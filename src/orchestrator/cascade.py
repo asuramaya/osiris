@@ -103,6 +103,15 @@ async def dispatch(
             url=cd.url, challenge_kind=cd.challenge.kind.value, existing_run_id=run_id,
         )
         return "suspended" if handoff_id is not None else "blocked:max_human_handoffs"
+    except Exception as exc:
+        # a flaky/slow source (timeout, 5xx, parse error) must not crash the cascade:
+        # mark the run failed (releasing its claim so it can retry later) and move on.
+        await ctx.ledger.refund_rate_credit(case_id)
+        await ctx.pool.execute(
+            "UPDATE helper_runs SET status='failed', finished_at=now(), error=$2 WHERE id=$1",
+            run_id, f"{type(exc).__name__}: {exc}"[:500],
+        )
+        return f"failed:{type(exc).__name__}"
     await execute_claimed(
         ctx.actions, manifest, response, input_object, case_id, run_id, input_hop=input_hop
     )
@@ -153,6 +162,17 @@ async def drain_outbox(ctx: CascadeContext, *, limit: int = 100) -> int:
             await fire_triggers(ctx, row["event_type"], row["object_id"], row["case_id"])
         await ctx.pool.execute("UPDATE outbox SET published_at=now() WHERE id=$1", row["id"])
     return len(rows)
+
+
+async def expand_case(ctx: CascadeContext, case_id: uuid.UUID) -> int:
+    """Operator-facing expand: (re)fire triggers for every object currently in the
+    case, then drain the resulting cascade. Unlike a bare outbox drain this also
+    works objects that pre-existed (shared from another case) or whose events were
+    already consumed — the claim dedup stops anything already running."""
+    rows = await ctx.pool.fetch("SELECT object_id FROM case_objects WHERE case_id=$1", case_id)
+    for r in rows:
+        await fire_triggers(ctx, "object_created", r["object_id"], case_id)
+    return len(rows) + await run_cascade(ctx)
 
 
 async def run_cascade(ctx: CascadeContext, *, max_iterations: int = 1000) -> int:

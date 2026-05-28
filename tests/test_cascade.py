@@ -101,6 +101,31 @@ async def test_cascade_fires_expands_and_terminates_on_hop_budget(
     assert await run_cascade(_ctx(actions, redis_client)) == 0
 
 
+async def test_flaky_connector_fails_gracefully(
+    actions: Actions, redis_client: aioredis.Redis
+) -> None:
+    """A connector that errors (timeout, 5xx) marks the run failed and lets the
+    cascade continue — it must not 500 the whole expansion."""
+    case_id = await _make_case(actions, {"rate_credits": 100, "max_hop_distance": 1})
+    await actions.create_or_find_object("Domain", "flaky.kp", "analyst:test", case_id)
+
+    async def boom(input_object: InputObject) -> dict:
+        raise TimeoutError("source timed out")
+
+    ctx = CascadeContext(
+        actions=actions, limiter=RateLimiter(redis_client),
+        ledger=BudgetLedger(actions.pool, redis_client),
+        manifests={"crtsh_subdomains": _CRT}, connectors={"crtsh_subdomains": boom},
+    )
+    processed = await run_cascade(ctx)  # does not raise
+    assert processed > 0
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM helper_runs WHERE status='failed'"
+    ) == 1
+    # the failed run released its claim and refunded its credit
+    assert int(await redis_client.get(f"budget:{case_id}:rate")) == 100
+
+
 async def test_cascade_halts_when_rate_credits_exhausted(
     actions: Actions, redis_client: aioredis.Redis
 ) -> None:

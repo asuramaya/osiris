@@ -33,6 +33,7 @@ from src.config.settings import get_settings
 from src.connectors.leases import LeaseStore
 from src.connectors.osint4all import suggest_manifests
 from src.connectors.registry import CONNECTORS
+from src.connectors.searxng import search_manifests, searxng_search
 from src.db.pool import create_pool
 from src.db.redis import create_redis
 from src.dissemination.brief import build_case_brief
@@ -40,7 +41,7 @@ from src.ontology.classify import classify
 from src.ontology.intake import intake
 from src.ontology.resolution import resolve_candidate, review_tray
 from src.orchestrator.budgets import BudgetLedger
-from src.orchestrator.cascade import CascadeContext, run_cascade
+from src.orchestrator.cascade import CascadeContext, expand_case
 from src.orchestrator.cobrowse import cobrowse_open
 from src.orchestrator.federation import federated_query, promote, to_preview
 from src.orchestrator.handoff import abandon, open_handoff, post_back
@@ -88,9 +89,10 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         settings = get_settings()
         own = pool is None
         app.state.pool = pool or await create_pool(settings.database_url)
-        # manifests = file helpers + osint4all suggest-tier sources
-        app.state.manifests = {**load_manifests(_HELPERS_DIR), **suggest_manifests()}
-        app.state.connectors = dict(CONNECTORS)
+        # manifests = file helpers + search-engine dorking + osint4all suggest sources
+        searches = search_manifests()
+        app.state.manifests = {**load_manifests(_HELPERS_DIR), **searches, **suggest_manifests()}
+        app.state.connectors = {**CONNECTORS, **{hid: searxng_search for hid in searches}}
         app.state.redis = create_redis(settings.redis_url)
         # triggers are a projection of manifests (#5) — (re)project on startup so a
         # fresh deployment actually fires helpers (else Expand finds no triggers).
@@ -138,7 +140,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             manifests=request.app.state.manifests,
             connectors=request.app.state.connectors,
         )
-        return {"processed": await run_cascade(ctx)}
+        return {"processed": await expand_case(ctx, case_id)}
 
     @app.get("/cases")
     async def list_cases(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:

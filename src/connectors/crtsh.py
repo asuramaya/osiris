@@ -16,7 +16,7 @@ from src.parsers.base import InputObject
 _URL = "https://crt.sh/"
 
 
-async def fetch_crtsh(input_object: InputObject, *, timeout_s: float = 60.0) -> dict[str, Any]:
+async def fetch_crtsh(input_object: InputObject, *, timeout_s: float = 25.0) -> dict[str, Any]:
     domain = input_object.canonical
     params = {"q": f"%.{domain}", "output": "json"}
     async with httpx.AsyncClient(timeout=timeout_s) as client:
