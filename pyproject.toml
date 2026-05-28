@@ -1,0 +1,53 @@
+[project]
+name = "osiris"
+version = "0.0.0"
+description = "Gotham-shaped OSINT orchestrator producing TTP/TTAL from OSINT"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "asyncpg>=0.30",          # async runtime DB driver (no sync drivers in app code)
+    "arq>=0.26",              # async worker pool
+    "redis>=5.2",             # queues, token buckets, pub/sub for UI feed
+    "httpx>=0.28",            # async HTTP for connectors
+    "pydantic>=2.10",
+    "pydantic-settings>=2.6",
+    "structlog>=24.4",        # structured JSON logs (case_id/helper_id in context)
+    "pyyaml>=6.0",            # helper manifests
+    "alembic>=1.14",          # migrations
+    "psycopg[binary]>=3.2",   # sync driver — MIGRATIONS ONLY, never app runtime
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "testcontainers[postgres]>=4.8",  # real Postgres in Docker for tests (not SQLite, not mocks)
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]            # mypy --strict clean on src/ (migrations excluded)
+
+[[tool.mypy.overrides]]
+module = ["asyncpg.*"]     # asyncpg ships no py.typed; treat as untyped at the boundary
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.uv]
+package = false

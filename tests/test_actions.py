@@ -1,0 +1,131 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+import pytest
+from src.actions.core import ActionError, Actions
+
+NOW = datetime(2026, 5, 27, tzinfo=UTC)
+
+
+async def test_create_or_find_is_idempotent(actions: Actions, case_id: str) -> None:
+    a = await actions.create_or_find_object("Email", "alice@example.com", "analyst:test", case_id)
+    b = await actions.create_or_find_object("Email", "alice@example.com", "analyst:test", case_id)
+    assert a == b
+
+    # exactly one object, one create event, one object_created outbox, one create_object audit
+    assert await actions.pool.fetchval("SELECT count(*) FROM objects") == 1
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM object_events WHERE event_type='create'"
+    ) == 1
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM outbox WHERE event_type='object_created'"
+    ) == 1
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM audit_log WHERE action='create_object'"
+    ) == 1
+    # case membership recorded once
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM case_objects WHERE object_id=$1", a
+    ) == 1
+
+
+async def test_assert_property_supersedes_within_source_but_keeps_set(
+    actions: Actions, case_id: str
+) -> None:
+    obj = await actions.create_or_find_object("Domain", "corp.com", "analyst:test", case_id)
+
+    # same source asserts twice -> the second supersedes the first
+    first = await actions.assert_property(obj, "registrar", "GoDaddy", "helper:rdap", NOW, 0.9)
+    second = await actions.assert_property(obj, "registrar", "Namecheap", "helper:rdap", NOW, 0.9)
+    superseded_by = await actions.pool.fetchval(
+        "SELECT supersedes FROM assertions WHERE id=$1", second
+    )
+    assert superseded_by == first
+
+    # within-source current value is just the latest
+    vals = await actions.current_values(obj, "registrar")
+    assert [v["value"] for v in vals] == ["Namecheap"]
+
+    # a *different* source's value coexists -> multi-source set (ruling #2)
+    await actions.assert_property(obj, "registrar", "MarkMonitor", "helper:whois", NOW, 0.7)
+    vals = await actions.current_values(obj, "registrar")
+    assert {v["value"] for v in vals} == {"Namecheap", "MarkMonitor"}
+
+
+async def test_create_link(actions: Actions, case_id: str) -> None:
+    a = await actions.create_or_find_object("Email", "a@x.com", "analyst:test", case_id)
+    b = await actions.create_or_find_object("Account", "github:a", "analyst:test", case_id)
+    link_id = await actions.create_link(a, b, "registered_with", "helper:holehe", NOW, 0.8)
+    assert link_id > 0
+
+    row = await actions.pool.fetchrow("SELECT * FROM links WHERE id=$1", link_id)
+    assert row["type"] == "registered_with"
+    assert row["first_seen"] == row["last_seen"] == NOW
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM outbox WHERE event_type='link_created'"
+    ) == 1
+
+
+async def test_merge_objects_is_event_sourced_and_resolves(
+    actions: Actions, case_id: str
+) -> None:
+    winner = await actions.create_or_find_object("Person", "p-winner", "analyst:test", case_id)
+    loser = await actions.create_or_find_object("Person", "p-loser", "analyst:test", case_id)
+
+    await actions.merge_objects(winner, loser, "same DOB + email", "analyst:test", case_id)
+
+    # projection updated
+    row = await actions.pool.fetchrow("SELECT status, merged_into FROM objects WHERE id=$1", loser)
+    assert row["status"] == "merged"
+    assert row["merged_into"] == winner
+    # identity resolves loser -> winner
+    assert await actions.resolve_object_id(loser) == winner
+    # event recorded (source of truth) + same_as link + audit + outbox
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM object_events WHERE event_type='merge' AND object_id=$1", winner
+    ) == 1
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND to_id=$2 AND type='same_as'", loser, winner
+    ) == 1
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM outbox WHERE event_type='object_merged'"
+    ) == 1
+
+
+async def test_merge_guards(actions: Actions, case_id: str) -> None:
+    a = await actions.create_or_find_object("Person", "g-a", "analyst:test", case_id)
+    with pytest.raises(ActionError):
+        await actions.merge_objects(a, a, "self", "analyst:test", case_id)
+
+    b = await actions.create_or_find_object("Person", "g-b", "analyst:test", case_id)
+    await actions.merge_objects(a, b, "ok", "analyst:test", case_id)
+    with pytest.raises(ActionError):  # b already merged
+        await actions.merge_objects(a, b, "again", "analyst:test", case_id)
+
+
+async def test_split_object_records_lineage(actions: Actions, case_id: str) -> None:
+    obj = await actions.create_or_find_object("Person", "conflated", "analyst:test", case_id)
+    spec = {"parts": [{"type": "Person", "canonical": "real-1"},
+                      {"type": "Person", "canonical": "real-2"}]}
+    new_ids = await actions.split_object(obj, spec, "two people conflated", "analyst:test", case_id)
+
+    assert len(new_ids) == 2
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM object_events WHERE event_type='split' AND object_id=$1", obj
+    ) == 2
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM audit_log WHERE action='split_object'"
+    ) == 1
+
+
+async def test_tag_object_is_additive(actions: Actions, case_id: str) -> None:
+    obj = await actions.create_or_find_object("Domain", "evil.tld", "analyst:test", case_id)
+    await actions.tag_object(obj, "c2", "case", "analyst:test", case_id)
+    await actions.tag_object(obj, "phishing", "case", "analyst:test", case_id)
+
+    tags = {t["value"]["tag"] for t in await actions.current_values(obj, "tag")}
+    assert tags == {"c2", "phishing"}
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM audit_log WHERE action='tag_object'"
+    ) == 2

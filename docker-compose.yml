@@ -1,0 +1,36 @@
+# Self-hosted runtime — single machine, single operator. All services bind to
+# 127.0.0.1 only (no public ingress; this box IS prod). The AGE graph extension
+# is added when the projection is populated (post-Phase-1); vanilla postgres:16 for now.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: osiris
+      POSTGRES_PASSWORD: osiris
+      POSTGRES_DB: osiris
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U osiris -d osiris"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
+  redisdata:
