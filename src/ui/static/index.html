@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Osiris — Graph</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+  <style>
+    html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; background: #0e1116; color: #d7dde5; }
+    #bar { padding: 8px 12px; background: #161b22; border-bottom: 1px solid #2b333c; display: flex; gap: 8px; align-items: center; }
+    #bar input { background: #0e1116; color: #d7dde5; border: 1px solid #2b333c; padding: 6px 8px; border-radius: 6px; width: 360px; }
+    #bar button { background: #2563eb; color: #fff; border: 0; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+    #cy { position: absolute; top: 49px; left: 0; right: 0; bottom: 0; }
+    #panel { position: absolute; top: 60px; right: 12px; width: 300px; max-height: 70%; overflow: auto;
+             background: #161b22cc; border: 1px solid #2b333c; border-radius: 8px; padding: 12px; display: none; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <strong>Osiris</strong>
+    <input id="oid" placeholder="object id (UUID) — loads its 1-hop neighbourhood" />
+    <input id="hops" type="number" value="1" min="0" max="4" style="width:56px" />
+    <button onclick="load()">Load</button>
+    <span id="status" style="opacity:.6"></span>
+  </div>
+  <div id="cy"></div>
+  <div id="panel"></div>
+
+  <script>
+    const colors = {
+      IntrusionSet: '#e5534b', Malware: '#d29922', Tool: '#bc8cff', AttackPattern: '#3fb950',
+      Indicator: '#58a6ff', ObservedData: '#8b949e', Domain: '#39c5cf', TelegramChannel: '#db61a2',
+    };
+    const cy = cytoscape({
+      container: document.getElementById('cy'),
+      style: [
+        { selector: 'node', style: {
+            'background-color': e => colors[e.data('type')] || '#6e7681',
+            'label': 'data(label)', 'color': '#d7dde5', 'font-size': 10,
+            'text-valign': 'bottom', 'text-wrap': 'wrap', 'text-max-width': 120 } },
+        { selector: 'edge', style: {
+            'width': 1.5, 'line-color': '#3a434d', 'target-arrow-color': '#3a434d',
+            'target-arrow-shape': 'triangle', 'curve-style': 'bezier',
+            'label': 'data(type)', 'font-size': 8, 'color': '#8b949e' } },
+      ],
+      layout: { name: 'cose', animate: false },
+    });
+
+    async function load() {
+      const id = document.getElementById('oid').value.trim();
+      const hops = document.getElementById('hops').value || 1;
+      if (!id) return;
+      const status = document.getElementById('status');
+      status.textContent = 'loading…';
+      const g = await fetch(`/objects/${id}/graph?hops=${hops}`).then(r => r.json());
+      cy.elements().remove();
+      cy.add(g.nodes.map(n => ({ data: { id: n.id, label: n.label, type: n.type } })));
+      cy.add(g.edges.map(e => ({ data: { source: e.source, target: e.target, type: e.type } })));
+      cy.layout({ name: 'cose', animate: false }).run();
+      status.textContent = `${g.nodes.length} nodes, ${g.edges.length} edges`;
+    }
+
+    cy.on('tap', 'node', async evt => {
+      const id = evt.target.id();
+      const [obj, helpers] = await Promise.all([
+        fetch(`/objects/${id}`).then(r => r.json()),
+        fetch(`/objects/${id}/helpers`).then(r => r.json()),
+      ]);
+      const panel = document.getElementById('panel');
+      panel.style.display = 'block';
+      panel.innerHTML =
+        `<h3 style="margin:.2em 0">${obj.type}</h3><code style="word-break:break-all">${obj.canonical}</code>` +
+        `<h4>Properties</h4>` + obj.properties.map(p =>
+          `<div><b>${p.name}</b>: ${JSON.stringify(p.value)} <span style="opacity:.5">(${p.source_id})</span></div>`).join('') +
+        `<h4>Available helpers</h4>` + (helpers.map(h =>
+          `<div>▸ ${h.name} <span style="opacity:.5">[${h.tier}]</span></div>`).join('') || '<i>none</i>');
+    });
+  </script>
+</body>
+</html>

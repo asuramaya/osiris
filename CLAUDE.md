@@ -106,5 +106,12 @@ and `docker run` do too.
   TTPs §11; resolve confirm→merge / reject→not_same_as; negative-memory suppression; review
   tray). Never auto-merges Person (#3). 60 tests green. NB: ipaddress rejects leading-zero
   IPv4 octets; PG `real` is float4 (approx in score compares).
-- **Phase 7 (next):** Object Set Service + graph read API (FastAPI) + Cytoscape/MapLibre
-  UI scaffold; right-click helpers from manifest registry; snapshot/timeline. Then federation.
+- **Phase 7 (DONE):** Object Set Service (`src/api/app.py`, FastAPI factory `create_app(pool)`):
+  /objects search, /objects/{id} (+multi-source props), /objects/{id}/graph (Cytoscape
+  nodes+edges), /objects/{id}/helpers (from manifest registry), /cases/{id}/tray,
+  /merge-candidates, /cases/{id}/snapshot?at= (event-sourced time-travel). Cytoscape UI
+  scaffold at `src/ui/static/index.html` (mounted /ui). 67 tests green (httpx ASGITransport
+  against test pool). NB: parse `at` to datetime in Python (asyncpg won't bind str→timestamptz);
+  B008 ignored for src/api (FastAPI Depends idiom).
+- **Phase 8 (next):** Federation / promote — query external sources in place (no persist),
+  analyst promotes selected results into the case graph via Actions. Then revisit Phase 9.
