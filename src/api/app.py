@@ -23,12 +23,17 @@ from typing import Any
 import asyncpg
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
+from src.actions.core import Actions
 from src.config.settings import get_settings
+from src.connectors.registry import CONNECTORS
 from src.db.pool import create_pool
 from src.ontology.resolution import review_tray
+from src.orchestrator.federation import federated_query, promote, to_preview
 from src.orchestrator.handoff import tray as handoff_tray
 from src.orchestrator.manifests import load_manifests
+from src.orchestrator.runner import load_input_object
 
 _HELPERS_DIR = Path(__file__).resolve().parent.parent.parent / "helpers"
 _UI_DIR = Path(__file__).resolve().parent.parent / "ui" / "static"
@@ -45,6 +50,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         own = pool is None
         app.state.pool = pool or await create_pool(get_settings().database_url)
         app.state.manifests = load_manifests(_HELPERS_DIR)
+        app.state.connectors = dict(CONNECTORS)
         try:
             yield
         finally:
@@ -151,8 +157,6 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def case_tray(
         case_id: uuid.UUID, p: asyncpg.Pool = Depends(get_pool)
     ) -> list[dict[str, Any]]:
-        from src.actions.core import Actions
-
         return await handoff_tray(Actions(p), case_id=case_id)
 
     @app.get("/merge-candidates")
@@ -181,10 +185,50 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         )
         return {"as_of": at, "objects": [dict(r) for r in rows]}
 
+    @app.post("/federate")
+    async def federate(body: FederateBody, request: Request) -> dict[str, Any]:
+        """Query a source against an object IN PLACE — returns a preview, no writes."""
+        manifest, connector, input_object = await _federation_ctx(request, body)
+        result = await federated_query(connector, manifest.parser, input_object)
+        return to_preview(result)
+
+    @app.post("/promote")
+    async def promote_endpoint(body: PromoteBody, request: Request) -> dict[str, int]:
+        """Materialize the selected previewed results into the case graph."""
+        manifest, connector, input_object = await _federation_ctx(request, body)
+        result = await federated_query(connector, manifest.parser, input_object)
+        return await promote(
+            Actions(request.app.state.pool),
+            result,
+            source_id=manifest.id,
+            input_object=input_object,
+            case_id=body.case_id,
+            selected=body.selected,
+        )
+
     if _UI_DIR.is_dir():
         app.mount("/ui", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
 
     return app
+
+
+class FederateBody(BaseModel):
+    helper_id: str
+    object_id: uuid.UUID
+
+
+class PromoteBody(FederateBody):
+    case_id: uuid.UUID
+    selected: list[str] | None = None
+
+
+async def _federation_ctx(request: Request, body: FederateBody) -> tuple[Any, Any, Any]:
+    manifest = request.app.state.manifests.get(body.helper_id)
+    connector = request.app.state.connectors.get(body.helper_id)
+    if manifest is None or connector is None:
+        raise HTTPException(404, f"no federatable helper {body.helper_id!r}")
+    input_object = await load_input_object(request.app.state.pool, body.object_id)
+    return manifest, connector, input_object
 
 
 app = create_app()

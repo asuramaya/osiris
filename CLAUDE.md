@@ -113,5 +113,10 @@ and `docker run` do too.
   scaffold at `src/ui/static/index.html` (mounted /ui). 67 tests green (httpx ASGITransport
   against test pool). NB: parse `at` to datetime in Python (asyncpg won't bind str→timestamptz);
   B008 ignored for src/api (FastAPI Depends idiom).
-- **Phase 8 (next):** Federation / promote — query external sources in place (no persist),
-  analyst promotes selected results into the case graph via Actions. Then revisit Phase 9.
+- **Phase 8 (DONE):** Federation / promote. `src/orchestrator/federation.py`
+  (federated_query = connector+parser, NO persist; to_preview; promote materializes a
+  selected subset via Actions, attributed by a 'manual' helper_run). API: POST /federate
+  (preview in place), POST /promote (materialize selected). Connectors injectable via
+  app.state.connectors for hermetic tests. 70 tests green.
+- **Phase 9 (REVISIT DECISIONS FIRST):** windowed pattern helpers + pattern hygiene.
+  Open #4: dormancy N / backfill K / append-vs-supersede. Then Phase 10 PDF dissemination.
