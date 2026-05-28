@@ -86,6 +86,7 @@
     <span class="spacer"></span>
     <label>Case</label>
     <select id="case" onchange="loadCaseObjects()"></select>
+    <button class="btn ghost" style="margin:0" onclick="newCase()">＋ New</button>
     <label>Depth</label>
     <input id="hops" type="number" value="2" min="0" max="4" style="width:54px" onchange="reload()" />
     <span id="status"></span>
@@ -93,20 +94,31 @@
 
   <aside id="nav" class="col">
     <div class="section">
-      <div class="hint"><b>Start here.</b> Pick a case, then click an entity below to open its
-        neighbourhood. Click any node to learn what it is and how it connects.</div>
+      <div class="hint"><b>Start here.</b> Make a case, paste any selector to seed it
+        (we detect the type), then <b>Expand</b> to let collectors fan out. Click any
+        node to learn what it is and how it connects.</div>
     </div>
     <div class="section">
-      <h2>1 · Entities in this case</h2>
+      <h2>1 · Seed the case — paste anything</h2>
+      <input id="seed" class="search" placeholder="email · IP · domain · @handle · hash · BTC · phrase…"
+             onkeydown="if(event.key==='Enter') seedIntake()" />
+      <div style="display:flex; gap:8px; margin-top:8px">
+        <button class="btn" onclick="seedIntake()">Add to case</button>
+        <button class="btn ghost" onclick="expandCase()">Expand ▸</button>
+      </div>
+      <div id="seedmsg" class="meaning" style="margin-top:8px"></div>
+    </div>
+    <div class="section">
+      <h2>2 · Entities in this case</h2>
       <input id="search" class="search" placeholder="filter by name…" oninput="renderObjectList()" />
       <div id="objlist" class="list"></div>
     </div>
     <div class="section">
-      <h2>2 · What the colours & shapes mean</h2>
+      <h2>3 · What the colours & shapes mean</h2>
       <div id="legend"></div>
     </div>
     <div class="section">
-      <h2>3 · What the links mean</h2>
+      <h2>4 · What the links mean</h2>
       <div id="glossary"></div>
     </div>
   </aside>
@@ -236,6 +248,41 @@ async function loadGraph(id) {
   inspect(id);
 }
 function reload() { if (ROOT) loadGraph(ROOT); }
+
+// ---- case building ---------------------------------------------------------
+async function newCase() {
+  const name = prompt('Name this investigation:');
+  if (!name) return;
+  const c = await fetch('/cases', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ name }) }).then(r => r.json());
+  await loadCases();
+  document.getElementById('case').value = c.id;
+  await loadCaseObjects();
+}
+
+async function seedIntake() {
+  const raw = document.getElementById('seed').value.trim();
+  if (!raw || !CASE) return;
+  const msg = document.getElementById('seedmsg');
+  msg.textContent = 'classifying…';
+  const r = await fetch(`/cases/${CASE}/intake`, { method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify({ raw }) }).then(r => r.json());
+  msg.innerHTML = `detected <b style="color:${ty(r.type).c}">${r.type}</b> — added. ` +
+    `Click <b>Expand</b> to run collectors.`;
+  document.getElementById('seed').value = '';
+  await loadCaseObjects();
+  loadGraph(r.object_id);
+}
+
+async function expandCase() {
+  if (!CASE) return;
+  const msg = document.getElementById('seedmsg');
+  msg.textContent = 'expanding — collectors fanning out (cached fetches reused)…';
+  const res = await fetch(`/cases/${CASE}/expand`, { method:'POST' }).then(r => r.json());
+  msg.textContent = `expanded: ${res.processed} events processed.`;
+  await loadCaseObjects();
+  if (ROOT) loadGraph(ROOT);
+}
 
 // ---- inspector -------------------------------------------------------------
 async function inspect(id) {

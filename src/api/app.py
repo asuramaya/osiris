@@ -29,10 +29,16 @@ from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.connectors.registry import CONNECTORS
 from src.db.pool import create_pool
+from src.db.redis import create_redis
+from src.ontology.classify import classify
+from src.ontology.intake import intake
 from src.ontology.resolution import review_tray
+from src.orchestrator.budgets import BudgetLedger
+from src.orchestrator.cascade import CascadeContext, run_cascade
 from src.orchestrator.federation import federated_query, promote, to_preview
 from src.orchestrator.handoff import tray as handoff_tray
 from src.orchestrator.manifests import load_manifests
+from src.orchestrator.ratelimit import RateLimiter
 from src.orchestrator.runner import load_input_object
 
 _HELPERS_DIR = Path(__file__).resolve().parent.parent.parent / "helpers"
@@ -47,13 +53,16 @@ def get_pool(request: Request) -> asyncpg.Pool:
 def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        settings = get_settings()
         own = pool is None
-        app.state.pool = pool or await create_pool(get_settings().database_url)
+        app.state.pool = pool or await create_pool(settings.database_url)
         app.state.manifests = load_manifests(_HELPERS_DIR)
         app.state.connectors = dict(CONNECTORS)
+        app.state.redis = create_redis(settings.redis_url)
         try:
             yield
         finally:
+            await app.state.redis.aclose()
             if own:
                 await app.state.pool.close()
 
@@ -62,6 +71,38 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.post("/cases")
+    async def create_case(body: NewCaseBody, p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        cid = await p.fetchval(
+            "INSERT INTO cases (name, owner, budgets) VALUES ($1,$2,$3) RETURNING id",
+            body.name,
+            get_settings().osiris_actor,
+            body.budgets or {},
+        )
+        return {"id": str(cid), "name": body.name}
+
+    @app.post("/cases/{case_id}/intake")
+    async def case_intake(
+        case_id: uuid.UUID, body: IntakeBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        """Paste anything: classify it, create the typed object in the case."""
+        type_ = body.type or classify(body.raw)
+        object_id = await intake(Actions(p), type_, body.raw, get_settings().osiris_actor, case_id)
+        return {"object_id": str(object_id), "type": type_, "canonical": body.raw.strip()}
+
+    @app.post("/cases/{case_id}/expand")
+    async def case_expand(case_id: uuid.UUID, request: Request) -> dict[str, int]:
+        """Drain the outbox once — fire matching helpers across the case, bounded
+        by its budgets. Cached fetches make repeated expansion cheap."""
+        ctx = CascadeContext(
+            actions=Actions(request.app.state.pool),
+            limiter=RateLimiter(request.app.state.redis),
+            ledger=BudgetLedger(request.app.state.pool, request.app.state.redis),
+            manifests=request.app.state.manifests,
+            connectors=request.app.state.connectors,
+        )
+        return {"processed": await run_cascade(ctx)}
 
     @app.get("/cases")
     async def list_cases(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
@@ -203,14 +244,20 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def federate(body: FederateBody, request: Request) -> dict[str, Any]:
         """Query a source against an object IN PLACE — returns a preview, no writes."""
         manifest, connector, input_object = await _federation_ctx(request, body)
-        result = await federated_query(connector, manifest.parser, input_object)
+        result = await federated_query(
+            request.app.state.pool, connector, manifest.parser, input_object,
+            helper_id=manifest.id, cache_ttl=manifest.cache_ttl,
+        )
         return to_preview(result)
 
     @app.post("/promote")
     async def promote_endpoint(body: PromoteBody, request: Request) -> dict[str, int]:
         """Materialize the selected previewed results into the case graph."""
         manifest, connector, input_object = await _federation_ctx(request, body)
-        result = await federated_query(connector, manifest.parser, input_object)
+        result = await federated_query(
+            request.app.state.pool, connector, manifest.parser, input_object,
+            helper_id=manifest.id, cache_ttl=manifest.cache_ttl,
+        )
         return await promote(
             Actions(request.app.state.pool),
             result,
@@ -224,6 +271,16 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         app.mount("/ui", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
 
     return app
+
+
+class NewCaseBody(BaseModel):
+    name: str
+    budgets: dict[str, Any] | None = None
+
+
+class IntakeBody(BaseModel):
+    raw: str
+    type: str | None = None
 
 
 class FederateBody(BaseModel):

@@ -18,7 +18,7 @@ from testcontainers.redis import RedisContainer
 
 _TABLES = (
     "cases,objects,case_objects,object_events,assertions,links,helper_runs,"
-    "triggers,audit_log,outbox,merge_candidates,cookie_leases"
+    "triggers,audit_log,outbox,merge_candidates,cookie_leases,handoffs,helper_cache"
 )
 
 

@@ -50,6 +50,17 @@ NOTE: `docker compose` plugin is not yet installed on this box
 (`sudo apt install docker-compose-plugin`). The Docker daemon works, so testcontainers
 and `docker run` do too.
 
+## Front door + caching (post-Phase-9 increment)
+- `classify()` regex front door (`src/ontology/classify.py`): paste anything → type.
+- API: `POST /cases`, `POST /cases/{id}/intake` (classify+intake), `POST /cases/{id}/expand`
+  (run_cascade once); UI wires New-case + paste-anything seed box + Expand into the case view.
+- **Persistent response cache** (`helper_cache` table, migration 0004; `src/orchestrator/
+  cache.py`): cascade + federation fetch through `cached_fetch` → a (helper,object) pair is
+  fetched at most once per cache_ttl. Makes deep/repeat expansion cheap.
+- **Arbitrary depth:** `max_hop_distance: null` in case budgets = unbounded (safe via
+  idempotent objects + active-claim dedup + rate credits). `trigger_overrides` now wired
+  (per-case helper enable/disable). 86 tests green.
+
 ## Build order (TTP/TTAL-first; see osiris memory / DESIGN.md §14 reordered)
 - **Phase 0 (DONE):** schema + 6 actions (`src/actions/core.py`) + audit/outbox + tests.
   7 tests green (testcontainers), ruff + mypy --strict clean. Remaining for Phase 0:

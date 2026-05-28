@@ -87,7 +87,10 @@ class BudgetLedger:
         """Non-consuming gates (hop, helpers-per-object). Rate credit is reserved
         separately so it can be refunded on cache hits / no-op routes."""
         budgets = await _load_budgets(self.pool, case_id)
-        if hop_distance > int(budgets["max_hop_distance"]):
+        # max_hop_distance = null -> unbounded depth (safe: idempotent objects +
+        # active-claim dedup mean the finite graph + rate credits still terminate it)
+        max_hop = budgets.get("max_hop_distance")
+        if max_hop is not None and hop_distance > int(max_hop):
             return BudgetDecision(False, "max_hop_distance")
         # count DISTINCT helpers (breadth), so windowed re-runs of one helper
         # don't trip the cap meant to prevent many helpers piling on one entity.

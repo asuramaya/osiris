@@ -21,6 +21,7 @@ import asyncpg
 from src.actions.core import Actions
 from src.connectors.registry import Connector
 from src.orchestrator.budgets import BudgetLedger
+from src.orchestrator.cache import cached_fetch
 from src.orchestrator.challenges import ChallengeDetected
 from src.orchestrator.handoff import suspend
 from src.orchestrator.manifests import Manifest
@@ -90,7 +91,9 @@ async def dispatch(
 
     input_object = await load_input_object(ctx.pool, object_id)
     try:
-        response = await connector(input_object)
+        response = await cached_fetch(
+            ctx.pool, connector, manifest.id, input_object, cache_ttl=manifest.cache_ttl
+        )
     except ChallengeDetected as cd:
         # bot-fight / login wall hit mid-fetch — suspend the in-flight run instead
         # of solving or evading. The rate credit is refunded; a handoff credit is spent.
@@ -126,7 +129,7 @@ async def fire_triggers(
         "SELECT DISTINCT name FROM current_assertions WHERE object_id=$1", object_id
     )
     props = {r["name"] for r in prop_rows}
-    helper_ids = await matching_helpers(ctx.pool, event, obj["type"], props)
+    helper_ids = await matching_helpers(ctx.pool, event, obj["type"], props, case_id=case_id)
     outcomes: list[str] = []
     for hid in helper_ids:
         manifest = ctx.manifests.get(hid)

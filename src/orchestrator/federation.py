@@ -11,18 +11,28 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import asyncpg
+
 from src.actions.core import Actions
 from src.connectors.registry import Connector
+from src.orchestrator.cache import cached_fetch
 from src.orchestrator.runner import apply_result
 from src.parsers import get_parser
 from src.parsers.base import InputObject, ParseResult, TargetRef
 
 
 async def federated_query(
-    connector: Connector, parser_name: str, input_object: InputObject
+    pool: asyncpg.Pool,
+    connector: Connector,
+    parser_name: str,
+    input_object: InputObject,
+    *,
+    helper_id: str,
+    cache_ttl: int = 3600,
 ) -> ParseResult:
-    """Run the source + parser and return the result WITHOUT touching the graph."""
-    response = await connector(input_object)
+    """Run the source + parser and return the result WITHOUT mutating the graph.
+    The fetch is cached, so a later promote() reuses it rather than re-hitting."""
+    response = await cached_fetch(pool, connector, helper_id, input_object, cache_ttl=cache_ttl)
     return get_parser(parser_name)(response, input_object)
 
 

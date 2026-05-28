@@ -29,7 +29,9 @@ async def _domain(actions: Actions, cid: uuid.UUID, canonical: str) -> InputObje
 async def test_federated_query_does_not_persist(actions: Actions, case_id: str) -> None:
     cid = uuid.UUID(case_id)
     inp = await _domain(actions, cid, "corp.kp")
-    result = await federated_query(_fake_crtsh, "crtsh_subdomains", inp)
+    result = await federated_query(
+        actions.pool, _fake_crtsh, "crtsh_subdomains", inp, helper_id="crtsh_subdomains"
+    )
 
     # preview has the three subdomains...
     canons = {o.canonical for o in result.objects}
@@ -43,7 +45,9 @@ async def test_federated_query_does_not_persist(actions: Actions, case_id: str) 
 async def test_promote_materializes_only_selected(actions: Actions, case_id: str) -> None:
     cid = uuid.UUID(case_id)
     inp = await _domain(actions, cid, "corp.kp")
-    result = await federated_query(_fake_crtsh, "crtsh_subdomains", inp)
+    result = await federated_query(
+        actions.pool, _fake_crtsh, "crtsh_subdomains", inp, helper_id="crtsh_subdomains"
+    )
 
     counts = await promote(
         actions, result, source_id="crtsh_subdomains", input_object=inp,
