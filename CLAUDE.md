@@ -98,6 +98,13 @@ and `docker run` do too.
   → resolve handoff → reuse lease server-side past a 403 wall. Live test self-skips if
   Chromium can't launch. NOTE: cascade auto-use of SERVER_WORKER_WITH_LEASE needs per-helper
   server-side HTML scrapers (router decision + reuse proven; auto-dispatch wiring deferred).
-- **Phase 6 (next):** Entity Resolution v1 — deterministic canonicalization per type
-  (Email/Phone/Domain/IP...), auto-merge on canonical match; never auto-merge Person.
-  Then ER v2 (probabilistic + review tray), Cytoscape UI, federation, windowed helpers, PDF.
+- **Phase 6 (DONE):** Entity Resolution. `src/ontology/canonicalize.py` (per-type: Email
+  gmail-dot/+strip, Phone best-effort E.164, Domain punycode, IP via ipaddress, BTC
+  case-preserving), `src/ontology/intake.py` (canonicalize→find-or-create, preserve
+  observed_value), `src/ontology/resolution.py` (probabilistic Person candidates: shared
+  email/phone, name+dob, name+employer+city; behavioral IntrusionSet candidates on shared
+  TTPs §11; resolve confirm→merge / reject→not_same_as; negative-memory suppression; review
+  tray). Never auto-merges Person (#3). 60 tests green. NB: ipaddress rejects leading-zero
+  IPv4 octets; PG `real` is float4 (approx in score compares).
+- **Phase 7 (next):** Object Set Service + graph read API (FastAPI) + Cytoscape/MapLibre
+  UI scaffold; right-click helpers from manifest registry; snapshot/timeline. Then federation.
