@@ -89,11 +89,13 @@ class BudgetLedger:
         budgets = await _load_budgets(self.pool, case_id)
         if hop_distance > int(budgets["max_hop_distance"]):
             return BudgetDecision(False, "max_hop_distance")
-        n_runs = await self.pool.fetchval(
-            "SELECT count(*) FROM helper_runs WHERE object_id=$1 AND case_id=$2",
+        # count DISTINCT helpers (breadth), so windowed re-runs of one helper
+        # don't trip the cap meant to prevent many helpers piling on one entity.
+        n_helpers = await self.pool.fetchval(
+            "SELECT count(DISTINCT helper_id) FROM helper_runs WHERE object_id=$1 AND case_id=$2",
             object_id,
             case_id,
         )
-        if n_runs >= int(budgets["max_helpers_per_object"]):
+        if n_helpers >= int(budgets["max_helpers_per_object"]):
             return BudgetDecision(False, "max_helpers_per_object")
         return BudgetDecision(True)

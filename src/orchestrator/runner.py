@@ -10,6 +10,7 @@ here the response is fetched by the caller and handed in directly.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Any, cast
 
 from src.actions.core import Actions
@@ -32,19 +33,22 @@ async def claim_run(
     tier: str,
     *,
     status: str = "running",
+    window_bucket: datetime | None = None,
 ) -> uuid.UUID | None:
     """Atomically claim a run. Returns the run id, or None if one is already
-    active for this (helper, object, case) — the partial unique index decides.
-    `status` lets a gated dispatch claim directly into 'awaiting_human'."""
+    active for this (helper, object, case, window_bucket) — the partial unique
+    index decides. `status` lets a gated dispatch claim into 'awaiting_human';
+    `window_bucket` makes each rolling window its own claimable run."""
     row = await actions.pool.fetchrow(
-        "INSERT INTO helper_runs (helper_id, object_id, case_id, status, tier) "
-        "VALUES ($1,$2,$3,$5,$4) "
+        "INSERT INTO helper_runs (helper_id, object_id, case_id, status, tier, window_bucket) "
+        "VALUES ($1,$2,$3,$5,$4,$6) "
         "ON CONFLICT DO NOTHING RETURNING id",
         helper_id,
         object_id,
         case_id,
         tier,
         status,
+        window_bucket,
     )
     return row["id"] if row is not None else None
 

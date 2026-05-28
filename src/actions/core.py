@@ -362,6 +362,36 @@ class Actions:
             )
             return new_ids
 
+    # --- status transitions (event-sourced; for pattern hygiene) ---------
+
+    async def set_status(
+        self,
+        object_id: uuid.UUID,
+        status: str,
+        justification: str,
+        actor: str,
+        case_id: uuid.UUID | None = None,
+    ) -> None:
+        """Transition an object's lifecycle status, recorded as an append-only
+        object_event so snapshots replay correctly. Used by pattern hygiene to
+        archive stale patterns (DESIGN §11)."""
+        async with self.pool.acquire() as conn, conn.transaction():
+            event = "archive" if status == "archived" else "status_change"
+            await conn.execute(
+                "INSERT INTO object_events (event_type, object_id, payload, actor, case_id) "
+                "VALUES ($1,$2,$3,$4,$5)",
+                event,
+                object_id,
+                {"status": status, "justification": justification},
+                actor,
+                case_id,
+            )
+            await conn.execute("UPDATE objects SET status=$1 WHERE id=$2", status, object_id)
+            await self._audit(
+                conn, "set_status", actor, case_id,
+                {"object_id": str(object_id), "status": status},
+            )
+
     # --- 6. tag_object ---------------------------------------------------
 
     async def tag_object(

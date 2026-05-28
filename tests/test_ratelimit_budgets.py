@@ -48,12 +48,14 @@ async def test_budget_check_hop_and_per_object(
     assert (await ledger.check(cid, obj, hop_distance=1)).allowed is True
     assert (await ledger.check(cid, obj, hop_distance=2)).reason == "max_hop_distance"
 
-    # two prior runs hit the per-object cap
-    for _ in range(2):
+    # two DISTINCT helpers on one object hit the per-object cap (breadth, not
+    # depth — re-runs of the same helper don't count, so windowed helpers are ok)
+    for helper in ("hx", "hy"):
         await actions.pool.execute(
             "INSERT INTO helper_runs (helper_id, object_id, case_id, status, tier) "
-            "VALUES ('x',$1,$2,'done','open')",
+            "VALUES ($3,$1,$2,'done','open')",
             obj,
             cid,
+            helper,
         )
     assert (await ledger.check(cid, obj, hop_distance=0)).reason == "max_helpers_per_object"

@@ -1,0 +1,28 @@
+id: tgstat_channel_behavior
+name: tgstat channel behavior (windowed)
+description: >
+  Observe a Telegram channel's posting behavior over rolling 7-day windows
+  (sliding daily), appending per-window ObservedData and maintaining a rolling
+  Campaign behavioral assessment. The window ticker advances it; it runs until
+  the case is archived or its rate budget is exhausted.
+consumes:
+  type: TelegramChannel
+  requires_properties: []
+emits:
+  - type: ObservedData
+    confidence_floor: 0.9
+  - type: Campaign
+    confidence_floor: 0.4
+tier: open
+origin: tgstat.ru
+rate:
+  per_origin_rps: 0.5
+  per_origin_concurrent: 1
+  jitter_ms: [300, 1000]
+parser: tgstat_channel_behavior
+windowing:
+  bucket: 7d
+  slide: 1d
+  lookback: 30d
+cache_ttl: 0
+enabled: true

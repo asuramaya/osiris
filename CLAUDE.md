@@ -118,5 +118,14 @@ and `docker run` do too.
   selected subset via Actions, attributed by a 'manual' helper_run). API: POST /federate
   (preview in place), POST /promote (materialize selected). Connectors injectable via
   app.state.connectors for hermetic tests. 70 tests green.
-- **Phase 9 (REVISIT DECISIONS FIRST):** windowed pattern helpers + pattern hygiene.
-  Open #4: dormancy N / backfill K / append-vs-supersede. Then Phase 10 PDF dissemination.
+- **Phase 9 (DONE):** windowed pattern helpers + hygiene. #4 RESOLVED: append evidence /
+  supersede judgment, budget-only termination (no dormancy), backfill bounded by budget.
+  `src/orchestrator/windows.py` (parse_duration, due_buckets, tick), `src/orchestrator/
+  hygiene.py` (promote_campaigns ≥N ObservedData→lifecycle=published; archive_stale_patterns
+  →set_status archived event-sourced), `src/parsers/tgstat.py` + manifest (windowed:
+  bucket 7d/slide 1d/lookback 30d). Added Actions.set_status (event-sourced), claim_run
+  window_bucket param, budget cap now counts DISTINCT helper_id (windowed re-runs exempt).
+  79 tests green. Append=new ObservedData per window; supersede=rolling assessment property
+  on stable Campaign (within-source supersession auto-applies).
+- **Phase 10 (LAST):** dissemination — PDF brief generator (STIX bundle export already
+  shipped in Phase 1). Then the build order is complete.
