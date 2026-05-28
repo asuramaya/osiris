@@ -1,0 +1,255 @@
+{
+  "type": "bundle",
+  "id": "bundle--dprk-fixture-0000-0000-000000000001",
+  "objects": [
+    {
+      "type": "intrusion-set",
+      "spec_version": "2.1",
+      "id": "intrusion-set--c93fccb1-e8e8-42cf-ae33-2ad1d183913a",
+      "created": "2017-05-31T21:31:53.197Z",
+      "modified": "2024-04-12T15:00:00.000Z",
+      "name": "Lazarus Group",
+      "description": "DPRK state-sponsored cyber threat group attributed to the Reconnaissance General Bureau.",
+      "aliases": ["Lazarus Group", "HIDDEN COBRA", "Guardians of Peace", "ZINC", "Labyrinth Chollima", "Diamond Sleet"],
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "G0032", "url": "https://attack.mitre.org/groups/G0032"}
+      ]
+    },
+    {
+      "type": "intrusion-set",
+      "spec_version": "2.1",
+      "id": "intrusion-set--dd2d9ca6-505b-4860-bd5e-d4f01396b15a",
+      "created": "2019-01-29T19:00:00.000Z",
+      "modified": "2024-04-12T15:00:00.000Z",
+      "name": "APT38",
+      "description": "DPRK financially-motivated cluster focused on banks and SWIFT operations.",
+      "aliases": ["APT38", "BlueNoroff", "Stardust Chollima", "Sapphire Sleet"],
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "G0082", "url": "https://attack.mitre.org/groups/G0082"}
+      ]
+    },
+    {
+      "type": "intrusion-set",
+      "spec_version": "2.1",
+      "id": "intrusion-set--cba37adb-d6fb-4610-b069-dd04c0643384",
+      "created": "2019-08-26T15:00:00.000Z",
+      "modified": "2024-04-12T15:00:00.000Z",
+      "name": "Kimsuky",
+      "description": "DPRK espionage group targeting policy, academia, and think tanks.",
+      "aliases": ["Kimsuky", "Velvet Chollima", "Emerald Sleet", "THALLIUM"],
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "G0094", "url": "https://attack.mitre.org/groups/G0094"}
+      ]
+    },
+    {
+      "type": "intrusion-set",
+      "spec_version": "2.1",
+      "id": "intrusion-set--f1cf1f5a-3d4a-4f9e-9c5e-aa0102030405",
+      "created": "2021-09-29T15:00:00.000Z",
+      "modified": "2024-04-12T15:00:00.000Z",
+      "name": "Andariel",
+      "description": "DPRK sub-cluster associated with Lazarus, conducting espionage and ransomware.",
+      "aliases": ["Andariel", "Silent Chollima", "Onyx Sleet"],
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "G0138", "url": "https://attack.mitre.org/groups/G0138"}
+      ]
+    },
+    {
+      "type": "malware",
+      "spec_version": "2.1",
+      "id": "malware--2dd34b01-6110-4aac-835d-b5e7b936b0be",
+      "created": "2018-04-18T17:59:24.739Z",
+      "modified": "2023-03-22T05:00:00.000Z",
+      "name": "FALLCHILL",
+      "is_family": true,
+      "description": "RAT used by Lazarus Group, attributed by US-CERT to HIDDEN COBRA.",
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "S0181", "url": "https://attack.mitre.org/software/S0181"}
+      ]
+    },
+    {
+      "type": "malware",
+      "spec_version": "2.1",
+      "id": "malware--c145e8eb-7e1a-4cb1-9d8a-6f1b0c0a1b2c",
+      "created": "2020-08-19T17:59:24.739Z",
+      "modified": "2023-03-22T05:00:00.000Z",
+      "name": "BLINDINGCAN",
+      "is_family": true,
+      "description": "RAT used by Lazarus Group in fake-job-offer campaigns against defense contractors.",
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "S0520", "url": "https://attack.mitre.org/software/S0520"}
+      ]
+    },
+    {
+      "type": "malware",
+      "spec_version": "2.1",
+      "id": "malware--6a0ef5d4-fc7c-4dda-85d7-592e4dbdc5d9",
+      "created": "2021-03-30T17:59:24.739Z",
+      "modified": "2023-03-22T05:00:00.000Z",
+      "name": "AppleJeus",
+      "is_family": true,
+      "description": "Trojanized cryptocurrency trading application used by Lazarus Group.",
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "S0584", "url": "https://attack.mitre.org/software/S0584"}
+      ]
+    },
+    {
+      "type": "tool",
+      "spec_version": "2.1",
+      "id": "tool--afc079f3-c0ea-4096-b75d-3f05338b7f60",
+      "created": "2017-05-31T21:33:02.428Z",
+      "modified": "2023-03-22T05:00:00.000Z",
+      "name": "Mimikatz",
+      "description": "Credential-dumping tool; used across multiple DPRK clusters.",
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "S0002", "url": "https://attack.mitre.org/software/S0002"}
+      ]
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--a62a8db3-f23a-4d8f-afd6-9dbc77e7813b",
+      "created": "2020-03-02T19:15:44.182Z",
+      "modified": "2023-03-30T21:01:38.317Z",
+      "name": "Phishing",
+      "description": "Adversaries may send phishing messages to gain access to victim systems.",
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "T1566", "url": "https://attack.mitre.org/techniques/T1566"}
+      ],
+      "kill_chain_phases": [
+        {"kill_chain_name": "mitre-attack", "phase_name": "initial-access"}
+      ],
+      "x_mitre_is_subtechnique": false
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--2e34237d-8574-43f6-aace-ae2915de8597",
+      "created": "2020-03-02T19:15:44.182Z",
+      "modified": "2023-03-30T21:01:38.317Z",
+      "name": "Spearphishing Attachment",
+      "description": "Adversaries may send spearphishing emails with a malicious attachment.",
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "T1566.001", "url": "https://attack.mitre.org/techniques/T1566/001"}
+      ],
+      "kill_chain_phases": [
+        {"kill_chain_name": "mitre-attack", "phase_name": "initial-access"}
+      ],
+      "x_mitre_is_subtechnique": true
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--0a3ead4e-6d47-4ccb-854c-a6a4f9d96b22",
+      "created": "2017-05-31T21:30:54.176Z",
+      "modified": "2023-03-30T21:01:38.317Z",
+      "name": "OS Credential Dumping",
+      "description": "Adversaries may attempt to dump credentials to obtain account login material.",
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "T1003", "url": "https://attack.mitre.org/techniques/T1003"}
+      ],
+      "kill_chain_phases": [
+        {"kill_chain_name": "mitre-attack", "phase_name": "credential-access"}
+      ],
+      "x_mitre_is_subtechnique": false
+    },
+    {
+      "type": "marking-definition",
+      "spec_version": "2.1",
+      "id": "marking-definition--fa42a846-8d90-4e51-bc29-71d5b4802168",
+      "created": "2017-06-01T00:00:00.000Z",
+      "definition_type": "statement",
+      "definition": {"statement": "Copyright 2015-2024, The MITRE Corporation."}
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11110000-0000-0000-0000-000000000001",
+      "created": "2018-04-18T17:59:24.739Z",
+      "modified": "2023-03-22T05:00:00.000Z",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--c93fccb1-e8e8-42cf-ae33-2ad1d183913a",
+      "target_ref": "malware--2dd34b01-6110-4aac-835d-b5e7b936b0be"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11110000-0000-0000-0000-000000000002",
+      "created": "2020-08-19T17:59:24.739Z",
+      "modified": "2023-03-22T05:00:00.000Z",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--c93fccb1-e8e8-42cf-ae33-2ad1d183913a",
+      "target_ref": "malware--c145e8eb-7e1a-4cb1-9d8a-6f1b0c0a1b2c"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11110000-0000-0000-0000-000000000003",
+      "created": "2021-03-30T17:59:24.739Z",
+      "modified": "2023-03-22T05:00:00.000Z",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--c93fccb1-e8e8-42cf-ae33-2ad1d183913a",
+      "target_ref": "malware--6a0ef5d4-fc7c-4dda-85d7-592e4dbdc5d9"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11110000-0000-0000-0000-000000000004",
+      "created": "2020-03-02T19:15:44.182Z",
+      "modified": "2023-03-30T21:01:38.317Z",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--c93fccb1-e8e8-42cf-ae33-2ad1d183913a",
+      "target_ref": "attack-pattern--2e34237d-8574-43f6-aace-ae2915de8597"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11110000-0000-0000-0000-000000000005",
+      "created": "2020-03-02T19:15:44.182Z",
+      "modified": "2023-03-30T21:01:38.317Z",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--cba37adb-d6fb-4610-b069-dd04c0643384",
+      "target_ref": "attack-pattern--2e34237d-8574-43f6-aace-ae2915de8597"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11110000-0000-0000-0000-000000000006",
+      "created": "2019-01-29T19:00:00.000Z",
+      "modified": "2023-03-22T05:00:00.000Z",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--dd2d9ca6-505b-4860-bd5e-d4f01396b15a",
+      "target_ref": "tool--afc079f3-c0ea-4096-b75d-3f05338b7f60"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11110000-0000-0000-0000-000000000007",
+      "created": "2019-01-29T19:00:00.000Z",
+      "modified": "2023-03-30T21:01:38.317Z",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--dd2d9ca6-505b-4860-bd5e-d4f01396b15a",
+      "target_ref": "attack-pattern--0a3ead4e-6d47-4ccb-854c-a6a4f9d96b22"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11110000-0000-0000-0000-000000000008",
+      "created": "2021-09-29T15:00:00.000Z",
+      "modified": "2023-03-22T05:00:00.000Z",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--f1cf1f5a-3d4a-4f9e-9c5e-aa0102030405",
+      "target_ref": "tool--afc079f3-c0ea-4096-b75d-3f05338b7f60"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--11110000-0000-0000-0000-000000000009",
+      "created": "2020-03-02T19:15:44.182Z",
+      "modified": "2023-03-30T21:01:38.317Z",
+      "relationship_type": "subtechnique-of",
+      "source_ref": "attack-pattern--2e34237d-8574-43f6-aace-ae2915de8597",
+      "target_ref": "attack-pattern--a62a8db3-f23a-4d8f-afd6-9dbc77e7813b"
+    }
+  ]
+}
