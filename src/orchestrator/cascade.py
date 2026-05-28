@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from urllib.parse import quote
 
 import asyncpg
 
@@ -121,9 +122,11 @@ async def dispatch(
 def _render_url(manifest: Manifest, input_object: InputObject) -> str | None:
     if manifest.template is None or manifest.template.url is None:
         return None
+    # percent-encode the selector so special chars (+, @, ', spaces) in an email
+    # or phrase don't break the rendered URL.
     return (
         manifest.template.url
-        .replace("{object.canonical}", input_object.canonical)
+        .replace("{object.canonical}", quote(input_object.canonical, safe=""))
         .replace("{object.type}", input_object.type)
     )
 

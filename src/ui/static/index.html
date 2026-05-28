@@ -5,6 +5,9 @@
   <title>Osiris — OSINT → TTP/TTAL</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+  <script src="https://unpkg.com/layout-base/layout-base.js"></script>
+  <script src="https://unpkg.com/cose-base/cose-base.js"></script>
+  <script src="https://unpkg.com/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
   <style>
     :root {
       --bg: #0d1117; --panel: #161b22; --panel2: #1c2330; --border: #2b333c;
@@ -30,6 +33,16 @@
     #inspect { grid-area: inspect; border-left: 1px solid var(--border); padding: 16px; }
     #graphwrap { grid-area: graph; position: relative; }
     #cy { position: absolute; inset: 0; }
+    #filterbar { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 5;
+                 display: flex; flex-wrap: wrap; gap: 6px; align-items: center; pointer-events: none; }
+    #filterbar .fchip { pointer-events: auto; }
+    .fchip { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; user-select: none;
+             background: var(--panel)cc; border: 1px solid var(--border); border-radius: 999px;
+             padding: 2px 9px; font-size: 11px; }
+    #graphhint { position: absolute; bottom: 10px; left: 12px; z-index: 5; color: var(--faint);
+                 font-size: 11px; pointer-events: none; }
+    .legend-cat { font-size: 10px; text-transform: uppercase; letter-spacing: .6px;
+                  color: var(--accent); margin: 10px 0 3px; font-weight: 600; }
 
     .section { margin-bottom: 18px; }
     .section h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--faint);
@@ -105,7 +118,8 @@
     <select id="case" onchange="loadCaseObjects()"></select>
     <button class="btn ghost" style="margin:0" onclick="newCase()">＋ New</button>
     <label>Depth</label>
-    <input id="hops" type="number" value="2" min="0" max="4" style="width:54px" onchange="reload()" />
+    <input id="hops" type="number" value="2" min="0" max="12" style="width:54px" onchange="reload()"
+           title="graph display depth — double-click a node to pivot-expand instead" />
     <span class="spacer"></span>
     <button class="btn ghost" style="margin:0" onclick="openTray('handoff')">Tray <b id="trayN">0</b></button>
     <button class="btn ghost" style="margin:0" onclick="openTray('merge')">Review <b id="mergeN">0</b></button>
@@ -146,7 +160,11 @@
     </div>
   </aside>
 
-  <div id="graphwrap"><div id="cy"></div></div>
+  <div id="graphwrap">
+    <div id="filterbar"></div>
+    <div id="cy"></div>
+    <div id="graphhint">double-click a node to expand its neighbourhood</div>
+  </div>
 
   <aside id="inspect" class="col">
     <div class="placeholder">Select a node to inspect it.<br><br>
@@ -170,13 +188,27 @@ const TYPE = {
   AttackPattern:  { c:'#3fb950', s:'diamond',          d:'A technique (MITRE ATT&CK Txxxx) — HOW something is done.' },
   Indicator:      { c:'#58a6ff', s:'triangle',         d:'An IOC / detection signal — a hash, IP, domain that points at something malicious.' },
   ObservedData:   { c:'#8b949e', s:'rectangle',        d:'Raw evidence — a scraped record, a feed entry. The provenance behind a claim.' },
+  URL:            { c:'#6cb6ff', s:'round-rectangle',  d:'A web page / search hit pulled in via dorking.' },
   Domain:         { c:'#39c5cf', s:'ellipse',          d:'A DNS domain observable.' },
+  IPv4:           { c:'#2dd4bf', s:'ellipse',          d:'An IPv4 address observable.' },
   TelegramChannel:{ c:'#56a3ff', s:'ellipse',          d:'A Telegram channel observable.' },
   Person:         { c:'#e3b341', s:'ellipse',          d:'A person entity (resolved probabilistically — never auto-merged).' },
   Email:          { c:'#7ee787', s:'ellipse',          d:'An email-address observable.' },
+  FileHash:       { c:'#f0883e', s:'triangle',         d:'A file hash observable (md5/sha1/sha256).' },
+  Phrase:         { c:'#adbac7', s:'ellipse',          d:'Free-text — a dorking seed.' },
 };
 const DEFAULT_TYPE = { c:'#6e7681', s:'ellipse', d:'An ontology object.' };
 const ty = t => TYPE[t] || DEFAULT_TYPE;
+
+// ontology categories (Palantir-style grouping; mirrors STIX SDO families)
+const GROUPS = [
+  ['Actors',       ['IntrusionSet','ThreatActor','Campaign']],
+  ['Capabilities', ['Malware','Tool']],
+  ['Techniques',   ['AttackPattern']],
+  ['Indicators',   ['Indicator']],
+  ['Evidence',     ['ObservedData','URL']],
+  ['Observables',  ['Domain','IPv4','TelegramChannel','Email','Person','FileHash','Phrase']],
+];
 
 const REL = {
   uses:             'The actor/source employs this capability or technique.',
@@ -193,6 +225,9 @@ const REL = {
 let CASE = null, ROOT = null, OBJECTS = [];
 
 // ---- cytoscape -------------------------------------------------------------
+if (window.cytoscapeFcose) cytoscape.use(window.cytoscapeFcose);
+const HAS_FCOSE = !!window.cytoscapeFcose;
+
 const cy = cytoscape({
   container: document.getElementById('cy'),
   wheelSensitivity: .2,
@@ -217,9 +252,17 @@ const cy = cytoscape({
   ],
 });
 
-function layout() {
-  cy.layout({ name: 'cose', animate: false, padding: 50, nodeRepulsion: 12000,
-              idealEdgeLength: 130, componentSpacing: 120, nodeOverlap: 24 }).run();
+// force-directed layout engine (fcose) for readable separation; `preserve`
+// keeps existing node positions stable so incremental growth isn't jarring.
+function layout(preserve) {
+  if (HAS_FCOSE) {
+    cy.layout({ name: 'fcose', animate: true, animationDuration: 350, randomize: !preserve,
+                quality: 'proof', nodeSeparation: 130, idealEdgeLength: 120,
+                nodeRepulsion: 9000, padding: 50, packComponents: true }).run();
+  } else {
+    cy.layout({ name: 'cose', animate: false, padding: 50, nodeRepulsion: 12000,
+                idealEdgeLength: 130, componentSpacing: 120, nodeOverlap: 24 }).run();
+  }
 }
 
 // ---- data loading ----------------------------------------------------------
@@ -263,20 +306,47 @@ function short(canon) {
   return canon.length > 30 ? canon.slice(0, 30) + '…' : canon;
 }
 
+// add only nodes/edges not already on the canvas; returns how many new nodes.
+function mergeGraph(g) {
+  let added = 0;
+  g.nodes.forEach(n => {
+    if (cy.getElementById(n.id).empty()) {
+      cy.add({ data: { id: n.id, label: n.label, type: n.type } }); added++;
+    }
+  });
+  g.edges.forEach(e => {
+    const eid = e.source + '>' + e.target + e.type;
+    if (cy.getElementById(eid).empty())
+      cy.add({ data: { id: eid, source: e.source, target: e.target, type: e.type } });
+  });
+  applyTypeFilter();
+  return added;
+}
+
 async function loadGraph(id) {
   ROOT = id;
   const hops = document.getElementById('hops').value || 2;
   document.getElementById('status').textContent = 'loading…';
   const g = await fetch(`/objects/${id}/graph?hops=${hops}`).then(r => r.json());
   cy.elements().remove();
-  cy.add(g.nodes.map(n => ({ data: { id: n.id, label: n.label, type: n.type } })));
-  cy.add(g.edges.map(e => ({ data: { id: e.source+'>'+e.target+e.type, source: e.source, target: e.target, type: e.type } })));
+  mergeGraph(g);
   cy.getElementById(id).addClass('root');
-  layout();
+  layout(false);
   document.getElementById('status').textContent = `${g.nodes.length} entities · ${g.edges.length} links`;
   inspect(id);
 }
 function reload() { if (ROOT) loadGraph(ROOT); }
+
+// Palantir-style pivot: double-click a node to grow its neighbourhood into the
+// current graph (incremental, positions preserved) rather than reloading.
+async function pivotExpand(id) {
+  const g = await fetch(`/objects/${id}/graph?hops=1`).then(r => r.json());
+  const added = mergeGraph(g);
+  if (added) layout(true);  // keep existing positions stable
+  document.getElementById('status').textContent =
+    `${cy.nodes().length} entities · ${cy.edges().length} links (+${added})`;
+}
+cy.on('dbltap', 'node', e => pivotExpand(e.target.id()));
 
 // ---- case building ---------------------------------------------------------
 async function newCase() {
@@ -306,11 +376,22 @@ async function seedIntake() {
 async function expandCase() {
   if (!CASE) return;
   const msg = document.getElementById('seedmsg');
-  msg.textContent = 'expanding — collectors fanning out (cached fetches reused)…';
-  const res = await fetch(`/cases/${CASE}/expand`, { method:'POST' }).then(r => r.json());
-  msg.textContent = `expanded: ${res.processed} events processed.`;
-  await loadCaseObjects();
-  if (ROOT) loadGraph(ROOT);
+  msg.innerHTML = 'expanding — collectors fanning out; <b>results stream in live</b>…';
+  // non-blocking: server runs the cascade in the background; the SSE stream
+  // grows the graph incrementally (no choppy full reload).
+  await fetch(`/cases/${CASE}/expand`, { method:'POST' });
+}
+
+async function refreshObjects() {
+  if (!CASE) return;
+  OBJECTS = await fetch(`/objects?case_id=${CASE}&limit=400`).then(r => r.json());
+  renderObjectList();
+}
+async function growGraph() {
+  if (!ROOT) return;
+  const hops = document.getElementById('hops').value || 2;
+  const g = await fetch(`/objects/${ROOT}/graph?hops=${hops}`).then(r => r.json());
+  if (mergeGraph(g)) layout(true);
 }
 
 // ---- inspector -------------------------------------------------------------
@@ -392,8 +473,8 @@ function watchCase() {
     const s = JSON.parse(ev.data);
     applyStats(s);
     document.getElementById('live').style.color = '#3fb950';
-    // when new entities appear (e.g. a cascade expanded), refresh the list/graph
-    if (LAST_TOTAL !== -1 && s.total !== LAST_TOTAL) { loadCaseObjects(); if (ROOT) loadGraph(ROOT); }
+    // entities appeared (cascade expanding) -> grow the sidebar + graph in place
+    if (LAST_TOTAL !== -1 && s.total !== LAST_TOTAL) { refreshObjects(); refreshCase(); growGraph(); }
     LAST_TOTAL = s.total;
   };
   STREAM.onerror = () => { document.getElementById('live').style.color = '#6e7681'; };
@@ -481,11 +562,37 @@ async function promoteSelected() {
   closeModal(); await loadCaseObjects(); loadGraph(window._fedObj);
 }
 
-// ---- legends ---------------------------------------------------------------
+// ---- type filter (Object-Explorer style show/hide by type) -----------------
+const HIDDEN = new Set();
+function applyTypeFilter() {
+  cy.nodes().forEach(n => n.style('display', HIDDEN.has(n.data('type')) ? 'none' : 'element'));
+  renderFilterChips();
+}
+function toggleType(t) {
+  HIDDEN.has(t) ? HIDDEN.delete(t) : HIDDEN.add(t);
+  applyTypeFilter();
+}
+function renderFilterChips() {
+  const present = [...new Set(cy.nodes().map(n => n.data('type')))].sort();
+  document.getElementById('filterbar').innerHTML = present.length
+    ? '<span style="color:var(--faint);font-size:11px;margin-right:4px">show:</span>' +
+      present.map(t => {
+        const on = !HIDDEN.has(t);
+        return `<span class="fchip" onclick="toggleType('${t}')"
+          style="border-color:${ty(t).c}${on?'':'33'};opacity:${on?1:.4}">
+          <span class="dot" style="background:${ty(t).c}"></span>${t}</span>`;
+      }).join('')
+    : '';
+}
+
+// ---- legends (grouped by ontology category, Palantir/STIX-style) -----------
 function renderLegends() {
-  document.getElementById('legend').innerHTML = Object.entries(TYPE).map(([t,m]) =>
-    `<div class="legend-row"><span class="dot" style="background:${m.c}"></span>
-       <span><span class="name">${t}</span><div class="meaning">${m.d}</div></span></div>`).join('');
+  document.getElementById('legend').innerHTML = GROUPS.map(([cat, types]) =>
+    `<div class="legend-cat">${cat}</div>` + types.filter(t => TYPE[t]).map(t => {
+      const m = TYPE[t];
+      return `<div class="legend-row"><span class="dot" style="background:${m.c}"></span>
+        <span><span class="name">${t}</span><div class="meaning">${m.d}</div></span></div>`;
+    }).join('')).join('');
   document.getElementById('glossary').innerHTML = Object.entries(REL).map(([r,d]) =>
     `<div class="glossary-row"><span class="rel">${r}</span><span class="meaning">${d}</span></div>`).join('');
 }

@@ -57,7 +57,8 @@ async def test_osint4all_suggest_fills_tray_on_expand(
         "WHERE r.status='awaiting_human'"
     )
     assert len(rows) >= 2
-    assert any("kim@dprk.example" in (r["url"] or "") for r in rows)
+    # the selector is percent-encoded into the URL (kim@dprk.example -> kim%40dprk.example)
+    assert any("kim%40dprk.example" in (r["url"] or "") for r in rows)
 
 
 async def test_pdf_brief(actions: Actions) -> None:

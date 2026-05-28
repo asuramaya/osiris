@@ -94,6 +94,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         app.state.manifests = {**load_manifests(_HELPERS_DIR), **searches, **suggest_manifests()}
         app.state.connectors = {**CONNECTORS, **{hid: searxng_search for hid in searches}}
         app.state.redis = create_redis(settings.redis_url)
+        app.state.tasks = set()  # holds background expand tasks so they aren't GC'd
         # triggers are a projection of manifests (#5) — (re)project on startup so a
         # fresh deployment actually fires helpers (else Expand finds no triggers).
         await project_triggers(app.state.pool, app.state.manifests)
@@ -130,9 +131,9 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         return {"object_id": str(object_id), "type": type_, "canonical": body.raw.strip()}
 
     @app.post("/cases/{case_id}/expand")
-    async def case_expand(case_id: uuid.UUID, request: Request) -> dict[str, int]:
-        """Drain the outbox once — fire matching helpers across the case, bounded
-        by its budgets. Cached fetches make repeated expansion cheap."""
+    async def case_expand(case_id: uuid.UUID, request: Request) -> dict[str, bool]:
+        """Fire helpers across the case in the BACKGROUND and return immediately;
+        the SSE stream surfaces entities as they arrive (non-blocking expand)."""
         ctx = CascadeContext(
             actions=Actions(request.app.state.pool),
             limiter=RateLimiter(request.app.state.redis),
@@ -140,7 +141,10 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             manifests=request.app.state.manifests,
             connectors=request.app.state.connectors,
         )
-        return {"processed": await expand_case(ctx, case_id)}
+        task = asyncio.create_task(expand_case(ctx, case_id))
+        request.app.state.tasks.add(task)
+        task.add_done_callback(request.app.state.tasks.discard)
+        return {"started": True}
 
     @app.get("/cases")
     async def list_cases(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
@@ -194,7 +198,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def object_graph(
         object_id: uuid.UUID,
         p: asyncpg.Pool = Depends(get_pool),
-        hops: int = Query(1, ge=0, le=4),
+        hops: int = Query(1, ge=0, le=12),
     ) -> dict[str, list[dict[str, Any]]]:
         seen: set[uuid.UUID] = {object_id}
         frontier: set[uuid.UUID] = {object_id}

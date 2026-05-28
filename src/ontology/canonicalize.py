@@ -23,10 +23,11 @@ def _email(raw: str) -> str:
     local, _, domain = raw.rpartition("@")
     domain = domain.strip(".")
     if domain in _GMAIL_DOMAINS:
+        # Gmail ignores dots and +subaddressing in the local part
         local = local.split("+", 1)[0].replace(".", "")
         domain = "gmail.com"
-    else:
-        local = local.split("+", 1)[0]
+    # other providers: preserve the local part verbatim (dots, +tags, and other
+    # RFC-legal special chars are significant) — only the domain is lowercased.
     return f"{local}@{domain}"
 
 

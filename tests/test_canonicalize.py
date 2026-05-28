@@ -10,8 +10,14 @@ from src.ontology.intake import intake
 def test_email_canonicalization() -> None:
     assert canonicalize("Email", "John.Doe+spam@Gmail.com") == "johndoe@gmail.com"
     assert canonicalize("Email", "a.b.c@googlemail.com") == "abc@gmail.com"
-    # non-gmail keeps dots, drops +tag, lowercases
-    assert canonicalize("Email", "First.Last+x@Corp.COM") == "first.last@corp.com"
+
+
+def test_email_preserves_special_chars_for_non_gmail() -> None:
+    # non-gmail: dots and +subaddressing are significant — never stripped (only
+    # the domain is lowercased). Regression: sanitization used to mangle these.
+    assert canonicalize("Email", "First.Last+osint@Corp.COM") == "first.last+osint@corp.com"
+    assert canonicalize("Email", "hector+osint@asuramaya.com") == "hector+osint@asuramaya.com"
+    assert canonicalize("Email", "o'brien@example.org") == "o'brien@example.org"
 
 
 def test_domain_and_ip_canonicalization() -> None:
