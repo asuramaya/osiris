@@ -32,10 +32,11 @@ from src.db.pool import create_pool
 from src.db.redis import create_redis
 from src.ontology.classify import classify
 from src.ontology.intake import intake
-from src.ontology.resolution import review_tray
+from src.ontology.resolution import resolve_candidate, review_tray
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, run_cascade
 from src.orchestrator.federation import federated_query, promote, to_preview
+from src.orchestrator.handoff import abandon, open_handoff, post_back
 from src.orchestrator.handoff import tray as handoff_tray
 from src.orchestrator.manifests import load_manifests
 from src.orchestrator.ratelimit import RateLimiter
@@ -218,6 +219,63 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def merge_candidates(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
         return await review_tray(p)
 
+    @app.post("/merge-candidates/{candidate_id}/resolve")
+    async def resolve_merge(
+        candidate_id: int, body: ResolveBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, str]:
+        await resolve_candidate(
+            Actions(p), candidate_id, body.decision, get_settings().osiris_actor
+        )
+        return {"resolved": body.decision}
+
+    @app.post("/handoffs/{handoff_id}/open")
+    async def handoff_open(handoff_id: int, p: asyncpg.Pool = Depends(get_pool)) -> dict[str, str]:
+        await open_handoff(Actions(p), handoff_id)
+        return {"status": "in_browser"}
+
+    @app.post("/handoffs/{handoff_id}/abandon")
+    async def handoff_abandon(
+        handoff_id: int, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, str]:
+        await abandon(Actions(p), handoff_id)
+        return {"status": "abandoned"}
+
+    @app.post("/handoffs/{handoff_id}/postback")
+    async def handoff_postback(
+        handoff_id: int, body: PostbackBody, request: Request
+    ) -> dict[str, int]:
+        pool = request.app.state.pool
+        helper_id = await pool.fetchval("SELECT helper_id FROM handoffs WHERE id=$1", handoff_id)
+        manifest = request.app.state.manifests.get(helper_id)
+        if manifest is None:
+            raise HTTPException(404, f"no manifest for handoff helper {helper_id!r}")
+        return await post_back(Actions(pool), manifest, handoff_id, body.result)
+
+    @app.get("/cases/{case_id}/stats")
+    async def case_stats(case_id: uuid.UUID, request: Request) -> dict[str, Any]:
+        pool = request.app.state.pool
+        by_type = {
+            r["type"]: r["n"]
+            for r in await pool.fetch(
+                "SELECT o.type, count(*) AS n FROM objects o "
+                "JOIN case_objects co ON co.object_id = o.id "
+                "WHERE co.case_id = $1 GROUP BY o.type ORDER BY n DESC",
+                case_id,
+            )
+        }
+        pending = await pool.fetchval(
+            "SELECT count(*) FROM handoffs h JOIN helper_runs r ON r.id = h.helper_run_id "
+            "WHERE h.case_id = $1 AND h.resolved_at IS NULL AND r.status = 'awaiting_human'",
+            case_id,
+        )
+        rate_left = await request.app.state.redis.get(f"budget:{case_id}:rate")
+        return {
+            "by_type": by_type,
+            "total": sum(by_type.values()),
+            "pending_handoffs": pending,
+            "rate_credits_remaining": int(rate_left) if rate_left is not None else None,
+        }
+
     @app.get("/cases/{case_id}/snapshot")
     async def snapshot(
         case_id: uuid.UUID,
@@ -281,6 +339,14 @@ class NewCaseBody(BaseModel):
 class IntakeBody(BaseModel):
     raw: str
     type: str | None = None
+
+
+class ResolveBody(BaseModel):
+    decision: str  # 'merged' | 'rejected'
+
+
+class PostbackBody(BaseModel):
+    result: dict[str, Any]
 
 
 class FederateBody(BaseModel):

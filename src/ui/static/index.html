@@ -76,6 +76,23 @@
     h3.insp-h { font-size: 11px; text-transform: uppercase; letter-spacing: .7px; color: var(--faint);
                 margin: 16px 0 6px; }
     #status { color: var(--faint); font-size: 12px; }
+
+    .stats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .pill { background: var(--panel2); border: 1px solid var(--border); border-radius: 999px;
+            padding: 2px 9px; font-size: 11px; }
+    #overlay { position: fixed; inset: 0; background: #0008; display: none; z-index: 50;
+               align-items: center; justify-content: center; }
+    #modal { width: 620px; max-height: 78vh; overflow-y: auto; background: var(--panel);
+             border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+    #modal h2 { margin: 0 0 10px; font-size: 15px; }
+    .card { background: var(--panel2); border: 1px solid var(--border); border-radius: 9px;
+            padding: 11px 13px; margin: 8px 0; }
+    .card .row { display: flex; gap: 8px; align-items: center; }
+    .card .acts { margin-top: 8px; display: flex; gap: 8px; }
+    .btn.warn { background: transparent; color: #f0b72f; border: 1px solid #f0b72f; }
+    .btn.bad { background: transparent; color: #f85149; border: 1px solid #f85149; }
+    .close { float: right; cursor: pointer; color: var(--faint); }
+    .chk { display: flex; gap: 8px; align-items: center; padding: 3px 0; font-size: 12.5px; }
   </style>
 </head>
 <body>
@@ -89,6 +106,9 @@
     <button class="btn ghost" style="margin:0" onclick="newCase()">＋ New</button>
     <label>Depth</label>
     <input id="hops" type="number" value="2" min="0" max="4" style="width:54px" onchange="reload()" />
+    <span class="spacer"></span>
+    <button class="btn ghost" style="margin:0" onclick="openTray('handoff')">Tray <b id="trayN">0</b></button>
+    <button class="btn ghost" style="margin:0" onclick="openTray('merge')">Review <b id="mergeN">0</b></button>
     <span id="status"></span>
   </header>
 
@@ -97,6 +117,7 @@
       <div class="hint"><b>Start here.</b> Make a case, paste any selector to seed it
         (we detect the type), then <b>Expand</b> to let collectors fan out. Click any
         node to learn what it is and how it connects.</div>
+      <div id="casestats" class="stats"></div>
     </div>
     <div class="section">
       <h2>1 · Seed the case — paste anything</h2>
@@ -130,6 +151,10 @@
       You'll see what kind of entity it is, its evidence-backed properties (with the source of each),
       how it links to everything around it, and which collectors you can run on it next.</div>
   </aside>
+</div>
+
+<div id="overlay" onclick="if(event.target.id==='overlay')closeModal()">
+  <div id="modal"></div>
 </div>
 
 <script>
@@ -208,6 +233,7 @@ async function loadCaseObjects() {
   CASE = document.getElementById('case').value || CASE;
   OBJECTS = await fetch(`/objects?case_id=${CASE}&limit=300`).then(r => r.json());
   renderObjectList();
+  refreshCase();
   // auto-open the most "central" thing for a new operator: an actor if present
   const actor = OBJECTS.find(o => o.type === 'IntrusionSet') || OBJECTS[0];
   if (actor) loadGraph(actor.id);
@@ -304,10 +330,14 @@ async function inspect(id) {
     `<div class="prop"><span class="k">${p.name}</span>:
        <span class="v">${fmt(p.value)}</span> <span class="src">via ${p.source_id}</span></div>`).join('')
     || '<div class="placeholder">No properties yet.</div>';
-  const helperHtml = helpers.length ? helpers.map(h =>
-    `<div class="helper"><span class="hname">${h.name}</span>
+  const helperHtml = helpers.length ? helpers.map(h => {
+    const action = h.tier === 'open'
+      ? `<button class="btn" style="margin-top:6px" onclick="federatePreview('${h.id}','${id}')">Run &amp; preview ▸</button>`
+      : `<div class="hwhat" style="color:var(--faint)">Gated — runs via <b>Expand</b>, lands in the handoff tray.</div>`;
+    return `<div class="helper"><span class="hname">${h.name}</span>
        <span class="tier ${h.tier}">${h.tier}</span>
-       <div class="hwhat">${h.description || 'Collect more about this entity.'}</div></div>`).join('')
+       <div class="hwhat">${h.description || 'Collect more about this entity.'}</div>${action}</div>`;
+  }).join('')
     : '<div class="placeholder">No collectors consume this type. It\'s linked-to, not a query seed.</div>';
 
   document.getElementById('inspect').innerHTML = `
@@ -326,6 +356,98 @@ function fmt(v) {
 }
 
 cy.on('tap', 'node', e => inspect(e.target.id()));
+
+// ---- case overview + trays -------------------------------------------------
+async function refreshCase() {
+  if (!CASE) return;
+  const [stats, merge] = await Promise.all([
+    fetch(`/cases/${CASE}/stats`).then(r => r.json()),
+    fetch('/merge-candidates').then(r => r.json()),
+  ]);
+  const rc = stats.rate_credits_remaining;
+  document.getElementById('casestats').innerHTML =
+    `<span class="pill">${stats.total} entities</span>` +
+    Object.entries(stats.by_type).slice(0,5).map(([t,n]) =>
+      `<span class="pill" style="border-color:${ty(t).c}66">${t}: ${n}</span>`).join('') +
+    (rc!=null ? `<span class="pill">budget: ${rc}</span>` : '');
+  document.getElementById('trayN').textContent = stats.pending_handoffs;
+  document.getElementById('mergeN').textContent = merge.length;
+}
+
+function closeModal() { document.getElementById('overlay').style.display = 'none'; }
+
+async function openTray(kind) {
+  const m = document.getElementById('modal');
+  document.getElementById('overlay').style.display = 'flex';
+  if (kind === 'handoff') {
+    const items = await fetch(`/cases/${CASE}/tray`).then(r => r.json());
+    m.innerHTML = `<span class="close" onclick="closeModal()">✕</span>
+      <h2>Handoff tray — sources waiting for you</h2>
+      <div class="hint">Gated sources can't be scraped server-side. Open one in your real
+        browser, then post back what you found. Cookies become a reusable lease.</div>` +
+      (items.map(h => `<div class="card">
+        <div class="row"><b>${h.helper_id}</b> ${h.challenge_kind ? `· <span style="color:#f0b72f">${h.challenge_kind}</span>`:''}</div>
+        <div class="meaning">${h.url||''}</div>
+        <div class="acts">
+          <a class="btn" href="${h.url}" target="_blank" onclick="hOpen(${h.id})">Open in browser ↗</a>
+          <button class="btn warn" onclick="hPost(${h.id})">Post back result</button>
+          <button class="btn bad" onclick="hAbandon(${h.id})">Skip</button>
+        </div></div>`).join('') || '<div class="card">Tray is empty.</div>');
+  } else {
+    const items = await fetch('/merge-candidates').then(r => r.json());
+    m.innerHTML = `<span class="close" onclick="closeModal()">✕</span>
+      <h2>Review queue — possible same entity</h2>
+      <div class="hint">The system never auto-merges people. Confirm to merge, or reject to
+        record a permanent "not the same" so it's never suggested again.</div>` +
+      (items.map(c => `<div class="card">
+        <div class="row"><b>score ${(+c.score).toFixed(2)}</b> · ${(c.reasons.signals||[]).join(', ')}</div>
+        <div class="meaning">${c.a_id} ⟷ ${c.b_id}</div>
+        <div class="acts">
+          <button class="btn" onclick="resolveMerge(${c.id},'merged')">Confirm merge</button>
+          <button class="btn bad" onclick="resolveMerge(${c.id},'rejected')">Reject — different</button>
+        </div></div>`).join('') || '<div class="card">Nothing to review.</div>');
+  }
+}
+async function hOpen(id){ await fetch(`/handoffs/${id}/open`,{method:'POST'}); }
+async function hAbandon(id){ await fetch(`/handoffs/${id}/abandon`,{method:'POST'}); openTray('handoff'); refreshCase(); }
+async function hPost(id){
+  const raw = prompt('Paste the scraped result as JSON (e.g. {"title":"…","subscribers":123}):','{}');
+  if(raw===null) return;
+  await fetch(`/handoffs/${id}/postback`,{method:'POST',headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({result: JSON.parse(raw)})});
+  closeModal(); await loadCaseObjects(); reload();
+}
+async function resolveMerge(id, decision){
+  await fetch(`/merge-candidates/${id}/resolve`,{method:'POST',headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({decision})});
+  openTray('merge'); await loadCaseObjects(); reload();
+}
+
+// ---- run a collector from the inspector (federate -> promote) --------------
+async function federatePreview(helperId, objectId) {
+  const m = document.getElementById('modal');
+  document.getElementById('overlay').style.display = 'flex';
+  m.innerHTML = `<span class="close" onclick="closeModal()">✕</span>
+    <h2>${helperId}</h2><div class="hint">querying the source in place — nothing is saved yet…</div>`;
+  let preview;
+  try { preview = await fetch('/federate',{method:'POST',headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({helper_id: helperId, object_id: objectId})}).then(r => r.json()); }
+  catch(e){ m.innerHTML += `<div class="card">fetch failed.</div>`; return; }
+  if (preview.detail) { m.innerHTML += `<div class="card">${preview.detail}</div>`; return; }
+  window._fedObj = objectId; window._fedHelper = helperId;
+  m.innerHTML = `<span class="close" onclick="closeModal()">✕</span>
+    <h2>${helperId} — preview</h2>
+    <div class="hint">Found ${preview.objects.length}. Tick what to keep, then promote into the case.</div>` +
+    preview.objects.map((o,i) => `<label class="chk"><input type="checkbox" data-c="${o.canonical}" checked>
+      <span class="dot" style="background:${ty(o.type).c}"></span> <b>${o.type}</b> ${short(o.canonical)}</label>`).join('') +
+    `<div class="acts"><button class="btn" onclick="promoteSelected()">Promote selected</button></div>`;
+}
+async function promoteSelected() {
+  const sel = [...document.querySelectorAll('#modal input[type=checkbox]:checked')].map(c => c.dataset.c);
+  await fetch('/promote',{method:'POST',headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({helper_id: window._fedHelper, object_id: window._fedObj, case_id: CASE, selected: sel})});
+  closeModal(); await loadCaseObjects(); loadGraph(window._fedObj);
+}
 
 // ---- legends ---------------------------------------------------------------
 function renderLegends() {
