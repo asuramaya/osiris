@@ -46,12 +46,15 @@ async def test_project_triggers_preserves_enabled_flag(actions: Actions) -> None
 async def test_matching_helpers(actions: Actions) -> None:
     manifests = load_manifests(HELPERS_DIR)
     await project_triggers(actions.pool, manifests)
-    # a Malware object_created matches the ThreatFox helper
+    # each helper matches its consumed type
     assert "threatfox_malware_iocs" in await matching_helpers(
         actions.pool, "object_created", "Malware"
     )
-    # a Domain doesn't
-    assert await matching_helpers(actions.pool, "object_created", "Domain") == []
+    assert "crtsh_subdomains" in await matching_helpers(
+        actions.pool, "object_created", "Domain"
+    )
+    # a type no helper consumes matches nothing
+    assert await matching_helpers(actions.pool, "object_created", "Email") == []
     # disabled triggers don't match
     await actions.pool.execute("UPDATE triggers SET enabled=false")
     assert await matching_helpers(actions.pool, "object_created", "Malware") == []

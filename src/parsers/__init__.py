@@ -7,10 +7,12 @@ parsers here so the runner can resolve them by the name in the manifest.
 from __future__ import annotations
 
 from src.parsers.base import Parser
+from src.parsers.crtsh import parse_crtsh
 from src.parsers.threatfox import parse_threatfox_iocs
 
 PARSERS: dict[str, Parser] = {
     "threatfox_malware_iocs": parse_threatfox_iocs,
+    "crtsh_subdomains": parse_crtsh,
 }
 
 

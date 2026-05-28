@@ -49,6 +49,10 @@ files = ["src"]            # mypy --strict clean on src/ (migrations excluded)
 module = ["asyncpg.*"]     # asyncpg ships no py.typed; treat as untyped at the boundary
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["arq.*"]   # partial/untyped public API at the worker boundary
+disallow_untyped_calls = false
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

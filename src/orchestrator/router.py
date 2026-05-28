@@ -1,0 +1,58 @@
+"""The router — per-(helper, object) routing decision (DESIGN §7).
+
+Phase 3 implements the tier=open path: cache -> token bucket -> server worker /
+defer. Fragile/gated/manual tiers return placeholder routes until their phases
+(SearXNG, browser bridge, leases) land. Routing is per (helper, object), not per
+source globally, and rate budget is checked against the helper's resolved origin.
+"""
+
+from __future__ import annotations
+
+import enum
+import uuid
+
+import asyncpg
+
+from src.orchestrator.manifests import Manifest
+from src.orchestrator.ratelimit import RateLimiter
+
+
+class Route(enum.Enum):
+    CACHED = "cached"
+    SERVER_WORKER = "server_worker"
+    DEFER = "defer"
+    AWAITING_HUMAN = "awaiting_human"
+
+
+async def _is_cached(pool: asyncpg.Pool, helper_id: str, object_id: uuid.UUID, ttl: int) -> bool:
+    return bool(
+        await pool.fetchval(
+            "SELECT 1 FROM helper_runs WHERE helper_id=$1 AND object_id=$2 "
+            "AND status='done' AND finished_at > now() - make_interval(secs => $3) LIMIT 1",
+            helper_id,
+            object_id,
+            ttl,
+        )
+    )
+
+
+async def route(
+    pool: asyncpg.Pool,
+    limiter: RateLimiter,
+    manifest: Manifest,
+    object_id: uuid.UUID,
+) -> Route:
+    if await _is_cached(pool, manifest.id, object_id, manifest.cache_ttl):
+        return Route.CACHED
+
+    if manifest.tier == "open":
+        ok = await limiter.acquire(
+            manifest.origin,
+            rps=manifest.rate.per_origin_rps,
+            capacity=float(manifest.rate.per_origin_concurrent),
+        )
+        return Route.SERVER_WORKER if ok else Route.DEFER
+
+    if manifest.tier in ("gated", "manual"):
+        return Route.AWAITING_HUMAN
+    return Route.DEFER  # fragile: needs SearXNG/browser (later phase)

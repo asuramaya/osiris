@@ -68,6 +68,13 @@ and `docker run` do too.
   FINDING: abuse.ch now requires a free Auth-Key — "keyless ThreatFox" (DESIGN §3/§14) is
   dead; connector reads THREATFOX_AUTH_KEY; tests are fixture-based/hermetic. CIRCL OSINT
   MISP feed IS keyless (candidate for a later bulk galaxy-ingest path).
-- **Phase 3 (next):** router (tier=open) + token buckets + durable outbox relay + Arq
-  cascade + cases/budgets/hop-distance enforcement. Then human-in-loop (Playwright-CDP),
-  leases, ER, UI, ...
+- **Phase 3 (DONE):** router (tier=open) + per-origin token buckets + durable outbox
+  relay + budget-gated cascade + Arq wiring. `src/orchestrator/{ratelimit,budgets,router,
+  cascade}.py`, `src/db/redis.py`, `src/workers/arq_worker.py`, `src/connectors/{crtsh,
+  registry}.py`, `src/parsers/crtsh.py`, `helpers/crtsh_subdomains.yaml`. 32 tests green
+  (real PG + real Redis via testcontainers). Cascade = pure async coroutines (drain_outbox/
+  fire_triggers/dispatch) tested directly; Arq is the prod process. Connector = injected
+  network seam. Proven: crt.sh self-similar feed cascades and TERMINATES on hop budget
+  (no infinite loop); halts on rate-credit exhaustion; atomic claim dedup; token-bucket DEFER.
+- **Phase 4 (next):** browser bridge (Playwright-CDP, reverses §15.3) + tier=gated +
+  analyst handoff tray (batched). Then leases, ER, UI, federation, windowed helpers, export.

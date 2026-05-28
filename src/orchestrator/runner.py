@@ -81,6 +81,7 @@ async def apply_result(
     input_object: InputObject,
     case_id: uuid.UUID,
     helper_run_id: uuid.UUID,
+    child_hop: int = 0,
 ) -> dict[str, int]:
     settings = get_settings()
     store = ArtifactStore(settings.osiris_artifact_dir)
@@ -94,7 +95,7 @@ async def apply_result(
 
     for spec in result.objects:
         obj_id = await actions.create_or_find_object(
-            spec.type, spec.canonical, source_id, case_id
+            spec.type, spec.canonical, source_id, case_id, hop_distance=child_hop
         )
         ids[spec.canonical] = obj_id
         n_obj += 1
@@ -123,24 +124,24 @@ async def apply_result(
     return {"objects": n_obj, "properties": n_prop, "links": n_link}
 
 
-async def run_helper(
+async def execute_claimed(
     actions: Actions,
     manifest: Manifest,
     response: dict[str, Any],
     input_object: InputObject,
     case_id: uuid.UUID,
+    run_id: uuid.UUID,
+    *,
+    input_hop: int = 0,
 ) -> dict[str, int]:
-    """Claim -> parse -> apply -> finalize. Returns counts of what was applied."""
-    object_id = uuid.UUID(input_object.id)
-    run_id = await claim_run(actions, manifest.id, object_id, case_id, manifest.tier)
-    if run_id is None:
-        raise HelperRunError(f"{manifest.id} already running on {object_id}")
+    """Parse -> apply -> finalize for an already-claimed run. Emitted objects are
+    placed one hop beyond the consumed object. Marks the run done/failed."""
     try:
         parser = get_parser(manifest.parser)
         result = parser(response, input_object)
         counts = await apply_result(
             actions, result, source_id=manifest.id, input_object=input_object,
-            case_id=case_id, helper_run_id=run_id,
+            case_id=case_id, helper_run_id=run_id, child_hop=input_hop + 1,
         )
         await actions.pool.execute(
             "UPDATE helper_runs SET status='done', finished_at=now(), result=$2 WHERE id=$1",
@@ -153,3 +154,22 @@ async def run_helper(
             run_id, str(exc),
         )
         raise
+
+
+async def run_helper(
+    actions: Actions,
+    manifest: Manifest,
+    response: dict[str, Any],
+    input_object: InputObject,
+    case_id: uuid.UUID,
+    *,
+    input_hop: int = 0,
+) -> dict[str, int]:
+    """Claim -> execute (the standalone synchronous path)."""
+    object_id = uuid.UUID(input_object.id)
+    run_id = await claim_run(actions, manifest.id, object_id, case_id, manifest.tier)
+    if run_id is None:
+        raise HelperRunError(f"{manifest.id} already running on {object_id}")
+    return await execute_claimed(
+        actions, manifest, response, input_object, case_id, run_id, input_hop=input_hop
+    )

@@ -1,0 +1,23 @@
+id: crtsh_subdomains
+name: crt.sh subdomain discovery
+description: >
+  Query crt.sh Certificate Transparency logs for a Domain and create child
+  Domain objects for each subdomain observed. Cascades: each new Domain re-fires
+  this helper; only the case hop-distance budget terminates the recursion.
+consumes:
+  type: Domain
+  requires_properties: []
+emits:
+  - type: Domain
+    confidence_floor: 0.7
+  - link_type: has_subdomain
+tier: open
+origin: crt.sh
+rate:
+  per_origin_rps: 0.5            # crt.sh is slow/flaky — be gentle
+  per_origin_concurrent: 1
+  jitter_ms: [500, 1500]
+parser: crtsh_subdomains
+cache_ttl: 86400                  # CT data changes slowly; cache a day
+windowing: null
+enabled: true

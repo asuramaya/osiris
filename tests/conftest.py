@@ -5,11 +5,14 @@ from collections.abc import AsyncIterator, Iterator
 
 import pytest
 import pytest_asyncio
+import redis.asyncio as aioredis
 from alembic import command
 from alembic.config import Config
 from src.actions.core import Actions
 from src.db.pool import create_pool
+from src.db.redis import create_redis
 from testcontainers.postgres import PostgresContainer
+from testcontainers.redis import RedisContainer
 
 _TABLES = (
     "cases,objects,case_objects,object_events,assertions,links,helper_runs,"
@@ -46,3 +49,22 @@ async def case_id(actions: Actions) -> str:
         "INSERT INTO cases (name, owner) VALUES ('test-case','analyst:test') RETURNING id"
     )
     return str(cid)
+
+
+@pytest.fixture(scope="session")
+def redis_url() -> Iterator[str]:
+    """A real Redis in Docker for token buckets / budget counters."""
+    with RedisContainer("redis:7") as rc:
+        host = rc.get_container_host_ip()
+        port = rc.get_exposed_port(6379)
+        yield f"redis://{host}:{port}/0"
+
+
+@pytest_asyncio.fixture
+async def redis_client(redis_url: str) -> AsyncIterator[aioredis.Redis]:
+    client = create_redis(redis_url)
+    await client.flushall()
+    try:
+        yield client
+    finally:
+        await client.aclose()
