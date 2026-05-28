@@ -46,7 +46,7 @@ class Manifest(BaseModel):
     description: str = ""
     consumes: Consumes
     emits: list[Emit] = Field(default_factory=list)
-    tier: Literal["open", "fragile", "gated", "manual"] = "open"
+    tier: Literal["open", "fragile", "gated", "manual", "suggest"] = "open"
     origin: str = "multi"
     rate: Rate = Field(default_factory=Rate)
     parser: str

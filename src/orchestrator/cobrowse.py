@@ -58,3 +58,38 @@ async def resolve_handoff_via_browser(
 
     posted = scraper(result)
     return await post_back(actions, manifest, handoff_id, posted)
+
+
+async def cobrowse_open(
+    actions: Actions,
+    lease_store: LeaseStore,
+    handoff_id: int,
+    *,
+    bound_ip: str,
+    issued_by: str,
+    cdp_endpoint: str | None = None,
+    lease_ttl_seconds: int = 900,
+) -> dict[str, Any]:
+    """Open a handoff's URL in a real browser, capture the session as a lease, and
+    return a summary for the analyst to review (no auto-parse — they post back or
+    promote). The lightweight path for arbitrary gated/suggest link-outs."""
+    row = await actions.pool.fetchrow(
+        "SELECT url FROM handoffs WHERE id=$1 AND resolved_at IS NULL", handoff_id
+    )
+    if row is None or row["url"] is None:
+        raise HandoffError(f"handoff {handoff_id} not openable")
+    await open_handoff(actions, handoff_id)
+    result = await co_browse(row["url"], cdp_endpoint=cdp_endpoint)
+    lease_captured = False
+    if result.cookies:
+        await lease_store.capture(
+            origin_of(result.url), result.cookies, result.ua,
+            bound_ip=bound_ip, ttl_seconds=lease_ttl_seconds, issued_by=issued_by,
+        )
+        lease_captured = True
+    return {
+        "title": result.title,
+        "url": result.url,
+        "lease_captured": lease_captured,
+        "excerpt": result.html[:600],
+    }

@@ -67,6 +67,8 @@ async def route(
                 return Route.SERVER_WORKER_WITH_LEASE
         return Route.AWAITING_HUMAN
 
-    if manifest.tier == "manual":
+    if manifest.tier in ("manual", "suggest"):
+        # suggest = osint4all-style augmentation link-out: surfaced in the tray
+        # for the analyst to open/co-browse, never scraped autonomously (#6).
         return Route.AWAITING_HUMAN
     return Route.DEFER  # fragile: needs SearXNG/browser (later phase)

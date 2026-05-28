@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from src.parsers.base import Parser
 from src.parsers.crtsh import parse_crtsh
+from src.parsers.suggest import parse_suggest_noop
 from src.parsers.telegram import parse_telegram_channel
 from src.parsers.tgstat import parse_tgstat_behavior
 from src.parsers.threatfox import parse_threatfox_iocs
@@ -17,6 +18,7 @@ PARSERS: dict[str, Parser] = {
     "crtsh_subdomains": parse_crtsh,
     "telegram_channel_profile": parse_telegram_channel,
     "tgstat_channel_behavior": parse_tgstat_behavior,
+    "suggest_noop": parse_suggest_noop,
 }
 
 

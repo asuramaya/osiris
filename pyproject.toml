@@ -19,6 +19,7 @@ dependencies = [
     "playwright>=1.60.0",
     "cryptography>=48.0.0",
     "keyring>=25.7.0",
+    "reportlab>=4.5.1",
 ]
 
 [dependency-groups]
@@ -59,7 +60,7 @@ module = ["arq.*", "playwright.*"]   # partial/untyped public API at the worker/
 disallow_untyped_calls = false
 
 [[tool.mypy.overrides]]
-module = ["keyring.*"]   # no bundled stubs
+module = ["keyring.*", "reportlab.*"]   # no bundled stubs
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

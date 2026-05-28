@@ -61,6 +61,19 @@ and `docker run` do too.
   idempotent objects + active-claim dedup + rate credits). `trigger_overrides` now wired
   (per-case helper enable/disable). 86 tests green.
 
+## Live prototype features (operator console on :8011)
+- **SSE live updates:** `GET /cases/{id}/stream` pushes stats; UI EventSource updates
+  badges/graph as the cascade expands.
+- **osint4all integration:** `src/connectors/osint4all.py` generates `suggest`-tier
+  manifests (built-in SEED + `import_startme` for the real board export); suggest tier
+  routes to the handoff tray (augmentation link-outs, ruling #6). Merged into app manifests.
+- **Co-browse from tray:** `POST /handoffs/{id}/cobrowse` (`cobrowse_open`) drives real
+  Chrome, captures the session as a lease, returns a summary.
+- **Phase 10 PDF brief:** `src/dissemination/brief.py` (reportlab) → `GET /cases/{id}/brief.pdf`.
+- **EXPAND FIX:** triggers are now projected from manifests on app startup (`project_triggers`
+  in lifespan). Root cause of "expand returns blank" was an unprojected triggers table on
+  fresh deployments — the cascade matched no helpers. 93 tests green.
+
 ## Build order (TTP/TTAL-first; see osiris memory / DESIGN.md §14 reordered)
 - **Phase 0 (DONE):** schema + 6 actions (`src/actions/core.py`) + audit/outbox + tests.
   7 tests green (testcontainers), ruff + mypy --strict clean. Remaining for Phase 0:

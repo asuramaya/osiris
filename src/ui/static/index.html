@@ -109,6 +109,8 @@
     <span class="spacer"></span>
     <button class="btn ghost" style="margin:0" onclick="openTray('handoff')">Tray <b id="trayN">0</b></button>
     <button class="btn ghost" style="margin:0" onclick="openTray('merge')">Review <b id="mergeN">0</b></button>
+    <button class="btn ghost" style="margin:0" onclick="downloadBrief()">Brief PDF</button>
+    <span id="live" title="live updates" style="color:#3fb950">●</span>
     <span id="status"></span>
   </header>
 
@@ -234,6 +236,7 @@ async function loadCaseObjects() {
   OBJECTS = await fetch(`/objects?case_id=${CASE}&limit=300`).then(r => r.json());
   renderObjectList();
   refreshCase();
+  watchCase();
   // auto-open the most "central" thing for a new operator: an actor if present
   const actor = OBJECTS.find(o => o.type === 'IntrusionSet') || OBJECTS[0];
   if (actor) loadGraph(actor.id);
@@ -358,12 +361,7 @@ function fmt(v) {
 cy.on('tap', 'node', e => inspect(e.target.id()));
 
 // ---- case overview + trays -------------------------------------------------
-async function refreshCase() {
-  if (!CASE) return;
-  const [stats, merge] = await Promise.all([
-    fetch(`/cases/${CASE}/stats`).then(r => r.json()),
-    fetch('/merge-candidates').then(r => r.json()),
-  ]);
+function applyStats(stats) {
   const rc = stats.rate_credits_remaining;
   document.getElementById('casestats').innerHTML =
     `<span class="pill">${stats.total} entities</span>` +
@@ -371,7 +369,34 @@ async function refreshCase() {
       `<span class="pill" style="border-color:${ty(t).c}66">${t}: ${n}</span>`).join('') +
     (rc!=null ? `<span class="pill">budget: ${rc}</span>` : '');
   document.getElementById('trayN').textContent = stats.pending_handoffs;
+}
+
+async function refreshCase() {
+  if (!CASE) return;
+  const [stats, merge] = await Promise.all([
+    fetch(`/cases/${CASE}/stats`).then(r => r.json()),
+    fetch('/merge-candidates').then(r => r.json()),
+  ]);
+  applyStats(stats);
   document.getElementById('mergeN').textContent = merge.length;
+}
+
+let STREAM = null, STREAM_CASE = null, LAST_TOTAL = -1;
+function watchCase() {
+  if (STREAM && STREAM_CASE === CASE) return;  // already watching this case
+  if (STREAM) STREAM.close();
+  STREAM_CASE = CASE;
+  LAST_TOTAL = -1;
+  STREAM = new EventSource(`/cases/${CASE}/stream`);
+  STREAM.onmessage = ev => {
+    const s = JSON.parse(ev.data);
+    applyStats(s);
+    document.getElementById('live').style.color = '#3fb950';
+    // when new entities appear (e.g. a cascade expanded), refresh the list/graph
+    if (LAST_TOTAL !== -1 && s.total !== LAST_TOTAL) { loadCaseObjects(); if (ROOT) loadGraph(ROOT); }
+    LAST_TOTAL = s.total;
+  };
+  STREAM.onerror = () => { document.getElementById('live').style.color = '#6e7681'; };
 }
 
 function closeModal() { document.getElementById('overlay').style.display = 'none'; }
@@ -390,6 +415,7 @@ async function openTray(kind) {
         <div class="meaning">${h.url||''}</div>
         <div class="acts">
           <a class="btn" href="${h.url}" target="_blank" onclick="hOpen(${h.id})">Open in browser ↗</a>
+          <button class="btn" onclick="hCobrowse(${h.id})">Co-browse (capture session)</button>
           <button class="btn warn" onclick="hPost(${h.id})">Post back result</button>
           <button class="btn bad" onclick="hAbandon(${h.id})">Skip</button>
         </div></div>`).join('') || '<div class="card">Tray is empty.</div>');
@@ -409,6 +435,12 @@ async function openTray(kind) {
   }
 }
 async function hOpen(id){ await fetch(`/handoffs/${id}/open`,{method:'POST'}); }
+async function hCobrowse(id){
+  const r = await fetch(`/handoffs/${id}/cobrowse`,{method:'POST'}).then(r=>r.json());
+  alert(`Co-browsed: "${r.title}"\nlease captured: ${r.lease_captured}\n\n${(r.excerpt||'').slice(0,300)}`);
+  refreshCase();
+}
+function downloadBrief(){ if(CASE) window.open(`/cases/${CASE}/brief.pdf`,'_blank'); }
 async function hAbandon(id){ await fetch(`/handoffs/${id}/abandon`,{method:'POST'}); openTray('handoff'); refreshCase(); }
 async function hPost(id){
   const raw = prompt('Paste the scraped result as JSON (e.g. {"title":"…","subscribers":123}):','{}');

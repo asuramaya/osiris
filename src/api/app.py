@@ -13,32 +13,39 @@ go through actions/services.
 
 from __future__ import annotations
 
+import asyncio
+import json as _json
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import asyncpg
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from src.actions.core import Actions
 from src.config.settings import get_settings
+from src.connectors.leases import LeaseStore
+from src.connectors.osint4all import suggest_manifests
 from src.connectors.registry import CONNECTORS
 from src.db.pool import create_pool
 from src.db.redis import create_redis
+from src.dissemination.brief import build_case_brief
 from src.ontology.classify import classify
 from src.ontology.intake import intake
 from src.ontology.resolution import resolve_candidate, review_tray
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, run_cascade
+from src.orchestrator.cobrowse import cobrowse_open
 from src.orchestrator.federation import federated_query, promote, to_preview
 from src.orchestrator.handoff import abandon, open_handoff, post_back
 from src.orchestrator.handoff import tray as handoff_tray
-from src.orchestrator.manifests import load_manifests
+from src.orchestrator.manifests import load_manifests, project_triggers
 from src.orchestrator.ratelimit import RateLimiter
 from src.orchestrator.runner import load_input_object
 
@@ -51,15 +58,43 @@ def get_pool(request: Request) -> asyncpg.Pool:
     return pool
 
 
+async def compute_stats(pool: asyncpg.Pool, redis: Any, case_id: uuid.UUID) -> dict[str, Any]:
+    by_type = {
+        r["type"]: r["n"]
+        for r in await pool.fetch(
+            "SELECT o.type, count(*) AS n FROM objects o "
+            "JOIN case_objects co ON co.object_id = o.id "
+            "WHERE co.case_id = $1 GROUP BY o.type ORDER BY n DESC",
+            case_id,
+        )
+    }
+    pending = await pool.fetchval(
+        "SELECT count(*) FROM handoffs h JOIN helper_runs r ON r.id = h.helper_run_id "
+        "WHERE h.case_id = $1 AND h.resolved_at IS NULL AND r.status = 'awaiting_human'",
+        case_id,
+    )
+    rate_left = await redis.get(f"budget:{case_id}:rate")
+    return {
+        "by_type": by_type,
+        "total": sum(by_type.values()),
+        "pending_handoffs": pending,
+        "rate_credits_remaining": int(rate_left) if rate_left is not None else None,
+    }
+
+
 def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings = get_settings()
         own = pool is None
         app.state.pool = pool or await create_pool(settings.database_url)
-        app.state.manifests = load_manifests(_HELPERS_DIR)
+        # manifests = file helpers + osint4all suggest-tier sources
+        app.state.manifests = {**load_manifests(_HELPERS_DIR), **suggest_manifests()}
         app.state.connectors = dict(CONNECTORS)
         app.state.redis = create_redis(settings.redis_url)
+        # triggers are a projection of manifests (#5) — (re)project on startup so a
+        # fresh deployment actually fires helpers (else Expand finds no triggers).
+        await project_triggers(app.state.pool, app.state.manifests)
         try:
             yield
         finally:
@@ -253,28 +288,46 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
     @app.get("/cases/{case_id}/stats")
     async def case_stats(case_id: uuid.UUID, request: Request) -> dict[str, Any]:
-        pool = request.app.state.pool
-        by_type = {
-            r["type"]: r["n"]
-            for r in await pool.fetch(
-                "SELECT o.type, count(*) AS n FROM objects o "
-                "JOIN case_objects co ON co.object_id = o.id "
-                "WHERE co.case_id = $1 GROUP BY o.type ORDER BY n DESC",
-                case_id,
-            )
-        }
-        pending = await pool.fetchval(
-            "SELECT count(*) FROM handoffs h JOIN helper_runs r ON r.id = h.helper_run_id "
-            "WHERE h.case_id = $1 AND h.resolved_at IS NULL AND r.status = 'awaiting_human'",
-            case_id,
+        return await compute_stats(request.app.state.pool, request.app.state.redis, case_id)
+
+    @app.get("/cases/{case_id}/stream")
+    async def case_stream(case_id: uuid.UUID, request: Request) -> StreamingResponse:
+        """SSE: push case stats as they change (DESIGN §4 — one-way, SSE). The UI
+        watches this so the graph/badges update live as the cascade expands."""
+        async def gen() -> AsyncIterator[str]:
+            last = ""
+            while not await request.is_disconnected():
+                stats = await compute_stats(
+                    request.app.state.pool, request.app.state.redis, case_id
+                )
+                payload = _json.dumps(stats)
+                if payload != last:
+                    yield f"data: {payload}\n\n"
+                    last = payload
+                else:
+                    yield ": keep-alive\n\n"
+                await asyncio.sleep(1.5)
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+    @app.post("/handoffs/{handoff_id}/cobrowse")
+    async def handoff_cobrowse(handoff_id: int, request: Request) -> dict[str, Any]:
+        """Drive a real browser to the parked URL, capture the session as a lease,
+        and return a summary for the analyst to review."""
+        return await cobrowse_open(
+            Actions(request.app.state.pool),
+            LeaseStore(request.app.state.pool),
+            handoff_id,
+            bound_ip="127.0.0.1",
+            issued_by=get_settings().osiris_actor,
         )
-        rate_left = await request.app.state.redis.get(f"budget:{case_id}:rate")
-        return {
-            "by_type": by_type,
-            "total": sum(by_type.values()),
-            "pending_handoffs": pending,
-            "rate_credits_remaining": int(rate_left) if rate_left is not None else None,
-        }
+
+    @app.get("/cases/{case_id}/brief.pdf")
+    async def case_brief(case_id: uuid.UUID, request: Request) -> Response:
+        pdf = await build_case_brief(
+            request.app.state.pool, case_id, generated_at=datetime.now(UTC)
+        )
+        return Response(content=pdf, media_type="application/pdf")
 
     @app.get("/cases/{case_id}/snapshot")
     async def snapshot(
