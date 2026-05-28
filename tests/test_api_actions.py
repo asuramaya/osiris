@@ -78,6 +78,44 @@ async def test_handoff_lifecycle_via_api(
     assert (await client.get(f"/cases/{cid}/tray")).json() == []  # resolved
 
 
+async def test_node_management(client: httpx.AsyncClient, actions: Actions, case_id: str) -> None:
+    cid = uuid.UUID(case_id)
+    a = await actions.create_or_find_object("Domain", "n1.kp", "analyst:test", cid)
+    b = await actions.create_or_find_object("Domain", "n2.kp", "analyst:test", cid)
+
+    # add a property + a tag through the API (audited via Actions)
+    await client.post(f"/objects/{a}/properties", json={"name": "note", "value": "seed"})
+    await client.post(f"/objects/{a}/tags", json={"tag": "of-interest"})
+    obj = (await client.get(f"/objects/{a}")).json()
+    names = {p["name"] for p in obj["properties"]}
+    assert "note" in names and "tag" in names
+
+    # manual link
+    r = await client.post("/links", json={"from_id": str(a), "to_id": str(b), "type": "related_to"})
+    assert r.json()["link_id"] > 0
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='related_to'", a
+    ) == 1
+
+    # archive removes it from the case object list
+    await client.post(f"/objects/{a}/archive")
+    listed = {o["canonical"] for o in (await client.get(f"/objects?case_id={cid}")).json()}
+    assert "n1.kp" not in listed and "n2.kp" in listed
+
+
+async def test_case_management(client: httpx.AsyncClient, actions: Actions) -> None:
+    cid = (await client.post("/cases", json={"name": "old name"})).json()["id"]
+    await client.patch(f"/cases/{cid}", json={"name": "Lazarus dossier",
+                                               "budgets": {"max_hop_distance": None}})
+    got = (await client.get(f"/cases/{cid}")).json()
+    assert got["name"] == "Lazarus dossier"
+    assert got["budgets"]["max_hop_distance"] is None  # unbounded depth
+
+    await client.post(f"/cases/{cid}/archive")
+    ids = {c["id"] for c in (await client.get("/cases")).json()}
+    assert cid not in ids  # archived cases drop off the list
+
+
 async def test_case_stats(client: httpx.AsyncClient, actions: Actions) -> None:
     cid = uuid.UUID(
         str(await actions.pool.fetchval(

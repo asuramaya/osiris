@@ -146,6 +146,32 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         task.add_done_callback(request.app.state.tasks.discard)
         return {"started": True}
 
+    @app.patch("/cases/{case_id}")
+    async def patch_case(
+        case_id: uuid.UUID, body: CasePatch, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, bool]:
+        if body.name is not None:
+            await p.execute("UPDATE cases SET name=$2 WHERE id=$1", case_id, body.name)
+        if body.budgets is not None:
+            await p.execute("UPDATE cases SET budgets=$2 WHERE id=$1", case_id, body.budgets)
+        return {"updated": True}
+
+    @app.post("/cases/{case_id}/archive")
+    async def archive_case(
+        case_id: uuid.UUID, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, bool]:
+        await p.execute("UPDATE cases SET archived_at=now() WHERE id=$1", case_id)
+        return {"archived": True}
+
+    @app.get("/cases/{case_id}")
+    async def get_case(case_id: uuid.UUID, p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        row = await p.fetchrow(
+            "SELECT id, name, owner, budgets FROM cases WHERE id=$1", case_id
+        )
+        if row is None:
+            raise HTTPException(404, "case not found")
+        return dict(row)
+
     @app.get("/cases")
     async def list_cases(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
         rows = await p.fetch(
@@ -166,7 +192,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     ) -> list[dict[str, Any]]:
         rows = await p.fetch(
             "SELECT id, type, canonical, status FROM objects o "
-            "WHERE ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM case_objects co "
+            "WHERE status NOT IN ('archived','merged') "
+            "  AND ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM case_objects co "
             "        WHERE co.object_id = o.id AND co.case_id = $1)) "
             "  AND ($2::text IS NULL OR type = $2) "
             "  AND ($3::text IS NULL OR canonical ILIKE '%' || $3 || '%') "
@@ -193,6 +220,41 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             object_id,
         )
         return {**dict(obj), "properties": [dict(r) for r in props]}
+
+    # --- node management (all via the audited Actions layer) ----------------
+    @app.post("/objects/{object_id}/properties")
+    async def add_property(
+        object_id: uuid.UUID, body: PropertyBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, int]:
+        aid = await Actions(p).assert_property(
+            object_id, body.name, body.value, get_settings().osiris_actor,
+            datetime.now(UTC), 1.0,
+        )
+        return {"assertion_id": aid}
+
+    @app.post("/objects/{object_id}/tags")
+    async def add_tag(
+        object_id: uuid.UUID, body: TagBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, str]:
+        await Actions(p).tag_object(object_id, body.tag, body.scope, get_settings().osiris_actor)
+        return {"tagged": body.tag}
+
+    @app.post("/objects/{object_id}/archive")
+    async def archive_object(
+        object_id: uuid.UUID, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, str]:
+        await Actions(p).set_status(
+            object_id, "archived", "analyst archived", get_settings().osiris_actor
+        )
+        return {"status": "archived"}
+
+    @app.post("/links")
+    async def create_link_ep(body: LinkBody, p: asyncpg.Pool = Depends(get_pool)) -> dict[str, int]:
+        lid = await Actions(p).create_link(
+            body.from_id, body.to_id, body.type, get_settings().osiris_actor,
+            datetime.now(UTC), 1.0,
+        )
+        return {"link_id": lid}
 
     @app.get("/objects/{object_id}/graph")
     async def object_graph(
@@ -398,6 +460,27 @@ class NewCaseBody(BaseModel):
 class IntakeBody(BaseModel):
     raw: str
     type: str | None = None
+
+
+class PropertyBody(BaseModel):
+    name: str
+    value: Any
+
+
+class TagBody(BaseModel):
+    tag: str
+    scope: str = "case"
+
+
+class LinkBody(BaseModel):
+    from_id: uuid.UUID
+    to_id: uuid.UUID
+    type: str
+
+
+class CasePatch(BaseModel):
+    name: str | None = None
+    budgets: dict[str, Any] | None = None
 
 
 class ResolveBody(BaseModel):

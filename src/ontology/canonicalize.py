@@ -12,22 +12,22 @@ from __future__ import annotations
 import ipaddress
 import re
 
-_GMAIL_DOMAINS = {"gmail.com", "googlemail.com"}
 _NON_DIGITS = re.compile(r"\D")
 
 
 def _email(raw: str) -> str:
+    # Predictable canonicalization: lowercase + normalize the googlemail->gmail
+    # domain alias only. The local part is preserved verbatim — dots and
+    # +subaddressing are significant to the operator and never stripped. (Gmail's
+    # dot-equivalence is a provider quirk; treat it as a probabilistic ER signal,
+    # not a baked-in canonical that silently rewrites the address.)
     raw = raw.strip().lower()
     if "@" not in raw:
         return raw
     local, _, domain = raw.rpartition("@")
     domain = domain.strip(".")
-    if domain in _GMAIL_DOMAINS:
-        # Gmail ignores dots and +subaddressing in the local part
-        local = local.split("+", 1)[0].replace(".", "")
+    if domain == "googlemail.com":
         domain = "gmail.com"
-    # other providers: preserve the local part verbatim (dots, +tags, and other
-    # RFC-legal special chars are significant) — only the domain is lowercased.
     return f"{local}@{domain}"
 
 

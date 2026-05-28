@@ -116,7 +116,10 @@
     <span class="spacer"></span>
     <label>Case</label>
     <select id="case" onchange="loadCaseObjects()"></select>
-    <button class="btn ghost" style="margin:0" onclick="newCase()">＋ New</button>
+    <button class="btn ghost" style="margin:0" onclick="newCase()" title="new case">＋</button>
+    <button class="btn ghost" style="margin:0" onclick="renameCase()" title="rename case">✎</button>
+    <button class="btn ghost" style="margin:0" onclick="editBudgets()" title="edit budgets">⛁</button>
+    <button class="btn ghost" style="margin:0" onclick="archiveCase()" title="archive case">🗄</button>
     <label>Depth</label>
     <input id="hops" type="number" value="2" min="0" max="12" style="width:54px" onchange="reload()"
            title="graph display depth — double-click a node to pivot-expand instead" />
@@ -359,6 +362,28 @@ async function newCase() {
   await loadCaseObjects();
 }
 
+async function renameCase() {
+  const name = prompt('Rename investigation:'); if (!name || !CASE) return;
+  await fetch(`/cases/${CASE}`, { method:'PATCH', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ name }) });
+  await loadCases(); document.getElementById('case').value = CASE; refreshCase();
+}
+async function editBudgets() {
+  if (!CASE) return;
+  const cur = await fetch(`/cases/${CASE}`).then(r => r.json());
+  const raw = prompt('Edit budgets JSON — set "max_hop_distance": null for unbounded depth:',
+    JSON.stringify(cur.budgets || {}, null, 0));
+  if (raw === null) return;
+  await fetch(`/cases/${CASE}`, { method:'PATCH', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ budgets: JSON.parse(raw) }) });
+  refreshCase();
+}
+async function archiveCase() {
+  if (!CASE || !confirm('Archive this investigation? It leaves the case list (kept in the DB).')) return;
+  await fetch(`/cases/${CASE}/archive`, { method:'POST' });
+  await loadCases(); await loadCaseObjects();
+}
+
 async function seedIntake() {
   const raw = document.getElementById('seed').value.trim();
   if (!raw || !CASE) return;
@@ -428,11 +453,55 @@ async function inspect(id) {
     <span class="insp-type" style="background:${meta.c}22;color:${meta.c};border:1px solid ${meta.c}66">${obj.type}</span>
     <div class="insp-def">${meta.d}</div>
     <div class="insp-id">${obj.canonical}</div>
-    <button class="btn ghost" onclick="loadGraph('${id}')" style="margin-top:10px">Pivot — centre the graph here</button>
+    <div class="acts" style="margin-top:10px">
+      <button class="btn ghost" onclick="loadGraph('${id}')">Pivot here</button>
+      <button class="btn ghost" onclick="linkFrom('${id}','${obj.canonical.replace(/'/g,"\\'")}')">Link →</button>
+    </div>
+    <div class="acts" style="margin-top:6px">
+      <button class="btn ghost" onclick="addProp('${id}')">+ Property</button>
+      <button class="btn ghost" onclick="addTag('${id}')">+ Tag</button>
+      <button class="btn bad" onclick="archiveObj('${id}')">Archive</button>
+    </div>
     <h3 class="insp-h">Properties &amp; provenance</h3>${props}
     <h3 class="insp-h">How it connects</h3>${rels.join('') || '<div class="placeholder">No links.</div>'}
     <h3 class="insp-h">Collectors you can run</h3>${helperHtml}`;
 }
+
+// ---- node management -------------------------------------------------------
+let LINK_FROM = null;
+async function addProp(id) {
+  const name = prompt('Property name (e.g. note, employer, city):'); if (!name) return;
+  const value = prompt(`Value for "${name}":`); if (value === null) return;
+  await fetch(`/objects/${id}/properties`, { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ name, value }) });
+  inspect(id);
+}
+async function addTag(id) {
+  const tag = prompt('Tag (e.g. c2, phishing, of-interest):'); if (!tag) return;
+  await fetch(`/objects/${id}/tags`, { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ tag }) });
+  inspect(id);
+}
+async function archiveObj(id) {
+  if (!confirm('Archive this entity? It stays in the audit log but leaves the views.')) return;
+  await fetch(`/objects/${id}/archive`, { method:'POST' });
+  await refreshObjects(); if (ROOT) growGraph(); cy.getElementById(id).remove();
+}
+function linkFrom(id, label) {
+  LINK_FROM = { id, label };
+  document.getElementById('status').textContent = `link from "${label}" — now click the target node`;
+}
+cy.on('tap', 'node', async e => {
+  if (LINK_FROM && LINK_FROM.id !== e.target.id()) {
+    const type = prompt(`Link type from "${LINK_FROM.label}" → this (e.g. owns, same_as, uses):`, 'related_to');
+    const from = LINK_FROM.id; LINK_FROM = null;
+    if (type) {
+      await fetch('/links', { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ from_id: from, to_id: e.target.id(), type }) });
+      growGraph();
+    }
+  }
+});
 function fmt(v) {
   if (Array.isArray(v)) return v.slice(0,4).join(', ') + (v.length>4?'…':'');
   if (v && typeof v === 'object') return JSON.stringify(v).slice(0,80);

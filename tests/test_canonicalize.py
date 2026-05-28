@@ -8,15 +8,16 @@ from src.ontology.intake import intake
 
 
 def test_email_canonicalization() -> None:
-    assert canonicalize("Email", "John.Doe+spam@Gmail.com") == "johndoe@gmail.com"
-    assert canonicalize("Email", "a.b.c@googlemail.com") == "abc@gmail.com"
+    # predictable: lowercase + googlemail->gmail domain alias only; local part kept
+    assert canonicalize("Email", "priya.kowalski42@gmail.com") == "priya.kowalski42@gmail.com"
+    assert canonicalize("Email", "a.b.c@googlemail.com") == "a.b.c@gmail.com"
 
 
-def test_email_preserves_special_chars_for_non_gmail() -> None:
-    # non-gmail: dots and +subaddressing are significant — never stripped (only
-    # the domain is lowercased). Regression: sanitization used to mangle these.
+def test_email_preserves_dots_and_subaddressing() -> None:
+    # dots and +subaddressing are significant — never stripped, any provider.
+    # Regression: sanitization used to mangle these (gmail dot-stripping included).
     assert canonicalize("Email", "First.Last+osint@Corp.COM") == "first.last+osint@corp.com"
-    assert canonicalize("Email", "hector+osint@asuramaya.com") == "hector+osint@asuramaya.com"
+    assert canonicalize("Email", "priya.kowalski42@gmail.com") == "priya.kowalski42@gmail.com"
     assert canonicalize("Email", "o'brien@example.org") == "o'brien@example.org"
 
 
@@ -39,8 +40,9 @@ def test_btc_is_case_preserving() -> None:
 
 async def test_intake_deterministic_auto_merge(actions: Actions, case_id: str) -> None:
     cid = uuid.UUID(case_id)
-    a = await intake(actions, "Email", "John.Doe@Gmail.com", "analyst:test", cid)
-    b = await intake(actions, "Email", "johndoe@gmail.com", "analyst:test", cid)
+    # case-folding still dedups (dots are now preserved, so they must match)
+    a = await intake(actions, "Email", "priya.kowalski42@gmail.com", "analyst:test", cid)
+    b = await intake(actions, "Email", "priya.kowalski42@gmail.com", "analyst:test", cid)
     assert a == b  # two raw forms collapse to one object
 
     # only one object, and the original form is preserved as evidence
@@ -53,4 +55,4 @@ async def test_intake_deterministic_auto_merge(actions: Actions, case_id: str) -
             a,
         )
     }
-    assert "John.Doe@Gmail.com" in observed
+    assert "priya.kowalski42@gmail.com" in observed

@@ -54,9 +54,9 @@ async def test_create_case_and_paste_anything(
     assert body["type"] == "Email"
     oid = uuid.UUID(body["object_id"])
 
-    # it's in the case, canonicalized, with the raw form preserved
+    # it's in the case, canonicalized (lowercased; dots preserved), raw kept
     obj = (await client.get(f"/objects/{oid}")).json()
-    assert obj["canonical"] == "johndoe@gmail.com"
+    assert obj["canonical"] == "john.doe@gmail.com"
     scoped = (await client.get(f"/objects?case_id={cid}")).json()
     assert oid in {uuid.UUID(o["id"]) for o in scoped}
 
