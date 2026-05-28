@@ -21,10 +21,12 @@ import asyncpg
 from src.actions.core import Actions
 from src.connectors.registry import Connector
 from src.orchestrator.budgets import BudgetLedger
+from src.orchestrator.challenges import ChallengeDetected
+from src.orchestrator.handoff import suspend
 from src.orchestrator.manifests import Manifest
 from src.orchestrator.ratelimit import RateLimiter
 from src.orchestrator.router import Route, route
-from src.orchestrator.runner import claim_run, execute_claimed
+from src.orchestrator.runner import claim_run, execute_claimed, load_input_object
 from src.orchestrator.triggers import matching_helpers
 from src.parsers.base import InputObject
 
@@ -51,19 +53,6 @@ async def _hop_of(pool: asyncpg.Pool, case_id: uuid.UUID, object_id: uuid.UUID) 
     return int(hop) if hop is not None else 0
 
 
-async def _input_object(pool: asyncpg.Pool, object_id: uuid.UUID) -> InputObject:
-    row = await pool.fetchrow("SELECT type, canonical FROM objects WHERE id=$1", object_id)
-    props = await pool.fetch(
-        "SELECT DISTINCT name FROM current_assertions WHERE object_id=$1", object_id
-    )
-    return InputObject(
-        id=str(object_id),
-        type=row["type"],
-        canonical=row["canonical"],
-        properties={r["name"]: None for r in props},
-    )
-
-
 async def dispatch(
     ctx: CascadeContext, manifest: Manifest, object_id: uuid.UUID, case_id: uuid.UUID
 ) -> str:
@@ -80,9 +69,18 @@ async def dispatch(
     if decided is Route.DEFER:
         return "defer"
     if decided is Route.AWAITING_HUMAN:
-        return "awaiting_human"
+        # gated tier — never attempt server-side; park for the analyst's browser.
+        input_object = await load_input_object(ctx.pool, object_id)
+        handoff_id = await suspend(
+            ctx.actions, ctx.ledger, manifest, object_id, case_id,
+            url=_render_url(manifest, input_object), challenge_kind=None,
+        )
+        return "suspended" if handoff_id is not None else "blocked:max_human_handoffs"
 
-    # SERVER_WORKER: reserve a rate credit, then claim the run.
+    # SERVER_WORKER: needs a connector (the network fetch) to run.
+    connector = ctx.connectors.get(manifest.id)
+    if connector is None:
+        return "no_connector"
     if not await ctx.ledger.reserve_rate_credit(case_id):
         return "blocked:rate_credits"
     run_id = await claim_run(ctx.actions, manifest.id, object_id, case_id, manifest.tier)
@@ -90,13 +88,32 @@ async def dispatch(
         await ctx.ledger.refund_rate_credit(case_id)
         return "skipped:active"
 
-    input_object = await _input_object(ctx.pool, object_id)
-    connector = ctx.connectors[manifest.id]
-    response = await connector(input_object)
+    input_object = await load_input_object(ctx.pool, object_id)
+    try:
+        response = await connector(input_object)
+    except ChallengeDetected as cd:
+        # bot-fight / login wall hit mid-fetch — suspend the in-flight run instead
+        # of solving or evading. The rate credit is refunded; a handoff credit is spent.
+        await ctx.ledger.refund_rate_credit(case_id)
+        handoff_id = await suspend(
+            ctx.actions, ctx.ledger, manifest, object_id, case_id,
+            url=cd.url, challenge_kind=cd.challenge.kind.value, existing_run_id=run_id,
+        )
+        return "suspended" if handoff_id is not None else "blocked:max_human_handoffs"
     await execute_claimed(
         ctx.actions, manifest, response, input_object, case_id, run_id, input_hop=input_hop
     )
     return "ran"
+
+
+def _render_url(manifest: Manifest, input_object: InputObject) -> str | None:
+    if manifest.template is None or manifest.template.url is None:
+        return None
+    return (
+        manifest.template.url
+        .replace("{object.canonical}", input_object.canonical)
+        .replace("{object.type}", input_object.type)
+    )
 
 
 async def fire_triggers(
@@ -113,8 +130,8 @@ async def fire_triggers(
     outcomes: list[str] = []
     for hid in helper_ids:
         manifest = ctx.manifests.get(hid)
-        if manifest is None or hid not in ctx.connectors:
-            continue  # registered trigger with no runnable connector yet
+        if manifest is None:
+            continue  # trigger for a helper not loaded in this worker
         outcomes.append(await dispatch(ctx, manifest, object_id, case_id))
     return outcomes
 

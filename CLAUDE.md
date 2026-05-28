@@ -76,5 +76,15 @@ and `docker run` do too.
   fire_triggers/dispatch) tested directly; Arq is the prod process. Connector = injected
   network seam. Proven: crt.sh self-similar feed cascades and TERMINATES on hop budget
   (no infinite loop); halts on rate-credit exhaustion; atomic claim dedup; token-bucket DEFER.
-- **Phase 4 (next):** browser bridge (Playwright-CDP, reverses §15.3) + tier=gated +
-  analyst handoff tray (batched). Then leases, ER, UI, federation, windowed helpers, export.
+- **Phase 4 (DONE):** human-in-the-loop. `handoffs` table (migration 0003), centralized
+  challenge detection (`src/orchestrator/challenges.py`), suspend/resume state machine +
+  batched tray (`src/orchestrator/handoff.py`), gated-tier dispatch + ChallengeDetected
+  mid-fetch suspend wired into cascade, human-handoff budget credit, gated Telegram helper
+  (`src/parsers/telegram.py` + manifest), Playwright-CDP driver skeleton (`src/connectors/
+  browser.py`, lazy-import — NOT yet a dep). 43 tests green. State authoritative on
+  helper_runs.status; tray ordered by priority heuristic (hop-distance; true fan-out
+  unknowable pre-run). DECISION PENDING: `uv add playwright` (+~150MB chromium) to enable
+  live co-browse — deferred, flagged to operator.
+- **Phase 5 (next):** cookie-lease subsystem (capture, OS-keyring-encrypted, scope to
+  IP+UA, server-egress reuse — which is the happy path on single-box, same egress IP).
+  Then ER, Cytoscape UI, federation, windowed pattern helpers, PDF export.

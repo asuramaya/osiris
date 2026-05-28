@@ -1,0 +1,21 @@
+id: telegram_channel_profile
+name: Telegram channel profile (gated)
+description: >
+  Capture a Telegram channel's public profile (title, subscriber count,
+  description). Telegram throttles automated access and often needs a real
+  session, so this is gated: the analyst opens the channel in their own browser
+  via the handoff tray and posts the result back.
+consumes:
+  type: TelegramChannel
+  requires_properties: []
+emits:
+  - type: ObservedData
+    confidence_floor: 0.9
+tier: gated
+origin: t.me
+template:
+  url: "https://t.me/s/{object.canonical}"
+parser: telegram_channel_profile
+cache_ttl: 86400
+windowing: null
+enabled: true

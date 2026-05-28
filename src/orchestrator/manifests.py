@@ -34,6 +34,12 @@ class Rate(BaseModel):
     jitter_ms: tuple[int, int] = (0, 0)
 
 
+class Template(BaseModel):
+    url: str | None = None          # e.g. "https://t.me/s/{object.canonical}"
+    method: str = "GET"
+    body: str | None = None
+
+
 class Manifest(BaseModel):
     id: str
     name: str
@@ -44,6 +50,7 @@ class Manifest(BaseModel):
     origin: str = "multi"
     rate: Rate = Field(default_factory=Rate)
     parser: str
+    template: Template | None = None
     cache_ttl: int = 3600
     windowing: dict[str, Any] | None = None
     enabled: bool = True

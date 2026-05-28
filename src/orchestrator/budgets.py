@@ -23,6 +23,7 @@ DEFAULT_BUDGETS: dict[str, Any] = {
     "rate_credits": 100,
     "max_hop_distance": 2,
     "max_helpers_per_object": 5,
+    "max_human_handoffs": 25,
 }
 
 
@@ -60,6 +61,21 @@ class BudgetLedger:
 
     async def refund_rate_credit(self, case_id: uuid.UUID) -> None:
         await self.redis.incr(f"budget:{case_id}:rate")
+
+    async def reserve_handoff_credit(self, case_id: uuid.UUID) -> bool:
+        """Human attention is the scarcest budget — gate handoffs separately."""
+        budgets = await _load_budgets(self.pool, case_id)
+        await self.redis.set(
+            f"budget:{case_id}:handoffs", int(budgets["max_human_handoffs"]), nx=True
+        )
+        remaining = await self.redis.decr(f"budget:{case_id}:handoffs")
+        if remaining < 0:
+            await self.redis.incr(f"budget:{case_id}:handoffs")
+            return False
+        return True
+
+    async def refund_handoff_credit(self, case_id: uuid.UUID) -> None:
+        await self.redis.incr(f"budget:{case_id}:handoffs")
 
     async def check(
         self,

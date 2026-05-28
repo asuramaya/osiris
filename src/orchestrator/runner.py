@@ -30,19 +30,38 @@ async def claim_run(
     object_id: uuid.UUID,
     case_id: uuid.UUID,
     tier: str,
+    *,
+    status: str = "running",
 ) -> uuid.UUID | None:
     """Atomically claim a run. Returns the run id, or None if one is already
-    active for this (helper, object, case) — the partial unique index decides."""
+    active for this (helper, object, case) — the partial unique index decides.
+    `status` lets a gated dispatch claim directly into 'awaiting_human'."""
     row = await actions.pool.fetchrow(
         "INSERT INTO helper_runs (helper_id, object_id, case_id, status, tier) "
-        "VALUES ($1,$2,$3,'running',$4) "
+        "VALUES ($1,$2,$3,$5,$4) "
         "ON CONFLICT DO NOTHING RETURNING id",
         helper_id,
         object_id,
         case_id,
         tier,
+        status,
     )
     return row["id"] if row is not None else None
+
+
+async def load_input_object(pool: Any, object_id: uuid.UUID) -> InputObject:
+    """Materialize the InputObject a helper consumes (type, canonical, current
+    property names) — shared by the cascade and the handoff resume path."""
+    row = await pool.fetchrow("SELECT type, canonical FROM objects WHERE id=$1", object_id)
+    props = await pool.fetch(
+        "SELECT DISTINCT name FROM current_assertions WHERE object_id=$1", object_id
+    )
+    return InputObject(
+        id=str(object_id),
+        type=row["type"],
+        canonical=row["canonical"],
+        properties={r["name"]: None for r in props},
+    )
 
 
 async def _resolve(actions: Actions, ref: TargetRef, ids: dict[str, uuid.UUID],
