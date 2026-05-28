@@ -63,18 +63,32 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/cases")
+    async def list_cases(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
+        rows = await p.fetch(
+            "SELECT c.id, c.name, c.owner, count(DISTINCT co.object_id) AS object_count "
+            "FROM cases c LEFT JOIN case_objects co ON co.case_id = c.id "
+            "WHERE c.archived_at IS NULL "
+            "GROUP BY c.id ORDER BY c.created_at DESC"
+        )
+        return [dict(r) for r in rows]
+
     @app.get("/objects")
     async def list_objects(
         p: asyncpg.Pool = Depends(get_pool),
+        case_id: uuid.UUID | None = None,
         type: str | None = None,
         q: str | None = None,
-        limit: int = Query(50, le=500),
+        limit: int = Query(100, le=500),
     ) -> list[dict[str, Any]]:
         rows = await p.fetch(
-            "SELECT id, type, canonical, status FROM objects "
-            "WHERE ($1::text IS NULL OR type = $1) "
-            "  AND ($2::text IS NULL OR canonical ILIKE '%' || $2 || '%') "
-            "ORDER BY created_at DESC LIMIT $3",
+            "SELECT id, type, canonical, status FROM objects o "
+            "WHERE ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM case_objects co "
+            "        WHERE co.object_id = o.id AND co.case_id = $1)) "
+            "  AND ($2::text IS NULL OR type = $2) "
+            "  AND ($3::text IS NULL OR canonical ILIKE '%' || $3 || '%') "
+            "ORDER BY type, created_at DESC LIMIT $4",
+            case_id,
             type,
             q,
             limit,

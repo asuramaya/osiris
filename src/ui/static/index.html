@@ -2,79 +2,295 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Osiris — Graph</title>
+  <title>Osiris — OSINT → TTP/TTAL</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
   <style>
-    html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; background: #0e1116; color: #d7dde5; }
-    #bar { padding: 8px 12px; background: #161b22; border-bottom: 1px solid #2b333c; display: flex; gap: 8px; align-items: center; }
-    #bar input { background: #0e1116; color: #d7dde5; border: 1px solid #2b333c; padding: 6px 8px; border-radius: 6px; width: 360px; }
-    #bar button { background: #2563eb; color: #fff; border: 0; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
-    #cy { position: absolute; top: 49px; left: 0; right: 0; bottom: 0; }
-    #panel { position: absolute; top: 60px; right: 12px; width: 300px; max-height: 70%; overflow: auto;
-             background: #161b22cc; border: 1px solid #2b333c; border-radius: 8px; padding: 12px; display: none; }
+    :root {
+      --bg: #0d1117; --panel: #161b22; --panel2: #1c2330; --border: #2b333c;
+      --ink: #e6edf3; --muted: #9aa5b1; --faint: #6e7681; --accent: #2f81f7;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; font: 13.5px/1.5 system-ui, -apple-system, sans-serif;
+                 background: var(--bg); color: var(--ink); overflow: hidden; }
+    #app { display: grid; grid-template-columns: 300px 1fr 360px; grid-template-rows: 52px 1fr;
+           grid-template-areas: "head head head" "nav graph inspect"; height: 100vh; }
+
+    header { grid-area: head; display: flex; align-items: center; gap: 14px; padding: 0 16px;
+             background: var(--panel); border-bottom: 1px solid var(--border); }
+    header .brand { font-weight: 700; font-size: 16px; letter-spacing: .3px; }
+    header .tag { color: var(--muted); font-size: 12px; }
+    header .spacer { flex: 1; }
+    header select, header input { background: var(--bg); color: var(--ink); border: 1px solid var(--border);
+             padding: 6px 9px; border-radius: 7px; font-size: 13px; }
+    header label { color: var(--muted); font-size: 12px; }
+
+    .col { overflow-y: auto; background: var(--panel); }
+    #nav { grid-area: nav; border-right: 1px solid var(--border); padding: 14px; }
+    #inspect { grid-area: inspect; border-left: 1px solid var(--border); padding: 16px; }
+    #graphwrap { grid-area: graph; position: relative; }
+    #cy { position: absolute; inset: 0; }
+
+    .section { margin-bottom: 18px; }
+    .section h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--faint);
+                  margin: 0 0 8px; font-weight: 600; }
+    .hint { font-size: 12px; color: var(--muted); background: var(--panel2); border: 1px solid var(--border);
+            border-radius: 8px; padding: 9px 11px; }
+    .hint b { color: var(--ink); }
+
+    .search { width: 100%; }
+    .list { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }
+    .item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; cursor: pointer;
+            border: 1px solid transparent; }
+    .item:hover { background: var(--panel2); border-color: var(--border); }
+    .item .label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .item .ty { font-size: 10px; color: var(--faint); }
+    .dot { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+
+    .legend-row, .glossary-row { display: flex; gap: 9px; align-items: baseline; padding: 5px 0; }
+    .legend-row .meaning, .glossary-row .meaning { color: var(--muted); font-size: 12px; }
+    .legend-row .name { font-weight: 600; min-width: 86px; }
+    .glossary-row .rel { font-family: ui-monospace, monospace; color: var(--accent); min-width: 110px; font-size: 12px; }
+
+    #inspect .placeholder { color: var(--faint); font-size: 13px; }
+    .insp-type { display: inline-block; padding: 3px 9px; border-radius: 999px; font-weight: 600; font-size: 12px; }
+    .insp-def { color: var(--muted); margin: 8px 0 14px; font-size: 12.5px; }
+    .insp-id { font-family: ui-monospace, monospace; font-size: 11.5px; word-break: break-all;
+               background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px; }
+    .prop { padding: 6px 0; border-bottom: 1px solid var(--border); }
+    .prop .k { font-weight: 600; }
+    .prop .v { color: var(--ink); }
+    .prop .src { color: var(--faint); font-size: 11px; }
+    .rel-line { padding: 4px 0; color: var(--muted); font-size: 12.5px; }
+    .rel-line .verb { color: var(--accent); font-family: ui-monospace, monospace; }
+    .rel-line .obj { color: var(--ink); }
+    .helper { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+              margin: 6px 0; }
+    .helper .hname { font-weight: 600; }
+    .helper .tier { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: #243; color: #7ee787; margin-left: 6px; }
+    .helper .tier.gated { background: #432; color: #f0b72f; }
+    .helper .hwhat { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .btn { display: inline-block; margin-top: 6px; background: var(--accent); color: #fff; border: 0;
+           padding: 6px 12px; border-radius: 7px; cursor: pointer; font-size: 12.5px; }
+    .btn.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+    h3.insp-h { font-size: 11px; text-transform: uppercase; letter-spacing: .7px; color: var(--faint);
+                margin: 16px 0 6px; }
+    #status { color: var(--faint); font-size: 12px; }
   </style>
 </head>
 <body>
-  <div id="bar">
-    <strong>Osiris</strong>
-    <input id="oid" placeholder="object id (UUID) — loads its 1-hop neighbourhood" />
-    <input id="hops" type="number" value="1" min="0" max="4" style="width:56px" />
-    <button onclick="load()">Load</button>
-    <span id="status" style="opacity:.6"></span>
-  </div>
-  <div id="cy"></div>
-  <div id="panel"></div>
+<div id="app">
+  <header>
+    <span class="brand">Osiris</span>
+    <span class="tag">OSINT&nbsp;→&nbsp;TTP/TTAL</span>
+    <span class="spacer"></span>
+    <label>Case</label>
+    <select id="case" onchange="loadCaseObjects()"></select>
+    <label>Depth</label>
+    <input id="hops" type="number" value="2" min="0" max="4" style="width:54px" onchange="reload()" />
+    <span id="status"></span>
+  </header>
 
-  <script>
-    const colors = {
-      IntrusionSet: '#e5534b', Malware: '#d29922', Tool: '#bc8cff', AttackPattern: '#3fb950',
-      Indicator: '#58a6ff', ObservedData: '#8b949e', Domain: '#39c5cf', TelegramChannel: '#db61a2',
-    };
-    const cy = cytoscape({
-      container: document.getElementById('cy'),
-      style: [
-        { selector: 'node', style: {
-            'background-color': e => colors[e.data('type')] || '#6e7681',
-            'label': 'data(label)', 'color': '#d7dde5', 'font-size': 10,
-            'text-valign': 'bottom', 'text-wrap': 'wrap', 'text-max-width': 120 } },
-        { selector: 'edge', style: {
-            'width': 1.5, 'line-color': '#3a434d', 'target-arrow-color': '#3a434d',
-            'target-arrow-shape': 'triangle', 'curve-style': 'bezier',
-            'label': 'data(type)', 'font-size': 8, 'color': '#8b949e' } },
-      ],
-      layout: { name: 'cose', animate: false },
-    });
+  <aside id="nav" class="col">
+    <div class="section">
+      <div class="hint"><b>Start here.</b> Pick a case, then click an entity below to open its
+        neighbourhood. Click any node to learn what it is and how it connects.</div>
+    </div>
+    <div class="section">
+      <h2>1 · Entities in this case</h2>
+      <input id="search" class="search" placeholder="filter by name…" oninput="renderObjectList()" />
+      <div id="objlist" class="list"></div>
+    </div>
+    <div class="section">
+      <h2>2 · What the colours & shapes mean</h2>
+      <div id="legend"></div>
+    </div>
+    <div class="section">
+      <h2>3 · What the links mean</h2>
+      <div id="glossary"></div>
+    </div>
+  </aside>
 
-    async function load() {
-      const id = document.getElementById('oid').value.trim();
-      const hops = document.getElementById('hops').value || 1;
-      if (!id) return;
-      const status = document.getElementById('status');
-      status.textContent = 'loading…';
-      const g = await fetch(`/objects/${id}/graph?hops=${hops}`).then(r => r.json());
-      cy.elements().remove();
-      cy.add(g.nodes.map(n => ({ data: { id: n.id, label: n.label, type: n.type } })));
-      cy.add(g.edges.map(e => ({ data: { source: e.source, target: e.target, type: e.type } })));
-      cy.layout({ name: 'cose', animate: false }).run();
-      status.textContent = `${g.nodes.length} nodes, ${g.edges.length} edges`;
-    }
+  <div id="graphwrap"><div id="cy"></div></div>
 
-    cy.on('tap', 'node', async evt => {
-      const id = evt.target.id();
-      const [obj, helpers] = await Promise.all([
-        fetch(`/objects/${id}`).then(r => r.json()),
-        fetch(`/objects/${id}/helpers`).then(r => r.json()),
-      ]);
-      const panel = document.getElementById('panel');
-      panel.style.display = 'block';
-      panel.innerHTML =
-        `<h3 style="margin:.2em 0">${obj.type}</h3><code style="word-break:break-all">${obj.canonical}</code>` +
-        `<h4>Properties</h4>` + obj.properties.map(p =>
-          `<div><b>${p.name}</b>: ${JSON.stringify(p.value)} <span style="opacity:.5">(${p.source_id})</span></div>`).join('') +
-        `<h4>Available helpers</h4>` + (helpers.map(h =>
-          `<div>▸ ${h.name} <span style="opacity:.5">[${h.tier}]</span></div>`).join('') || '<i>none</i>');
-    });
-  </script>
+  <aside id="inspect" class="col">
+    <div class="placeholder">Select a node to inspect it.<br><br>
+      You'll see what kind of entity it is, its evidence-backed properties (with the source of each),
+      how it links to everything around it, and which collectors you can run on it next.</div>
+  </aside>
+</div>
+
+<script>
+// ---- teaching metadata: what each node type / relationship means -----------
+const TYPE = {
+  IntrusionSet:   { c:'#f85149', s:'hexagon',          d:'An actor cluster — a tracked set of related intrusion activity (e.g. Lazarus Group).' },
+  ThreatActor:    { c:'#da3633', s:'hexagon',          d:'The human or group behind activity.' },
+  Campaign:       { c:'#db61a2', s:'hexagon',          d:'Time-bounded activity attributed to an actor.' },
+  Malware:        { c:'#d29922', s:'round-rectangle',  d:'Malicious software — a capability an actor uses.' },
+  Tool:           { c:'#bc8cff', s:'round-rectangle',  d:'Legitimate/utility software used in operations (e.g. Mimikatz).' },
+  AttackPattern:  { c:'#3fb950', s:'diamond',          d:'A technique (MITRE ATT&CK Txxxx) — HOW something is done.' },
+  Indicator:      { c:'#58a6ff', s:'triangle',         d:'An IOC / detection signal — a hash, IP, domain that points at something malicious.' },
+  ObservedData:   { c:'#8b949e', s:'rectangle',        d:'Raw evidence — a scraped record, a feed entry. The provenance behind a claim.' },
+  Domain:         { c:'#39c5cf', s:'ellipse',          d:'A DNS domain observable.' },
+  TelegramChannel:{ c:'#56a3ff', s:'ellipse',          d:'A Telegram channel observable.' },
+  Person:         { c:'#e3b341', s:'ellipse',          d:'A person entity (resolved probabilistically — never auto-merged).' },
+  Email:          { c:'#7ee787', s:'ellipse',          d:'An email-address observable.' },
+};
+const DEFAULT_TYPE = { c:'#6e7681', s:'ellipse', d:'An ontology object.' };
+const ty = t => TYPE[t] || DEFAULT_TYPE;
+
+const REL = {
+  uses:             'The actor/source employs this capability or technique.',
+  indicates:        'This indicator points to the linked malware/technique.',
+  'based-on':       'This indicator is derived from that raw observed evidence.',
+  'subtechnique-of':'A more specific technique under a broader one.',
+  has_observation:  'This pattern is backed by that piece of raw evidence.',
+  targets:          'The campaign/actor is aimed at this entity.',
+  has_subdomain:    'This domain contains the linked subdomain.',
+  same_as:          'Resolved to be the same entity (merge).',
+  not_same_as:      'Confirmed by an analyst to be different entities.',
+};
+
+let CASE = null, ROOT = null, OBJECTS = [];
+
+// ---- cytoscape -------------------------------------------------------------
+const cy = cytoscape({
+  container: document.getElementById('cy'),
+  wheelSensitivity: .2,
+  style: [
+    { selector: 'node', style: {
+        'background-color': e => ty(e.data('type')).c,
+        'shape': e => ty(e.data('type')).s,
+        'width': 34, 'height': 34, 'border-width': 0,
+        'label': 'data(label)', 'color': '#e6edf3', 'font-size': 11,
+        'text-valign': 'bottom', 'text-margin-y': 4, 'text-wrap': 'wrap', 'text-max-width': 120,
+        'text-background-color': '#0d1117', 'text-background-opacity': .72,
+        'text-background-padding': 3, 'text-background-shape': 'roundrectangle' } },
+    { selector: 'node.root', style: { 'border-width': 3, 'border-color': '#fff' } },
+    { selector: 'node:selected', style: { 'border-width': 3, 'border-color': '#2f81f7' } },
+    { selector: 'edge', style: {
+        'width': 1.4, 'line-color': '#3a434d', 'target-arrow-color': '#3a434d',
+        'target-arrow-shape': 'triangle', 'curve-style': 'bezier', 'arrow-scale': .9,
+        'label': 'data(type)', 'font-size': 9, 'color': '#9aa5b1',
+        'text-background-color': '#0d1117', 'text-background-opacity': .85,
+        'text-background-padding': 2, 'text-rotation': 'autorotate' } },
+    { selector: 'edge:selected', style: { 'line-color': '#2f81f7', 'target-arrow-color': '#2f81f7', 'width': 2.5 } },
+  ],
+});
+
+function layout() {
+  cy.layout({ name: 'cose', animate: false, padding: 50, nodeRepulsion: 12000,
+              idealEdgeLength: 130, componentSpacing: 120, nodeOverlap: 24 }).run();
+}
+
+// ---- data loading ----------------------------------------------------------
+async function loadCases() {
+  const cases = await fetch('/cases').then(r => r.json());
+  const sel = document.getElementById('case');
+  sel.innerHTML = cases.map(c =>
+    `<option value="${c.id}">${c.name} (${c.object_count})</option>`).join('');
+  if (cases.length) { CASE = cases[0].id; await loadCaseObjects(); }
+}
+
+async function loadCaseObjects() {
+  CASE = document.getElementById('case').value || CASE;
+  OBJECTS = await fetch(`/objects?case_id=${CASE}&limit=300`).then(r => r.json());
+  renderObjectList();
+  // auto-open the most "central" thing for a new operator: an actor if present
+  const actor = OBJECTS.find(o => o.type === 'IntrusionSet') || OBJECTS[0];
+  if (actor) loadGraph(actor.id);
+}
+
+function renderObjectList() {
+  const q = (document.getElementById('search').value || '').toLowerCase();
+  const order = ['IntrusionSet','Campaign','ThreatActor','Malware','Tool','AttackPattern',
+                 'Indicator','ObservedData','Domain','TelegramChannel','Person','Email'];
+  const list = OBJECTS
+    .filter(o => o.canonical.toLowerCase().includes(q))
+    .sort((a,b) => (order.indexOf(a.type)+99*!~order.indexOf(a.type)) - (order.indexOf(b.type)+99*!~order.indexOf(b.type)));
+  document.getElementById('objlist').innerHTML = list.slice(0, 120).map(o =>
+    `<div class="item" onclick="loadGraph('${o.id}')" title="${o.canonical}">
+       <span class="dot" style="background:${ty(o.type).c}"></span>
+       <span class="label">${short(o.canonical)}</span>
+       <span class="ty">${o.type}</span>
+     </div>`).join('') || '<div class="hint">No entities match.</div>';
+}
+
+function short(canon) {
+  // STIX ids are ugly; show the readable tail
+  if (canon.includes('--')) return canon.split('--')[0] + '…';
+  return canon.length > 30 ? canon.slice(0, 30) + '…' : canon;
+}
+
+async function loadGraph(id) {
+  ROOT = id;
+  const hops = document.getElementById('hops').value || 2;
+  document.getElementById('status').textContent = 'loading…';
+  const g = await fetch(`/objects/${id}/graph?hops=${hops}`).then(r => r.json());
+  cy.elements().remove();
+  cy.add(g.nodes.map(n => ({ data: { id: n.id, label: n.label, type: n.type } })));
+  cy.add(g.edges.map(e => ({ data: { id: e.source+'>'+e.target+e.type, source: e.source, target: e.target, type: e.type } })));
+  cy.getElementById(id).addClass('root');
+  layout();
+  document.getElementById('status').textContent = `${g.nodes.length} entities · ${g.edges.length} links`;
+  inspect(id);
+}
+function reload() { if (ROOT) loadGraph(ROOT); }
+
+// ---- inspector -------------------------------------------------------------
+async function inspect(id) {
+  const [obj, helpers, g] = await Promise.all([
+    fetch(`/objects/${id}`).then(r => r.json()),
+    fetch(`/objects/${id}/helpers`).then(r => r.json()),
+    fetch(`/objects/${id}/graph?hops=1`).then(r => r.json()),
+  ]);
+  const meta = ty(obj.type);
+  const rels = g.edges.filter(e => e.source === id || e.target === id).map(e => {
+    const otherId = e.source === id ? e.target : e.source;
+    const other = g.nodes.find(n => n.id === otherId);
+    const dir = e.source === id ? '→' : '←';
+    return `<div class="rel-line">${dir === '→' ? 'this' : (other?.label||'?')}
+              <span class="verb">${e.type}</span>
+              <span class="obj">${dir === '→' ? (other?.label||'?') : 'this'}</span></div>`;
+  });
+  const props = obj.properties.map(p =>
+    `<div class="prop"><span class="k">${p.name}</span>:
+       <span class="v">${fmt(p.value)}</span> <span class="src">via ${p.source_id}</span></div>`).join('')
+    || '<div class="placeholder">No properties yet.</div>';
+  const helperHtml = helpers.length ? helpers.map(h =>
+    `<div class="helper"><span class="hname">${h.name}</span>
+       <span class="tier ${h.tier}">${h.tier}</span>
+       <div class="hwhat">${h.description || 'Collect more about this entity.'}</div></div>`).join('')
+    : '<div class="placeholder">No collectors consume this type. It\'s linked-to, not a query seed.</div>';
+
+  document.getElementById('inspect').innerHTML = `
+    <span class="insp-type" style="background:${meta.c}22;color:${meta.c};border:1px solid ${meta.c}66">${obj.type}</span>
+    <div class="insp-def">${meta.d}</div>
+    <div class="insp-id">${obj.canonical}</div>
+    <button class="btn ghost" onclick="loadGraph('${id}')" style="margin-top:10px">Pivot — centre the graph here</button>
+    <h3 class="insp-h">Properties &amp; provenance</h3>${props}
+    <h3 class="insp-h">How it connects</h3>${rels.join('') || '<div class="placeholder">No links.</div>'}
+    <h3 class="insp-h">Collectors you can run</h3>${helperHtml}`;
+}
+function fmt(v) {
+  if (Array.isArray(v)) return v.slice(0,4).join(', ') + (v.length>4?'…':'');
+  if (v && typeof v === 'object') return JSON.stringify(v).slice(0,80);
+  return String(v);
+}
+
+cy.on('tap', 'node', e => inspect(e.target.id()));
+
+// ---- legends ---------------------------------------------------------------
+function renderLegends() {
+  document.getElementById('legend').innerHTML = Object.entries(TYPE).map(([t,m]) =>
+    `<div class="legend-row"><span class="dot" style="background:${m.c}"></span>
+       <span><span class="name">${t}</span><div class="meaning">${m.d}</div></span></div>`).join('');
+  document.getElementById('glossary').innerHTML = Object.entries(REL).map(([r,d]) =>
+    `<div class="glossary-row"><span class="rel">${r}</span><span class="meaning">${d}</span></div>`).join('');
+}
+
+renderLegends();
+loadCases();
+</script>
 </body>
 </html>

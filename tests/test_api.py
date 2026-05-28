@@ -84,6 +84,29 @@ async def test_object_404(client: httpx.AsyncClient) -> None:
     assert r.status_code == 404
 
 
+async def test_list_cases_with_counts(client: httpx.AsyncClient, actions: Actions) -> None:
+    cid = await _seed(actions)
+    cases = (await client.get("/cases")).json()
+    mine = next(c for c in cases if c["id"] == str(cid))
+    assert mine["name"] == "api"
+    assert mine["object_count"] >= 11  # the ingested ATT&CK objects
+
+
+async def test_objects_scoped_to_case(client: httpx.AsyncClient, actions: Actions) -> None:
+    cid = await _seed(actions)
+    # an object in a *different* case must not appear when scoping to this one
+    other = uuid.UUID(
+        str(await actions.pool.fetchval(
+            "INSERT INTO cases (name, owner) VALUES ('other','x') RETURNING id"
+        ))
+    )
+    await actions.create_or_find_object("Domain", "elsewhere.test", "x", other)
+    scoped = (await client.get(f"/objects?case_id={cid}")).json()
+    canonicals = {o["canonical"] for o in scoped}
+    assert LAZARUS in canonicals
+    assert "elsewhere.test" not in canonicals
+
+
 async def test_snapshot_time_travel(client: httpx.AsyncClient, actions: Actions) -> None:
     cid = uuid.UUID(
         str(
