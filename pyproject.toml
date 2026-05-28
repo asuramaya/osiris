@@ -25,6 +25,7 @@ dev = [
     "testcontainers[postgres]>=4.8",  # real Postgres in Docker for tests (not SQLite, not mocks)
     "ruff>=0.8",
     "mypy>=1.13",
+    "types-PyYAML>=6.0",
 ]
 
 [tool.ruff]
@@ -34,6 +35,10 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.ruff.lint.per-file-ignores]
+# tests legitimately do synchronous file IO inside async test bodies
+"tests/**" = ["ASYNC230", "ASYNC240"]
 
 [tool.mypy]
 python_version = "3.12"

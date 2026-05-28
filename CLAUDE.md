@@ -59,5 +59,15 @@ and `docker run` do too.
   13 tests green. Proven on LIVE enterprise bundle: 4815 objects / 21025 links / 0 dangling;
   Lazarus G0032 -> 93 techniques + 22 malware + 4 tools; 1-hop dossier exports as valid
   STIX 2.1 (524 objects). DPRK fixture in tests/fixtures/. `python -m src.ontology.ingest_cli`.
-- **Phase 2 (next):** first OSINT->TTP slice (ThreatFox/MISP helper) + helper registry.
-- Then: router+cases+budgets, human-in-loop (Playwright-CDP), leases, ER, UI, ...
+- **Phase 2 (DONE):** helper registry + manifest format + trigger projection (#5) +
+  synchronous runner + first OSINT->TTP helper (ThreatFox). `src/orchestrator/
+  {manifests,triggers,runner}.py`, `src/parsers/{base,threatfox}.py`, `src/connectors/
+  {threatfox,store}.py`, `helpers/threatfox_malware_iocs.yaml`. 24 tests green. Proven:
+  IOC->TTP convergence (ThreatFox AppleJeus IOC -> indicates -> ATT&CK Malware <- uses <-
+  Lazarus), evidence content-addressed, atomic helper_run claim, STIX export of the chain.
+  FINDING: abuse.ch now requires a free Auth-Key — "keyless ThreatFox" (DESIGN §3/§14) is
+  dead; connector reads THREATFOX_AUTH_KEY; tests are fixture-based/hermetic. CIRCL OSINT
+  MISP feed IS keyless (candidate for a later bulk galaxy-ingest path).
+- **Phase 3 (next):** router (tier=open) + token buckets + durable outbox relay + Arq
+  cascade + cases/budgets/hop-distance enforcement. Then human-in-loop (Playwright-CDP),
+  leases, ER, UI, ...

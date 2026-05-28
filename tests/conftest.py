@@ -42,6 +42,7 @@ async def actions(pg_dsn: str) -> AsyncIterator[Actions]:
 
 @pytest_asyncio.fixture
 async def case_id(actions: Actions) -> str:
-    return await actions.pool.fetchval(
+    cid = await actions.pool.fetchval(
         "INSERT INTO cases (name, owner) VALUES ('test-case','analyst:test') RETURNING id"
     )
+    return str(cid)

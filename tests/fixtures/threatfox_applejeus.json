@@ -1,0 +1,36 @@
+{
+  "query_status": "ok",
+  "data": [
+    {
+      "id": "1099001",
+      "ioc": "23.254.xxx.xxx:443",
+      "ioc_type": "ip:port",
+      "threat_type": "botnet_cc",
+      "threat_type_desc": "Indicator that identifies a botnet command&control server (C&C)",
+      "malware": "win.applejeus",
+      "malware_printable": "AppleJeus",
+      "malware_alias": "AppleJeus",
+      "confidence_level": 75,
+      "first_seen": "2024-02-01 12:00:00 UTC",
+      "last_seen": null,
+      "reporter": "abuse_ch",
+      "reference": "https://bazaar.abuse.ch/sample/deadbeef",
+      "tags": ["AppleJeus", "Lazarus", "attack.T1566"]
+    },
+    {
+      "id": "1099002",
+      "ioc": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "ioc_type": "sha256_hash",
+      "threat_type": "payload",
+      "threat_type_desc": "Indicator that identifies a malware sample (payload)",
+      "malware": "win.applejeus",
+      "malware_printable": "AppleJeus",
+      "confidence_level": 90,
+      "first_seen": "2024-03-15 08:30:00 UTC",
+      "last_seen": null,
+      "reporter": "abuse_ch",
+      "reference": "https://bazaar.abuse.ch/sample/cafebabe",
+      "tags": ["AppleJeus", "macOS"]
+    }
+  ]
+}
