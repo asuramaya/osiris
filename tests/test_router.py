@@ -3,10 +3,14 @@ from __future__ import annotations
 import uuid
 
 import redis.asyncio as aioredis
+from cryptography.fernet import Fernet
 from src.actions.core import Actions
+from src.connectors.leases import LeaseStore
 from src.orchestrator.manifests import Manifest
 from src.orchestrator.ratelimit import RateLimiter
 from src.orchestrator.router import Route, route
+
+_LEASE_KEY = Fernet.generate_key()
 
 
 def _manifest(**over: object) -> Manifest:
@@ -51,3 +55,30 @@ async def test_route_gated_awaits_human(
     limiter = RateLimiter(redis_client)
     obj = await actions.create_or_find_object("Domain", "r3.test", "analyst:test", case_id)
     assert await route(actions.pool, limiter, _manifest(tier="gated"), obj) is Route.AWAITING_HUMAN
+
+
+async def test_route_gated_with_valid_lease_reuses_server_side(
+    actions: Actions, case_id: str, redis_client: aioredis.Redis
+) -> None:
+    limiter = RateLimiter(redis_client)
+    store = LeaseStore(actions.pool, _LEASE_KEY)
+    obj = await actions.create_or_find_object("Domain", "r4.test", "analyst:test", case_id)
+    m = _manifest(tier="gated", origin="t.me")
+
+    # no lease yet -> still needs the human
+    assert await route(
+        actions.pool, limiter, m, obj, lease_store=store, current_ip="127.0.0.1"
+    ) is Route.AWAITING_HUMAN
+
+    await store.capture(
+        "t.me", [{"name": "k", "value": "v"}], "UA",
+        bound_ip="127.0.0.1", ttl_seconds=900, issued_by="analyst:test",
+    )
+    # valid lease from the bound IP -> reuse server-side (single-box happy path)
+    assert await route(
+        actions.pool, limiter, m, obj, lease_store=store, current_ip="127.0.0.1"
+    ) is Route.SERVER_WORKER_WITH_LEASE
+    # a different egress IP voids it -> back to the human
+    assert await route(
+        actions.pool, limiter, m, obj, lease_store=store, current_ip="10.0.0.9"
+    ) is Route.AWAITING_HUMAN

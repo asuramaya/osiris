@@ -85,6 +85,19 @@ and `docker run` do too.
   helper_runs.status; tray ordered by priority heuristic (hop-distance; true fan-out
   unknowable pre-run). DECISION PENDING: `uv add playwright` (+~150MB chromium) to enable
   live co-browse — deferred, flagged to operator.
-- **Phase 5 (next):** cookie-lease subsystem (capture, OS-keyring-encrypted, scope to
-  IP+UA, server-egress reuse — which is the happy path on single-box, same egress IP).
-  Then ER, Cytoscape UI, federation, windowed pattern helpers, PDF export.
+- **Phase 5 (DONE):** cookie leases + LIVE co-browse. Playwright/cryptography/keyring added
+  as deps; real Chromium works on this box (note: `playwright install chromium` has no
+  prebuilt for ubuntu26.04 but a working chromium is present — launch verified). Lease
+  subsystem (`src/connectors/leases.py`: Fernet encryption at rest, key via OS keyring →
+  0600 file fallback → OSIRIS_LEASE_KEY override; (IP,UA) binding; `fetch_with_lease`
+  server reuse). Real co-browse driver (`src/connectors/browser.py` `co_browse`: CDP-connect
+  to operator's Chrome, or launch own headless). Co-browse handoff resolution
+  (`src/orchestrator/cobrowse.py`). Router gains SERVER_WORKER_WITH_LEASE (gated + valid
+  IP-bound lease → server reuse, the single-box happy path). 50 tests green incl. a LIVE
+  test driving real Chromium: render local page → capture session cookie as encrypted lease
+  → resolve handoff → reuse lease server-side past a 403 wall. Live test self-skips if
+  Chromium can't launch. NOTE: cascade auto-use of SERVER_WORKER_WITH_LEASE needs per-helper
+  server-side HTML scrapers (router decision + reuse proven; auto-dispatch wiring deferred).
+- **Phase 6 (next):** Entity Resolution v1 — deterministic canonicalization per type
+  (Email/Phone/Domain/IP...), auto-merge on canonical match; never auto-merge Person.
+  Then ER v2 (probabilistic + review tray), Cytoscape UI, federation, windowed helpers, PDF.

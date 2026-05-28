@@ -122,6 +122,8 @@ async def apply_result(
         if spec.evidence is not None:
             evidence_uri, evidence_sha = store.put_json(spec.evidence)
         for name, value in spec.properties.items():
+            if value is None:
+                continue  # a None property is "unknown", not a fact — don't assert it
             await actions.assert_property(
                 obj_id, name, value, source_id, observed_at, spec.confidence,
                 case_id=case_id, helper_run_id=helper_run_id,

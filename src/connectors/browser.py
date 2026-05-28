@@ -1,39 +1,62 @@
-"""Browser driver seam — Playwright-CDP against the analyst's real Chrome.
+"""Browser driver — Playwright-CDP against the analyst's real Chrome (reverses
+DESIGN §15.3). For the single-operator box we drive the genuine profile/session
+over CDP (`--remote-debugging-port`) rather than shipping an MV3 extension, so
+co-browse + cookie-lease capture use real cookies, with far less build friction.
 
-Design decision (reverses DESIGN §15.3): for the self-hosted single-operator box
-we drive the analyst's *real* Chrome over CDP (`--remote-debugging-port`) rather
-than shipping an MV3 extension. CDP attaches to the genuine profile/session, so
-co-browse + cookie-lease capture work, and it's far less build friction solo.
-
-NOTE: Playwright is NOT yet a project dependency (it pulls a ~150 MB browser).
-This module lazy-imports it so the rest of the system — including the entire
-handoff state machine, which is what makes Phase 4 valuable — runs and tests
-without it. Wiring real CDP is a one-line `uv add playwright` + `playwright
-install chromium` when the operator wants live co-browse.
+`co_browse` connects to a running Chrome (cdp_endpoint) for live, session-bearing
+co-browse, or launches its own headless Chromium when no endpoint is given (used
+in tests and for unauthenticated fetches). Either way it returns the rendered DOM
+plus the context cookies, which the lease subsystem can persist for server reuse.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 
-async def fetch_via_cdp(url: str, *, cdp_endpoint: str = "http://127.0.0.1:9222") -> dict[str, Any]:
-    """Attach to the operator's running Chrome over CDP, load `url` in their real
-    session, and return the rendered DOM. Raises if Playwright isn't installed."""
-    try:
-        from playwright.async_api import async_playwright  # type: ignore[import-not-found]
-    except ImportError as exc:  # pragma: no cover - exercised only with playwright absent
-        raise RuntimeError(
-            "Playwright not installed. Run `uv add playwright` and "
-            "`uv run playwright install chromium` to enable live co-browse."
-        ) from exc
+@dataclass
+class BrowserResult:
+    url: str
+    title: str
+    html: str
+    ua: str
+    cookies: list[dict[str, Any]] = field(default_factory=list)
 
-    async with async_playwright() as p:  # pragma: no cover - needs a live browser
-        browser = await p.chromium.connect_over_cdp(cdp_endpoint)
-        context = browser.contexts[0] if browser.contexts else await browser.new_context()
+
+async def co_browse(
+    url: str,
+    *,
+    cdp_endpoint: str | None = None,
+    headless: bool = True,
+    timeout_ms: int = 30000,
+) -> BrowserResult:
+    """Load `url` in a real browser and return its DOM + cookies.
+
+    cdp_endpoint set  -> attach to the operator's running Chrome (real session).
+    cdp_endpoint None -> launch a private headless Chromium (no session).
+    """
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as p:
+        owns_browser = cdp_endpoint is None
+        if cdp_endpoint is not None:
+            browser = await p.chromium.connect_over_cdp(cdp_endpoint)
+            context = browser.contexts[0] if browser.contexts else await browser.new_context()
+        else:
+            browser = await p.chromium.launch(headless=headless)
+            context = await browser.new_context()
+
         page = await context.new_page()
-        await page.goto(url, wait_until="domcontentloaded")
-        html = await page.content()
-        title = await page.title()
-        await page.close()
-        return {"url": url, "title": title, "html": html}
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            html = await page.content()
+            title = await page.title()
+            ua = str(await page.evaluate("() => navigator.userAgent"))
+            cookies = [dict(c) for c in await context.cookies()]
+        finally:
+            await page.close()
+            if owns_browser:  # never close the operator's real browser
+                await browser.close()
+
+    return BrowserResult(url=url, title=title, html=html, ua=ua, cookies=cookies)

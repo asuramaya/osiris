@@ -13,6 +13,7 @@ import uuid
 
 import asyncpg
 
+from src.connectors.leases import LeaseStore, valid_for_server_egress
 from src.orchestrator.manifests import Manifest
 from src.orchestrator.ratelimit import RateLimiter
 
@@ -20,6 +21,7 @@ from src.orchestrator.ratelimit import RateLimiter
 class Route(enum.Enum):
     CACHED = "cached"
     SERVER_WORKER = "server_worker"
+    SERVER_WORKER_WITH_LEASE = "server_worker_with_lease"
     DEFER = "defer"
     AWAITING_HUMAN = "awaiting_human"
 
@@ -41,6 +43,9 @@ async def route(
     limiter: RateLimiter,
     manifest: Manifest,
     object_id: uuid.UUID,
+    *,
+    lease_store: LeaseStore | None = None,
+    current_ip: str | None = None,
 ) -> Route:
     if await _is_cached(pool, manifest.id, object_id, manifest.cache_ttl):
         return Route.CACHED
@@ -53,6 +58,15 @@ async def route(
         )
         return Route.SERVER_WORKER if ok else Route.DEFER
 
-    if manifest.tier in ("gated", "manual"):
+    if manifest.tier == "gated":
+        # A valid (IP, UA)-bound lease lets us skip the human and reuse the solved
+        # session server-side — the single-box happy path (same egress IP).
+        if lease_store is not None and current_ip is not None:
+            lease = await lease_store.get(manifest.origin)
+            if lease is not None and valid_for_server_egress(lease, current_ip):
+                return Route.SERVER_WORKER_WITH_LEASE
+        return Route.AWAITING_HUMAN
+
+    if manifest.tier == "manual":
         return Route.AWAITING_HUMAN
     return Route.DEFER  # fragile: needs SearXNG/browser (later phase)

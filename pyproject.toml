@@ -16,6 +16,9 @@ dependencies = [
     "pyyaml>=6.0",            # helper manifests
     "alembic>=1.14",          # migrations
     "psycopg[binary]>=3.2",   # sync driver — MIGRATIONS ONLY, never app runtime
+    "playwright>=1.60.0",
+    "cryptography>=48.0.0",
+    "keyring>=25.7.0",
 ]
 
 [dependency-groups]
@@ -50,8 +53,12 @@ module = ["asyncpg.*"]     # asyncpg ships no py.typed; treat as untyped at the 
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["arq.*"]   # partial/untyped public API at the worker boundary
+module = ["arq.*", "playwright.*"]   # partial/untyped public API at the worker/browser boundary
 disallow_untyped_calls = false
+
+[[tool.mypy.overrides]]
+module = ["keyring.*"]   # no bundled stubs
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

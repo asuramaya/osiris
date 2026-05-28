@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import http.server
 import os
+import threading
 from collections.abc import AsyncIterator, Iterator
 
 import pytest
@@ -68,3 +70,48 @@ async def redis_client(redis_url: str) -> AsyncIterator[aioredis.Redis]:
         yield client
     finally:
         await client.aclose()
+
+
+class _SiteHandler(http.server.BaseHTTPRequestHandler):
+    """Tiny site: '/' sets a session cookie; '/protected' needs it (else a
+    Cloudflare-ish 403). Lets co-browse capture a real cookie and prove reuse."""
+
+    def log_message(self, *args: object) -> None:  # silence test noise
+        pass
+
+    def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
+        if self.path == "/":
+            self.send_response(200)
+            self.send_header("Set-Cookie", "session=secret123; Path=/")
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(
+                b"<html><head><title>DPRK News</title></head><body>"
+                b"<div id='subs'>12345</div><div id='desc'>state media mirror</div>"
+                b"</body></html>"
+            )
+        elif self.path == "/protected":
+            if "session=secret123" in self.headers.get("Cookie", ""):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.end_headers()
+                self.wfile.write(b"<html><body><span id='secret'>topsecret</span></body></html>")
+            else:
+                self.send_response(403)
+                self.send_header("Content-Type", "text/html")
+                self.end_headers()
+                self.wfile.write(b"<title>Just a moment...</title>")
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+
+@pytest.fixture
+def local_site() -> Iterator[str]:
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _SiteHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
