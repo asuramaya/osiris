@@ -32,6 +32,11 @@ _FAMILIES: dict[str, list[str]] = {
     "IPv4": ['"{q}"', '"{q}" (site:shodan.io OR site:censys.io OR site:viz.greynoise.io)'],
     "Person": ['"{q}"', '"{q}" (linkedin OR twitter OR facebook)'],
     "Phrase": ["{q}", '"{q}" (filetype:pdf OR filetype:docx)'],
+    "Phone": [
+        '"{q}"',
+        '"{q}" (site:truecaller.com OR site:sync.me OR site:whocalld.com)',
+        '"{q}" (contact OR whatsapp OR telegram OR signal)',
+    ],
 }
 _DEFAULT = ['"{q}"']
 

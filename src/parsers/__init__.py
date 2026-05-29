@@ -11,6 +11,7 @@ from src.parsers.base import Parser
 from src.parsers.crtsh import parse_crtsh
 from src.parsers.gravatar import parse_gravatar
 from src.parsers.handles import parse_email_handles
+from src.parsers.phone import parse_phone_meta
 from src.parsers.searxng import parse_searxng_results
 from src.parsers.suggest import parse_suggest_noop
 from src.parsers.telegram import parse_telegram_channel
@@ -28,6 +29,7 @@ PARSERS: dict[str, Parser] = {
     "email_handles": parse_email_handles,
     "username_accounts": parse_username_accounts,
     "url_accounts": parse_url_accounts,
+    "phone_meta": parse_phone_meta,
 }
 
 

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import uuid
 
+from src.connectors.phone import fetch_phone_meta
 from src.parsers.accounts import parse_url_accounts, parse_username_accounts
 from src.parsers.base import InputObject
+from src.parsers.phone import parse_phone_meta
 
 
 def _inp(type_: str, canon: str) -> InputObject:
@@ -39,3 +41,42 @@ def test_url_account_ignores_non_profile_urls() -> None:
     assert r.objects == []
     r2 = parse_url_accounts({}, _inp("URL", "https://zenodo.org/record/2403053/files/article.pdf"))
     assert r2.objects == []
+
+
+def test_url_to_account_recognizes_more_social_profiles() -> None:
+    cases = {
+        "https://www.tiktok.com/@asuramaya": "tiktok:asuramaya",
+        "https://soundcloud.com/asuramaya": "soundcloud:asuramaya",
+        "https://about.me/asuramaya": "about.me:asuramaya",
+        "https://lobste.rs/~asuramaya": "lobsters:asuramaya",
+        "https://asuramaya.tumblr.com": "tumblr:asuramaya",
+        "https://www.last.fm/user/asuramaya": "lastfm:asuramaya",
+        "https://mastodon.social/@asuramaya": "mastodon:asuramaya",
+    }
+    for url, expected in cases.items():
+        r = parse_url_accounts({}, _inp("URL", url))
+        assert [o.canonical for o in r.objects] == [expected], url
+
+
+async def test_phone_enrichment_offline() -> None:
+    # libphonenumber metadata is fully offline/keyless — deterministic in tests
+    io = _inp("Phone", "+14155552671")
+    meta = await fetch_phone_meta(io)
+    assert meta["valid"] is True
+    assert meta["country"] == "US"
+    assert meta["national"] == "(415) 555-2671"
+
+    r = parse_phone_meta(meta, io)
+    phone = [o for o in r.objects if o.type == "Phone"]
+    assert phone and phone[0].properties["country"] == "US"
+    # human-formatted variants are seeded as search Phrases
+    variants = {o.canonical for o in r.objects if o.type == "Phrase"}
+    assert "(415) 555-2671" in variants
+    assert all(link.type == "search_variant" for link in r.links)
+
+
+async def test_phone_enrichment_rejects_invalid() -> None:
+    io = _inp("Phone", "12345")
+    meta = await fetch_phone_meta(io)
+    assert meta["valid"] is False
+    assert parse_phone_meta(meta, io).objects == []

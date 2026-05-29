@@ -1,0 +1,18 @@
+id: phone_meta
+name: Phone enrichment (offline libphonenumber)
+description: >
+  Derive a phone number's country, region, carrier and line type locally via
+  libphonenumber metadata (no network, no key, no bot wall) and seed the
+  human-formatted variants (national / international) as search phrases so the
+  number can be dorked in the formats people actually post it in.
+consumes:
+  type: Phone
+  requires_properties: []
+emits:
+  - type: Phrase
+    confidence_floor: 0.5
+tier: open
+origin: local
+parser: phone_meta
+cache_ttl: 86400
+enabled: true

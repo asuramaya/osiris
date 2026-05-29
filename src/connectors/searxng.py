@@ -24,7 +24,7 @@ _DORKS_PER_RUN = 3
 _RESULTS_PER_DORK = 6
 
 # selector types we route through search-engine dorking
-_SEARCHABLE = ("Email", "Domain", "Username", "IPv4", "Person", "Phrase")
+_SEARCHABLE = ("Email", "Domain", "Username", "IPv4", "Person", "Phrase", "Phone")
 
 
 async def _searx_query(client: httpx.AsyncClient, base: str, query: str) -> list[dict[str, Any]]:

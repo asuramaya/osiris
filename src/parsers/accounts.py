@@ -45,6 +45,16 @@ _PROFILE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("instagram", re.compile(r"https?://(?:www\.)?instagram\.com/([A-Za-z0-9_.]+)/?$")),
     ("telegram", re.compile(r"https?://t\.me/([A-Za-z0-9_]{4,32})/?$")),
     ("medium", re.compile(r"https?://medium\.com/@([A-Za-z0-9_.-]+)/?")),
+    ("facebook", re.compile(r"https?://(?:www\.)?facebook\.com/([A-Za-z0-9.]{5,})/?$")),
+    ("tiktok", re.compile(r"https?://(?:www\.)?tiktok\.com/@([A-Za-z0-9_.]+)/?")),
+    ("mastodon", re.compile(r"https?://[A-Za-z0-9.-]+/@([A-Za-z0-9_]+)/?$")),
+    ("soundcloud", re.compile(r"https?://(?:www\.)?soundcloud\.com/([A-Za-z0-9_-]+)/?$")),
+    ("about.me", re.compile(r"https?://about\.me/([A-Za-z0-9_.-]+)/?$")),
+    ("lobsters", re.compile(r"https?://lobste\.rs/~([A-Za-z0-9_.-]+)/?$")),
+    ("tumblr", re.compile(r"https?://([A-Za-z0-9-]+)\.tumblr\.com/?$")),
+    ("lastfm", re.compile(r"https?://(?:www\.)?last\.fm/user/([A-Za-z0-9_-]+)/?")),
+    ("pinterest", re.compile(r"https?://(?:www\.)?pinterest\.com/([A-Za-z0-9_]+)/?$")),
+    ("keybase", re.compile(r"https?://keybase\.io/([A-Za-z0-9_]+)/?$")),
 ]
 
 

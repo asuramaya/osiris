@@ -28,6 +28,15 @@ SITES: list[dict[str, Any]] = [
     {"platform": "gumroad", "url": "https://{u}.gumroad.com", "require_status": 200},
     {"platform": "hackernews", "url": "https://news.ycombinator.com/user?id={u}",
      "require_status": 200, "absent_text": "No such user."},
+    # Social/community platforms whose absence signal was LIVE-VERIFIED clean
+    # (exists -> 200, missing -> 404) and that serve without keys or bot walls.
+    {"platform": "lobsters", "url": "https://lobste.rs/~{u}", "require_status": 200},
+    {"platform": "about.me", "url": "https://about.me/{u}", "require_status": 200},
+    {"platform": "tumblr", "url": "https://{u}.tumblr.com", "require_status": 200},
+    {"platform": "mastodon.social", "url": "https://mastodon.social/@{u}",
+     "require_status": 200},
+    {"platform": "lastfm", "url": "https://www.last.fm/user/{u}", "require_status": 200},
+    {"platform": "soundcloud", "url": "https://soundcloud.com/{u}", "require_status": 200},
 ]
 _UA = {"User-Agent": "Mozilla/5.0 (compatible; osiris-osint)"}
 

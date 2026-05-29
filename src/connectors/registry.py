@@ -14,6 +14,7 @@ from typing import Any
 from src.connectors.crtsh import fetch_crtsh
 from src.connectors.derive import echo
 from src.connectors.gravatar import fetch_gravatar
+from src.connectors.phone import fetch_phone_meta
 from src.connectors.username_enum import enumerate_username
 from src.parsers.base import InputObject
 
@@ -25,6 +26,7 @@ CONNECTORS: dict[str, Connector] = {
     "email_handles": echo,           # pure local derivation
     "username_accounts": enumerate_username,
     "url_accounts": echo,            # pure regex derivation
+    "phone_meta": fetch_phone_meta,  # offline libphonenumber, no network/key
     # threatfox is request/response with args -> wired when its tier/cascade lands
 }
 
