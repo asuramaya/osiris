@@ -195,8 +195,11 @@ const TYPE = {
   Domain:         { c:'#39c5cf', s:'ellipse',          d:'A DNS domain observable.' },
   IPv4:           { c:'#2dd4bf', s:'ellipse',          d:'An IPv4 address observable.' },
   TelegramChannel:{ c:'#56a3ff', s:'ellipse',          d:'A Telegram channel observable.' },
-  Person:         { c:'#e3b341', s:'ellipse',          d:'A person entity (resolved probabilistically — never auto-merged).' },
+  Person:         { c:'#e3b341', s:'ellipse',          d:'A person entity / identity hub (resolved probabilistically — never auto-merged).' },
+  Account:        { c:'#ffd33d', s:'round-rectangle',  d:'A platform account (github:user, twitter:handle) — a piece of someone’s footprint.' },
+  Username:       { c:'#ffab70', s:'ellipse',          d:'A handle/username — the connective tissue across platforms.' },
   Email:          { c:'#7ee787', s:'ellipse',          d:'An email-address observable.' },
+  Phone:          { c:'#85e89d', s:'ellipse',          d:'A phone-number observable (enriched offline: country/carrier/line type).' },
   FileHash:       { c:'#f0883e', s:'triangle',         d:'A file hash observable (md5/sha1/sha256).' },
   Phrase:         { c:'#adbac7', s:'ellipse',          d:'Free-text — a dorking seed.' },
 };
@@ -209,8 +212,9 @@ const GROUPS = [
   ['Capabilities', ['Malware','Tool']],
   ['Techniques',   ['AttackPattern']],
   ['Indicators',   ['Indicator']],
+  ['Identity',     ['Person','Account','Username','Email','Phone']],
   ['Evidence',     ['ObservedData','URL']],
-  ['Observables',  ['Domain','IPv4','TelegramChannel','Email','Person','FileHash','Phrase']],
+  ['Observables',  ['Domain','IPv4','TelegramChannel','FileHash','Phrase']],
 ];
 
 const REL = {
@@ -223,6 +227,16 @@ const REL = {
   has_subdomain:    'This domain contains the linked subdomain.',
   same_as:          'Resolved to be the same entity (merge).',
   not_same_as:      'Confirmed by an analyst to be different entities.',
+  has_account:      'This identity owns the linked platform account.',
+  has_email:        'This identity owns the linked email address.',
+  has_username:     'This identity uses the linked handle.',
+  is_profile:       'This URL/handle resolves to the linked platform account.',
+  rel_me:           'IndieWeb rel=me — the page asserts this is the same identity.',
+  co_occurs:        'Surfaced together with the seed (weak co-occurrence lead).',
+  appears_in:       'The seed appears in this web page / search hit.',
+  has_email_link:   'Contact email found on the page.',
+  derived_handle:   'A candidate username derived from the seed.',
+  has_url:          'A website/blog this identity links to.',
 };
 
 let CASE = null, ROOT = null, OBJECTS = [];
@@ -439,6 +453,10 @@ async function inspect(id) {
     `<div class="prop"><span class="k">${p.name}</span>:
        <span class="v">${fmt(p.value)}</span> <span class="src">via ${p.source_id}</span></div>`).join('')
     || '<div class="placeholder">No properties yet.</div>';
+  const isIdentity = ['Person','Account','Email','Username'].includes(obj.type);
+  const subjectBtn = isIdentity
+    ? `<button class="btn" onclick="markSubject('${id}')" title="Pin as the case subject — builds an identity hub the footprint converges toward">★ This is me</button>`
+    : '';
   const helperHtml = helpers.length ? helpers.map(h => {
     const action = h.tier === 'open'
       ? `<button class="btn" style="margin-top:6px" onclick="federatePreview('${h.id}','${id}')">Run &amp; preview ▸</button>`
@@ -458,6 +476,7 @@ async function inspect(id) {
       <button class="btn ghost" onclick="linkFrom('${id}','${obj.canonical.replace(/'/g,"\\'")}')">Link →</button>
     </div>
     <div class="acts" style="margin-top:6px">
+      ${subjectBtn}
       <button class="btn ghost" onclick="addProp('${id}')">+ Property</button>
       <button class="btn ghost" onclick="addTag('${id}')">+ Tag</button>
       <button class="btn bad" onclick="archiveObj('${id}')">Archive</button>
@@ -486,6 +505,13 @@ async function archiveObj(id) {
   if (!confirm('Archive this entity? It stays in the audit log but leaves the views.')) return;
   await fetch(`/objects/${id}/archive`, { method:'POST' });
   await refreshObjects(); if (ROOT) growGraph(); cy.getElementById(id).remove();
+}
+async function markSubject(id) {
+  if (!CASE) { alert('Open a case first.'); return; }
+  await fetch(`/objects/${id}/subject`, { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ case_id: CASE }) });
+  document.getElementById('status').textContent = '★ Pinned as case subject — identity hub seeded.';
+  await refreshObjects(); if (ROOT) growGraph(); inspect(id);
 }
 function linkFrom(id, label) {
   LINK_FROM = { id, label };

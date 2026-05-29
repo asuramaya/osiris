@@ -52,6 +52,35 @@ async def test_resolve_merge_candidate_via_api(
     assert sorted(x["status"] for x in rows) == ["active", "merged"]
 
 
+async def test_mark_subject_builds_identity_hub(
+    client: httpx.AsyncClient, actions: Actions, case_id: str
+) -> None:
+    cid = uuid.UUID(case_id)
+    acc = await actions.create_or_find_object("Account", "github:asuramaya", "analyst:test", cid)
+
+    r = await client.post(f"/objects/{acc}/subject", json={"case_id": case_id})
+    assert r.status_code == 200
+    hub_id = uuid.UUID(r.json()["hub"])
+
+    # a per-case subject Person hub was minted and linked to the account
+    hub = await actions.pool.fetchrow("SELECT canonical FROM objects WHERE id=$1", hub_id)
+    assert hub["canonical"] == f"subject:{case_id}"
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND to_id=$2 AND type='has_account'",
+        hub_id, acc,
+    ) == 1
+    # both the account and the hub are tagged 'subject'
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE object_id=$1 AND name='tag'"
+        " AND value->>'tag' = 'subject'", acc,
+    ) >= 1
+    # idempotent: re-marking doesn't duplicate the has_account link
+    await client.post(f"/objects/{acc}/subject", json={"case_id": case_id})
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='has_account'", hub_id
+    ) == 1
+
+
 async def test_handoff_lifecycle_via_api(
     client: httpx.AsyncClient, actions: Actions, redis_client: aioredis.Redis
 ) -> None:

@@ -40,7 +40,11 @@ from src.db.redis import create_redis
 from src.dissemination.brief import build_case_brief
 from src.ontology.classify import classify
 from src.ontology.intake import intake
-from src.ontology.resolution import resolve_candidate, review_tray
+from src.ontology.resolution import (
+    find_person_merge_candidates,
+    resolve_candidate,
+    review_tray,
+)
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, expand_case
 from src.orchestrator.cobrowse import cobrowse_open
@@ -248,6 +252,38 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     ) -> dict[str, str]:
         await Actions(p).tag_object(object_id, body.tag, body.scope, get_settings().osiris_actor)
         return {"tagged": body.tag}
+
+    @app.post("/objects/{object_id}/subject")
+    async def mark_subject(
+        object_id: uuid.UUID, body: SubjectBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, str]:
+        """Pin an object as the case subject ('this is me'). Tags it, mints/links a
+        per-case Person hub (subject:<case_id>) when the object is an identity
+        fragment, and seeds Person merge-candidate generation so the hub starts
+        attracting matches in the review tray."""
+        actor = get_settings().osiris_actor
+        row = await p.fetchrow("SELECT type FROM objects WHERE id=$1", object_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="object not found")
+        await Actions(p).tag_object(object_id, "subject", "case", actor, case_id=body.case_id)
+        hub_id = await Actions(p).create_or_find_object(
+            "Person", f"subject:{body.case_id}", actor, body.case_id
+        )
+        await Actions(p).tag_object(hub_id, "subject", "case", actor, case_id=body.case_id)
+        link_type = {"Account": "has_account", "Email": "has_email",
+                     "Username": "has_username"}.get(row["type"])
+        if link_type and object_id != hub_id:
+            exists = await p.fetchval(
+                "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type=$3 LIMIT 1",
+                hub_id, object_id, link_type,
+            )
+            if not exists:
+                await Actions(p).create_link(
+                    hub_id, object_id, link_type, actor, datetime.now(UTC), 1.0,
+                    case_id=body.case_id,
+                )
+        await find_person_merge_candidates(p)
+        return {"subject": str(object_id), "hub": str(hub_id)}
 
     @app.post("/objects/{object_id}/archive")
     async def archive_object(
@@ -480,6 +516,10 @@ class PropertyBody(BaseModel):
 class TagBody(BaseModel):
     tag: str
     scope: str = "case"
+
+
+class SubjectBody(BaseModel):
+    case_id: uuid.UUID
 
 
 class LinkBody(BaseModel):
