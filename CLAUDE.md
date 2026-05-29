@@ -179,3 +179,17 @@ and `docker run` do too.
   and the subject anchor minting the identity hub. (Pre-Phase-11 increment: Phone footprint via
   offline libphonenumber + searxng_phone; broader keyless username enumeration + url_accounts
   profile patterns.)
+- **Phase 11.1 (DONE):** anchor-and-pivot + precision. First live self-OSINT run was mostly
+  noise (breadth-first dorking on common name "hector" + greedy github URL parsing). Fixes:
+  (1) `accounts.profile_account()` reserved-path stoplist (github.com/{about,features,...} no
+  longer fake Accounts; shared by url_accounts + webpage); (2) `handles.py` skips common
+  first-name/generic locals (hector, info, …) + ≤2-char handles; (3) `urlfetch` uses a browser
+  UA so Cloudflare-fronted personal sites serve real HTML; (4) NEW **`github_deep`** helper
+  (`connectors/github_deep.py` + `parsers/github_deep.py`, consumes a confirmed github Account):
+  mines profile README → self-declared social links (LinkedIn/SoundCloud/Twitter, `declares`
+  @0.85), repo homepages → owned Domains/URLs (`has_url`), and commit authorship (API
+  `author=` filter) → the real `committed_as` Email @0.9 (noreply dropped); keyless, optional
+  GITHUB_TOKEN, bounded calls, 24h cache. 132 tests green. Proven: seeding username `asuramaya`
+  alone now auto-yields github:asuramaya, soundcloud:wrenaudio7, linkedin:priya-kowalski-…,
+  dakota.jm@gmail.com (committed_as), and owned domains (asuramaya.com/chronohorn.com/
+  decepticons.win/madapesai.com) — with the prior account-noise eliminated.
