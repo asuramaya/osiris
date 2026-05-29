@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from src.parsers.base import Parser
 from src.parsers.crtsh import parse_crtsh
+from src.parsers.gravatar import parse_gravatar
+from src.parsers.handles import parse_email_handles
 from src.parsers.searxng import parse_searxng_results
 from src.parsers.suggest import parse_suggest_noop
 from src.parsers.telegram import parse_telegram_channel
@@ -21,6 +23,8 @@ PARSERS: dict[str, Parser] = {
     "tgstat_channel_behavior": parse_tgstat_behavior,
     "suggest_noop": parse_suggest_noop,
     "searxng_results": parse_searxng_results,
+    "gravatar": parse_gravatar,
+    "email_handles": parse_email_handles,
 }
 
 

@@ -12,12 +12,16 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from src.connectors.crtsh import fetch_crtsh
+from src.connectors.derive import echo
+from src.connectors.gravatar import fetch_gravatar
 from src.parsers.base import InputObject
 
 Connector = Callable[[InputObject], Awaitable[dict[str, Any]]]
 
 CONNECTORS: dict[str, Connector] = {
     "crtsh_subdomains": fetch_crtsh,
+    "gravatar_email": fetch_gravatar,
+    "email_handles": echo,  # pure local derivation
     # threatfox is request/response with args -> wired when its tier/cascade lands
 }
 

@@ -1,0 +1,17 @@
+id: email_handles
+name: Email → candidate usernames
+description: >
+  Derive candidate usernames from an email's local part (the handle behind it)
+  so the case can pivot into username search/dorking — emails rarely have a
+  public search footprint, but the handle does.
+consumes:
+  type: Email
+  requires_properties: []
+emits:
+  - type: Username
+    confidence_floor: 0.4
+tier: open
+origin: local
+parser: email_handles
+cache_ttl: 0
+enabled: true

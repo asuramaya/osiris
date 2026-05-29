@@ -54,7 +54,7 @@ async def test_matching_helpers(actions: Actions) -> None:
         actions.pool, "object_created", "Domain"
     )
     # a type no helper consumes matches nothing
-    assert await matching_helpers(actions.pool, "object_created", "Email") == []
+    assert await matching_helpers(actions.pool, "object_created", "Vessel") == []
     # disabled triggers don't match
     await actions.pool.execute("UPDATE triggers SET enabled=false")
     assert await matching_helpers(actions.pool, "object_created", "Malware") == []
