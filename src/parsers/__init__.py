@@ -15,6 +15,7 @@ from src.parsers.phone import parse_phone_meta
 from src.parsers.searxng import parse_searxng_results
 from src.parsers.suggest import parse_suggest_noop
 from src.parsers.telegram import parse_telegram_channel
+from src.parsers.webpage import parse_webpage
 from src.parsers.tgstat import parse_tgstat_behavior
 from src.parsers.threatfox import parse_threatfox_iocs
 
@@ -30,6 +31,7 @@ PARSERS: dict[str, Parser] = {
     "username_accounts": parse_username_accounts,
     "url_accounts": parse_url_accounts,
     "phone_meta": parse_phone_meta,
+    "webpage": parse_webpage,
 }
 
 

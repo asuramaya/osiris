@@ -1,0 +1,26 @@
+id: url_fetch
+name: Web-page fetch (keyless follow-the-link)
+description: >
+  GET a discovered URL server-side (no key, no browser) and mine the page for
+  identity signals: rel="me" links (IndieWeb identity verification), mailto:
+  addresses, profile links on known platforms, and the page title. text/html
+  only, byte-capped, with challenge detection that suspends to a human on a wall.
+consumes:
+  type: URL
+  requires_properties: []
+emits:
+  - type: Email
+    confidence_floor: 0.6
+  - type: Account
+    confidence_floor: 0.5
+  - type: URL
+    confidence_floor: 0.5
+tier: open
+origin: multi
+rate:
+  per_origin_rps: 0.5
+  per_origin_concurrent: 1
+  jitter_ms: [200, 800]
+parser: webpage
+cache_ttl: 86400
+enabled: true
