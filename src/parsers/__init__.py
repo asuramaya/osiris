@@ -9,15 +9,16 @@ from __future__ import annotations
 from src.parsers.accounts import parse_url_accounts, parse_username_accounts
 from src.parsers.base import Parser
 from src.parsers.crtsh import parse_crtsh
+from src.parsers.github import parse_github_user
 from src.parsers.gravatar import parse_gravatar
 from src.parsers.handles import parse_email_handles
 from src.parsers.phone import parse_phone_meta
 from src.parsers.searxng import parse_searxng_results
 from src.parsers.suggest import parse_suggest_noop
 from src.parsers.telegram import parse_telegram_channel
-from src.parsers.webpage import parse_webpage
 from src.parsers.tgstat import parse_tgstat_behavior
 from src.parsers.threatfox import parse_threatfox_iocs
+from src.parsers.webpage import parse_webpage
 
 PARSERS: dict[str, Parser] = {
     "threatfox_malware_iocs": parse_threatfox_iocs,
@@ -32,6 +33,7 @@ PARSERS: dict[str, Parser] = {
     "url_accounts": parse_url_accounts,
     "phone_meta": parse_phone_meta,
     "webpage": parse_webpage,
+    "github": parse_github_user,
 }
 
 

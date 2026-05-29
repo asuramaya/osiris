@@ -1,0 +1,25 @@
+id: github_user
+name: GitHub user enrichment (keyless public API)
+description: >
+  Look up a Username on api.github.com (unauthenticated, no key) and pull the
+  public profile: real name, company, blog, twitter, contact email, location,
+  bio. Low rps + long cache keep it inside the ~60 req/hr unauth limit.
+consumes:
+  type: Username
+  requires_properties: []
+emits:
+  - type: Account
+    confidence_floor: 0.6
+  - type: Email
+    confidence_floor: 0.6
+  - type: URL
+    confidence_floor: 0.5
+tier: open
+origin: api.github.com
+rate:
+  per_origin_rps: 0.2
+  per_origin_concurrent: 1
+  jitter_ms: [200, 800]
+parser: github
+cache_ttl: 86400
+enabled: true

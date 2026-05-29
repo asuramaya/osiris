@@ -13,6 +13,7 @@ from typing import Any
 
 from src.connectors.crtsh import fetch_crtsh
 from src.connectors.derive import echo
+from src.connectors.github import fetch_github_user
 from src.connectors.gravatar import fetch_gravatar
 from src.connectors.phone import fetch_phone_meta
 from src.connectors.urlfetch import fetch_webpage
@@ -26,6 +27,7 @@ CONNECTORS: dict[str, Connector] = {
     "gravatar_email": fetch_gravatar,
     "email_handles": echo,           # pure local derivation
     "username_accounts": enumerate_username,
+    "github_user": fetch_github_user,  # keyless api.github.com public profile
     "url_accounts": echo,            # pure regex derivation
     "url_fetch": fetch_webpage,      # keyless page fetch (rel=me, mailto, profiles)
     "phone_meta": fetch_phone_meta,  # offline libphonenumber, no network/key
