@@ -38,6 +38,25 @@ async def _is_cached(pool: asyncpg.Pool, helper_id: str, object_id: uuid.UUID, t
     )
 
 
+async def has_cached_run_for_case(
+    pool: asyncpg.Pool, helper_id: str, object_id: uuid.UUID, case_id: uuid.UUID, ttl: int
+) -> bool:
+    """Like _is_cached but scoped to ONE case. The global _is_cached makes route()
+    return CACHED whenever ANY case ran the helper; the cascade uses this to tell a
+    genuine same-case cache hit (skip) from a cross-case one (re-materialize into
+    this case so its results actually land here)."""
+    return bool(
+        await pool.fetchval(
+            "SELECT 1 FROM helper_runs WHERE helper_id=$1 AND object_id=$2 AND case_id=$3 "
+            "AND status='done' AND finished_at > now() - make_interval(secs => $4) LIMIT 1",
+            helper_id,
+            object_id,
+            case_id,
+            ttl,
+        )
+    )
+
+
 async def route(
     pool: asyncpg.Pool,
     limiter: RateLimiter,

@@ -28,7 +28,7 @@ from src.orchestrator.challenges import ChallengeDetected
 from src.orchestrator.handoff import suspend
 from src.orchestrator.manifests import Manifest
 from src.orchestrator.ratelimit import RateLimiter
-from src.orchestrator.router import Route, route
+from src.orchestrator.router import Route, has_cached_run_for_case, route
 from src.orchestrator.runner import claim_run, execute_claimed, load_input_object
 from src.orchestrator.triggers import matching_helpers
 from src.parsers.base import InputObject
@@ -70,7 +70,14 @@ async def dispatch(
 
     decided = await route(ctx.pool, ctx.limiter, manifest, object_id)
     if decided is Route.CACHED:
-        return "cached"
+        # CACHED is global (any case ran it). If THIS case already has the done run,
+        # it's a genuine hit — skip. Otherwise re-materialize the cached result into
+        # this case (a cache hit means no network; cross-case reuse stays cheap).
+        if await has_cached_run_for_case(
+            ctx.pool, manifest.id, object_id, case_id, manifest.cache_ttl
+        ):
+            return "cached"
+        return await _rematerialize_cached(ctx, manifest, object_id, case_id, input_hop)
     if decided is Route.DEFER:
         return "defer"
     if decided is Route.AWAITING_HUMAN:
@@ -120,6 +127,40 @@ async def dispatch(
         ctx.actions, manifest, response, input_object, case_id, run_id, input_hop=input_hop
     )
     return "ran"
+
+
+async def _rematerialize_cached(
+    ctx: CascadeContext,
+    manifest: Manifest,
+    object_id: uuid.UUID,
+    case_id: uuid.UUID,
+    input_hop: int,
+) -> str:
+    """A global CACHED hit with no done run in THIS case — re-link the cached result
+    into this case. cached_fetch returns the stored response without touching the
+    network, so this is cheap; the claim index keeps it idempotent. No rate credit
+    is spent (a cache hit isn't an egress)."""
+    connector = ctx.connectors.get(manifest.id)
+    if connector is None:
+        return "cached"  # no connector/parser loaded here — can't re-link, leave as-is
+    run_id = await claim_run(ctx.actions, manifest.id, object_id, case_id, manifest.tier)
+    if run_id is None:  # another worker is already materializing it for this case
+        return "skipped:active"
+    input_object = await load_input_object(ctx.pool, object_id)
+    try:
+        response = await cached_fetch(
+            ctx.pool, connector, manifest.id, input_object, cache_ttl=manifest.cache_ttl
+        )
+    except Exception as exc:
+        await ctx.pool.execute(
+            "UPDATE helper_runs SET status='failed', finished_at=now(), error=$2 WHERE id=$1",
+            run_id, f"{type(exc).__name__}: {exc}"[:500],
+        )
+        return f"failed:{type(exc).__name__}"
+    await execute_claimed(
+        ctx.actions, manifest, response, input_object, case_id, run_id, input_hop=input_hop
+    )
+    return "rematerialized"
 
 
 def _render_url(manifest: Manifest, input_object: InputObject) -> str | None:

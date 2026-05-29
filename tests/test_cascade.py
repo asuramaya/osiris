@@ -5,7 +5,7 @@ import uuid
 import redis.asyncio as aioredis
 from src.actions.core import Actions
 from src.orchestrator.budgets import BudgetLedger
-from src.orchestrator.cascade import CascadeContext, run_cascade
+from src.orchestrator.cascade import CascadeContext, dispatch, run_cascade
 from src.orchestrator.manifests import Manifest, Rate
 from src.orchestrator.ratelimit import RateLimiter
 from src.parsers.base import InputObject
@@ -124,6 +124,52 @@ async def test_flaky_connector_fails_gracefully(
     ) == 1
     # the failed run released its claim and refunded its credit
     assert int(await redis_client.get(f"budget:{case_id}:rate")) == 100
+
+
+async def test_cross_case_cached_result_rematerializes_into_new_case(
+    actions: Actions, redis_client: aioredis.Redis
+) -> None:
+    """A helper that ran in case A is router-CACHED when the same object appears in
+    case B. Instead of silently skipping (leaving B empty), the cascade re-links the
+    cached result into B — without touching the network (cache hit)."""
+    case_a = await _make_case(actions, {"max_hop_distance": 0, "rate_credits": 100})
+    obj = await actions.create_or_find_object("Domain", "shared.kp", "analyst:test", case_a)
+
+    assert await dispatch(_ctx(actions, redis_client), _CRT, obj, case_a) == "ran"
+    # case A now has a done run and a global cache row for (crtsh, shared.kp)
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM helper_runs WHERE object_id=$1 AND case_id=$2 AND status='done'",
+        obj, case_a,
+    ) == 1
+
+    # case B: same object, fresh case. A connector that raises proves the re-materialize
+    # path reads the cache and never egresses.
+    case_b = await _make_case(actions, {"max_hop_distance": 0, "rate_credits": 100})
+
+    async def no_network(input_object: InputObject) -> dict:
+        raise AssertionError("network egress on a cache hit")
+
+    ctx_b = CascadeContext(
+        actions=actions, limiter=RateLimiter(redis_client),
+        ledger=BudgetLedger(actions.pool, redis_client),
+        manifests={"crtsh_subdomains": _CRT}, connectors={"crtsh_subdomains": no_network},
+    )
+    assert await dispatch(ctx_b, _CRT, obj, case_b) == "rematerialized"
+
+    # the child materialized INTO case B (not just case A)
+    child = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='a.shared.kp'")
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM case_objects WHERE case_id=$1 AND object_id=$2", case_b, child
+    ) == 1
+    # a done run now exists for case B, and a re-materialize spends no rate credit
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM helper_runs WHERE object_id=$1 AND case_id=$2 AND status='done'",
+        obj, case_b,
+    ) == 1
+    assert await redis_client.get(f"budget:{case_b}:rate") is None  # never seeded/decremented
+
+    # a genuine same-case repeat is now a plain CACHED skip
+    assert await dispatch(ctx_b, _CRT, obj, case_b) == "cached"
 
 
 async def test_cascade_halts_when_rate_credits_exhausted(
