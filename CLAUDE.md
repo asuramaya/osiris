@@ -151,5 +151,31 @@ and `docker run` do too.
   window_bucket param, budget cap now counts DISTINCT helper_id (windowed re-runs exempt).
   79 tests green. Append=new ObservedData per window; supersede=rolling assessment property
   on stable Campaign (within-source supersession auto-applies).
-- **Phase 10 (LAST):** dissemination — PDF brief generator (STIX bundle export already
-  shipped in Phase 1). Then the build order is complete.
+- **Phase 10 (DONE):** dissemination — PDF brief generator (STIX bundle export already
+  shipped in Phase 1). Original build order complete.
+- **Phase 11 (DONE):** recursive footprint crawl + identity convergence (keyless; co-browse/
+  token-passing deprioritized by operator). All keyless/no-antibot. 128 tests green, ruff +
+  mypy --strict clean. Six commits:
+  (A) **cross-case CACHED fix** — `router.has_cached_run_for_case`; `cascade._rematerialize_cached`
+  re-links a globally-cached helper result into the requesting case (cache hit ⇒ no network,
+  claim-idempotent, no rate credit). (B) **snippet mining** — `src/parsers/snippets.py`
+  (find-style email/@handle/phone/URL regexes, canonicalized, conservative) folded into
+  `parse_searxng_results`; mined selectors emit @0.4 `co_occurs` so the cascade crawls them.
+  (C) **url_fetch** — `connectors/urlfetch.py` (http(s)+text/html only, byte-cap, challenge→
+  suspend) + `parsers/webpage.py` (stdlib html.parser: rel=me 0.8 / mailto 0.7 / profile 0.5 /
+  page_title). (D) **github_user** — `connectors/github.py` keyless api.github.com/users/{u}
+  (404/403/429 graceful) + `parsers/github.py` (Account+Email+URL+twitter), consumes Username,
+  low rps + 24h cache for the 60/hr unauth cap. (E) **convergence** —
+  `resolution.find_footprint_merge_candidates` (shared-handle 0.6 / shared rel=me source 0.9
+  Account↔Account) + `ensure_person_hub` (idempotent `cluster:<key>` Person, has_account/
+  has_email, carries anchoring email); `hygiene.converge_identities` wired into `expand_case`
+  after the fixpoint (hubs only from strong signals: bio-email match, rel=me; never auto-merges
+  Person #3). (F) **subject anchor** — `POST /objects/{id}/subject` mints a per-case
+  `subject:<case_id>` Person hub + links the fragment + seeds Person candidates; UI gains an
+  "Identity" legend group (Person/Account/Username/Email/Phone), Account/Username/Phone TYPE
+  styles, a "★ This is me" inspector button, and relation-legend entries.
+  Proven live on username `asuramaya`: github_user→real github account, dorking→asuramaya.com +
+  linkedin/soundcloud accounts via url_fetch/url_accounts, shared-handle candidates in the tray,
+  and the subject anchor minting the identity hub. (Pre-Phase-11 increment: Phone footprint via
+  offline libphonenumber + searxng_phone; broader keyless username enumeration + url_accounts
+  profile patterns.)
