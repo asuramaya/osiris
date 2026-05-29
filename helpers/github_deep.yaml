@@ -1,0 +1,28 @@
+id: github_deep
+name: GitHub deep pivot (README + repos + commit emails)
+description: >
+  Anchor-and-pivot enrichment of a confirmed github Account: mine the profile
+  README for declared social/contact links, repo homepages for owned domains,
+  and commit authorship for the real email(s) the user commits with. Keyless
+  (honours an optional operator GITHUB_TOKEN); bounded calls; cached 24h.
+consumes:
+  type: Account
+  requires_properties: []
+emits:
+  - type: Account
+    confidence_floor: 0.7
+  - type: Email
+    confidence_floor: 0.7
+  - type: URL
+    confidence_floor: 0.6
+  - type: Domain
+    confidence_floor: 0.6
+tier: open
+origin: api.github.com
+rate:
+  per_origin_rps: 0.2
+  per_origin_concurrent: 1
+  jitter_ms: [200, 800]
+parser: github_deep
+cache_ttl: 86400
+enabled: true

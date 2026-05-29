@@ -10,6 +10,7 @@ from src.parsers.accounts import parse_url_accounts, parse_username_accounts
 from src.parsers.base import Parser
 from src.parsers.crtsh import parse_crtsh
 from src.parsers.github import parse_github_user
+from src.parsers.github_deep import parse_github_deep
 from src.parsers.gravatar import parse_gravatar
 from src.parsers.handles import parse_email_handles
 from src.parsers.phone import parse_phone_meta
@@ -34,6 +35,7 @@ PARSERS: dict[str, Parser] = {
     "phone_meta": parse_phone_meta,
     "webpage": parse_webpage,
     "github": parse_github_user,
+    "github_deep": parse_github_deep,
 }
 
 
