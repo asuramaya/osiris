@@ -13,8 +13,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src.parsers.base import InputObject, LinkSpec, ObjectSpec, ParseResult, TargetRef
+from src.parsers.snippets import extract_selectors
 
 _LEAK_HINTS = ("filetype:env", "filetype:sql", "pastebin", "ghostbin", "rentry", "paste.ee")
+
+# snippet co-occurrence is weak evidence — emit mined selectors low so they don't
+# pollute high-trust views or auto-merge, but still get crawled by the cascade.
+_MINED_CONFIDENCE = 0.4
+_MINED_CAP = 50  # bound how many mined selectors one search run injects
 
 
 def parse_searxng_results(response: dict[str, Any], input_object: InputObject) -> ParseResult:
@@ -40,6 +46,8 @@ def parse_searxng_results(response: dict[str, Any], input_object: InputObject) -
     )
 
     seen: set[str] = set()
+    # mined selectors deduped across the whole run (type, canonical) -> emitted once
+    mined: dict[tuple[str, str], None] = {}
     for dork in dork_results:
         leaky = any(h in (dork.get("query") or "") for h in _LEAK_HINTS)
         for hit in dork.get("results", []):
@@ -63,4 +71,18 @@ def parse_searxng_results(response: dict[str, Any], input_object: InputObject) -
             result.links.append(
                 LinkSpec(TargetRef(input=True), TargetRef(ref=url), "appears_in", 0.6)
             )
+            # mine the hit's title+snippet for selectors that co-occur with the seed
+            blob = f"{hit.get('title') or ''} {hit.get('content') or ''}"
+            for pair in extract_selectors(blob):
+                mined.setdefault(pair, None)
+
+    # emit mined selectors (low confidence; linked co_occurs) so the cascade crawls
+    # them. Skip the seed itself and any URL already surfaced as a direct hit.
+    for (type_, canon) in list(mined)[:_MINED_CAP]:
+        if canon == selector or (type_ == "URL" and canon in seen):
+            continue
+        result.objects.append(ObjectSpec(type=type_, canonical=canon, confidence=_MINED_CONFIDENCE))
+        result.links.append(
+            LinkSpec(TargetRef(input=True), TargetRef(ref=canon), "co_occurs", _MINED_CONFIDENCE)
+        )
     return result
