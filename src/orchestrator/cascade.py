@@ -13,6 +13,7 @@ real Postgres + real Redis with deterministic responses.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from urllib.parse import quote
@@ -31,6 +32,8 @@ from src.orchestrator.router import Route, route
 from src.orchestrator.runner import claim_run, execute_claimed, load_input_object
 from src.orchestrator.triggers import matching_helpers
 from src.parsers.base import InputObject
+
+logger = logging.getLogger("osiris.cascade")
 
 
 @dataclass
@@ -147,7 +150,13 @@ async def fire_triggers(
         manifest = ctx.manifests.get(hid)
         if manifest is None:
             continue  # trigger for a helper not loaded in this worker
-        outcomes.append(await dispatch(ctx, manifest, object_id, case_id))
+        try:
+            outcomes.append(await dispatch(ctx, manifest, object_id, case_id))
+        except Exception as exc:
+            # one helper blowing up must not abort the whole fan-out (or the
+            # background cascade) — record it and keep going.
+            logger.warning("dispatch %s on %s failed: %r", hid, object_id, exc)
+            outcomes.append(f"error:{type(exc).__name__}")
     return outcomes
 
 
@@ -167,15 +176,28 @@ async def drain_outbox(ctx: CascadeContext, *, limit: int = 100) -> int:
     return len(rows)
 
 
-async def expand_case(ctx: CascadeContext, case_id: uuid.UUID) -> int:
-    """Operator-facing expand: (re)fire triggers for every object currently in the
-    case, then drain the resulting cascade. Unlike a bare outbox drain this also
-    works objects that pre-existed (shared from another case) or whose events were
-    already consumed — the claim dedup stops anything already running."""
-    rows = await ctx.pool.fetch("SELECT object_id FROM case_objects WHERE case_id=$1", case_id)
-    for r in rows:
-        await fire_triggers(ctx, "object_created", r["object_id"], case_id)
-    return len(rows) + await run_cascade(ctx)
+async def expand_case(ctx: CascadeContext, case_id: uuid.UUID, *, max_rounds: int = 8) -> int:
+    """Operator-facing expand: work the case to a fixpoint. Each round (re)fires
+    triggers for EVERY object currently in the case and drains the cascade; newly
+    materialized objects (incl. ones that pre-existed globally, so emitted no
+    object_created event) join the case and get worked the next round. Stops when
+    the case stops growing, or after max_rounds / when budgets run dry. The claim
+    + cache dedup keep already-run helpers from repeating real work."""
+    processed = 0
+    for _ in range(max_rounds):
+        before = await ctx.pool.fetchval(
+            "SELECT count(*) FROM case_objects WHERE case_id=$1", case_id
+        )
+        rows = await ctx.pool.fetch("SELECT object_id FROM case_objects WHERE case_id=$1", case_id)
+        for r in rows:
+            await fire_triggers(ctx, "object_created", r["object_id"], case_id)
+        processed += await run_cascade(ctx)
+        after = await ctx.pool.fetchval(
+            "SELECT count(*) FROM case_objects WHERE case_id=$1", case_id
+        )
+        if after == before:
+            break  # fixpoint — nothing new entered the case this round
+    return processed
 
 
 async def run_cascade(ctx: CascadeContext, *, max_iterations: int = 1000) -> int:

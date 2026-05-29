@@ -6,6 +6,7 @@ parsers here so the runner can resolve them by the name in the manifest.
 
 from __future__ import annotations
 
+from src.parsers.accounts import parse_url_accounts, parse_username_accounts
 from src.parsers.base import Parser
 from src.parsers.crtsh import parse_crtsh
 from src.parsers.gravatar import parse_gravatar
@@ -25,6 +26,8 @@ PARSERS: dict[str, Parser] = {
     "searxng_results": parse_searxng_results,
     "gravatar": parse_gravatar,
     "email_handles": parse_email_handles,
+    "username_accounts": parse_username_accounts,
+    "url_accounts": parse_url_accounts,
 }
 
 

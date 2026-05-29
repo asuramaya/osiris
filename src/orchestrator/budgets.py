@@ -20,10 +20,14 @@ import asyncpg
 import redis.asyncio as aioredis
 
 DEFAULT_BUDGETS: dict[str, Any] = {
-    "rate_credits": 100,
+    "rate_credits": 200,
     "max_hop_distance": 2,
-    "max_helpers_per_object": 5,
-    "max_human_handoffs": 25,
+    # breadth cap (distinct helpers per object). With a rich helper library many
+    # helpers legitimately consume one type (e.g. 7+ for Username), so a low cap
+    # silently starves collectors and leaves the graph incomplete. Keep it high
+    # enough for full coverage; loops are still bounded by hop + rate + dedup.
+    "max_helpers_per_object": 25,
+    "max_human_handoffs": 50,
 }
 
 

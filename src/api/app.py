@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json as _json
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -52,6 +53,15 @@ from src.orchestrator.runner import load_input_object
 
 _HELPERS_DIR = Path(__file__).resolve().parent.parent.parent / "helpers"
 _UI_DIR = Path(__file__).resolve().parent.parent / "ui" / "static"
+
+
+_log = logging.getLogger("osiris.api")
+
+
+def _on_expand_done(task: asyncio.Task[Any]) -> None:
+    """Surface background-expand failures instead of swallowing them."""
+    if not task.cancelled() and task.exception() is not None:
+        _log.error("background expand failed: %r", task.exception())
 
 
 def get_pool(request: Request) -> asyncpg.Pool:
@@ -143,7 +153,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         )
         task = asyncio.create_task(expand_case(ctx, case_id))
         request.app.state.tasks.add(task)
-        task.add_done_callback(request.app.state.tasks.discard)
+        task.add_done_callback(_on_expand_done)
         return {"started": True}
 
     @app.patch("/cases/{case_id}")

@@ -1,0 +1,17 @@
+id: url_accounts
+name: URL → profile account
+description: >
+  Recognize profile-URL patterns in a discovered URL (github.com/u,
+  linkedin.com/in/u, x.com/u, youtube.com/@u, ...) and derive the typed Account
+  it represents, so the footprint graph organizes by platform identity.
+consumes:
+  type: URL
+  requires_properties: []
+emits:
+  - type: Account
+    confidence_floor: 0.6
+tier: open
+origin: local
+parser: url_accounts
+cache_ttl: 0
+enabled: true

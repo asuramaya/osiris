@@ -24,24 +24,43 @@ SEED: dict[str, list[tuple[str, str]]] = {
     "Email": [
         ("EmailRep", "https://emailrep.io/{object.canonical}"),
         ("Have I Been Pwned", "https://haveibeenpwned.com/account/{object.canonical}"),
+        ("Hunter.io", "https://hunter.io/email-verifier/{object.canonical}"),
+        ("IntelX", "https://intelx.io/?s={object.canonical}"),
+        ("Epieos", "https://epieos.com/?q={object.canonical}"),
+        ("Have I Been Sold", "https://haveibeensold.app/{object.canonical}"),
     ],
     "Domain": [
         ("ViewDNS reverse-IP", "https://viewdns.info/reverseip/?host={object.canonical}"),
         ("URLScan search", "https://urlscan.io/search/#{object.canonical}"),
+        ("SecurityTrails", "https://securitytrails.com/domain/{object.canonical}/dns"),
+        ("Wayback Machine", "https://web.archive.org/web/*/{object.canonical}"),
+        ("BuiltWith", "https://builtwith.com/{object.canonical}"),
+        ("DNSDumpster", "https://dnsdumpster.com/?q={object.canonical}"),
     ],
     "Username": [
         ("WhatsMyName", "https://whatsmyname.app/?q={object.canonical}"),
-        ("Sherlock targets", "https://www.google.com/search?q=%22{object.canonical}%22"),
+        ("Sherlock (web)", "https://www.idcrawl.com/u/{object.canonical}"),
+        ("Namechk", "https://namechk.com/{object.canonical}"),
+        ("InstantUsername", "https://instantusername.com/#/{object.canonical}"),
+        ("Social Searcher", "https://www.social-searcher.com/search-users/?q5={object.canonical}"),
     ],
     "IPv4": [
         ("AbuseIPDB", "https://www.abuseipdb.com/check/{object.canonical}"),
         ("Shodan host", "https://www.shodan.io/host/{object.canonical}"),
+        ("Censys", "https://search.censys.io/hosts/{object.canonical}"),
+        ("GreyNoise", "https://viz.greynoise.io/ip/{object.canonical}"),
+    ],
+    "Person": [
+        ("IDCrawl", "https://www.idcrawl.com/{object.canonical}"),
+        ("That'sThem", "https://thatsthem.com/name/{object.canonical}"),
     ],
     "TelegramChannel": [
         ("tgstat", "https://tgstat.com/channel/{object.canonical}"),
+        ("Telemetr", "https://telemetr.io/en/channels/{object.canonical}"),
     ],
     "Phrase": [
         ("Google dork", "https://www.google.com/search?q={object.canonical}"),
+        ("DuckDuckGo", "https://duckduckgo.com/?q={object.canonical}"),
     ],
 }
 
