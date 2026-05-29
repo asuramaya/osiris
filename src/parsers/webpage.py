@@ -18,7 +18,7 @@ from typing import Any
 from urllib.parse import urljoin
 
 from src.ontology.canonicalize import canonicalize
-from src.parsers.accounts import _PROFILE_PATTERNS
+from src.parsers.accounts import profile_account
 from src.parsers.base import InputObject, LinkSpec, ObjectSpec, ParseResult, TargetRef
 
 
@@ -46,11 +46,8 @@ class _Extractor(HTMLParser):
 
 
 def _account_ref(url: str) -> str | None:
-    for platform, pattern in _PROFILE_PATTERNS:
-        m = pattern.match(url)
-        if m:
-            return f"{platform}:{m.group(1)}"
-    return None
+    match = profile_account(url)
+    return f"{match[0]}:{match[1]}" if match is not None else None
 
 
 def parse_webpage(response: dict[str, Any], input_object: InputObject) -> ParseResult:

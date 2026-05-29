@@ -12,6 +12,27 @@ from typing import Any
 
 from src.parsers.base import InputObject, LinkSpec, ObjectSpec, ParseResult, TargetRef
 
+# Common first names / generic mailbox words have no discriminating power as a
+# handle — enumerating "hector" or "info" just surfaces strangers. We skip them
+# as derived seeds (the distinctive part of an address is what's worth crawling).
+_COMMON_HANDLES: frozenset[str] = frozenset({
+    # generic mailbox locals
+    "info", "admin", "contact", "hello", "hi", "mail", "team", "support", "sales",
+    "office", "help", "no-reply", "noreply", "webmaster", "abuse", "postmaster",
+    # very common first names (top given names — high collision, low signal)
+    "james", "john", "robert", "michael", "william", "david", "richard", "joseph",
+    "thomas", "charles", "daniel", "matthew", "anthony", "mark", "paul", "steven",
+    "andrew", "kenneth", "george", "joshua", "kevin", "brian", "edward", "ronald",
+    "hector", "carlos", "luis", "juan", "jose", "miguel", "antonio", "manuel",
+    "mary", "patricia", "jennifer", "linda", "elizabeth", "susan", "jessica",
+    "sarah", "karen", "nancy", "lisa", "maria", "ana", "laura", "sofia",
+    "alex", "sam", "max", "chris", "mike", "dan", "tom", "ben", "joe", "nick",
+})
+
+
+def _common(handle: str) -> bool:
+    return handle in _COMMON_HANDLES or len(handle) <= 2
+
 
 def parse_email_handles(response: dict[str, Any], input_object: InputObject) -> ParseResult:
     result = ParseResult(observed_at=datetime.now(UTC))
@@ -19,7 +40,7 @@ def parse_email_handles(response: dict[str, Any], input_object: InputObject) -> 
 
     variants: list[str] = []
     for v in (local, local.replace(".", ""), local.replace(".", "_"), local.split(".", 1)[0]):
-        if v and v not in variants:
+        if v and v not in variants and not _common(v):
             variants.append(v)
 
     for handle in variants:

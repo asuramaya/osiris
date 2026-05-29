@@ -34,6 +34,46 @@ def parse_username_accounts(response: dict[str, Any], input_object: InputObject)
     return result
 
 
+# Reserved first-path segments that look like a handle but are the platform's own
+# pages (nav/footer/marketing). Without this, github.com/about etc. become fake
+# "accounts" — the dominant false-positive source when crawling these sites.
+_RESERVED: dict[str, frozenset[str]] = {
+    "github": frozenset({
+        "about", "features", "pricing", "security", "sponsors", "marketplace",
+        "topics", "collections", "trending", "enterprise", "team", "customer-stories",
+        "readme", "mobile", "newsroom", "newsletter", "partners", "premium-support",
+        "resources", "sitemap", "solutions", "why-github", "git-guides", "edu",
+        "login", "join", "settings", "explore", "notifications", "issues", "pulls",
+        "apps", "organizations", "new", "github", "mcp",
+        "accelerator", "trust-center", "contact", "site", "open-source", "education",
+    }),
+    "twitter": frozenset({
+        "home", "share", "intent", "search", "explore", "i", "settings", "login",
+        "messages", "notifications", "hashtag", "compose", "status", "github",
+        "githubstatus", "privacy", "tos",
+    }),
+    "instagram": frozenset({"explore", "accounts", "p", "reel", "reels", "stories", "github"}),
+    "tiktok": frozenset({"foryou", "following", "explore", "live", "tag", "github"}),
+    "facebook": frozenset({"groups", "pages", "events", "watch", "marketplace", "login",
+                           "sharer", "dialog", "tr", "policies", "help"}),
+}
+
+
+def profile_account(url: str) -> tuple[str, str] | None:
+    """Recognize a profile URL -> (platform, handle), rejecting the platform's own
+    reserved pages (github.com/about etc.). Shared by url_accounts and the webpage
+    parser so the stoplist is applied consistently."""
+    for platform, pattern in _PROFILE_PATTERNS:
+        m = pattern.match(url)
+        if not m:
+            continue
+        handle = m.group(1)
+        if handle.lower() in _RESERVED.get(platform, frozenset()):
+            return None
+        return platform, handle
+    return None
+
+
 # profile-URL patterns -> (platform, handle). Single-segment profile paths only.
 _PROFILE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("github", re.compile(r"https?://github\.com/([A-Za-z0-9-]{1,39})/?$")),
@@ -61,11 +101,9 @@ _PROFILE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 def parse_url_accounts(response: dict[str, Any], input_object: InputObject) -> ParseResult:
     result = ParseResult(observed_at=datetime.now(UTC))
     url = input_object.canonical
-    for platform, pattern in _PROFILE_PATTERNS:
-        m = pattern.match(url)
-        if not m:
-            continue
-        handle = m.group(1)
+    match = profile_account(url)
+    if match is not None:
+        platform, handle = match
         canon = f"{platform}:{handle}"
         result.objects.append(
             ObjectSpec(
@@ -78,5 +116,4 @@ def parse_url_accounts(response: dict[str, Any], input_object: InputObject) -> P
         result.links.append(
             LinkSpec(TargetRef(input=True), TargetRef(ref=canon), "is_profile", 0.7)
         )
-        break  # one profile per URL
     return result
