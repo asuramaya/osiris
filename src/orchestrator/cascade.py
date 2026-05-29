@@ -26,6 +26,7 @@ from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cache import cached_fetch
 from src.orchestrator.challenges import ChallengeDetected
 from src.orchestrator.handoff import suspend
+from src.orchestrator.hygiene import converge_identities
 from src.orchestrator.manifests import Manifest
 from src.orchestrator.ratelimit import RateLimiter
 from src.orchestrator.router import Route, has_cached_run_for_case, route
@@ -238,6 +239,12 @@ async def expand_case(ctx: CascadeContext, case_id: uuid.UUID, *, max_rounds: in
         )
         if after == before:
             break  # fixpoint — nothing new entered the case this round
+    # assemble the discovered fragments into identity hubs + merge candidates.
+    # Isolated so a convergence error never aborts the expand the operator asked for.
+    try:
+        await converge_identities(ctx.actions, case_id=case_id)
+    except Exception as exc:
+        logger.warning("converge_identities failed for case %s: %r", case_id, exc)
     return processed
 
 

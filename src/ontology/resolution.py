@@ -148,6 +148,93 @@ async def find_behavioral_merge_candidates(
     return queued
 
 
+async def find_footprint_merge_candidates(pool: asyncpg.Pool) -> int:
+    """Queue Account↔Account candidates from footprint signals (never auto-merges):
+      * same handle on different platforms  -> 0.6 (weak; same name, maybe same person)
+      * two Accounts that are both rel=me targets of one page -> 0.9 (strong identity)
+    Returns the number of new candidates queued."""
+    scored: dict[Pair, tuple[float, list[str]]] = {}
+
+    def add(a: uuid.UUID, b: uuid.UUID, score: float, reason: str) -> None:
+        key = (a, b) if a < b else (b, a)
+        prev = scored.get(key)
+        if prev is None or score > prev[0]:
+            scored[key] = (score, ((prev[1] if prev else []) + [reason]))
+
+    # same handle, different platform
+    for r in await pool.fetch(
+        "SELECT a.object_id AS x, b.object_id AS y, a.value #>> '{}' AS handle "
+        "FROM current_assertions a "
+        "JOIN current_assertions b ON a.name='handle' AND b.name='handle' "
+        "  AND a.value=b.value AND a.object_id < b.object_id "
+        "JOIN current_assertions pa ON pa.object_id=a.object_id AND pa.name='platform' "
+        "JOIN current_assertions pb ON pb.object_id=b.object_id AND pb.name='platform' "
+        "  AND pb.value <> pa.value "
+        "JOIN objects oa ON oa.id=a.object_id AND oa.type='Account' "
+        "JOIN objects ob ON ob.id=b.object_id AND ob.type='Account'"
+    ):
+        add(r["x"], r["y"], 0.6, f"shared handle '{r['handle']}'")
+
+    # two Accounts both rel=me-linked from the same page -> same identity
+    for r in await pool.fetch(
+        "SELECT l1.to_id AS x, l2.to_id AS y "
+        "FROM links l1 "
+        "JOIN links l2 ON l1.from_id=l2.from_id AND l1.type='rel_me' AND l2.type='rel_me' "
+        "  AND l1.to_id < l2.to_id "
+        "JOIN objects oa ON oa.id=l1.to_id AND oa.type='Account' "
+        "JOIN objects ob ON ob.id=l2.to_id AND ob.type='Account'"
+    ):
+        add(r["x"], r["y"], 0.9, "rel=me identity link")
+
+    suppressed = await _suppressed(pool)
+    queued = 0
+    for (a, b), (score, reasons) in scored.items():
+        if frozenset((a, b)) in suppressed:
+            continue
+        if await _insert(pool, a, b, score, reasons):
+            queued += 1
+    return queued
+
+
+async def ensure_person_hub(
+    actions: Actions,
+    *,
+    key: str,
+    account_ids: list[uuid.UUID],
+    email_value: str | None = None,
+    email_id: uuid.UUID | None = None,
+    case_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """Idempotently assemble discovered identity-fragments under a Person hub
+    (`cluster:<key>`), linking has_account / has_email. Hubs are formed only from
+    STRONG signals (bio-email match, rel=me) — never speculatively per account, and
+    never by merging two Persons (ruling #3). The hub carries the anchoring email as
+    a property so find_person_merge_candidates can later relate it to other Persons."""
+    now = datetime.now(UTC)
+    person_id = await actions.create_or_find_object(
+        "Person", f"cluster:{key}", "convergence", case_id
+    )
+
+    async def _link_once(to_id: uuid.UUID, type_: str) -> None:
+        exists = await actions.pool.fetchval(
+            "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type=$3 LIMIT 1",
+            person_id, to_id, type_,
+        )
+        if not exists:
+            await actions.create_link(person_id, to_id, type_, "convergence", now, 0.8,
+                                      case_id=case_id)
+
+    for aid in account_ids:
+        await _link_once(aid, "has_account")
+    if email_id is not None:
+        await _link_once(email_id, "has_email")
+    if email_value is not None:
+        # within-source supersession keeps this to one current assertion (no spam)
+        await actions.assert_property(person_id, "email", email_value, "convergence", now, 0.8,
+                                      case_id=case_id)
+    return person_id
+
+
 async def resolve_candidate(
     actions: Actions, candidate_id: int, decision: str, actor: str
 ) -> None:
