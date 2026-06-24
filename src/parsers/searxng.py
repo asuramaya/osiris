@@ -12,14 +12,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from src.parsers.base import InputObject, LinkSpec, ObjectSpec, ParseResult, TargetRef
+from src.parsers.base import EvidenceClass, InputObject, ParseResult, TargetRef
+from src.parsers.evidence import emit, link
 from src.parsers.snippets import extract_selectors
 
 _LEAK_HINTS = ("filetype:env", "filetype:sql", "pastebin", "ghostbin", "rentry", "paste.ee")
 
-# snippet co-occurrence is weak evidence — emit mined selectors low so they don't
-# pollute high-trust views or auto-merge, but still get crawled by the cascade.
-_MINED_CONFIDENCE = 0.4
 _MINED_CAP = 50  # bound how many mined selectors one search run injects
 
 
@@ -28,21 +26,22 @@ def parse_searxng_results(response: dict[str, Any], input_object: InputObject) -
     selector = input_object.canonical
     dork_results = response.get("dork_results", [])
 
-    # one ObservedData per search run — the evidence behind everything below
+    # one ObservedData per search run — the faithful record behind everything below
     n_hits = sum(len(d.get("results", [])) for d in dork_results)
     snapshot = f"search:{selector}"
     result.objects.append(
-        ObjectSpec(
-            type="ObservedData",
-            canonical=snapshot,
-            confidence=0.95,
+        emit(
+            "ObservedData",
+            snapshot,
+            EvidenceClass.AUTHORITATIVE_API,
             properties={"source": "searxng", "selector": selector, "hit_count": n_hits,
                         "dorks": [d.get("query") for d in dork_results]},
             evidence=response,
         )
     )
     result.links.append(
-        LinkSpec(TargetRef(input=True), TargetRef(ref=snapshot), "has_observation", 0.95)
+        link(TargetRef(input=True), TargetRef(ref=snapshot), "has_observation",
+             EvidenceClass.AUTHORITATIVE_API)
     )
 
     seen: set[str] = set()
@@ -55,11 +54,12 @@ def parse_searxng_results(response: dict[str, Any], input_object: InputObject) -
             if not url or url in seen:
                 continue
             seen.add(url)
+            # a real URL the search returned — a direct observation.
             result.objects.append(
-                ObjectSpec(
-                    type="URL",
-                    canonical=url,
-                    confidence=0.6,
+                emit(
+                    "URL",
+                    url,
+                    EvidenceClass.DIRECT_OBSERVATION,
                     properties={
                         "title": hit.get("title"),
                         "snippet": hit.get("content"),
@@ -69,20 +69,22 @@ def parse_searxng_results(response: dict[str, Any], input_object: InputObject) -
                 )
             )
             result.links.append(
-                LinkSpec(TargetRef(input=True), TargetRef(ref=url), "appears_in", 0.6)
+                link(TargetRef(input=True), TargetRef(ref=url), "appears_in",
+                     EvidenceClass.DIRECT_OBSERVATION)
             )
             # mine the hit's title+snippet for selectors that co-occur with the seed
             blob = f"{hit.get('title') or ''} {hit.get('content') or ''}"
             for pair in extract_selectors(blob):
                 mined.setdefault(pair, None)
 
-    # emit mined selectors (low confidence; linked co_occurs) so the cascade crawls
-    # them. Skip the seed itself and any URL already surfaced as a direct hit.
+    # mined selectors are mere co-occurrence in a snippet — speculative. The frontier
+    # keeps them as leaves (won't crawl them) until a second source corroborates.
     for (type_, canon) in list(mined)[:_MINED_CAP]:
         if canon == selector or (type_ == "URL" and canon in seen):
             continue
-        result.objects.append(ObjectSpec(type=type_, canonical=canon, confidence=_MINED_CONFIDENCE))
+        result.objects.append(emit(type_, canon, EvidenceClass.CO_OCCURRENCE))
         result.links.append(
-            LinkSpec(TargetRef(input=True), TargetRef(ref=canon), "co_occurs", _MINED_CONFIDENCE)
+            link(TargetRef(input=True), TargetRef(ref=canon), "co_occurs",
+                 EvidenceClass.CO_OCCURRENCE)
         )
     return result

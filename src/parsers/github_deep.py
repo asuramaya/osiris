@@ -16,7 +16,8 @@ from urllib.parse import urlparse
 
 from src.ontology.canonicalize import canonicalize
 from src.parsers.accounts import profile_account
-from src.parsers.base import InputObject, LinkSpec, ObjectSpec, ParseResult, TargetRef
+from src.parsers.base import EvidenceClass, InputObject, ParseResult, TargetRef
+from src.parsers.evidence import emit, link
 from src.parsers.snippets import extract_selectors
 
 
@@ -29,35 +30,37 @@ def parse_github_deep(response: dict[str, Any], input_object: InputObject) -> Pa
 
     # refresh the github Account's own properties (dedupes to the input object)
     result.objects.append(
-        ObjectSpec(type="Account", canonical=account, confidence=0.85,
-                   properties={"platform": "github", "handle": response.get("login"),
-                               "name": prof.get("name"), "bio": prof.get("bio"),
-                               "company": prof.get("company"), "location": prof.get("location")},
-                   evidence=response)
+        emit("Account", account, EvidenceClass.AUTHORITATIVE_API,
+             properties={"platform": "github", "handle": response.get("login"),
+                         "name": prof.get("name"), "bio": prof.get("bio"),
+                         "company": prof.get("company"), "location": prof.get("location")},
+             evidence=response)
     )
 
     emitted: set[str] = set()
 
-    def emit(type_: str, canon: str, conf: float, link: str) -> None:
+    def add(type_: str, canon: str, link_type: str, ec: EvidenceClass) -> None:
+        # everything mined here is self-declared by the user (README links, profile
+        # fields, repo homepages, commit authorship) — the anchor-and-pivot payoff.
         if not canon or canon in emitted or canon == account:
             return
         emitted.add(canon)
-        result.objects.append(ObjectSpec(type=type_, canonical=canon, confidence=conf))
-        result.links.append(LinkSpec(TargetRef(input=True), TargetRef(ref=canon), link, conf))
+        result.objects.append(emit(type_, canon, ec))
+        result.links.append(link(TargetRef(input=True), TargetRef(ref=canon), link_type, ec))
 
     # declared accounts/emails mined from the README (self-asserted = high trust)
     for type_, canon in extract_selectors(response.get("readme") or ""):
         if type_ == "URL":
             acct = profile_account(canon)
             if acct:
-                emit("Account", f"{acct[0]}:{acct[1]}", 0.85, "declares")
+                add("Account", f"{acct[0]}:{acct[1]}", "declares", EvidenceClass.SELF_DECLARED)
         elif type_ == "Email":
-            emit("Email", canon, 0.8, "has_email")
+            add("Email", canon, "has_email", EvidenceClass.SELF_DECLARED)
 
     # twitter handle from the profile field
     tw = (prof.get("twitter_username") or "").strip().lstrip("@")
     if tw:
-        emit("Account", f"twitter:{tw}", 0.85, "declares")
+        add("Account", f"twitter:{tw}", "declares", EvidenceClass.SELF_DECLARED)
 
     # owned sites: repo homepages + profile blog -> URL (+ Domain for the host)
     sites = list(response.get("homepages") or [])
@@ -65,14 +68,14 @@ def parse_github_deep(response: dict[str, Any], input_object: InputObject) -> Pa
         sites.append(prof["blog"])
     for raw in sites:
         url = raw if str(raw).startswith(("http://", "https://")) else f"https://{raw}"
-        emit("URL", url, 0.7, "has_url")
+        add("URL", url, "has_url", EvidenceClass.SELF_DECLARED)
         host = urlparse(url).hostname
         if host:
-            emit("Domain", canonicalize("Domain", host), 0.7, "has_url")
+            add("Domain", canonicalize("Domain", host), "has_url", EvidenceClass.SELF_DECLARED)
 
     # the real committing email(s) — strongest tie (the user authored commits as it)
     for email, _n in (response.get("commit_emails") or {}).items():
         if "@" not in email or "noreply" in email:
             continue  # skip github noreply placeholders; keep real addresses
-        emit("Email", canonicalize("Email", email), 0.9, "committed_as")
+        add("Email", canonicalize("Email", email), "committed_as", EvidenceClass.SELF_DECLARED)
     return result

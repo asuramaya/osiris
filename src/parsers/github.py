@@ -12,7 +12,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src.ontology.canonicalize import canonicalize
-from src.parsers.base import InputObject, LinkSpec, ObjectSpec, ParseResult, TargetRef
+from src.parsers.base import EvidenceClass, InputObject, ParseResult, TargetRef
+from src.parsers.evidence import emit, link
 
 
 def parse_github_user(response: dict[str, Any], input_object: InputObject) -> ParseResult:
@@ -24,12 +25,14 @@ def parse_github_user(response: dict[str, Any], input_object: InputObject) -> Pa
     if not login:
         return result
 
+    # the account identity is vouched by the GitHub API; the email/blog/twitter it
+    # carries are fields the user declared on their profile.
     account = f"github:{login}"
     result.objects.append(
-        ObjectSpec(
-            type="Account",
-            canonical=account,
-            confidence=0.8,
+        emit(
+            "Account",
+            account,
+            EvidenceClass.AUTHORITATIVE_API,
             properties={
                 "platform": "github",
                 "handle": login,
@@ -43,33 +46,37 @@ def parse_github_user(response: dict[str, Any], input_object: InputObject) -> Pa
         )
     )
     result.links.append(
-        LinkSpec(TargetRef(input=True), TargetRef(ref=account), "is_profile", 0.8)
+        link(TargetRef(input=True), TargetRef(ref=account), "is_profile",
+             EvidenceClass.AUTHORITATIVE_API)
     )
 
     email = user.get("email")
     if email and "@" in email:
         canon = canonicalize("Email", email)
-        result.objects.append(ObjectSpec(type="Email", canonical=canon, confidence=0.7))
+        result.objects.append(emit("Email", canon, EvidenceClass.SELF_DECLARED))
         result.links.append(
-            LinkSpec(TargetRef(ref=account), TargetRef(ref=canon), "has_email", 0.7)
+            link(TargetRef(ref=account), TargetRef(ref=canon), "has_email",
+                 EvidenceClass.SELF_DECLARED)
         )
 
     blog = (user.get("blog") or "").strip()
     if blog:
         url = blog if blog.startswith(("http://", "https://")) else f"https://{blog}"
-        result.objects.append(ObjectSpec(type="URL", canonical=url, confidence=0.6))
+        result.objects.append(emit("URL", url, EvidenceClass.SELF_DECLARED))
         result.links.append(
-            LinkSpec(TargetRef(ref=account), TargetRef(ref=url), "has_url", 0.6)
+            link(TargetRef(ref=account), TargetRef(ref=url), "has_url",
+                 EvidenceClass.SELF_DECLARED)
         )
 
     twitter = (user.get("twitter_username") or "").strip().lstrip("@")
     if twitter:
         tacc = f"twitter:{twitter}"
         result.objects.append(
-            ObjectSpec(type="Account", canonical=tacc, confidence=0.6,
-                       properties={"platform": "twitter", "handle": twitter})
+            emit("Account", tacc, EvidenceClass.SELF_DECLARED,
+                 properties={"platform": "twitter", "handle": twitter})
         )
         result.links.append(
-            LinkSpec(TargetRef(ref=account), TargetRef(ref=tacc), "co_occurs", 0.6)
+            link(TargetRef(ref=account), TargetRef(ref=tacc), "co_occurs",
+                 EvidenceClass.SELF_DECLARED)
         )
     return result

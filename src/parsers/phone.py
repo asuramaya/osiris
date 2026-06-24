@@ -14,7 +14,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from src.parsers.base import InputObject, LinkSpec, ObjectSpec, ParseResult, TargetRef
+from src.parsers.base import EvidenceClass, InputObject, ParseResult, TargetRef
+from src.parsers.evidence import emit, link
 
 
 def parse_phone_meta(response: dict[str, Any], input_object: InputObject) -> ParseResult:
@@ -22,12 +23,13 @@ def parse_phone_meta(response: dict[str, Any], input_object: InputObject) -> Par
     if not response.get("valid"):
         return result
 
-    # assert metadata back onto the Phone (find-or-create dedupes to the input)
+    # offline libphonenumber metadata is authoritative; assert it back onto the
+    # Phone (find-or-create dedupes to the input).
     result.objects.append(
-        ObjectSpec(
-            type="Phone",
-            canonical=input_object.canonical,
-            confidence=0.95,
+        emit(
+            "Phone",
+            input_object.canonical,
+            EvidenceClass.AUTHORITATIVE_API,
             properties={
                 "country": response.get("country"),
                 "region": response.get("region"),
@@ -42,16 +44,16 @@ def parse_phone_meta(response: dict[str, Any], input_object: InputObject) -> Par
     )
 
     # seed format-variant search: dorking the bare E.164 misses pages that show
-    # the number formatted, so push the human formats through as Phrases.
+    # the number formatted. The variants are DERIVED (formatting transforms, not
+    # new observations) — speculative until a search actually surfaces them.
     seen: set[str] = set()
     for fmt in (response.get("national"), response.get("international")):
         if not fmt or fmt in seen:
             continue
         seen.add(fmt)
-        result.objects.append(
-            ObjectSpec(type="Phrase", canonical=fmt, confidence=0.6)
-        )
+        result.objects.append(emit("Phrase", fmt, EvidenceClass.DERIVED))
         result.links.append(
-            LinkSpec(TargetRef(input=True), TargetRef(ref=fmt), "search_variant", 0.6)
+            link(TargetRef(input=True), TargetRef(ref=fmt), "search_variant",
+                 EvidenceClass.DERIVED)
         )
     return result

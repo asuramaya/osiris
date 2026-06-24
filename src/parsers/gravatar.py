@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from src.parsers.base import InputObject, LinkSpec, ObjectSpec, ParseResult, TargetRef
+from src.parsers.base import EvidenceClass, InputObject, ParseResult, TargetRef
+from src.parsers.evidence import emit, link
 
 
 def parse_gravatar(response: dict[str, Any], input_object: InputObject) -> ParseResult:
@@ -15,12 +16,13 @@ def parse_gravatar(response: dict[str, Any], input_object: InputObject) -> Parse
     entry = response["entry"][0]
     digest = response.get("hash", "")
 
+    # the Gravatar profile is keyed to the email hash — an authoritative match.
     person = f"gravatar:{digest}"
     result.objects.append(
-        ObjectSpec(
-            type="Person",
-            canonical=person,
-            confidence=0.8,
+        emit(
+            "Person",
+            person,
+            EvidenceClass.AUTHORITATIVE_API,
             properties={
                 "name": entry.get("displayName") or (entry.get("name") or {}).get("formatted"),
                 "location": entry.get("currentLocation"),
@@ -30,9 +32,11 @@ def parse_gravatar(response: dict[str, Any], input_object: InputObject) -> Parse
         )
     )
     result.links.append(
-        LinkSpec(TargetRef(input=True), TargetRef(ref=person), "has_profile", 0.8)
+        link(TargetRef(input=True), TargetRef(ref=person), "has_profile",
+             EvidenceClass.AUTHORITATIVE_API)
     )
 
+    # accounts the user listed on their Gravatar — self-declared social links.
     for acc in entry.get("accounts", []):
         handle = acc.get("username") or acc.get("display") or acc.get("shortname")
         platform = acc.get("shortname", "account")
@@ -40,14 +44,11 @@ def parse_gravatar(response: dict[str, Any], input_object: InputObject) -> Parse
             continue
         canon = f"{platform}:{handle}"
         result.objects.append(
-            ObjectSpec(
-                type="Account",
-                canonical=canon,
-                confidence=0.7,
-                properties={"platform": platform, "handle": handle, "url": acc.get("url")},
-            )
+            emit("Account", canon, EvidenceClass.SELF_DECLARED,
+                 properties={"platform": platform, "handle": handle, "url": acc.get("url")})
         )
         result.links.append(
-            LinkSpec(TargetRef(ref=person), TargetRef(ref=canon), "has_account", 0.7)
+            link(TargetRef(ref=person), TargetRef(ref=canon), "has_account",
+                 EvidenceClass.SELF_DECLARED)
         )
     return result

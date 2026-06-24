@@ -11,7 +11,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from src.parsers.base import InputObject, LinkSpec, ObjectSpec, ParseResult, TargetRef
+from src.parsers.base import EvidenceClass, InputObject, ParseResult, TargetRef
+from src.parsers.evidence import emit, link
 
 
 def _canonical_domain(name: str) -> str:
@@ -32,20 +33,13 @@ def parse_crtsh(response: dict[str, Any], input_object: InputObject) -> ParseRes
             if not sub.endswith(f".{parent}"):
                 continue  # only true subdomains of the queried apex
             seen.add(sub)
+            # CT logs are an authoritative source for subdomains of the apex.
             result.objects.append(
-                ObjectSpec(
-                    type="Domain",
-                    canonical=sub,
-                    confidence=0.9,
-                    properties={"discovered_via": "crtsh", "apex": parent},
-                )
+                emit("Domain", sub, EvidenceClass.AUTHORITATIVE_API,
+                     properties={"discovered_via": "crtsh", "apex": parent})
             )
             result.links.append(
-                LinkSpec(
-                    from_ref=TargetRef(input=True),
-                    to_ref=TargetRef(ref=sub),
-                    type="has_subdomain",
-                    confidence=0.9,
-                )
+                link(TargetRef(input=True), TargetRef(ref=sub), "has_subdomain",
+                     EvidenceClass.AUTHORITATIVE_API)
             )
     return result

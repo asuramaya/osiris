@@ -10,7 +10,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from src.parsers.base import InputObject, LinkSpec, ObjectSpec, ParseResult, TargetRef
+from src.parsers.base import EvidenceClass, InputObject, ParseResult, TargetRef
+from src.parsers.evidence import emit, link
 
 # Common first names / generic mailbox words have no discriminating power as a
 # handle — enumerating "hector" or "info" just surfaces strangers. We skip them
@@ -44,15 +45,14 @@ def parse_email_handles(response: dict[str, Any], input_object: InputObject) -> 
             variants.append(v)
 
     for handle in variants:
+        # a handle guessed from the local part is DERIVED — same local part does
+        # not prove the same person, so it stays speculative until corroborated.
         result.objects.append(
-            ObjectSpec(
-                type="Username",
-                canonical=handle,
-                confidence=0.5,  # candidate — same local part, not proven the same person
-                properties={"derived_from": input_object.canonical},
-            )
+            emit("Username", handle, EvidenceClass.DERIVED,
+                 properties={"derived_from": input_object.canonical})
         )
         result.links.append(
-            LinkSpec(TargetRef(input=True), TargetRef(ref=handle), "derived_handle", 0.5)
+            link(TargetRef(input=True), TargetRef(ref=handle), "derived_handle",
+                 EvidenceClass.DERIVED)
         )
     return result

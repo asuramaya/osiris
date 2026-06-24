@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from src.parsers.base import InputObject
+from src.parsers.base import EvidenceClass, InputObject
 from src.parsers.searxng import parse_searxng_results
 from src.parsers.snippets import extract_selectors
 
@@ -26,7 +26,7 @@ def test_extract_selectors_rejects_bare_words_and_short_runs() -> None:
     assert all(t != "Phone" for t, _ in pairs)
 
 
-def test_snippet_mining_emits_low_confidence_co_occurs() -> None:
+def test_snippet_mining_emits_speculative_co_occurs() -> None:
     inp = InputObject(id=str(uuid.uuid4()), type="Email", canonical="priya@kowalski.dev")
     response = {
         "selector": "priya@kowalski.dev",
@@ -39,7 +39,11 @@ def test_snippet_mining_emits_low_confidence_co_occurs() -> None:
         ],
     }
     result = parse_searxng_results(response, inp)
-    mined = {(o.type, o.canonical) for o in result.objects if o.confidence == 0.4}
+    mined = {
+        (o.type, o.canonical)
+        for o in result.objects
+        if o.evidence_class is EvidenceClass.CO_OCCURRENCE
+    }
     # @handle and a co-occurring URL are mined; the seed email itself is skipped
     assert ("Username", "asuramaya") in mined
     assert ("Email", "priya@kowalski.dev") not in mined  # the seed is not re-emitted

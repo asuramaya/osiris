@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from src.parsers.base import InputObject
+from src.parsers.base import EvidenceClass, InputObject
 from src.parsers.webpage import parse_webpage
 
 
@@ -24,14 +24,17 @@ def test_parse_webpage_extracts_identity_signals() -> None:
     objs = {(o.type, o.canonical): o for o in r.objects}
     links = {(o.type, o.canonical): None for o in r.objects}  # noqa: F841
 
-    # rel=me github profile -> Account at 0.8
-    assert objs[("Account", "github:asuramaya")].confidence == 0.8
-    # rel=me mastodon -> Account at 0.8 (generic /@handle pattern)
+    # rel=me github profile -> self-declared identity link
+    assert objs[("Account", "github:asuramaya")].evidence_class is EvidenceClass.SELF_DECLARED
+    # rel=me mastodon -> Account (generic /@handle pattern), self-declared
     assert ("Account", "mastodon:asuramaya") in objs
-    # mailto -> Email at 0.7
-    assert objs[("Email", "priya@kowalski.dev")].confidence == 0.7
-    # plain profile link (not rel=me) -> Account at 0.5
-    assert objs[("Account", "linkedin:priya-kowalski")].confidence == 0.5
+    # mailto -> self-declared contact email
+    assert objs[("Email", "priya@kowalski.dev")].evidence_class is EvidenceClass.SELF_DECLARED
+    # plain profile link (not rel=me) -> observed, but a weaker signal (not an anchor)
+    assert (
+        objs[("Account", "linkedin:priya-kowalski")].evidence_class
+        is EvidenceClass.DIRECT_OBSERVATION
+    )
     # the random non-profile link is NOT emitted
     assert ("URL", "https://example.com/some/article") not in objs
     # page title labels the fetched URL

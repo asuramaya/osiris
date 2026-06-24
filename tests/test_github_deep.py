@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from src.parsers.base import InputObject
+from src.parsers.base import EvidenceClass, InputObject
 from src.parsers.github_deep import parse_github_deep
 
 
@@ -32,7 +32,10 @@ def test_github_deep_extracts_declared_links_domains_and_commit_email() -> None:
     links = {(lk.to_ref.ref, lk.type) for lk in r.links}
 
     # self-declared profile accounts (high trust)
-    assert objs[("Account", "linkedin:priya-kowalski-583920147")].confidence == 0.85
+    assert (
+        objs[("Account", "linkedin:priya-kowalski-583920147")].evidence_class
+        is EvidenceClass.SELF_DECLARED
+    )
     assert ("Account", "soundcloud:wrenaudio7") in objs
     assert ("Account", "twitter:asuramaya_hq") in objs
     assert ("linkedin:priya-kowalski-583920147", "declares") in links
@@ -43,7 +46,10 @@ def test_github_deep_extracts_declared_links_domains_and_commit_email() -> None:
     assert ("Domain", "madapesai.com") in objs
     assert ("Domain", "chronohorn.com") in objs
     # the real committing email (strongest tie); github noreply is dropped
-    assert objs[("Email", "dakota.jm@gmail.com")].confidence == 0.9
+    assert (
+        objs[("Email", "dakota.jm@gmail.com")].evidence_class
+        is EvidenceClass.SELF_DECLARED
+    )
     assert ("dakota.jm@gmail.com", "committed_as") in links
     assert not any("noreply" in canon for (_t, canon) in objs)
     # mailto / contact email from the README

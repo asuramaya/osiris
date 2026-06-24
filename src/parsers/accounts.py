@@ -12,24 +12,26 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-from src.parsers.base import InputObject, LinkSpec, ObjectSpec, ParseResult, TargetRef
+from src.parsers.base import EvidenceClass, InputObject, ParseResult, TargetRef
+from src.parsers.evidence import emit, link
 
 
 def parse_username_accounts(response: dict[str, Any], input_object: InputObject) -> ParseResult:
     result = ParseResult(observed_at=datetime.now(UTC))
     for acc in response.get("accounts", []):
         canon = f"{acc['platform']}:{acc['username']}"
+        # The account provably EXISTS (the enumerator verified 200/absent-text) —
+        # DIRECT_OBSERVATION. But the same handle on another platform is NOT proof
+        # of the same person, so the identity link is only CO_OCCURRENCE: the
+        # frontier won't expand it as an anchor until a second source corroborates.
         result.objects.append(
-            ObjectSpec(
-                type="Account",
-                canonical=canon,
-                confidence=0.7,
-                properties={"platform": acc["platform"], "handle": acc["username"],
-                            "url": acc.get("url")},
-            )
+            emit("Account", canon, EvidenceClass.DIRECT_OBSERVATION,
+                 properties={"platform": acc["platform"], "handle": acc["username"],
+                             "url": acc.get("url")})
         )
         result.links.append(
-            LinkSpec(TargetRef(input=True), TargetRef(ref=canon), "has_account", 0.7)
+            link(TargetRef(input=True), TargetRef(ref=canon), "has_account",
+                 EvidenceClass.CO_OCCURRENCE)
         )
     return result
 
@@ -105,15 +107,13 @@ def parse_url_accounts(response: dict[str, Any], input_object: InputObject) -> P
     if match is not None:
         platform, handle = match
         canon = f"{platform}:{handle}"
+        # the URL we observed IS structurally this account's profile page.
         result.objects.append(
-            ObjectSpec(
-                type="Account",
-                canonical=canon,
-                confidence=0.7,
-                properties={"platform": platform, "handle": handle, "url": url},
-            )
+            emit("Account", canon, EvidenceClass.DIRECT_OBSERVATION,
+                 properties={"platform": platform, "handle": handle, "url": url})
         )
         result.links.append(
-            LinkSpec(TargetRef(input=True), TargetRef(ref=canon), "is_profile", 0.7)
+            link(TargetRef(input=True), TargetRef(ref=canon), "is_profile",
+                 EvidenceClass.DIRECT_OBSERVATION)
         )
     return result

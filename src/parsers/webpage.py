@@ -19,7 +19,8 @@ from urllib.parse import urljoin
 
 from src.ontology.canonicalize import canonicalize
 from src.parsers.accounts import profile_account
-from src.parsers.base import InputObject, LinkSpec, ObjectSpec, ParseResult, TargetRef
+from src.parsers.base import EvidenceClass, InputObject, ParseResult, TargetRef
+from src.parsers.evidence import emit, link
 
 
 class _Extractor(HTMLParser):
@@ -61,24 +62,25 @@ def parse_webpage(response: dict[str, Any], input_object: InputObject) -> ParseR
     if p.title:
         # label the fetched URL itself (find-or-create dedupes to the input)
         result.objects.append(
-            ObjectSpec(type="URL", canonical=input_object.canonical, confidence=0.6,
-                       properties={"page_title": p.title})
+            emit("URL", input_object.canonical, EvidenceClass.DIRECT_OBSERVATION,
+                 properties={"page_title": p.title})
         )
 
     emitted: set[str] = set()
 
-    def emit(type_: str, canon: str, confidence: float, link: str) -> None:
+    def add(type_: str, canon: str, link_type: str, ec: EvidenceClass) -> None:
         if not canon or canon in emitted:
             return
         emitted.add(canon)
-        result.objects.append(ObjectSpec(type=type_, canonical=canon, confidence=confidence))
-        result.links.append(LinkSpec(TargetRef(input=True), TargetRef(ref=canon), link, confidence))
+        result.objects.append(emit(type_, canon, ec))
+        result.links.append(link(TargetRef(input=True), TargetRef(ref=canon), link_type, ec))
 
     for href, rel in p.anchors:
         if href.startswith("mailto:"):
             addr = href[len("mailto:"):].split("?")[0].strip()
             if "@" in addr:
-                emit("Email", canonicalize("Email", addr), 0.7, "has_email")
+                # an explicit contact address on the page — self-declared.
+                add("Email", canonicalize("Email", addr), "has_email", EvidenceClass.SELF_DECLARED)
             continue
         resolved = urljoin(base, href)
         if not resolved.startswith(("http://", "https://")):
@@ -86,13 +88,14 @@ def parse_webpage(response: dict[str, Any], input_object: InputObject) -> ParseR
         is_me = "me" in rel.split()
         acct = _account_ref(resolved)
         if is_me:
-            # rel=me is a strong identity link — emit the Account if profile-shaped,
-            # else the URL itself, at high confidence.
+            # rel=me is the IndieWeb identity-verification standard — self-declared.
             if acct:
-                emit("Account", acct, 0.8, "rel_me")
+                add("Account", acct, "rel_me", EvidenceClass.SELF_DECLARED)
             else:
-                emit("URL", resolved, 0.8, "rel_me")
+                add("URL", resolved, "rel_me", EvidenceClass.SELF_DECLARED)
         elif acct:
-            emit("Account", acct, 0.5, "is_profile")
+            # a plain profile link observed on the page (not rel=me): real but a
+            # weaker identity signal — DIRECT_OBSERVATION, not an anchor.
+            add("Account", acct, "is_profile", EvidenceClass.DIRECT_OBSERVATION)
         # non-profile, non-rel=me outbound links are not emitted (too noisy)
     return result
