@@ -5,8 +5,12 @@ decided since** and **current build state**. When a decision here contradicts
 `DESIGN.md`, these decisions win until `DESIGN.md` is updated in one pass.
 
 ## What this is
-A self-hosted OSINT orchestrator whose **product is TTP/TTAL pattern intelligence**
-(STIX SDOs) derived from OSINT. Patterns are the spine, not a late phase.
+A self-hosted OSINT orchestrator. **The product is the entity-graph engine itself**
+(event-sourced Actions + cascade + ER + evidence-graded ingest); **footprint recon**
+and **TTP/TTAL pattern intelligence** (STIX SDOs) are two thin *frontends* over it.
+(Reset decision 2026-06-24 — supersedes the earlier "patterns are THE spine" framing;
+both verticals are first-class frontends, neither is the spine. See the Reset entry in
+the build order.)
 
 ## Runtime context (locked)
 - **Single machine, single operator — this box IS prod.** No Cloudflare edge
@@ -193,3 +197,41 @@ and `docker run` do too.
   alone now auto-yields github:asuramaya, soundcloud:wrenaudio7, linkedin:priya-kowalski-…,
   dakota.jm@gmail.com (committed_as), and owned domains (asuramaya.com/chronohorn.com/
   decepticons.win/madapesai.com) — with the prior account-noise eliminated.
+- **RESET — engine-as-product (DONE, 2026-06-24):** the program had grown into a "confused
+  tech demo" carrying two identities (threat-intel spine + footprint crawler). Decision: the
+  **engine is the product**; both verticals are thin frontends. Root-caused the noise as a
+  *crawl + ingest* problem, not a filtering one, and fixed the two seams. Branch
+  `reset-engine-product` (tag `pre-reset-archive` for recovery). 138 tests green, ruff +
+  mypy --strict clean. Commits:
+  - **Step 0 declutter** — lifted `converge_identities` into `ontology/resolution.py`; removed
+    the runtime-isolated windowed-tick vertical (`hygiene.py` promote/archive, `windows.py`,
+    `tgstat`). Leases/federation/cobrowse/osint4all archival DEFERRED (leases is coupled into
+    the kept router; not low-risk).
+  - **Seam 1 — evidence-class ingest** (`src/parsers/evidence.py`): an `EvidenceClass` taxonomy
+    (SELF_DECLARED / AUTHORITATIVE_API / DIRECT_OBSERVATION / CO_OCCURRENCE / DERIVED; read-time
+    CORROBORATED) is now the source of truth for confidence — `emit()/link()` derive it from the
+    class. `ObjectSpec` gained per-property classing (the old single shared confidence was the
+    real defect); `LinkSpec` gained `evidence_class`. Persisted via migration 0005 (nullable
+    column on assertions+links; view recreated). All footprint parsers ported; threat-intel
+    parsers keep NULL (back-compat). The link class is the key signal: an enumerated same-handle
+    Account is `DIRECT_OBSERVATION` (it exists) but its `has_account` link is `CO_OCCURRENCE`
+    (same handle != same person).
+  - **Seam 2 — anchor-and-pivot frontier** (`src/orchestrator/frontier.py`): `tier_of`/
+    `is_expandable`, gated in `cascade.fire_triggers`. A node whose only inbound links are
+    speculative (co-occurrence/derived) is a LEAF and never spawns crawls — until a second
+    non-speculative source corroborates it and a later `expand_case` round finds it expandable
+    (free promotion via the existing fixpoint). Seed = `hop_distance=0`; subject-tag = anchor;
+    NULL/observation/anchor classes still expand (only restricts, never widens).
+  - **Seam 3 — subject report** (`frontier.subject_report`, `GET /objects/{id}/subject-report`,
+    UI panel off "★ This is me"): "who is this?" as Verified Core / Corroborated / Speculative,
+    each fragment annotated with its evidence_class + source count + confidence.
+  - **Live regression caught a real bug:** `create_or_find_object` never sets
+    `case_objects.added_by_run`, so the original `_is_seed` (added_by_run IS NULL) made every
+    node a "seed" → gate + report were no-ops in prod. Fixed to `hop_distance=0`. Proven live on
+    `asuramaya`: github:asuramaya (authoritative) + asuramaya.com (self-declared) land in
+    Verified; tumblr:asuramaya (enumerated, co-occurrence) is quarantined to Speculative.
+  - NB: api.github.com unauth 60/hr throttles `github_deep`'s README/commit calls mid-run
+    (partial README declares) — set `GITHUB_TOKEN` for the full enumeration. SearXNG container
+    needs its `/tmp/searxng/settings.yml` mount repaired after a reboot (search-dorking path).
+  - REMAINING: fold these decisions + DESIGN.md into one doc; finish the deferred archival
+    (leases/federation/cobrowse/osint4all) with the router lease-route surgery.
