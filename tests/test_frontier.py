@@ -34,11 +34,12 @@ async def _seed(actions: Actions, cid: uuid.UUID, type_: str, canon: str) -> uui
 
 
 async def _child(actions: Actions, cid: uuid.UUID, type_: str, canon: str) -> uuid.UUID:
-    """An object created by a helper run (added_by_run set) — judged by its links."""
+    """A cascade-created object (hop_distance >= 1, i.e. not the seed) — the frontier
+    judges it by its inbound links."""
     oid = await actions.create_or_find_object(type_, canon, "helper", cid)
     await actions.pool.execute(
-        "UPDATE case_objects SET added_by_run=$3 WHERE case_id=$1 AND object_id=$2",
-        cid, oid, uuid.uuid4(),
+        "UPDATE case_objects SET hop_distance=1 WHERE case_id=$1 AND object_id=$2",
+        cid, oid,
     )
     return oid
 

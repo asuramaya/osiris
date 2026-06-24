@@ -46,13 +46,15 @@ class Tier(StrEnum):
 
 
 async def _is_seed(pool: asyncpg.Pool, case_id: uuid.UUID, object_id: uuid.UUID) -> bool:
-    """The operator-chosen seed has no creating run (added_by_run IS NULL)."""
-    row = await pool.fetchrow(
-        "SELECT added_by_run FROM case_objects WHERE case_id=$1 AND object_id=$2",
+    """The operator-chosen seed sits at hop 0 — intake creates it there, while every
+    cascade child is placed at input_hop+1 (>=1). (added_by_run is never populated by
+    create_or_find_object, so hop_distance is the reliable seed signal.)"""
+    hop = await pool.fetchval(
+        "SELECT hop_distance FROM case_objects WHERE case_id=$1 AND object_id=$2",
         case_id,
         object_id,
     )
-    return row is not None and row["added_by_run"] is None
+    return hop is not None and int(hop) == 0
 
 
 async def _is_subject(pool: asyncpg.Pool, object_id: uuid.UUID) -> bool:
@@ -113,7 +115,7 @@ async def subject_report(
     }
     rows = await pool.fetch(
         """
-        SELECT o.id, o.type, o.canonical, co.added_by_run,
+        SELECT o.id, o.type, o.canonical, co.hop_distance,
                array_agg(DISTINCT l.evidence_class)
                  FILTER (WHERE l.evidence_class IS NOT NULL) AS classes,
                count(DISTINCT l.source_id) FILTER (WHERE l.id IS NOT NULL) AS n_sources,
@@ -122,7 +124,7 @@ async def subject_report(
         JOIN objects o ON o.id = co.object_id AND o.status = 'active'
         LEFT JOIN links l ON l.to_id = o.id AND (l.case_id = $1 OR l.case_id IS NULL)
         WHERE co.case_id = $1 AND o.type = ANY($2::text[])
-        GROUP BY o.id, o.type, o.canonical, co.added_by_run
+        GROUP BY o.id, o.type, o.canonical, co.hop_distance
         """,
         case_id,
         list(_ID_TYPES),
@@ -135,7 +137,7 @@ async def subject_report(
         classes = [EvidenceClass(c) for c in (r["classes"] or [])]
         strongest = max(classes, key=strength) if classes else None
         is_subject = r["id"] in subject_ids
-        is_seed = r["added_by_run"] is None
+        is_seed = int(r["hop_distance"]) == 0
         if is_subject or is_seed or (strongest is not None and is_anchor_grade(strongest)):
             tier = "verified"
         elif int(r["n_sources"]) >= 2:
