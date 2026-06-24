@@ -26,6 +26,7 @@ from src.ontology.resolution import converge_identities
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cache import cached_fetch
 from src.orchestrator.challenges import ChallengeDetected
+from src.orchestrator.frontier import is_expandable
 from src.orchestrator.handoff import suspend
 from src.orchestrator.manifests import Manifest
 from src.orchestrator.ratelimit import RateLimiter
@@ -187,6 +188,13 @@ async def fire_triggers(
     )
     props = {r["name"] for r in prop_rows}
     helper_ids = await matching_helpers(ctx.pool, event, obj["type"], props, case_id=case_id)
+    # Anchor-and-pivot: only expand nodes with a real reason to exist. A speculative
+    # leaf (its only inbound links are co-occurrence/derived guesses) is skipped here
+    # so it never spawns crawls — until a second source corroborates it and a later
+    # expand_case round re-fires this and finds it expandable. Facts still attach to
+    # it via other helpers; we only gate *its own* expansion.
+    if helper_ids and not await is_expandable(ctx.pool, case_id, object_id):
+        return ["leaf:not_expandable"]
     outcomes: list[str] = []
     for hid in helper_ids:
         manifest = ctx.manifests.get(hid)
