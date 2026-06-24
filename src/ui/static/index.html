@@ -510,8 +510,32 @@ async function markSubject(id) {
   if (!CASE) { alert('Open a case first.'); return; }
   await fetch(`/objects/${id}/subject`, { method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ case_id: CASE }) });
-  document.getElementById('status').textContent = '★ Pinned as case subject — identity hub seeded.';
-  await refreshObjects(); if (ROOT) growGraph(); inspect(id);
+  document.getElementById('status').textContent = '★ Pinned as case subject — building report…';
+  await refreshObjects(); if (ROOT) growGraph();
+  await showSubjectReport(id);
+}
+const _TIERS = [
+  ['verified', 'Verified core', '#3fb950', 'Self-declared or authoritative — solid.'],
+  ['corroborated', 'Corroborated', '#f0b72f', 'Two or more independent sources agree.'],
+  ['speculative', 'Speculative', '#8b949e', 'A single weak (co-occurrence / derived) signal — unconfirmed.'],
+];
+async function showSubjectReport(id) {
+  if (!CASE) { alert('Open a case first.'); return; }
+  const rep = await fetch(`/objects/${id}/subject-report?case_id=${CASE}`).then(r => r.json());
+  const m = document.getElementById('modal');
+  document.getElementById('overlay').style.display = 'flex';
+  const frag = f => `<div class="row" style="justify-content:space-between;cursor:pointer" onclick="closeModal();inspect('${f.id}')">
+      <span><b>${f.type}</b> ${f.canonical}${f.subject ? ' ★' : ''}</span>
+      <span class="meaning">${f.evidence_class || 'unclassified'} · ${f.sources} src${f.sources===1?'':'s'}${f.confidence!=null?' · '+Number(f.confidence).toFixed(2):''}</span>
+    </div>`;
+  m.innerHTML = `<span class="close" onclick="closeModal()">✕</span>
+    <h2>Who is this? — subject report</h2>
+    <div class="hint">Identity fragments found in this case, ranked by how well each is established. Click one to inspect it.</div>` +
+    _TIERS.map(([k, label, color, blurb]) => `<div class="card">
+      <div class="row"><b style="color:${color}">${label}</b> <span class="meaning">${rep[k].length}</span></div>
+      <div class="meaning">${blurb}</div>
+      ${rep[k].map(frag).join('') || '<div class="meaning">— none —</div>'}
+    </div>`).join('');
 }
 function linkFrom(id, label) {
   LINK_FROM = { id, label };

@@ -8,7 +8,7 @@ import redis.asyncio as aioredis
 from src.actions.core import Actions
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, fire_triggers
-from src.orchestrator.frontier import Tier, is_expandable, tier_of
+from src.orchestrator.frontier import Tier, is_expandable, subject_report, tier_of
 from src.orchestrator.manifests import Manifest, Rate
 from src.orchestrator.ratelimit import RateLimiter
 from src.parsers.base import EvidenceClass, InputObject
@@ -121,6 +121,30 @@ async def test_unclassified_link_still_expands(actions: Actions, case_id: str) -
     await actions.create_link(seed, ind, "indicates", "threatfox", NOW, 0.7, case_id=cid)
     assert await tier_of(actions.pool, cid, ind) is Tier.OBSERVED
     assert await is_expandable(actions.pool, cid, ind)
+
+
+async def test_subject_report_buckets_by_evidence(actions: Actions, case_id: str) -> None:
+    cid = uuid.UUID(case_id)
+    seed = await _seed(actions, cid, "Username", "asuramaya")
+    # verified: a self-declared account
+    a1 = await _child(actions, cid, "Account", "soundcloud:wrenaudio7")
+    await _link(actions, cid, seed, a1, "declares", EvidenceClass.SELF_DECLARED)
+    # speculative: a lone same-handle co-occurrence
+    a2 = await _child(actions, cid, "Account", "soundcloud:asuramaya")
+    await _link(actions, cid, seed, a2, "has_account", EvidenceClass.CO_OCCURRENCE)
+    # corroborated: two independent observations, neither anchor-grade
+    u = await _child(actions, cid, "URL", "https://x.example/p")
+    await _link(actions, cid, seed, u, "appears_in", EvidenceClass.DIRECT_OBSERVATION, "searxng")
+    await _link(actions, cid, seed, u, "appears_in", EvidenceClass.DIRECT_OBSERVATION, "bing")
+
+    rep = await subject_report(actions.pool, cid)
+    verified = {f["canonical"] for f in rep["verified"]}
+    corroborated = {f["canonical"] for f in rep["corroborated"]}
+    speculative = {f["canonical"] for f in rep["speculative"]}
+    assert "soundcloud:wrenaudio7" in verified
+    assert "asuramaya" in verified  # the seed is the subject's own handle
+    assert "https://x.example/p" in corroborated
+    assert "soundcloud:asuramaya" in speculative
 
 
 async def test_fire_triggers_crawls_anchor_skips_speculative_leaf(

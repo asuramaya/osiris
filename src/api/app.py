@@ -49,6 +49,7 @@ from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, expand_case
 from src.orchestrator.cobrowse import cobrowse_open
 from src.orchestrator.federation import federated_query, promote, to_preview
+from src.orchestrator.frontier import subject_report
 from src.orchestrator.handoff import abandon, open_handoff, post_back
 from src.orchestrator.handoff import tray as handoff_tray
 from src.orchestrator.manifests import load_manifests, project_triggers
@@ -284,6 +285,16 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
                 )
         await find_person_merge_candidates(p)
         return {"subject": str(object_id), "hub": str(hub_id)}
+
+    @app.get("/objects/{object_id}/subject-report")
+    async def subject_report_ep(
+        object_id: uuid.UUID, case_id: uuid.UUID, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        """The 'who is this?' answer: identity fragments in the case bucketed into
+        Verified Core / Corroborated / Speculative, each annotated with why it is
+        believed (evidence_class + source count + confidence)."""
+        buckets = await subject_report(p, case_id)
+        return {"subject": str(object_id), **buckets}
 
     @app.post("/objects/{object_id}/archive")
     async def archive_object(

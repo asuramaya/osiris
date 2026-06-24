@@ -33,7 +33,10 @@ from enum import StrEnum
 import asyncpg
 
 from src.parsers.base import EvidenceClass
-from src.parsers.evidence import is_anchor_grade, is_speculative
+from src.parsers.evidence import is_anchor_grade, is_speculative, strength
+
+# Identity-fragment types the subject report organizes (the footprint surface).
+_ID_TYPES = ("Person", "Account", "Username", "Email", "Phone", "Domain", "URL")
 
 
 class Tier(StrEnum):
@@ -89,3 +92,66 @@ async def is_expandable(pool: asyncpg.Pool, case_id: uuid.UUID, object_id: uuid.
     """Whether the cascade may fire collectors on this node (ANCHOR/OBSERVED) or
     must keep it as a leaf (SPECULATIVE)."""
     return await tier_of(pool, case_id, object_id) is not Tier.SPECULATIVE
+
+
+async def subject_report(
+    pool: asyncpg.Pool, case_id: uuid.UUID
+) -> dict[str, list[dict[str, object]]]:
+    """Answer 'who is this?' as a confidence ladder instead of a raw graph. Every
+    identity fragment in the case is bucketed by HOW well it is established:
+      * verified    — seed/subject, or a self-declared/authoritative reason to exist
+      * corroborated — not anchor-grade, but >=2 independent sources point at it
+      * speculative — a single weak (co-occurrence/derived) reason only
+    Each fragment carries its strongest evidence_class, source count and confidence
+    so the operator can see WHY it is believed."""
+    subject_ids = {
+        r["object_id"]
+        for r in await pool.fetch(
+            "SELECT object_id FROM current_assertions "
+            "WHERE name='tag' AND value->>'tag'='subject'"
+        )
+    }
+    rows = await pool.fetch(
+        """
+        SELECT o.id, o.type, o.canonical, co.added_by_run,
+               array_agg(DISTINCT l.evidence_class)
+                 FILTER (WHERE l.evidence_class IS NOT NULL) AS classes,
+               count(DISTINCT l.source_id) FILTER (WHERE l.id IS NOT NULL) AS n_sources,
+               max(l.confidence) AS confidence
+        FROM case_objects co
+        JOIN objects o ON o.id = co.object_id AND o.status = 'active'
+        LEFT JOIN links l ON l.to_id = o.id AND (l.case_id = $1 OR l.case_id IS NULL)
+        WHERE co.case_id = $1 AND o.type = ANY($2::text[])
+        GROUP BY o.id, o.type, o.canonical, co.added_by_run
+        """,
+        case_id,
+        list(_ID_TYPES),
+    )
+
+    buckets: dict[str, list[dict[str, object]]] = {
+        "verified": [], "corroborated": [], "speculative": []
+    }
+    for r in rows:
+        classes = [EvidenceClass(c) for c in (r["classes"] or [])]
+        strongest = max(classes, key=strength) if classes else None
+        is_subject = r["id"] in subject_ids
+        is_seed = r["added_by_run"] is None
+        if is_subject or is_seed or (strongest is not None and is_anchor_grade(strongest)):
+            tier = "verified"
+        elif int(r["n_sources"]) >= 2:
+            tier = "corroborated"
+        else:
+            tier = "speculative"
+        buckets[tier].append({
+            "id": str(r["id"]),
+            "type": r["type"],
+            "canonical": r["canonical"],
+            "evidence_class": strongest.value if strongest is not None else None,
+            "sources": int(r["n_sources"]),
+            "confidence": r["confidence"],
+            "subject": is_subject,
+            "speculative": strongest is not None and is_speculative(strongest),
+        })
+    for bucket in buckets.values():
+        bucket.sort(key=lambda f: (f["confidence"] or 0, str(f["canonical"])), reverse=True)
+    return buckets
