@@ -22,11 +22,11 @@ import asyncpg
 
 from src.actions.core import Actions
 from src.connectors.registry import Connector
+from src.ontology.resolution import converge_identities
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cache import cached_fetch
 from src.orchestrator.challenges import ChallengeDetected
 from src.orchestrator.handoff import suspend
-from src.orchestrator.hygiene import converge_identities
 from src.orchestrator.manifests import Manifest
 from src.orchestrator.ratelimit import RateLimiter
 from src.orchestrator.router import Route, has_cached_run_for_case, route

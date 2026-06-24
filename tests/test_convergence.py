@@ -5,8 +5,11 @@ from datetime import UTC, datetime
 
 import pytest
 from src.actions.core import Actions
-from src.ontology.resolution import find_footprint_merge_candidates, review_tray
-from src.orchestrator.hygiene import converge_identities
+from src.ontology.resolution import (
+    converge_identities,
+    find_footprint_merge_candidates,
+    review_tray,
+)
 
 NOW = datetime(2026, 5, 28, tzinfo=UTC)
 

@@ -17,7 +17,6 @@ from src.parsers.phone import parse_phone_meta
 from src.parsers.searxng import parse_searxng_results
 from src.parsers.suggest import parse_suggest_noop
 from src.parsers.telegram import parse_telegram_channel
-from src.parsers.tgstat import parse_tgstat_behavior
 from src.parsers.threatfox import parse_threatfox_iocs
 from src.parsers.webpage import parse_webpage
 
@@ -25,7 +24,6 @@ PARSERS: dict[str, Parser] = {
     "threatfox_malware_iocs": parse_threatfox_iocs,
     "crtsh_subdomains": parse_crtsh,
     "telegram_channel_profile": parse_telegram_channel,
-    "tgstat_channel_behavior": parse_tgstat_behavior,
     "suggest_noop": parse_suggest_noop,
     "searxng_results": parse_searxng_results,
     "gravatar": parse_gravatar,
