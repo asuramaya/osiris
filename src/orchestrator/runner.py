@@ -19,6 +19,7 @@ from src.connectors.store import ArtifactStore
 from src.orchestrator.manifests import Manifest
 from src.parsers import get_parser
 from src.parsers.base import InputObject, ParseResult, TargetRef
+from src.parsers.evidence import confidence_for
 
 
 class HelperRunError(Exception):
@@ -128,10 +129,16 @@ async def apply_result(
         for name, value in spec.properties.items():
             if value is None:
                 continue  # a None property is "unknown", not a fact — don't assert it
+            # Grade each property by its own class (falling back to the object
+            # default); confidence is the projection of that class. Legacy specs
+            # with no class fall back to spec.confidence and write no class.
+            pclass = spec.property_classes.get(name, spec.evidence_class)
+            conf = confidence_for(pclass) if pclass is not None else spec.confidence
             await actions.assert_property(
-                obj_id, name, value, source_id, observed_at, spec.confidence,
+                obj_id, name, value, source_id, observed_at, conf,
                 case_id=case_id, helper_run_id=helper_run_id,
                 evidence_uri=evidence_uri, evidence_sha256=evidence_sha,
+                evidence_class=pclass.value if pclass is not None else None,
             )
             n_prop += 1
 
@@ -143,6 +150,7 @@ async def apply_result(
         await actions.create_link(
             from_id, to_id, link.type, source_id, observed_at, link.confidence,
             case_id=case_id, helper_run_id=helper_run_id,
+            evidence_class=link.evidence_class.value if link.evidence_class is not None else None,
         )
         n_link += 1
 

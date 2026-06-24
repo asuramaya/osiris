@@ -10,7 +10,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import StrEnum
 from typing import Any, Protocol
+
+
+class EvidenceClass(StrEnum):
+    """How a fact was obtained — the source of truth for confidence. Defined here
+    (the contract module) so ObjectSpec/LinkSpec can carry it without a cycle;
+    `parsers/evidence.py` owns the class→confidence map and the emit/link helpers.
+    CORROBORATED is read-time only (computed when ≥2 independent sources agree)."""
+
+    SELF_DECLARED = "self_declared"
+    AUTHORITATIVE_API = "authoritative_api"
+    DIRECT_OBSERVATION = "direct_observation"
+    CO_OCCURRENCE = "co_occurrence"
+    DERIVED = "derived"
+    CORROBORATED = "corroborated"
 
 
 @dataclass(frozen=True)
@@ -36,6 +51,12 @@ class ObjectSpec:
     properties: dict[str, Any] = field(default_factory=dict)
     confidence: float = 0.9
     evidence: dict[str, Any] | None = None
+    # How this object/its properties were obtained. `evidence_class` is the object
+    # default; `property_classes` overrides it per-property when one object carries
+    # facts of differing provenance. None = legacy/unknown (runner falls back to
+    # `confidence` and writes no class).
+    evidence_class: EvidenceClass | None = None
+    property_classes: dict[str, EvidenceClass] = field(default_factory=dict)
 
 
 @dataclass
@@ -54,6 +75,8 @@ class LinkSpec:
     to_ref: TargetRef
     type: str
     confidence: float = 0.7
+    # Why this edge exists — the frontier's primary "is this node an anchor?" signal.
+    evidence_class: EvidenceClass | None = None
 
 
 @dataclass

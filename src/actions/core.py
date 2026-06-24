@@ -132,11 +132,13 @@ class Actions:
         helper_run_id: uuid.UUID | None = None,
         evidence_uri: str | None = None,
         evidence_sha256: str | None = None,
+        evidence_class: str | None = None,
         actor: str | None = None,
     ) -> int:
         """Append a property assertion. Supersedes the prior non-superseded
         assertion *from the same source* (within-source supersession); other
-        sources' values coexist as the multi-source set."""
+        sources' values coexist as the multi-source set. `evidence_class` records
+        HOW the fact was obtained (see parsers/evidence.py)."""
         actor = actor or source_id
         async with self.pool.acquire() as conn, conn.transaction():
             prior = await conn.fetchval(
@@ -153,8 +155,8 @@ class Actions:
                 await conn.fetchval(
                     "INSERT INTO assertions "
                     "(object_id,name,value,source_id,case_id,helper_run_id,evidence_uri,"
-                    " evidence_sha256,observed_at,confidence,supersedes) "
-                    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id",
+                    " evidence_sha256,observed_at,confidence,supersedes,evidence_class) "
+                    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id",
                     object_id,
                     name,
                     value,
@@ -166,6 +168,7 @@ class Actions:
                     observed_at,
                     confidence,
                     prior,
+                    evidence_class,
                 ),
             )
             await self._audit(
@@ -194,10 +197,12 @@ class Actions:
         helper_run_id: uuid.UUID | None = None,
         evidence_uri: str | None = None,
         evidence_sha256: str | None = None,
+        evidence_class: str | None = None,
         actor: str | None = None,
     ) -> int:
-        """Append a typed link. (Phase 0: plain insert; edge consolidation/
-        dedup and valid_until deactivation come with the ER/graph phases.)"""
+        """Append a typed link. `evidence_class` records WHY the edge exists (the
+        frontier's primary anchor signal; see parsers/evidence.py). (Phase 0: plain
+        insert; edge consolidation/dedup and valid_until come with later phases.)"""
         actor = actor or source_id
         async with self.pool.acquire() as conn, conn.transaction():
             new_id = cast(
@@ -205,8 +210,8 @@ class Actions:
                 await conn.fetchval(
                     "INSERT INTO links "
                     "(from_id,to_id,type,properties,source_id,case_id,helper_run_id,"
-                    " evidence_uri,evidence_sha256,first_seen,last_seen,confidence) "
-                    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,$11) RETURNING id",
+                    " evidence_uri,evidence_sha256,first_seen,last_seen,confidence,evidence_class) "
+                    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,$11,$12) RETURNING id",
                     from_id,
                     to_id,
                     type_,
@@ -218,6 +223,7 @@ class Actions:
                     evidence_sha256,
                     observed_at,
                     confidence,
+                    evidence_class,
                 ),
             )
             await self._audit(
