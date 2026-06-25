@@ -278,6 +278,35 @@ async def review_tray(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     ]
 
 
+async def find_sanctions_candidates(pool: asyncpg.Pool) -> int:
+    """Screen the crawled footprint against ingested watchlist entities
+    (OpenSanctions et al.): when a crawled object's name matches a sanctioned/PEP
+    entity's name, queue a review candidate. This is where the two halves of the
+    kernel meet — the autonomous crawl and the federated open base resolve against
+    each other. Never auto-flags (ruling #3): the analyst adjudicates same-entity vs
+    namesake in the tray. Match is name-only here (a weak 0.5 signal on purpose) +
+    a length guard against trivial collisions; strong-identifier matches (shared
+    email/website) come through find_person_merge_candidates already."""
+    suppressed = await _suppressed(pool)
+    queued = 0
+    for r in await pool.fetch(
+        "SELECT c.object_id AS crawled, s.object_id AS sanctioned, c.value #>> '{}' AS nm "
+        "FROM current_assertions c "
+        "JOIN current_assertions s "
+        "  ON lower(btrim(c.value #>> '{}')) = lower(btrim(s.value #>> '{}')) "
+        "WHERE c.name='name' AND (c.source_id IS NULL OR c.source_id <> 'opensanctions') "
+        "  AND s.name='name' AND s.source_id = 'opensanctions' "
+        "  AND c.object_id <> s.object_id "
+        "  AND length(btrim(c.value #>> '{}')) >= 5"
+    ):
+        a, b = sorted((r["crawled"], r["sanctioned"]))
+        if frozenset((a, b)) in suppressed:
+            continue
+        if await _insert(pool, a, b, 0.5, [f"watchlist name match: {r['nm']}"]):
+            queued += 1
+    return queued
+
+
 async def converge_identities(
     actions: Actions, *, case_id: uuid.UUID | None = None
 ) -> dict[str, int]:
@@ -289,6 +318,7 @@ async def converge_identities(
     pool = actions.pool
     queued = await find_footprint_merge_candidates(pool)
     queued += await find_person_merge_candidates(pool)
+    queued += await find_sanctions_candidates(pool)  # crawl x federated-base screening
 
     case_objs: set[uuid.UUID] | None = None
     if case_id is not None:

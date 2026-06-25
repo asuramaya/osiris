@@ -53,7 +53,10 @@ _EDGES: dict[str, tuple[str, str, str]] = {
     "Representation": ("agent", "client", "represents"),
     "UnknownLink": ("subject", "object", "linked_to"),
 }
-_PROPS = ("name", "country", "topics", "birthDate", "nationality", "position")
+# name is stored scalar (primary) for cross-source matching; email/website/phone are
+# the strong identifiers the footprint crawl can collide with.
+_PROPS = ("name", "country", "topics", "birthDate", "nationality", "position",
+          "email", "website", "phone")
 
 
 def parse_jsonl(text: str) -> Iterator[dict[str, Any]]:
@@ -98,7 +101,8 @@ async def ingest_ftm(
             vals = props.get(name)
             if not vals:
                 continue
-            value: Any = vals[0] if len(vals) == 1 else vals
+            # keep name a scalar (primary) so cross-source matching is a simple join
+            value: Any = vals[0] if (name == "name" or len(vals) == 1) else vals
             await actions.assert_property(
                 oid, name, value, _SOURCE, ts, _CONF, case_id=case_id, evidence_class=_EC
             )
