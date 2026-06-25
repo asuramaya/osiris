@@ -12,7 +12,7 @@ _FTM = [
      "properties": {"director": ["P1"], "organization": ["O1"]}},
     {"id": "P2", "schema": "Person", "properties": {"name": ["Relative X"]}},
     {"id": "R2", "schema": "Family", "properties": {"person": ["P1"], "relative": ["P2"]}},
-    {"id": "R3", "schema": "Ownership",  # dangling: asset not in the slice -> link skipped
+    {"id": "R3", "schema": "Ownership",  # asset not in slice -> stubbed, edge still forms
      "properties": {"owner": ["P1"], "asset": ["MISSING"]}},
 ]
 
@@ -20,7 +20,12 @@ _FTM = [
 async def test_ingest_ftm_loads_entities_and_relationships(actions: Actions) -> None:
     counts = await ingest_ftm(actions, _FTM)
     assert counts["objects"] == 3  # P1, O1, P2 — relationship-entities are not nodes
-    assert counts["links"] == 2    # directs, family — the dangling ownership is skipped
+    assert counts["stubs"] == 1    # MISSING (the absent ownership asset) is stubbed
+    assert counts["links"] == 3    # directs, family, owns — the absent endpoint is bridged
+    # the absent endpoint became a typed stub (Organization, per the ownership role)
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE canonical='MISSING' AND type='Organization'"
+    ) == 1
 
     pid = await actions.pool.fetchval(
         "SELECT id FROM objects WHERE type='Person' AND canonical='P1'"
@@ -38,7 +43,7 @@ async def test_ingest_ftm_loads_entities_and_relationships(actions: Actions) -> 
 
     assert await actions.pool.fetchval("SELECT count(*) FROM links WHERE type='directs'") == 1
     assert await actions.pool.fetchval("SELECT count(*) FROM links WHERE type='family'") == 1
-    assert await actions.pool.fetchval("SELECT count(*) FROM links WHERE type='owns'") == 0
+    assert await actions.pool.fetchval("SELECT count(*) FROM links WHERE type='owns'") == 1
 
 
 def test_parse_jsonl_skips_blank_and_bad_lines() -> None:

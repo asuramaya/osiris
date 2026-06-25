@@ -53,6 +53,19 @@ _EDGES: dict[str, tuple[str, str, str]] = {
     "Representation": ("agent", "client", "represents"),
     "UnknownLink": ("subject", "object", "linked_to"),
 }
+# inferred object type per relationship endpoint role — lets us stub an endpoint that
+# isn't in the slice (its real entity lives elsewhere in the full dataset, keyed by
+# the same id) so the edge still forms and a later ingest can enrich it in place.
+_EDGE_TYPES: dict[str, dict[str, str]] = {
+    "Ownership": {"owner": "Organization", "asset": "Organization"},
+    "Directorship": {"director": "Person", "organization": "Organization"},
+    "Family": {"person": "Person", "relative": "Person"},
+    "Associate": {"person": "Person", "associate": "Person"},
+    "Membership": {"member": "Person", "organization": "Organization"},
+    "Employment": {"employer": "Organization", "employee": "Person"},
+    "Representation": {"agent": "Person", "client": "Organization"},
+    "UnknownLink": {"subject": "Organization", "object": "Organization"},
+}
 # name is stored scalar (primary) for cross-source matching; email/website/phone are
 # the strong identifiers the footprint crawl can collide with.
 _PROPS = ("name", "country", "topics", "birthDate", "nationality", "position",
@@ -85,16 +98,31 @@ async def ingest_ftm(
     if limit is not None:
         ents = ents[:limit]
     ids: dict[str, uuid.UUID] = {}
+    by_id = {e["id"]: e for e in ents if e.get("id")}
     n_obj = n_prop = n_link = 0
+
+    async def resolve(fid: str, inferred: str | None) -> uuid.UUID | None:
+        """Find-or-create the node for an entity id; if it isn't a materialized
+        Person/Organization, stub it with the relationship-role-inferred type."""
+        if fid in ids:
+            return ids[fid]
+        ent = by_id.get(fid)
+        otype = _TYPE.get((ent or {}).get("schema") or "") if ent else None
+        otype = otype or inferred
+        if otype is None:
+            return None
+        oid = await actions.create_or_find_object(otype, fid, _SOURCE, case_id)
+        ids[fid] = oid
+        return oid
 
     # pass 1: real entities (Person/Organization) -> objects + properties
     for e in ents:
         fid = e.get("id")
-        otype = _TYPE.get(e.get("schema") or "")
-        if not fid or otype is None:
+        if not fid or _TYPE.get(e.get("schema") or "") is None:
             continue
-        oid = await actions.create_or_find_object(otype, fid, _SOURCE, case_id)
-        ids[fid] = oid
+        oid = await resolve(fid, None)
+        if oid is None:
+            continue
         n_obj += 1
         props = e.get("properties") or {}
         for name in _PROPS:
@@ -108,27 +136,29 @@ async def ingest_ftm(
             )
             n_prop += 1
 
-    # pass 2: relationship-entities -> links between the entities they reference
+    # pass 2: relationship-entities -> links; absent endpoints become typed stubs
     for e in ents:
-        edge = _EDGES.get(e.get("schema") or "")
+        schema = e.get("schema") or ""
+        edge = _EDGES.get(schema)
         if edge is None:
             continue
         sp, tp, ltype = edge
+        roles = _EDGE_TYPES.get(schema, {})
         props = e.get("properties") or {}
         srcs = props.get(sp) or []
         tgts = props.get(tp) or []
         if not srcs or not tgts:
             continue
-        a = ids.get(srcs[0])
-        b = ids.get(tgts[0])
+        a = await resolve(srcs[0], roles.get(sp))
+        b = await resolve(tgts[0], roles.get(tp))
         if a is None or b is None:
-            continue  # an endpoint isn't in this slice — skip (like a dangling ref)
+            continue
         await actions.create_link(
             a, b, ltype, _SOURCE, ts, _CONF, case_id=case_id, evidence_class=_EC
         )
         n_link += 1
 
-    return {"objects": n_obj, "properties": n_prop, "links": n_link}
+    return {"objects": n_obj, "stubs": len(ids) - n_obj, "properties": n_prop, "links": n_link}
 
 
 async def fetch_ftm(
