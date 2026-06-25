@@ -276,3 +276,36 @@ and `docker run` do too.
     stubs in place (same Qxxx keys) + biggest open entity graph; (2) sharpen screening
     (alias-aware + shared-identifier, not name-only); (3) point the existing subject-report /
     graph view at an ingested entity to render its ownership/family network.
+- **ENTITY-INTELLIGENCE BUILDOUT — the three NEXT moves, in order (DONE, 2026-06-25):** 3 commits
+  on `reset-engine-product` (d82422e..6eba046), 151 tests green, ruff + mypy --strict clean.
+  - **(1) Wikidata enricher** (`src/ingest/wikidata.py`): enrich-only federation over the keyless
+    `wbgetentities` API. Reads the `Qxxx` stubs already in the graph, fetches labels/descriptions/
+    literal facts (birthDate/website/...), writes them back as AUTHORITATIVE_API on the EXISTING
+    object id (find-by-canonical → enrich in place; same find-or-create-or-stub as the FtM loader,
+    so it composes in layers). `relationships=True` forms links from Wikidata's own claims
+    (P22/P26/P40/P1830/...), stubbing absent endpoints. Live: **141/141 demo stubs named, 0 left**
+    — the FtM family/ownership edges now connect two NAMED PEPs (was void→void). Bug caught live:
+    `languages=en` filtered labels server-side, dropping 2 entities whose name lives only under
+    Wikidata's `mul` (language-agnostic) code (common for transliterated names) → fixed to
+    `en|mul` + mul-aware label fallback. `python -m src.ingest.wikidata enrich [limit] [--rel]`.
+  - **(2) Sharpened screening** (`resolution.find_sanctions_candidates`): was exact-name-only @0.5.
+    Now two scored/merged signals — **SHARED STRONG IDENTIFIER** (email/website/phone) @0.9
+    (watchlist identifiers from ANY source, so a wikidata-enriched website screens too) +
+    **ALIAS-AWARE** name match over `{name ∪ alias}` @0.5. The FtM loader now stores
+    `alias`/`weakAlias`/secondary-names as a list-valued `alias` assertion (it dropped them
+    before). "Watchlist entity" = any object with an opensanctions assertion. Live: 0 candidates
+    on `asuramaya` (correct — private subject ≠ PEP; mechanism proven by 4 real-PG tests). NB:
+    alias-awareness applies to entities ingested AFTER this change (re-ingest to backfill 1807).
+  - **(3) Entity dossier** (`src/orchestrator/dossier.py`, `GET /objects/{id}/dossier`, UI
+    "Dossier ▸" button): the "who is this?" read model for a FEDERATED entity (subject_report's
+    tier lens collapses when every fact is AUTHORITATIVE_API). Identity properties (multi-source
+    set) + relationship network grouped by direction/type, every endpoint NAMED (falls back to
+    canonical; dedups repeated edges). Live: Bhagaban Majhi (Indian politician, b.1950-03-18)
+    --family--> Pradeep Kumar Majhi — the three commits composing (OpenSanctions edge + Wikidata
+    names + dossier render).
+  - **Demo DB state (PG :5439) now:** ~141 Qxxx stubs named (0 bare), dossier/screening live.
+    Still no GITHUB_TOKEN; SearXNG still dead (mount).
+  - **NEXT (unstarted):** Wikidata `--rel` pass to GROW the graph (untested live; watch stub
+    growth); more open bases (GLEIF/OpenAlex/USAspending — same `src/ingest/` pattern);
+    name+DOB screening escalation now that watchlist carries birthDate; fold decisions into
+    DESIGN.md; finish deferred archival (leases/federation/cobrowse/osint4all).
