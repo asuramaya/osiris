@@ -17,6 +17,9 @@ import dataclasses
 import random
 import statistics
 from collections.abc import Callable
+from pathlib import Path
+
+import yaml
 
 from src.lab.policies import (
     BanditPolicy,
@@ -28,7 +31,7 @@ from src.lab.policies import (
     StigmergyPolicy,
 )
 from src.lab.sim import Episode, run_episode
-from src.lab.substrate import SynthParams, generate
+from src.lab.substrate import SynthParams, generate, load_substrate
 
 _FACTORIES: dict[str, Callable[[random.Random], Policy]] = {
     "gate": lambda _r: GatePolicy(),
@@ -94,8 +97,35 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--policies", default="gate,pagerank,bandit,chemotaxis,stigmergy,random")
     ap.add_argument("--sweep", default="", help="KNOB=v1,v2,... e.g. noise_rate=0.3,0.6,0.9")
+    ap.add_argument("--fixture", default="", help="path to a recorded substrate dir (real world)")
     args = ap.parse_args()
     names = [n.strip() for n in args.policies.split(",")]
+
+    if args.fixture:
+        fdir = Path(args.fixture)
+        labels = yaml.safe_load((fdir / "labels.yaml").read_text()) or {}
+        core = labels.get("core", [])
+        sub = load_substrate(fdir / "substrate.json", core)
+        # one real world -> repeat trials so the stochastic policies show variance
+        results: dict[str, list[Episode]] = {n: [] for n in names}
+        avg: dict[str, list[float]] = {n: [0.0] * args.budget for n in names}
+        for k in range(args.worlds):
+            for n in names:
+                ep = run_episode(sub, _FACTORIES[n](random.Random(k * 2654435761)), args.budget)
+                results[n].append(ep)
+                for i in range(args.budget):
+                    v = ep.curve[i] if i < len(ep.curve) else (ep.curve[-1] if ep.curve else 0.0)
+                    avg[n][i] += v / args.worlds
+        print(f"\n  REAL substrate {fdir.name}: {sub.n_core} core / "
+              f"{len(sub.reveal)} expandable nodes · {args.worlds} trials · budget {args.budget}\n")
+        for ln in _summarize(results, names):
+            print(ln)
+        print("\n  discovery curve:\n")
+        for n in sorted(names, key=lambda n: avg[n][-1], reverse=True):
+            print(f"  {n:<11}|{_sparkline(avg[n], args.budget, sub.n_core)}| "
+                  f"{avg[n][-1]:.1f}/{sub.n_core}")
+        print()
+        return
 
     if args.sweep:
         knob, raw = args.sweep.split("=", 1)

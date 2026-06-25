@@ -1,0 +1,5 @@
+# recorded real substrates contain personal footprint (PII) — never commit
+*/cache.json
+*/substrate.json
+*/nodes.txt
+*/labels.yaml

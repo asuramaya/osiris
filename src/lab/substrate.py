@@ -18,8 +18,11 @@ A recorded-from-prod substrate (later) implements the same `expand()` surface.
 
 from __future__ import annotations
 
+import json
 import random
+from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
 
 from src.parsers.base import EvidenceClass
 
@@ -110,3 +113,32 @@ def generate(p: SynthParams, rng: random.Random) -> Substrate:
     grow_core("seed", p.core_depth)
     grow_noise("seed", p.noise_depth)
     return Substrate("seed", "Username", reveal, frozenset(core_ids))
+
+
+def dump_substrate(sub: Substrate, types: dict[str, str], path: Path) -> None:
+    """Serialize a recorded substrate (reveal map + node types) to JSON. core_ids is
+    NOT stored — ground-truth labels live in a separate file the operator owns."""
+    payload = {
+        "seed": sub.seed,
+        "seed_type": sub.seed_type,
+        "types": types,
+        "reveal": {
+            parent: [[r.dst, r.dst_type, r.evidence_class.value, r.source] for r in revs]
+            for parent, revs in sub.reveal.items()
+        },
+    }
+    path.write_text(json.dumps(payload, indent=0))
+
+
+def load_substrate(path: Path, core_ids: Iterable[str]) -> Substrate:
+    """Load a recorded substrate and stamp it with ground-truth core labels."""
+    payload = json.loads(path.read_text())
+    core = frozenset(core_ids)
+    reveal: dict[str, list[Reveal]] = {
+        parent: [
+            Reveal(dst, dst_type, dst in core, EvidenceClass(ec), src)
+            for dst, dst_type, ec, src in revs
+        ]
+        for parent, revs in payload["reveal"].items()
+    }
+    return Substrate(payload["seed"], payload["seed_type"], reveal, core)
