@@ -235,3 +235,44 @@ and `docker run` do too.
     needs its `/tmp/searxng/settings.yml` mount repaired after a reboot (search-dorking path).
   - REMAINING: fold these decisions + DESIGN.md into one doc; finish the deferred archival
     (leases/federation/cobrowse/osint4all) with the router lease-route surgery.
+- **POST-RESET SESSION — entity-intelligence pivot + ingest bases + lab (DONE, 2026-06-25):**
+  9 commits on `reset-engine-product` (c91bca7..4282101), 143 tests green, ruff + mypy --strict
+  clean. The arc: a long Socratic session that pressure-tested the whole project ("make the
+  emperor naked" / constantly try to self-destruct it) and ended by pivoting collection from
+  crawl to *federating finished open bases*. Key strands:
+  - **Frontier-policy lab** (`src/lab/`, kernel-read-only): an offline simulator that races
+    frontier policies (gate / PageRank / Thompson-bandit / chemotaxis / stigmergy) over
+    synthetic + recorded substrates. FINDING: chemotaxis (run-and-tumble, explore-rate coupled
+    to recent yield) modestly beats the naked bandit *only in the noisy, budget-scarce regime*;
+    stigmergy is costume in static worlds. On the REAL keyless `asuramaya` substrate every
+    policy hits 100%/0% — the frontier is **moot when collection is clean**. Meta-finding: an
+    organic "shape" yields a good *parameterization of a known algorithm* (bandit/PageRank),
+    not a new algorithm — so the bio-frontier work is conditional-on-noise, parked not killed.
+    `src/lab/record.py` records a live substrate; recorded footprints are **gitignored (PII)**.
+  - **Three keyless collectors added** (`connectors/parsers`: wayback, github_social, bluesky;
+    manifests + registries). All verified correct; all yield NOTHING for `asuramaya` (no
+    gists/GPG/Bluesky, domains unarchived). Proved the keyless surface for a careful,
+    distinctive-handle subject is ~exhausted at GitHub. The "more data about me" lives behind
+    antibot/keyed/broker walls the keyless constraint forbids.
+  - **THE PIVOT (data is the moat/wall):** keyless gets the whole open *entity* graph and almost
+    no private-*person* data. So keyless steers Osiris toward **entity intelligence** (the
+    OpenSanctions/Sayari space), away from personal footprint. Don't crawl county/local records
+    (the "ForeScan grave"); *federate finished open bases*. See [[osiris-data-strategy]].
+  - **Bulk-ingest bases** (`src/ingest/`): `opensanctions.py` (FollowTheMoney loader — schema→
+    object type, properties→assertions, relationship-entities→links; **role-typed endpoint
+    stubs** bridge edges whose endpoints live elsewhere, enriched in place by a later same-id
+    ingest) and `edgar.py` (SEC company_tickers.json → Organizations; SEC *inverts* antibot —
+    403s browser UAs, wants a contact UA). Live: ~350 sanctioned persons/orgs + 800 SEC
+    companies + 166 ownership/family/director links in the demo graph.
+  - **Sanctions screening (the two halves meet):** `resolution.find_sanctions_candidates`
+    name-matches the crawled footprint against ingested watchlist entities and queues review
+    candidates (0.5, name-only, length-guarded; never auto-flags, #3); wired into
+    `converge_identities`. This is the capability uniquely Osiris's: the autonomous crawl
+    resolves against the open base it federated.
+  - **Demo DB state (PG :5439):** 3235 objects, 662 links, 1807 opensanctions + 800 edgar.
+    No GITHUB_TOKEN set; SearXNG container still dead (mount). `asuramaya` substrate fixture in
+    `fixtures/substrate/asuramaya/` (gitignored).
+  - **NEXT (operator's pick, in leverage order):** (1) Wikidata ingest — enriches the 309 FtM
+    stubs in place (same Qxxx keys) + biggest open entity graph; (2) sharpen screening
+    (alias-aware + shared-identifier, not name-only); (3) point the existing subject-report /
+    graph view at an ingested entity to render its ownership/family network.
