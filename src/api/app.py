@@ -48,6 +48,7 @@ from src.ontology.resolution import (
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, expand_case
 from src.orchestrator.cobrowse import cobrowse_open
+from src.orchestrator.dossier import entity_dossier
 from src.orchestrator.federation import federated_query, promote, to_preview
 from src.orchestrator.frontier import subject_report
 from src.orchestrator.handoff import abandon, open_handoff, post_back
@@ -295,6 +296,18 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         believed (evidence_class + source count + confidence)."""
         buckets = await subject_report(p, case_id)
         return {"subject": str(object_id), **buckets}
+
+    @app.get("/objects/{object_id}/dossier")
+    async def entity_dossier_ep(
+        object_id: uuid.UUID, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        """The 'who is this?' answer for a FEDERATED entity (sanctioned party / PEP /
+        company): its identity properties plus its ownership/family/director network,
+        each endpoint named. Complements subject-report (the footprint/tier lens)."""
+        dossier = await entity_dossier(p, object_id)
+        if not dossier:
+            raise HTTPException(404, "object not found")
+        return dossier
 
     @app.post("/objects/{object_id}/archive")
     async def archive_object(

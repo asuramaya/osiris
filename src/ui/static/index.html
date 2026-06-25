@@ -473,6 +473,7 @@ async function inspect(id) {
     <div class="insp-id">${obj.canonical}</div>
     <div class="acts" style="margin-top:10px">
       <button class="btn ghost" onclick="loadGraph('${id}')">Pivot here</button>
+      <button class="btn ghost" onclick="showDossier('${id}')" title="Identity + ownership/family/director network — for federated entities (sanctioned parties, companies, PEPs)">Dossier ▸</button>
       <button class="btn ghost" onclick="linkFrom('${id}','${obj.canonical.replace(/'/g,"\\'")}')">Link →</button>
     </div>
     <div class="acts" style="margin-top:6px">
@@ -536,6 +537,32 @@ async function showSubjectReport(id) {
       <div class="meaning">${blurb}</div>
       ${rep[k].map(frag).join('') || '<div class="meaning">— none —</div>'}
     </div>`).join('');
+}
+async function showDossier(id) {
+  const d = await fetch(`/objects/${id}/dossier`).then(r => r.json());
+  const m = document.getElementById('modal');
+  document.getElementById('overlay').style.display = 'flex';
+  const props = d.properties.map(p => `<div class="row" style="justify-content:space-between">
+      <span class="k">${p.name}</span>
+      <span class="v">${p.values.map(v => fmt(v.value)).join(', ')}</span></div>`).join('')
+    || '<div class="meaning">— no properties —</div>';
+  // group the network by direction + relationship type (owns / family / directs …)
+  const byType = {};
+  for (const r of d.relationships) {
+    const k = (r.direction === 'out' ? '' : '← ') + r.type;
+    (byType[k] = byType[k] || []).push(r);
+  }
+  const rels = Object.entries(byType).map(([k, list]) => `<div class="card">
+      <div class="row"><b>${k}</b> <span class="meaning">${list.length}</span></div>
+      ${list.map(r => `<div class="row" style="justify-content:space-between;cursor:pointer" onclick="closeModal();inspect('${r.neighbor.id}')">
+         <span><b>${r.neighbor.type}</b> ${r.neighbor.name || '?'}</span>
+         <span class="meaning">${r.evidence_class || 'unclassified'} · ${r.source}</span></div>`).join('')}
+    </div>`).join('') || '<div class="meaning">No relationships.</div>';
+  m.innerHTML = `<span class="close" onclick="closeModal()">✕</span>
+    <h2>${d.name || d.canonical}</h2>
+    <div class="hint">${d.type} · ${d.canonical} — identity and relationship network.</div>
+    <div class="card"><div class="row"><b>Identity</b></div>${props}</div>
+    ${rels}`;
 }
 function linkFrom(id, label) {
   LINK_FROM = { id, label };
