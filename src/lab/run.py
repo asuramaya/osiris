@@ -93,7 +93,7 @@ def main() -> None:
     ap.add_argument("--budget", type=int, default=40)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--policies", default="gate,pagerank,bandit,chemotaxis,stigmergy,random")
-    ap.add_argument("--sweep", default="", help="KNOB=v1,v2,... e.g. corroborate_frac=0,0.3,0.6,1.0")
+    ap.add_argument("--sweep", default="", help="KNOB=v1,v2,... e.g. noise_rate=0.3,0.6,0.9")
     args = ap.parse_args()
     names = [n.strip() for n in args.policies.split(",")]
 
