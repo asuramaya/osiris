@@ -1,0 +1,21 @@
+id: wayback
+name: Wayback Machine (archived footprint)
+description: >
+  Keyless Internet Archive CDX lookup on a Domain: every path ever archived —
+  old profile pages, deleted content, prior site versions — emitted as URLs for
+  url_fetch to mine. The richest keyless source of a person's *past* footprint.
+consumes:
+  type: Domain
+  requires_properties: []
+emits:
+  - type: URL
+    confidence_floor: 0.6
+tier: open
+origin: web.archive.org
+rate:
+  per_origin_rps: 0.5
+  per_origin_concurrent: 1
+  jitter_ms: [200, 800]
+parser: wayback
+cache_ttl: 86400
+enabled: true

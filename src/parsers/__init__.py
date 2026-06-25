@@ -8,9 +8,11 @@ from __future__ import annotations
 
 from src.parsers.accounts import parse_url_accounts, parse_username_accounts
 from src.parsers.base import Parser
+from src.parsers.bluesky import parse_bluesky
 from src.parsers.crtsh import parse_crtsh
 from src.parsers.github import parse_github_user
 from src.parsers.github_deep import parse_github_deep
+from src.parsers.github_social import parse_github_social
 from src.parsers.gravatar import parse_gravatar
 from src.parsers.handles import parse_email_handles
 from src.parsers.phone import parse_phone_meta
@@ -18,6 +20,7 @@ from src.parsers.searxng import parse_searxng_results
 from src.parsers.suggest import parse_suggest_noop
 from src.parsers.telegram import parse_telegram_channel
 from src.parsers.threatfox import parse_threatfox_iocs
+from src.parsers.wayback import parse_wayback
 from src.parsers.webpage import parse_webpage
 
 PARSERS: dict[str, Parser] = {
@@ -34,6 +37,9 @@ PARSERS: dict[str, Parser] = {
     "webpage": parse_webpage,
     "github": parse_github_user,
     "github_deep": parse_github_deep,
+    "github_social": parse_github_social,
+    "wayback": parse_wayback,
+    "bluesky": parse_bluesky,
 }
 
 

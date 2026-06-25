@@ -11,14 +11,17 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from src.connectors.bluesky import fetch_bluesky
 from src.connectors.crtsh import fetch_crtsh
 from src.connectors.derive import echo
 from src.connectors.github import fetch_github_user
 from src.connectors.github_deep import fetch_github_deep
+from src.connectors.github_social import fetch_github_social
 from src.connectors.gravatar import fetch_gravatar
 from src.connectors.phone import fetch_phone_meta
 from src.connectors.urlfetch import fetch_webpage
 from src.connectors.username_enum import enumerate_username
+from src.connectors.wayback import fetch_wayback
 from src.parsers.base import InputObject
 
 Connector = Callable[[InputObject], Awaitable[dict[str, Any]]]
@@ -33,6 +36,9 @@ CONNECTORS: dict[str, Connector] = {
     "url_accounts": echo,            # pure regex derivation
     "url_fetch": fetch_webpage,      # keyless page fetch (rel=me, mailto, profiles)
     "phone_meta": fetch_phone_meta,  # offline libphonenumber, no network/key
+    "github_social": fetch_github_social,  # keyless GPG-key emails + gists
+    "wayback": fetch_wayback,        # keyless Internet Archive CDX (historical footprint)
+    "bluesky": fetch_bluesky,        # keyless AT Protocol AppView (open-protocol social)
     # threatfox is request/response with args -> wired when its tier/cascade lands
 }
 

@@ -1,0 +1,23 @@
+id: bluesky
+name: Bluesky (open-protocol social)
+description: >
+  Keyless AT Protocol AppView lookup on a Username: resolve the handle's public
+  profile (getProfile) and search candidates (searchActors), emit the account and
+  any links declared in the bio. Open-protocol social reachable without antibot.
+consumes:
+  type: Username
+  requires_properties: []
+emits:
+  - type: Account
+    confidence_floor: 0.5
+  - type: URL
+    confidence_floor: 0.5
+tier: open
+origin: public.api.bsky.app
+rate:
+  per_origin_rps: 0.5
+  per_origin_concurrent: 1
+  jitter_ms: [200, 800]
+parser: bluesky
+cache_ttl: 86400
+enabled: true
