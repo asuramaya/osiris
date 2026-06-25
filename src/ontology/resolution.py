@@ -280,29 +280,78 @@ async def review_tray(pool: asyncpg.Pool) -> list[dict[str, Any]]:
 
 async def find_sanctions_candidates(pool: asyncpg.Pool) -> int:
     """Screen the crawled footprint against ingested watchlist entities
-    (OpenSanctions et al.): when a crawled object's name matches a sanctioned/PEP
-    entity's name, queue a review candidate. This is where the two halves of the
-    kernel meet — the autonomous crawl and the federated open base resolve against
-    each other. Never auto-flags (ruling #3): the analyst adjudicates same-entity vs
-    namesake in the tray. Match is name-only here (a weak 0.5 signal on purpose) +
-    a length guard against trivial collisions; strong-identifier matches (shared
-    email/website) come through find_person_merge_candidates already."""
-    suppressed = await _suppressed(pool)
-    queued = 0
+    (OpenSanctions et al.) — where the two halves of the kernel meet: the autonomous
+    crawl and the federated open base resolve against each other. Two signals, scored
+    and merged per pair:
+
+      * a SHARED STRONG IDENTIFIER (email / website / phone) — near-certainly the same
+        entity (0.9);
+      * a NAME match — now ALIAS-AWARE, over the watchlist entity's {name ∪ alias} set
+        — a weak namesake signal (0.5) with a length guard against trivial collisions.
+
+    A 'watchlist entity' is any object carrying an opensanctions assertion (so an
+    identifier enriched from another source, e.g. wikidata, on that same object still
+    counts). Never auto-flags (ruling #3): the analyst adjudicates same-entity vs
+    namesake in the tray."""
+    scored: dict[Pair, tuple[float, list[str]]] = {}
+
+    def add(crawled: uuid.UUID, sanctioned: uuid.UUID, score: float, reason: str) -> None:
+        key = (min(crawled, sanctioned), max(crawled, sanctioned))
+        prev = scored.get(key)
+        if prev is None:
+            scored[key] = (score, [reason])
+        else:
+            prev[1].append(reason)
+            if score > prev[0]:
+                scored[key] = (score, prev[1])
+
+    # (1) shared strong identifier — watchlist identifiers from ANY source
     for r in await pool.fetch(
-        "SELECT c.object_id AS crawled, s.object_id AS sanctioned, c.value #>> '{}' AS nm "
-        "FROM current_assertions c "
-        "JOIN current_assertions s "
-        "  ON lower(btrim(c.value #>> '{}')) = lower(btrim(s.value #>> '{}')) "
-        "WHERE c.name='name' AND (c.source_id IS NULL OR c.source_id <> 'opensanctions') "
-        "  AND s.name='name' AND s.source_id = 'opensanctions' "
+        "WITH watchlist AS "
+        "  (SELECT DISTINCT object_id FROM assertions WHERE source_id='opensanctions') "
+        "SELECT c.object_id AS crawled, s.object_id AS sanctioned, s.name AS sig, "
+        "       lower(btrim(c.value #>> '{}')) AS val "
+        "FROM current_assertions s "
+        "JOIN watchlist w ON w.object_id=s.object_id "
+        "JOIN current_assertions c "
+        "  ON c.name=s.name "
+        "  AND lower(btrim(c.value #>> '{}')) = lower(btrim(s.value #>> '{}')) "
+        "WHERE s.name IN ('email','website','phone') "
         "  AND c.object_id <> s.object_id "
+        "  AND c.object_id NOT IN (SELECT object_id FROM watchlist) "
+        "  AND length(btrim(c.value #>> '{}')) >= 4"
+    ):
+        add(r["crawled"], r["sanctioned"], 0.9, f"shared {r['sig']}: {r['val']}")
+
+    # (2) alias-aware name match over the watchlist entity's {name ∪ alias} set
+    for r in await pool.fetch(
+        "WITH watchlist AS "
+        "  (SELECT DISTINCT object_id FROM assertions WHERE source_id='opensanctions'), "
+        "sanc_names AS ("
+        "  SELECT s.object_id, lower(btrim(s.value #>> '{}')) AS nm "
+        "  FROM current_assertions s JOIN watchlist w ON w.object_id=s.object_id "
+        "  WHERE s.name='name' "
+        "  UNION "
+        "  SELECT s.object_id, lower(btrim(al.v)) "
+        "  FROM current_assertions s JOIN watchlist w ON w.object_id=s.object_id "
+        "  CROSS JOIN LATERAL jsonb_array_elements_text(s.value) AS al(v) "
+        "  WHERE s.name='alias' AND jsonb_typeof(s.value)='array') "
+        "SELECT c.object_id AS crawled, sn.object_id AS sanctioned, c.value #>> '{}' AS nm "
+        "FROM current_assertions c "
+        "JOIN sanc_names sn ON sn.nm = lower(btrim(c.value #>> '{}')) "
+        "WHERE c.name='name' "
+        "  AND c.object_id <> sn.object_id "
+        "  AND c.object_id NOT IN (SELECT object_id FROM watchlist) "
         "  AND length(btrim(c.value #>> '{}')) >= 5"
     ):
-        a, b = sorted((r["crawled"], r["sanctioned"]))
+        add(r["crawled"], r["sanctioned"], 0.5, f"watchlist name match: {r['nm']}")
+
+    suppressed = await _suppressed(pool)
+    queued = 0
+    for (a, b), (score, reasons) in scored.items():
         if frozenset((a, b)) in suppressed:
             continue
-        if await _insert(pool, a, b, 0.5, [f"watchlist name match: {r['nm']}"]):
+        if await _insert(pool, a, b, score, reasons):
             queued += 1
     return queued
 

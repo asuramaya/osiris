@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
 from src.actions.core import Actions
 from src.ingest.opensanctions import ingest_ftm
 from src.ontology.resolution import find_sanctions_candidates, review_tray
@@ -44,3 +45,31 @@ async def test_short_names_do_not_collide(actions: Actions) -> None:
     obj = await actions.create_or_find_object("Person", "p:x", "analyst")
     await actions.assert_property(obj, "name", "Li", "github_deep", NOW, 0.8)
     assert await find_sanctions_candidates(actions.pool) == 0  # length guard
+
+
+async def test_shared_identifier_scores_high(actions: Actions) -> None:
+    # a watchlist entity whose ONLY collision with the crawl is a shared email
+    await ingest_ftm(actions, [{"id": "S1", "schema": "Person", "properties": {
+        "name": ["Dear Leader"], "email": ["dear.leader@kp.gov"]}}])
+    me = await actions.create_or_find_object("Person", "subject:case", "analyst")
+    await actions.assert_property(me, "name", "Totally Unrelated Name", "gravatar", NOW, 0.8)
+    await actions.assert_property(me, "email", "Dear.Leader@kp.gov", "github_deep", NOW, 0.8)
+
+    assert await find_sanctions_candidates(actions.pool) == 1
+    s1 = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='S1'")
+    pair = next(t for t in await review_tray(actions.pool) if me in (t["a_id"], t["b_id"]))
+    assert {pair["a_id"], pair["b_id"]} == {me, s1}
+    assert pair["score"] == pytest.approx(0.9)  # shared id, not the weak name signal
+    assert any("shared email" in s for s in pair["reasons"]["signals"])
+
+
+async def test_alias_match_flags_namesake(actions: Actions) -> None:
+    # primary name is hyphenated; the space-separated form lives only in the alias set
+    await ingest_ftm(actions, [{"id": "S1", "schema": "Person", "properties": {
+        "name": ["Kim Jong-un"], "alias": ["Kim Jong Un", "Marshal Kim"]}}])
+    me = await actions.create_or_find_object("Person", "subject:case", "analyst")
+    await actions.assert_property(me, "name", "Kim Jong Un", "gravatar", NOW, 0.8)
+
+    assert await find_sanctions_candidates(actions.pool) == 1  # matched via alias, not name
+    pair = next(t for t in await review_tray(actions.pool) if me in (t["a_id"], t["b_id"]))
+    assert pair["score"] == 0.5

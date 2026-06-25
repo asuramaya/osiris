@@ -135,6 +135,22 @@ async def ingest_ftm(
                 oid, name, value, _SOURCE, ts, _CONF, case_id=case_id, evidence_class=_EC
             )
             n_prop += 1
+        # aliases (FtM alias/weakAlias + any secondary names) -> a single list-valued
+        # 'alias' assertion so alias-aware screening matches over name ∪ alias.
+        aliases = [
+            a
+            for a in dict.fromkeys(
+                list(props.get("alias") or [])
+                + list(props.get("weakAlias") or [])
+                + list((props.get("name") or [])[1:])
+            )
+            if a
+        ]
+        if aliases:
+            await actions.assert_property(
+                oid, "alias", aliases, _SOURCE, ts, _CONF, case_id=case_id, evidence_class=_EC
+            )
+            n_prop += 1
 
     # pass 2: relationship-entities -> links; absent endpoints become typed stubs
     for e in ents:
