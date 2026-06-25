@@ -173,34 +173,104 @@ class BanditPolicy(_Base):
 # --- coupling hypotheses (to fill once the baseline harness is proven) ----------
 
 
-class _Stub(_Base):
-    def rank(self, state: SimState) -> list[str]:
-        raise NotImplementedError(f"{self.name} coupling not implemented yet")
-
-
-class ChemotaxisPolicy(_Stub):
-    """Run-and-tumble: bandit whose exploration rate is coupled to the DERIVATIVE of
-    recent yield — exploit the cluster while probes pay off, spike exploration (jump
-    to a structurally distant frontier region) when the last k probes came back noise.
-    Coupling to test: explore_rate = g(d(yield)/d(probe)). Baseline to beat: BanditPolicy."""
+class ChemotaxisPolicy(_Base):
+    """Run-and-tumble. Same per-arm learning as the bandit, but the exploration rate
+    is coupled to recent yield: RUN (exploit the best arm) while probes pay off, and
+    TUMBLE (random reorientation to a different lead) more often as the local vein
+    dries — p_tumble = 1 - recent_yield_rate. The hypothesis is that this escapes the
+    gate's deadlock yet wastes less than blind exploration. Beats? -> race the bandit."""
 
     name = "chemotaxis"
 
+    def __init__(self, rng: random.Random, window: int = 6) -> None:
+        self.rng = rng
+        self.window = window
+        self.recent: list[float] = []
+        self.a: dict[EvidenceClass, float] = {}
+        self.b: dict[EvidenceClass, float] = {}
 
-class StigmergyPolicy(_Stub):
-    """Ant foraging: lay decaying 'pheromone' on lead *feature-types* (evidence_class x
-    node_type) that produced verified core; bias future probes toward high-scent types.
-    A contextual bandit with evaporation — gives the crawl MEMORY of what pays off."""
+    def _mean(self, d: Disc) -> float:
+        arm = d.strongest()
+        a = self.a.get(arm, 1.0) if arm is not None else 1.0
+        b = self.b.get(arm, 1.0) if arm is not None else 1.0
+        return a / (a + b)
+
+    def rank(self, state: SimState) -> list[str]:
+        cands = state.candidates()
+        if not cands:
+            return []
+        yield_rate = sum(self.recent) / len(self.recent) if self.recent else 0.5
+        p_tumble = min(0.95, max(0.05, 1.0 - yield_rate))
+        if self.rng.random() < p_tumble:  # tumble: random reorientation
+            ids = [d.id for d in cands]
+            self.rng.shuffle(ids)
+            return ids
+        cands.sort(key=self._mean, reverse=True)  # run: climb the gradient
+        return [d.id for d in cands]
+
+    def update(self, node_id: str, was_core: bool, state: SimState) -> None:
+        self.recent.append(1.0 if was_core else 0.0)
+        if len(self.recent) > self.window:
+            self.recent.pop(0)
+        d = state.discovered.get(node_id)
+        arm = d.strongest() if d is not None else None
+        if arm is None:
+            return
+        if was_core:
+            self.a[arm] = self.a.get(arm, 1.0) + 1.0
+        else:
+            self.b[arm] = self.b.get(arm, 1.0) + 1.0
+
+
+class StigmergyPolicy(_Base):
+    """Ant foraging: lay decaying pheromone on lead feature-types (the inbound
+    evidence_class) that produced core; bias probes toward high-scent types. The
+    distinguishing trick vs the bandit is EVAPORATION — a recency-weighted memory that
+    should adapt faster than a monotone Beta posterior when the productive lead-type
+    shifts mid-crawl (the dynamic regime)."""
 
     name = "stigmergy"
 
+    def __init__(self, rng: random.Random, evaporate: float = 0.1,
+                 deposit: float = 1.0, alpha: float = 2.0, base: float = 0.1) -> None:
+        self.rng = rng
+        self.evaporate = evaporate
+        self.deposit = deposit
+        self.alpha = alpha
+        self.base = base
+        self.tau: dict[EvidenceClass, float] = {}
 
-class PhysarumPolicy(_Stub):
+    def _scent(self, d: Disc) -> float:
+        arm = d.strongest()
+        return self.tau.get(arm, self.base) if arm is not None else self.base
+
+    def rank(self, state: SimState) -> list[str]:
+        scored = [
+            ((self._scent(d) ** self.alpha) * (0.5 + self.rng.random()), d.id)
+            for d in state.candidates()
+        ]
+        scored.sort(reverse=True)
+        return [i for _, i in scored]
+
+    def update(self, node_id: str, was_core: bool, state: SimState) -> None:
+        for k in list(self.tau):
+            self.tau[k] *= (1.0 - self.evaporate)
+        if was_core:
+            d = state.discovered.get(node_id)
+            arm = d.strongest() if d is not None else None
+            if arm is not None:
+                self.tau[arm] = self.tau.get(arm, self.base) + self.deposit
+
+
+class PhysarumPolicy(_Base):
     """Slime-mold transport: flux-reinforced conductance with decay over the discovered
-    graph (consolidation, not exploration). Expand by arriving flux. Expected to help
-    only in the dynamic/redundant regime; provably ~shortest-path otherwise."""
+    graph (consolidation, not exploration). Left unimplemented — it's the wrong half of
+    the problem (transport, not foraging); see the conversation. Stub raises."""
 
     name = "physarum"
+
+    def rank(self, state: SimState) -> list[str]:
+        raise NotImplementedError("physarum is a consolidation mechanism, not a frontier policy")
 
 
 def _conf(d: Disc) -> float:
