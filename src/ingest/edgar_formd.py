@@ -230,7 +230,7 @@ def _target_company(spv_name: str) -> str | None:
     out: list[str] = []
     for raw in re.split(r"[\s,\-]+", spv_name.strip()):
         tok = raw.lower().strip(".")
-        if not tok or tok.startswith("spv") or re.fullmatch(r"\d{2,}", tok):
+        if not tok or tok.startswith("spv") or re.fullmatch(r"\d+", tok):
             break
         if tok in _STOP_TOKENS or tok in _MONTHS:
             break
