@@ -7,6 +7,7 @@ from __future__ import annotations
 import uuid
 
 from src.actions.core import Actions
+from src.dissemination.dossier_report import build_dossier_report
 from src.ingest.etherscan import _addr_canonical, ingest_address, screen_against_sanctions
 from src.ingest.opensanctions import _wallet_canonical, ingest_ftm
 
@@ -83,3 +84,25 @@ async def test_trace_fuses_with_sanctioned_wallet_and_screens(actions: Actions) 
     hit = screen["sanctioned_hits"][0]
     assert hit["address"] == SANCTIONED.lower()
     assert "Ivan Sanctioned" in hit["holders"]
+
+
+async def test_dossier_renders_onchain_and_sanctions_exposure(actions: Actions) -> None:
+    await ingest_ftm(actions, [_HOLDER_FTM, _WALLET_FTM])
+    txs = [
+        {"from": ME, "to": SANCTIONED.lower(), "value": str(2 * 10**18), "timeStamp": "1700000000"},
+    ]
+    token_txs = [
+        {"from": ME, "to": SANCTIONED.lower(), "tokenSymbol": "USDT", "tokenDecimal": "6",
+         "value": str(50000 * 10**6), "timeStamp": "1700000100"},
+    ]
+    bundle = {"balance_wei": "0", "txs": txs, "token_txs": token_txs, "source": []}
+    out = await ingest_address(actions, ME, bundle, chain_id=1)
+
+    md = await build_dossier_report(actions.pool, uuid.UUID(out["subject_id"]))
+    assert "## On-chain activity" in md
+    assert "### Top counterparties" in md
+    assert "sent 50,000 USDT" in md             # decimal-adjusted token flow in the report
+    assert "### ⚑ Sanctions exposure" in md     # the differentiating finding
+    assert "OFAC-listed wallet" in md
+    assert "Ivan Sanctioned" in md              # the named holder behind the wallet
+    assert "`etherscan`" in md and "`opensanctions`" in md  # sources appendix

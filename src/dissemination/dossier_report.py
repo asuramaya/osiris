@@ -16,6 +16,7 @@ from typing import Any
 
 import asyncpg
 
+from src.ingest.etherscan import screen_against_sanctions
 from src.orchestrator.coinvest import _identity_set, coinvestment_ties
 from src.orchestrator.discrepancy import footprint_discrepancy
 
@@ -30,6 +31,62 @@ _TAG = {
 def _prov(source: str | None, ec: str | None, when: Any = None) -> str:
     bits = [b for b in (source, _TAG.get(ec, ec), str(when)[:10] if when else None) if b]
     return f"_({' · '.join(bits)})_"
+
+
+def _flows(props: dict[str, Any]) -> str:
+    """One-line value summary for an on-chain counterparty link."""
+    bits: list[str] = []
+    for sym, amt in list((props.get("token_in") or {}).items())[:3]:
+        bits.append(f"received {amt:,.0f} {sym}")
+    for sym, amt in list((props.get("token_out") or {}).items())[:3]:
+        bits.append(f"sent {amt:,.0f} {sym}")
+    if props.get("eth_in"):
+        bits.append(f"received {props['eth_in']} ETH")
+    if props.get("eth_out"):
+        bits.append(f"sent {props['eth_out']} ETH")
+    return "; ".join(bits) or "no value transfer"
+
+
+async def _crypto_section(
+    pool: asyncpg.Pool, object_id: uuid.UUID, cluster: list[uuid.UUID]
+) -> list[str]:
+    """On-chain activity + sanctions exposure — renders only when the subject cluster
+    has `transacted_with` edges (i.e. it's a traced wallet)."""
+    cps = await pool.fetch(
+        "SELECT o.canonical, "
+        "  (SELECT value #>> '{}' FROM current_assertions "
+        "   WHERE object_id=o.id AND name='contract_name' LIMIT 1) AS cname, "
+        "  l.properties AS props "
+        "FROM links l JOIN objects o ON o.id=l.to_id AND o.status='active' "
+        "WHERE l.from_id = ANY($1::uuid[]) AND l.type='transacted_with' "
+        "ORDER BY (l.properties->>'tx_count')::int DESC NULLS LAST LIMIT 15",
+        cluster,
+    )
+    if not cps:
+        return []
+    out = ["## On-chain activity", "", "### Top counterparties", ""]
+    for r in cps:
+        p = r["props"] or {}
+        label = r["cname"] or r["canonical"]
+        out.append(
+            f"- `{label}` — {p.get('tx_count', '?')} txs · {_flows(p)}  "
+            "_(etherscan · authoritative)_"
+        )
+    out.append("")
+    screen = await screen_against_sanctions(pool, object_id)
+    hits = [h for h in screen.get("sanctioned_hits", []) if not h.get("is_subject")]
+    if screen.get("subject_sanctioned") or hits:
+        out += ["### ⚑ Sanctions exposure", ""]
+        if screen.get("subject_sanctioned"):
+            out.append("- **This address is itself an OFAC-listed wallet.**")
+        for h in hits:
+            holders = ", ".join(h.get("holders") or []) or "unnamed holder"
+            out.append(
+                f"- ⚑ counterparty `{h['address']}` is an OFAC-listed wallet — "
+                f"held by **{holders}**  _(opensanctions · authoritative)_"
+            )
+        out.append("")
+    return out
 
 
 def _sub(prop: str, ref: str) -> str:
@@ -140,6 +197,12 @@ async def build_dossier_report(pool: asyncpg.Pool, object_id: uuid.UUID) -> str:
         for t in ties:
             out.append(f"- **{t['company']}** — {t['shared_operators']} shared SPV operator(s)")
         out.append("")
+
+    # --- on-chain activity + sanctions exposure ---------------------------
+    crypto = await _crypto_section(pool, object_id, cluster)
+    if crypto:
+        sources.update({"etherscan", "opensanctions"})
+        out += crypto
 
     # --- sources appendix -------------------------------------------------
     if sources:
