@@ -33,14 +33,34 @@ from src.ontology.resolution import normalize_org_name
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
-# the feeder link is INFERRED from the SPV's name referencing the core company —
-# speculative, so the frontier won't crawl outward from it.
-_DERIVED = EvidenceClass.DERIVED.value
-_DERIVED_CONF = confidence_for(EvidenceClass.DERIVED)
-
 _SOURCE = "edgar"
 _EC = EvidenceClass.AUTHORITATIVE_API.value
 _CONF = confidence_for(EvidenceClass.AUTHORITATIVE_API)
+# a feeder->core 'raises_for' link is INFERRED from the SPV's name referencing the
+# company — real but speculative, so it's graded co-occurrence (a non-expanding leaf).
+_CO = EvidenceClass.CO_OCCURRENCE.value
+_CO_CONF = confidence_for(EvidenceClass.CO_OCCURRENCE)
+
+
+def _to_int(s: Any) -> int:
+    try:
+        return int(s)
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _link_once(
+    actions: Actions, a: uuid.UUID, b: uuid.UUID, type_: str, *,
+    ts: datetime, conf: float, ec: str, case_id: uuid.UUID | None,
+) -> bool:
+    """create_link is append-only; these authoritative filings are re-ingested on
+    re-aim, so guard against duplicating an identical (from,to,type) edge."""
+    if await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type=$3 LIMIT 1", a, b, type_
+    ):
+        return False
+    await actions.create_link(a, b, type_, _SOURCE, ts, conf, case_id=case_id, evidence_class=ec)
+    return True
 # SEC fair-access wants a descriptive contact UA (it 403s browser UAs).
 _UA = {"User-Agent": "osiris-osint operator@example.com"}
 _EFTS = "https://efts.sec.gov/LATEST/search-index"
@@ -101,14 +121,15 @@ async def ingest_form_d(
     *,
     case_id: uuid.UUID | None = None,
     observed_at: datetime | None = None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Materialize a parsed Form D: the issuer Organization (canonical cik:NNN, the
     same scheme as edgar.py, so it resolves cross-base to Wikidata), its offering
     facts as properties, and its related persons linked by role."""
     ts = observed_at or datetime.now(UTC)
     cik = parsed.get("cik")
     if not cik:
-        return {"issuers": 0, "persons": 0, "links": 0, "properties": 0}
+        return {"issuers": 0, "persons": 0, "links": 0, "properties": 0,
+                "issuer_id": None, "name": None, "amount": 0}
     issuer_id = await actions.create_or_find_object(
         "Organization", f"cik:{int(cik):010d}", _SOURCE, case_id
     )
@@ -141,12 +162,48 @@ async def ingest_form_d(
                 case_id=case_id, evidence_class=_EC,
             )
         for rel in p.get("relationships") or ["officer"]:
-            await actions.create_link(
-                issuer_id, person_id, _REL.get(rel, "officer"), _SOURCE, ts, _CONF,
-                case_id=case_id, evidence_class=_EC,
-            )
-            n_link += 1
-    return {"issuers": 1, "persons": n_person, "links": n_link, "properties": n_prop}
+            if await _link_once(
+                actions, issuer_id, person_id, _REL.get(rel, "officer"),
+                ts=ts, conf=_CONF, ec=_EC, case_id=case_id,
+            ):
+                n_link += 1
+    return {
+        "issuers": 1, "persons": n_person, "links": n_link, "properties": n_prop,
+        "issuer_id": issuer_id, "name": parsed.get("issuer"),
+        "amount": _to_int((parsed.get("offering") or {}).get("amount_raised")),
+    }
+
+
+async def link_feeders(
+    actions: Actions,
+    issuers: list[dict[str, Any]],
+    search_name: str,
+    *,
+    observed_at: datetime | None = None,
+    case_id: uuid.UUID | None = None,
+) -> tuple[uuid.UUID | None, int]:
+    """Connect the feeder SPVs to the company they fund. The CORE is the issuer whose
+    name normalizes to the search term (and, among ties, raised the most — the company
+    out-raises its feeders); every other issuer whose name still references the term is
+    an SPV that `raises_for` the core. Name-inferred, so the link is co-occurrence."""
+    ts = observed_at or datetime.now(UTC)
+    norm = normalize_org_name(search_name)
+    exact = [i for i in issuers if normalize_org_name(i["name"] or "") == norm]
+    pool = exact or issuers
+    if not pool:
+        return None, 0
+    core = max(pool, key=lambda i: i.get("amount") or 0)
+    n = 0
+    for i in issuers:
+        if i["id"] == core["id"]:
+            continue
+        if norm and norm in normalize_org_name(i["name"] or ""):
+            if await _link_once(
+                actions, i["id"], core["id"], "raises_for",
+                ts=ts, conf=_CO_CONF, ec=_CO, case_id=case_id,
+            ):
+                n += 1
+    return core["id"], n
 
 
 async def search_form_d(name: str, *, limit: int = 40) -> list[dict[str, str]]:
@@ -178,69 +235,12 @@ async def fetch_form_d(cik: str, accession: str) -> dict[str, Any]:
         return parse_form_d(r.text)
 
 
-async def link_funnel(
-    actions: Actions, name: str, *, observed_at: datetime | None = None
-) -> dict[str, Any]:
-    """Wire the financing funnel: a feeder SPV encodes its target in its NAME ("MAV
-    Neuralink, LP" -> Neuralink), so we link every org whose normalized name *contains*
-    the core company's name to the core via a `raises_for` edge. The core is the
-    token-matching org with the largest amount_raised (the operating company, e.g.
-    Neuralink Corp.'s $280M vs an SPV's $1M); its same-named cross-base duplicates are
-    skipped. The edge is DERIVED (name-inferred), so it never spawns a crawl."""
-    pool = actions.pool
-    ts = observed_at or datetime.now(UTC)
-    target = normalize_org_name(name)
-    if len(target) < 4:
-        return {"core": None, "spv_links": 0}
-
-    rows = await pool.fetch(
-        "SELECT o.id, a.value #>> '{}' AS nm, "
-        "  (SELECT value #>> '{}' FROM current_assertions x "
-        "   WHERE x.object_id=o.id AND x.name='amount_raised') AS raised "
-        "FROM current_assertions a "
-        "JOIN objects o ON o.id=a.object_id AND o.type='Organization' AND o.status='active' "
-        "WHERE a.name='name'"
-    )
-    matches = [
-        (r["id"], normalize_org_name(r["nm"] or ""), r["nm"], r["raised"])
-        for r in rows
-        if target in normalize_org_name(r["nm"] or "")
-    ]
-    if not matches:
-        return {"core": None, "spv_links": 0}
-
-    def raised_val(raised: str | None) -> int:
-        try:
-            return int(raised) if raised else -1
-        except ValueError:
-            return -1
-
-    core = max(matches, key=lambda m: (raised_val(m[3]), m[1] == target))
-    core_id, core_norm, core_name = core[0], core[1], core[2]
-
-    n_link = 0
-    for mid, mnorm, _nm, _raised in matches:
-        if mid == core_id or mnorm == core_norm:  # skip the core + its cross-base dups
-            continue
-        if await pool.fetchval(
-            "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='raises_for' LIMIT 1",
-            mid, core_id,
-        ):
-            continue
-        await actions.create_link(
-            mid, core_id, "raises_for", "funnel", ts, _DERIVED_CONF, evidence_class=_DERIVED
-        )
-        n_link += 1
-    return {"core": core_name, "spv_links": n_link}
-
-
 async def aim_form_d(actions: Actions, name: str, *, limit: int = 40) -> dict[str, Any]:
     """Resolve a name to its Form D filings and ingest each — the private-financing
     layer of 'aim Osiris at <name>'."""
     filings = await search_form_d(name, limit=limit)
-    totals: dict[str, Any] = {
-        "filings": 0, "issuers": 0, "persons": 0, "links": 0, "properties": 0
-    }
+    totals: dict[str, Any] = {"filings": 0, "issuers": 0, "persons": 0, "links": 0, "properties": 0}
+    issuers: list[dict[str, Any]] = []
     for f in filings:
         try:
             parsed = await fetch_form_d(f["cik"], f["accession"])
@@ -250,9 +250,13 @@ async def aim_form_d(actions: Actions, name: str, *, limit: int = 40) -> dict[st
         totals["filings"] += 1
         for k in ("issuers", "persons", "links", "properties"):
             totals[k] += counts[k]
-    funnel = await link_funnel(actions, name)
-    totals["funnel_core"] = funnel["core"]
-    totals["funnel_links"] = funnel["spv_links"]
+        if counts["issuer_id"] is not None:
+            issuers.append(
+                {"id": counts["issuer_id"], "name": counts["name"], "amount": counts["amount"]}
+            )
+    core_id, feeders = await link_feeders(actions, issuers, name)
+    totals["feeders"] = feeders
+    totals["core"] = str(core_id) if core_id else None
     return totals
 
 
