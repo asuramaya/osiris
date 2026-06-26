@@ -5,9 +5,12 @@ and the materializer with a fixture bundle, never calling Etherscan.
 """
 from __future__ import annotations
 
+import pytest
+import src.ingest.etherscan as eth
 from src.actions.core import Actions
 from src.ingest.etherscan import (
     _addr_canonical,
+    _is_rate_limit,
     _parse_source,
     aggregate_counterparties,
     ingest_address,
@@ -108,6 +111,50 @@ async def test_ingest_materializes_subject_and_counterparties(actions: Actions) 
     assert row["properties"]["eth_out"] == 3.0
     assert row["properties"]["token_out"] == {"USDC": 1500.0}
     assert "USDC" in row["properties"]["tokens"]
+
+
+class _FakeResp:
+    def __init__(self, payload: dict[str, object], status_code: int = 200) -> None:
+        self._p, self.status_code = payload, status_code
+
+    def raise_for_status(self) -> None:
+        pass
+
+    def json(self) -> dict[str, object]:
+        return self._p
+
+
+class _FakeClient:
+    def __init__(self, responses: list[_FakeResp]) -> None:
+        self._r, self.calls = responses, 0
+
+    async def get(self, url: str, params: dict[str, object] | None = None) -> _FakeResp:
+        r = self._r[self.calls]
+        self.calls += 1
+        return r
+
+
+def test_is_rate_limit() -> None:
+    assert _is_rate_limit("NOTOK", "Max calls per sec rate limit reached (3/sec)")
+    assert _is_rate_limit("", "429 too many requests")
+    assert not _is_rate_limit("NOTOK", "Invalid API Key")
+
+
+async def test_call_retries_then_succeeds_on_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    sleeps: list[float] = []
+
+    async def fake_sleep(s: float) -> None:
+        sleeps.append(s)
+
+    monkeypatch.setattr(eth.asyncio, "sleep", fake_sleep)
+    client = _FakeClient([
+        _FakeResp({"status": "0", "message": "NOTOK",
+                   "result": "Max calls per sec rate limit reached (3/sec)"}),
+        _FakeResp({"status": "1", "message": "OK", "result": "42"}),
+    ])
+    out = await eth._call(client, "k", 1, "account", "balance", address="0x")  # type: ignore[arg-type]
+    assert out == "42"
+    assert client.calls == 2 and len(sleeps) == 1  # backed off once, then succeeded
 
 
 async def test_ingest_is_idempotent(actions: Actions) -> None:

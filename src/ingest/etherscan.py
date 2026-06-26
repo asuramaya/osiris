@@ -163,25 +163,40 @@ class EtherscanError(RuntimeError):
     pass
 
 
+def _is_rate_limit(*texts: str) -> bool:
+    blob = " ".join(texts).lower()
+    return "rate limit" in blob or "max calls" in blob or "429" in blob
+
+
 async def _call(
-    client: httpx.AsyncClient, key: str, chain_id: int, module: str, action: str, **params: Any
+    client: httpx.AsyncClient, key: str, chain_id: int, module: str, action: str,
+    *, retries: int = 4, **params: Any,
 ) -> Any:
-    """One Etherscan v2 call. Returns `result`; an empty-set 'No transactions found'
-    is normal (=> []), any other status '0' is an error."""
+    """One Etherscan v2 call, retrying on the free-tier 3/sec rate limit with backoff.
+    Returns `result`; an empty-set 'No transactions found' is normal (=> []), any other
+    status '0' is an error."""
     q = {"chainid": chain_id, "module": module, "action": action, "apikey": key, **params}
-    r = await client.get(_API, params=q)
-    r.raise_for_status()
-    data = r.json()
-    if data.get("status") == "1":
-        return data.get("result")
-    msg = str(data.get("message") or "")
-    result = data.get("result")
-    if "No transactions found" in msg or "No records found" in msg or result == []:
-        return []
-    # `message` is a generic "NOTOK"; the actionable detail (bad key, rate limit) is in
-    # `result` — surface it.
-    detail = result if isinstance(result, str) else ""
-    raise EtherscanError(f"{module}.{action}: {f'{msg} — {detail}'.strip(' —') or 'unknown error'}")
+    for attempt in range(retries):
+        r = await client.get(_API, params=q)
+        if r.status_code == 429:
+            await asyncio.sleep(0.3 * (attempt + 1))
+            continue
+        r.raise_for_status()
+        data = r.json()
+        if data.get("status") == "1":
+            return data.get("result")
+        msg = str(data.get("message") or "")
+        result = data.get("result")
+        if "No transactions found" in msg or "No records found" in msg or result == []:
+            return []
+        # `message` is a generic "NOTOK"; the actionable detail (bad key, rate limit) is
+        # in `result` — surface it (and back off if it's a rate limit).
+        detail = result if isinstance(result, str) else ""
+        if _is_rate_limit(msg, detail):
+            await asyncio.sleep(0.3 * (attempt + 1))
+            continue
+        raise EtherscanError(f"{module}.{action}: {f'{msg} — {detail}'.strip(' —') or 'error'}")
+    raise EtherscanError(f"{module}.{action}: rate limited after {retries} retries")
 
 
 async def fetch_address(
