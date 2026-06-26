@@ -24,10 +24,22 @@ async def test_report_renders_sections_with_provenance(actions: Actions) -> None
     await actions.create_link(co, case, "litigation", "courtlistener", NOW, 0.6,
                               evidence_class="direct_observation")
 
+    # a principal who is BOTH officer and director collapses to one line
+    boss = await actions.create_or_find_object("Person", "sec-person:boss", "edgar")
+    await actions.assert_property(boss, "name", "Jane Boss", "edgar", NOW, 0.85,
+                                  evidence_class="authoritative_api")
+    await actions.create_link(co, boss, "officer", "edgar", NOW, 0.85,
+                              evidence_class="authoritative_api")
+    await actions.create_link(co, boss, "director", "edgar", NOW, 0.85,
+                              evidence_class="authoritative_api")
+
     md = await build_dossier_report(actions.pool, co)
 
     assert md.startswith("# Dossier: Scam Co")
     assert "## Identity" in md and "## Litigation" in md and "## Sources" in md
+    # principals: one line per person, roles merged
+    assert "## Principals" in md
+    assert "**Jane Boss** — director, officer" in md
     # provenance is inline on every identity claim
     assert "incorporation_state" in md and "edgar · authoritative" in md
     # the litigation role is surfaced (named party vs mentioned)

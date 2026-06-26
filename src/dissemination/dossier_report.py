@@ -133,6 +133,37 @@ async def build_dossier_report(pool: asyncpg.Pool, object_id: uuid.UUID) -> str:
             )
         out.append("")
 
+    # --- principals (the people behind the entity) ------------------------
+    people = await pool.fetch(
+        "SELECT l.type AS role, l.source_id, "
+        "  (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=p.id "
+        "   AND a.name='name' ORDER BY confidence DESC LIMIT 1) AS nm "
+        "FROM links l JOIN objects p ON p.id=l.to_id AND p.type='Person' AND p.status='active' "
+        "WHERE l.from_id = ANY($1::uuid[]) "
+        "  AND l.type IN ('officer','director','founded_by','founder','manager','agent','employs') "
+        "ORDER BY nm",
+        cluster,
+    )
+    if people:
+        # group by person → the set of roles + sources (a person is often both
+        # officer and director; collapse so each principal is one line)
+        agg: dict[str, dict[str, set[str]]] = {}
+        for r in people:
+            if not r["nm"]:
+                continue
+            e = agg.setdefault(r["nm"], {"roles": set(), "src": set()})
+            e["roles"].add(r["role"])
+            if r["source_id"]:
+                e["src"].add(r["source_id"])
+        if agg:
+            out += ["## Principals", ""]
+            for nm in sorted(agg):
+                roles = ", ".join(sorted(agg[nm]["roles"]))
+                src = ", ".join(sorted(agg[nm]["src"]))
+                sources.update(agg[nm]["src"])
+                out.append(f"- **{nm}** — {roles}  _({src} · authoritative)_")
+            out.append("")
+
     # --- financing (Form D feeders raising for it) ------------------------
     feeders = await pool.fetch(
         f"SELECT {_sub('name', 's.id')} nm, {_sub('amount_raised', 's.id')} amt, "
