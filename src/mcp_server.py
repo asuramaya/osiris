@@ -21,6 +21,7 @@ from mcp.server.fastmcp import FastMCP
 from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.db.pool import create_pool
+from src.dissemination.dossier_report import build_dossier_report
 from src.ingest.clinicaltrials import aim_trials, expand_facility
 from src.ingest.courtlistener import aim_litigation
 from src.ingest.edgar_formd import aim_form_d, expand_filings
@@ -179,6 +180,16 @@ async def coinvestment(object_ref: str) -> list[dict[str, Any]] | dict[str, str]
     pool = await _pool_get()
     oid = await _resolve(pool, object_ref)
     return await coinvestment_ties(pool, oid) if oid else {"error": f"no object {object_ref!r}"}
+
+
+@mcp.tool()
+async def dossier_report(object_ref: str) -> str:
+    """The deliverable: a provenance-annotated Markdown dossier for an entity —
+    identity, financing, litigation, footprint discrepancy, co-investment — with every
+    claim carrying its source + how-obtained + date. Run the collect tools first."""
+    pool = await _pool_get()
+    oid = await _resolve(pool, object_ref)
+    return await build_dossier_report(pool, oid) if oid else f"# no object {object_ref!r}"
 
 
 def main() -> None:
