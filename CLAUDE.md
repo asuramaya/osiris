@@ -436,3 +436,25 @@ and `docker run` do too.
     SPV-name parse residue (OpenAI s); related-person entity artifacts (LLC Sydecar). All speculative-
     graded for review. NEXT: cross-base merge company:↔cik: (not just candidate); patents (keyless
     source still TBD); apply expand/coinvest to OpenAI/Anthropic directly (their own Form Ds).
+- **MCP SERVER + SOURCE PLAYBOOK — the AI-facing surface (DONE, 2026-06-26, 77c9076):** answered
+  "can Osiris run without Claude as a crutch?" structurally. Two crutches: (A) Claude-as-developer
+  (fine, temporary — frozen capability), (B) Claude-as-runtime-analyst (the real risk: source
+  selection, sequencing, ad-hoc SQL, interpretation). The fix isn't to remove B, it's to FORMALIZE
+  it as an interface. Architecture: engine (pure capability) ← MCP server (AI-facing, external/
+  optional/audited; never embedded) + FastAPI app (human front-end), both over the same functions.
+  - `src/orchestrator/sources.py`: the investigation playbook AS DATA. `suggest(object_type)` →
+    capabilities worth running (collect-then-analyze). Externalizes "private co → Form D" judgment;
+    both surfaces read it. THE keystone.
+  - `src/mcp_server.py` (FastMCP, `mcp==1.28.1` dep): 11 tools (suggest_sources/search/aim_entity/
+    ingest_form_d/expand_operator/ingest_trials/expand_clinical_site/consolidate/dossier/
+    discrepancy/coinvestment). All accept a UUID **or name** (fuzzy: exact then shortest-substring).
+    Run `uv run python -m src.mcp_server` (stdio). mypy override: src.mcp_server disallow_untyped_
+    decorators=false.
+  - BUG the MCP surfaced (tool earning its keep): cross-base merge leaves loser links in place
+    (resolve-on-read), so analytics on raw links miss them → discrepancy dropped UAE/UK. Fixed
+    `discrepancy._cluster` to follow merged_into recursively. LESSON: all read-models must be
+    merge-aware (coinvest/dossier likely need the same WITH RECURSIVE merged_into expansion).
+  - NEXT (Option-1 completion = tool stands alone): wire the analytics to REST endpoints + UI panels
+    (discrepancy/coinvest/funnel/suggest-sources — dossier already is) so the HUMAN front-end can
+    drive everything the MCP can; make remaining read-models merge-aware; map more EDGAR country
+    codes (C7 unmapped). THEN run the OpenAI/Anthropic playbook THROUGH the tool (the real test).
