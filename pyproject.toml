@@ -21,6 +21,7 @@ dependencies = [
     "keyring>=25.7.0",
     "reportlab>=4.5.1",
     "phonenumbers>=9.0.31",
+    "mcp>=1.28.1",
 ]
 
 [dependency-groups]
@@ -63,6 +64,10 @@ disallow_untyped_calls = false
 [[tool.mypy.overrides]]
 module = ["keyring.*", "reportlab.*", "phonenumbers.*"]   # no bundled stubs
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["src.mcp_server"]                  # FastMCP's .tool() is an untyped decorator
+disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

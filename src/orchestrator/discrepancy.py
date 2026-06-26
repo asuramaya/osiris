@@ -68,22 +68,31 @@ async def _cluster(pool: asyncpg.Pool, object_id: uuid.UUID) -> list[uuid.UUID]:
         object_id,
     )
     norm = normalize_org_name(name or "")
-    if not norm:
-        return [object_id]
     ids = {object_id}
-    for r in await pool.fetch(
-        "SELECT a.object_id FROM current_assertions a "
-        "JOIN objects o ON o.id=a.object_id AND o.type='Organization' AND o.status='active' "
-        "WHERE a.name='name'"
-    ):
-        if normalize_org_name(
-            await pool.fetchval(
-                "SELECT value #>> '{}' FROM current_assertions "
-                "WHERE object_id=$1 AND name='name' LIMIT 1", r["object_id"]
-            ) or ""
-        ) == norm:
-            ids.add(r["object_id"])
-    return list(ids)
+    if norm:
+        for r in await pool.fetch(
+            "SELECT a.object_id FROM current_assertions a "
+            "JOIN objects o ON o.id=a.object_id AND o.type='Organization' AND o.status='active' "
+            "WHERE a.name='name'"
+        ):
+            if normalize_org_name(
+                await pool.fetchval(
+                    "SELECT value #>> '{}' FROM current_assertions "
+                    "WHERE object_id=$1 AND name='name' LIMIT 1", r["object_id"]
+                ) or ""
+            ) == norm:
+                ids.add(r["object_id"])
+    # include objects MERGED into any cluster member — their links (e.g. trial sites
+    # that hung off a pre-merge sponsor node) still point at the old ids, and the
+    # identity is the same, so the analysis must follow them.
+    rows = await pool.fetch(
+        "WITH RECURSIVE m(id) AS ("
+        "  SELECT unnest($1::uuid[]) "
+        "  UNION SELECT o.id FROM objects o JOIN m ON o.merged_into = m.id) "
+        "SELECT id FROM m",
+        list(ids),
+    )
+    return [r["id"] for r in rows]
 
 
 async def footprint_discrepancy(pool: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, Any]:
