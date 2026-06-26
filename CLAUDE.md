@@ -504,9 +504,35 @@ and `docker run` do too.
   - Bug caught by the fusion test: the fused node carries multi-source `address` assertions
     (etherscan + opensanctions) → scalar address subquery needs LIMIT 1 (the kernel's multi-source
     hazard surfacing in a read-model). MCP surface now 16 tools.
-  - HONEST LIMITS / NOT DONE: (1) LIVE-UNVERIFIED — no key set, hermetic tests only; field shapes
-    trusted from the TS-repo extraction. (2) counterparties stay anonymous unless verified-contract or
-    OFAC (keyless Etherscan has no exchange labels — PRO-only). (3) Solana half deferred (Helius-keyed).
-    (4) NOT wired into `dossier_report` — trace/screen absent from the Markdown deliverable. (5) demo
-    DB's 1807 opensanctions entities predate the CryptoWallet pass → re-ingest an OFAC slice for live
-    screening data. NEXT: a live trace with a real key; crypto section in dossier_report; Solana.
+  - Bug caught by the fusion test: the fused node carries multi-source `address` assertions
+    (etherscan + opensanctions) → scalar address subquery needs LIMIT 1 (the kernel's multi-source
+    hazard surfacing in a read-model). MCP surface now 16 tools.
+- **BLOCKCHAIN LIVE-PROOF — dossier section + OFAC re-ingest + real trace (DONE, 2026-06-26,
+  289abd3/c061e1d/db952c3):** wired crypto into the deliverable and proved the whole loop
+  live on real OFAC wallets. 191 tests green, ruff + mypy --strict clean.
+  - **Dossier crypto section** (`dossier_report._crypto_section`): for a traced wallet subject,
+    renders Top counterparties (decimal-adjusted token flow + ETH, `_flows`) + ⚑ Sanctions exposure
+    (subject-is-listed? counterparty-is-listed? + named holder), etherscan+opensanctions in the
+    sources appendix. Renders only when the cluster has `transacted_with` edges (entity dossiers
+    unchanged).
+  - **LIVE-VERIFIED against Ethereum mainnet** (key activated after a delay). vitalik.eth + USDT
+    confirmed field shapes (USDT→TetherToken). The live run caught two defects hermetic tests
+    missed → fixed: zero/burn address ranked as a counterparty (carrying scam-airdrop spam tokens
+    $2000/0x4/14.3.3 → `_BURN` filter) and token AMOUNTS dropped (only symbols → `token_in/out`
+    {symbol:amount} decimal-adjusted, the money was invisible). Also added rate-limit retry (free
+    tier 3/sec; 4 calls/fetch tripped it).
+  - **OFAC re-ingest** (us_ofac_sdn FtM, keyless ~50MB): focused slice = 797 CryptoWallets + 87
+    holders + intra-holder rels → demo DB :5439 now has **786 CryptoAddress (97 EVM-keyed eth:1:),
+    797 controlled_by** links to named holders (GARANTEX, Andariel/DPRK, CHATEX, …).
+  - **THE LOOP, LIVE:** trace CHATEX `0x5512…21b0` via Etherscan → fuses with the OFAC object
+    (subject_sanctioned=True) → screen finds a counterparty `0x4854…6b4a` that is ALSO an OFAC
+    CHATEX wallet, to which CHATEX **sent 34.2 ETH** — a real on-chain link between two designations,
+    surfaced as a sourced dossier finding. Same for Andariel→Andariel. The differentiator delivers
+    end-to-end on real data. Driver: scratchpad ad-hoc (OFAC file at scratchpad/ofac_sdn.ftm.json).
+  - HONEST LIMITS / NOT DONE: (1) counterparties stay anonymous unless verified-contract or OFAC
+    (keyless Etherscan has no exchange labels — PRO-only); cross-token VALUE ranking needs prices.
+    (2) Solana half deferred (Helius-keyed). (3) dossier Identity shows multi-source scalar (address)
+    twice — honest but redundant; a dedup-by-value display is a general dossier polish. (4) ETHERSCAN
+    env-shadowing: operator's shell profile exports a STALE key (16NGD…) that overrides .env's valid
+    one (MGY4…) — runs need the key inline until the profile export is fixed. NEXT: Solana; price
+    enrichment for value-ranked counterparties; REST/UI parity.
