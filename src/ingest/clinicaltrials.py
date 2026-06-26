@@ -171,8 +171,15 @@ async def expand_facility(actions: Actions, facility: str, *, limit: int = 60) -
     (the foreign-counterparty thread: who else operates at Cleveland Clinic Abu Dhabi).
     Other trials at the same facility link to the same site node, so co-tenancy emerges."""
     totals = {"trials": 0, "sites": 0, "investigators": 0, "links": 0}
+    needle = facility.lower()
     for study in (await _fetch({"query.locn": facility}))[:limit]:
-        counts = await ingest_study(actions, parse_study(study))
+        parsed = parse_study(study)
+        # keep ONLY the queried facility's site — a multinational trial lists dozens of
+        # global sites and we don't want to slurp them all just to record co-tenancy.
+        parsed["locations"] = [
+            loc for loc in parsed["locations"] if needle in (loc.get("facility") or "").lower()
+        ]
+        counts = await ingest_study(actions, parsed)
         for k in totals:
             totals[k] += counts[k]
     return totals
