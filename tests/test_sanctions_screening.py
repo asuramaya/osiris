@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import pytest
 from src.actions.core import Actions
 from src.ingest.opensanctions import ingest_ftm
-from src.ontology.resolution import find_sanctions_candidates, review_tray
+from src.ontology.resolution import find_sanctions_candidates, review_tray, screen_network
 
 NOW = datetime(2026, 6, 24, tzinfo=UTC)
 
@@ -73,3 +73,33 @@ async def test_alias_match_flags_namesake(actions: Actions) -> None:
     assert await find_sanctions_candidates(actions.pool) == 1  # matched via alias, not name
     pair = next(t for t in await review_tray(actions.pool) if me in (t["a_id"], t["b_id"]))
     assert pair["score"] == 0.5
+
+
+async def test_screen_network_flags_dirty_spv_operator(actions: Actions) -> None:
+    # a watchlist entity (a sanctioned person)
+    await ingest_ftm(actions, [{"id": "W1", "schema": "Person", "properties": {
+        "name": ["Dmitry Dirtyhands"], "topics": ["sanction"]}}])
+
+    company = await actions.create_or_find_object("Organization", "cik:42", "edgar")
+    await actions.assert_property(company, "name", "Target Corp", "edgar", NOW, 0.85)
+    # a clean direct officer
+    clean = await actions.create_or_find_object("Person", "sec-person:clean", "edgar")
+    await actions.assert_property(clean, "name", "Honest Abe", "edgar", NOW, 0.85)
+    await actions.create_link(company, clean, "officer", "edgar", NOW, 0.85)
+    # a feeder SPV whose OPERATOR shares a name with the sanctioned person
+    spv = await actions.create_or_find_object("Organization", "cik:99", "edgar")
+    await actions.assert_property(spv, "name", "Feeder SPV LP", "edgar", NOW, 0.85)
+    await actions.create_link(spv, company, "raises_for", "edgar", NOW, 0.35)
+    dirty = await actions.create_or_find_object("Person", "sec-person:dirty", "edgar")
+    await actions.assert_property(dirty, "name", "Dmitry Dirtyhands", "edgar", NOW, 0.85)
+    await actions.create_link(spv, dirty, "officer", "edgar", NOW, 0.85)
+
+    hits = await screen_network(actions.pool, company)
+    assert len(hits) == 1  # only the dirty SPV operator, two hops out
+    h = hits[0]
+    assert h["member_name"] == "Dmitry Dirtyhands"
+    assert h["watchlist_entity"] == "Dmitry Dirtyhands"
+    assert h["via"] == ["spv_operator"]
+
+    # a clean company (no network member on a list) returns nothing
+    assert await screen_network(actions.pool, clean) == []

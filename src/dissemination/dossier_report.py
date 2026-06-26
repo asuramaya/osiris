@@ -17,6 +17,7 @@ from typing import Any
 import asyncpg
 
 from src.ingest.etherscan import screen_against_sanctions
+from src.ontology.resolution import screen_network
 from src.orchestrator.coinvest import _identity_set, coinvestment_ties
 from src.orchestrator.discrepancy import footprint_discrepancy
 
@@ -227,6 +228,20 @@ async def build_dossier_report(pool: asyncpg.Pool, object_id: uuid.UUID) -> str:
         out += ["## Co-investment ties", ""]
         for t in ties:
             out.append(f"- **{t['company']}** — {t['shared_operators']} shared SPV operator(s)")
+        out.append("")
+
+    # --- watchlist exposure across the financing network ------------------
+    net_hits = await screen_network(pool, object_id)
+    if net_hits:
+        sources.add("opensanctions")
+        out += ["## ⚑ Watchlist exposure (financing network)", ""]
+        for h in net_hits:
+            via = "/".join(h["via"])
+            roles = (", " + ", ".join(h["roles"])) if h["roles"] else ""
+            out.append(
+                f"- ⚑ **{h['member_name']}** ({via}{roles}) matches watchlist entity "
+                f"**{h['watchlist_entity']}** — {h['reason']}  _(opensanctions · authoritative)_"
+            )
         out.append("")
 
     # --- on-chain activity + sanctions exposure ---------------------------

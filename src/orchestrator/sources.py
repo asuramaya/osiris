@@ -98,6 +98,12 @@ _ANALYZE: tuple[Capability, ...] = (
         "is this address, or any counterparty, an OFAC-listed wallet? + the holder",
         "screen_wallet",
     ),
+    Capability(
+        "network_screen", "Financing-network watchlist screen", "analyze",
+        ("Organization", "Person"),
+        "is anyone in this entity's money network (principals/SPVs/operators) on a list?",
+        "screen_financing_network",
+    ),
 )
 
 REGISTRY: tuple[Capability, ...] = _COLLECT + _ANALYZE

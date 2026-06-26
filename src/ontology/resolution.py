@@ -488,6 +488,113 @@ async def find_sanctions_candidates(pool: asyncpg.Pool) -> int:
     return queued
 
 
+async def screen_network(
+    pool: asyncpg.Pool, entity_id: uuid.UUID, *, min_len: int = 5
+) -> list[dict[str, Any]]:
+    """Screen an entity's FINANCING NETWORK against the watchlist base — the un-chased
+    follow-the-money question: is anyone in this company's money network (its principals,
+    its feeder SPVs, and those SPVs' operators) a sanctioned/PEP entity?
+
+    For each network member, match against any watchlist entity (opensanctions-tagged)
+    by a SHARED IDENTIFIER (email/website/phone, 0.9) or an alias-aware NAME match (0.5).
+    Returns the hits with the path that connects the member to the entity. A read model
+    (does not queue): a null result is a clean network, reported as such. Never asserts
+    same-entity (ruling #3) — the analyst adjudicates."""
+    cluster = await _network_identity(pool, entity_id)
+    members = await pool.fetch(
+        "WITH ent AS (SELECT unnest($1::uuid[]) AS id), "
+        "feeders AS (SELECT DISTINCT l.from_id AS id FROM links l JOIN ent ON l.to_id=ent.id "
+        "            WHERE l.type='raises_for') "
+        "SELECT l.to_id AS id, 'principal' AS via, l.type AS role "
+        "  FROM links l JOIN ent ON l.from_id=ent.id "
+        "  WHERE l.type IN ('officer','director','founded_by','manager','agent','owns','directs') "
+        "UNION SELECT f.id, 'feeder_spv', NULL FROM feeders f "
+        "UNION SELECT l.to_id, 'spv_operator', l.type "
+        "  FROM links l JOIN feeders f ON l.from_id=f.id "
+        "  WHERE l.type IN ('officer','director','manager')",
+        cluster,
+    )
+    meta: dict[uuid.UUID, dict[str, Any]] = {}
+    for m in members:
+        e = meta.setdefault(m["id"], {"via": set(), "roles": set()})
+        e["via"].add(m["via"])
+        if m["role"]:
+            e["roles"].add(m["role"])
+    member_ids = [m for m in meta if m not in cluster]
+    if not member_ids:
+        return []
+
+    hits = await pool.fetch(
+        "WITH watchlist AS "
+        "  (SELECT DISTINCT object_id FROM assertions WHERE source_id='opensanctions'), "
+        "sanc_names AS ("
+        "  SELECT s.object_id, lower(btrim(s.value #>> '{}')) AS nm FROM current_assertions s "
+        "  JOIN watchlist w ON w.object_id=s.object_id WHERE s.name='name' "
+        "  UNION SELECT s.object_id, lower(btrim(al.v)) FROM current_assertions s "
+        "  JOIN watchlist w ON w.object_id=s.object_id "
+        "  CROSS JOIN LATERAL jsonb_array_elements_text(s.value) AS al(v) "
+        "  WHERE s.name='alias' AND jsonb_typeof(s.value)='array'), "
+        "members AS (SELECT unnest($1::uuid[]) AS id) "
+        # identifier match (strong)
+        "SELECT c.object_id AS member, s.object_id AS hit, 0.9 AS score, "
+        "  ('shared '||s.name||': '||lower(btrim(c.value #>> '{}'))) AS reason "
+        "FROM current_assertions c JOIN members m ON m.id=c.object_id "
+        "JOIN current_assertions s ON s.name=c.name "
+        "  AND lower(btrim(s.value #>> '{}'))=lower(btrim(c.value #>> '{}')) "
+        "JOIN watchlist w ON w.object_id=s.object_id "
+        "WHERE c.name IN ('email','website','phone') AND c.object_id<>s.object_id "
+        "  AND c.object_id NOT IN (SELECT object_id FROM watchlist) "
+        "UNION "
+        # name match (alias-aware, weak)
+        "SELECT c.object_id, sn.object_id, 0.5, ('watchlist name match: '||(c.value #>> '{}')) "
+        "FROM current_assertions c JOIN members m ON m.id=c.object_id "
+        "JOIN sanc_names sn ON sn.nm=lower(btrim(c.value #>> '{}')) "
+        "WHERE c.name='name' AND c.object_id<>sn.object_id "
+        "  AND c.object_id NOT IN (SELECT object_id FROM watchlist) "
+        "  AND length(btrim(c.value #>> '{}'))>=$2",
+        member_ids, min_len,
+    )
+    out: list[dict[str, Any]] = []
+    for h in hits:
+        mid = h["member"]
+        out.append({
+            "member_id": str(mid),
+            "member_name": await _name_of(pool, mid),
+            "via": sorted(meta[mid]["via"]),
+            "roles": sorted(meta[mid]["roles"]),
+            "watchlist_entity": await _name_of(pool, h["hit"]),
+            "score": float(h["score"]),
+            "reason": h["reason"],
+        })
+    out.sort(key=lambda x: -x["score"])
+    return out
+
+
+async def _network_identity(pool: asyncpg.Pool, object_id: uuid.UUID) -> list[uuid.UUID]:
+    """The entity's full identity set (merge winner + everything merged into it)."""
+    winner = object_id
+    for _ in range(50):
+        nxt = await pool.fetchval("SELECT merged_into FROM objects WHERE id=$1", winner)
+        if nxt is None:
+            break
+        winner = nxt
+    rows = await pool.fetch(
+        "WITH RECURSIVE m(id) AS (SELECT $1::uuid "
+        "  UNION SELECT o.id FROM objects o JOIN m ON o.merged_into=m.id) SELECT id FROM m",
+        winner,
+    )
+    return [r["id"] for r in rows]
+
+
+async def _name_of(pool: asyncpg.Pool, oid: uuid.UUID) -> str | None:
+    val: str | None = await pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='name' "
+        "ORDER BY confidence DESC LIMIT 1",
+        oid,
+    )
+    return val
+
+
 async def find_cross_base_candidates(pool: asyncpg.Pool, *, min_len: int = 4) -> int:
     """Resolve the SAME organization across different federated bases. A person bridges
     them — aiming at Musk pulls Tesla (Q478214) from Wikidata, while EDGAR carries
