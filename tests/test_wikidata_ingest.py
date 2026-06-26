@@ -72,6 +72,30 @@ async def test_properties_only_skips_relationships(actions: Actions) -> None:
     assert counts["enriched"] == 2
 
 
+async def test_ingest_mints_official_social_accounts(actions: Actions) -> None:
+    ent = {"Q1": {
+        "id": "Q1",
+        "labels": {"en": {"language": "en", "value": "Neuralink"}},
+        "claims": {
+            "P2002": [_val("string", "neuralink")],          # twitter/X
+            "P2013": [_val("string", "neuralinkcorporation")],  # facebook
+            "P4264": [_val("string", "neuralink")],          # linkedin
+        },
+    }}
+    counts = await ingest_entities(actions, ent)
+    assert counts["accounts"] == 3
+    org = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='Q1'")
+    accts = {
+        r["canonical"] for r in await actions.pool.fetch(
+            "SELECT o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
+            "WHERE l.from_id=$1 AND l.type='has_account'", org)
+    }
+    assert accts == {"twitter:neuralink", "facebook:neuralinkcorporation", "linkedin:neuralink"}
+    klass = await actions.pool.fetchval(
+        "SELECT evidence_class FROM links WHERE from_id=$1 AND type='has_account' LIMIT 1", org)
+    assert klass == "authoritative_api"
+
+
 def test_parse_entities_drops_missing() -> None:
     data = {"entities": {
         "Q1": {"id": "Q1", "labels": {}},

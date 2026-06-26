@@ -65,6 +65,18 @@ _REL_PROPS: dict[str, tuple[str, str]] = {
     "P488": ("chairperson", "Person"),    # chairperson
     "P102": ("member_of", "Organization"),  # member of political party
 }
+# Wikidata social-media-account claim -> platform. The value is a handle/id; we mint
+# an Account the entity has_account. These are the official accounts a curated record
+# carries that a (minimal/antibot) homepage crawl can't surface — the Neuralink case.
+_SOCIAL: dict[str, str] = {
+    "P2002": "twitter",    # X/Twitter username
+    "P2003": "instagram",  # Instagram username
+    "P2013": "facebook",   # Facebook id
+    "P2397": "youtube",    # YouTube channel id
+    "P4264": "linkedin",   # LinkedIn company id
+    "P3185": "vk",         # VK id
+    "P11705": "facebook",  # Facebook numeric id (fallback)
+}
 
 
 # --- value extraction from the wbgetentities shape ----------------------------
@@ -196,6 +208,29 @@ async def ingest_entities(
         if wrote:
             enriched += 1
 
+    # pass 1b: official social-media accounts -> Account objects (always on; identity,
+    # authoritative, low-noise). One account per platform.
+    n_acct = 0
+    for qid, ent in entities.items():
+        a = cache.get(qid)
+        if a is None:
+            continue
+        claims = ent.get("claims") or {}
+        for pid, platform in _SOCIAL.items():
+            for st in claims.get(pid, []):
+                handle = _literal_value(st.get("mainsnak", {}))
+                if not handle:
+                    continue
+                acct_id = await actions.create_or_find_object(
+                    "Account", f"{platform}:{handle}".lower(), _SOURCE, case_id
+                )
+                await actions.create_link(
+                    a, acct_id, "has_account", _SOURCE, ts, _CONF,
+                    case_id=case_id, evidence_class=_EC,
+                )
+                n_acct += 1
+                break  # one account per platform
+
     # pass 2: relationship claims -> links (absent endpoints become typed stubs)
     if relationships:
         for qid, ent in entities.items():
@@ -216,7 +251,10 @@ async def ingest_entities(
                     n_link += 1
 
     endpoints = len([q for q in cache if q not in entities])
-    return {"enriched": enriched, "properties": n_prop, "links": n_link, "endpoints": endpoints}
+    return {
+        "enriched": enriched, "properties": n_prop, "accounts": n_acct,
+        "links": n_link, "endpoints": endpoints,
+    }
 
 
 # --- fetch + stub selection ---------------------------------------------------
@@ -249,6 +287,38 @@ async def fetch_entities(
     return out
 
 
+async def search_entity(name: str, *, timeout_s: float = 30.0) -> str | None:
+    """Resolve a name to its best-match Wikidata Q-id (wbsearchentities). Keyless;
+    the entry point for 'aim Osiris at <name>'."""
+    async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
+        r = await client.get(
+            _API,
+            params={
+                "action": "wbsearchentities", "search": name,
+                "language": "en", "format": "json", "limit": 1,
+            },
+            headers=_UA,
+        )
+        r.raise_for_status()
+        hits = r.json().get("search") or []
+    return str(hits[0]["id"]) if hits else None
+
+
+async def aim(actions: Actions, name: str, *, case_id: uuid.UUID | None = None) -> dict[str, Any]:
+    """Point Osiris at a named entity: resolve it on Wikidata, ingest the entity with
+    its relationship network + official social accounts, then name the stubs the
+    relationships created. Returns the resolved qid + ingest counts (the crawl/
+    web-presence half runs through the case cascade)."""
+    qid = await search_entity(name)
+    if qid is None:
+        return {"qid": None, "matched": None}
+    ents = await fetch_entities([qid])
+    counts = await ingest_entities(actions, ents, case_id=case_id, relationships=True)
+    enriched = await enrich_stubs(actions, relationships=False)
+    label = _label(ents.get(qid, {}))
+    return {"qid": qid, "matched": label, "ingest": counts, "stub_enrich": enriched}
+
+
 async def select_stub_qids(pool: Any, *, limit: int | None = None) -> list[str]:
     """Q-ids already in the graph with no name — the un-enriched stubs."""
     q = (
@@ -274,7 +344,8 @@ async def enrich_stubs(
     """Select the graph's un-named Wikidata stubs and enrich them in place."""
     qids = await select_stub_qids(actions.pool, limit=limit)
     if not qids:
-        return {"selected": 0, "enriched": 0, "properties": 0, "links": 0, "endpoints": 0}
+        return {"selected": 0, "enriched": 0, "properties": 0,
+                "accounts": 0, "links": 0, "endpoints": 0}
     entities = await fetch_entities(qids)
     counts = await ingest_entities(
         actions, entities, relationships=relationships, observed_at=observed_at
@@ -298,11 +369,14 @@ def main() -> None:
             if argv and argv[0] == "enrich":
                 limit = int(argv[1]) if len(argv) > 1 else None
                 counts = await enrich_stubs(actions, limit=limit, relationships=rel)
+            elif argv and argv[0] == "aim":
+                counts = await aim(actions, " ".join(argv[1:]))
             elif argv and all(_looks_like_qid(a) for a in argv):
                 ents = await fetch_entities(argv)
                 counts = await ingest_entities(actions, ents, relationships=rel)
             else:
                 print("usage: python -m src.ingest.wikidata enrich [limit] [--rel]")
+                print("       python -m src.ingest.wikidata aim <name…>")
                 print("       python -m src.ingest.wikidata Q42 Q9061 [--rel]")
                 return
             print(f"ingested: {counts}")
