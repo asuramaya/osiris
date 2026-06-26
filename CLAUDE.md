@@ -348,3 +348,32 @@ and `docker run` do too.
     (2026.06.24, 1989-1990); now requires '+' or >=10 digits. RESIDUAL noise: 10-15-digit IDs
     still slip as phones; internal-URL spread (~41/entity) still unpruned. Yield harness:
     `scratchpad/yield.py` (uses the real urlfetch connector + webpage parser).
+- **AIMED AT NEURALINK — official social accounts + `aim <name>` (DONE, 2026-06-26, b237594):**
+  pointed the engine at a real non-toy subject. The federated half worked great
+  (Neuralink Q29043471 → founded_by Elon Musk + Jared Birchall, named); the base→crawl half
+  came up **empty** — neuralink.com is a minimal marketing page (200 OK, NOT antibot) with zero
+  machine-readable identifiers. FINDING: base→crawl yield is inverse to company sophistication —
+  SMBs (voltara.example) leak contact emails in HTML, big tech doesn't. The signal lives in Wikidata's
+  curated social-account claims, which the loader ignored. Built:
+  - `ingest_entities` mints official Account objects from social claims (P2002 twitter / P2003
+    instagram / P2013 facebook / P2397 youtube / P4264 linkedin / P3185 vk), has_account @
+    AUTHORITATIVE_API, always-on (`_SOCIAL` map).
+  - `search_entity(name)` (wbsearchentities) + `aim()`: name → qid → ingest(entity + relationships
+    + social) + stub-enrich. CLI `python -m src.ingest.wikidata aim <name>`.
+  - Live `aim "Neuralink"` → entity + founders + twitter:neuralink / facebook:neuralinkcorporation
+    / youtube / linkedin — a real keyless intelligence picture where the homepage crawl yielded
+    nothing. Renders via the existing `/objects/{id}/dossier`.
+  - NEXT: founder pivot (aim at Musk → his companies; does the network cross into the EDGAR
+    public-company base?). Cross-base org resolution is UNWIRED (screening is footprint×
+    opensanctions only). Demo DB now has Neuralink + a neuralink_* case.
+- **CROSS-BASE ORG RESOLUTION — fuse the bases (DONE, 2026-06-26, 67b411b):** the founder pivot
+  paid off. Aiming at Musk pulls Tesla (Q478214) from Wikidata; EDGAR has "Tesla, Inc." (a cik).
+  The earlier "OpenSanctions × EDGAR overlap = 0" was a NORMALIZATION failure — names differ only
+  by legal form. `normalize_org_name()` strips punctuation + legal-form suffix tokens
+  (inc/corp/llc/sa/ooo/pjsc/…); `find_cross_base_candidates()` buckets Organizations by that key
+  and queues a 0.6 review candidate for any two distinct objects with DIFFERENT provenance
+  (cross-base, not a within-base dup). Wired into `converge_identities`. Never auto-merges (#3).
+  Live: `aim "Tesla, Inc."` → Wikidata Q478214 → resolves to EDGAR cik:0001318605 — one clean
+  candidate, no flood. The open bases now fuse on shared entities. Driver: `scratchpad/
+  crossbase.py`. NEXT: sharpen with shared-identifier corroboration (website/LEI) to lift 0.6→0.9;
+  a `POST /entities/aim?name=` endpoint + UI so "aim at X" is a console action, not a CLI.
