@@ -15,12 +15,15 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from src.ontology.canonicalize import canonicalize
 from src.parsers.accounts import profile_account
 from src.parsers.base import EvidenceClass, InputObject, ParseResult, TargetRef
 from src.parsers.evidence import emit, link
+from src.parsers.snippets import extract_selectors
+
+_SKIP_TEXT = {"script", "style", "noscript"}
 
 
 class _Extractor(HTMLParser):
@@ -29,6 +32,8 @@ class _Extractor(HTMLParser):
         self.anchors: list[tuple[str, str]] = []  # (href, rel-tokens)
         self.title: str | None = None
         self._in_title = False
+        self.text_parts: list[str] = []  # visible page text (for plain-text mining)
+        self._skip_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         d = {k: (v or "") for k, v in attrs}
@@ -36,14 +41,20 @@ class _Extractor(HTMLParser):
             self.anchors.append((d["href"], d.get("rel", "").lower()))
         elif tag == "title":
             self._in_title = True
+        elif tag in _SKIP_TEXT:
+            self._skip_depth += 1
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "title":
             self._in_title = False
+        elif tag in _SKIP_TEXT and self._skip_depth > 0:
+            self._skip_depth -= 1
 
     def handle_data(self, data: str) -> None:
         if self._in_title and self.title is None and data.strip():
             self.title = data.strip()[:200]
+        if self._skip_depth == 0 and data.strip():
+            self.text_parts.append(data)
 
 
 def _account_ref(url: str) -> str | None:
@@ -98,4 +109,18 @@ def parse_webpage(response: dict[str, Any], input_object: InputObject) -> ParseR
             # weaker identity signal — DIRECT_OBSERVATION, not an anchor.
             add("Account", acct, "is_profile", EvidenceClass.DIRECT_OBSERVATION)
         # non-profile, non-rel=me outbound links are not emitted (too noisy)
+
+    # Plain-text contact identifiers (NOT in mailto:/tel: anchors) — the high-value
+    # signal a registered record often lacks. We mine ONLY Email and Phone from the
+    # visible text (not URL/handle: that is the breadth noise the crawl already
+    # fought). An email on the page's OWN domain is the entity's contact —
+    # DIRECT_OBSERVATION; an off-domain email merely co-occurs.
+    page_host = (urlparse(base).netloc.split("@")[-1].split(":")[0] or "").lower()
+    for type_, canon in extract_selectors(" ".join(p.text_parts)):
+        if type_ == "Email":
+            on_domain = page_host != "" and canon.endswith("@" + page_host)
+            add("Email", canon, "has_email",
+                EvidenceClass.DIRECT_OBSERVATION if on_domain else EvidenceClass.CO_OCCURRENCE)
+        elif type_ == "Phone":
+            add("Phone", canon, "co_occurs", EvidenceClass.CO_OCCURRENCE)
     return result
