@@ -377,3 +377,19 @@ and `docker run` do too.
   candidate, no flood. The open bases now fuse on shared entities. Driver: `scratchpad/
   crossbase.py`. NEXT: sharpen with shared-identifier corroboration (website/LEI) to lift 0.6→0.9;
   a `POST /entities/aim?name=` endpoint + UI so "aim at X" is a console action, not a CLI.
+- **SEC FORM D — the buried private-placement layer (DONE, 2026-06-26, ebd8a7c):** the operator
+  asked to sharpen until the tool surfaces something NON-PUBLIC and surprising. Found the vein:
+  private companies file **Form D** when raising capital (officers, amount raised, investor count,
+  address), and a swarm of feeder **SPVs** file their own to repackage access — public but
+  aggregated nowhere. The company_tickers loader only saw PUBLIC companies, so this was invisible.
+  `src/ingest/edgar_formd.py` (keyless): EDGAR full-text search (efts.sec.gov) -> Form D filings ->
+  each primary_doc.xml -> Organization (canonical cik:NNN, same scheme as edgar.py -> cross-base
+  fuses to Wikidata) + offering facts + Person officers/directors by role. `aim_form_d(name)`;
+  `python -m src.ingest.edgar_formd <name>`. Live on Neuralink: 14 filings -> Neuralink Corp.
+  ($280,274,981 raised / 24 investors / $14,995 min / officers Elon Musk + Jared Birchall /
+  Fremont CA, NOT the public SF HQ) + the feeder swarm (MAV Neuralink LP = a Jakarta fund, $1.3M
+  from 107 investors at $1k min; DPV/VUVP/CGF2021/MegaCap series). Cross-base resolved
+  cik:0001708503 <-> Q29043471. The surprise: a global retail secondary-market for a company most
+  think is closed. THIS is the engine's edge — aggregating buried public filings nobody connects.
+  Driver: `scratchpad/neuralink_formd.py`. NEXT: link SPVs -> core company (raises_for); pull SPV
+  managers as a people network; full-text search beyond Form D (S-1, 13D/G ownership).
