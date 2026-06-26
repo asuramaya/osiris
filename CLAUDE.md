@@ -504,9 +504,6 @@ and `docker run` do too.
   - Bug caught by the fusion test: the fused node carries multi-source `address` assertions
     (etherscan + opensanctions) → scalar address subquery needs LIMIT 1 (the kernel's multi-source
     hazard surfacing in a read-model). MCP surface now 16 tools.
-  - Bug caught by the fusion test: the fused node carries multi-source `address` assertions
-    (etherscan + opensanctions) → scalar address subquery needs LIMIT 1 (the kernel's multi-source
-    hazard surfacing in a read-model). MCP surface now 16 tools.
 - **BLOCKCHAIN LIVE-PROOF — dossier section + OFAC re-ingest + real trace (DONE, 2026-06-26,
   289abd3/c061e1d/db952c3):** wired crypto into the deliverable and proved the whole loop
   live on real OFAC wallets. 191 tests green, ruff + mypy --strict clean.
@@ -536,3 +533,39 @@ and `docker run` do too.
     env-shadowing: operator's shell profile exports a STALE key (16NGD…) that overrides .env's valid
     one (MGY4…) — runs need the key inline until the profile export is fixed. NEXT: Solana; price
     enrichment for value-ranked counterparties; REST/UI parity.
+- **NEURALINK THREAD — novelty check + 3 sharpening tools (DONE, 2026-06-26,
+  53a93a1/abb09da/7eb230b):** returned to the product thread; web-checked whether Osiris's
+  Neuralink findings are already public, then built 3 tools in order. 194 tests green, ruff +
+  mypy --strict clean.
+  - **"Is the story already out?" (web)** — VERDICT: the real stories are all public (SEC probe
+    reopened re: misleading investors on implant safety; USDA animal-welfare probe; $650M Series E;
+    the SPV secondary-market phenomenon via EquityZen/Hiive/Forge). What Osiris has that's NOT
+    written up: the ENUMERATED named roster of 13 feeder SPVs + investor counts + their GPs. But
+    honestly that's plumbing, not scandal. Chased + KILLED two foreign-GP leads: Brilliant Phoenix
+    (BP Neuralink, Chinese-heritage GPs Wu+Chen) = a VANCOUVER EMD, not China; MyAsiaVC (Sajid
+    Rahman, 107-investor Jakarta SPV) = legit emerging-markets VC. The discipline (verify before
+    publishing) working — handed no unverified China-scare.
+  - **(1) coinvest platform filter** (`coinvest._PLATFORM_RE` + `platform_degree=12`): the
+    co-investment "cluster" was mostly fund-admin-platform artifact — Brett Sagan/Sydecar "ties"
+    Neuralink to Anthropic AND to dentists (Dentologie/MoldCo). Filter platforms by name + by
+    DEGREE (an operator wired into >12 distinct cos is a serial-admin, catches platform signatories
+    no name list would). Live: Neuralink ties collapse ~15→3; the survivor is the REAL signal —
+    Sajid Rahman/MyAsiaVC bridges Neuralink↔Groq↔Worldcoin. The prior "Anthropic is the hub" claim
+    was Sydecar artifact, correctly gone.
+  - **(2) dossier Principals section + Celsius fraud proof** (`dossier_report` principals): the
+    dossier lacked a "who runs it" section (1st question in a fraud dossier). Added — people linked
+    (officer/director/founder/manager/agent) grouped one-line-per-person with merged roles, merge-
+    aware. Proven on a target where financing IS the story (contrast to Neuralink=plumbing): live
+    aim_form_d+ingest_litigation on Celsius/Mashinsky → Form D officers ARE the charged principals
+    (Mashinsky, Daniel Leon, Yaron Shalem/Hogeg-case, the CFOs); litigation = the collapse (SDNY
+    bankruptcy + 370-fraud clawback suits). Residue: Person name variants ("Alex" vs "Alexander"
+    Mashinsky) render as separate principals (ruling #3, no auto-merge); display dedup deferred.
+  - **(3) `resolution.screen_network`** — the un-chased thread: does any money-mover behind Neuralink
+    trace to a watchlist? Form D names no LPs, but names the SPV officers/GPs → NETWORK screen.
+    Gathers principals + feeder SPVs + SPV operators, matches each vs watchlist (shared id 0.9 /
+    alias-aware name 0.5) with the connecting path; read-only, never asserts (#3), merge-aware.
+    Wired to dossier (⚑ section, hits-only), MCP (`screen_financing_network` → 17 tools), sources.
+    Live: Neuralink's 29-member network AND Celsius BOTH clean vs the ingested OFAC SDN/PEP set —
+    honest null; fires on a planted dirty operator (hermetic test). NB "clean"=vs what's ingested,
+    not all watchlists globally (fuller OpenSanctions PEP ingest widens it). NEXT: Person display-
+    dedup; broader PEP ingest; aim the playbook at an active-fraud target where the network lights up.
