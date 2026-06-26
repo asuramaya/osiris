@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     # Single static operator identity — fills the actor role CF Access would have provided.
     osiris_actor: str = "analyst:operator"
     osiris_artifact_dir: str = "./artifacts"
+    # On-chain ingest. Etherscan v2 is the one base where "keyless" bends: the API
+    # rejects unkeyed calls, but a free key lifts the whole limit. Empty => the ETH
+    # connector degrades gracefully (returns an error dict, never crashes a run).
+    etherscan_api_key: str = ""
 
 
 def get_settings() -> Settings:

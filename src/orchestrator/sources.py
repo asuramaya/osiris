@@ -60,6 +60,11 @@ _COLLECT: tuple[Capability, ...] = (
         "lawsuits & enforcement — dockets, parties, judges; 'sued or charged?'",
         "ingest_litigation",
     ),
+    Capability(
+        "etherscan", "On-chain trace (Etherscan)", "collect", ("CryptoAddress",),
+        "an EVM address's top counterparties, balance, token flow, contract identity",
+        "trace_wallet", keyless=False,  # Etherscan v2 needs a free key
+    ),
 )
 
 # ANALYZE — read-model lenses over what's already in the graph (no new collection).

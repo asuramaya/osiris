@@ -25,6 +25,7 @@ from src.dissemination.dossier_report import build_dossier_report
 from src.ingest.clinicaltrials import aim_trials, expand_facility
 from src.ingest.courtlistener import aim_litigation
 from src.ingest.edgar_formd import aim_form_d, expand_filings
+from src.ingest.etherscan import aim_address
 from src.ingest.wikidata import aim as wikidata_aim
 from src.ontology.resolution import (
     consolidate_companies,
@@ -136,6 +137,14 @@ async def ingest_litigation(name: str, opinions: bool = False) -> dict[str, int]
     entity — dockets, parties, judges. opinions=True searches case law instead of
     RECAP dockets. Answers 'has this entity been sued or charged?'."""
     return await aim_litigation(Actions(await _pool_get()), name, kind="o" if opinions else "r")
+
+
+@mcp.tool()
+async def trace_wallet(address: str, chain_id: int = 1, top: int = 25) -> dict[str, Any]:
+    """Trace an EVM crypto address on-chain (Etherscan): its top counterparties, native
+    balance, token flow, and contract/token identity — graded as ledger ground truth.
+    chain_id 1=Ethereum, 8453=Base, 42161=Arbitrum. Needs ETHERSCAN_API_KEY (free)."""
+    return await aim_address(Actions(await _pool_get()), address, chain_id=chain_id, top=top)
 
 
 @mcp.tool()
