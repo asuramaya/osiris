@@ -309,3 +309,32 @@ and `docker run` do too.
     growth); more open bases (GLEIF/OpenAlex/USAspending — same `src/ingest/` pattern);
     name+DOB screening escalation now that watchlist carries birthDate; fold decisions into
     DESIGN.md; finish deferred archival (leases/federation/cobrowse/osint4all).
+- **PROVE-THE-DIFFERENTIATOR — base→crawl bridge (DONE, 2026-06-26):** picked option (C) "prove
+  the crawl×base bridge once" as a forcing function. 2 commits (aa201f6, 9cca6b2), 154 tests
+  green, ruff + mypy --strict clean. The empirical investigation reshaped the goal:
+  - **Original (C) "crawl SURFACES a base entity" is structurally dead.** No org-from-domain
+    collector exists, and the crawl's population (person footprints) doesn't intersect the bases'
+    (PEPs/companies). "Fuse the bases" is also dead in this demo — OpenSanctions × EDGAR name
+    overlap = **0** (non-US sanctioned vs US public; different populations).
+  - **But the bridge fires base→crawl, and there's live data:** 113 demo watchlist entities carry
+    a crawlable `website`. Seed THOSE → keyless crawl → fuse the open-web footprint onto the
+    registered record. That direction has shared entity space.
+  - **The seam** (`src/orchestrator/enrich.py` `seed_web_presence`): mints linked URL+Domain
+    objects from a federated entity's website/domain props, one hop past it, stamped
+    AUTHORITATIVE_API so the anchor-pivot frontier lets the cascade crawl them.
+  - **Live caught the same lesson as the reset, in miniature — yield is an EXTRACTION problem,
+    not a crawl one.** First run on ELECTRA PRO LLC (sanctioned; voltara.example) confirmed the name
+    (page_title) but harvested 0 emails — because the webpage parser only read `mailto:`, while
+    `contact@voltara.example` sat in plain `<span>` text. Fix: `parse_webpage` now mines visible text for
+    Email/Phone ONLY (not URL/handle — the breadth noise) via the existing snippet miner;
+    own-domain email = DIRECT_OBSERVATION, off-domain = CO_OCCURRENCE. Re-run **harvested
+    contact@voltara.example + a contact phone** onto the sanctioned entity — a new identifier the
+    OpenSanctions record lacked. The differentiator delivers, keyless, with provenance.
+  - **Honest limits:** ~1/3 of the 113 are antibot-walled (clp.com.hk → 403); the crawl still
+    spreads ~41 internal URLs (url_fetch/url_accounts following links) — bounded by hop budget,
+    low-value, unpruned. Demo DB (PG :5439) now also has a `bridge_*` case + voltara.example crawl. NB:
+    no Redis on the box by default — `docker run -d --rm --name osiris-bridge-redis -p 6379:6379
+    redis:7` for live cascade runs.
+  - **NEXT for this thread:** prune internal-URL spread (tighten url_fetch/url_accounts to
+    profile-shaped only); a `POST /objects/{id}/enrich-web` endpoint + UI button (the function
+    exists, not yet wired to the API/UI); run the bridge across all 113 to measure real yield.
