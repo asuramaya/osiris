@@ -46,6 +46,9 @@ _API = "https://api.etherscan.io/v2/api"
 _WEI = 10**18
 # Bounded window: most-recent N rows per feed keeps an active whale tractable.
 _PAGE = 1000
+# The zero address is mint/burn/creation, not a counterparty; it also collects the
+# scam-airdrop spam tokens that pollute any active address's token feed.
+_BURN = frozenset({"0x0000000000000000000000000000000000000000"})
 
 
 def _addr_canonical(chain_id: int, address: str) -> str:
@@ -60,11 +63,16 @@ class Counterparty:
 
     address: str
     tx_count: int = 0
-    wei_in: int = 0          # value flowing subject <- counterparty
-    wei_out: int = 0         # value flowing subject -> counterparty
-    tokens: set[str] = field(default_factory=set)
+    wei_in: int = 0          # native ETH flowing subject <- counterparty
+    wei_out: int = 0         # native ETH flowing subject -> counterparty
+    token_in: dict[str, float] = field(default_factory=dict)   # {symbol: amount} <-
+    token_out: dict[str, float] = field(default_factory=dict)  # {symbol: amount} ->
     first_ts: int | None = None
     last_ts: int | None = None
+
+    @property
+    def tokens(self) -> list[str]:
+        return sorted(set(self.token_in) | set(self.token_out))
 
     def observe(self, ts: int) -> None:
         self.tx_count += 1
@@ -93,8 +101,8 @@ def aggregate_counterparties(
     for t in txs:
         frm, to = (t.get("from") or "").lower(), (t.get("to") or "").lower()
         other = to if frm == me else frm
-        if not other or other == me:
-            continue  # contract creation / self-transfer
+        if not other or other == me or other in _BURN:
+            continue  # contract creation / self-transfer / mint-burn
         c = cp(other)
         try:
             ts = int(t.get("timeStamp") or 0)
@@ -110,16 +118,21 @@ def aggregate_counterparties(
     for t in token_txs:
         frm, to = (t.get("from") or "").lower(), (t.get("to") or "").lower()
         other = to if frm == me else frm
-        if not other or other == me:
+        if not other or other == me or other in _BURN:
             continue
         c = cp(other)
         try:
             ts = int(t.get("timeStamp") or 0)
+            dec = int(t.get("tokenDecimal") or 0)
+            raw = int(t.get("value") or 0)
         except ValueError:
-            ts = 0
+            ts, dec, raw = 0, 0, 0
         c.observe(ts)
-        if sym := (t.get("tokenSymbol") or "").strip():
-            c.tokens.add(sym)
+        sym = (t.get("tokenSymbol") or "").strip()
+        if sym:
+            amt = raw / (10**dec) if dec else float(raw)
+            book_side = c.token_out if frm == me else c.token_in
+            book_side[sym] = round(book_side.get(sym, 0.0) + amt, 6)
 
     ranked = sorted(book.values(), key=lambda c: (c.tx_count, c.wei_in + c.wei_out), reverse=True)
     return ranked[:top]
@@ -165,7 +178,10 @@ async def _call(
     result = data.get("result")
     if "No transactions found" in msg or "No records found" in msg or result == []:
         return []
-    raise EtherscanError(f"{module}.{action}: {msg or result}")
+    # `message` is a generic "NOTOK"; the actionable detail (bad key, rate limit) is in
+    # `result` — surface it.
+    detail = result if isinstance(result, str) else ""
+    raise EtherscanError(f"{module}.{action}: {f'{msg} — {detail}'.strip(' —') or 'unknown error'}")
 
 
 async def fetch_address(
@@ -266,7 +282,9 @@ async def ingest_address(
             "tx_count": c.tx_count,
             "eth_in": round(c.wei_in / _WEI, 6),
             "eth_out": round(c.wei_out / _WEI, 6),
-            "tokens": sorted(c.tokens),
+            "token_in": c.token_in,
+            "token_out": c.token_out,
+            "tokens": c.tokens,
             "first_seen": c.first_ts,
             "last_seen": c.last_ts,
         }

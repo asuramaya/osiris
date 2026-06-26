@@ -29,8 +29,10 @@ _TXS = [
     {"from": ME, "to": "", "value": "0", "timeStamp": "1700000500"},
 ]
 _TOKEN_TXS = [
-    {"from": ME, "to": EXCH, "tokenSymbol": "USDC", "timeStamp": "1700000600"},
+    {"from": ME, "to": EXCH, "tokenSymbol": "USDC", "tokenDecimal": "6",
+     "value": str(1500 * 10**6), "timeStamp": "1700000600"},
 ]
+BURN = "0x0000000000000000000000000000000000000000"
 
 
 def test_aggregate_ranks_by_interaction_and_tracks_flow() -> None:
@@ -41,7 +43,8 @@ def test_aggregate_ranks_by_interaction_and_tracks_flow() -> None:
     assert exch.tx_count == 4  # 3 normal + 1 token
     assert exch.wei_out == 3 * 10**18  # subject sent 2 + 1
     assert exch.wei_in == 5 * 10**17   # subject received 0.5
-    assert exch.tokens == {"USDC"}
+    assert exch.tokens == ["USDC"]
+    assert exch.token_out == {"USDC": 1500.0}  # decimal-adjusted token flow captured
 
     victim = cps[1]
     assert victim.tx_count == 1
@@ -51,6 +54,15 @@ def test_aggregate_ranks_by_interaction_and_tracks_flow() -> None:
 
 def test_top_k_caps_counterparties() -> None:
     assert len(aggregate_counterparties(ME, _TXS, _TOKEN_TXS, top=1)) == 1
+
+
+def test_burn_address_is_not_a_counterparty() -> None:
+    txs = [
+        {"from": ME, "to": BURN, "value": "0", "timeStamp": "1700000000"},
+        {"from": ME, "to": EXCH, "value": str(10**18), "timeStamp": "1700000100"},
+    ]
+    cps = aggregate_counterparties(ME, txs, [], top=10)
+    assert [c.address for c in cps] == [EXCH]  # mint/burn filtered out
 
 
 def test_parse_source_distinguishes_contract_from_eoa() -> None:
@@ -94,6 +106,7 @@ async def test_ingest_materializes_subject_and_counterparties(actions: Actions) 
     assert row["evidence_class"] == "authoritative_api"
     assert row["properties"]["tx_count"] == 4
     assert row["properties"]["eth_out"] == 3.0
+    assert row["properties"]["token_out"] == {"USDC": 1500.0}
     assert "USDC" in row["properties"]["tokens"]
 
 
