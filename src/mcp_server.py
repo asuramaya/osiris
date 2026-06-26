@@ -22,6 +22,7 @@ from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.db.pool import create_pool
 from src.ingest.clinicaltrials import aim_trials, expand_facility
+from src.ingest.courtlistener import aim_litigation
 from src.ingest.edgar_formd import aim_form_d, expand_filings
 from src.ingest.wikidata import aim as wikidata_aim
 from src.ontology.resolution import (
@@ -126,6 +127,14 @@ async def ingest_trials(sponsor: str) -> dict[str, int]:
     """ClinicalTrials.gov: a sponsor's registered human trials — status, sites
     (facilities), named investigators."""
     return await aim_trials(Actions(await _pool_get()), sponsor)
+
+
+@mcp.tool()
+async def ingest_litigation(name: str, opinions: bool = False) -> dict[str, int]:
+    """Court records (CourtListener): lawsuits & enforcement actions naming this
+    entity — dockets, parties, judges. opinions=True searches case law instead of
+    RECAP dockets. Answers 'has this entity been sued or charged?'."""
+    return await aim_litigation(Actions(await _pool_get()), name, kind="o" if opinions else "r")
 
 
 @mcp.tool()

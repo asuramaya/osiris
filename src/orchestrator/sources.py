@@ -55,6 +55,11 @@ _COLLECT: tuple[Capability, ...] = (
         ("Username", "Email", "Account", "Person", "Domain", "URL"),
         "GitHub/social/web identifiers via the cascade", "expand_case",
     ),
+    Capability(
+        "litigation", "Court records (CourtListener)", "collect", ("Organization", "Person"),
+        "lawsuits & enforcement — dockets, parties, judges; 'sued or charged?'",
+        "ingest_litigation",
+    ),
 )
 
 # ANALYZE — read-model lenses over what's already in the graph (no new collection).
