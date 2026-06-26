@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 import uuid
 from collections.abc import Iterable, Iterator
@@ -70,6 +71,19 @@ _EDGE_TYPES: dict[str, dict[str, str]] = {
 # the strong identifiers the footprint crawl can collide with.
 _PROPS = ("name", "country", "topics", "birthDate", "nationality", "position",
           "email", "website", "phone")
+
+_EVM_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+
+
+def _wallet_canonical(addr: str, currency: str | None) -> str:
+    """Canonical that ALIGNS with the on-chain tracer (src/ingest/etherscan): an EVM
+    address becomes `eth:1:<lower>` regardless of the OFAC currency label (ERC-20
+    tokens share Ethereum's address space), so an OFAC-listed wallet and a later
+    Etherscan trace of the same address dedupe into ONE object — for free."""
+    a = addr.strip()
+    if _EVM_RE.match(a):
+        return f"eth:1:{a.lower()}"
+    return f"wallet:{(currency or 'crypto').strip().lower()}:{a}"
 
 
 def parse_jsonl(text: str) -> Iterator[dict[str, Any]]:
@@ -151,6 +165,40 @@ async def ingest_ftm(
                 oid, "alias", aliases, _SOURCE, ts, _CONF, case_id=case_id, evidence_class=_EC
             )
             n_prop += 1
+
+    # pass 1b: crypto wallets -> CryptoAddress nodes keyed on the tracer-aligned
+    # canonical, so an OFAC wallet fuses with an on-chain trace of the same address.
+    # The FtM `holder` property becomes a controlled_by edge to the sanctioned party.
+    for e in ents:
+        if (e.get("schema") or "") != "CryptoWallet":
+            continue
+        fid = e.get("id")
+        props = e.get("properties") or {}
+        keys = props.get("publicKey") or []
+        if not fid or not keys:
+            continue
+        addr = str(keys[0]).strip()
+        currency = (props.get("currency") or [None])[0]
+        oid = await actions.create_or_find_object(
+            "CryptoAddress", _wallet_canonical(addr, currency), _SOURCE, case_id
+        )
+        ids[fid] = oid
+        n_obj += 1
+        stored = addr.lower() if _EVM_RE.match(addr) else addr
+        for name, val in (("address", stored), ("currency", currency), ("sanctioned", True)):
+            if val not in (None, ""):
+                await actions.assert_property(
+                    oid, name, val, _SOURCE, ts, _CONF, case_id=case_id, evidence_class=_EC
+                )
+                n_prop += 1
+        for holder_fid in (props.get("holder") or []):
+            h = await resolve(holder_fid, "Person")
+            if h is not None:
+                await actions.create_link(
+                    oid, h, "controlled_by", _SOURCE, ts, _CONF,
+                    case_id=case_id, evidence_class=_EC,
+                )
+                n_link += 1
 
     # pass 2: relationship-entities -> links; absent endpoints become typed stubs
     for e in ents:

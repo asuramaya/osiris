@@ -25,7 +25,7 @@ from src.dissemination.dossier_report import build_dossier_report
 from src.ingest.clinicaltrials import aim_trials, expand_facility
 from src.ingest.courtlistener import aim_litigation
 from src.ingest.edgar_formd import aim_form_d, expand_filings
-from src.ingest.etherscan import aim_address
+from src.ingest.etherscan import aim_address, screen_against_sanctions
 from src.ingest.wikidata import aim as wikidata_aim
 from src.ontology.resolution import (
     consolidate_companies,
@@ -145,6 +145,25 @@ async def trace_wallet(address: str, chain_id: int = 1, top: int = 25) -> dict[s
     balance, token flow, and contract/token identity — graded as ledger ground truth.
     chain_id 1=Ethereum, 8453=Base, 42161=Arbitrum. Needs ETHERSCAN_API_KEY (free)."""
     return await aim_address(Actions(await _pool_get()), address, chain_id=chain_id, top=top)
+
+
+@mcp.tool()
+async def screen_wallet(address: str, chain_id: int = 1) -> dict[str, Any]:
+    """Screen a traced EVM address against the federated sanctions base: is the
+    address — or any of its counterparties — an OFAC-listed wallet? Returns the
+    sanctioned hits and the named holder behind each. Run trace_wallet + ingest
+    OpenSanctions first; fusion is automatic (shared on-chain canonical)."""
+    pool = await _pool_get()
+    canon = f"eth:{chain_id}:{address.strip().lower()}"
+    oid = await pool.fetchval(
+        "SELECT id FROM objects WHERE type='CryptoAddress' AND canonical=$1 AND status='active'",
+        canon,
+    )
+    if oid is None:
+        oid = await _resolve(pool, address)
+    if oid is None:
+        return {"error": f"no traced address {address!r} — run trace_wallet first"}
+    return await screen_against_sanctions(pool, uuid.UUID(str(oid)))
 
 
 @mcp.tool()

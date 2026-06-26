@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+import asyncpg
 import httpx
 
 from src.actions.core import Actions
@@ -295,6 +296,63 @@ async def aim_address(
     return await ingest_address(
         actions, address, bundle, chain_id=chain_id, top=top, case_id=case_id
     )
+
+
+# --- screen against the federated sanctions base ----------------------------
+
+async def screen_against_sanctions(
+    pool: asyncpg.Pool, address_id: uuid.UUID
+) -> dict[str, Any]:
+    """The crawl×base edge for crypto: flag the traced address, or any counterparty,
+    that carries an OpenSanctions provenance — i.e. an OFAC-listed wallet whose
+    canonical fused with this trace. Answers 'did my subject move money through a
+    sanctioned wallet?'.
+
+    Fusion here is by CANONICAL alignment (an OFAC wallet and the trace create the
+    SAME object), not by a merge — so a direct per-node provenance check is exact;
+    no merged_into expansion is needed for this path."""
+    rows = await pool.fetch(
+        "WITH nodes AS ("
+        "  SELECT $1::uuid AS id, true AS is_subject "
+        "  UNION "
+        "  SELECT l.to_id, false FROM links l "
+        "  WHERE l.from_id=$1 AND l.type='transacted_with'"
+        ") "
+        "SELECT DISTINCT n.id, n.is_subject, o.canonical, "
+        "  (SELECT value #>> '{}' FROM current_assertions "
+        "   WHERE object_id=n.id AND name='address' "
+        "   ORDER BY confidence DESC LIMIT 1) AS addr, "
+        "  EXISTS (SELECT 1 FROM current_assertions s "
+        "          WHERE s.object_id=n.id AND s.source_id='opensanctions') AS sanctioned "
+        "FROM nodes n JOIN objects o ON o.id=n.id AND o.status='active'",
+        address_id,
+    )
+    hits: dict[str, dict[str, Any]] = {}
+    subject_sanctioned = False
+    for r in rows:
+        if not r["sanctioned"]:
+            continue
+        if r["is_subject"]:
+            subject_sanctioned = True
+        holders = await pool.fetch(
+            "SELECT (SELECT value #>> '{}' FROM current_assertions "
+            "        WHERE object_id=l.to_id AND name='name' LIMIT 1) AS nm "
+            "FROM links l WHERE l.from_id=$1 AND l.type='controlled_by'",
+            r["id"],
+        )
+        key = str(r["id"])
+        prev = hits.get(key)
+        hits[key] = {
+            "address": r["addr"] or r["canonical"],
+            "canonical": r["canonical"],
+            "is_subject": (prev["is_subject"] if prev else False) or r["is_subject"],
+            "holders": [h["nm"] for h in holders if h["nm"]],
+        }
+    return {
+        "address_id": str(address_id),
+        "subject_sanctioned": subject_sanctioned,
+        "sanctioned_hits": list(hits.values()),
+    }
 
 
 def main() -> None:

@@ -93,6 +93,11 @@ _ANALYZE: tuple[Capability, ...] = (
         "name/identifier matches against the ingested sanctions/PEP base",
         "find_sanctions_candidates",
     ),
+    Capability(
+        "sanctioned_wallet", "Sanctioned-wallet screen", "analyze", ("CryptoAddress",),
+        "is this address, or any counterparty, an OFAC-listed wallet? + the holder",
+        "screen_wallet",
+    ),
 )
 
 REGISTRY: tuple[Capability, ...] = _COLLECT + _ANALYZE
