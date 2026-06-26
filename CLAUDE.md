@@ -458,3 +458,26 @@ and `docker run` do too.
     (discrepancy/coinvest/funnel/suggest-sources — dossier already is) so the HUMAN front-end can
     drive everything the MCP can; make remaining read-models merge-aware; map more EDGAR country
     codes (C7 unmapped). THEN run the OpenAI/Anthropic playbook THROUGH the tool (the real test).
+- **PERSONA PIVOT + COURT RECORDS + DOSSIER OUTPUT (DONE, 2026-06-26, b413ef8/7cafd96):** named
+  the target USER — the independent follow-the-money investigator (Coffeezilla / dossier-builder).
+  This reframes everything: "buried-but-public≠secret" (a ceiling I flagged) is their ENTIRE JOB;
+  the provenance kernel (append-only/evidence-graded/hashed) I called plumbing is the #1 feature
+  (they get sued — every claim needs a litigation-defensible receipt); keyless open-base federation
+  IS their toolkit (no subpoena/LexisNexis). Competitor = Maltego+spreadsheet, not Palantir. See
+  [[osiris-product-persona]]. Build order for the persona: court records → dossier output →
+  blockchain ([[osiris-blockchain-layer]], deferred; reuse asuramaya/remix-etherscan-mcp +
+  asuramaya/exciton). Built #1 and #2:
+  - **Court records** (`src/ingest/courtlistener.py`): keyless CourtListener v4 (RECAP dockets +
+    opinions) by party name → CourtCase nodes (court/dates/docket/judge/parties/attorneys/firms),
+    linked to subject DIRECT_OBSERVATION when a NAMED PARTY, CO_OCCURRENCE when merely mentioned —
+    the grading IS the precision tool (full-text 'Neuralink' returns 40, only ROGERS v. NEURALINK /
+    Bernard v. Neuralink are party). MCP tool `ingest_litigation`; registry `litigation`.
+  - **Dossier output** (`src/dissemination/dossier_report.py`): the deliverable. One call →
+    provenance-annotated Markdown (identity / Form-D financing / litigation / discrepancy /
+    co-investment / sources), every claim tagged source·how-obtained·date. Merge-aware, dedups.
+    MCP tool `dossier_report(name)`. Proven live on Neuralink end-to-end via MCP.
+  - MCP surface now 14 tools (added ingest_litigation, dossier_report). 179 tests green.
+  - KNOWN NOISE in the deliverable (data-quality, all speculative-graded): co-investment shows SPV-
+    name variants (Anthropic Magnitude/Secondary); litigation party-match is loose substring (some
+    false 'named party'); C7 EDGAR country code unmapped. NEXT: blockchain layer; tighten party
+    match + SPV-name consolidation; REST/UI panels so the HUMAN front-end reaches parity with MCP.
