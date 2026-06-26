@@ -9,6 +9,7 @@ link — negative memory that suppresses the pair from ever being re-proposed.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -19,6 +20,24 @@ from src.actions.core import Actions
 from src.ontology.canonicalize import canonicalize
 
 Pair = tuple[uuid.UUID, uuid.UUID]
+
+# Legal-form suffixes stripped before cross-base org name matching: "Tesla, Inc."
+# (EDGAR) and "Tesla" (Wikidata) are the same company — the names differ only by the
+# corporate form. Multilingual because the open bases are.
+_LEGAL_SUFFIXES = frozenset({
+    "inc", "incorporated", "corp", "corporation", "co", "company", "llc", "llp", "lp",
+    "ltd", "limited", "plc", "sa", "sas", "sl", "ag", "gmbh", "kg", "srl", "spa", "nv",
+    "bv", "ab", "oy", "as", "kk", "pty", "pte", "se", "oao", "ooo", "pao", "zao", "pjsc",
+    "ojsc", "jsc", "ao", "rt", "kft", "doo", "dd", "tov", "sro", "the",
+})
+
+
+def normalize_org_name(name: str) -> str:
+    """Lowercase, drop punctuation and legal-form suffix tokens — the canonical key
+    for matching the same organization across bases."""
+    cleaned = re.sub(r"[^\w\s]", " ", name.lower())
+    toks = [t for t in cleaned.split() if t and t not in _LEGAL_SUFFIXES]
+    return " ".join(toks)
 
 
 class ResolutionError(Exception):
@@ -356,6 +375,48 @@ async def find_sanctions_candidates(pool: asyncpg.Pool) -> int:
     return queued
 
 
+async def find_cross_base_candidates(pool: asyncpg.Pool, *, min_len: int = 4) -> int:
+    """Resolve the SAME organization across different federated bases. A person bridges
+    them — aiming at Musk pulls Tesla (Q478214) from Wikidata, while EDGAR carries
+    'Tesla, Inc.' (a cik); they are one company whose names differ only by legal form.
+    We bucket Organizations by `normalize_org_name`, and queue a review candidate for
+    any two distinct objects in a bucket whose provenance differs (a genuine cross-base
+    pair, not a within-base dup the ingest already deduped). Name-normalized only -> a
+    weak 0.6 signal; never auto-merges (ruling #3)."""
+    rows = await pool.fetch(
+        "SELECT a.object_id, a.value #>> '{}' AS nm, "
+        "  (SELECT array_agg(DISTINCT source_id) FROM assertions s WHERE s.object_id=a.object_id) "
+        "   AS sources "
+        "FROM current_assertions a "
+        "JOIN objects o ON o.id=a.object_id AND o.type='Organization' AND o.status='active' "
+        "WHERE a.name='name'"
+    )
+    buckets: dict[str, list[tuple[uuid.UUID, frozenset[str]]]] = {}
+    for r in rows:
+        norm = normalize_org_name(r["nm"] or "")
+        if len(norm) < min_len:
+            continue
+        buckets.setdefault(norm, []).append(
+            (r["object_id"], frozenset(r["sources"] or []))
+        )
+
+    suppressed = await _suppressed(pool)
+    queued = 0
+    for norm, members in buckets.items():
+        for i in range(len(members)):
+            for j in range(i + 1, len(members)):
+                (a, sa), (b, sb) = members[i], members[j]
+                if a == b or sa == sb:  # require different provenance (cross-base)
+                    continue
+                lo, hi = sorted((a, b))
+                if frozenset((lo, hi)) in suppressed:
+                    continue
+                bases = "/".join(sorted(sa | sb))
+                if await _insert(pool, lo, hi, 0.6, [f"cross-base org match: {norm} ({bases})"]):
+                    queued += 1
+    return queued
+
+
 async def converge_identities(
     actions: Actions, *, case_id: uuid.UUID | None = None
 ) -> dict[str, int]:
@@ -368,6 +429,7 @@ async def converge_identities(
     queued = await find_footprint_merge_candidates(pool)
     queued += await find_person_merge_candidates(pool)
     queued += await find_sanctions_candidates(pool)  # crawl x federated-base screening
+    queued += await find_cross_base_candidates(pool)  # base x base org resolution
 
     case_objs: set[uuid.UUID] | None = None
     if case_id is not None:
