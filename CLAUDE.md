@@ -338,3 +338,13 @@ and `docker run` do too.
   - **NEXT for this thread:** prune internal-URL spread (tighten url_fetch/url_accounts to
     profile-shaped only); a `POST /objects/{id}/enrich-web` endpoint + UI button (the function
     exists, not yet wired to the API/UI); run the bridge across all 113 to measure real yield.
+  - **YIELD MEASURED across all 113 (2026-06-26, commit 51e517f):** keyless fetch+parse of each
+    federated entity's website → **37% surface a NEW identifier** the registered record lacked,
+    **31% an email or social account** (the trustworthy signal: info@vendor-c.example, info@vendor-a.example,
+    twitter:djiglobal, kontakt@vendor-b.example, …). Outcome split: new-id 37% / name-only 16% /
+    empty 7% / **antibot-wall 16%** / dead-or-timeout 22%. So base→crawl enrichment is a
+    ~1-in-3 headline capability, not a fluke — and ~38% is unreachable keyless (wall+dead).
+    Measurement also caught a real noise bug → fixed: phone mining grabbed dates/year-ranges
+    (2026.06.24, 1989-1990); now requires '+' or >=10 digits. RESIDUAL noise: 10-15-digit IDs
+    still slip as phones; internal-URL spread (~41/entity) still unpruned. Yield harness:
+    `scratchpad/yield.py` (uses the real urlfetch connector + webpage parser).
