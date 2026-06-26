@@ -48,6 +48,14 @@ def extract_selectors(text: str) -> list[tuple[str, str]]:
     for handle in _HANDLE_RE.findall(text):
         add("Username", handle)
     for run in _PHONE_RE.findall(text):
-        if 7 <= sum(c.isdigit() for c in run) <= 15:
-            add("Phone", run)
+        digits = sum(c.isdigit() for c in run)
+        if not 7 <= digits <= 15:
+            continue
+        # measuring the base->crawl yield showed the dominant phone noise is DATES and
+        # year-ranges (2026.06.24, 1989-1990) — 8 digits, often with separators, so
+        # punctuation can't tell them from a phone. Digit count can: require an explicit
+        # '+' country code, or >=10 digits (national+area), which excises 6-9 digit dates.
+        if not (run.lstrip().startswith("+") or digits >= 10):
+            continue
+        add("Phone", run)
     return out

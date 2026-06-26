@@ -26,6 +26,16 @@ def test_extract_selectors_rejects_bare_words_and_short_runs() -> None:
     assert all(t != "Phone" for t, _ in pairs)
 
 
+def test_extract_selectors_rejects_datelike_digit_runs() -> None:
+    # the base->crawl yield run showed dates / year-ranges were the dominant phone
+    # noise (8 digits, often separated) — excised by requiring '+' or >=10 digits.
+    pairs = extract_selectors("© 2024 on 2026.06.24 and 2026-03-02 range 1989-1990")
+    assert all(t != "Phone" for t, _ in pairs)
+    # real phones still parse: an explicit country code, or a 10+ digit national number
+    assert dict(extract_selectors("call +7 (495) 000-00-00"))["Phone"] == "+74950000000"
+    assert dict(extract_selectors("ring 415-555-2671 today"))["Phone"] == "4155552671"
+
+
 def test_snippet_mining_emits_speculative_co_occurs() -> None:
     inp = InputObject(id=str(uuid.uuid4()), type="Email", canonical="priya@kowalski.dev")
     response = {
