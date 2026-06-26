@@ -481,3 +481,32 @@ and `docker run` do too.
     name variants (Anthropic Magnitude/Secondary); litigation party-match is loose substring (some
     false 'named party'); C7 EDGAR country code unmapped. NEXT: blockchain layer; tighten party
     match + SPV-name consolidation; REST/UI panels so the HUMAN front-end reaches parity with MCP.
+- **BLOCKCHAIN LAYER — EVM trace + sanctions fusion (DONE, 2026-06-26, 05b29e2/084c5ca):** build
+  #3 for the persona (crypto-fraud is half the beat). EVM half shipped; Solana deferred. 187 tests
+  green, ruff + mypy --strict clean. See [[osiris-blockchain-layer]].
+  - **On-chain trace** (`src/ingest/etherscan.py`): Etherscan v2 (multichain by `chainid`) turns an
+    EVM address into a financial picture. The footprint noise lesson carries over —
+    `aggregate_counterparties` collapses normal+token txs into top-K per-counterparty totals (count,
+    ETH in/out, tokens, first/last seen) rather than a node per tx; materialized as `transacted_with`
+    links + balance + contract identity (getsourcecode), all AUTHORITATIVE_API (the ledger is ground
+    truth). KEYLESS BENDS HERE: Etherscan rejects unkeyed calls → `ETHERSCAN_API_KEY` (free) required;
+    absent it the connector returns an error dict, never crashes a run.
+  - **THE DIFFERENTIATOR — fuse trace × sanctions base** (`opensanctions` CryptoWallet pass +
+    `etherscan.screen_against_sanctions`): the loader's _TYPE map skipped FtM `CryptoWallet`, so OFAC
+    SDN wallets never landed. Now a CryptoWallet pass mints a `CryptoAddress` keyed on a canonical
+    ALIGNED with the tracer (`_wallet_canonical`: EVM addr → `eth:1:<lower>` regardless of ERC-20
+    currency label) + a `controlled_by` edge to the holder. Because the canonical matches
+    `etherscan._addr_canonical`, an OFAC wallet and a later trace of the same address dedupe into ONE
+    object via create_or_find — **fusion for free, no merge, both provenances on one node**.
+    `screen_against_sanctions` then flags the subject or any counterparty carrying an opensanctions
+    provenance + names the holder. "Did my subject move money through a sanctioned wallet?" — the
+    crawl×base edge applied to crypto. MCP `trace_wallet`/`screen_wallet`; sources playbook entries.
+  - Bug caught by the fusion test: the fused node carries multi-source `address` assertions
+    (etherscan + opensanctions) → scalar address subquery needs LIMIT 1 (the kernel's multi-source
+    hazard surfacing in a read-model). MCP surface now 16 tools.
+  - HONEST LIMITS / NOT DONE: (1) LIVE-UNVERIFIED — no key set, hermetic tests only; field shapes
+    trusted from the TS-repo extraction. (2) counterparties stay anonymous unless verified-contract or
+    OFAC (keyless Etherscan has no exchange labels — PRO-only). (3) Solana half deferred (Helius-keyed).
+    (4) NOT wired into `dossier_report` — trace/screen absent from the Markdown deliverable. (5) demo
+    DB's 1807 opensanctions entities predate the CryptoWallet pass → re-ingest an OFAC slice for live
+    screening data. NEXT: a live trace with a real key; crypto section in dossier_report; Solana.
