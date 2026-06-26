@@ -416,3 +416,23 @@ and `docker run` do too.
   - NEXT: keyless PATENTS source (PatentsView API now keyed — needs alt: USPTO bulk/ODP or Google
     Patents XHR with correct query); a scheduled trial-status WATCH; `POST /objects/{id}/discrepancy`
     + UI; pull SPV managers' own other filings (repeat-player expansion).
+- **THREAD-PULLING TOOLS + CLUSTER PULL (DONE, 2026-06-26, 1754390..a414e21):** turned the
+  Neuralink case into reusable network tools, then aimed them at the rest of the cluster.
+  - **Repeat-player expansion** (`edgar_formd.expand_filings` + `search_filings(match_issuer=False)`
+    + `_target_company` SPV-name parser + `link_spv_targets`): ingest every Form D MENTIONING an
+    operator → link each SPV `raises_for` a `company:<name>` node. CLI `... edgar_formd expand <op>`.
+    Sydecar=5323 filings, Sajid Rahman/MyAsiaVC=391. EFTS returns ~100/page, 500s on `from` offset.
+  - **consolidate_companies** (resolution): event-sourced prefix-merge of the noisy company: layer
+    (Crusoe Green Meadow→Crusoe). **coinvestment_ties** (`orchestrator/coinvest`): rank companies by
+    shared SPV operators. **expand_facility** (clinicaltrials): trials at a SITE → co-tenant sponsors
+    (filters to the queried facility only — was slurping all global sites of multi-site trials).
+  - **CLUSTER FINDINGS (live):** Neuralink's SPV backers (Sydecar/CGF2021 in DE, MyAsiaVC in
+    Jakarta) ALSO fund OpenAI, Anthropic, Groq, Worldcoin, Atom Computing, Crusoe, Starlab — the
+    frontier-tech smart-money cluster. Co-investment: Anthropic is the hub (shares 3 operators w/
+    Neuralink); Groq↔Anthropic↔Worldcoin tightly tied via MyAsiaVC. Cleveland Clinic Abu Dhabi
+    (Neuralink's UAE trial site) co-hosts AbbVie/Pfizer/Lilly/Roche/Novo/Merck/Medtronic/Oxford —
+    an established multinational trial hub, 19 sponsors.
+  - KNOWN NOISE: `company:`/`cik:` fragmentation (Neuralink vs Neuralink Corp. unmerged → self-ties);
+    SPV-name parse residue (OpenAI s); related-person entity artifacts (LLC Sydecar). All speculative-
+    graded for review. NEXT: cross-base merge company:↔cik: (not just candidate); patents (keyless
+    source still TBD); apply expand/coinvest to OpenAI/Anthropic directly (their own Form Ds).
