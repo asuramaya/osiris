@@ -29,8 +29,14 @@ import httpx
 from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.db.pool import create_pool
+from src.ontology.resolution import normalize_org_name
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
+
+# the feeder link is INFERRED from the SPV's name referencing the core company —
+# speculative, so the frontier won't crawl outward from it.
+_DERIVED = EvidenceClass.DERIVED.value
+_DERIVED_CONF = confidence_for(EvidenceClass.DERIVED)
 
 _SOURCE = "edgar"
 _EC = EvidenceClass.AUTHORITATIVE_API.value
@@ -172,11 +178,69 @@ async def fetch_form_d(cik: str, accession: str) -> dict[str, Any]:
         return parse_form_d(r.text)
 
 
+async def link_funnel(
+    actions: Actions, name: str, *, observed_at: datetime | None = None
+) -> dict[str, Any]:
+    """Wire the financing funnel: a feeder SPV encodes its target in its NAME ("MAV
+    Neuralink, LP" -> Neuralink), so we link every org whose normalized name *contains*
+    the core company's name to the core via a `raises_for` edge. The core is the
+    token-matching org with the largest amount_raised (the operating company, e.g.
+    Neuralink Corp.'s $280M vs an SPV's $1M); its same-named cross-base duplicates are
+    skipped. The edge is DERIVED (name-inferred), so it never spawns a crawl."""
+    pool = actions.pool
+    ts = observed_at or datetime.now(UTC)
+    target = normalize_org_name(name)
+    if len(target) < 4:
+        return {"core": None, "spv_links": 0}
+
+    rows = await pool.fetch(
+        "SELECT o.id, a.value #>> '{}' AS nm, "
+        "  (SELECT value #>> '{}' FROM current_assertions x "
+        "   WHERE x.object_id=o.id AND x.name='amount_raised') AS raised "
+        "FROM current_assertions a "
+        "JOIN objects o ON o.id=a.object_id AND o.type='Organization' AND o.status='active' "
+        "WHERE a.name='name'"
+    )
+    matches = [
+        (r["id"], normalize_org_name(r["nm"] or ""), r["nm"], r["raised"])
+        for r in rows
+        if target in normalize_org_name(r["nm"] or "")
+    ]
+    if not matches:
+        return {"core": None, "spv_links": 0}
+
+    def raised_val(raised: str | None) -> int:
+        try:
+            return int(raised) if raised else -1
+        except ValueError:
+            return -1
+
+    core = max(matches, key=lambda m: (raised_val(m[3]), m[1] == target))
+    core_id, core_norm, core_name = core[0], core[1], core[2]
+
+    n_link = 0
+    for mid, mnorm, _nm, _raised in matches:
+        if mid == core_id or mnorm == core_norm:  # skip the core + its cross-base dups
+            continue
+        if await pool.fetchval(
+            "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='raises_for' LIMIT 1",
+            mid, core_id,
+        ):
+            continue
+        await actions.create_link(
+            mid, core_id, "raises_for", "funnel", ts, _DERIVED_CONF, evidence_class=_DERIVED
+        )
+        n_link += 1
+    return {"core": core_name, "spv_links": n_link}
+
+
 async def aim_form_d(actions: Actions, name: str, *, limit: int = 40) -> dict[str, Any]:
     """Resolve a name to its Form D filings and ingest each — the private-financing
     layer of 'aim Osiris at <name>'."""
     filings = await search_form_d(name, limit=limit)
-    totals = {"filings": 0, "issuers": 0, "persons": 0, "links": 0, "properties": 0}
+    totals: dict[str, Any] = {
+        "filings": 0, "issuers": 0, "persons": 0, "links": 0, "properties": 0
+    }
     for f in filings:
         try:
             parsed = await fetch_form_d(f["cik"], f["accession"])
@@ -186,6 +250,9 @@ async def aim_form_d(actions: Actions, name: str, *, limit: int = 40) -> dict[st
         totals["filings"] += 1
         for k in ("issuers", "persons", "links", "properties"):
             totals[k] += counts[k]
+    funnel = await link_funnel(actions, name)
+    totals["funnel_core"] = funnel["core"]
+    totals["funnel_links"] = funnel["spv_links"]
     return totals
 
 
