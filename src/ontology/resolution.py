@@ -16,7 +16,7 @@ from typing import Any
 
 import asyncpg
 
-from src.actions.core import Actions
+from src.actions.core import ActionError, Actions
 from src.ontology.canonicalize import canonicalize
 
 Pair = tuple[uuid.UUID, uuid.UUID]
@@ -284,6 +284,39 @@ async def resolve_candidate(
         decision,
         actor,
     )
+
+
+async def consolidate_companies(actions: Actions) -> int:
+    """Collapse the noisy 'company:<name>' nodes the SPV-name parser produces. A feeder
+    titled 'Crusoe Green Meadow …' and one titled 'Crusoe …' are the same target seen
+    through different SPV labels; when one node's name tokens are a strict PREFIX of
+    another's, the longer is a label-decorated variant — merge it into the shorter
+    (event-sourced, reversible). Conservative: prefix-only, never fuses unrelated names
+    that merely share a first word of differing tails."""
+    pool = actions.pool
+    rows = await pool.fetch(
+        "SELECT o.id, a.value #>> '{}' AS nm FROM objects o "
+        "JOIN current_assertions a ON a.object_id=o.id AND a.name='name' "
+        "WHERE o.type='Organization' AND o.status='active' AND o.canonical LIKE 'company:%'"
+    )
+    nodes = [(r["id"], tuple(normalize_org_name(r["nm"] or "").split())) for r in rows]
+    nodes = [(i, toks) for i, toks in nodes if toks]
+    by_tokens = {toks: i for i, toks in nodes}  # exact-name -> id (1 per canonical)
+    merged = 0
+    for loser_id, toks in sorted(nodes, key=lambda n: len(n[1]), reverse=True):
+        # find the shortest existing node that is a strict token-prefix of this one
+        for k in range(1, len(toks)):
+            winner_id = by_tokens.get(toks[:k])
+            if winner_id is not None and winner_id != loser_id:
+                try:
+                    await actions.merge_objects(
+                        winner_id, loser_id, "company name prefix-variant", "consolidate"
+                    )
+                    merged += 1
+                except ActionError:  # already merged in a prior step / chain — skip
+                    pass
+                break
+    return merged
 
 
 async def review_tray(pool: asyncpg.Pool) -> list[dict[str, Any]]:

@@ -140,13 +140,15 @@ async def ingest_study(
     return {"trials": 1, "sites": n_site, "investigators": n_inv, "links": n_link}
 
 
-async def fetch_studies(sponsor: str, *, page_size: int = 100) -> list[dict[str, Any]]:
-    """All studies for a lead sponsor (keyless v2 API)."""
+async def _fetch(
+    query: dict[str, str], *, page_size: int = 100, max_pages: int = 5
+) -> list[dict[str, Any]]:
+    """Paginate the keyless v2 studies endpoint for an arbitrary query."""
     out: list[dict[str, Any]] = []
     async with httpx.AsyncClient(timeout=40.0, headers=_UA, follow_redirects=True) as client:
         token: str | None = None
-        while True:
-            params: dict[str, Any] = {"query.spons": sponsor, "pageSize": page_size}
+        for _ in range(max_pages):
+            params: dict[str, Any] = {**query, "pageSize": page_size}
             if token:
                 params["pageToken"] = token
             r = await client.get(_API, params=params)
@@ -157,6 +159,23 @@ async def fetch_studies(sponsor: str, *, page_size: int = 100) -> list[dict[str,
             if not token:
                 break
     return out
+
+
+async def fetch_studies(sponsor: str, *, page_size: int = 100) -> list[dict[str, Any]]:
+    """All studies for a lead sponsor (keyless v2 API)."""
+    return await _fetch({"query.spons": sponsor}, page_size=page_size)
+
+
+async def expand_facility(actions: Actions, facility: str, *, limit: int = 60) -> dict[str, int]:
+    """Ingest the trials run at a clinical SITE — revealing which other sponsors use it
+    (the foreign-counterparty thread: who else operates at Cleveland Clinic Abu Dhabi).
+    Other trials at the same facility link to the same site node, so co-tenancy emerges."""
+    totals = {"trials": 0, "sites": 0, "investigators": 0, "links": 0}
+    for study in (await _fetch({"query.locn": facility}))[:limit]:
+        counts = await ingest_study(actions, parse_study(study))
+        for k in totals:
+            totals[k] += counts[k]
+    return totals
 
 
 async def aim_trials(actions: Actions, sponsor: str) -> dict[str, int]:
