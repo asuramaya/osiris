@@ -393,3 +393,26 @@ and `docker run` do too.
   think is closed. THIS is the engine's edge — aggregating buried public filings nobody connects.
   Driver: `scratchpad/neuralink_formd.py`. NEXT: link SPVs -> core company (raises_for); pull SPV
   managers as a people network; full-text search beyond Form D (S-1, 13D/G ownership).
+- **FORM D FUNNEL + CLINICAL TRIALS + DISCREPANCY (DONE, 2026-06-26, ccba82f/a655074/ec598d5):**
+  deepening the Neuralink case into a real analytic chain.
+  - **Feeder funnel** (`edgar_formd.link_feeders` + `_link_once` idempotency): SPVs now
+    `raises_for` the core company (name-inferred, co_occurrence); managers (already ingested per
+    filing) become reachable. Neuralink Corp ($280M) ← 12 SPVs (~$14.5M); Brett Sagan/Sydecar (DE)
+    runs 5 of them; Sajid Rahman/MyAsia VC (Jakarta) the 107-investor retail feeder.
+  - **ClinicalTrials.gov ingest** (`src/ingest/clinicaltrials.py`, keyless v2 API): trials →
+    ClinicalTrial nodes (status/whyStopped/enrollment/has_results) + sponsor `sponsors` + `site`
+    facilities + `investigator` people. Live: Neuralink = 6 trials, 5 countries, 8 sites, 4 named
+    surgeons (Ponce/Jagid/Roser/Pouratian). INTEGRITY FINDING (operator asked re: dead human
+    patients / buried failure): FDA MAUDE + recalls = 0 for Neuralink; all trials RECRUITING, 0
+    terminated, 0 results posted → NO public evidence of patient deaths. The real "wall" is
+    regulatory: investigational-device (IDE) adverse events are FDA-confidential, not in MAUDE,
+    until a trial completes. Did NOT fabricate; reported the null. This ingest is the *monitor* —
+    a TERMINATED flip or posted results is when evidence surfaces.
+  - **Footprint discrepancy** (`src/orchestrator/discrepancy.py`): home (disclosed) vs operational
+    (2-hop activity) geography; flags foreign countries the disclosures omit. Live on Neuralink
+    (discloses US only): operates in UAE (Abu Dhabi trial), UK (UCL/Newcastle), Canada (Toronto
+    trial + Vancouver financing), Indonesia (Jakarta feeder). The shadow footprint. NB: trial sites
+    are partner hospitals (clinical reach ≠ offices); SPV entries are financing reach.
+  - NEXT: keyless PATENTS source (PatentsView API now keyed — needs alt: USPTO bulk/ODP or Google
+    Patents XHR with correct query); a scheduled trial-status WATCH; `POST /objects/{id}/discrepancy`
+    + UI; pull SPV managers' own other filings (repeat-player expansion).
