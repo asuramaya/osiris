@@ -286,6 +286,86 @@ async def resolve_candidate(
     )
 
 
+def _winner_priority(canonical: str) -> int:
+    """Prefer the most authoritatively-keyed canonical as the merge winner: a SEC CIK
+    over a Wikidata Q-id over a trials-registry slug over a derived company:<name>."""
+    if canonical.startswith("cik:"):
+        return 3
+    if re.fullmatch(r"Q\d+", canonical):
+        return 2
+    if canonical.startswith("ctgov-org:"):
+        return 1
+    return 0
+
+
+async def resolve_cross_base(actions: Actions, *, min_len: int = 5) -> int:
+    """Promote cross-base candidates to actual merges where it is SAFE: the same
+    organization is fragmented across bases (company:/cik:/Qxxx) until merged, which
+    makes analytics self-reference. We merge a connected component of cross-base
+    candidates only when every member shares one distinctive normalized name (>= min_len,
+    so 'tesla'/'neuralink' qualify but short namesakes don't) — corroboration across
+    bases, not a name guess. Organizations only (#3); event-sourced, so reversible."""
+    pool = actions.pool
+    rows = await pool.fetch(
+        "SELECT id, a_id, b_id FROM merge_candidates "
+        "WHERE reasons->>'signals' LIKE '%cross-base%' AND resolved IS NULL"
+    )
+    parent: dict[uuid.UUID, uuid.UUID] = {}
+
+    def find(x: uuid.UUID) -> uuid.UUID:
+        parent.setdefault(x, x)
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        parent[x] = root
+        return root
+
+    for r in rows:
+        parent[find(r["a_id"])] = find(r["b_id"])
+
+    components: dict[uuid.UUID, set[uuid.UUID]] = {}
+    cand_ids: dict[uuid.UUID, list[int]] = {}
+    for r in rows:
+        root = find(r["a_id"])
+        components.setdefault(root, set()).update((r["a_id"], r["b_id"]))
+        cand_ids.setdefault(root, []).append(r["id"])
+
+    merged = 0
+    for root, members in components.items():
+        info = await pool.fetch(
+            "SELECT o.id, o.canonical, o.status, "
+            "  (SELECT value #>> '{}' FROM current_assertions a "
+            "   WHERE a.object_id=o.id AND a.name='name' LIMIT 1) AS nm, "
+            "  (SELECT count(*) FROM current_assertions a WHERE a.object_id=o.id) AS na "
+            "FROM objects o WHERE o.id = ANY($1::uuid[])",
+            list(members),
+        )
+        active = [i for i in info if i["status"] == "active"]
+        norms = {normalize_org_name(i["nm"] or "") for i in active if i["nm"]}
+        if len(norms) != 1:
+            continue  # mixed names in the component -> not obviously one entity; skip
+        norm = next(iter(norms))
+        if len(norm) < min_len:
+            continue  # too short/common to merge on name corroboration alone
+        winner = max(active, key=lambda i: (_winner_priority(i["canonical"]), i["na"]))
+        for loser in active:
+            if loser["id"] == winner["id"]:
+                continue
+            try:
+                await actions.merge_objects(
+                    winner["id"], loser["id"], f"cross-base same-entity: {norm}", "cross-base"
+                )
+                merged += 1
+            except ActionError:
+                pass
+        await pool.execute(
+            "UPDATE merge_candidates SET resolved='merged', resolved_by='cross-base', "
+            "resolved_at=now() WHERE id = ANY($1::int[])",
+            cand_ids[root],
+        )
+    return merged
+
+
 async def consolidate_companies(actions: Actions) -> int:
     """Collapse the noisy 'company:<name>' nodes the SPV-name parser produces. A feeder
     titled 'Crusoe Green Meadow …' and one titled 'Crusoe …' are the same target seen

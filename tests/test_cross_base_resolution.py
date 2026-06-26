@@ -50,3 +50,32 @@ async def test_same_base_namesakes_not_matched(actions: Actions) -> None:
     await _org(actions, "cik:1", "Tesla, Inc.", "edgar")
     await _org(actions, "cik:2", "Tesla Corp.", "edgar")
     assert await find_cross_base_candidates(actions.pool) == 0
+
+
+async def test_resolve_cross_base_merges_distinctive_cluster(actions: Actions) -> None:
+    from src.ontology.resolution import find_cross_base_candidates, resolve_cross_base
+
+    # the same company fragmented across three bases (distinct sources -> candidates)
+    comp = await _org(actions, "company:neuralink", "Neuralink", "edgar")
+    cik = await _org(actions, "cik:0001708503", "Neuralink Corp.", "edgar")
+    # give cik a second source so company:/cik: differ in provenance
+    await actions.assert_property(cik, "topics", "private", "edgar", NOW, 0.85)
+    wiki = await _org(actions, "Q29043471", "Neuralink", "wikidata")
+
+    await find_cross_base_candidates(actions.pool)
+    merged = await resolve_cross_base(actions)
+    assert merged >= 2  # company: and Q fold into the CIK-keyed winner
+
+    # everything now resolves to the CIK (most authoritative canonical)
+    assert await actions.resolve_object_id(comp) == cik
+    assert await actions.resolve_object_id(wiki) == cik
+
+
+async def test_resolve_cross_base_skips_short_names(actions: Actions) -> None:
+    from src.ontology.resolution import find_cross_base_candidates, resolve_cross_base
+
+    a = await _org(actions, "company:abc", "ABC", "edgar")  # 3 chars -> too short/common
+    await _org(actions, "Q1", "ABC", "wikidata")
+    await find_cross_base_candidates(actions.pool)
+    assert await resolve_cross_base(actions) == 0
+    assert await actions.resolve_object_id(a) == a  # untouched
