@@ -2,7 +2,13 @@
 from __future__ import annotations
 
 from src.actions.core import Actions
-from src.ingest.edgar_formd import ingest_form_d, link_feeders, parse_form_d
+from src.ingest.edgar_formd import (
+    _target_company,
+    ingest_form_d,
+    link_feeders,
+    link_spv_targets,
+    parse_form_d,
+)
 
 
 def _formd(cik: str, name: str, sold: str) -> str:
@@ -112,3 +118,32 @@ async def test_link_feeders_connects_spvs_to_core(actions: Actions) -> None:
     )
     assert {r["from_id"] for r in rows} == {spv1["issuer_id"], spv2["issuer_id"]}
     assert all(r["evidence_class"] == "co_occurrence" for r in rows)
+
+
+def test_target_company_parses_portfolio_co() -> None:
+    assert _target_company("Anthropic SPV2 Emerging Global a Series of CGF2021 LLC") == "Anthropic"
+    assert _target_company("Databricks MAV Alternate Fund I, LP") == "Databricks"
+    assert _target_company("Cohere-MAV Alternate Fund I") == "Cohere"
+    assert _target_company("Atom Computing Jan 2026 a Series of CGF2021 LLC") == "Atom Computing"
+    assert _target_company("MAV Groq Alternate Fund") == "Groq"     # leading operator skipped
+    assert _target_company("BP Neuralink LP") == "Neuralink"
+    assert _target_company("a Series of CGF2021 LLC") is None       # all boilerplate
+    assert _target_company("AC-0215 Gaingels Fund I") is None       # code prefix, no real name
+    assert _target_company("CC SX III a Series of X") is None       # short codes only
+
+
+async def test_link_spv_targets_builds_coinvestment(actions: Actions) -> None:
+    # two SPVs from different operators funding the SAME company -> a shared target node
+    a = await ingest_form_d(actions, parse_form_d(_formd("10", "Anthropic SPV a Series X", "100")))
+    b = await ingest_form_d(actions, parse_form_d(_formd("11", "Anthropic MAV Alt Fund", "200")))
+    issuers = [{"id": r["issuer_id"], "name": r["name"], "amount": r["amount"]} for r in (a, b)]
+
+    assert await link_spv_targets(actions, issuers) == 2
+    target = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE type='Organization' AND canonical='company:anthropic'"
+    )
+    assert target is not None
+    funders = await actions.pool.fetch(
+        "SELECT from_id FROM links WHERE to_id=$1 AND type='raises_for'", target
+    )
+    assert {r["from_id"] for r in funders} == {a["issuer_id"], b["issuer_id"]}

@@ -18,6 +18,7 @@ resolution then fuses the Form D issuer with the same company from Wikidata.
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 import uuid
 from datetime import UTC, datetime
@@ -206,25 +207,136 @@ async def link_feeders(
     return core["id"], n
 
 
-async def search_form_d(name: str, *, limit: int = 40) -> list[dict[str, str]]:
-    """EDGAR full-text search (keyless) -> Form D filings whose issuer name matches."""
+# tokens that mark the END of the portfolio-company name in an SPV's title — the
+# company a feeder funds is its leading word(s) before the fund/structure boilerplate.
+_STOP_TOKENS = frozenset({
+    "spv", "fund", "funds", "series", "llc", "lp", "inc", "corp", "partners", "alternate",
+    "investments", "investment", "capital", "ventures", "vc", "holdings", "coinvest",
+    "co", "access", "opportunities", "opportunity", "trust", "vehicle", "gp", "the",
+    "a", "of", "and", "al", "i", "ii", "iii", "iv", "v", "vi",
+})
+_MONTHS = frozenset({
+    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+    "january", "february", "march", "april", "june", "july", "august", "september",
+    "october", "november", "december",
+})
+
+
+def _target_company(spv_name: str) -> str | None:
+    """Best-effort: the portfolio company a feeder SPV funds, from its name. Form D does
+    NOT disclose the underlying company, so the SPV title is the only signal — leading
+    word(s) before the fund/structure/date boilerplate. Heuristic (hence the link it
+    feeds is co-occurrence): 'Anthropic SPV2 ... a Series of CGF2021 LLC' -> Anthropic."""
+    out: list[str] = []
+    for raw in re.split(r"[\s,\-]+", spv_name.strip()):
+        tok = raw.lower().strip(".")
+        if not tok or tok.startswith("spv") or re.fullmatch(r"\d{2,}", tok):
+            break
+        if tok in _STOP_TOKENS or tok in _MONTHS:
+            break
+        if raw.isupper() and len(raw) <= 4:
+            # an operator acronym (MAV, DPV, BP…): skip it if it leads, stop if it trails
+            if out:
+                break
+            continue
+        out.append(raw)
+        if len(out) >= 2:
+            break
+    company = " ".join(out).strip(" ,-")
+    # drop short codes (CC, JFF, AC) and bare acronyms that slipped through
+    if len(company) < 3 or (len(company) <= 4 and company.upper() == company):
+        return None
+    return company if not company.isdigit() else None
+
+
+async def search_filings(
+    query: str, *, forms: str = "D", limit: int = 60, match_issuer: bool = False,
+) -> list[dict[str, str]]:
+    """EDGAR full-text search (keyless, paginated). With match_issuer the hit's issuer
+    name must contain the query (a company's own filings); without it, every filing
+    that MENTIONS the query is returned — the way to pull a repeat player's portfolio."""
     out: list[dict[str, str]] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
+    # the EFTS search-index endpoint returns ~100 hits per request and rejects a `from`
+    # offset (500s), so one request is the page; limit just slices it.
     async with httpx.AsyncClient(timeout=30.0, headers=_UA, follow_redirects=True) as client:
-        r = await client.get(
-            _EFTS, params={"q": f'"{name}"', "forms": "D"}
-        )
+        r = await client.get(_EFTS, params={"q": f'"{query}"', "forms": forms})
         r.raise_for_status()
-        for hit in (r.json().get("hits", {}).get("hits", []))[:limit]:
+        for hit in r.json().get("hits", {}).get("hits", []):
             src = hit.get("_source", {})
-            ciks = src.get("ciks", [])
-            names = src.get("display_names", [])
             acc = (hit.get("_id") or "").split(":")[0]
-            for cik, disp in zip(ciks, names, strict=False):
-                if name.lower() in disp.lower() and cik not in seen:
-                    seen.add(cik)
-                    out.append({"cik": cik, "accession": acc, "issuer": disp})
+            for cik, disp in zip(src.get("ciks", []), src.get("display_names", []), strict=False):
+                if match_issuer and query.lower() not in disp.lower():
+                    continue
+                key = (cik, acc)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({"cik": cik, "accession": acc, "issuer": disp})
+                if len(out) >= limit:
+                    return out
     return out
+
+
+async def search_form_d(name: str, *, limit: int = 40) -> list[dict[str, str]]:
+    """A company's own Form D filings (issuer-name match)."""
+    return await search_filings(name, limit=limit, match_issuer=True)
+
+
+async def link_spv_targets(
+    actions: Actions,
+    issuers: list[dict[str, Any]],
+    *,
+    observed_at: datetime | None = None,
+    case_id: uuid.UUID | None = None,
+) -> int:
+    """For each ingested SPV, link it raises_for the portfolio company parsed from its
+    name (creating a `company:<name>` node that cross-base resolution fuses to the real
+    entity). This is what turns a repeat player's filings into a co-investment graph."""
+    ts = observed_at or datetime.now(UTC)
+    n = 0
+    for i in issuers:
+        company = _target_company(i["name"] or "")
+        if not company:
+            continue
+        target = await actions.create_or_find_object(
+            "Organization", f"company:{normalize_org_name(company)}", _SOURCE, case_id
+        )
+        if target == i["id"]:
+            continue
+        await actions.assert_property(
+            target, "name", company, _SOURCE, ts, _CO_CONF, case_id=case_id, evidence_class=_CO
+        )
+        if await _link_once(
+            actions, i["id"], target, "raises_for", ts=ts, conf=_CO_CONF, ec=_CO, case_id=case_id
+        ):
+            n += 1
+    return n
+
+
+async def expand_filings(actions: Actions, query: str, *, limit: int = 60) -> dict[str, Any]:
+    """Pull a repeat player's thread: ingest every Form D that mentions them, link each
+    SPV to the company it funds. The operator (a related person on every filing) ends up
+    connected to their whole portfolio."""
+    hits = await search_filings(query, limit=limit, match_issuer=False)
+    totals: dict[str, Any] = {"filings": 0, "issuers": 0, "persons": 0, "links": 0}
+    issuers: list[dict[str, Any]] = []
+    for f in hits:
+        try:
+            parsed = await fetch_form_d(f["cik"], f["accession"])
+        except (httpx.HTTPError, ET.ParseError):
+            continue
+        counts = await ingest_form_d(actions, parsed)
+        totals["filings"] += 1
+        for k in ("issuers", "persons", "links"):
+            totals[k] += counts[k]
+        if counts["issuer_id"] is not None:
+            issuers.append(
+                {"id": counts["issuer_id"], "name": counts["name"], "amount": counts["amount"]}
+            )
+    totals["targets"] = await link_spv_targets(actions, issuers)
+    totals["fetched"] = len(hits)
+    return totals
 
 
 async def fetch_form_d(cik: str, accession: str) -> dict[str, Any]:
@@ -261,15 +373,23 @@ async def aim_form_d(actions: Actions, name: str, *, limit: int = 40) -> dict[st
 
 
 def main() -> None:
-    name = " ".join(sys.argv[1:])
-    if not name:
-        print("usage: python -m src.ingest.edgar_formd <name>")
+    argv = sys.argv[1:]
+    if not argv:
+        print("usage: python -m src.ingest.edgar_formd <company name>")
+        print("       python -m src.ingest.edgar_formd expand <operator name>")
         return
+    expand = argv[0] == "expand"
+    name = " ".join(argv[1:] if expand else argv)
 
     async def run() -> None:
         pool = await create_pool(get_settings().database_url)
         try:
-            print(f"ingested: {await aim_form_d(Actions(pool), name)}")
+            actions = Actions(pool)
+            result = (
+                await expand_filings(actions, name) if expand
+                else await aim_form_d(actions, name)
+            )
+            print(f"ingested: {result}")
         finally:
             await pool.close()
 
