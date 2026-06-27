@@ -605,3 +605,25 @@ and `docker run` do too.
   Action exists (design intent only) — the demo false-positive reversal was direct SQL on :5439.
   RESIDUAL: clinicaltrials still mints junk Person nodes from contact-field strings (pre-existing,
   separate parser issue).
+- **GLEIF + DELIVERABLE HARDENING (DONE, 2026-06-26, 3d95c26/c7e7955):** operator picked "GLEIF
+  global registry" + "harden the deliverable" (deferred acronym-LP cross-base as false-positive-
+  prone). 237 tests green, ruff + mypy --strict clean.
+  - **GLEIF** (`src/ingest/gleif.py`): keyless global LEI registry. Organization per LEI
+    (`lei:<LEI>`) + jurisdiction/status/country + `subsidiary_of`/`ultimate_parent` links from
+    Level-2 ownership. The LEI is a DETERMINISTIC cross-base key → `find_cross_base_candidates`
+    gains a shared-LEI pass (0.95 vs 0.6 name). Fuzzy name filter post-filtered to normalized-name
+    matches (cuts 'ProShares Ultra Anthropic' ETF noise). MCP `lookup_lei`; sources `gleif`. Live:
+    GOLDMAN SACHS INTERNATIONAL → GS GROUP UK → THE GOLDMAN SACHS GROUP, INC. HONEST LIMIT: GLEIF
+    Level-2 parent reporting is VOLUNTARY/sparse — most entities (Tesla subs, Anthropic PBC) 404.
+  - **Harden the deliverable (3 fixes):** (1) MERGE-AWARE Principals — the dossier section I'd
+    added joined link targets raw + filtered active, so a confirmed Person merge DROPPED the
+    loser's roles (violated the merge-aware invariant in my own new code); now forward-resolves
+    each link to its merge winner (walk merged_into) + groups by resolved id. (2) NAME-VARIANT
+    person ER candidates (`resolution._name_variant`): two people behind the SAME company (resolved
+    to its winner — cluster-aware) with identical names (0.7) or nickname/initial variant
+    (Alex/Alexander, 0.55); review-gated, never auto (#3). (3) JUNK-PERSON guard
+    (`entity_type.is_plausible_person_name`): ClinicalTrials skips contact-string "officials"
+    ("Call 1-877-…", "…(dept. 2834)"). Live proof: confirming the Mashinsky candidate collapses
+    the Celsius dossier to ONE "Alexander Mashinsky — director, founded_by, officer (edgar,
+    wikidata)". DELIBERATELY SKIPPED: acronym LP cross-base (BP↔Brilliant Phoenix) — token-overlap
+    on "neuralink" would merge every Neuralink SPV; GP-level fusion + LEI link the families safely.
