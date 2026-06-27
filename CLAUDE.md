@@ -589,3 +589,19 @@ and `docker run` do too.
   an Org that deterministically cross-base-fuses with bc-reg:A0127997 (also cleans the
   Sydecar/MyAsiaVC "Person" artifacts). CSA NRS / CanLII deferred (CanLII needs a key → breaks
   keyless; CSA aretheyregistered.ca is a JS app w/o a clean public API).
+- **PERSON-vs-ORG CLASSIFIER — at ingest + retroactive repair (DONE, 2026-06-26, d58cee0):** the
+  root cause behind the BC↔EDGAR fusion miss + the "LLC Sydecar"/"MyAsiaVC" Person artifacts: Form
+  D's related-persons parser typed every entity as Person. `src/ontology/entity_type.py`
+  (`is_organization`/`classify_entity_type`/`clean_entity_name`) — CONSERVATIVE (legal-form token /
+  curated org-noun / '&' ⇒ Org; a plain name stays Person, so a real person is never made a
+  company; strips Form D 'N/A' placeholders). Applied in `edgar_formd` at ingest (Org→`sec-org:`,
+  Person→`sec-person:`). `resolution.reclassify_mistyped_entities` heals EXISTING mistyped nodes by
+  minting the Org + MERGING the Person into it (event-sourced, reversible, one-direction); wired
+  into MCP `consolidate`. Live: 31 GP/LLC/Fund "persons" re-typed → 5 cross-base merges → **EDGAR
+  'Brilliant Phoenix GP Inc.' FUSES with bc-reg:A0127997**, closing the BC↔EDGAR loop through the
+  GP. Emperor-naked: a "name has a digit ⇒ org" first cut false-flagged 'Desiree Lambert Inmate No.
+  13432-046' (+2 clinical-contact artifacts) → removed (redundant; real orgs carry a word token),
+  reversed the 3 bad demo merges, added a stray-digit regression. 232 tests green. NB: no `unmerge`
+  Action exists (design intent only) — the demo false-positive reversal was direct SQL on :5439.
+  RESIDUAL: clinicaltrials still mints junk Person nodes from contact-field strings (pre-existing,
+  separate parser issue).
