@@ -760,3 +760,17 @@ and `docker run` do too.
   Hermetic (fake LLM); live compose needs ANTHROPIC_API_KEY (the pipeline is proven; wire a real
   DocDelta/DocFetch off edgar_formd + AnthropicClient to run it live). The original 5-step persistence
   build order is COMPLETE. NEXT: Phases 6/7 (operator asked for minimal working proofs).
+- **CRON BUILD Phase 6 — placeful satellite (DONE, 2026-06-26):** minimal working proof of
+  vantage-bound collection the placeless core can't do (residential IP / session-bound browser /
+  a network only reachable elsewhere). Migration 0007 `collection_jobs` (dispatch queue, atomic
+  claim via FOR UPDATE SKIP LOCKED on the queued partial index, mirrors helper_runs).
+  `src/orchestrator/satellite.py`: `dispatch_collection` (core enqueues) / `claim_collection_job`
+  (a satellite atomically claims a job with no vantage or a vantage it provides) /
+  `run_satellite_once(actions, satellite_id, collectors, vantages=)` (claim → run the injected
+  vantage-bound Collector → emit results into the CENTRAL graph via the Actions waist, attributed
+  `satellite:<id>` → mark done/failed). Coordination is ONLY Postgres (the bus) — a satellite runs
+  on any box that reaches the DB. 273 tests green (+5), ruff + mypy --strict clean. Proof:
+  `tests/test_satellite.py` (5, real PG) — dispatch→wrong-vantage idle / right-vantage collects into
+  the graph; atomic single-winner claim; vantageless job served by any; unknown-kind fails the JOB
+  not the satellite; collector error isolated. The Collector is the seam a real browser/residential
+  fetch plugs into. NEXT: Phase 7 — hosting cuts (multi-process topology).
