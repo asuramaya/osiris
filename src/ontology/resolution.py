@@ -71,6 +71,19 @@ async def _insert(
     return row is not None
 
 
+def _name_variant(a: str, b: str) -> bool:
+    """Two names are a likely same-person variant iff they share a surname (last token)
+    and one first name is a prefix or single-initial of the other ('Alex'/'Alexander',
+    'J.'/'John') — but are NOT identical (exact matches are handled by stronger rules)."""
+    ta, tb = a.lower().split(), b.lower().split()
+    if len(ta) < 2 or len(tb) < 2 or ta[-1] != tb[-1]:
+        return False
+    fa, fb = ta[0].rstrip("."), tb[0].rstrip(".")
+    if not fa or not fb or fa == fb:
+        return False
+    return fa.startswith(fb) or fb.startswith(fa)
+
+
 async def find_person_merge_candidates(pool: asyncpg.Pool) -> int:
     """Queue Person merge candidates from shared identifiers / name+DOB /
     name+employer+city. Returns the number of new candidates queued."""
@@ -125,6 +138,41 @@ async def find_person_merge_candidates(pool: asyncpg.Pool) -> int:
         "JOIN objects ob ON ob.id=nb.object_id AND ob.type='Person'"
     ):
         add(r["x"], r["y"], 0.8, "name+employer+city")
+
+    # two people behind the SAME company (resolved to its merge winner, so links on a
+    # pre-merge company node still group) whose names are identical (0.7) or a compatible
+    # variant — a nickname/initial of the other, 'Alex'/'Alexander' Mashinsky (0.55).
+    # Exact-name rules elsewhere need a DOB/city; this uses the shared employer link.
+    # Weak + review-gated (never auto-merges a Person, #3).
+    for r in await pool.fetch(
+        "WITH RECURSIVE cwalk AS ("
+        "  SELECT DISTINCT l.from_id AS raw, l.from_id AS cur FROM links l "
+        "    WHERE l.type IN ('officer','director','founded_by','manager') "
+        "  UNION ALL "
+        "  SELECT c.raw, o.merged_into FROM cwalk c JOIN objects o ON o.id=c.cur "
+        "    WHERE o.merged_into IS NOT NULL"
+        "), cwin AS ("
+        "  SELECT raw, cur AS company FROM cwalk c "
+        "  WHERE NOT EXISTS "
+        "    (SELECT 1 FROM objects o WHERE o.id=c.cur AND o.merged_into IS NOT NULL)"
+        "), plinks AS ("
+        "  SELECT cwin.company, l.to_id AS person, "
+        "    (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=l.to_id "
+        "     AND a.name='name' ORDER BY confidence DESC LIMIT 1) AS nm "
+        "  FROM links l JOIN cwin ON cwin.raw=l.from_id "
+        "  JOIN objects p ON p.id=l.to_id AND p.type='Person' AND p.status='active' "
+        "  WHERE l.type IN ('officer','director','founded_by','manager')"
+        ") "
+        "SELECT DISTINCT a.person AS x, b.person AS y, a.nm AS xn, b.nm AS yn "
+        "FROM plinks a JOIN plinks b ON a.company=b.company AND a.person < b.person"
+    ):
+        xn, yn = r["xn"], r["yn"]
+        if not xn or not yn:
+            continue
+        if xn.strip().lower() == yn.strip().lower():
+            add(r["x"], r["y"], 0.7, f"same org + same name: {xn}")
+        elif _name_variant(xn, yn):
+            add(r["x"], r["y"], 0.55, f"same org + name variant: {xn} / {yn}")
 
     suppressed = await _suppressed(pool)
     queued = 0

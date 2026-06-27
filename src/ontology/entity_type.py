@@ -69,3 +69,19 @@ def is_organization(name: str) -> bool:
 def classify_entity_type(name: str) -> str:
     """'Organization' or 'Person' for a bare name (the ontology types)."""
     return "Organization" if is_organization(name) else "Person"
+
+
+# Tokens that betray a CONTACT STRING masquerading as a person name (ClinicalTrials
+# 'overallOfficials' sometimes carries "Call 1-877-CTLILLY ..." or "Clinical
+# Transparency (dept. 2834)" instead of an investigator).
+_NOT_A_NAME = re.compile(r"\d|@|https?://|www\.|\bcall\b|\bdept\b|\bdepartment\b|\bhotline\b", re.I)
+
+
+def is_plausible_person_name(name: str) -> bool:
+    """A conservative gate before minting a Person: reject org-shaped names and obvious
+    contact strings (phone/email/url/'call'/'dept'/digits) and sentence-length blobs."""
+    s = clean_entity_name(name)
+    if not s or is_organization(s) or _NOT_A_NAME.search(s):
+        return False
+    toks = s.split()
+    return 2 <= len(toks) <= 5   # a real name is 2–5 tokens, not one word or a sentence

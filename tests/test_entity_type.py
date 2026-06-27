@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import pytest
-from src.ontology.entity_type import classify_entity_type, clean_entity_name, is_organization
+from src.ontology.entity_type import (
+    classify_entity_type,
+    clean_entity_name,
+    is_organization,
+    is_plausible_person_name,
+)
 
 _ORGS = [
     "Brilliant Phoenix GP Inc.",
@@ -54,3 +59,14 @@ def test_person_with_stray_digits_is_not_an_org() -> None:
     # a bare digit must NOT trigger org — people carry case/inmate numbers in filings
     assert is_organization("Desiree Lambert Inmate No. 13432-046") is False
     assert is_organization("John Smith 3rd") is False
+
+
+def test_plausible_person_name_gate() -> None:
+    assert is_plausible_person_name("Jaimie Henderson") is True
+    assert is_plausible_person_name("Dr. Nader Pouratian") is True
+    # contact strings / orgs / one-word / sentences are rejected
+    assert is_plausible_person_name("Call 1-877-CTLILLY (1-877-285-4559)") is False
+    assert is_plausible_person_name("Clinical Transparency (dept. 2834)") is False
+    assert is_plausible_person_name("Brilliant Phoenix GP Inc.") is False
+    assert is_plausible_person_name("Madonna") is False
+    assert is_plausible_person_name("contact@trial.org") is False

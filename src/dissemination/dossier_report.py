@@ -135,34 +135,45 @@ async def build_dossier_report(pool: asyncpg.Pool, object_id: uuid.UUID) -> str:
         out.append("")
 
     # --- principals (the people behind the entity) ------------------------
+    # MERGE-AWARE: forward-resolve each link's target to its active merge winner (walk
+    # merged_into), so a confirmed 'Alex'=='Alexander' Mashinsky collapses to ONE
+    # principal with all roles unioned — not two, nor one with its roles dropped.
     people = await pool.fetch(
-        "SELECT l.type AS role, l.source_id, "
-        "  (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=p.id "
+        "WITH RECURSIVE links0 AS ("
+        "  SELECT l.to_id AS raw, l.type AS role, l.source_id FROM links l "
+        "  WHERE l.from_id = ANY($1::uuid[]) AND l.type IN "
+        "    ('officer','director','founded_by','founder','manager','agent','employs')"
+        "), walk AS ("
+        "  SELECT raw, raw AS cur, role, source_id FROM links0 "
+        "  UNION ALL "
+        "  SELECT w.raw, o.merged_into, w.role, w.source_id "
+        "  FROM walk w JOIN objects o ON o.id=w.cur WHERE o.merged_into IS NOT NULL"
+        ") "
+        "SELECT w.cur AS pid, w.role, w.source_id, "
+        "  (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=w.cur "
         "   AND a.name='name' ORDER BY confidence DESC LIMIT 1) AS nm "
-        "FROM links l JOIN objects p ON p.id=l.to_id AND p.type='Person' AND p.status='active' "
-        "WHERE l.from_id = ANY($1::uuid[]) "
-        "  AND l.type IN ('officer','director','founded_by','founder','manager','agent','employs') "
-        "ORDER BY nm",
+        "FROM walk w JOIN objects p ON p.id=w.cur AND p.type='Person' AND p.status='active' "
+        "WHERE NOT EXISTS "
+        "  (SELECT 1 FROM objects o2 WHERE o2.id=w.cur AND o2.merged_into IS NOT NULL)",
         cluster,
     )
     if people:
-        # group by person → the set of roles + sources (a person is often both
-        # officer and director; collapse so each principal is one line)
-        agg: dict[str, dict[str, set[str]]] = {}
+        # group by resolved person id (not name) so merged variants collapse to one line
+        agg: dict[str, dict[str, Any]] = {}
         for r in people:
             if not r["nm"]:
                 continue
-            e = agg.setdefault(r["nm"], {"roles": set(), "src": set()})
+            e = agg.setdefault(str(r["pid"]), {"name": r["nm"], "roles": set(), "src": set()})
             e["roles"].add(r["role"])
             if r["source_id"]:
                 e["src"].add(r["source_id"])
         if agg:
             out += ["## Principals", ""]
-            for nm in sorted(agg):
-                roles = ", ".join(sorted(agg[nm]["roles"]))
-                src = ", ".join(sorted(agg[nm]["src"]))
-                sources.update(agg[nm]["src"])
-                out.append(f"- **{nm}** — {roles}  _({src} · authoritative)_")
+            for e in sorted(agg.values(), key=lambda x: x["name"]):
+                roles = ", ".join(sorted(e["roles"]))
+                src = ", ".join(sorted(e["src"]))
+                sources.update(e["src"])
+                out.append(f"- **{e['name']}** — {roles}  _({src} · authoritative)_")
             out.append("")
 
     # --- financing (Form D feeders raising for it) ------------------------

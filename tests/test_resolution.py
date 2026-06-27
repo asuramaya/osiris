@@ -109,3 +109,27 @@ async def test_behavioral_merge_on_shared_ttps(actions: Actions, case_id: str) -
     assert queued == 1
     pair = (await review_tray(actions.pool))[0]
     assert {pair["a_id"], pair["b_id"]} == {lazarus, twin}
+
+
+async def test_name_variant_same_org_queues_review_candidate(actions: Actions) -> None:
+    """'Alex Mashinsky' & 'Alexander Mashinsky' both officers of the same company are
+    queued as a (weak, review-gated) person-merge candidate; a different surname is not."""
+    co = await actions.create_or_find_object("Organization", "cik:celsius", "edgar")
+    alex = await actions.create_or_find_object("Person", "sec-person:alex mashinsky", "edgar")
+    await actions.assert_property(alex, "name", "Alex Mashinsky", "edgar", NOW, 0.85)
+    alexander = await actions.create_or_find_object(
+        "Person", "sec-person:alexander mashinsky", "edgar")
+    await actions.assert_property(alexander, "name", "Alexander Mashinsky", "edgar", NOW, 0.85)
+    # a same-company officer with an UNRELATED name must NOT be proposed
+    other = await actions.create_or_find_object("Person", "sec-person:daniel leon", "edgar")
+    await actions.assert_property(other, "name", "Daniel Leon", "edgar", NOW, 0.85)
+    for p in (alex, alexander, other):
+        await actions.create_link(co, p, "officer", "edgar", NOW, 0.85)
+
+    await find_person_merge_candidates(actions.pool)
+    tray = await review_tray(actions.pool)
+    pairs = {frozenset((t["a_id"], t["b_id"])) for t in tray}
+    assert frozenset((alex, alexander)) in pairs          # the variant is queued
+    assert frozenset((alex, other)) not in pairs          # different surname is not
+    cand = next(t for t in tray if {t["a_id"], t["b_id"]} == {alex, alexander})
+    assert cand["score"] == pytest.approx(0.55)

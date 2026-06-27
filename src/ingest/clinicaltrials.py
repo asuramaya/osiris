@@ -29,6 +29,7 @@ import httpx
 from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.db.pool import create_pool
+from src.ontology.entity_type import is_plausible_person_name
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -113,6 +114,10 @@ async def ingest_study(
         n_link += 1
 
     for o in parsed.get("officials") or []:
+        # 'overallOfficials' occasionally carries a contact string ("Call 1-877-...")
+        # instead of an investigator — don't mint a junk Person from it.
+        if not is_plausible_person_name(o["name"]):
+            continue
         person = await actions.create_or_find_object(
             "Person", f"ctgov-person:{_norm(o['name'])}", _SOURCE, case_id
         )
