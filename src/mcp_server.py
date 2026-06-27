@@ -26,6 +26,7 @@ from src.ingest.clinicaltrials import aim_trials, expand_facility
 from src.ingest.courtlistener import aim_litigation
 from src.ingest.edgar_formd import aim_form_d, expand_filings
 from src.ingest.etherscan import aim_address, screen_against_sanctions
+from src.ingest.orgbook import aim_orgbook
 from src.ingest.wikidata import aim as wikidata_aim
 from src.ontology.resolution import (
     consolidate_companies,
@@ -123,6 +124,15 @@ async def expand_operator(name: str) -> dict[str, Any]:
     """Pull a repeat player's thread: every Form D mentioning this operator → their
     whole portfolio, exposing the co-investment network."""
     return await expand_filings(Actions(await _pool_get()), name)
+
+
+@mcp.tool()
+async def verify_bc_entity(name: str) -> dict[str, int]:
+    """Canadian (British Columbia) corporate registry via OrgBook BC (keyless): pull a
+    company/partnership — or a whole family name like 'Brilliant Phoenix' — with its BC
+    registration number, CRA business number, type, status, and jurisdiction. Verifies
+    registration + legal existence (not directors/owners). Cross-resolves to EDGAR."""
+    return await aim_orgbook(Actions(await _pool_get()), name)
 
 
 @mcp.tool()

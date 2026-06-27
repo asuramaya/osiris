@@ -61,6 +61,11 @@ _COLLECT: tuple[Capability, ...] = (
         "ingest_litigation",
     ),
     Capability(
+        "bc_registry", "Canadian (BC) corporate registry", "collect", ("Organization",),
+        "BC registration #, CRA business #, type/status/jurisdiction — verify + the family",
+        "verify_bc_entity",
+    ),
+    Capability(
         "etherscan", "On-chain trace (Etherscan)", "collect", ("CryptoAddress",),
         "an EVM address's top counterparties, balance, token flow, contract identity",
         "trace_wallet", keyless=False,  # Etherscan v2 needs a free key
