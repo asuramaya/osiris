@@ -66,6 +66,11 @@ _COLLECT: tuple[Capability, ...] = (
         "verify_bc_entity",
     ),
     Capability(
+        "gleif", "Global LEI registry (GLEIF)", "collect", ("Organization",),
+        "the entity's LEI (deterministic global key) + jurisdiction + ownership parents",
+        "lookup_lei",
+    ),
+    Capability(
         "etherscan", "On-chain trace (Etherscan)", "collect", ("CryptoAddress",),
         "an EVM address's top counterparties, balance, token flow, contract identity",
         "trace_wallet", keyless=False,  # Etherscan v2 needs a free key

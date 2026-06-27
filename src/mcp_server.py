@@ -26,6 +26,7 @@ from src.ingest.clinicaltrials import aim_trials, expand_facility
 from src.ingest.courtlistener import aim_litigation
 from src.ingest.edgar_formd import aim_form_d, expand_filings
 from src.ingest.etherscan import aim_address, screen_against_sanctions
+from src.ingest.gleif import aim_gleif
 from src.ingest.orgbook import aim_orgbook
 from src.ingest.wikidata import aim as wikidata_aim
 from src.ontology.resolution import (
@@ -125,6 +126,14 @@ async def expand_operator(name: str) -> dict[str, Any]:
     """Pull a repeat player's thread: every Form D mentioning this operator → their
     whole portfolio, exposing the co-investment network."""
     return await expand_filings(Actions(await _pool_get()), name)
+
+
+@mcp.tool()
+async def lookup_lei(name: str) -> dict[str, int]:
+    """GLEIF global LEI registry (keyless): the entity's Legal Entity Identifier,
+    jurisdiction, status, and corporate ownership parents (direct + ultimate). The LEI
+    is a deterministic global key — it cross-resolves the same company across bases."""
+    return await aim_gleif(Actions(await _pool_get()), name)
 
 
 @mcp.tool()

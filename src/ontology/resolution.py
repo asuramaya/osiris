@@ -681,6 +681,33 @@ async def find_cross_base_candidates(pool: asyncpg.Pool, *, min_len: int = 4) ->
                 bases = "/".join(sorted(sa | sb))
                 if await _insert(pool, lo, hi, 0.6, [f"cross-base org match: {norm} ({bases})"]):
                     queued += 1
+
+    # deterministic pass: two objects sharing an LEI ARE the same entity (the LEI is a
+    # global primary key) — far stronger than a normalized-name match, so score 0.95.
+    lei_rows = await pool.fetch(
+        "SELECT lower(btrim(a.value #>> '{}')) AS lei, a.object_id, "
+        "  (SELECT array_agg(DISTINCT source_id) FROM assertions s "
+        "   WHERE s.object_id=a.object_id) AS sources "
+        "FROM current_assertions a "
+        "JOIN objects o ON o.id=a.object_id AND o.type='Organization' AND o.status='active' "
+        "WHERE a.name='lei' AND length(btrim(a.value #>> '{}'))=20"
+    )
+    lei_buckets: dict[str, list[tuple[uuid.UUID, frozenset[str]]]] = {}
+    for r in lei_rows:
+        lei_buckets.setdefault(r["lei"], []).append(
+            (r["object_id"], frozenset(r["sources"] or []))
+        )
+    for lei, lmembers in lei_buckets.items():
+        for i in range(len(lmembers)):
+            for j in range(i + 1, len(lmembers)):
+                (a, sa), (b, sb) = lmembers[i], lmembers[j]
+                if a == b or sa == sb:
+                    continue
+                lo, hi = sorted((a, b))
+                if frozenset((lo, hi)) in suppressed:
+                    continue
+                if await _insert(pool, lo, hi, 0.95, [f"shared LEI: {lei}"]):
+                    queued += 1
     return queued
 
 
