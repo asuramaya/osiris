@@ -18,6 +18,9 @@ import asyncpg
 
 from src.actions.core import ActionError, Actions
 from src.ontology.canonicalize import canonicalize
+from src.ontology.entity_type import clean_entity_name, is_organization
+from src.parsers.base import EvidenceClass
+from src.parsers.evidence import confidence_for
 
 Pair = tuple[uuid.UUID, uuid.UUID]
 
@@ -486,6 +489,50 @@ async def find_sanctions_candidates(pool: asyncpg.Pool) -> int:
         if await _insert(pool, a, b, score, reasons):
             queued += 1
     return queued
+
+
+async def reclassify_mistyped_entities(actions: Actions, *, limit: int | None = None) -> int:
+    """Repair pass: a Person object whose NAME is clearly an organization ('Brilliant
+    Phoenix GP Inc.', 'LLC Sydecar' — Form D 'related persons' that are GP entities) is
+    re-typed by minting the proper Organization and MERGING the Person into it (event-
+    sourced, reversible). The mis-typed node's links resolve-on-read to the Org, so
+    principals/screening stop seeing fake people and the entity now cross-base-resolves.
+    One direction only (Person→Org), gated on the conservative classifier; never the
+    reverse, so a real person is never turned into a company."""
+    rows = await actions.pool.fetch(
+        "SELECT o.id, "
+        "  (SELECT value #>> '{}' FROM current_assertions a "
+        "   WHERE a.object_id=o.id AND a.name='name' ORDER BY confidence DESC LIMIT 1) AS nm "
+        "FROM objects o WHERE o.type='Person' AND o.status='active'"
+    )
+    ts = datetime.now(UTC)
+    conf = confidence_for(EvidenceClass.AUTHORITATIVE_API)
+    n = 0
+    for r in rows:
+        nm = r["nm"]
+        if not nm or not is_organization(nm):
+            continue
+        cleaned = clean_entity_name(nm) or nm
+        org_id = await actions.create_or_find_object(
+            "Organization", "sec-org:" + cleaned.lower(), "reclassify"
+        )
+        await actions.assert_property(
+            org_id, "name", cleaned, "reclassify", ts, conf,
+            evidence_class=EvidenceClass.AUTHORITATIVE_API.value,
+        )
+        if org_id == r["id"]:
+            continue
+        try:
+            await actions.merge_objects(
+                org_id, r["id"],
+                "reclassified Person->Organization (name carries an org signal)", "reclassify",
+            )
+            n += 1
+        except ActionError:
+            continue
+        if limit is not None and n >= limit:
+            break
+    return n
 
 
 async def screen_network(

@@ -31,6 +31,7 @@ from src.ingest.wikidata import aim as wikidata_aim
 from src.ontology.resolution import (
     consolidate_companies,
     find_cross_base_candidates,
+    reclassify_mistyped_entities,
     resolve_cross_base,
     screen_network,
 )
@@ -185,11 +186,14 @@ async def expand_clinical_site(facility: str) -> dict[str, int]:
 
 @mcp.tool()
 async def consolidate() -> dict[str, int]:
-    """Graph hygiene: queue + resolve cross-base merges (same company across bases) and
-    collapse SPV-name company variants. Run after collecting to de-fragment entities."""
+    """Graph hygiene: re-type mis-ingested entities (GP/LLC 'persons' -> Organizations),
+    then queue + resolve cross-base merges (same company across bases) and collapse
+    SPV-name company variants. Run after collecting to de-fragment entities."""
     actions = Actions(await _pool_get())
+    reclassified = await reclassify_mistyped_entities(actions)
     await find_cross_base_candidates(actions.pool)
     return {
+        "entities_retyped": reclassified,
         "cross_base_merges": await resolve_cross_base(actions),
         "company_variants_merged": await consolidate_companies(actions),
     }

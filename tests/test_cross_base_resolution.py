@@ -8,6 +8,8 @@ from src.actions.core import Actions
 from src.ontology.resolution import (
     find_cross_base_candidates,
     normalize_org_name,
+    reclassify_mistyped_entities,
+    resolve_cross_base,
     review_tray,
 )
 
@@ -69,6 +71,35 @@ async def test_resolve_cross_base_merges_distinctive_cluster(actions: Actions) -
     # everything now resolves to the CIK (most authoritative canonical)
     assert await actions.resolve_object_id(comp) == cik
     assert await actions.resolve_object_id(wiki) == cik
+
+
+async def test_reclassify_heals_mistyped_person_and_enables_cross_base(
+    actions: Actions,
+) -> None:
+    # a GP entity mis-ingested as a Person (the Form D defect), an officer-style link to
+    # it, and the SAME entity correctly typed as an Org from another base (BC registry)
+    fake_person = await actions.create_or_find_object(
+        "Person", "sec-person:n/a brilliant phoenix gp inc.", "edgar")
+    await actions.assert_property(
+        fake_person, "name", "n/a Brilliant Phoenix GP Inc.", "edgar", NOW, 0.85)
+    spv = await _org(actions, "cik:99", "BP Neuralink LP", "edgar")
+    await actions.create_link(spv, fake_person, "director", "edgar", NOW, 0.85)
+    bc = await _org(actions, "bc-reg:A0127997", "BRILLIANT PHOENIX GP INC.", "orgbook")
+
+    # repair: the fake person re-types into an Organization
+    assert await reclassify_mistyped_entities(actions) == 1
+    org = await actions.create_or_find_object(
+        "Organization", "sec-org:brilliant phoenix gp inc.", "reclassify")
+    assert await actions.resolve_object_id(fake_person) == org  # merged into the Org
+    # the director link now resolves to the Org, not a fake person
+    assert await actions.pool.fetchval(
+        "SELECT type FROM objects WHERE id=$1", org) == "Organization"
+
+    # and now the EDGAR-side Org cross-base-resolves with the BC registry entity
+    await find_cross_base_candidates(actions.pool)
+    merged = await resolve_cross_base(actions)
+    assert merged >= 1
+    assert await actions.resolve_object_id(org) == await actions.resolve_object_id(bc)
 
 
 async def test_resolve_cross_base_skips_short_names(actions: Actions) -> None:

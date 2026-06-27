@@ -30,6 +30,7 @@ import httpx
 from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.db.pool import create_pool
+from src.ontology.entity_type import classify_entity_type, clean_entity_name
 from src.ontology.resolution import normalize_org_name
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
@@ -150,21 +151,28 @@ async def ingest_form_d(
         await put(k, v)
 
     for p in parsed.get("persons") or []:
-        key = "sec-person:" + p["name"].strip().lower()
-        person_id = await actions.create_or_find_object("Person", key, _SOURCE, case_id)
+        # a Form D "related person" is OFTEN actually the GP entity ('Brilliant Phoenix
+        # GP Inc.', 'LLC Sydecar'); classify so those become Organizations, not fake
+        # people that pollute principals/screening and never cross-base-resolve.
+        name = clean_entity_name(p["name"]) or p["name"]
+        etype = classify_entity_type(name)
+        prefix = "sec-org:" if etype == "Organization" else "sec-person:"
+        ent_id = await actions.create_or_find_object(
+            etype, prefix + name.strip().lower(), _SOURCE, case_id
+        )
         n_person += 1
         await actions.assert_property(
-            person_id, "name", p["name"], _SOURCE, ts, _CONF, case_id=case_id, evidence_class=_EC
+            ent_id, "name", name, _SOURCE, ts, _CONF, case_id=case_id, evidence_class=_EC
         )
         if p.get("city") or p.get("state"):
             loc = ", ".join(x for x in (p.get("city"), p.get("state")) if x)
             await actions.assert_property(
-                person_id, "location", loc, _SOURCE, ts, _CONF,
+                ent_id, "location", loc, _SOURCE, ts, _CONF,
                 case_id=case_id, evidence_class=_EC,
             )
         for rel in p.get("relationships") or ["officer"]:
             if await _link_once(
-                actions, issuer_id, person_id, _REL.get(rel, "officer"),
+                actions, issuer_id, ent_id, _REL.get(rel, "officer"),
                 ts=ts, conf=_CONF, ec=_EC, case_id=case_id,
             ):
                 n_link += 1
