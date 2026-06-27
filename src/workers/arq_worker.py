@@ -10,6 +10,7 @@ startup and drains the outbox on a short cron. Run with:
 from __future__ import annotations
 
 import logging
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -22,10 +23,11 @@ from src.connectors.registry import CONNECTORS
 from src.db.pool import create_pool
 from src.db.redis import create_redis
 from src.orchestrator.budgets import BudgetLedger
-from src.orchestrator.cascade import CascadeContext, run_cascade
+from src.orchestrator.cascade import CascadeContext, expand_case, run_cascade
 from src.orchestrator.manifests import load_manifests
 from src.orchestrator.monitor import Puller, evaluate_subscriptions, tick
 from src.orchestrator.ratelimit import RateLimiter
+from src.orchestrator.runner import reap_stale_runs
 
 _HELPERS_DIR = Path(__file__).resolve().parent.parent.parent / "helpers"
 _log = logging.getLogger("osiris.worker")
@@ -61,6 +63,14 @@ async def drain_cascade(ctx: dict[str, Any]) -> int:
     return await run_cascade(ctx["cascade"])
 
 
+async def expand_case_job(ctx: dict[str, Any], case_id: str) -> int:
+    """The heavy case-expansion the API used to run inline in its own event loop.
+    It is ENQUEUED here so a long crawl can never block or crash the console — the
+    worker⊥surface cut. The API's SSE stream still surfaces progress, reading the
+    same Postgres this writes to."""
+    return await expand_case(ctx["cascade"], uuid.UUID(case_id))
+
+
 async def evaluate_watch(ctx: dict[str, Any]) -> int:
     """The tripwire: match new outbox mutations against saved subscriptions."""
     return await evaluate_subscriptions(ctx["pool"])
@@ -78,18 +88,25 @@ async def run_source_ticks(ctx: dict[str, Any]) -> int:
     return total
 
 
+async def reap_runs(ctx: dict[str, Any]) -> int:
+    """Self-heal: recover runs orphaned by a crashed worker so a restart re-claims."""
+    return await reap_stale_runs(ctx["pool"])
+
+
 class WorkerSettings:
-    functions: list[Any] = []
+    # enqueueable jobs (the API hands heavy work here instead of running it inline)
+    functions: list[Any] = [expand_case_job]
     cron_jobs = [
         cron(drain_cascade, second=set(range(0, 60, 5)), run_at_startup=True),
         # the watch: evaluate subscriptions every 5s (offset from the cascade drain),
         # pull source deltas once a minute.
         cron(evaluate_watch, second=set(range(2, 60, 5)), run_at_startup=True),
         cron(run_source_ticks, minute=set(range(0, 60)), second={0}),
+        # self-heal orphaned claims every 5 min (the failure-drill recovery path).
+        cron(reap_runs, minute=set(range(0, 60, 5)), run_at_startup=True),
     ]
     on_startup = startup
     on_shutdown = shutdown
-
-    @staticmethod
-    def redis_settings() -> RedisSettings:
-        return RedisSettings.from_dsn(get_settings().redis_url)
+    # arq reads this attribute AS the RedisSettings (not a callable) — a staticmethod
+    # here makes arq do `.host` on the function object and die at boot. Bind the value.
+    redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

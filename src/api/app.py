@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Any
 
 import asyncpg
+from arq import create_pool as create_arq_pool
+from arq.connections import RedisSettings
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -45,8 +47,6 @@ from src.ontology.resolution import (
     resolve_candidate,
     review_tray,
 )
-from src.orchestrator.budgets import BudgetLedger
-from src.orchestrator.cascade import CascadeContext, expand_case
 from src.orchestrator.cobrowse import cobrowse_open
 from src.orchestrator.dossier import entity_dossier
 from src.orchestrator.federation import federated_query, promote, to_preview
@@ -55,7 +55,6 @@ from src.orchestrator.handoff import abandon, open_handoff, post_back
 from src.orchestrator.handoff import tray as handoff_tray
 from src.orchestrator.manifests import load_manifests, project_triggers
 from src.orchestrator.monitor import create_subscription
-from src.orchestrator.ratelimit import RateLimiter
 from src.orchestrator.runner import load_input_object
 
 _HELPERS_DIR = Path(__file__).resolve().parent.parent.parent / "helpers"
@@ -63,12 +62,6 @@ _UI_DIR = Path(__file__).resolve().parent.parent / "ui" / "static"
 
 
 _log = logging.getLogger("osiris.api")
-
-
-def _on_expand_done(task: asyncio.Task[Any]) -> None:
-    """Surface background-expand failures instead of swallowing them."""
-    if not task.cancelled() and task.exception() is not None:
-        _log.error("background expand failed: %r", task.exception())
 
 
 def get_pool(request: Request) -> asyncpg.Pool:
@@ -111,13 +104,16 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         app.state.manifests = {**load_manifests(_HELPERS_DIR), **searches, **suggest_manifests()}
         app.state.connectors = {**CONNECTORS, **{hid: searxng_search for hid in searches}}
         app.state.redis = create_redis(settings.redis_url)
-        app.state.tasks = set()  # holds background expand tasks so they aren't GC'd
+        # the Arq queue: the API ENQUEUES heavy jobs (e.g. case expansion) onto the
+        # worker via this pool instead of running them inline — the worker⊥surface cut.
+        app.state.arq = await create_arq_pool(RedisSettings.from_dsn(settings.redis_url))
         # triggers are a projection of manifests (#5) — (re)project on startup so a
         # fresh deployment actually fires helpers (else Expand finds no triggers).
         await project_triggers(app.state.pool, app.state.manifests)
         try:
             yield
         finally:
+            await app.state.arq.aclose()
             await app.state.redis.aclose()
             if own:
                 await app.state.pool.close()
@@ -148,20 +144,13 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         return {"object_id": str(object_id), "type": type_, "canonical": body.raw.strip()}
 
     @app.post("/cases/{case_id}/expand")
-    async def case_expand(case_id: uuid.UUID, request: Request) -> dict[str, bool]:
-        """Fire helpers across the case in the BACKGROUND and return immediately;
-        the SSE stream surfaces entities as they arrive (non-blocking expand)."""
-        ctx = CascadeContext(
-            actions=Actions(request.app.state.pool),
-            limiter=RateLimiter(request.app.state.redis),
-            ledger=BudgetLedger(request.app.state.pool, request.app.state.redis),
-            manifests=request.app.state.manifests,
-            connectors=request.app.state.connectors,
-        )
-        task = asyncio.create_task(expand_case(ctx, case_id))
-        request.app.state.tasks.add(task)
-        task.add_done_callback(_on_expand_done)
-        return {"started": True}
+    async def case_expand(case_id: uuid.UUID, request: Request) -> dict[str, Any]:
+        """ENQUEUE the case expansion onto the worker and return immediately. The
+        heavy crawl never runs in the API's event loop (the worker⊥surface cut), so a
+        runaway expansion can't block or crash the console. The SSE stream surfaces
+        progress, reading the same Postgres the worker writes to."""
+        job = await request.app.state.arq.enqueue_job("expand_case_job", str(case_id))
+        return {"started": True, "job_id": job.job_id if job else None}
 
     @app.patch("/cases/{case_id}")
     async def patch_case(

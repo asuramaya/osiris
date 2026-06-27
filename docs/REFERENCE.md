@@ -129,11 +129,13 @@ src/
   dissemination/  dossier_report (the Markdown deliverable) · brief (PDF)
   connectors/     network seams (http clients, store, browser/leases [experimental])
   api/            FastAPI app (the human surface)
-  workers/        Arq worker (background/cascade execution)
+  workers/        Arq worker — enqueued jobs (expand_case_job) + crons (cascade drain,
+                  watch evaluate/tick, stale-run reaper). Fate-isolated from the API.
   mcp_server.py   the MCP server (the AI surface)
   lab/            offline frontier-policy research [experimental]
 alembic/          migrations (sync psycopg)
 helpers/          footprint helper manifests (YAML)
+deploy/           systemd units (api/worker) + env example; see docs/DEPLOY.md
 tests/            pytest-asyncio + testcontainers (real Postgres/Redis)
 samples/          real generated dossiers + evidence exports
 ```

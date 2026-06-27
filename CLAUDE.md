@@ -681,3 +681,34 @@ and `docker run` do too.
   - **NEXT:** Phase 2 — worker ⊥ surface cut (isolate the worker process from the API; failure
     drill). Then Phase 3 — register a REAL puller (new SEC filings / sanctions deltas) into
     SOURCE_TICKS and prove the full loop end-to-end on a live source.
+- **CRON BUILD Phase 2 — worker ⊥ surface cut (DONE, 2026-06-26):** the deployment foundation
+  (ROADMAP persistence step 2; Cut 1 of the deployment ladder). Isolate the worker process from
+  the API so a runaway crawl can never block/crash the console, and prove a crashed worker recovers
+  without double-emit. 254 tests green (+5), ruff + mypy --strict clean. Zero new architecture —
+  API and worker already coordinate only through PG+Redis. Branch `cron-persistence`.
+  - **The discipline — nothing heavy in a request path.** `POST /cases/{id}/expand` used to run
+    `expand_case` as an asyncio task IN THE API EVENT LOOP. Now it ENQUEUES the `expand_case_job`
+    Arq job (new `WorkerSettings.functions`) onto `app.state.arq` (an arq pool created in lifespan)
+    and returns immediately; the worker runs it; the SSE stream still surfaces progress from the
+    same Postgres. Removed the inline `CascadeContext`/`_on_expand_done`/`app.state.tasks` path.
+  - **The reaper (self-heal) — `runner.reap_stale_runs`.** The `helper_runs_active_claim` partial
+    unique index blocks a second claim while a run is queued/running, so a worker that dies MID-RUN
+    leaves a stuck row that wedges that (helper,object,case) FOREVER. The reaper (worker cron @5min,
+    run_at_startup) resets machine-state runs older than 900s to 'failed', releasing the claim so the
+    restart re-claims a fresh run. Human-wait states (awaiting_human/in_browser, 24h handoffs) exempt.
+  - **Deploy units:** `deploy/osiris-api.service` + `osiris-worker.service` (systemd, Restart=always,
+    worker MemoryMax caps a runaway), `osiris.env.example`, `docs/DEPLOY.md` (the cut + why it's safe:
+    atomic claim / durable outbox / idempotent emit / reaper).
+  - **Proof — `tests/test_failure_drill.py` (5, real PG):** API enqueues + does NO inline work
+    (0 helper_runs in the request path); concurrent claim → single winner; orphan blocks → reaper
+    recovers → re-claim succeeds; reaper spares fresh + awaiting_human; re-emit idempotent (no dup
+    objects). Plus a LIVE drill (throwaway PG :5544 + Redis :6399, real `arq` worker booted): planted
+    a 1h-old orphaned 'running' run + a subscription + a matching object → worker startup crons
+    reaped the orphan to 'failed' AND the watch fired the alert live, then killed the worker (the
+    "crash"). **The live run caught a real bug hermetic tests missed:** `WorkerSettings.redis_settings`
+    was a `@staticmethod` → arq reads the attribute AS the RedisSettings and did `.host` on the
+    function object → the worker had NEVER booted (would crash on every systemd start). Fixed to a
+    bound `RedisSettings.from_dsn(...)` value; live boot verified. Driver: `scratchpad/drill_*.py`.
+  - **NEXT:** Phase 3 — register a REAL puller (new SEC filings / sanctions deltas) into SOURCE_TICKS
+    and prove the full loop (schedule → delta → ingest → resolve → trigger → sourced alert) end-to-end
+    on a live source, AND that it stays quiet on noise.

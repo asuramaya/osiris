@@ -54,6 +54,28 @@ async def claim_run(
     return row["id"] if row is not None else None
 
 
+async def reap_stale_runs(pool: Any, *, older_than_secs: int = 900) -> int:
+    """Recover orphaned runs left by a crashed worker. The active-claim partial
+    unique index blocks a second claim while a run is in a machine state
+    (queued/running), so a worker that dies mid-run leaves a stuck row that would
+    wedge that (helper, object, case) FOREVER. This resets such rows — older than
+    `older_than_secs` with no finish — to 'failed', releasing the claim so the
+    restarted worker (or the next cascade round) can re-claim a fresh run.
+
+    Human-wait states (awaiting_human/in_browser/result_posted_back) are long-lived
+    BY DESIGN (a 24h handoff) and are never reaped. Returns the count recovered.
+    """
+    rows = await pool.fetch(
+        "UPDATE helper_runs SET status='failed', finished_at=now(), "
+        "  error='reaped: orphaned run (worker crash?)' "
+        "WHERE status IN ('queued','running') "
+        "  AND created_at < now() - make_interval(secs => $1) "
+        "RETURNING id",
+        older_than_secs,
+    )
+    return len(rows)
+
+
 async def load_input_object(pool: Any, object_id: uuid.UUID) -> InputObject:
     """Materialize the InputObject a helper consumes (type, canonical, current
     property names) — shared by the cascade and the handoff resume path."""

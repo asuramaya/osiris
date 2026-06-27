@@ -1,0 +1,23 @@
+# Osiris worker (the cascade drain + the watch + the reaper). Fate-isolated from the
+# API: a runaway crawl, an OOM, or a crash here cannot take down the console. On
+# restart it re-claims orphaned runs (the reaper) and resumes draining the durable
+# outbox — no work is lost, nothing double-emits (atomic helper_runs claim).
+# See docs/DEPLOY.md.
+[Unit]
+Description=Osiris worker (Arq: cascade, watch, reaper)
+After=network-online.target postgresql.service redis.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=osiris
+WorkingDirectory=/opt/osiris
+EnvironmentFile=/etc/osiris/osiris.env
+ExecStart=/opt/osiris/.venv/bin/arq src.workers.arq_worker.WorkerSettings
+Restart=always
+RestartSec=2
+# a runaway expansion is contained here, not in the API. Tune to the box.
+MemoryMax=4G
+
+[Install]
+WantedBy=multi-user.target

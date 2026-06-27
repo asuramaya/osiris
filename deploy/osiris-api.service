@@ -1,0 +1,20 @@
+# Osiris API + console (the human surface). Restartable edge: holds no state,
+# coordinates only through Postgres + Redis. Killing it never touches the truth or
+# the worker. See docs/DEPLOY.md.
+[Unit]
+Description=Osiris API (Object Set Service + console)
+After=network-online.target postgresql.service redis.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=osiris
+WorkingDirectory=/opt/osiris
+EnvironmentFile=/etc/osiris/osiris.env
+# bind to localhost only — this box IS prod, single operator (no edge proxy)
+ExecStart=/opt/osiris/.venv/bin/uvicorn src.api.app:app --host 127.0.0.1 --port 8011
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
