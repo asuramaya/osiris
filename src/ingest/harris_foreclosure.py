@@ -37,6 +37,10 @@ _FIELDS = (
 def _watch_item(notice: dict[str, Any]) -> WatchItem:
     props: dict[str, Any] = {k: notice.get(k) for k in _FIELDS}
     props["county"] = "Harris"
+    # the human-readable NAME of a property is its address — so the generic card
+    # renderer titles the lead by address without knowing what a foreclosure is.
+    if notice.get("address"):
+        props["name"] = notice["address"]
     if notice.get("demo"):
         props["demo"] = "true"
     return WatchItem(

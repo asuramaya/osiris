@@ -55,7 +55,12 @@ from src.orchestrator.frontier import subject_report
 from src.orchestrator.handoff import abandon, open_handoff, post_back
 from src.orchestrator.handoff import tray as handoff_tray
 from src.orchestrator.manifests import load_manifests, project_triggers
-from src.orchestrator.monitor import create_subscription, evaluate_subscriptions, tick
+from src.orchestrator.monitor import (
+    create_subscription,
+    evaluate_subscriptions,
+    match_condition,
+    tick,
+)
 from src.orchestrator.runner import load_input_object
 
 _HELPERS_DIR = Path(__file__).resolve().parent.parent.parent / "helpers"
@@ -559,73 +564,60 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             for r in rows
         ]
 
-    @app.get("/leads")
-    async def list_leads(
-        zip_code: str | None = Query(None, alias="zip"),
-        max_bid: int | None = None,
-        q: str | None = None,
-        since: str | None = None,
+    @app.get("/matches")
+    async def watch_matches(
+        subscription_id: uuid.UUID,
         limit: int = Query(200, le=1000),
         p: asyncpg.Pool = Depends(get_pool),
     ) -> list[dict[str, Any]]:
-        """The leads FEED: Harris County foreclosure notices as sourced lead cards.
-        This is a tripwire feed, not a CRM — it surfaces the public record with full
-        provenance; it holds no pipeline or contact state. Filters narrow the feed to a
-        beat (area / price / keyword)."""
-        rows = await p.fetch(
-            "SELECT o.id, jsonb_object_agg(a.name, a.value) AS props, "
-            "  max(a.observed_at) AS observed, max(a.confidence) AS confidence, "
-            "  (array_agg(DISTINCT a.source_id))[1] AS source, "
-            "  (array_agg(DISTINCT a.evidence_class) "
-            "     FILTER (WHERE a.evidence_class IS NOT NULL))[1] AS ec "
-            "FROM objects o JOIN current_assertions a ON a.object_id=o.id "
-            "WHERE o.type='Property' AND o.status='active' AND o.id IN ("
-            "  SELECT object_id FROM current_assertions "
-            "  WHERE name='county' AND value #>> '{}'='Harris') "
-            "GROUP BY o.id"
+        """The FEED for a watch: the objects currently matching its criteria, each
+        rendered GENERICALLY as a sourced card (type · graded properties · provenance).
+        Type-driven, not vertical — a Property reads like a foreclosure lead and an
+        Organization like a company because the DATA is, never because this surface
+        knows the words. The same console serves any beat over the public record."""
+        crit = _coerce_json(
+            await p.fetchval("SELECT criteria FROM subscriptions WHERE id=$1", subscription_id)
         )
-        leads: list[dict[str, Any]] = []
+        if crit is None:
+            raise HTTPException(404, "no such watch")
+        object_type = crit.get("object_type")
+        where = crit.get("where", []) or []
+        rows = await p.fetch(
+            "SELECT id FROM objects WHERE status='active' AND ($1::text IS NULL OR type=$1)",
+            object_type,
+        )
+        cards: list[dict[str, Any]] = []
         for r in rows:
-            props = _coerce_json(r["props"]) or {}
-            lead = {k: props.get(k) for k in _LEAD_FIELDS}
-            if zip_code and lead.get("zip") != zip_code:
+            card = await _object_card(p, r["id"])
+            if card is None:
                 continue
-            if max_bid is not None and _as_float(lead.get("opening_bid"), 1e18) > max_bid:
-                continue
-            if since and (lead.get("filed_date") or "") < since:
-                continue
-            if q and q.lower() not in " ".join(str(v) for v in lead.values() if v).lower():
-                continue
-            lead["object_id"] = str(r["id"])
-            lead["provenance"] = {
-                "source": r["source"],
-                "source_label": _SOURCE_LABELS.get(r["source"], r["source"]),
-                "how": _HOW_LABELS.get(r["ec"], r["ec"] or "unknown"),
-                "evidence_class": r["ec"],
-                "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
-                "observed": r["observed"].isoformat() if r["observed"] else None,
-            }
-            leads.append(lead)
-        leads.sort(key=lambda x: x.get("filed_date") or "", reverse=True)
-        return leads[:limit]
+            facts = {pp["name"]: pp["value"] for pp in card["properties"]}
+            facts["name"] = card["title"]
+            if all(match_condition(facts.get(c.get("property")), c.get("op", "contains"),
+                                   c.get("value")) for c in where):
+                cards.append(card)
+        cards.sort(key=lambda c: c["provenance"]["observed"] or "", reverse=True)
+        return cards[:limit]
 
     @app.post("/demo/foreclosure-seed")
     async def demo_foreclosure_seed(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
-        """Dev/demo: run the Harris foreclosure watcher over the bundled SYNTHETIC
-        notices so the feed populates without a live county session. Resets the demo
-        cursor so the button reliably (re)loads; objects are idempotent (no dupes)."""
-        # attribute to the real source (Harris County Clerk) so provenance reads true;
-        # the demo=true flag on each notice — not the source — marks it synthetic.
-        await p.execute("DELETE FROM watermarks WHERE key='source:harris_county_clerk'")
+        """Demo LOADER (clearly namespaced /demo/). Ingests the SYNTHETIC Harris County
+        notices and ensures one demo watch so the generic feed has something to show. The
+        foreclosure vertical lives ONLY here — the watch console and /matches never name it."""
+        watch_id = await p.fetchval(
+            "INSERT INTO subscriptions (name, criteria) "
+            "SELECT 'Harris County foreclosures (demo)', $1 "
+            "WHERE NOT EXISTS (SELECT 1 FROM subscriptions "
+            "  WHERE name='Harris County foreclosures (demo)') RETURNING id",
+            {"event_types": ["object_created"], "object_type": "Property",
+             "where": [{"property": "county", "op": "eq", "value": "Harris"}]},
+        ) or await p.fetchval(
+            "SELECT id FROM subscriptions WHERE name='Harris County foreclosures (demo)'"
+        )
         watcher = make_harris_foreclosure_watcher(fetch=demo_fetch)
         ingested = await tick(Actions(p), "harris_county_clerk", watcher)
-        fired = await evaluate_subscriptions(p)  # let any saved beats raise alerts
-        total = await p.fetchval(
-            "SELECT count(*) FROM objects o WHERE o.type='Property' AND o.status='active' "
-            "AND o.id IN (SELECT object_id FROM current_assertions "
-            "WHERE name='county' AND value #>> '{}'='Harris')"
-        )
-        return {"ingested": ingested, "alerts_fired": fired, "leads_total": total}
+        fired = await evaluate_subscriptions(p)  # also raise alerts (the bell), prospectively
+        return {"ingested": ingested, "alerts_fired": fired, "watch_id": str(watch_id)}
 
     if _UI_DIR.is_dir():
         app.mount("/ui", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
@@ -633,24 +625,78 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     return app
 
 
-_LEAD_FIELDS = ("address", "zip", "owner", "lienholder", "trustee", "sale_date",
-                "opening_bid", "filed_date", "notice_url", "county", "demo")
-_SOURCE_LABELS = {"harris_county_clerk": "Harris County Clerk"}
+# Friendly labels for provenance display — generic over every source/class, no vertical.
+_SOURCE_LABELS = {
+    "harris_county_clerk": "Harris County Clerk",
+    "edgar": "SEC EDGAR", "harris_county_clerk_demo": "Harris County Clerk",
+}
 _HOW_LABELS = {
-    "authoritative_api": "authoritative county record",
+    "authoritative_api": "authoritative record",
     "self_declared": "self-declared",
     "direct_observation": "directly observed",
     "co_occurrence": "co-occurrence (unconfirmed)",
     "derived": "inferred",
     "corroborated": "corroborated by ≥2 sources",
 }
+# strength order so a card's provenance reports its STRONGEST evidence (mirrors evidence.py).
+_EC_STRENGTH = {"co_occurrence": 0, "derived": 1, "direct_observation": 2,
+                "authoritative_api": 3, "self_declared": 4, "corroborated": 5}
 
 
-def _as_float(v: Any, default: float) -> float:
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return default
+async def _object_card(p: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, Any] | None:
+    """Render ANY object as a generic sourced card: its type, a title, its current
+    graded properties as key/values, and a provenance block (sources · how · date ·
+    confidence). The renderer is type-driven — it knows nothing about foreclosures or
+    any vertical; the domain shows through entirely from the data."""
+    o = await p.fetchrow("SELECT type, canonical FROM objects WHERE id=$1", object_id)
+    if o is None:
+        return None
+    rows = await p.fetch(
+        "SELECT DISTINCT ON (name) name, value #>> '{}' AS v, source_id, evidence_class, "
+        "  confidence, observed_at FROM current_assertions WHERE object_id=$1 "
+        "ORDER BY name, observed_at DESC",
+        object_id,
+    )
+    title = o["canonical"]
+    props: list[dict[str, Any]] = []
+    sources: set[str] = set()
+    strongest: str | None = None
+    confidence: float | None = None
+    observed: datetime | None = None
+    demo = False
+    for r in rows:
+        name = r["name"]
+        if name == "tag":
+            continue
+        if name == "demo":
+            demo = str(r["v"]).lower() == "true"
+            continue
+        if name == "name":
+            title = r["v"] or title
+        else:
+            props.append({"name": name, "value": r["v"]})
+        if r["source_id"]:
+            sources.add(r["source_id"])
+        ec = r["evidence_class"]
+        if ec and (strongest is None or _EC_STRENGTH.get(ec, -1) > _EC_STRENGTH.get(strongest, -1)):
+            strongest = ec
+        if r["confidence"] is not None:
+            confidence = max(confidence or 0.0, float(r["confidence"]))
+        if r["observed_at"] and (observed is None or r["observed_at"] > observed):
+            observed = r["observed_at"]
+    return {
+        "object_id": str(object_id), "type": o["type"], "title": title,
+        "properties": props,
+        "provenance": {
+            "source": ", ".join(sorted(sources)) or None,
+            "source_label": ", ".join(_SOURCE_LABELS.get(s, s) for s in sorted(sources)) or None,
+            "how": _HOW_LABELS.get(strongest or "", strongest or "unknown"),
+            "evidence_class": strongest,
+            "confidence": confidence,
+            "observed": observed.isoformat() if observed else None,
+            "demo": demo,
+        },
+    }
 
 
 def _coerce_json(v: Any) -> Any:

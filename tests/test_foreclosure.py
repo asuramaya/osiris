@@ -81,40 +81,43 @@ async def client(actions: Actions) -> AsyncIterator[httpx.AsyncClient]:
         yield c
 
 
-async def test_seed_populates_the_sourced_leads_feed(client: httpx.AsyncClient) -> None:
+def _prop(card: dict, name: str) -> object:
+    return next(f["value"] for f in card["properties"] if f["name"] == name)
+
+
+async def test_demo_loads_the_generic_watch_feed(client: httpx.AsyncClient) -> None:
+    """The demo loader ingests notices + ensures one watch; the GENERIC /matches feed
+    renders them as type-driven sourced cards — the surface names no vertical."""
     seed = (await client.post("/demo/foreclosure-seed")).json()
-    assert seed["ingested"] == 8 and seed["leads_total"] == 8
+    assert seed["ingested"] == 8
+    cards = (await client.get("/matches", params={"subscription_id": seed["watch_id"]})).json()
+    assert len(cards) == 8
 
-    leads = (await client.get("/leads")).json()
-    assert len(leads) == 8
-    top = leads[0]  # newest filed first
-    assert top["filed_date"] == "2026-06-26"
-    assert top["demo"] == "true"
-    # every lead carries its provenance (the whole point)
-    assert top["provenance"]["source_label"] == "Harris County Clerk"
-    assert top["provenance"]["how"] == "authoritative county record"
-    assert round(top["provenance"]["confidence"], 2) == 0.85  # PG real is float4 (approx)
-
-
-async def test_feed_filters_narrow_to_a_beat(client: httpx.AsyncClient) -> None:
-    await client.post("/demo/foreclosure-seed")
-    z = (await client.get("/leads", params={"zip": "77084"})).json()
-    assert z and all(x["zip"] == "77084" for x in z)
-    cheap = (await client.get("/leads", params={"max_bid": 200000})).json()
-    assert cheap and all(float(x["opening_bid"]) <= 200000 for x in cheap)
-    q = (await client.get("/leads", params={"q": "cypress"})).json()
-    assert q and all("cypress" in x["address"].lower() for x in q)
+    olive = next(c for c in cards if "Olive Leaf" in c["title"])
+    assert olive["type"] == "Property"            # rendered by type, not as "a lead"
+    assert "18330 Olive Leaf" in olive["title"]   # title = the address (the object's name)
+    assert _prop(olive, "owner").startswith("DEMO")
+    # the provenance block is the whole point — generic, true to the source
+    assert olive["provenance"]["source_label"] == "Harris County Clerk"
+    assert olive["provenance"]["how"] == "authoritative record"
+    assert olive["provenance"]["demo"] is True
+    assert round(olive["provenance"]["confidence"], 2) == 0.85  # PG real is float4
 
 
-async def test_saved_beat_fires_an_alert_on_a_matching_new_notice(
-    client: httpx.AsyncClient
-) -> None:
-    # a beat: sub-$200k foreclosures anywhere
-    await client.post("/subscriptions", json={
-        "name": "cheap", "criteria": {
-            "event_types": ["object_created"], "object_type": "Property",
-            "where": [{"property": "opening_bid", "op": "lt", "value": 200000}]}})
-    seed = (await client.post("/demo/foreclosure-seed")).json()
-    assert seed["alerts_fired"] == 3  # the three sub-$200k notices in the demo set
-    alerts = (await client.get("/alerts")).json()
-    assert len(alerts) == 3
+async def test_a_narrower_watch_matches_fewer(client: httpx.AsyncClient) -> None:
+    await client.post("/demo/foreclosure-seed")  # 8 Property objects in the graph
+    sub = (await client.post("/subscriptions", json={"name": "cheap", "criteria": {
+        "object_type": "Property",
+        "where": [{"property": "opening_bid", "op": "lt", "value": 200000}]}})).json()
+    cards = (await client.get("/matches", params={"subscription_id": sub["id"]})).json()
+    assert len(cards) == 3  # the three sub-$200k notices
+    assert all(float(_prop(c, "opening_bid")) < 200000 for c in cards)
+
+
+async def test_a_saved_beat_fires_a_scoped_alert(client: httpx.AsyncClient) -> None:
+    sub = (await client.post("/subscriptions", json={"name": "cheap", "criteria": {
+        "event_types": ["object_created"], "object_type": "Property",
+        "where": [{"property": "opening_bid", "op": "lt", "value": 200000}]}})).json()
+    await client.post("/demo/foreclosure-seed")  # tick + evaluate (prospective)
+    alerts = (await client.get("/alerts", params={"subscription_id": sub["id"]})).json()
+    assert len(alerts) == 3  # exactly the sub-$200k notices fired for THIS beat

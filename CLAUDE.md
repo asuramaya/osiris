@@ -803,8 +803,8 @@ and `docker run` do too.
   promote cron-persistence→main when reviewed.
 - **HARRIS COUNTY FORECLOSURE VERTICAL + the product front-end (DONE, 2026-06-27, on cron-persistence):**
   aimed the watch at a REAL persona beat (the foreclosure broker = ForeScan's customer) and built the
-  SUBSCRIBER-facing surface — a sourced tripwire feed, deliberately NOT a CRM. 291 tests green (+6),
-  ruff + mypy --strict clean.
+  SUBSCRIBER-facing surface — a sourced tripwire feed, deliberately NOT a CRM. (UI later GENERICIZED —
+  see next entry.) 285 tests green, ruff + mypy --strict clean.
   - `src/ingest/harris_foreclosure.py`: `make_harris_foreclosure_watcher(fetch=)` → a monitor.Puller
     turning each Notice of Trustee Sale into a graded `Property` object (canonical `harris-notice:<id>`;
     address/owner/lienholder/trustee/sale_date/opening_bid/zip/filed_date, AUTHORITATIVE_API). The
@@ -830,3 +830,23 @@ and `docker run` do too.
     Tests: `tests/test_foreclosure.py` (6). This is the SUBSCRIBER surface (the broker receives sourced
     leads, never touches the engine); the operator builds beats here or via MCP. NEXT: a real email/SMS
     delivery sink; the live county scrape as a satellite Collector; alert dedup/throttle.
+- **GENERICIZED THE WATCH SURFACE — kill the "foreclosure app" costume (DONE, 2026-06-27):** the operator
+  caught the leads page making Osiris feel like a foreclosure app — the SAME "confused tech demo / two
+  identities" trap the engine-as-product reset killed, recurring in the UI. Diagnosis: the vertical had
+  leaked into the SURFACE (page branded "Foreclosure Watch", card template hardcoding opening_bid/
+  trustee/sale_date, a `GET /leads` endpoint keyed on Property+county=Harris). Principle restored: **the
+  surface is TYPE-driven, not vertical-driven — the domain lives in the DATA and the CONFIG, never in
+  the template.** A vertical = a source connector + a beat (subscription) + a delivery sink; none is a UI.
+  Changes: removed `/leads` + the foreclosure-specific fields; added generic `GET /matches?subscription_id`
+  (returns the objects matching a watch's criteria as `_object_card`s — type · title(name||canonical) ·
+  graded properties · provenance — knowing nothing of any vertical); `monitor._cmp`→public
+  `match_condition` (shared by the evaluator + the feed); `harris_foreclosure` now sets `name=address`
+  so the GENERIC card titles a Property by its address with zero UI knowledge; `/demo/foreclosure-seed`
+  is now a clearly-namespaced demo LOADER that ensures one demo watch (the only place "foreclosure"
+  appears). UI: deleted `leads.html`, added generic `src/ui/static/watch.html` (`/ui/watch.html`) — a
+  "Watch" console: list/create watches (object type + generic where-conditions + optional webhook),
+  pick one → its feed of type-rendered sourced cards. Foreclosure is now ONE loadable demo config, not
+  an app. 285 tests green, ruff + mypy --strict clean. Proven live: same template renders a Property as
+  "7706 Antoine Dr · Harris County Clerk · authoritative record · 85% · DEMO". So Osiris has exactly TWO
+  generic operator surfaces (graph console = investigate; watch console = monitor) + MCP; verticals are
+  connectors+beats+sinks. NEXT unchanged: delivery sink, satellite scrape, alert dedup/throttle.

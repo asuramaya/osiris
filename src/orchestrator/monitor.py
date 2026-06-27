@@ -171,7 +171,7 @@ def matches(criteria: dict[str, Any], event: GraphEvent) -> dict[str, Any] | Non
         actual = event.props.get(prop)
         if actual is None and event.payload.get("name") == prop:
             actual = event.value
-        if not _cmp(actual, cond.get("op", "contains"), cond.get("value")):
+        if not match_condition(actual, cond.get("op", "contains"), cond.get("value")):
             return None
     return {
         "event_type": event.event_type,
@@ -181,9 +181,10 @@ def matches(criteria: dict[str, Any], event: GraphEvent) -> dict[str, Any] | Non
     }
 
 
-def _cmp(actual: Any, op: str, expected: Any) -> bool:
+def match_condition(actual: Any, op: str, expected: Any) -> bool:
     """One beat condition. Ops: eq / contains (case-insensitive substring) / lt / gt
-    (numeric). A missing value or an un-parseable number fails closed (no false match)."""
+    (numeric). A missing value or an un-parseable number fails closed (no false match).
+    Shared by the evaluator (matches) and the read-model feed (/matches)."""
     if actual is None:
         return False
     if op == "eq":
