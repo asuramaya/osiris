@@ -139,6 +139,10 @@ end-to-end — not by toy fixtures:
 
 237 tests green (real Postgres/Redis), `ruff` + `mypy --strict` clean.
 
+**See it for yourself:** [`samples/`](samples/) ships the literal `dossier_report` output
+and graded-evidence exports for Celsius and Neuralink — real dossiers, shown with their
+warts, because provenance is the point.
+
 ---
 
 ## How it's built
@@ -149,8 +153,9 @@ interface, and two **surfaces** over it (the MCP server and the FastAPI app). Th
 imports no driver; drivers depend on the kernel. That seam is what lets the messy,
 ever-growing collection layer accrete without destabilizing the core.
 
-See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the current shape and
-[`DESIGN.md`](DESIGN.md) for the original deep design.
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the current shape,
+[`docs/REFERENCE.md`](docs/REFERENCE.md) for the data model, evidence classes, source &
+tool registries, and repo map, and [`DESIGN.md`](DESIGN.md) for the original deep design.
 
 ---
 

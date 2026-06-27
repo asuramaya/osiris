@@ -16,6 +16,9 @@ def test_country_of_handles_formats() -> None:
     assert country_of("Austin, TX") == "United States"   # US postal code
     assert country_of("Jakarta, K8") == "Indonesia"      # EDGAR foreign code
     assert country_of("CA") == "United States"
+    # an UNMAPPED EDGAR code is not a country — must not leak as a false reach claim
+    assert country_of("L3") is None
+    assert country_of("Somewhere, X0") is None
 
 
 async def test_discrepancy_flags_foreign_operational_reach(actions: Actions) -> None:

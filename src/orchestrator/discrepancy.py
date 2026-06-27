@@ -15,12 +15,17 @@ set doesn't cover.
 
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Any
 
 import asyncpg
 
 from src.ontology.resolution import normalize_org_name
+
+# EDGAR foreign stateOrCountry codes are a letter followed by a digit (A0, X5, K8…).
+# An UNMAPPED one is not a country — never leak 'L3'/'X0'/'C7' as a false reach claim.
+_EDGAR_CODE = re.compile(r"^[A-Z][0-9]$")
 
 # US state / territory postal codes -> the home country is the United States.
 _US_STATES = frozenset(
@@ -57,6 +62,8 @@ def country_of(location: str | None) -> str | None:
     low = last.lower()
     if low in _COUNTRY_ALIASES:
         return _COUNTRY_ALIASES[low]
+    if _EDGAR_CODE.match(last):
+        return None  # unmapped EDGAR code -> unknown, not a country
     return last or None
 
 
