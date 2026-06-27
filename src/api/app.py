@@ -54,6 +54,7 @@ from src.orchestrator.frontier import subject_report
 from src.orchestrator.handoff import abandon, open_handoff, post_back
 from src.orchestrator.handoff import tray as handoff_tray
 from src.orchestrator.manifests import load_manifests, project_triggers
+from src.orchestrator.monitor import create_subscription
 from src.orchestrator.ratelimit import RateLimiter
 from src.orchestrator.runner import load_input_object
 
@@ -516,10 +517,67 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             selected=body.selected,
         )
 
+    @app.post("/subscriptions")
+    async def create_subscription_route(
+        body: SubscriptionBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        """Save a watch: criteria that fire an alert when matched. Source-agnostic —
+        see monitor.matches for the supported clauses."""
+        sub_id = await create_subscription(p, body.name, body.criteria, body.webhook_url)
+        return {"id": str(sub_id), "name": body.name}
+
+    @app.get("/subscriptions")
+    async def list_subscriptions(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
+        rows = await p.fetch(
+            "SELECT id, name, criteria, webhook_url, active, created_at "
+            "FROM subscriptions ORDER BY created_at DESC"
+        )
+        return [
+            {
+                "id": str(r["id"]), "name": r["name"], "criteria": _coerce_json(r["criteria"]),
+                "webhook_url": r["webhook_url"], "active": r["active"],
+                "created_at": r["created_at"].isoformat(),
+            }
+            for r in rows
+        ]
+
+    @app.get("/alerts")
+    async def list_alerts(
+        subscription_id: uuid.UUID | None = None,
+        limit: int = Query(100, le=1000),
+        p: asyncpg.Pool = Depends(get_pool),
+    ) -> list[dict[str, Any]]:
+        """The dumb sink, read back: fired alerts newest-first (optionally one sub)."""
+        rows = await p.fetch(
+            "SELECT a.id, a.subscription_id, s.name AS subscription, a.object_id, "
+            "       a.event_type, a.matched, a.created_at, a.delivered_at "
+            "FROM alerts a JOIN subscriptions s ON s.id = a.subscription_id "
+            "WHERE ($1::uuid IS NULL OR a.subscription_id = $1) "
+            "ORDER BY a.created_at DESC LIMIT $2",
+            subscription_id,
+            limit,
+        )
+        return [
+            {
+                "id": str(r["id"]), "subscription_id": str(r["subscription_id"]),
+                "subscription": r["subscription"],
+                "object_id": str(r["object_id"]) if r["object_id"] else None,
+                "event_type": r["event_type"], "matched": _coerce_json(r["matched"]),
+                "created_at": r["created_at"].isoformat(),
+                "delivered_at": r["delivered_at"].isoformat() if r["delivered_at"] else None,
+            }
+            for r in rows
+        ]
+
     if _UI_DIR.is_dir():
         app.mount("/ui", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
 
     return app
+
+
+def _coerce_json(v: Any) -> Any:
+    """asyncpg returns jsonb as a str unless a codec is set; normalize for responses."""
+    return _json.loads(v) if isinstance(v, str) else v
 
 
 class NewCaseBody(BaseModel):
@@ -563,6 +621,12 @@ class ResolveBody(BaseModel):
 
 class PostbackBody(BaseModel):
     result: dict[str, Any]
+
+
+class SubscriptionBody(BaseModel):
+    name: str
+    criteria: dict[str, Any]
+    webhook_url: str | None = None
 
 
 class FederateBody(BaseModel):

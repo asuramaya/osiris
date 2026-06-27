@@ -644,3 +644,40 @@ and `docker run` do too.
   subsystems (leases/cobrowse/federation/osint4all/lab) kept but documented as experimental — not
   deleted pre-release. 237 tests green. NEXT: promote reset-engine-product→main, push to remote
   (pending operator go-ahead + license confirm), then build the persistence/cron capability.
+- **CRON BUILD Phase 1 — the watch (lens→tripwire) (DONE, 2026-06-26):** first rung of the
+  persistence ladder (ROADMAP "Next: persistence", step 1). The one new primitive that turns the
+  kernel from a *lens* (investigate on demand) into a *tripwire* (fire when the public record
+  changes). 249 tests green (+12), ruff + mypy --strict clean. All source-agnostic — NO real
+  collection yet (that's Phase 3). `src/orchestrator/monitor.py` + migration 0006:
+  - **Two cursors, two decoupled consumers of one outbox.** The evaluator claims via a NEW
+    `outbox.evaluated_at` flag (gap-free `FOR UPDATE SKIP LOCKED`, mirrors the cascade's
+    `published_at`) — it never touches `published_at`, so draining the cascade and evaluating
+    subscriptions are independent passes. The `watermarks` table (`key`/`cursor`) is the OTHER
+    cursor — generic per-SOURCE delta cursor (`source:<id>`), used by `tick`, not the evaluator.
+  - **`tick(actions, source_id, puller)`** — source-agnostic scheduled pull: read cursor →
+    injected `puller(cursor)` → materialize each `WatchItem` through Actions (idempotent) →
+    advance cursor AFTER commit (crash mid-tick re-pulls the same delta, find-or-create dedups).
+    The puller is the only collection-specific part; a real connector registers into
+    `arq_worker.SOURCE_TICKS` in Phase 3.
+  - **`evaluate_subscriptions(pool, sink=)`** — drains un-evaluated outbox rows, matches each
+    against active `subscriptions` (saved `criteria` jsonb), emits an `alerts` row per match.
+    `matches()` clauses (all AND, source-agnostic): event_types / object_type / canonical_prefix
+    / canonical_contains / property_name / value_contains. Idempotent: claim flag + UNIQUE
+    (subscription_id, outbox_id) ON CONFLICT DO NOTHING. Prospective by design (a new sub fires on
+    tomorrow's events, not the backlog... caveat: it WILL match any still-unevaluated backlog rows).
+  - **Dumb alert sink (NOT a CRM):** the `alerts` table is the durable record (always written
+    first); a `Sink` callback delivers the side-channel (default `_post_webhook` if the sub has a
+    `webhook_url`) AFTER commit — a sink failure logs + leaves the row, never loses the alert or
+    aborts the batch. `delivered_at` stamped only on sink success.
+  - **Arq wiring:** `evaluate_watch` cron @ 5s (offset +2s from the cascade drain), `run_source_ticks`
+    @ :00 each minute (iterates `SOURCE_TICKS`, one bad source can't sink the rest). **API:** POST
+    `/subscriptions`, GET `/subscriptions`, GET `/alerts?subscription_id=` (the sink read back).
+  - **Proof:** hermetic `tests/test_monitor.py` (12, real PG) — matcher clauses, watermark upsert,
+    tick materializes+advances+re-pull-empty, evaluator fires-on-match / quiet-on-noise /
+    idempotent / inactive-silent / sink-failure-keeps-alert / decoupled-from-published_at. Plus ONE
+    LIVE run (throwaway PG :5544, migration 0006 forward-clean): canned tick of {Neuralink, Apple}
+    → subscription `value_contains:neuralink` fired exactly 1 alert (Neuralink), Apple stayed quiet,
+    re-run fired 0, webhook sink delivered=True. Driver: `scratchpad/watch_live.py`.
+  - **NEXT:** Phase 2 — worker ⊥ surface cut (isolate the worker process from the API; failure
+    drill). Then Phase 3 — register a REAL puller (new SEC filings / sanctions deltas) into
+    SOURCE_TICKS and prove the full loop end-to-end on a live source.
