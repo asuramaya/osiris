@@ -712,3 +712,18 @@ and `docker run` do too.
   - **NEXT:** Phase 3 — register a REAL puller (new SEC filings / sanctions deltas) into SOURCE_TICKS
     and prove the full loop (schedule → delta → ingest → resolve → trigger → sourced alert) end-to-end
     on a live source, AND that it stays quiet on noise.
+- **CRON BUILD Phase 3 — broker PoC, real source watcher (DONE, 2026-06-26):** the first watcher over
+  a live keyless source (new SEC Form D filings). `src/orchestrator/watchers.py`:
+  `make_form_d_watcher(query, fetch=)` returns a `monitor.Puller` — fetches Form D filings mentioning
+  the term (EFTS, contact-UA, `efts_form_d_fetch` is the live impl; injected for tests), emits only
+  filings with `file_date` strictly newer than the cursor as Organization WatchItems (cik: + name +
+  filed_date, AUTHORITATIVE_API), advances the cursor to the newest date in the whole feed (empty
+  delta never rewinds). Wired: `settings.osiris_watch_form_d` (comma-separated watch terms) →
+  `arq_worker.register_default_watchers()` registers `form_d:<term>` ticks into SOURCE_TICKS at
+  startup (empty => no-op; the watch stays source-agnostic until an operator names a beat). 258 tests
+  green (+4), ruff + mypy --strict clean. Proof: `tests/test_watchers.py` (4, real PG) — tick ingests
+  + advances cursor, unchanged feed = no news (0), only-strictly-newer pulled, full loop fires on
+  match / quiet on noise. LIVE: real EFTS returned 20 Form D filings for "Neuralink" (the feeder SPVs
+  — MAV/TWE/QP-MAV Neuralink), watcher delta None→20 items / newest-cursor→0 (quiet). The broker
+  use case proven on the real record: a NEW feeder SPV filing (TWE Neuralink SPV, 2026-06-22) is
+  exactly what the tick surfaces. NEXT: Phase 4 — AI-extraction driver (universal parser).

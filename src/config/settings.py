@@ -17,6 +17,14 @@ class Settings(BaseSettings):
     # rejects unkeyed calls, but a free key lifts the whole limit. Empty => the ETH
     # connector degrades gracefully (returns an error dict, never crashes a run).
     etherscan_api_key: str = ""
+    # The watch (cron Phase 3): comma-separated query terms to watch for new SEC Form D
+    # filings (e.g. "Neuralink,Anthropic"). Empty => the worker registers no source tick
+    # (the watch stays source-agnostic until an operator names a beat).
+    osiris_watch_form_d: str = ""
+    # AI extraction (cron Phase 4): the model used by the universal extractor. A
+    # document→entities task is flash-tier; Opus would be wasteful per-filing.
+    osiris_extract_model: str = "claude-haiku-4-5-20251001"
+    anthropic_api_key: str = ""
 
 
 def get_settings() -> Settings:

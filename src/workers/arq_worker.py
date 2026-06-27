@@ -28,14 +28,24 @@ from src.orchestrator.manifests import load_manifests
 from src.orchestrator.monitor import Puller, evaluate_subscriptions, tick
 from src.orchestrator.ratelimit import RateLimiter
 from src.orchestrator.runner import reap_stale_runs
+from src.orchestrator.watchers import make_form_d_watcher
 
 _HELPERS_DIR = Path(__file__).resolve().parent.parent.parent / "helpers"
 _log = logging.getLogger("osiris.worker")
 
-# The watch's source ticks. Source-agnostic by design: a real connector (new filings,
-# sanctions deltas, dockets) registers its puller here in a later phase; until then the
-# cron iterates an empty set and is a no-op. Keyed by source_id.
+# The watch's source ticks, keyed by source_id. Populated at startup from config
+# (register_default_watchers); a real connector registers its puller here. Empty =>
+# the run_source_ticks cron is a no-op (the watch stays source-agnostic).
 SOURCE_TICKS: dict[str, Puller] = {}
+
+
+def register_default_watchers() -> None:
+    """Wire the source watchers named in config into SOURCE_TICKS. Idempotent —
+    safe to call on every startup. A Form D watch term 'Neuralink' registers a tick
+    keyed 'form_d:Neuralink' that polls SEC for new Form D filings mentioning it."""
+    terms = [t.strip() for t in get_settings().osiris_watch_form_d.split(",") if t.strip()]
+    for term in terms:
+        SOURCE_TICKS[f"form_d:{term}"] = make_form_d_watcher(term)
 
 
 async def startup(ctx: dict[str, Any]) -> None:
@@ -52,6 +62,7 @@ async def startup(ctx: dict[str, Any]) -> None:
     )
     ctx["pool"] = pool
     ctx["redis"] = redis
+    register_default_watchers()
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
