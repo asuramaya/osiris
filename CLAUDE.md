@@ -727,3 +727,20 @@ and `docker run` do too.
   — MAV/TWE/QP-MAV Neuralink), watcher delta None→20 items / newest-cursor→0 (quiet). The broker
   use case proven on the real record: a NEW feeder SPV filing (TWE Neuralink SPV, 2026-06-22) is
   exactly what the tick surfaces. NEXT: Phase 4 — AI-extraction driver (universal parser).
+- **CRON BUILD Phase 4 — AI-extraction driver / universal parser (DONE, 2026-06-26):** one messy
+  document → graded entities with NO bespoke parser, collapsing the per-source parser tax.
+  `src/ingest/extract.py`: `LLMClient` Protocol (injected seam; `AnthropicClient` is the live httpx
+  impl over the Messages API, NO SDK dep) + `parse_extraction(raw)` (pure: tolerant JSON → entities/
+  relationships, strips ```fences, never raises on garbage — an extractor must not crash a cron) +
+  `extract_document(actions, text, llm, ...)` (emits via the Actions narrow waist). TWO design
+  choices: (1) everything is graded **DERIVED (0.4)** — an LLM reading is an inference, so an
+  AI-extracted node is a SPECULATIVE LEAF in the frontier (never spawns crawls until a 2nd
+  independent source corroborates it); the taxonomy already encodes AI uncertainty. (2) Model defaults
+  to **Haiku** (`settings.osiris_extract_model`) — document→entities is flash-tier, Opus is wasteful
+  per-filing. The Person/Org classifier overrides a bad model type-hint when it has a strong org signal
+  ("Acme Holdings LLC" labelled Person → corrected). Canonical `extracted-{org,person}:<norm>` dedups
+  re-extraction + becomes a review-gated cross-base candidate against a same-name cik:/lei:/Qxxx (not a
+  dupe). 265 tests green (+7), ruff + mypy --strict clean. Hermetic (fake LLM, canned JSON — no
+  network/cost); no ANTHROPIC_API_KEY in env so the live Haiku call is DEFERRED (the seam is proven;
+  set the key + call extract_document with AnthropicClient to run it live). NEXT: Phase 5 — compose
+  (cron watches a document source → AI-extract → emit graded → resolve → sourced lead).
