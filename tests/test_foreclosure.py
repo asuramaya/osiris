@@ -114,6 +114,20 @@ async def test_a_narrower_watch_matches_fewer(client: httpx.AsyncClient) -> None
     assert all(float(_prop(c, "opening_bid")) < 200000 for c in cards)
 
 
+async def test_object_view_carries_per_property_provenance(client: httpx.AsyncClient) -> None:
+    """The shared Object view (object.html) renders /objects/{id}; each fact must carry
+    how it was obtained + a source label — the unifying atom both surfaces open into."""
+    seed = (await client.post("/demo/foreclosure-seed")).json()
+    cards = (await client.get("/matches", params={"subscription_id": seed["watch_id"]})).json()
+    oid = cards[0]["object_id"]
+    obj = (await client.get(f"/objects/{oid}")).json()
+    assert obj["type"] == "Property"
+    bid = next(p for p in obj["properties"] if p["name"] == "opening_bid")
+    assert bid["how"] == "authoritative record"
+    assert bid["source_label"] == "Harris County Clerk"
+    assert bid["evidence_class"] == "authoritative_api"
+
+
 async def test_a_saved_beat_fires_a_scoped_alert(client: httpx.AsyncClient) -> None:
     sub = (await client.post("/subscriptions", json={"name": "cheap", "criteria": {
         "event_types": ["object_created"], "object_type": "Property",

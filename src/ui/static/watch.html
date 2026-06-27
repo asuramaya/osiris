@@ -47,7 +47,8 @@
   .card .top{display:flex;align-items:baseline;gap:9px;margin-bottom:8px}
   .type{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--blue);
     background:#15263b;border:1px solid #1f3a5a;border-radius:999px;padding:2px 8px;font-weight:700}
-  .title{font-size:15px;font-weight:650}
+  .title{font-size:15px;font-weight:650;color:var(--text);text-decoration:none}
+  a.title:hover{text-decoration:underline;color:var(--blue)}
   .demo{font-size:10px;letter-spacing:.4px;color:#d2a8ff;background:#3a1d40;border:1px solid #57306b;
     border-radius:999px;padding:1px 8px;font-weight:700}
   .facts{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4px 18px}
@@ -166,7 +167,7 @@ function card(c){
     `<div class="kv"><span class="k">${esc(p.name)}</span><span class="v">${esc(p.value)}</span></div>`).join("");
   return `<div class="card">
     <div class="top"><span class="type">${esc(c.type)}</span>
-      <span class="title">${esc(c.title)}</span>${pr.demo?'<span class="demo">DEMO</span>':''}</div>
+      <a class="title" href="/ui/object.html?id=${c.object_id}">${esc(c.title)}</a>${pr.demo?'<span class="demo">DEMO</span>':''}</div>
     <div class="facts">${facts}</div>
     <div class="prov"><span class="dot">◆</span>
       <span>${esc(pr.source_label||"unknown source")}</span><span class="sep">·</span>

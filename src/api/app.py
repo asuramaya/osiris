@@ -227,11 +227,24 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         if obj is None:
             raise HTTPException(404, "object not found")
         props = await p.fetch(
-            "SELECT name, value, source_id, confidence FROM current_assertions "
-            "WHERE object_id=$1 ORDER BY name, source_id",
+            "SELECT name, value, source_id, confidence, evidence_class, observed_at "
+            "FROM current_assertions WHERE object_id=$1 ORDER BY name, source_id",
             object_id,
         )
-        return {**dict(obj), "properties": [dict(r) for r in props]}
+        return {
+            **dict(obj),
+            "properties": [
+                {
+                    "name": r["name"], "value": r["value"], "source_id": r["source_id"],
+                    "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
+                    "evidence_class": r["evidence_class"],
+                    "how": _HOW_LABELS.get(r["evidence_class"] or "", r["evidence_class"]),
+                    "source_label": _SOURCE_LABELS.get(r["source_id"], r["source_id"]),
+                    "observed": r["observed_at"].isoformat() if r["observed_at"] else None,
+                }
+                for r in props
+            ],
+        }
 
     # --- node management (all via the audited Actions layer) ----------------
     @app.post("/objects/{object_id}/properties")

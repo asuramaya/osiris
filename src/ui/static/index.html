@@ -473,6 +473,7 @@ async function inspect(id) {
     <div class="insp-id">${obj.canonical}</div>
     <div class="acts" style="margin-top:10px">
       <button class="btn ghost" onclick="loadGraph('${id}')">Pivot here</button>
+      <button class="btn ghost" onclick="location.href='/ui/object.html?id=${id}'" title="Open the shared Object view — the same page the watch feed opens">Open ▸</button>
       <button class="btn ghost" onclick="showDossier('${id}')" title="Identity + ownership/family/director network — for federated entities (sanctioned parties, companies, PEPs)">Dossier ▸</button>
       <button class="btn ghost" onclick="linkFrom('${id}','${obj.canonical.replace(/'/g,"\\'")}')">Link →</button>
     </div>
