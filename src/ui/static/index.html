@@ -1,751 +1,409 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>Osiris — OSINT → TTP/TTAL</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
-  <script src="https://unpkg.com/layout-base/layout-base.js"></script>
-  <script src="https://unpkg.com/cose-base/cose-base.js"></script>
-  <script src="https://unpkg.com/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
-  <style>
-    :root {
-      --bg: #0d1117; --panel: #161b22; --panel2: #1c2330; --border: #2b333c;
-      --ink: #e6edf3; --muted: #9aa5b1; --faint: #6e7681; --accent: #2f81f7;
-    }
-    * { box-sizing: border-box; }
-    html, body { margin: 0; height: 100%; font: 13.5px/1.5 system-ui, -apple-system, sans-serif;
-                 background: var(--bg); color: var(--ink); overflow: hidden; }
-    #app { display: grid; grid-template-columns: 300px 1fr 360px; grid-template-rows: 52px 1fr;
-           grid-template-areas: "head head head" "nav graph inspect"; height: 100vh; }
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Osiris · Analysis</title>
+<script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+<script src="https://unpkg.com/layout-base/layout-base.js"></script>
+<script src="https://unpkg.com/cose-base/cose-base.js"></script>
+<script src="https://unpkg.com/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
+<style>
+  :root{
+    --bg:#0b0e13; --panel:#11161d; --panel2:#161c25; --border:#222b36; --border2:#2c3744;
+    --text:#e6edf3; --muted:#7d8896; --faint:#566069; --accent:#3fb950; --blue:#4493f8;
+    --chip:#1b222c;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--text);
+    font:13px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;overflow:hidden}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  a{color:var(--blue);text-decoration:none}
+  button,select,input{font:inherit;color:var(--text)}
+  #app{display:grid;grid-template-rows:46px 1fr;height:100vh}
 
-    header { grid-area: head; display: flex; align-items: center; gap: 14px; padding: 0 16px;
-             background: var(--panel); border-bottom: 1px solid var(--border); }
-    header .brand { font-weight: 700; font-size: 16px; letter-spacing: .3px; }
-    header .tag { color: var(--muted); font-size: 12px; }
-    header .spacer { flex: 1; }
-    header select, header input { background: var(--bg); color: var(--ink); border: 1px solid var(--border);
-             padding: 6px 9px; border-radius: 7px; font-size: 13px; }
-    header label { color: var(--muted); font-size: 12px; }
+  /* top bar */
+  #bar{display:flex;align-items:center;gap:12px;padding:0 14px;background:var(--panel);
+    border-bottom:1px solid var(--border)}
+  #bar .brand{font-weight:650;letter-spacing:.2px}
+  #bar .brand b{color:var(--accent)}
+  select,.field{background:var(--bg);border:1px solid var(--border2);border-radius:7px;
+    padding:6px 9px;font-size:12.5px}
+  #search{width:340px}
+  .iconbtn{background:var(--chip);border:1px solid var(--border2);border-radius:7px;
+    padding:6px 10px;font-size:12px;cursor:pointer;color:var(--text)}
+  .iconbtn:hover{border-color:var(--blue)}
+  .spacer{flex:1}
+  .badge{background:#3a1212;color:#ff7b72;border:1px solid #5a1d1d;border-radius:999px;
+    padding:1px 7px;font-size:11px;font-weight:600}
 
-    .col { overflow-y: auto; background: var(--panel); }
-    #nav { grid-area: nav; border-right: 1px solid var(--border); padding: 14px; }
-    #inspect { grid-area: inspect; border-left: 1px solid var(--border); padding: 16px; }
-    #graphwrap { grid-area: graph; position: relative; }
-    #cy { position: absolute; inset: 0; }
-    #filterbar { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 5;
-                 display: flex; flex-wrap: wrap; gap: 6px; align-items: center; pointer-events: none; }
-    #filterbar .fchip { pointer-events: auto; }
-    .fchip { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; user-select: none;
-             background: var(--panel)cc; border: 1px solid var(--border); border-radius: 999px;
-             padding: 2px 9px; font-size: 11px; }
-    #graphhint { position: absolute; bottom: 10px; left: 12px; z-index: 5; color: var(--faint);
-                 font-size: 11px; pointer-events: none; }
-    .legend-cat { font-size: 10px; text-transform: uppercase; letter-spacing: .6px;
-                  color: var(--accent); margin: 10px 0 3px; font-weight: 600; }
+  /* layout */
+  #main{display:grid;grid-template-columns:264px 1fr 350px;height:100%;min-height:0}
+  .rail{background:var(--panel);overflow-y:auto;min-height:0}
+  #left{border-right:1px solid var(--border)}
+  #right{border-left:1px solid var(--border)}
+  .railhead{display:flex;align-items:center;gap:8px;padding:11px 14px 7px;
+    font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);font-weight:600}
+  .railhead .n{margin-left:auto;color:var(--muted);font-weight:500}
+  .pad{padding:0 14px 14px}
 
-    .section { margin-bottom: 18px; }
-    .section h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--faint);
-                  margin: 0 0 8px; font-weight: 600; }
-    .hint { font-size: 12px; color: var(--muted); background: var(--panel2); border: 1px solid var(--border);
-            border-radius: 8px; padding: 9px 11px; }
-    .hint b { color: var(--ink); }
+  /* object set list */
+  .filter{width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:7px;
+    padding:6px 9px;font-size:12px;margin:0 0 8px}
+  .item{display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:6px;cursor:pointer;
+    border:1px solid transparent}
+  .item:hover{background:var(--panel2)} .item.sel{background:var(--panel2);border-color:var(--border2)}
+  .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+  .item .lab{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .item .ty{font-size:10px;color:var(--faint)}
+  .muted{color:var(--muted)} .faint{color:var(--faint)}
+  .empty{color:var(--faint);font-size:12px;padding:16px 0;text-align:center}
 
-    .search { width: 100%; }
-    .list { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }
-    .item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; cursor: pointer;
-            border: 1px solid transparent; }
-    .item:hover { background: var(--panel2); border-color: var(--border); }
-    .item .label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .item .ty { font-size: 10px; color: var(--faint); }
-    .dot { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+  /* center board */
+  #center{display:grid;grid-template-rows:40px 1fr 24px;min-height:0;min-width:0}
+  #tools{display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--panel2);
+    border-bottom:1px solid var(--border)}
+  #tools .title{font-weight:600}
+  #cy{background:
+    radial-gradient(circle at 1px 1px, #161c25 1px, transparent 0) 0 0/22px 22px,var(--bg);
+    min-height:0}
+  #statusbar{display:flex;align-items:center;gap:10px;padding:0 12px;background:var(--panel);
+    border-top:1px solid var(--border);color:var(--faint);font-size:11px}
+  .live{color:var(--accent)}
 
-    .legend-row, .glossary-row { display: flex; gap: 9px; align-items: baseline; padding: 5px 0; }
-    .legend-row .meaning, .glossary-row .meaning { color: var(--muted); font-size: 12px; }
-    .legend-row .name { font-weight: 600; min-width: 86px; }
-    .glossary-row .rel { font-family: ui-monospace, monospace; color: var(--accent); min-width: 110px; font-size: 12px; }
+  /* inspector */
+  .insp-empty{padding:40px 16px;color:var(--faint);font-size:12px;text-align:center}
+  .insp-top{padding:14px 16px 10px;border-bottom:1px solid var(--border)}
+  .type{font-size:10px;letter-spacing:.5px;text-transform:uppercase;border-radius:999px;
+    padding:2px 8px;font-weight:700}
+  .insp-title{font-size:16px;font-weight:650;margin:8px 0 2px}
+  .insp-canon{font-size:11px;color:var(--faint)}
+  .acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:11px}
+  .act{background:var(--chip);border:1px solid var(--border2);border-radius:7px;padding:6px 10px;
+    font-size:12px;cursor:pointer}
+  .act:hover{border-color:var(--blue)} .act.go{background:var(--accent);color:#06210f;border:0;font-weight:650}
+  .sect{padding:12px 16px;border-bottom:1px solid var(--border)}
+  .sect h3{font-size:10.5px;letter-spacing:.6px;text-transform:uppercase;color:var(--faint);
+    margin:0 0 9px;font-weight:600}
+  .pv{display:grid;grid-template-columns:96px 1fr;gap:3px 10px;font-size:12.5px}
+  .pv .k{color:var(--muted);text-transform:capitalize}
+  .pv .v{word-break:break-word}
+  .pvs{color:var(--faint);font-size:10.5px;grid-column:2;margin:-1px 0 5px}
+  .rel{display:flex;align-items:center;gap:7px;padding:5px 0}
+  .reltype{color:var(--muted);font-size:10.5px;background:var(--chip);border:1px solid var(--border2);
+    border-radius:5px;padding:0 6px}
+  .demo{font-size:10px;color:#d2a8ff;background:#3a1d40;border:1px solid #57306b;border-radius:999px;
+    padding:1px 7px;font-weight:700}
 
-    #inspect .placeholder { color: var(--faint); font-size: 13px; }
-    .insp-type { display: inline-block; padding: 3px 9px; border-radius: 999px; font-weight: 600; font-size: 12px; }
-    .insp-def { color: var(--muted); margin: 8px 0 14px; font-size: 12.5px; }
-    .insp-id { font-family: ui-monospace, monospace; font-size: 11.5px; word-break: break-all;
-               background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px; }
-    .prop { padding: 6px 0; border-bottom: 1px solid var(--border); }
-    .prop .k { font-weight: 600; }
-    .prop .v { color: var(--ink); }
-    .prop .src { color: var(--faint); font-size: 11px; }
-    .rel-line { padding: 4px 0; color: var(--muted); font-size: 12.5px; }
-    .rel-line .verb { color: var(--accent); font-family: ui-monospace, monospace; }
-    .rel-line .obj { color: var(--ink); }
-    .helper { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
-              margin: 6px 0; }
-    .helper .hname { font-weight: 600; }
-    .helper .tier { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: #243; color: #7ee787; margin-left: 6px; }
-    .helper .tier.gated { background: #432; color: #f0b72f; }
-    .helper .hwhat { color: var(--muted); font-size: 12px; margin-top: 3px; }
-    .btn { display: inline-block; margin-top: 6px; background: var(--accent); color: #fff; border: 0;
-           padding: 6px 12px; border-radius: 7px; cursor: pointer; font-size: 12.5px; }
-    .btn.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
-    h3.insp-h { font-size: 11px; text-transform: uppercase; letter-spacing: .7px; color: var(--faint);
-                margin: 16px 0 6px; }
-    #status { color: var(--faint); font-size: 12px; }
-
-    .stats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-    .pill { background: var(--panel2); border: 1px solid var(--border); border-radius: 999px;
-            padding: 2px 9px; font-size: 11px; }
-    #overlay { position: fixed; inset: 0; background: #0008; display: none; z-index: 50;
-               align-items: center; justify-content: center; }
-    #modal { width: 620px; max-height: 78vh; overflow-y: auto; background: var(--panel);
-             border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
-    #modal h2 { margin: 0 0 10px; font-size: 15px; }
-    .card { background: var(--panel2); border: 1px solid var(--border); border-radius: 9px;
-            padding: 11px 13px; margin: 8px 0; }
-    .card .row { display: flex; gap: 8px; align-items: center; }
-    .card .acts { margin-top: 8px; display: flex; gap: 8px; }
-    .btn.warn { background: transparent; color: #f0b72f; border: 1px solid #f0b72f; }
-    .btn.bad { background: transparent; color: #f85149; border: 1px solid #f85149; }
-    .close { float: right; cursor: pointer; color: var(--faint); }
-    .chk { display: flex; gap: 8px; align-items: center; padding: 3px 0; font-size: 12.5px; }
-  </style>
+  /* popover (type key, add) */
+  .pop{position:absolute;z-index:30;background:var(--panel);border:1px solid var(--border2);
+    border-radius:9px;padding:12px;box-shadow:0 12px 40px #000a;font-size:12px;min-width:200px}
+  .keyrow{display:flex;align-items:center;gap:8px;padding:2px 0}
+</style>
 </head>
 <body>
 <div id="app">
-  <header>
-    <span class="brand">Osiris</span>
-    <span class="tag">OSINT&nbsp;→&nbsp;TTP/TTAL</span>
+  <div id="bar">
+    <span class="brand">◭ <b>Osiris</b></span>
+    <select id="analysis" onchange="openAnalysis(this.value)" title="Analysis"></select>
+    <button class="iconbtn" onclick="newAnalysis()" title="New analysis">＋</button>
+    <input id="search" class="field" placeholder="Search the ontology — name or identifier…"
+           oninput="debouncedSearch()" onfocus="debouncedSearch()" autocomplete="off" />
     <span class="spacer"></span>
-    <label>Case</label>
-    <select id="case" onchange="loadCaseObjects()"></select>
-    <button class="btn ghost" style="margin:0" onclick="newCase()" title="new case">＋</button>
-    <button class="btn ghost" style="margin:0" onclick="renameCase()" title="rename case">✎</button>
-    <button class="btn ghost" style="margin:0" onclick="editBudgets()" title="edit budgets">⛁</button>
-    <button class="btn ghost" style="margin:0" onclick="archiveCase()" title="archive case">🗄</button>
-    <label>Depth</label>
-    <input id="hops" type="number" value="2" min="0" max="12" style="width:54px" onchange="reload()"
-           title="graph display depth — double-click a node to pivot-expand instead" />
-    <span class="spacer"></span>
-    <button class="btn ghost" style="margin:0" onclick="openTray('handoff')">Tray <b id="trayN">0</b></button>
-    <button class="btn ghost" style="margin:0" onclick="openTray('merge')">Review <b id="mergeN">0</b></button>
-    <button class="btn ghost" style="margin:0" onclick="downloadBrief()">Brief PDF</button>
-    <span id="live" title="live updates" style="color:#3fb950">●</span>
-    <span id="status"></span>
-  </header>
-
-  <aside id="nav" class="col">
-    <div class="section">
-      <div class="hint"><b>Start here.</b> Make a case, paste any selector to seed it
-        (we detect the type), then <b>Expand</b> to let collectors fan out. Click any
-        node to learn what it is and how it connects.</div>
-      <div id="casestats" class="stats"></div>
-    </div>
-    <div class="section">
-      <h2>1 · Seed the case — paste anything</h2>
-      <input id="seed" class="search" placeholder="email · IP · domain · @handle · hash · BTC · phrase…"
-             onkeydown="if(event.key==='Enter') seedIntake()" />
-      <div style="display:flex; gap:8px; margin-top:8px">
-        <button class="btn" onclick="seedIntake()">Add to case</button>
-        <button class="btn ghost" onclick="expandCase()">Expand ▸</button>
-      </div>
-      <div id="seedmsg" class="meaning" style="margin-top:8px"></div>
-    </div>
-    <div class="section">
-      <h2>2 · Entities in this case</h2>
-      <input id="search" class="search" placeholder="filter by name…" oninput="renderObjectList()" />
-      <div id="objlist" class="list"></div>
-    </div>
-    <div class="section">
-      <h2>3 · What the colours & shapes mean</h2>
-      <div id="legend"></div>
-    </div>
-    <div class="section">
-      <h2>4 · What the links mean</h2>
-      <div id="glossary"></div>
-    </div>
-  </aside>
-
-  <div id="graphwrap">
-    <div id="filterbar"></div>
-    <div id="cy"></div>
-    <div id="graphhint">double-click a node to expand its neighbourhood</div>
+    <button class="iconbtn" onclick="toggleKey(event)">Type key</button>
+    <button class="iconbtn" onclick="openReview()">Review <span id="reviewN" class="muted">0</span></button>
+    <a class="iconbtn" href="/ui/watch.html">Watch ▸</a>
   </div>
 
-  <aside id="inspect" class="col">
-    <div class="placeholder">Select a node to inspect it.<br><br>
-      You'll see what kind of entity it is, its evidence-backed properties (with the source of each),
-      how it links to everything around it, and which collectors you can run on it next.</div>
-  </aside>
-</div>
+  <div id="main">
+    <!-- LEFT: object set -->
+    <aside id="left" class="rail">
+      <div class="railhead">Object set <span class="n" id="setn">0</span></div>
+      <div class="pad">
+        <input id="filter" class="filter" placeholder="Filter the set…" oninput="renderSet()" />
+        <div id="set"></div>
+      </div>
+      <div class="railhead">Add to analysis</div>
+      <div class="pad">
+        <input id="seed" class="filter" placeholder="paste an identifier or name…" />
+        <button class="iconbtn" style="width:100%" onclick="addSeed()">Add &amp; classify</button>
+        <div id="seedmsg" class="faint" style="margin-top:6px;font-size:11px"></div>
+      </div>
+    </aside>
 
-<div id="overlay" onclick="if(event.target.id==='overlay')closeModal()">
-  <div id="modal"></div>
+    <!-- CENTER: the board -->
+    <section id="center">
+      <div id="tools">
+        <span class="title" id="boardtitle">Board</span>
+        <button class="iconbtn" id="aroundBtn" onclick="searchAround()" disabled>Search around</button>
+        <button class="iconbtn" onclick="expandSet()" title="Run collectors to grow the set">Expand ▸</button>
+        <span class="spacer"></span>
+        <button class="iconbtn" onclick="cyFit()">Fit</button>
+        <button class="iconbtn" onclick="relayout()">Re-layout</button>
+        <button class="iconbtn" onclick="clearBoard()">Clear</button>
+      </div>
+      <div id="cy"></div>
+      <div id="statusbar">
+        <span id="status">Select an object to place it on the board.</span>
+        <span class="spacer"></span><span id="live" class="live"></span>
+      </div>
+    </section>
+
+    <!-- RIGHT: inspector (the one noun) -->
+    <aside id="right" class="rail">
+      <div class="insp-empty" id="insp">Select an object to inspect it.<br><br>
+        Click anything — an object in the set, a node on the board, a related entity — and it
+        opens here, with every fact and where it came from.</div>
+    </aside>
+  </div>
 </div>
 
 <script>
-// ---- teaching metadata: what each node type / relationship means -----------
+const $ = id => document.getElementById(id);
+const esc = s => (s==null?"":String(s)).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+const HOW = {authoritative_api:"authoritative",self_declared:"self-declared",
+  direct_observation:"observed",co_occurrence:"co-occurrence",derived:"inferred",
+  corroborated:"corroborated"};
+
 const TYPE = {
-  IntrusionSet:   { c:'#f85149', s:'hexagon',          d:'An actor cluster — a tracked set of related intrusion activity (e.g. Lazarus Group).' },
-  ThreatActor:    { c:'#da3633', s:'hexagon',          d:'The human or group behind activity.' },
-  Campaign:       { c:'#db61a2', s:'hexagon',          d:'Time-bounded activity attributed to an actor.' },
-  Malware:        { c:'#d29922', s:'round-rectangle',  d:'Malicious software — a capability an actor uses.' },
-  Tool:           { c:'#bc8cff', s:'round-rectangle',  d:'Legitimate/utility software used in operations (e.g. Mimikatz).' },
-  AttackPattern:  { c:'#3fb950', s:'diamond',          d:'A technique (MITRE ATT&CK Txxxx) — HOW something is done.' },
-  Indicator:      { c:'#58a6ff', s:'triangle',         d:'An IOC / detection signal — a hash, IP, domain that points at something malicious.' },
-  ObservedData:   { c:'#8b949e', s:'rectangle',        d:'Raw evidence — a scraped record, a feed entry. The provenance behind a claim.' },
-  URL:            { c:'#6cb6ff', s:'round-rectangle',  d:'A web page / search hit pulled in via dorking.' },
-  Domain:         { c:'#39c5cf', s:'ellipse',          d:'A DNS domain observable.' },
-  IPv4:           { c:'#2dd4bf', s:'ellipse',          d:'An IPv4 address observable.' },
-  TelegramChannel:{ c:'#56a3ff', s:'ellipse',          d:'A Telegram channel observable.' },
-  Person:         { c:'#e3b341', s:'ellipse',          d:'A person entity / identity hub (resolved probabilistically — never auto-merged).' },
-  Account:        { c:'#ffd33d', s:'round-rectangle',  d:'A platform account (github:user, twitter:handle) — a piece of someone’s footprint.' },
-  Username:       { c:'#ffab70', s:'ellipse',          d:'A handle/username — the connective tissue across platforms.' },
-  Email:          { c:'#7ee787', s:'ellipse',          d:'An email-address observable.' },
-  Phone:          { c:'#85e89d', s:'ellipse',          d:'A phone-number observable (enriched offline: country/carrier/line type).' },
-  FileHash:       { c:'#f0883e', s:'triangle',         d:'A file hash observable (md5/sha1/sha256).' },
-  Phrase:         { c:'#adbac7', s:'ellipse',          d:'Free-text — a dorking seed.' },
+  IntrusionSet:{c:'#f85149',s:'hexagon'}, ThreatActor:{c:'#da3633',s:'hexagon'},
+  Campaign:{c:'#db61a2',s:'hexagon'}, Malware:{c:'#d29922',s:'round-rectangle'},
+  Tool:{c:'#bc8cff',s:'round-rectangle'}, AttackPattern:{c:'#3fb950',s:'diamond'},
+  Indicator:{c:'#58a6ff',s:'triangle'}, ObservedData:{c:'#8b949e',s:'rectangle'},
+  Organization:{c:'#4493f8',s:'round-rectangle'}, Person:{c:'#e3b341',s:'ellipse'},
+  Property:{c:'#39c5cf',s:'round-rectangle'}, CryptoAddress:{c:'#f0883e',s:'diamond'},
+  CourtCase:{c:'#ca8aff',s:'rectangle'}, ClinicalTrial:{c:'#56d4dd',s:'rectangle'},
+  Account:{c:'#ffd33d',s:'round-rectangle'}, Username:{c:'#ffab70',s:'ellipse'},
+  Email:{c:'#7ee787',s:'ellipse'}, Phone:{c:'#85e89d',s:'ellipse'}, Domain:{c:'#39c5cf',s:'ellipse'},
+  URL:{c:'#6cb6ff',s:'round-rectangle'}, FileHash:{c:'#f0883e',s:'triangle'},
 };
-const DEFAULT_TYPE = { c:'#6e7681', s:'ellipse', d:'An ontology object.' };
-const ty = t => TYPE[t] || DEFAULT_TYPE;
+const DEF = {c:'#6e7681',s:'ellipse'};
+const ty = t => TYPE[t]||DEF;
 
-// ontology categories (Palantir-style grouping; mirrors STIX SDO families)
-const GROUPS = [
-  ['Actors',       ['IntrusionSet','ThreatActor','Campaign']],
-  ['Capabilities', ['Malware','Tool']],
-  ['Techniques',   ['AttackPattern']],
-  ['Indicators',   ['Indicator']],
-  ['Identity',     ['Person','Account','Username','Email','Phone']],
-  ['Evidence',     ['ObservedData','URL']],
-  ['Observables',  ['Domain','IPv4','TelegramChannel','FileHash','Phrase']],
-];
+let ANALYSIS=null, SET=[], FOCUS=null, STREAM=null;
 
-const REL = {
-  uses:             'The actor/source employs this capability or technique.',
-  indicates:        'This indicator points to the linked malware/technique.',
-  'based-on':       'This indicator is derived from that raw observed evidence.',
-  'subtechnique-of':'A more specific technique under a broader one.',
-  has_observation:  'This pattern is backed by that piece of raw evidence.',
-  targets:          'The campaign/actor is aimed at this entity.',
-  has_subdomain:    'This domain contains the linked subdomain.',
-  same_as:          'Resolved to be the same entity (merge).',
-  not_same_as:      'Confirmed by an analyst to be different entities.',
-  has_account:      'This identity owns the linked platform account.',
-  has_email:        'This identity owns the linked email address.',
-  has_username:     'This identity uses the linked handle.',
-  is_profile:       'This URL/handle resolves to the linked platform account.',
-  rel_me:           'IndieWeb rel=me — the page asserts this is the same identity.',
-  co_occurs:        'Surfaced together with the seed (weak co-occurrence lead).',
-  appears_in:       'The seed appears in this web page / search hit.',
-  has_email_link:   'Contact email found on the page.',
-  derived_handle:   'A candidate username derived from the seed.',
-  has_url:          'A website/blog this identity links to.',
-};
-
-let CASE = null, ROOT = null, OBJECTS = [];
-
-// ---- cytoscape -------------------------------------------------------------
+// ---- cytoscape board -------------------------------------------------------
 if (window.cytoscapeFcose) cytoscape.use(window.cytoscapeFcose);
 const HAS_FCOSE = !!window.cytoscapeFcose;
+const cy = cytoscape({ container:$('cy'), wheelSensitivity:.2, minZoom:.15, maxZoom:3,
+  style:[
+    {selector:'node',style:{'background-color':e=>ty(e.data('type')).c,'shape':e=>ty(e.data('type')).s,
+      'width':30,'height':30,'border-width':0,'label':'data(label)','color':'#cdd6df','font-size':10.5,
+      'text-valign':'bottom','text-margin-y':4,'text-wrap':'wrap','text-max-width':110,
+      'text-background-color':'#0b0e13','text-background-opacity':.7,'text-background-padding':3,
+      'text-background-shape':'roundrectangle','min-zoomed-font-size':7}},
+    {selector:'node.focus',style:{'border-width':3,'border-color':'#4493f8'}},
+    {selector:'edge',style:{'width':1.2,'line-color':'#2c3744','target-arrow-color':'#2c3744',
+      'target-arrow-shape':'triangle','curve-style':'bezier','arrow-scale':.85,'label':'data(type)',
+      'font-size':8.5,'color':'#7d8896','text-background-color':'#0b0e13','text-background-opacity':.85,
+      'text-background-padding':2,'text-rotation':'autorotate','min-zoomed-font-size':7}},
+  ]});
+cy.on('tap','node',e=>focus(e.target.id()));
+cy.on('dbltap','node',e=>searchAround(e.target.id()));
 
-const cy = cytoscape({
-  container: document.getElementById('cy'),
-  wheelSensitivity: .2,
-  style: [
-    { selector: 'node', style: {
-        'background-color': e => ty(e.data('type')).c,
-        'shape': e => ty(e.data('type')).s,
-        'width': 34, 'height': 34, 'border-width': 0,
-        'label': 'data(label)', 'color': '#e6edf3', 'font-size': 11,
-        'text-valign': 'bottom', 'text-margin-y': 4, 'text-wrap': 'wrap', 'text-max-width': 120,
-        'text-background-color': '#0d1117', 'text-background-opacity': .72,
-        'text-background-padding': 3, 'text-background-shape': 'roundrectangle' } },
-    { selector: 'node.root', style: { 'border-width': 3, 'border-color': '#fff' } },
-    { selector: 'node:selected', style: { 'border-width': 3, 'border-color': '#2f81f7' } },
-    { selector: 'edge', style: {
-        'width': 1.4, 'line-color': '#3a434d', 'target-arrow-color': '#3a434d',
-        'target-arrow-shape': 'triangle', 'curve-style': 'bezier', 'arrow-scale': .9,
-        'label': 'data(type)', 'font-size': 9, 'color': '#9aa5b1',
-        'text-background-color': '#0d1117', 'text-background-opacity': .85,
-        'text-background-padding': 2, 'text-rotation': 'autorotate' } },
-    { selector: 'edge:selected', style: { 'line-color': '#2f81f7', 'target-arrow-color': '#2f81f7', 'width': 2.5 } },
-  ],
-});
-
-// force-directed layout engine (fcose) for readable separation; `preserve`
-// keeps existing node positions stable so incremental growth isn't jarring.
-function layout(preserve) {
-  if (HAS_FCOSE) {
-    cy.layout({ name: 'fcose', animate: true, animationDuration: 350, randomize: !preserve,
-                quality: 'proof', nodeSeparation: 130, idealEdgeLength: 120,
-                nodeRepulsion: 9000, padding: 50, packComponents: true }).run();
-  } else {
-    cy.layout({ name: 'cose', animate: false, padding: 50, nodeRepulsion: 12000,
-                idealEdgeLength: 130, componentSpacing: 120, nodeOverlap: 24 }).run();
-  }
+function layout(preserve){
+  const o = HAS_FCOSE
+    ? {name:'fcose',animate:true,animationDuration:300,randomize:!preserve,quality:'proof',
+       nodeSeparation:120,idealEdgeLength:115,nodeRepulsion:9000,padding:45,packComponents:true}
+    : {name:'cose',animate:false,padding:45,nodeRepulsion:12000,idealEdgeLength:120};
+  cy.layout(o).run();
 }
-
-// ---- data loading ----------------------------------------------------------
-async function loadCases() {
-  const cases = await fetch('/cases').then(r => r.json());
-  const sel = document.getElementById('case');
-  sel.innerHTML = cases.map(c =>
-    `<option value="${c.id}">${c.name} (${c.object_count})</option>`).join('');
-  if (cases.length) { CASE = cases[0].id; await loadCaseObjects(); }
-}
-
-async function loadCaseObjects() {
-  CASE = document.getElementById('case').value || CASE;
-  OBJECTS = await fetch(`/objects?case_id=${CASE}&limit=300`).then(r => r.json());
-  renderObjectList();
-  refreshCase();
-  watchCase();
-  // auto-open the most "central" thing for a new operator: an actor if present
-  const actor = OBJECTS.find(o => o.type === 'IntrusionSet') || OBJECTS[0];
-  if (actor) loadGraph(actor.id);
-}
-
-function renderObjectList() {
-  const q = (document.getElementById('search').value || '').toLowerCase();
-  const order = ['IntrusionSet','Campaign','ThreatActor','Malware','Tool','AttackPattern',
-                 'Indicator','ObservedData','Domain','TelegramChannel','Person','Email'];
-  const list = OBJECTS
-    .filter(o => o.canonical.toLowerCase().includes(q))
-    .sort((a,b) => (order.indexOf(a.type)+99*!~order.indexOf(a.type)) - (order.indexOf(b.type)+99*!~order.indexOf(b.type)));
-  document.getElementById('objlist').innerHTML = list.slice(0, 120).map(o =>
-    `<div class="item" onclick="loadGraph('${o.id}')" title="${o.canonical}">
-       <span class="dot" style="background:${ty(o.type).c}"></span>
-       <span class="label">${short(o.canonical)}</span>
-       <span class="ty">${o.type}</span>
-     </div>`).join('') || '<div class="hint">No entities match.</div>';
-}
-
-function short(canon) {
-  // STIX ids are ugly; show the readable tail
-  if (canon.includes('--')) return canon.split('--')[0] + '…';
-  return canon.length > 30 ? canon.slice(0, 30) + '…' : canon;
-}
-
-// add only nodes/edges not already on the canvas; returns how many new nodes.
-function mergeGraph(g) {
-  let added = 0;
-  g.nodes.forEach(n => {
-    if (cy.getElementById(n.id).empty()) {
-      cy.add({ data: { id: n.id, label: n.label, type: n.type } }); added++;
-    }
-  });
-  g.edges.forEach(e => {
-    const eid = e.source + '>' + e.target + e.type;
-    if (cy.getElementById(eid).empty())
-      cy.add({ data: { id: eid, source: e.source, target: e.target, type: e.type } });
-  });
-  applyTypeFilter();
+function mergeGraph(g){
+  let added=0;
+  g.nodes.forEach(n=>{ if(!cy.getElementById(n.id).length){
+    cy.add({group:'nodes',data:{id:n.id,type:n.type,label:n.label}}); added++; }});
+  g.edges.forEach(e=>{ const id=`${e.source}-${e.type}-${e.target}`;
+    if(!cy.getElementById(id).length && cy.getElementById(e.source).length && cy.getElementById(e.target).length)
+      cy.add({group:'edges',data:{id,source:e.source,target:e.target,type:e.type}}); });
   return added;
 }
+function cyFit(){ cy.animate({fit:{padding:50},duration:250}); }
+function relayout(){ layout(false); }
+function clearBoard(){ cy.elements().remove(); FOCUS=null; $('aroundBtn').disabled=true;
+  setStatus('Board cleared.'); }
+function setStatus(s){ $('status').textContent=s; }
 
-async function loadGraph(id) {
-  ROOT = id;
-  const hops = document.getElementById('hops').value || 2;
-  document.getElementById('status').textContent = 'loading…';
-  const g = await fetch(`/objects/${id}/graph?hops=${hops}`).then(r => r.json());
-  cy.elements().remove();
-  mergeGraph(g);
-  cy.getElementById(id).addClass('root');
-  layout(false);
-  document.getElementById('status').textContent = `${g.nodes.length} entities · ${g.edges.length} links`;
+// ---- analyses (cases) ------------------------------------------------------
+async function loadAnalyses(){
+  const cs = await fetch('/cases').then(r=>r.json());
+  $('analysis').innerHTML = cs.map(c=>`<option value="${c.id}">${esc(c.name)} · ${c.object_count}</option>`).join('')
+    || '<option value="">— no analyses —</option>';
+  if(cs.length){ ANALYSIS=cs[0].id; await openAnalysis(ANALYSIS); }
+}
+async function newAnalysis(){
+  const name = prompt('Name this analysis:'); if(!name) return;
+  const r = await fetch('/cases',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({name})}).then(r=>r.json());
+  await loadAnalyses(); $('analysis').value=r.id; openAnalysis(r.id);
+}
+async function openAnalysis(id){
+  ANALYSIS=id; clearBoard();
+  SET = await fetch(`/objects?case_id=${id}&limit=400`).then(r=>r.json());
+  $('setn').textContent = SET.length; renderSet();
+  refreshReview(); watch();
+  if(SET.length) focus(SET[0].id);
+  else setStatus('Empty analysis — add an object below, or run Expand.');
+}
+function renderSet(){
+  const q=($('filter').value||'').toLowerCase();
+  const rows = SET.filter(o => (o.name||o.canonical).toLowerCase().includes(q) || o.type.toLowerCase().includes(q));
+  $('set').innerHTML = rows.slice(0,200).map(o=>`
+    <div class="item${FOCUS===o.id?' sel':''}" onclick="focus('${o.id}')" title="${esc(o.canonical)}">
+      <span class="dot" style="background:${ty(o.type).c}"></span>
+      <span class="lab">${esc(o.name||o.canonical)}</span><span class="ty">${o.type}</span>
+    </div>`).join('') || '<div class="empty">No objects match.</div>';
+}
+
+// ---- focus / inspect / search-around --------------------------------------
+async function focus(id){
+  FOCUS=id; $('aroundBtn').disabled=false; renderSet();
+  if(!cy.getElementById(id).length) await searchAround(id, true);
+  cy.nodes().removeClass('focus'); cy.getElementById(id).addClass('focus');
   inspect(id);
 }
-function reload() { if (ROOT) loadGraph(ROOT); }
-
-// Palantir-style pivot: double-click a node to grow its neighbourhood into the
-// current graph (incremental, positions preserved) rather than reloading.
-async function pivotExpand(id) {
-  const g = await fetch(`/objects/${id}/graph?hops=1`).then(r => r.json());
+async function searchAround(id, quiet){
+  id = id || FOCUS; if(!id) return;
+  setStatus('Searching around…');
+  const g = await fetch(`/objects/${id}/graph?hops=1`).then(r=>r.json());
   const added = mergeGraph(g);
-  if (added) layout(true);  // keep existing positions stable
-  document.getElementById('status').textContent =
-    `${cy.nodes().length} entities · ${cy.edges().length} links (+${added})`;
-}
-cy.on('dbltap', 'node', e => pivotExpand(e.target.id()));
-
-// ---- case building ---------------------------------------------------------
-async function newCase() {
-  const name = prompt('Name this investigation:');
-  if (!name) return;
-  const c = await fetch('/cases', { method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ name }) }).then(r => r.json());
-  await loadCases();
-  document.getElementById('case').value = c.id;
-  await loadCaseObjects();
+  layout(cy.nodes().length>1);
+  if(!quiet) cy.getElementById(id).select();
+  setStatus(`${cy.nodes().length} objects on the board${added?` (+${added})`:''}.`);
+  $('boardtitle').textContent = `Board · ${cy.nodes().length} objects`;
 }
 
-async function renameCase() {
-  const name = prompt('Rename investigation:'); if (!name || !CASE) return;
-  await fetch(`/cases/${CASE}`, { method:'PATCH', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ name }) });
-  await loadCases(); document.getElementById('case').value = CASE; refreshCase();
-}
-async function editBudgets() {
-  if (!CASE) return;
-  const cur = await fetch(`/cases/${CASE}`).then(r => r.json());
-  const raw = prompt('Edit budgets JSON — set "max_hop_distance": null for unbounded depth:',
-    JSON.stringify(cur.budgets || {}, null, 0));
-  if (raw === null) return;
-  await fetch(`/cases/${CASE}`, { method:'PATCH', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ budgets: JSON.parse(raw) }) });
-  refreshCase();
-}
-async function archiveCase() {
-  if (!CASE || !confirm('Archive this investigation? It leaves the case list (kept in the DB).')) return;
-  await fetch(`/cases/${CASE}/archive`, { method:'POST' });
-  await loadCases(); await loadCaseObjects();
-}
-
-async function seedIntake() {
-  const raw = document.getElementById('seed').value.trim();
-  if (!raw || !CASE) return;
-  const msg = document.getElementById('seedmsg');
-  msg.textContent = 'classifying…';
-  const r = await fetch(`/cases/${CASE}/intake`, { method:'POST',
-    headers:{'Content-Type':'application/json'}, body: JSON.stringify({ raw }) }).then(r => r.json());
-  msg.innerHTML = `detected <b style="color:${ty(r.type).c}">${r.type}</b> — added. ` +
-    `Click <b>Expand</b> to run collectors.`;
-  document.getElementById('seed').value = '';
-  await loadCaseObjects();
-  loadGraph(r.object_id);
-}
-
-async function expandCase() {
-  if (!CASE) return;
-  const msg = document.getElementById('seedmsg');
-  msg.innerHTML = 'expanding — collectors fanning out; <b>results stream in live</b>…';
-  // non-blocking: server runs the cascade in the background; the SSE stream
-  // grows the graph incrementally (no choppy full reload).
-  await fetch(`/cases/${CASE}/expand`, { method:'POST' });
-}
-
-async function refreshObjects() {
-  if (!CASE) return;
-  OBJECTS = await fetch(`/objects?case_id=${CASE}&limit=400`).then(r => r.json());
-  renderObjectList();
-}
-async function growGraph() {
-  if (!ROOT) return;
-  const hops = document.getElementById('hops').value || 2;
-  const g = await fetch(`/objects/${ROOT}/graph?hops=${hops}`).then(r => r.json());
-  if (mergeGraph(g)) layout(true);
-}
-
-// ---- inspector -------------------------------------------------------------
-async function inspect(id) {
-  const [obj, helpers, g] = await Promise.all([
-    fetch(`/objects/${id}`).then(r => r.json()),
-    fetch(`/objects/${id}/helpers`).then(r => r.json()),
-    fetch(`/objects/${id}/graph?hops=1`).then(r => r.json()),
-  ]);
-  const meta = ty(obj.type);
-  const rels = g.edges.filter(e => e.source === id || e.target === id).map(e => {
-    const otherId = e.source === id ? e.target : e.source;
-    const other = g.nodes.find(n => n.id === otherId);
-    const dir = e.source === id ? '→' : '←';
-    return `<div class="rel-line">${dir === '→' ? 'this' : (other?.label||'?')}
-              <span class="verb">${e.type}</span>
-              <span class="obj">${dir === '→' ? (other?.label||'?') : 'this'}</span></div>`;
-  });
-  const props = obj.properties.map(p =>
-    `<div class="prop"><span class="k">${p.name}</span>:
-       <span class="v">${fmt(p.value)}</span> <span class="src">via ${p.source_id}</span></div>`).join('')
-    || '<div class="placeholder">No properties yet.</div>';
-  const isIdentity = ['Person','Account','Email','Username'].includes(obj.type);
-  const subjectBtn = isIdentity
-    ? `<button class="btn" onclick="markSubject('${id}')" title="Pin as the case subject — builds an identity hub the footprint converges toward">★ This is me</button>`
-    : '';
-  const helperHtml = helpers.length ? helpers.map(h => {
-    const action = h.tier === 'open'
-      ? `<button class="btn" style="margin-top:6px" onclick="federatePreview('${h.id}','${id}')">Run &amp; preview ▸</button>`
-      : `<div class="hwhat" style="color:var(--faint)">Gated — runs via <b>Expand</b>, lands in the handoff tray.</div>`;
-    return `<div class="helper"><span class="hname">${h.name}</span>
-       <span class="tier ${h.tier}">${h.tier}</span>
-       <div class="hwhat">${h.description || 'Collect more about this entity.'}</div>${action}</div>`;
-  }).join('')
-    : '<div class="placeholder">No collectors consume this type. It\'s linked-to, not a query seed.</div>';
-
-  document.getElementById('inspect').innerHTML = `
-    <span class="insp-type" style="background:${meta.c}22;color:${meta.c};border:1px solid ${meta.c}66">${obj.type}</span>
-    <div class="insp-def">${meta.d}</div>
-    <div class="insp-id">${obj.canonical}</div>
-    <div class="acts" style="margin-top:10px">
-      <button class="btn ghost" onclick="loadGraph('${id}')">Pivot here</button>
-      <button class="btn ghost" onclick="location.href='/ui/object.html?id=${id}'" title="Open the shared Object view — the same page the watch feed opens">Open ▸</button>
-      <button class="btn ghost" onclick="showDossier('${id}')" title="Identity + ownership/family/director network — for federated entities (sanctioned parties, companies, PEPs)">Dossier ▸</button>
-      <button class="btn ghost" onclick="linkFrom('${id}','${obj.canonical.replace(/'/g,"\\'")}')">Link →</button>
+async function inspect(id){
+  const o = await fetch('/objects/'+id).then(r=>r.ok?r.json():null);
+  if(!o){ $('insp').className='insp-empty'; $('insp').textContent='Object not found.'; return; }
+  const nameP=o.properties.find(p=>p.name==='name');
+  const demo=o.properties.some(p=>p.name==='demo'&&String(p.value).toLowerCase()==='true');
+  const title=(nameP&&nameP.value)||o.canonical;
+  const m=ty(o.type);
+  const facts=o.properties.filter(p=>!['name','demo','tag'].includes(p.name));
+  const pv = facts.map(p=>`<div class="k">${esc(p.name)}</div><div class="v">${esc(p.value)}</div>
+    <div class="pvs">${esc(p.source_label||p.source_id||'—')} · ${esc(p.how||'—')} · ${p.confidence!=null?Math.round(p.confidence*100)+'%':'—'}</div>`).join('')
+    || '<div class="muted" style="grid-column:1/3">No properties.</div>';
+  const right=$('right'); right.className='rail';
+  right.innerHTML = `
+    <div class="insp-top">
+      <span class="type" style="color:${m.c};background:${m.c}1e;border:1px solid ${m.c}55">${esc(o.type)}</span>
+      ${demo?'<span class="demo" style="margin-left:6px">DEMO</span>':''}
+      <div class="insp-title">${esc(title)}</div>
+      <div class="insp-canon mono">${esc(o.canonical)}</div>
+      <div class="acts">
+        <button class="act go" onclick="searchAround('${id}')">Search around</button>
+        <button class="act" onclick="showDossier('${id}')">Dossier</button>
+        <button class="act" onclick="tagIt('${id}')">Tag</button>
+      </div>
     </div>
-    <div class="acts" style="margin-top:6px">
-      ${subjectBtn}
-      <button class="btn ghost" onclick="addProp('${id}')">+ Property</button>
-      <button class="btn ghost" onclick="addTag('${id}')">+ Tag</button>
-      <button class="btn bad" onclick="archiveObj('${id}')">Archive</button>
-    </div>
-    <h3 class="insp-h">Properties &amp; provenance</h3>${props}
-    <h3 class="insp-h">How it connects</h3>${rels.join('') || '<div class="placeholder">No links.</div>'}
-    <h3 class="insp-h">Collectors you can run</h3>${helperHtml}`;
+    <div class="sect"><h3>Properties · what &amp; how</h3><div class="pv">${pv}</div></div>
+    <div class="sect"><h3>Relationships</h3><div id="rels" class="muted">…</div></div>
+    <div class="sect" id="dossbox" style="display:none"><h3>Dossier</h3>
+      <pre id="doss" class="mono" style="white-space:pre-wrap;font-size:11.5px;margin:0"></pre></div>`;
+  loadRels(id);
 }
+async function loadRels(id){
+  const g=await fetch(`/objects/${id}/graph?hops=1`).then(r=>r.json());
+  const lab={}; g.nodes.forEach(n=>lab[n.id]=n);
+  const rows=g.edges.filter(e=>e.source===id||e.target===id).map(e=>{
+    const out=e.source===id, other=out?e.target:e.source, n=lab[other]||{label:other,type:'?'};
+    return `<div class="rel"><span class="faint">${out?'→':'←'}</span>
+      <span class="reltype">${esc(e.type)}</span>
+      <a onclick="focus('${other}')" style="cursor:pointer">${esc(n.label)}</a>
+      <span class="faint">${esc(n.type)}</span></div>`;
+  }).join('');
+  const el=$('rels'); if(el) el.innerHTML = rows || '<span class="faint">No links.</span>';
+}
+async function showDossier(id){
+  $('dossbox').style.display='block'; $('doss').textContent='loading…';
+  const d=await fetch('/objects/'+id+'/dossier').then(r=>r.ok?r.json():null);
+  $('doss').textContent = d?JSON.stringify(d,null,2):'No dossier for this object type.';
+}
+async function tagIt(id){ const t=prompt('Tag:'); if(!t) return;
+  await fetch('/objects/'+id+'/tags',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({tag:t,scope:'global'})}); inspect(id); }
 
-// ---- node management -------------------------------------------------------
-let LINK_FROM = null;
-async function addProp(id) {
-  const name = prompt('Property name (e.g. note, employer, city):'); if (!name) return;
-  const value = prompt(`Value for "${name}":`); if (value === null) return;
-  await fetch(`/objects/${id}/properties`, { method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ name, value }) });
-  inspect(id);
+// ---- add / expand ----------------------------------------------------------
+async function addSeed(){
+  const raw=$('seed').value.trim(); if(!raw||!ANALYSIS) return;
+  const r=await fetch(`/cases/${ANALYSIS}/intake`,{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({raw})}).then(r=>r.json());
+  $('seed').value=''; $('seedmsg').textContent=`added ${r.type}`;
+  await openAnalysis(ANALYSIS); focus(r.object_id);
 }
-async function addTag(id) {
-  const tag = prompt('Tag (e.g. c2, phishing, of-interest):'); if (!tag) return;
-  await fetch(`/objects/${id}/tags`, { method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ tag }) });
-  inspect(id);
+async function expandSet(){
+  if(!ANALYSIS) return;
+  setStatus('Expanding — running collectors…'); $('live').textContent='● collecting';
+  await fetch(`/cases/${ANALYSIS}/expand`,{method:'POST'});
 }
-async function archiveObj(id) {
-  if (!confirm('Archive this entity? It stays in the audit log but leaves the views.')) return;
-  await fetch(`/objects/${id}/archive`, { method:'POST' });
-  await refreshObjects(); if (ROOT) growGraph(); cy.getElementById(id).remove();
-}
-async function markSubject(id) {
-  if (!CASE) { alert('Open a case first.'); return; }
-  await fetch(`/objects/${id}/subject`, { method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ case_id: CASE }) });
-  document.getElementById('status').textContent = '★ Pinned as case subject — building report…';
-  await refreshObjects(); if (ROOT) growGraph();
-  await showSubjectReport(id);
-}
-const _TIERS = [
-  ['verified', 'Verified core', '#3fb950', 'Self-declared or authoritative — solid.'],
-  ['corroborated', 'Corroborated', '#f0b72f', 'Two or more independent sources agree.'],
-  ['speculative', 'Speculative', '#8b949e', 'A single weak (co-occurrence / derived) signal — unconfirmed.'],
-];
-async function showSubjectReport(id) {
-  if (!CASE) { alert('Open a case first.'); return; }
-  const rep = await fetch(`/objects/${id}/subject-report?case_id=${CASE}`).then(r => r.json());
-  const m = document.getElementById('modal');
-  document.getElementById('overlay').style.display = 'flex';
-  const frag = f => `<div class="row" style="justify-content:space-between;cursor:pointer" onclick="closeModal();inspect('${f.id}')">
-      <span><b>${f.type}</b> ${f.canonical}${f.subject ? ' ★' : ''}</span>
-      <span class="meaning">${f.evidence_class || 'unclassified'} · ${f.sources} src${f.sources===1?'':'s'}${f.confidence!=null?' · '+Number(f.confidence).toFixed(2):''}</span>
-    </div>`;
-  m.innerHTML = `<span class="close" onclick="closeModal()">✕</span>
-    <h2>Who is this? — subject report</h2>
-    <div class="hint">Identity fragments found in this case, ranked by how well each is established. Click one to inspect it.</div>` +
-    _TIERS.map(([k, label, color, blurb]) => `<div class="card">
-      <div class="row"><b style="color:${color}">${label}</b> <span class="meaning">${rep[k].length}</span></div>
-      <div class="meaning">${blurb}</div>
-      ${rep[k].map(frag).join('') || '<div class="meaning">— none —</div>'}
-    </div>`).join('');
-}
-async function showDossier(id) {
-  const d = await fetch(`/objects/${id}/dossier`).then(r => r.json());
-  const m = document.getElementById('modal');
-  document.getElementById('overlay').style.display = 'flex';
-  const props = d.properties.map(p => `<div class="row" style="justify-content:space-between">
-      <span class="k">${p.name}</span>
-      <span class="v">${p.values.map(v => fmt(v.value)).join(', ')}</span></div>`).join('')
-    || '<div class="meaning">— no properties —</div>';
-  // group the network by direction + relationship type (owns / family / directs …)
-  const byType = {};
-  for (const r of d.relationships) {
-    const k = (r.direction === 'out' ? '' : '← ') + r.type;
-    (byType[k] = byType[k] || []).push(r);
-  }
-  const rels = Object.entries(byType).map(([k, list]) => `<div class="card">
-      <div class="row"><b>${k}</b> <span class="meaning">${list.length}</span></div>
-      ${list.map(r => `<div class="row" style="justify-content:space-between;cursor:pointer" onclick="closeModal();inspect('${r.neighbor.id}')">
-         <span><b>${r.neighbor.type}</b> ${r.neighbor.name || '?'}</span>
-         <span class="meaning">${r.evidence_class || 'unclassified'} · ${r.source}</span></div>`).join('')}
-    </div>`).join('') || '<div class="meaning">No relationships.</div>';
-  m.innerHTML = `<span class="close" onclick="closeModal()">✕</span>
-    <h2>${d.name || d.canonical}</h2>
-    <div class="hint">${d.type} · ${d.canonical} — identity and relationship network.</div>
-    <div class="card"><div class="row"><b>Identity</b></div>${props}</div>
-    ${rels}`;
-}
-function linkFrom(id, label) {
-  LINK_FROM = { id, label };
-  document.getElementById('status').textContent = `link from "${label}" — now click the target node`;
-}
-cy.on('tap', 'node', async e => {
-  if (LINK_FROM && LINK_FROM.id !== e.target.id()) {
-    const type = prompt(`Link type from "${LINK_FROM.label}" → this (e.g. owns, same_as, uses):`, 'related_to');
-    const from = LINK_FROM.id; LINK_FROM = null;
-    if (type) {
-      await fetch('/links', { method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ from_id: from, to_id: e.target.id(), type }) });
-      growGraph();
-    }
-  }
-});
-function fmt(v) {
-  if (Array.isArray(v)) return v.slice(0,4).join(', ') + (v.length>4?'…':'');
-  if (v && typeof v === 'object') return JSON.stringify(v).slice(0,80);
-  return String(v);
-}
-
-cy.on('tap', 'node', e => inspect(e.target.id()));
-
-// ---- case overview + trays -------------------------------------------------
-function applyStats(stats) {
-  const rc = stats.rate_credits_remaining;
-  document.getElementById('casestats').innerHTML =
-    `<span class="pill">${stats.total} entities</span>` +
-    Object.entries(stats.by_type).slice(0,5).map(([t,n]) =>
-      `<span class="pill" style="border-color:${ty(t).c}66">${t}: ${n}</span>`).join('') +
-    (rc!=null ? `<span class="pill">budget: ${rc}</span>` : '');
-  document.getElementById('trayN').textContent = stats.pending_handoffs;
-}
-
-async function refreshCase() {
-  if (!CASE) return;
-  const [stats, merge] = await Promise.all([
-    fetch(`/cases/${CASE}/stats`).then(r => r.json()),
-    fetch('/merge-candidates').then(r => r.json()),
-  ]);
-  applyStats(stats);
-  document.getElementById('mergeN').textContent = merge.length;
-}
-
-let STREAM = null, STREAM_CASE = null, LAST_TOTAL = -1;
-function watchCase() {
-  if (STREAM && STREAM_CASE === CASE) return;  // already watching this case
-  if (STREAM) STREAM.close();
-  STREAM_CASE = CASE;
-  LAST_TOTAL = -1;
-  STREAM = new EventSource(`/cases/${CASE}/stream`);
-  STREAM.onmessage = ev => {
-    const s = JSON.parse(ev.data);
-    applyStats(s);
-    document.getElementById('live').style.color = '#3fb950';
-    // entities appeared (cascade expanding) -> grow the sidebar + graph in place
-    if (LAST_TOTAL !== -1 && s.total !== LAST_TOTAL) { refreshObjects(); refreshCase(); growGraph(); }
-    LAST_TOTAL = s.total;
+function watch(){
+  if(STREAM) STREAM.close();
+  STREAM=new EventSource(`/cases/${ANALYSIS}/stream`);
+  STREAM.onmessage=async ev=>{
+    const s=JSON.parse(ev.data);
+    $('live').textContent = s.total!=null ? `● ${s.total} objects` : '';
+    const fresh=await fetch(`/objects?case_id=${ANALYSIS}&limit=400`).then(r=>r.json());
+    if(fresh.length!==SET.length){ SET=fresh; $('setn').textContent=SET.length; renderSet();
+      if(FOCUS) searchAround(FOCUS,true); }
   };
-  STREAM.onerror = () => { document.getElementById('live').style.color = '#6e7681'; };
 }
 
-function closeModal() { document.getElementById('overlay').style.display = 'none'; }
+// ---- global search ---------------------------------------------------------
+let st;
+function debouncedSearch(){ clearTimeout(st); st=setTimeout(globalSearch,180); }
+async function globalSearch(){
+  const q=$('search').value.trim(); closePop();
+  if(q.length<2) return;
+  const res=await fetch(`/objects?q=${encodeURIComponent(q)}&limit=12`).then(r=>r.json());
+  const pop=document.createElement('div'); pop.className='pop'; pop.id='searchpop';
+  const r=$('search').getBoundingClientRect(); pop.style.left=r.left+'px'; pop.style.top=(r.bottom+5)+'px';
+  pop.style.width=r.width+'px'; pop.style.maxHeight='340px'; pop.style.overflowY='auto';
+  pop.innerHTML = res.length ? res.map(o=>`
+    <div class="item" onmousedown="pick('${o.id}')">
+      <span class="dot" style="background:${ty(o.type).c}"></span>
+      <span class="lab">${esc(o.name||o.canonical)}</span><span class="ty">${o.type}</span>
+    </div>`).join('') : '<div class="empty">No matches.</div>';
+  document.body.appendChild(pop);
+}
+function pick(id){ closePop(); $('search').value=''; focus(id); }
+function closePop(){ const p=$('searchpop'); if(p) p.remove(); const k=$('keypop'); }
+document.addEventListener('click',e=>{ if(!e.target.closest('#search')&&!e.target.closest('#searchpop')) closePop(); });
 
-async function openTray(kind) {
-  const m = document.getElementById('modal');
-  document.getElementById('overlay').style.display = 'flex';
-  if (kind === 'handoff') {
-    const items = await fetch(`/cases/${CASE}/tray`).then(r => r.json());
-    m.innerHTML = `<span class="close" onclick="closeModal()">✕</span>
-      <h2>Handoff tray — sources waiting for you</h2>
-      <div class="hint">Gated sources can't be scraped server-side. Open one in your real
-        browser, then post back what you found. Cookies become a reusable lease.</div>` +
-      (items.map(h => `<div class="card">
-        <div class="row"><b>${h.helper_id}</b> ${h.challenge_kind ? `· <span style="color:#f0b72f">${h.challenge_kind}</span>`:''}</div>
-        <div class="meaning">${h.url||''}</div>
-        <div class="acts">
-          <a class="btn" href="${h.url}" target="_blank" onclick="hOpen(${h.id})">Open in browser ↗</a>
-          <button class="btn" onclick="hCobrowse(${h.id})">Co-browse (capture session)</button>
-          <button class="btn warn" onclick="hPost(${h.id})">Post back result</button>
-          <button class="btn bad" onclick="hAbandon(${h.id})">Skip</button>
-        </div></div>`).join('') || '<div class="card">Tray is empty.</div>');
-  } else {
-    const items = await fetch('/merge-candidates').then(r => r.json());
-    m.innerHTML = `<span class="close" onclick="closeModal()">✕</span>
-      <h2>Review queue — possible same entity</h2>
-      <div class="hint">The system never auto-merges people. Confirm to merge, or reject to
-        record a permanent "not the same" so it's never suggested again.</div>` +
-      (items.map(c => `<div class="card">
-        <div class="row"><b>score ${(+c.score).toFixed(2)}</b> · ${(c.reasons.signals||[]).join(', ')}</div>
-        <div class="meaning">${c.a_id} ⟷ ${c.b_id}</div>
-        <div class="acts">
-          <button class="btn" onclick="resolveMerge(${c.id},'merged')">Confirm merge</button>
-          <button class="btn bad" onclick="resolveMerge(${c.id},'rejected')">Reject — different</button>
-        </div></div>`).join('') || '<div class="card">Nothing to review.</div>');
-  }
+// ---- type key + review -----------------------------------------------------
+function toggleKey(ev){ ev.stopPropagation(); const ex=$('keypop'); if(ex){ex.remove();return;}
+  const pop=document.createElement('div'); pop.className='pop'; pop.id='keypop';
+  const r=ev.target.getBoundingClientRect(); pop.style.right='14px'; pop.style.top=(r.bottom+5)+'px';
+  pop.innerHTML=Object.entries(TYPE).map(([t,m])=>
+    `<div class="keyrow"><span class="dot" style="background:${m.c}"></span>${t}</div>`).join('');
+  document.body.appendChild(pop);
+  setTimeout(()=>document.addEventListener('click',function h(){pop.remove();document.removeEventListener('click',h);}),0);
 }
-async function hOpen(id){ await fetch(`/handoffs/${id}/open`,{method:'POST'}); }
-async function hCobrowse(id){
-  const r = await fetch(`/handoffs/${id}/cobrowse`,{method:'POST'}).then(r=>r.json());
-  alert(`Co-browsed: "${r.title}"\nlease captured: ${r.lease_captured}\n\n${(r.excerpt||'').slice(0,300)}`);
-  refreshCase();
+async function refreshReview(){
+  const m=await fetch('/merge-candidates').then(r=>r.json()).catch(()=>[]);
+  $('reviewN').textContent = (m&&m.length)||0;
 }
-function downloadBrief(){ if(CASE) window.open(`/cases/${CASE}/brief.pdf`,'_blank'); }
-async function hAbandon(id){ await fetch(`/handoffs/${id}/abandon`,{method:'POST'}); openTray('handoff'); refreshCase(); }
-async function hPost(id){
-  const raw = prompt('Paste the scraped result as JSON (e.g. {"title":"…","subscribers":123}):','{}');
-  if(raw===null) return;
-  await fetch(`/handoffs/${id}/postback`,{method:'POST',headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({result: JSON.parse(raw)})});
-  closeModal(); await loadCaseObjects(); reload();
-}
-async function resolveMerge(id, decision){
-  await fetch(`/merge-candidates/${id}/resolve`,{method:'POST',headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({decision})});
-  openTray('merge'); await loadCaseObjects(); reload();
+async function openReview(ev){
+  closePop();
+  const m=await fetch('/merge-candidates').then(r=>r.json()).catch(()=>[]);
+  const pop=document.createElement('div'); pop.className='pop'; pop.id='reviewpop';
+  pop.style.right='14px'; pop.style.top='46px'; pop.style.width='320px';
+  pop.style.maxHeight='60vh'; pop.style.overflowY='auto';
+  pop.innerHTML = '<div class="railhead" style="padding:0 0 8px">Merge review · resolve in the inspector</div>' +
+    (m.length ? m.slice(0,30).map(c=>{
+      const reason = Array.isArray(c.reasons)?c.reasons[0]:(c.reasons||'possible duplicate');
+      return `<div style="padding:7px 0;border-top:1px solid var(--border)">
+        <div><b>${Math.round((c.score||0)*100)}%</b> <span class="muted">${esc(reason)}</span></div>
+        <div class="faint" style="font-size:11px;margin-top:2px">
+          <a onmousedown="pick('${c.a_id}')" style="cursor:pointer">open A</a> ·
+          <a onmousedown="pick('${c.b_id}')" style="cursor:pointer">open B</a></div></div>`;
+    }).join('') : '<div class="empty">Nothing to review.</div>');
+  document.body.appendChild(pop);
+  setTimeout(()=>document.addEventListener('click',function h(e){
+    if(!e.target.closest('#reviewpop')){pop.remove();document.removeEventListener('click',h);}},0);
 }
 
-// ---- run a collector from the inspector (federate -> promote) --------------
-async function federatePreview(helperId, objectId) {
-  const m = document.getElementById('modal');
-  document.getElementById('overlay').style.display = 'flex';
-  m.innerHTML = `<span class="close" onclick="closeModal()">✕</span>
-    <h2>${helperId}</h2><div class="hint">querying the source in place — nothing is saved yet…</div>`;
-  let preview;
-  try { preview = await fetch('/federate',{method:'POST',headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({helper_id: helperId, object_id: objectId})}).then(r => r.json()); }
-  catch(e){ m.innerHTML += `<div class="card">fetch failed.</div>`; return; }
-  if (preview.detail) { m.innerHTML += `<div class="card">${preview.detail}</div>`; return; }
-  window._fedObj = objectId; window._fedHelper = helperId;
-  m.innerHTML = `<span class="close" onclick="closeModal()">✕</span>
-    <h2>${helperId} — preview</h2>
-    <div class="hint">Found ${preview.objects.length}. Tick what to keep, then promote into the case.</div>` +
-    preview.objects.map((o,i) => `<label class="chk"><input type="checkbox" data-c="${o.canonical}" checked>
-      <span class="dot" style="background:${ty(o.type).c}"></span> <b>${o.type}</b> ${short(o.canonical)}</label>`).join('') +
-    `<div class="acts"><button class="btn" onclick="promoteSelected()">Promote selected</button></div>`;
-}
-async function promoteSelected() {
-  const sel = [...document.querySelectorAll('#modal input[type=checkbox]:checked')].map(c => c.dataset.c);
-  await fetch('/promote',{method:'POST',headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({helper_id: window._fedHelper, object_id: window._fedObj, case_id: CASE, selected: sel})});
-  closeModal(); await loadCaseObjects(); loadGraph(window._fedObj);
-}
-
-// ---- type filter (Object-Explorer style show/hide by type) -----------------
-const HIDDEN = new Set();
-function applyTypeFilter() {
-  cy.nodes().forEach(n => n.style('display', HIDDEN.has(n.data('type')) ? 'none' : 'element'));
-  renderFilterChips();
-}
-function toggleType(t) {
-  HIDDEN.has(t) ? HIDDEN.delete(t) : HIDDEN.add(t);
-  applyTypeFilter();
-}
-function renderFilterChips() {
-  const present = [...new Set(cy.nodes().map(n => n.data('type')))].sort();
-  document.getElementById('filterbar').innerHTML = present.length
-    ? '<span style="color:var(--faint);font-size:11px;margin-right:4px">show:</span>' +
-      present.map(t => {
-        const on = !HIDDEN.has(t);
-        return `<span class="fchip" onclick="toggleType('${t}')"
-          style="border-color:${ty(t).c}${on?'':'33'};opacity:${on?1:.4}">
-          <span class="dot" style="background:${ty(t).c}"></span>${t}</span>`;
-      }).join('')
-    : '';
-}
-
-// ---- legends (grouped by ontology category, Palantir/STIX-style) -----------
-function renderLegends() {
-  document.getElementById('legend').innerHTML = GROUPS.map(([cat, types]) =>
-    `<div class="legend-cat">${cat}</div>` + types.filter(t => TYPE[t]).map(t => {
-      const m = TYPE[t];
-      return `<div class="legend-row"><span class="dot" style="background:${m.c}"></span>
-        <span><span class="name">${t}</span><div class="meaning">${m.d}</div></span></div>`;
-    }).join('')).join('');
-  document.getElementById('glossary').innerHTML = Object.entries(REL).map(([r,d]) =>
-    `<div class="glossary-row"><span class="rel">${r}</span><span class="meaning">${d}</span></div>`).join('');
-}
-
-renderLegends();
-loadCases();
+loadAnalyses();
 </script>
 </body>
 </html>

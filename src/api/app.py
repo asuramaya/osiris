@@ -203,12 +203,17 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         limit: int = Query(100, le=500),
     ) -> list[dict[str, Any]]:
         rows = await p.fetch(
-            "SELECT id, type, canonical, status FROM objects o "
+            "SELECT id, type, canonical, status, "
+            "  (SELECT value #>> '{}' FROM current_assertions a "
+            "   WHERE a.object_id=o.id AND a.name='name' LIMIT 1) AS name "
+            "FROM objects o "
             "WHERE status NOT IN ('archived','merged') "
             "  AND ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM case_objects co "
             "        WHERE co.object_id = o.id AND co.case_id = $1)) "
             "  AND ($2::text IS NULL OR type = $2) "
-            "  AND ($3::text IS NULL OR canonical ILIKE '%' || $3 || '%') "
+            "  AND ($3::text IS NULL OR canonical ILIKE '%' || $3 || '%' "
+            "       OR EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+            "          AND a.name='name' AND a.value #>> '{}' ILIKE '%' || $3 || '%')) "
             "ORDER BY type, created_at DESC LIMIT $4",
             case_id,
             type,
