@@ -118,3 +118,41 @@ async def run_satellite_once(
         "result=$2 WHERE id=$1", job.id, {"items": len(items)},
     )
     return "collected"
+
+
+# The satellite's collector registry — empty by default (the proof injects fakes; a
+# real deploy registers vantage-bound collectors here, e.g. a browser/residential fetch).
+COLLECTORS: dict[str, Collector] = {}
+
+
+async def _run_loop(poll_secs: float = 2.0) -> None:  # pragma: no cover - process entrypoint
+    """The satellite agent: poll for dispatched jobs at this vantage and serve them.
+    A thin process — its only dependency is Postgres (the bus)."""
+    import asyncio
+
+    from src.config.settings import get_settings
+    from src.db.pool import create_pool
+
+    settings = get_settings()
+    vantages = [v.strip() for v in settings.osiris_satellite_vantages.split(",") if v.strip()]
+    pool = await create_pool(settings.database_url)
+    actions = Actions(pool)
+    logger.info("satellite %s up; vantages=%s", settings.osiris_satellite_id, vantages)
+    try:
+        while True:
+            out = await run_satellite_once(
+                actions, settings.osiris_satellite_id, COLLECTORS, vantages=vantages
+            )
+            await asyncio.sleep(poll_secs if out == "idle" else 0)
+    finally:
+        await pool.close()
+
+
+def main() -> None:  # pragma: no cover - process entrypoint
+    import asyncio
+
+    asyncio.run(_run_loop())
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()

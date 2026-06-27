@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # document→entities task is flash-tier; Opus would be wasteful per-filing.
     osiris_extract_model: str = "claude-haiku-4-5-20251001"
     anthropic_api_key: str = ""
+    # Placeful satellite (cron Phase 6/7): this agent's id + the vantages it provides
+    # (comma-separated). It claims dispatched collection jobs needing one of these.
+    osiris_satellite_id: str = "satellite:local"
+    osiris_satellite_vantages: str = ""
 
 
 def get_settings() -> Settings:

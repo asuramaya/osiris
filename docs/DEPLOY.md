@@ -56,8 +56,27 @@ sudo systemctl enable --now osiris-api osiris-worker
 Both units are `Restart=always`. Postgres and Redis are the only shared dependencies;
 run them as their own services (or containers) the units order after.
 
+## Full topology as one stack (containers)
+
+The whole ring set — Postgres, Redis, a one-shot migration, the API, the worker, and
+an opt-in placeful satellite — is declared in
+[`../deploy/docker-compose.full.yml`](../deploy/docker-compose.full.yml). The surfaces
+share one PG+Redis bus (no RPC mesh); migrations gate the app start; the API and worker
+are distinct services (the API uses the image's default uvicorn command, the worker
+overrides it to `arq`). Build + run:
+
+```bash
+docker compose -f deploy/docker-compose.full.yml up -d --build
+docker compose -f deploy/docker-compose.full.yml --profile satellite up -d   # + a satellite
+```
+
+On a box without the compose plugin yet, `deploy/up.sh` brings the same topology up with
+infra as containers and the API/worker as local processes (`deploy/down.sh` tears down).
+The manifest is guarded by `tests/test_deploy_topology.py` so it can't silently drift.
+
 ## Later cuts (not yet)
 
 When a pool bites, split the worker by resource class (light federators / heavy
 extractors / vantage-bound browsers) — same code, more units. When adoption forces
-multi-user, managed Postgres/Redis + scaled surfaces. See the ROADMAP cut sequence.
+multi-user, managed Postgres/Redis + scaled surfaces, and the placeful satellite moves
+to its own box/vantage (it already reaches only Postgres). See the ROADMAP cut sequence.

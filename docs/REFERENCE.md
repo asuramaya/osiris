@@ -125,7 +125,8 @@ src/
   parsers/        evidence taxonomy + per-source parsers
   ingest/         the federators (one module per open base) + their CLIs
   orchestrator/   sources (the playbook) · cascade · router · ratelimit · budgets ·
-                  dossier · discrepancy · coinvest · enrich · monitor (the watch)
+                  dossier · discrepancy · coinvest · enrich · monitor (the watch) ·
+                  watchers (source pullers) · compose (doc→lead) · satellite (placeful)
   dissemination/  dossier_report (the Markdown deliverable) · brief (PDF)
   connectors/     network seams (http clients, store, browser/leases [experimental])
   api/            FastAPI app (the human surface)

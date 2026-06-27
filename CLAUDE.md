@@ -774,3 +774,30 @@ and `docker run` do too.
   the graph; atomic single-winner claim; vantageless job served by any; unknown-kind fails the JOB
   not the satellite; collector error isolated. The Collector is the seam a real browser/residential
   fetch plugs into. NEXT: Phase 7 — hosting cuts (multi-process topology).
+- **CRON BUILD Phase 7 — hosting cuts (DONE, 2026-06-26):** the rings as separate deployable units,
+  the hosting cut expressed as config + proven live. `Dockerfile` (one uv-based image, two roles —
+  API default CMD = uvicorn, worker overrides to arq; no browsers bundled). `deploy/docker-compose.
+  full.yml` (postgres, redis, one-shot `migrate` gate, api, worker, opt-in `satellite` profile; the
+  surfaces share one PG+Redis bus via a YAML anchor; app start gated on `service_completed_
+  successfully` of migrate). `deploy/up.sh`/`down.sh` (no-compose-plugin bring-up on this box: infra
+  as containers + API/worker as local processes). DEPLOY.md hosting section. 279 tests green (+6),
+  ruff + mypy --strict clean. Proof: `tests/test_deploy_topology.py` (6) guards the manifest from
+  rot (declares the rings / shared bus / migrate-gates-app / worker≠api commands / satellite opt-in /
+  scripts present). LIVE multi-process bring-up (throwaway PG :5544 + Redis :6399): migrate→head, API
+  + worker as SEPARATE processes, /health=ok, worker booted registering all 5 functions
+  (expand_case_job + drain_cascade/evaluate_watch/run_source_ticks/reap_runs crons), then FATE
+  ISOLATION proven — killed the worker, the API stayed up and serving. Added a satellite agent loop
+  entrypoint (`satellite.main`/`_run_loop`, `python -m src.orchestrator.satellite`) + COLLECTORS
+  registry + `osiris_satellite_{id,vantages}` settings.
+- **CRON BUILD COMPLETE (2026-06-26) — the persistence ladder, all 7 phases on `cron-persistence`
+  (3f194bb..HEAD), 279 tests green, ruff + mypy --strict clean, NOT pushed (operator review pending).**
+  The kernel is now a TRIPWIRE, not just a lens: subscriptions + evaluator + watermark (1), worker⊥
+  surface cut + reaper (2), a real SEC Form D watcher (3), the AI-extraction universal parser (4),
+  the document→sourced-lead pipeline (5), the placeful satellite (6), the multi-process hosting
+  topology (7). Live-proven at each rung; two pre-existing bugs caught by live runs (the worker
+  redis_settings staticmethod that meant the worker had NEVER booted; the create_or_find_object
+  added_by_run earlier). DEFERRED-live (need keys): the Haiku extraction call + the composed
+  edgar_formd→extract watcher (ANTHROPIC_API_KEY); the real vantage-bound Collector (browser/
+  residential). NEXT (operator's call): wire a real composed watcher + register it in SOURCE_TICKS
+  with a live LLM key; harden the alert sink (dedup/throttle before it can become a 3am false alert);
+  promote cron-persistence→main when reviewed.
