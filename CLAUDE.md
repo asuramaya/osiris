@@ -627,3 +627,20 @@ and `docker run` do too.
     the Celsius dossier to ONE "Alexander Mashinsky — director, founded_by, officer (edgar,
     wikidata)". DELIBERATELY SKIPPED: acronym LP cross-base (BP↔Brilliant Phoenix) — token-overlap
     on "neuralink" would merge every Neuralink SPV; GP-level fusion + LEI link the families safely.
+- **v0.1.0 PUBLIC RELEASE PREP (2026-06-27):** first release to https://github.com/asuramaya/osiris.
+  Strategy crystallized in a long discussion (see [[osiris-roadmap-deployment]]): the kernel is the
+  spine the operator's two dead projects (ForeScan foreclosure lead-gen, Lakshmi gov-contract
+  crawler) circled but never built; both died collection-first (swamped by local processing + bad-
+  data theatrics). Capability ladder = each holder forces one kernel capability: journalist→
+  convergence (PROVEN), broker→persistence/cron (NEXT), analyst→correlation, then standing graph.
+  Deployment = separate by placefulness/blast-radius/trust-zone; PG+Redis as the bus (no RPC mesh);
+  cuts not rewrites; lens runs anywhere, tripwire forces always-on. Adoption = MCP-first, AGPL-3.0,
+  journalists as beachhead but the engine is horizontal ("same sword, many hands"); keyless = a
+  safety feature (open entity commons, not private persons); trust/noise is existential for adoption.
+  Wrote public docs: README (honest does/wants/can't), ROADMAP (the ladder + the deliberately-not-
+  done), ARCHITECTURE (rings + narrow waist), RESPONSIBLE_USE (dual-use + data-license matrix —
+  OpenSanctions CC-BY-NC is the gotcha), CONTRIBUTING, SECURITY, LICENSE (AGPL-3.0). Repo hygiene:
+  no secrets/PII tracked (verified), removed empty extension/, tidied .gitignore. Deferred
+  subsystems (leases/cobrowse/federation/osint4all/lab) kept but documented as experimental — not
+  deleted pre-release. 237 tests green. NEXT: promote reset-engine-product→main, push to remote
+  (pending operator go-ahead + license confirm), then build the persistence/cron capability.

@@ -21,3 +21,7 @@ artifacts/
 
 # stray docker install helper
 get-docker.sh
+
+# Session scratch / generated briefs
+scratchpad/
+*.pdf
