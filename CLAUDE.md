@@ -569,3 +569,23 @@ and `docker run` do too.
     honest null; fires on a planted dirty operator (hermetic test). NB "clean"=vs what's ingested,
     not all watchlists globally (fuller OpenSanctions PEP ingest widens it). NEXT: Person display-
     dedup; broader PEP ingest; aim the playbook at an active-fraud target where the network lights up.
+- **ORGBOOK BC — keyless Canadian corporate-registry verification (DONE, 2026-06-26, 7db2326):**
+  driven by a live investigation ("is Brilliant Phoenix actually Canadian?"). US-only (EDGAR)
+  verification was a real jurisdiction gap. `src/ingest/orgbook.py` federates OrgBook BC
+  (orgbook.gov.bc.ca, keyless) — an Organization per BC registration, canonical `bc-reg:<num>`,
+  carrying CRA business number / type / status / jurisdiction / reg date, AUTHORITATIVE_API; a
+  family name pulls the whole group. MCP `verify_bc_entity` (→18 tools); sources `bc_registry`.
+  198 tests green. Live: 'Brilliant Phoenix' → 10 ACTIVE BC entities exposing the structure —
+  Holdings (control) → Capital Mgmt → GP + Carry GP → per-thesis LPs (AI / Israel 1 / Neuralink /
+  SpaceX) + a local Mortgage Investment Corp. Verdict on the investigation: registration/operations
+  = definitively Canadian (BC) — triple-confirmed (SEC Form D 'A1' + CSA NRD#58800 + BC registry);
+  China nexus is real but lives in the FOUNDERS' background (Chunhua Wu — Fudan, UBC Sauder prof,
+  co-founded a China internet/financial-info co; Ye/Cindy Chen) not in any provable capital/control
+  link; LP capital source is the keyless ceiling (BC beneficial-ownership register non-public, SPV
+  LPs undisclosed). HONEST LIMIT: cross-base does NOT fuse BC 'Brilliant Phoenix Neuralink LP' with
+  EDGAR 'BP Neuralink LP' — the BP acronym defeats name-normalization, no shared identifier.
+  NEXT (would close the loop SAFELY): fix edgar_formd to type entity-shaped related-persons
+  (Inc./LLC/GP Inc./Fund Admin) as Organizations not Persons → 'Brilliant Phoenix GP Inc.' becomes
+  an Org that deterministically cross-base-fuses with bc-reg:A0127997 (also cleans the
+  Sydecar/MyAsiaVC "Person" artifacts). CSA NRS / CanLII deferred (CanLII needs a key → breaks
+  keyless; CSA aretheyregistered.ca is a JS app w/o a clean public API).
