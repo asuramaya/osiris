@@ -850,3 +850,30 @@ and `docker run` do too.
   "7706 Antoine Dr · Harris County Clerk · authoritative record · 85% · DEMO". So Osiris has exactly TWO
   generic operator surfaces (graph console = investigate; watch console = monitor) + MCP; verticals are
   connectors+beats+sinks. NEXT unchanged: delivery sink, satellite scrape, alert dedup/throttle.
+- **QUIVER-SHAPED ANALYSIS SURFACE + the SEMANTIC LAYER (DONE, 2026-06-27):** operator wanted the graph
+  page (which read like a beginner tutorial) redone professionally, taking the abstract shape from the
+  Palantir Foundry/Quiver + Ontology docs, "without turning it into a mess." Done in two moves.
+  - **(1) Analysis surface** (`src/ui/static/index.html`, full rewrite): a Quiver-style ANALYSIS (a
+    case) with an OBJECT SET (left), a graph BOARD (center), and the shared object INSPECTOR (right).
+    Core verb = SEARCH AROUND (native link traversal — click/dbl-click a node or the inspector button
+    pulls connected objects onto the board and grows it); plus EXPAND (run collectors, live via SSE),
+    global ontology search (top), merge-Review popover. Dropped ALL tutorial scaffolding (numbered
+    steps, colour/link glossaries, hints). `GET /objects?q=` now matches the name property + returns a
+    label, so search finds "Neuralink"/"7706 Antoine Dr", not just ids.
+  - **(2) The semantic layer** (`src/ontology/schema.py`): the Palantir shape mapped onto Osiris —
+    semantic (object/link types) + kinetic (Actions, already the only write path) + functions
+    (sources.py) + apps (surfaces). The MISSING piece was the semantic catalog (types were invented
+    inline by each parser, scattered across UI/parsers/docs). schema.py is the SINGLE SOURCE OF TRUTH:
+    `ObjectType` (name/category/color/shape/description/canonical-schemes) + `LinkType` (name/desc/
+    domain/range), seeded from the 20 object types + 38 link types actually in the demo graph (now 24
+    types / 40 links). `catalog()` → `GET /schema`; the UI reads colours/shapes from /schema (no more
+    hardcoded TYPE map — "the UI is an app over the ontology; it reads, never defines"). The 5
+    guardrails that keep it from sprawling: registry-not-inline · Actions-only-kinetic-path ·
+    apps-compose-never-define · functions-uniform · interfaces-over-special-casing. NOT a framework
+    (no codegen/per-type classes/validation engine) — a declarative catalog existing code reads.
+    Osiris's two enrichments over Palantir (evidence-grading + event-sourcing) stay kernel-wide
+    invariants (actions/core + parsers/evidence), not per-type. Tests: `tests/test_schema.py` (5) —
+    the catalog must stay a SUPERSET of types/links in the graph (a parser emitting an undeclared type
+    fails the build), safe fallback, /schema endpoint. 291 tests green, ruff + mypy --strict clean.
+    NEXT: parsers/UI to validate-against / fully read the catalog; generate REFERENCE.md data-model
+    from schema.py; resolve-in-place for merge Review.

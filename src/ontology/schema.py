@@ -1,0 +1,217 @@
+"""The semantic layer — the declared Object-Type and Link-Type catalog.
+
+Palantir's ontology composes from a SMALL, DECLARED primitive set: object types,
+link types, properties (the "what"); action types + functions (the "how"). Osiris
+already has the kinetic waist (`actions/core.py` — the only write path) and a function
+registry (`orchestrator/sources.py` — the capability playbook). This module supplies
+the missing semantic layer: the single source of truth for WHAT TYPES EXIST, so types
+stop being invented inline by each parser and scattered across the UI, the parsers, and
+the docs.
+
+Everything reads this catalog — the UI takes its colours/shapes from it, the generic
+Object view treats every type through one Interface (type · graded properties · links ·
+provenance), and `validate_*` lets a caller check a type is known. Osiris's two
+enrichments over Palantir — evidence-grading and event-sourcing — are kernel-wide
+invariants (every property/link carries provenance; the graph is an append-only
+ledger), so they live in `actions/core.py` + `parsers/evidence.py`, not per-type here.
+
+This is a CATALOG, not a framework: a declarative registry existing code reads. A new
+type is a new entry here (reviewed), never an inline string. Seeded from the types and
+links actually in the graph.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+
+@dataclass(frozen=True)
+class ObjectType:
+    """One declared kind of entity. `schemes` are the canonical-id prefixes it uses
+    (e.g. cik:, lei:); `color`/`shape` drive every surface's rendering."""
+
+    name: str
+    category: str
+    color: str
+    shape: str  # cytoscape node shape
+    description: str
+    schemes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class LinkType:
+    """One declared relationship. `domain`/`range` are advisory (what tends to connect
+    to what); empty means unconstrained."""
+
+    name: str
+    description: str
+    domain: tuple[str, ...] = ()
+    range: tuple[str, ...] = ()
+
+
+# --- Object types (the "what") — grouped by category for the UI -------------
+_OBJECT_TYPES: tuple[ObjectType, ...] = (
+    # Entities — the core of the open-base graph
+    ObjectType("Organization", "Entity", "#4493f8", "round-rectangle",
+               "A company, fund, agency, or other organization.",
+               ("cik:", "lei:", "bc-reg:", "Q", "sec-org:", "company:", "ctgov-org:")),
+    ObjectType("Person", "Entity", "#e3b341", "ellipse",
+               "An individual — officer, director, investigator, identity hub "
+               "(resolved probabilistically; never auto-merged).",
+               ("sec-person:", "ctgov-person:", "Q", "subject:", "cluster:", "person:")),
+    # Assets
+    ObjectType("CryptoAddress", "Asset", "#f0883e", "diamond",
+               "An on-chain wallet/address (EVM, fused with OFAC designations).",
+               ("eth:", "wallet:")),
+    ObjectType("Property", "Asset", "#39c5cf", "round-rectangle",
+               "A real-property parcel / foreclosure notice.", ("harris-notice:",)),
+    # Records
+    ObjectType("CourtCase", "Record", "#ca8aff", "rectangle",
+               "A litigation docket / opinion (parties, court, judge).", ("courtlistener:",)),
+    ObjectType("ClinicalTrial", "Record", "#56d4dd", "rectangle",
+               "A registered human trial (status, sites, investigators).", ("nct:",)),
+    ObjectType("ObservedData", "Record", "#8b949e", "rectangle",
+               "Raw evidence — a scraped record / feed entry behind a claim.",
+               ("ioc:", "threatfox:")),
+    # Identity / footprint
+    ObjectType("Account", "Identity", "#ffd33d", "round-rectangle",
+               "A platform account (github:, twitter:, …) — a footprint fragment.",
+               ("github:", "twitter:", "linkedin:", "instagram:", "youtube:", "facebook:",
+                "soundcloud:", "replit:", "gitlab:", "pypi:")),
+    ObjectType("Username", "Identity", "#ffab70", "ellipse",
+               "A handle — connective tissue across platforms."),
+    ObjectType("Email", "Identity", "#7ee787", "ellipse", "An email-address observable."),
+    ObjectType("Phone", "Identity", "#85e89d", "ellipse",
+               "A phone-number observable (enriched offline)."),
+    # Web
+    ObjectType("URL", "Web", "#6cb6ff", "round-rectangle",
+               "A web page / search hit / archived snapshot.", ("http", "https")),
+    ObjectType("Domain", "Web", "#39c5cf", "ellipse", "A DNS domain observable.",
+               ("about.me",)),
+    # Threat-intel (the second frontend)
+    ObjectType("IntrusionSet", "ThreatIntel", "#f85149", "hexagon",
+               "An actor cluster — tracked related intrusion activity."),
+    ObjectType("ThreatActor", "ThreatIntel", "#da3633", "hexagon",
+               "The human or group behind activity."),
+    ObjectType("Campaign", "ThreatIntel", "#db61a2", "hexagon",
+               "Time-bounded activity attributed to an actor."),
+    ObjectType("Malware", "ThreatIntel", "#d29922", "round-rectangle",
+               "Malicious software — a capability an actor uses."),
+    ObjectType("Tool", "ThreatIntel", "#bc8cff", "round-rectangle",
+               "Legitimate/utility software used in operations."),
+    ObjectType("AttackPattern", "ThreatIntel", "#3fb950", "diamond",
+               "A technique (MITRE ATT&CK Txxxx) — HOW something is done."),
+    ObjectType("Indicator", "ThreatIntel", "#58a6ff", "triangle",
+               "An IOC / detection signal — a hash, IP, or domain."),
+    # Observables
+    ObjectType("IPv4", "Observable", "#2dd4bf", "ellipse", "An IPv4 address observable."),
+    ObjectType("TelegramChannel", "Observable", "#56a3ff", "ellipse",
+               "A Telegram channel observable."),
+    ObjectType("FileHash", "Observable", "#f0883e", "triangle",
+               "A file hash observable (md5/sha1/sha256)."),
+    ObjectType("Phrase", "Observable", "#adbac7", "ellipse", "Free text — a search seed."),
+)
+
+# --- Link types (the relationships) — seeded from what's in the graph -------
+_LINK_TYPES: tuple[LinkType, ...] = (
+    LinkType("controlled_by", "Asset/wallet is controlled by a holder.",
+             ("CryptoAddress",), ("Person", "Organization")),
+    LinkType("owns", "Owns the target.", ("Person", "Organization")),
+    LinkType("owned_by", "Is owned by the target."),
+    LinkType("subsidiary_of", "Is a subsidiary of the target org.",
+             ("Organization",), ("Organization",)),
+    LinkType("ultimate_parent", "Ultimate parent org (GLEIF level-2).",
+             ("Organization",), ("Organization",)),
+    LinkType("founded_by", "Founded by the target person.", ("Organization",), ("Person",)),
+    LinkType("officer", "Has the target as an officer.", ("Organization",), ("Person",)),
+    LinkType("director", "Has the target as a director.", ("Organization",), ("Person",)),
+    LinkType("ceo", "Has the target as CEO.", ("Organization",), ("Person",)),
+    LinkType("chairperson", "Has the target as chairperson.", ("Organization",), ("Person",)),
+    LinkType("directs", "Person directs the target org.", ("Person",), ("Organization",)),
+    LinkType("promoter", "Promoter of the target."),
+    LinkType("represents", "Legal/agent representation."),
+    LinkType("family", "Familial relationship.", ("Person",), ("Person",)),
+    LinkType("sponsors", "Sponsors the target (trial/event).",
+             ("Organization",), ("ClinicalTrial",)),
+    LinkType("investigator", "Investigator on the target trial.",
+             ("ClinicalTrial",), ("Person",)),
+    LinkType("site", "Trial site / facility.", ("ClinicalTrial",), ("Organization",)),
+    LinkType("raises_for", "Feeder SPV raises capital for the core company.",
+             ("Organization",), ("Organization",)),
+    LinkType("transacted_with", "On-chain counterparty (aggregated flow).",
+             ("CryptoAddress",), ("CryptoAddress",)),
+    LinkType("litigation", "Party/mention in a court case.",
+             ("Organization", "Person"), ("CourtCase",)),
+    LinkType("appears_in", "Subject appears in the target record."),
+    LinkType("has_account", "Identity hub has the target account.",
+             ("Person",), ("Account",)),
+    LinkType("has_email", "Has the target email.", ("Person",), ("Email",)),
+    LinkType("has_url", "Has/owns the target URL.", (), ("URL",)),
+    LinkType("has_domain", "Has/owns the target domain.", (), ("Domain",)),
+    LinkType("has_subdomain", "Subdomain of.", ("Domain",), ("Domain",)),
+    LinkType("is_profile", "Account is a profile of the subject.", ("Account",)),
+    LinkType("declares", "Self-declared social/owned link (rel=me, profile).",),
+    LinkType("committed_as", "Commit-authored as the target email.", (), ("Email",)),
+    LinkType("derived_handle", "Handle derived from a local-part (speculative)."),
+    LinkType("co_occurs", "Co-occurs near the subject in a snippet (speculative)."),
+    LinkType("search_variant", "A search/handle variant."),
+    LinkType("linked_to", "Generic association."),
+    LinkType("has_observation", "Points at raw observed evidence.", (), ("ObservedData",)),
+    LinkType("archived_snapshot", "A Wayback/archive snapshot of the target.", (), ("URL",)),
+    LinkType("same_as", "Identity merge edge (loser → winner)."),
+    LinkType("uses", "Actor/source employs this capability or technique."),
+    LinkType("indicates", "Indicator points at the linked malware/technique.",
+             ("Indicator",)),
+    LinkType("based-on", "Indicator derived from raw observed evidence.", ("Indicator",)),
+    LinkType("subtechnique-of", "A more specific technique under a broader one.",
+             ("AttackPattern",), ("AttackPattern",)),
+)
+
+OBJECT_TYPES: dict[str, ObjectType] = {t.name: t for t in _OBJECT_TYPES}
+LINK_TYPES: dict[str, LinkType] = {lt.name: lt for lt in _LINK_TYPES}
+
+_DEFAULT = ObjectType("Unknown", "Other", "#6e7681", "ellipse", "An ontology object.")
+
+
+def object_type(name: str) -> ObjectType:
+    """The declared type, or a neutral default (so the UI never breaks on a new type)."""
+    return OBJECT_TYPES.get(name, _DEFAULT)
+
+
+def is_known_object_type(name: str) -> bool:
+    return name in OBJECT_TYPES
+
+
+def is_known_link_type(name: str) -> bool:
+    return name in LINK_TYPES
+
+
+def categories() -> list[str]:
+    """Object-type categories in declaration order (for grouped display)."""
+    out: list[str] = []
+    for t in _OBJECT_TYPES:
+        if t.category not in out:
+            out.append(t.category)
+    return out
+
+
+def catalog() -> dict[str, Any]:
+    """JSON-serializable catalog for the API / UI — the semantic layer as data."""
+    return {
+        "object_types": [
+            {
+                "name": t.name, "category": t.category, "color": t.color,
+                "shape": t.shape, "description": t.description, "schemes": list(t.schemes),
+            }
+            for t in _OBJECT_TYPES
+        ],
+        "link_types": [
+            {
+                "name": lt.name, "description": lt.description,
+                "domain": list(lt.domain), "range": list(lt.range),
+            }
+            for lt in _LINK_TYPES
+        ],
+        "categories": categories(),
+    }

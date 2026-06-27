@@ -48,6 +48,7 @@ from src.ontology.resolution import (
     resolve_candidate,
     review_tray,
 )
+from src.ontology.schema import catalog as ontology_catalog
 from src.orchestrator.cobrowse import cobrowse_open
 from src.orchestrator.dossier import entity_dossier
 from src.orchestrator.federation import federated_query, promote, to_preview
@@ -129,6 +130,12 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/schema")
+    async def get_schema() -> dict[str, Any]:
+        """The semantic layer — the declared Object-Type + Link-Type catalog. Every
+        surface reads its types/colours/shapes from here (one source of truth)."""
+        return ontology_catalog()
 
     @app.post("/cases")
     async def create_case(body: NewCaseBody, p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:

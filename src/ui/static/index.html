@@ -166,20 +166,16 @@ const HOW = {authoritative_api:"authoritative",self_declared:"self-declared",
   direct_observation:"observed",co_occurrence:"co-occurrence",derived:"inferred",
   corroborated:"corroborated"};
 
-const TYPE = {
-  IntrusionSet:{c:'#f85149',s:'hexagon'}, ThreatActor:{c:'#da3633',s:'hexagon'},
-  Campaign:{c:'#db61a2',s:'hexagon'}, Malware:{c:'#d29922',s:'round-rectangle'},
-  Tool:{c:'#bc8cff',s:'round-rectangle'}, AttackPattern:{c:'#3fb950',s:'diamond'},
-  Indicator:{c:'#58a6ff',s:'triangle'}, ObservedData:{c:'#8b949e',s:'rectangle'},
-  Organization:{c:'#4493f8',s:'round-rectangle'}, Person:{c:'#e3b341',s:'ellipse'},
-  Property:{c:'#39c5cf',s:'round-rectangle'}, CryptoAddress:{c:'#f0883e',s:'diamond'},
-  CourtCase:{c:'#ca8aff',s:'rectangle'}, ClinicalTrial:{c:'#56d4dd',s:'rectangle'},
-  Account:{c:'#ffd33d',s:'round-rectangle'}, Username:{c:'#ffab70',s:'ellipse'},
-  Email:{c:'#7ee787',s:'ellipse'}, Phone:{c:'#85e89d',s:'ellipse'}, Domain:{c:'#39c5cf',s:'ellipse'},
-  URL:{c:'#6cb6ff',s:'round-rectangle'}, FileHash:{c:'#f0883e',s:'triangle'},
-};
-const DEF = {c:'#6e7681',s:'ellipse'};
+// The type catalog is the SEMANTIC LAYER — fetched from /schema (ontology/schema.py),
+// never hardcoded here. The UI is an application over the ontology; it reads, never defines.
+let TYPE = {};
+const DEF = {c:'#6e7681',s:'ellipse',category:'Other',description:'An ontology object.'};
 const ty = t => TYPE[t]||DEF;
+async function loadSchema(){
+  const cat = await fetch('/schema').then(r=>r.json());
+  TYPE = Object.fromEntries(cat.object_types.map(t=>[t.name,
+    {c:t.color,s:t.shape,category:t.category,description:t.description}]));
+}
 
 let ANALYSIS=null, SET=[], FOCUS=null, STREAM=null;
 
@@ -374,8 +370,11 @@ document.addEventListener('click',e=>{ if(!e.target.closest('#search')&&!e.targe
 function toggleKey(ev){ ev.stopPropagation(); const ex=$('keypop'); if(ex){ex.remove();return;}
   const pop=document.createElement('div'); pop.className='pop'; pop.id='keypop';
   const r=ev.target.getBoundingClientRect(); pop.style.right='14px'; pop.style.top=(r.bottom+5)+'px';
-  pop.innerHTML=Object.entries(TYPE).map(([t,m])=>
-    `<div class="keyrow"><span class="dot" style="background:${m.c}"></span>${t}</div>`).join('');
+  const cats={}; Object.entries(TYPE).forEach(([t,m])=>{(cats[m.category]=cats[m.category]||[]).push([t,m]);});
+  pop.innerHTML=Object.entries(cats).map(([cat,ts])=>
+    `<div class="faint" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin:6px 0 2px">${cat}</div>`+
+    ts.map(([t,m])=>`<div class="keyrow"><span class="dot" style="background:${m.c}"></span>${t}</div>`).join('')
+  ).join('');
   document.body.appendChild(pop);
   setTimeout(()=>document.addEventListener('click',function h(){pop.remove();document.removeEventListener('click',h);}),0);
 }
@@ -403,7 +402,7 @@ async function openReview(ev){
     if(!e.target.closest('#reviewpop')){pop.remove();document.removeEventListener('click',h);}},0);
 }
 
-loadAnalyses();
+loadSchema().then(loadAnalyses);
 </script>
 </body>
 </html>
