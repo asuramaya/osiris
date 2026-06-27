@@ -200,15 +200,15 @@ async def extract_document(
     ids: dict[str, uuid.UUID] = {}
     for ent in result.entities:
         canonical = _canonical(ent.type, ent.name)
-        oid = await actions.create_or_find_object(ent.type, canonical, _SOURCE, case_id)
+        oid = await actions.create_or_find_object(ent.type, canonical, source_id, case_id)
         ids[ent.name] = oid
         await actions.assert_property(
-            oid, "name", ent.name, _SOURCE, observed, _CONF, case_id=case_id,
+            oid, "name", ent.name, source_id, observed, _CONF, case_id=case_id,
             evidence_class=_EC.value,
         )
         for k, v in ent.properties.items():
             await actions.assert_property(
-                oid, k, v, _SOURCE, observed, _CONF, case_id=case_id, evidence_class=_EC.value
+                oid, k, v, source_id, observed, _CONF, case_id=case_id, evidence_class=_EC.value
             )
 
     n_links = 0
@@ -217,7 +217,7 @@ async def extract_document(
         if f is None or t is None:
             continue
         await actions.create_link(
-            f, t, rel.type, _SOURCE, observed, _CONF, case_id=case_id, evidence_class=_EC.value
+            f, t, rel.type, source_id, observed, _CONF, case_id=case_id, evidence_class=_EC.value
         )
         n_links += 1
 

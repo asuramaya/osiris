@@ -35,7 +35,9 @@ class _FakeLLM:
         self.reply = reply
         self.model_used: str | None = None
 
-    async def complete(self, *, system: str, prompt: str, model: str, max_tokens: int = 2048) -> str:
+    async def complete(
+        self, *, system: str, prompt: str, model: str, max_tokens: int = 2048
+    ) -> str:
         self.model_used = model
         return self.reply
 

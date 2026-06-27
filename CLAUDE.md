@@ -744,3 +744,19 @@ and `docker run` do too.
   network/cost); no ANTHROPIC_API_KEY in env so the live Haiku call is DEFERRED (the seam is proven;
   set the key + call extract_document with AnthropicClient to run it live). NEXT: Phase 5 — compose
   (cron watches a document source → AI-extract → emit graded → resolve → sourced lead).
+- **CRON BUILD Phase 5 — compose: document → sourced lead (DONE, 2026-06-26):** the whole ladder in
+  one pipeline. `src/orchestrator/compose.py` `watch_extract_tick(actions, source_id, delta, fetch,
+  llm, resolve=)`: pull new documents past a `docsource:<id>` cursor (independent of the WatchItem
+  tick) → AI-extract each (Phase 4) into graded DERIVED entities → `find_cross_base_candidates`
+  resolves them against what the graph knows → the extracted nodes write the outbox so a saved
+  subscription fires the lead. All three source-halves injected (DocDelta / DocFetch / LLMClient);
+  a single bad document is logged + skipped, never aborts the tick or loses the cursor. Fixed a bug
+  in extract_document (honored its hardcoded `_SOURCE` instead of the `source_id` param → cross-base
+  resolve needs the distinct `extract:<src>` provenance). 268 tests green (+3), ruff + mypy --strict
+  clean. Proof: `tests/test_compose.py` (3, real PG) — END-TO-END: 2 docs → 4 entities/2 links graded
+  DERIVED, cursor advanced, the extracted 'Neuralink Corp.' cross-base-matches a pre-seeded federated
+  `cik:` (merge candidate queued = RESOLVE), and the saved 'neuralink mentions' watch fires a sourced
+  alert on `extracted-org:neuralink-corp` (the LEAD); plus quiet-with-no-new-docs and bad-doc-skipped.
+  Hermetic (fake LLM); live compose needs ANTHROPIC_API_KEY (the pipeline is proven; wire a real
+  DocDelta/DocFetch off edgar_formd + AnthropicClient to run it live). The original 5-step persistence
+  build order is COMPLETE. NEXT: Phases 6/7 (operator asked for minimal working proofs).
