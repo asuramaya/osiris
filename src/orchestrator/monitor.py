@@ -120,6 +120,9 @@ class GraphEvent:
     canonical: str | None
     payload: dict[str, Any]
     value: Any | None  # the new property value (property_added only)
+    # the object's current scalar properties — loaded for object_created so a beat can
+    # match a whole object at once (e.g. zip AND price); empty for other events.
+    props: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -160,12 +163,40 @@ def matches(criteria: dict[str, Any], event: GraphEvent) -> dict[str, Any] | Non
     vc = criteria.get("value_contains")
     if vc and vc.lower() not in str(event.value or "").lower():
         return None
+    # object-level conjunction over the object's properties (a "beat"): every condition
+    # must hold. Reads event.props (object_created); falls back to the event value when a
+    # condition names the property that just changed.
+    for cond in criteria.get("where", []) or []:
+        prop = cond.get("property")
+        actual = event.props.get(prop)
+        if actual is None and event.payload.get("name") == prop:
+            actual = event.value
+        if not _cmp(actual, cond.get("op", "contains"), cond.get("value")):
+            return None
     return {
         "event_type": event.event_type,
         "object_type": event.object_type,
         "canonical": event.canonical,
         "property": event.payload.get("name"),
     }
+
+
+def _cmp(actual: Any, op: str, expected: Any) -> bool:
+    """One beat condition. Ops: eq / contains (case-insensitive substring) / lt / gt
+    (numeric). A missing value or an un-parseable number fails closed (no false match)."""
+    if actual is None:
+        return False
+    if op == "eq":
+        return str(actual).strip().lower() == str(expected).strip().lower()
+    if op == "contains":
+        return str(expected).lower() in str(actual).lower()
+    if op in ("lt", "gt"):
+        try:
+            a, b = float(actual), float(expected)
+        except (TypeError, ValueError):
+            return False
+        return a < b if op == "lt" else a > b
+    return False
 
 
 async def create_subscription(
@@ -254,6 +285,16 @@ async def _load_event(pool: asyncpg.Pool, row: asyncpg.Record) -> GraphEvent:
                 row["object_id"],
                 name,
             )
+    props: dict[str, Any] = {}
+    if row["event_type"] == "object_created" and row["object_id"] is not None:
+        # by evaluation time the object's assertions are committed (the evaluator runs
+        # after the tick), so a beat can match the whole object on its creation event.
+        for r in await pool.fetch(
+            "SELECT DISTINCT ON (name) name, value #>> '{}' AS v FROM current_assertions "
+            "WHERE object_id=$1 ORDER BY name, observed_at DESC",
+            row["object_id"],
+        ):
+            props[r["name"]] = r["v"]
     return GraphEvent(
         outbox_id=row["id"],
         event_type=row["event_type"],
@@ -263,6 +304,7 @@ async def _load_event(pool: asyncpg.Pool, row: asyncpg.Record) -> GraphEvent:
         canonical=canonical,
         payload=payload,
         value=value,
+        props=props,
     )
 
 

@@ -801,3 +801,32 @@ and `docker run` do too.
   residential). NEXT (operator's call): wire a real composed watcher + register it in SOURCE_TICKS
   with a live LLM key; harden the alert sink (dedup/throttle before it can become a 3am false alert);
   promote cron-persistence→main when reviewed.
+- **HARRIS COUNTY FORECLOSURE VERTICAL + the product front-end (DONE, 2026-06-27, on cron-persistence):**
+  aimed the watch at a REAL persona beat (the foreclosure broker = ForeScan's customer) and built the
+  SUBSCRIBER-facing surface — a sourced tripwire feed, deliberately NOT a CRM. 291 tests green (+6),
+  ruff + mypy --strict clean.
+  - `src/ingest/harris_foreclosure.py`: `make_harris_foreclosure_watcher(fetch=)` → a monitor.Puller
+    turning each Notice of Trustee Sale into a graded `Property` object (canonical `harris-notice:<id>`;
+    address/owner/lienholder/trustee/sale_date/opening_bid/zip/filed_date, AUTHORITATIVE_API). The
+    county portal (cclerk.hctx.net FRCL_R.aspx) is an ASPX web-form, NOT an API → `live_fetch` is a
+    documented satellite-shaped integration point (the county last-mile; NOT a mass-crawl — the
+    ForeScan-grave discipline holds). A clearly-labelled DEMO dataset (`SAMPLE_NOTICES`, fictional
+    owners / real Houston ZIPs / first-Tuesday sale dates, `demo=true`) + `demo_fetch` lets the front
+    end be felt now; the pipeline (parse→grade→lead→alert) is fully real.
+  - **Object-level beat matching** (`monitor.matches` + `GraphEvent.props`): a generic
+    `where:[{property,op,value}]` AND-conjunction (ops eq/contains/lt/gt) over an object's properties
+    (loaded for object_created). A beat = "zip 77084 AND opening_bid < 300000" fires once per matching
+    new Property. General — trucking/other beats reuse it.
+  - **Leads read-model + demo seed** (`GET /leads?zip&max_bid&q&since`, `POST /demo/foreclosure-seed`):
+    rich sourced lead cards (facts + provenance block source·how·date·confidence; mapped to "Harris
+    County Clerk"/"authoritative county record"). Seed ticks under source `harris_county_clerk` so
+    provenance reads true (the `demo` flag, not the source, marks synthetic).
+  - **The front end** (`src/ui/static/leads.html`, `/ui/leads.html`): a dedicated PRODUCT surface
+    distinct from the analyst graph console — "Your beat" (zip/max-bid/keyword + optional webhook →
+    saves a subscription), a live leads FEED (reverse-chron cards, sale-date badge, DEMO/NEW tags, a
+    provenance footer + View-notice link), filters, "Load demo notices", and explicit anti-CRM copy
+    ("no pipeline, no contacts, no stages — Osiris watches the public record; you act in your own
+    tools"). Proven live (throwaway PG+Redis): seed → 8 sourced leads, beat sub-$200k → 3, page 200.
+    Tests: `tests/test_foreclosure.py` (6). This is the SUBSCRIBER surface (the broker receives sourced
+    leads, never touches the engine); the operator builds beats here or via MCP. NEXT: a real email/SMS
+    delivery sink; the live county scrape as a satellite Collector; alert dedup/throttle.

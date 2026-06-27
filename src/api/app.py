@@ -40,6 +40,7 @@ from src.connectors.searxng import search_manifests, searxng_search
 from src.db.pool import create_pool
 from src.db.redis import create_redis
 from src.dissemination.brief import build_case_brief
+from src.ingest.harris_foreclosure import demo_fetch, make_harris_foreclosure_watcher
 from src.ontology.classify import classify
 from src.ontology.intake import intake
 from src.ontology.resolution import (
@@ -54,7 +55,7 @@ from src.orchestrator.frontier import subject_report
 from src.orchestrator.handoff import abandon, open_handoff, post_back
 from src.orchestrator.handoff import tray as handoff_tray
 from src.orchestrator.manifests import load_manifests, project_triggers
-from src.orchestrator.monitor import create_subscription
+from src.orchestrator.monitor import create_subscription, evaluate_subscriptions, tick
 from src.orchestrator.runner import load_input_object
 
 _HELPERS_DIR = Path(__file__).resolve().parent.parent.parent / "helpers"
@@ -558,10 +559,98 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             for r in rows
         ]
 
+    @app.get("/leads")
+    async def list_leads(
+        zip_code: str | None = Query(None, alias="zip"),
+        max_bid: int | None = None,
+        q: str | None = None,
+        since: str | None = None,
+        limit: int = Query(200, le=1000),
+        p: asyncpg.Pool = Depends(get_pool),
+    ) -> list[dict[str, Any]]:
+        """The leads FEED: Harris County foreclosure notices as sourced lead cards.
+        This is a tripwire feed, not a CRM — it surfaces the public record with full
+        provenance; it holds no pipeline or contact state. Filters narrow the feed to a
+        beat (area / price / keyword)."""
+        rows = await p.fetch(
+            "SELECT o.id, jsonb_object_agg(a.name, a.value) AS props, "
+            "  max(a.observed_at) AS observed, max(a.confidence) AS confidence, "
+            "  (array_agg(DISTINCT a.source_id))[1] AS source, "
+            "  (array_agg(DISTINCT a.evidence_class) "
+            "     FILTER (WHERE a.evidence_class IS NOT NULL))[1] AS ec "
+            "FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+            "WHERE o.type='Property' AND o.status='active' AND o.id IN ("
+            "  SELECT object_id FROM current_assertions "
+            "  WHERE name='county' AND value #>> '{}'='Harris') "
+            "GROUP BY o.id"
+        )
+        leads: list[dict[str, Any]] = []
+        for r in rows:
+            props = _coerce_json(r["props"]) or {}
+            lead = {k: props.get(k) for k in _LEAD_FIELDS}
+            if zip_code and lead.get("zip") != zip_code:
+                continue
+            if max_bid is not None and _as_float(lead.get("opening_bid"), 1e18) > max_bid:
+                continue
+            if since and (lead.get("filed_date") or "") < since:
+                continue
+            if q and q.lower() not in " ".join(str(v) for v in lead.values() if v).lower():
+                continue
+            lead["object_id"] = str(r["id"])
+            lead["provenance"] = {
+                "source": r["source"],
+                "source_label": _SOURCE_LABELS.get(r["source"], r["source"]),
+                "how": _HOW_LABELS.get(r["ec"], r["ec"] or "unknown"),
+                "evidence_class": r["ec"],
+                "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
+                "observed": r["observed"].isoformat() if r["observed"] else None,
+            }
+            leads.append(lead)
+        leads.sort(key=lambda x: x.get("filed_date") or "", reverse=True)
+        return leads[:limit]
+
+    @app.post("/demo/foreclosure-seed")
+    async def demo_foreclosure_seed(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        """Dev/demo: run the Harris foreclosure watcher over the bundled SYNTHETIC
+        notices so the feed populates without a live county session. Resets the demo
+        cursor so the button reliably (re)loads; objects are idempotent (no dupes)."""
+        # attribute to the real source (Harris County Clerk) so provenance reads true;
+        # the demo=true flag on each notice — not the source — marks it synthetic.
+        await p.execute("DELETE FROM watermarks WHERE key='source:harris_county_clerk'")
+        watcher = make_harris_foreclosure_watcher(fetch=demo_fetch)
+        ingested = await tick(Actions(p), "harris_county_clerk", watcher)
+        fired = await evaluate_subscriptions(p)  # let any saved beats raise alerts
+        total = await p.fetchval(
+            "SELECT count(*) FROM objects o WHERE o.type='Property' AND o.status='active' "
+            "AND o.id IN (SELECT object_id FROM current_assertions "
+            "WHERE name='county' AND value #>> '{}'='Harris')"
+        )
+        return {"ingested": ingested, "alerts_fired": fired, "leads_total": total}
+
     if _UI_DIR.is_dir():
         app.mount("/ui", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
 
     return app
+
+
+_LEAD_FIELDS = ("address", "zip", "owner", "lienholder", "trustee", "sale_date",
+                "opening_bid", "filed_date", "notice_url", "county", "demo")
+_SOURCE_LABELS = {"harris_county_clerk": "Harris County Clerk"}
+_HOW_LABELS = {
+    "authoritative_api": "authoritative county record",
+    "self_declared": "self-declared",
+    "direct_observation": "directly observed",
+    "co_occurrence": "co-occurrence (unconfirmed)",
+    "derived": "inferred",
+    "corroborated": "corroborated by ≥2 sources",
+}
+
+
+def _as_float(v: Any, default: float) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
 
 
 def _coerce_json(v: Any) -> Any:
