@@ -258,8 +258,26 @@ async def dossier_report(object_ref: str) -> str:
 # --- the composer: author/run/list compositions (the front end as a primitive) ---
 
 @mcp.tool()
+async def create_room(name: str) -> dict[str, str]:
+    """Create a ROOM — a saved STANCE the operator switches between (journalist / broker /
+    engineer). A Room scopes WORK ARTIFACTS (cases + compositions) to a beat, never the
+    shared entity graph. The FDE move: author a room from a sentence ("set up a Harris
+    foreclosure desk"), then save_composition(..., room="<name>") to stock it."""
+    pool = await _pool_get()
+    rid = await comp.create_room(pool, name)
+    return {"id": str(rid), "name": name}
+
+
+@mcp.tool()
+async def list_rooms() -> list[dict[str, Any]]:
+    """The Rooms (stances) the operator can switch between."""
+    pool = await _pool_get()
+    return await comp.list_rooms(pool)
+
+
+@mcp.tool()
 async def save_composition(
-    name: str, spec: dict[str, Any], kind: str = "lens"
+    name: str, spec: dict[str, Any], kind: str = "lens", room: str | None = None
 ) -> dict[str, str]:
     """Save a COMPOSITION — a reusable, forkable query/lens over the graph (the
     composer's primitive). This is how a question becomes a first-class object instead
@@ -277,7 +295,8 @@ async def save_composition(
       {"op":"order","from":<node>,"by":"metric|prop","dir":"asc|desc"}  rank
       {"op":"take","from":<node>,"n":N}                 top-N
     There is no `join` — relate sets via `intersect` or `traverse`, and fuzzy matching is a
-    Function. Example (operational vs disclosed geography — what `discrepancy` hardcoded):
+    Function. `room` (name or id) scopes it to a stance. Example (operational vs disclosed
+    geography — what `discrepancy` hardcoded):
       {"op":"subtract",
        "left":{"op":"collect","transform":"country","properties":["location"],
                "from":{"op":"traverse","from":{"op":"subject"},"hops":2}},
@@ -285,7 +304,8 @@ async def save_composition(
                 "properties":["incorporation_state","address"],"from":{"op":"subject"}}}
     """
     pool = await _pool_get()
-    cid = await comp.save_composition(pool, name, spec, kind)
+    rid = await comp.resolve_room(pool, room)
+    cid = await comp.save_composition(pool, name, spec, kind, room_id=rid)
     return {"id": str(cid), "name": name}
 
 

@@ -156,6 +156,28 @@ async def test_rooms_scope_artifacts_not_the_graph(
     assert any(o["canonical"] == "commit:z" for o in found)
 
 
+async def test_claude_authors_a_room_from_a_sentence(actions: Actions) -> None:
+    """W5: the FDE move — create_room + save_composition(room=) is all Claude needs to mint
+    a stance from a sentence ('set up a compliance desk'). resolve_room takes name or id."""
+    from src.orchestrator.compositions import (
+        create_room,
+        list_compositions,
+        list_rooms,
+        resolve_room,
+        save_composition,
+    )
+    rid = await create_room(actions.pool, "compliance")
+    assert await resolve_room(actions.pool, "compliance") == rid  # by name
+    assert await resolve_room(actions.pool, str(rid)) == rid       # by id
+    assert await resolve_room(actions.pool, None) is None          # the All scope
+    # stock the desk, scoped to the room
+    await save_composition(actions.pool, "new sanctioned wallets",
+                           {"op": "select", "object_type": "CryptoAddress"}, "watch", room_id=rid)
+    scoped = [c["name"] for c in await list_compositions(actions.pool, rid)]
+    assert scoped == ["new sanctioned wallets"]
+    assert "compliance" in {r["name"] for r in await list_rooms(actions.pool)}
+
+
 async def test_console_pages_are_render_mode_stubs() -> None:
     """object.html and watch.html are CUT — thin redirect stubs into the composer."""
     ui = Path(__file__).resolve().parent.parent / "src" / "ui" / "static"

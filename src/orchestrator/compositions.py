@@ -379,6 +379,36 @@ async def _spec_of(pool: asyncpg.Pool, ref: str) -> dict[str, Any] | None:
     return _coerce(row["spec"]) if row else None
 
 
+# --- rooms: the stance (a Room is a composition of compositions — authorable by Claude) --
+
+async def create_room(
+    pool: asyncpg.Pool, name: str, config: dict[str, Any] | None = None
+) -> uuid.UUID:
+    """Create (or update) a Room — a saved stance the operator switches between. The FDE
+    move: Claude mints one from a sentence, then assigns compositions to it."""
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "INSERT INTO rooms (name, config) VALUES ($1,$2) "
+        "ON CONFLICT (name) DO UPDATE SET config=EXCLUDED.config RETURNING id",
+        name, config or {},
+    )
+
+
+async def resolve_room(pool: asyncpg.Pool, ref: str | None) -> uuid.UUID | None:
+    """A room by name or id (None ref → None = the All/unassigned scope)."""
+    if not ref:
+        return None
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT id FROM rooms WHERE name=$1 OR id::text=$1", ref
+    )
+
+
+async def list_rooms(pool: asyncpg.Pool) -> list[dict[str, Any]]:
+    return [
+        {"id": str(r["id"]), "name": r["name"], "config": _coerce(r["config"])}
+        for r in await pool.fetch("SELECT id, name, config FROM rooms ORDER BY created_at")
+    ]
+
+
 async def list_compositions(
     pool: asyncpg.Pool, room_id: uuid.UUID | None = None
 ) -> list[dict[str, Any]]:

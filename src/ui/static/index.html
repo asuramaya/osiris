@@ -247,10 +247,21 @@ function renderComposerBar(){
     chips = (sel.where||[]).map((c,i)=>`<span class="fchip">${esc(c.property)}${Osiris.OPSYM[c.op]||c.op}${esc(c.value)}
       <span class="x" data-rmf="${i}">×</span></span>`).join('') + `<span class="cbtn" id="addf">+ filter</span>`;
   }
-  bar.innerHTML = lin + `<span style="flex:1"></span>` + chips + `<span class="cbtn" id="saveas">Save as…</span>`;
+  const grp = RESULT.kind==='objects' ? `<span class="cbtn" id="groupby">Group by…</span>` : '';
+  bar.innerHTML = lin + `<span style="flex:1"></span>` + chips + grp
+    + `<span class="cbtn" id="saveas">Save as…</span>`;
   bar.querySelectorAll('[data-rmf]').forEach(x=>x.onclick=()=>{ sel.where.splice(+x.dataset.rmf,1); runWorking(); });
   if($('addf')) $('addf').onclick=addFilter;
+  if($('groupby')) $('groupby').onclick=groupBy;
   $('saveas').onclick=saveWorkingAs;
+}
+// scale: collapse an object set into a count-per-group histogram (Foundry's move) — wrap
+// the working spec in aggregate→order. Composes with the filter chips above it.
+function groupBy(){
+  const property=prompt('Group by property (e.g. type, sector):'); if(!property) return;
+  WORKING = {op:'order',dir:'desc',from:{op:'aggregate',group_by:[property],
+            metric:{type:'count'},from:WORKING}};
+  runWorking();
 }
 function addFilter(){
   const sel=Osiris.innerSelect(WORKING); if(!sel) return;
