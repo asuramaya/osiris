@@ -11,13 +11,16 @@ a `tick` takes an injected puller; a real connector lands in a later phase.
     each item through Actions -> advance cursor. The materialized objects write outbox
     events, which the evaluator below picks up. One clean seam between collection and
     the watch.
-  * `evaluate_subscriptions` — drains the durable outbox PAST ITS OWN CLAIM FLAG
+  * `evaluate_watches` — drains the durable outbox PAST ITS OWN CLAIM FLAG
     (`evaluated_at`, independent of the cascade's `published_at`), matches each new
-    mutation against saved `subscriptions`, and emits an `alerts` row to a dumb sink.
+    mutation against active WATCHES (kind='watch' compositions, whose `select` spec is
+    reduced to match criteria), and emits an `alerts` row to a dumb sink.
 
-The match is prospective: a subscription created today fires on tomorrow's events,
-not yesterday's (each outbox row is evaluated exactly once). That is the tripwire
-semantic — "tell me when X happens", not "search what already happened".
+A watch and a lens are ONE primitive (a composition): the same `select` spec you run() on
+demand (the lens — current members) drives this evaluator (the tripwire — alert on a new
+member). The match is prospective: a watch created today fires on tomorrow's events, not
+yesterday's (each outbox row is evaluated exactly once) — "tell me when X happens", not
+"search what already happened".
 """
 
 from __future__ import annotations
@@ -126,11 +129,29 @@ class GraphEvent:
 
 
 @dataclass(frozen=True)
-class Subscription:
+class Watch:
+    """A saved watch — a kind='watch' composition. Its `select` spec is reduced to the
+    evaluator's match `criteria`; the same spec is also run() on demand as a lens."""
+
     id: uuid.UUID
     name: str
     criteria: dict[str, Any]
     webhook_url: str | None
+
+
+def watch_criteria(spec: dict[str, Any]) -> dict[str, Any]:
+    """Derive the evaluator's match criteria from a watch's `select` spec. A watch fires
+    on SET-ENTRY: a newly created object whose type+properties satisfy the select (the
+    real-beat semantic — new filing/notice/entity). Membership-change on an existing
+    object via a later property update is out of scope for v1 (documented)."""
+    criteria: dict[str, Any] = {
+        "event_types": ["object_created"],
+        "object_type": spec.get("object_type"),
+        "where": spec.get("where", []) or [],
+    }
+    if spec.get("canonical_prefix"):
+        criteria["canonical_prefix"] = spec["canonical_prefix"]
+    return criteria
 
 
 def matches(criteria: dict[str, Any], event: GraphEvent) -> dict[str, Any] | None:
@@ -200,29 +221,21 @@ def match_condition(actual: Any, op: str, expected: Any) -> bool:
     return False
 
 
-async def create_subscription(
-    pool: asyncpg.Pool, name: str, criteria: dict[str, Any], webhook_url: str | None = None
-) -> uuid.UUID:
-    """Save a watch. Returns its id."""
-    return await pool.fetchval(  # type: ignore[no-any-return]
-        "INSERT INTO subscriptions (name, criteria, webhook_url) VALUES ($1,$2,$3) RETURNING id",
-        name,
-        criteria,
-        webhook_url,
-    )
-
-
-async def _active_subscriptions(pool: asyncpg.Pool) -> list[Subscription]:
+async def _active_watches(pool: asyncpg.Pool) -> list[Watch]:
+    """The active watches — kind='watch' compositions. Read straight from the table (no
+    import of compositions.py, which imports this module) and reduce each select spec to
+    the evaluator's criteria."""
     import json
     rows = await pool.fetch(
-        "SELECT id, name, criteria, webhook_url FROM subscriptions WHERE active ORDER BY created_at"
+        "SELECT id, name, spec, webhook_url FROM compositions "
+        "WHERE kind='watch' AND active ORDER BY created_at"
     )
-    out: list[Subscription] = []
+    out: list[Watch] = []
     for r in rows:
-        crit = r["criteria"]
-        if isinstance(crit, str):  # asyncpg returns jsonb as text unless a codec is set
-            crit = json.loads(crit)
-        out.append(Subscription(r["id"], r["name"], crit, r["webhook_url"]))
+        spec = r["spec"]
+        if isinstance(spec, str):  # asyncpg returns jsonb as text unless a codec is set
+            spec = json.loads(spec)
+        out.append(Watch(r["id"], r["name"], watch_criteria(spec), r["webhook_url"]))
     return out
 
 
@@ -237,8 +250,8 @@ Sink = Callable[["Alert"], Awaitable[bool]]
 @dataclass(frozen=True)
 class Alert:
     id: uuid.UUID
-    subscription_id: uuid.UUID
-    subscription_name: str
+    watch_id: uuid.UUID
+    watch_name: str
     object_id: uuid.UUID | None
     event_type: str
     matched: dict[str, Any]
@@ -252,7 +265,7 @@ async def _post_webhook(alert: Alert) -> bool:
     import httpx
     payload = {
         "alert_id": str(alert.id),
-        "subscription": alert.subscription_name,
+        "watch": alert.watch_name,
         "event_type": alert.event_type,
         "object_id": str(alert.object_id) if alert.object_id else None,
         "matched": alert.matched,
@@ -309,19 +322,19 @@ async def _load_event(pool: asyncpg.Pool, row: asyncpg.Record) -> GraphEvent:
     )
 
 
-async def evaluate_subscriptions(
+async def evaluate_watches(
     pool: asyncpg.Pool, *, sink: Sink | None = None, limit: int = 500
 ) -> int:
-    """Claim a batch of un-evaluated outbox rows, match each against active
-    subscriptions, and emit an `alerts` row per match. Returns the number of alerts
-    emitted. Idempotent: the claim flag (`evaluated_at`) makes each row fire at most
-    once; the (subscription, outbox) unique key makes a re-run a no-op.
+    """Claim a batch of un-evaluated outbox rows, match each against active WATCHES
+    (kind='watch' compositions), and emit an `alerts` row per match. Returns the number
+    of alerts emitted. Idempotent: the claim flag (`evaluated_at`) makes each row fire at
+    most once; the (composition, outbox) unique key makes a re-run a no-op.
 
     The claim is gap-free (FOR UPDATE SKIP LOCKED on the unevaluated flag), and the
     evaluator never touches `published_at`, so it is fully decoupled from the cascade.
     """
     deliver: Sink = sink if sink is not None else _post_webhook
-    subs = await _active_subscriptions(pool)
+    watches = await _active_watches(pool)
 
     rows = await pool.fetch(
         "UPDATE outbox SET evaluated_at=now() WHERE id IN ("
@@ -335,18 +348,18 @@ async def evaluate_subscriptions(
 
     fired: list[Alert] = []
     for row in rows:
-        if not subs:
+        if not watches:
             continue
         event = await _load_event(pool, row)
-        for sub in subs:
-            why = matches(sub.criteria, event)
+        for w in watches:
+            why = matches(w.criteria, event)
             if why is None:
                 continue
             alert_id = await pool.fetchval(
-                "INSERT INTO alerts (subscription_id, outbox_id, object_id, event_type, matched) "
-                "VALUES ($1,$2,$3,$4,$5) ON CONFLICT (subscription_id, outbox_id) DO NOTHING "
+                "INSERT INTO alerts (composition_id, outbox_id, object_id, event_type, matched) "
+                "VALUES ($1,$2,$3,$4,$5) ON CONFLICT (composition_id, outbox_id) DO NOTHING "
                 "RETURNING id",
-                sub.id,
+                w.id,
                 event.outbox_id,
                 event.object_id,
                 event.event_type,
@@ -355,8 +368,8 @@ async def evaluate_subscriptions(
             if alert_id is None:  # already alerted (idempotent re-run)
                 continue
             fired.append(
-                Alert(alert_id, sub.id, sub.name, event.object_id, event.event_type,
-                      why, sub.webhook_url)
+                Alert(alert_id, w.id, w.name, event.object_id, event.event_type,
+                      why, w.webhook_url)
             )
 
     # deliver to the side-channel sink AFTER the durable rows are committed. A sink

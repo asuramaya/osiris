@@ -169,9 +169,11 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
 
     if op == "select":
         ot = node.get("object_type")
+        cp = node.get("canonical_prefix")
         where = node.get("where", []) or []
         rows = await pool.fetch(
-            "SELECT id FROM objects WHERE status='active' AND ($1::text IS NULL OR type=$1)", ot
+            "SELECT id FROM objects WHERE status='active' AND ($1::text IS NULL OR type=$1) "
+            "AND ($2::text IS NULL OR canonical LIKE $2 || '%')", ot, cp
         )
         out: list[uuid.UUID] = []
         for r in rows:
@@ -340,14 +342,29 @@ async def _order(
 # --- persistence + run ------------------------------------------------------
 
 async def save_composition(
-    pool: asyncpg.Pool, name: str, spec: dict[str, Any], kind: str = "lens"
+    pool: asyncpg.Pool, name: str, spec: dict[str, Any], kind: str = "lens",
+    *, webhook_url: str | None = None, active: bool = True,
 ) -> uuid.UUID:
-    """Save (or update) a composition by name. Fork = save under a new name."""
+    """Save (or update) a composition by name. Fork = save under a new name. `webhook_url`
+    and `active` are a watch's execution metadata (a lens ignores them)."""
     return await pool.fetchval(  # type: ignore[no-any-return]
-        "INSERT INTO compositions (name, kind, spec) VALUES ($1,$2,$3) "
-        "ON CONFLICT (name) DO UPDATE SET spec=EXCLUDED.spec, kind=EXCLUDED.kind RETURNING id",
-        name, kind, spec,
+        "INSERT INTO compositions (name, kind, spec, webhook_url, active) VALUES ($1,$2,$3,$4,$5) "
+        "ON CONFLICT (name) DO UPDATE SET spec=EXCLUDED.spec, kind=EXCLUDED.kind, "
+        "  webhook_url=EXCLUDED.webhook_url, active=EXCLUDED.active RETURNING id",
+        name, kind, spec, webhook_url, active,
     )
+
+
+async def save_watch(
+    pool: asyncpg.Pool, name: str, object_type: str | None, where: list[dict[str, Any]],
+    *, canonical_prefix: str | None = None, webhook_url: str | None = None,
+) -> uuid.UUID:
+    """Save a WATCH — a composition whose spec is a `select` op. The same spec runs as a
+    lens (current members) and drives the evaluator (alert on a new member). One primitive."""
+    spec: dict[str, Any] = {"op": "select", "object_type": object_type, "where": where}
+    if canonical_prefix:
+        spec["canonical_prefix"] = canonical_prefix
+    return await save_composition(pool, name, spec, "watch", webhook_url=webhook_url)
 
 
 async def _spec_of(pool: asyncpg.Pool, ref: str) -> dict[str, Any] | None:
@@ -359,9 +376,10 @@ async def _spec_of(pool: asyncpg.Pool, ref: str) -> dict[str, Any] | None:
 
 async def list_compositions(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     return [
-        {"id": str(r["id"]), "name": r["name"], "kind": r["kind"], "spec": _coerce(r["spec"])}
+        {"id": str(r["id"]), "name": r["name"], "kind": r["kind"], "spec": _coerce(r["spec"]),
+         "webhook_url": r["webhook_url"], "active": r["active"]}
         for r in await pool.fetch(
-            "SELECT id, name, kind, spec FROM compositions ORDER BY created_at"
+            "SELECT id, name, kind, spec, webhook_url, active FROM compositions ORDER BY created_at"
         )
     ]
 

@@ -50,6 +50,7 @@ from src.ontology.resolution import (
 )
 from src.ontology.schema import catalog as ontology_catalog
 from src.orchestrator.cobrowse import cobrowse_open
+from src.orchestrator.compositions import save_watch
 from src.orchestrator.dossier import entity_dossier
 from src.orchestrator.federation import federated_query, promote, to_preview
 from src.orchestrator.frontier import subject_report
@@ -57,8 +58,7 @@ from src.orchestrator.handoff import abandon, open_handoff, post_back
 from src.orchestrator.handoff import tray as handoff_tray
 from src.orchestrator.manifests import load_manifests, project_triggers
 from src.orchestrator.monitor import (
-    create_subscription,
-    evaluate_subscriptions,
+    evaluate_watches,
     match_condition,
     tick,
 )
@@ -551,25 +551,34 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def create_subscription_route(
         body: SubscriptionBody, p: asyncpg.Pool = Depends(get_pool)
     ) -> dict[str, Any]:
-        """Save a watch: criteria that fire an alert when matched. Source-agnostic —
-        see monitor.matches for the supported clauses."""
-        sub_id = await create_subscription(p, body.name, body.criteria, body.webhook_url)
-        return {"id": str(sub_id), "name": body.name}
+        """Save a WATCH — a kind='watch' composition whose `select` spec is the beat. The
+        same spec runs as a lens (current members) and drives the tripwire (alert on a new
+        member). The posted criteria (object_type + where) become that select spec."""
+        wid = await save_watch(
+            p, body.name, body.criteria.get("object_type"),
+            body.criteria.get("where", []) or [], webhook_url=body.webhook_url,
+        )
+        return {"id": str(wid), "name": body.name}
 
     @app.get("/subscriptions")
     async def list_subscriptions(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
+        """The active watches. `criteria` is reconstructed from the select spec so the
+        watch console keeps its shape; the storage is a composition underneath."""
         rows = await p.fetch(
-            "SELECT id, name, criteria, webhook_url, active, created_at "
-            "FROM subscriptions ORDER BY created_at DESC"
+            "SELECT id, name, spec, webhook_url, active, created_at "
+            "FROM compositions WHERE kind='watch' ORDER BY created_at DESC"
         )
-        return [
-            {
-                "id": str(r["id"]), "name": r["name"], "criteria": _coerce_json(r["criteria"]),
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            spec = _coerce_json(r["spec"]) or {}
+            out.append({
+                "id": str(r["id"]), "name": r["name"],
+                "criteria": {"object_type": spec.get("object_type"),
+                             "where": spec.get("where", [])},
                 "webhook_url": r["webhook_url"], "active": r["active"],
                 "created_at": r["created_at"].isoformat(),
-            }
-            for r in rows
-        ]
+            })
+        return out
 
     @app.get("/alerts")
     async def list_alerts(
@@ -577,19 +586,19 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         limit: int = Query(100, le=1000),
         p: asyncpg.Pool = Depends(get_pool),
     ) -> list[dict[str, Any]]:
-        """The dumb sink, read back: fired alerts newest-first (optionally one sub)."""
+        """The dumb sink, read back: fired alerts newest-first (optionally one watch)."""
         rows = await p.fetch(
-            "SELECT a.id, a.subscription_id, s.name AS subscription, a.object_id, "
+            "SELECT a.id, a.composition_id, c.name AS subscription, a.object_id, "
             "       a.event_type, a.matched, a.created_at, a.delivered_at "
-            "FROM alerts a JOIN subscriptions s ON s.id = a.subscription_id "
-            "WHERE ($1::uuid IS NULL OR a.subscription_id = $1) "
+            "FROM alerts a JOIN compositions c ON c.id = a.composition_id "
+            "WHERE ($1::uuid IS NULL OR a.composition_id = $1) "
             "ORDER BY a.created_at DESC LIMIT $2",
             subscription_id,
             limit,
         )
         return [
             {
-                "id": str(r["id"]), "subscription_id": str(r["subscription_id"]),
+                "id": str(r["id"]), "subscription_id": str(r["composition_id"]),
                 "subscription": r["subscription"],
                 "object_id": str(r["object_id"]) if r["object_id"] else None,
                 "event_type": r["event_type"], "matched": _coerce_json(r["matched"]),
@@ -610,13 +619,15 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         Type-driven, not vertical — a Property reads like a foreclosure lead and an
         Organization like a company because the DATA is, never because this surface
         knows the words. The same console serves any beat over the public record."""
-        crit = _coerce_json(
-            await p.fetchval("SELECT criteria FROM subscriptions WHERE id=$1", subscription_id)
+        spec = _coerce_json(
+            await p.fetchval(
+                "SELECT spec FROM compositions WHERE id=$1 AND kind='watch'", subscription_id
+            )
         )
-        if crit is None:
+        if spec is None:
             raise HTTPException(404, "no such watch")
-        object_type = crit.get("object_type")
-        where = crit.get("where", []) or []
+        object_type = spec.get("object_type")
+        where = spec.get("where", []) or []
         rows = await p.fetch(
             "SELECT id FROM objects WHERE status='active' AND ($1::text IS NULL OR type=$1)",
             object_type,
@@ -639,19 +650,13 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         """Demo LOADER (clearly namespaced /demo/). Ingests the SYNTHETIC Harris County
         notices and ensures one demo watch so the generic feed has something to show. The
         foreclosure vertical lives ONLY here — the watch console and /matches never name it."""
-        watch_id = await p.fetchval(
-            "INSERT INTO subscriptions (name, criteria) "
-            "SELECT 'Harris County foreclosures (demo)', $1 "
-            "WHERE NOT EXISTS (SELECT 1 FROM subscriptions "
-            "  WHERE name='Harris County foreclosures (demo)') RETURNING id",
-            {"event_types": ["object_created"], "object_type": "Property",
-             "where": [{"property": "county", "op": "eq", "value": "Harris"}]},
-        ) or await p.fetchval(
-            "SELECT id FROM subscriptions WHERE name='Harris County foreclosures (demo)'"
+        watch_id = await save_watch(
+            p, "Harris County foreclosures (demo)", "Property",
+            [{"property": "county", "op": "eq", "value": "Harris"}],
         )
         watcher = make_harris_foreclosure_watcher(fetch=demo_fetch)
         ingested = await tick(Actions(p), "harris_county_clerk", watcher)
-        fired = await evaluate_subscriptions(p)  # also raise alerts (the bell), prospectively
+        fired = await evaluate_watches(p)  # also raise alerts (the bell), prospectively
         return {"ingested": ingested, "alerts_fired": fired, "watch_id": str(watch_id)}
 
     if _UI_DIR.is_dir():

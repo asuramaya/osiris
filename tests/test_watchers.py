@@ -8,9 +8,9 @@ AND that it stays quiet when there is no news / on filings that don't match the 
 from __future__ import annotations
 
 from src.actions.core import Actions
+from src.orchestrator.compositions import save_watch
 from src.orchestrator.monitor import (
-    create_subscription,
-    evaluate_subscriptions,
+    evaluate_watches,
     get_cursor,
     tick,
 )
@@ -70,15 +70,14 @@ async def test_only_strictly_newer_filings_are_pulled(actions: Actions) -> None:
 async def test_full_loop_fires_on_match_quiet_on_noise(actions: Actions) -> None:
     """The broker proof end-to-end: a saved watch fires a sourced alert on the new
     filing it cares about, and stays silent on the one it doesn't."""
-    await create_subscription(
-        actions.pool, "new Neuralink financings",
-        {"event_types": ["property_added"], "property_name": "name",
-         "value_contains": "neuralink"},
+    await save_watch(
+        actions.pool, "new Neuralink financings", "Organization",
+        [{"property": "name", "op": "contains", "value": "neuralink"}],
     )
     watcher = make_form_d_watcher("form-d", fetch=_fetch_returning([_NEURALINK, _APPLE]))
     await tick(actions, "form_d:test", watcher)
 
-    fired = await evaluate_subscriptions(actions.pool)
+    fired = await evaluate_watches(actions.pool)
     assert fired == 1  # Neuralink filing matched; Apple (noise) did not
     alerted = await actions.pool.fetchval(
         "SELECT o.canonical FROM alerts a JOIN objects o ON o.id=a.object_id LIMIT 1"

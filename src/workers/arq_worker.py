@@ -25,7 +25,7 @@ from src.db.redis import create_redis
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, expand_case, run_cascade
 from src.orchestrator.manifests import load_manifests
-from src.orchestrator.monitor import Puller, evaluate_subscriptions, tick
+from src.orchestrator.monitor import Puller, evaluate_watches, tick
 from src.orchestrator.ratelimit import RateLimiter
 from src.orchestrator.runner import reap_stale_runs
 from src.orchestrator.watchers import make_form_d_watcher
@@ -83,8 +83,8 @@ async def expand_case_job(ctx: dict[str, Any], case_id: str) -> int:
 
 
 async def evaluate_watch(ctx: dict[str, Any]) -> int:
-    """The tripwire: match new outbox mutations against saved subscriptions."""
-    return await evaluate_subscriptions(ctx["pool"])
+    """The tripwire: match new outbox mutations against active watches."""
+    return await evaluate_watches(ctx["pool"])
 
 
 async def run_source_ticks(ctx: dict[str, Any]) -> int:

@@ -13,7 +13,8 @@ from datetime import UTC, datetime
 import pytest
 from src.actions.core import Actions
 from src.orchestrator.compose import DocRef, watch_extract_tick
-from src.orchestrator.monitor import create_subscription, evaluate_subscriptions, get_cursor
+from src.orchestrator.compositions import save_watch
+from src.orchestrator.monitor import evaluate_watches, get_cursor
 
 NOW = datetime(2026, 6, 26, tzinfo=UTC)
 
@@ -51,10 +52,10 @@ async def test_document_to_sourced_lead_end_to_end(actions: Actions, case_id: st
     await actions.assert_property(fed, "name", "Neuralink Corp.", "edgar", NOW, 0.85)
 
     # an analyst's saved watch: tell me when a new doc names a Neuralink officer/entity
-    await create_subscription(
-        actions.pool, "neuralink mentions",
-        {"event_types": ["property_added"], "property_name": "name",
-         "value_contains": "neuralink"},
+    # (set-entry: fires when a new object whose name mentions Neuralink is created)
+    await save_watch(
+        actions.pool, "neuralink mentions", None,
+        [{"property": "name", "op": "contains", "value": "neuralink"}],
     )
 
     refs = [DocRef(doc_id="acc-1", date="2026-06-25", text="(carried text)"),
@@ -79,7 +80,7 @@ async def test_document_to_sourced_lead_end_to_end(actions: Actions, case_id: st
     assert ec == "derived"
 
     # THE LEAD: the saved watch fires a sourced alert on the extracted Neuralink entity
-    fired = await evaluate_subscriptions(actions.pool)
+    fired = await evaluate_watches(actions.pool)
     assert fired >= 1
     hit = await actions.pool.fetchval(
         "SELECT o.canonical FROM alerts a JOIN objects o ON o.id=a.object_id "
