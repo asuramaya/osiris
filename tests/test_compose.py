@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+import pytest
 from src.actions.core import Actions
 from src.orchestrator.compose import DocRef, watch_extract_tick
 from src.orchestrator.monitor import create_subscription, evaluate_subscriptions, get_cursor
@@ -85,6 +86,35 @@ async def test_document_to_sourced_lead_end_to_end(actions: Actions, case_id: st
         "WHERE o.canonical LIKE 'extracted-%' LIMIT 1"
     )
     assert hit == "extracted-org:neuralink-corp"
+
+
+async def test_compose_ocrs_a_scanned_document(
+    actions: Actions, case_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A scanned source (image bytes) is OCR'd via the vision seam before extraction —
+    the county-notice case. The GPU is an API key; here a fake stands in for it."""
+    cid = uuid.UUID(case_id)
+    ocred = {"called": False}
+
+    class _FakeVision:
+        async def to_text(self, *, image: bytes, media_type: str, model: str,
+                          instruction: str = "") -> str:
+            ocred["called"] = True
+            return "transcribed page mentioning Neuralink Corp."
+
+    monkeypatch.setattr("src.ingest.providers.vision_provider", lambda: _FakeVision())
+
+    async def img_delta(_c: str | None) -> tuple[list[DocRef], str]:
+        return [DocRef(doc_id="scan-1", date="2026-06-27", media_type="image/png")], "2026-06-27"
+
+    async def img_fetch(_d: DocRef) -> bytes:
+        return b"\x89PNG fake-scan-bytes"
+
+    counts = await watch_extract_tick(
+        actions, "scans", img_delta, img_fetch, _FakeLLM(), case_id=cid, resolve=False
+    )
+    assert ocred["called"] is True            # the scan went through OCR
+    assert counts["documents"] == 1 and counts["entities"] >= 1
 
 
 async def test_compose_advances_cursor_and_is_quiet_with_no_new_docs(

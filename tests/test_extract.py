@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from src.actions.core import Actions
 from src.ingest.extract import (
     ExtractionResult,
@@ -107,6 +108,16 @@ async def test_extract_uses_configured_model(actions: Actions, case_id: str) -> 
     fake = _FakeLLM('{"entities":[]}')
     await extract_document(actions, "doc", fake, case_id=uuid.UUID(case_id), model="some-model")
     assert fake.model_used == "some-model"
+
+
+async def test_extract_requires_a_provider_when_none_injected(
+    actions: Actions, case_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no client injected and no key configured, extraction fails loudly — the
+    deployment must wire the model (a key), not silently produce nothing."""
+    monkeypatch.setattr("src.ingest.extract.llm_provider", lambda: None)
+    with pytest.raises(RuntimeError, match="LLM provider"):
+        await extract_document(actions, "doc", case_id=uuid.UUID(case_id))
 
 
 async def test_unknown_relationship_demotes_to_controlled_vocab(

@@ -20,7 +20,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.actions.core import Actions
-from src.ingest.extract import LLMClient, extract_document
+from src.ingest.extract import extract_document
+from src.ingest.providers import LLMClient, document_to_text
 from src.ontology.resolution import find_cross_base_candidates
 from src.orchestrator.monitor import get_cursor, set_cursor
 
@@ -30,19 +31,22 @@ logger = logging.getLogger("osiris.compose")
 @dataclass
 class DocRef:
     """A document the watcher found. `doc_id` dedups, `date` is the cursor field,
-    `text` may already be carried by the delta (else `fetch` is called)."""
+    `text` may already be carried by the delta (else `fetch` is called). `media_type`
+    drives normalization — a scanned `image/*`/`application/pdf` page is OCR'd to text
+    via the vision provider before extraction (county notices are images)."""
 
     doc_id: str
     date: str
     url: str | None = None
     text: str | None = None
+    media_type: str = "text/plain"
 
 
 # the source-specific halves, all injected:
 #   delta:  (cursor) -> (new document refs, advanced cursor)
-#   fetch:  (DocRef) -> the document text
+#   fetch:  (DocRef) -> the document content (text, or raw bytes for a scan)
 DocDelta = Callable[[str | None], Awaitable[tuple[list[DocRef], str]]]
-DocFetch = Callable[[DocRef], Awaitable[str]]
+DocFetch = Callable[[DocRef], Awaitable[bytes | str]]
 
 
 async def watch_extract_tick(
@@ -68,7 +72,8 @@ async def watch_extract_tick(
     documents = entities = relationships = 0
     for doc in docs:
         try:
-            text = doc.text if doc.text is not None else await fetch(doc)
+            raw = doc.text if doc.text is not None else await fetch(doc)
+            text = await document_to_text(raw, media_type=doc.media_type)  # OCR if scanned
             if not text:
                 continue
             counts = await extract_document(

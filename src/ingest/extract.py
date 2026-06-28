@@ -25,15 +25,18 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Protocol
-
-import httpx
+from typing import Any
 
 from src.actions.core import Actions
 from src.config.settings import get_settings
+from src.ingest.providers import LLMClient, llm_provider
 from src.ontology.entity_type import classify_entity_type, clean_entity_name
 from src.ontology.schema import is_known_link_type
 from src.parsers.base import EvidenceClass
+
+# the inference seams live in providers.py (the GPU-as-key abstraction); re-exported
+# here for back-compat with callers/tests that import them from extract.
+__all__ = ["LLMClient", "extract_document", "parse_extraction"]
 
 _SOURCE = "ai_extract"
 _EC = EvidenceClass.DERIVED  # an LLM reading is inferred, never authoritative
@@ -49,46 +52,6 @@ _SYSTEM = (
     '"relationships":[{"from":str,"to":str,"type":str}]}\n'
     "Use the exact entity `name` strings as the `from`/`to` of relationships."
 )
-
-
-class LLMClient(Protocol):
-    """The injected model seam: a document-grounded completion returning JSON text."""
-
-    async def complete(
-        self, *, system: str, prompt: str, model: str, max_tokens: int = 2048
-    ) -> str: ...
-
-
-@dataclass
-class AnthropicClient:
-    """Live LLM over the Anthropic Messages API via httpx (no SDK dependency)."""
-
-    api_key: str
-    base_url: str = "https://api.anthropic.com"
-
-    async def complete(
-        self, *, system: str, prompt: str, model: str, max_tokens: int = 2048
-    ) -> str:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            r = await client.post(
-                f"{self.base_url}/v1/messages",
-                headers={
-                    "x-api-key": self.api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "max_tokens": max_tokens,
-                    "system": system,
-                    "messages": [{"role": "user", "content": prompt}],
-                },
-            )
-            r.raise_for_status()
-            data = r.json()
-            return "".join(
-                b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"
-            )
 
 
 @dataclass
@@ -184,15 +147,19 @@ def parse_extraction(raw: str) -> ExtractionResult:
 async def extract_document(
     actions: Actions,
     text: str,
-    llm: LLMClient,
+    llm: LLMClient | None = None,
     *,
     case_id: uuid.UUID | None = None,
     model: str | None = None,
     source_id: str = _SOURCE,
     observed_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """Extract entities/relationships from `text` via `llm` and emit them DERIVED.
-    Returns counts + the canonical of each entity. Idempotent (find-or-create)."""
+    """Extract entities/relationships from `text` and emit them DERIVED. `llm` defaults
+    to the configured provider (the deployment wires the model by key, not by passing a
+    client); tests inject a fake. Returns counts + each canonical. Idempotent."""
+    llm = llm or llm_provider()
+    if llm is None:
+        raise RuntimeError("no LLM provider — set ANTHROPIC_API_KEY (the extraction seam)")
     model = model or get_settings().osiris_extract_model
     raw = await llm.complete(system=_SYSTEM, prompt=text, model=model)
     result = parse_extraction(raw)

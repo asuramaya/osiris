@@ -890,3 +890,26 @@ and `docker run` do too.
     tables (27 object types / 47 link types) between `<!-- generated:schema -->` markers; a test asserts
     REFERENCE.md == the generated output (can't drift). 294 tests green, ruff + mypy --strict clean.
     NEXT: resolve-in-place for merge Review; parsers could read schemes from the catalog too.
+- **MERGE REVIEW resolve-in-place + INFERENCE PROVIDERS (DONE, 2026-06-27):** two threads toward the
+  broker deployment. 303 tests green, ruff + mypy --strict clean.
+  - **(1) merge Review closes the loop:** `GET /merge-candidates` enriched with a_label/a_type/
+    b_label/b_type (name→canonical), and the Analysis UI tray gained Merge/Reject buttons per pair →
+    `POST /merge-candidates/{id}/resolve` (merge_objects winner / not_same_as negative memory) →
+    refreshes tray + object set + inspector in place. `tests/test_merge_review.py` (2).
+  - **(2) inference providers — the GPU-as-an-API-key abstraction** (`src/ingest/providers.py`): the
+    engine runs NO GPU. Two model seams — `LLMClient` (text → entities) + `VisionClient` (OCR a scanned
+    notice/PDF page → text). `AnthropicClient`/`AnthropicVisionClient` (httpx, no SDK) are the hosted
+    backends; `llm_provider()`/`vision_provider()` resolve the backend from config (`osiris_extract_
+    provider` + key) — a hosted API for the managed broker, or a local model for a self-hoster with a
+    GPU, SAME code. `document_to_text(content, media_type, vision=)` normalizes a fetched doc: text
+    passes through, an `image/*`/pdf scan is OCR'd via the vision seam. Refactored `extract.py` to own
+    the seams from providers (re-export for back-compat) + default `extract_document(llm=None)` to
+    `llm_provider()` (the deployment wires the model by KEY, not by passing a client; raises clearly if
+    unconfigured). Wired into `compose.watch_extract_tick`: `DocRef.media_type` + `DocFetch -> bytes|str`
+    → a scanned source flows OCR→extract end-to-end. Tests: `test_providers.py` (5) factory resolution +
+    document_to_text routing incl. the OCR path; `test_compose` scanned-doc OCR end-to-end (fake vision);
+    extract requires-a-provider. Live model calls deferred (need ANTHROPIC_API_KEY) — the seam is proven.
+  - DEPLOYMENT MAP discussed (broker = you-host 24/7 managed, single-tenant; journalist = self-host;
+    same engine, different switches). NEXT toward live-for-broker: the county SATELLITE (the real Harris
+    scrape — the gate, vantage-bound); a delivery SINK (email/SMS); alert DEDUP/THROTTLE; worker
+    dead-man's-switch; backups. See [[osiris-roadmap-deployment]].
