@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
 from src.actions.core import Actions
 from src.orchestrator.compositions import (
     DEFAULT_COMPOSITIONS,
@@ -71,6 +72,67 @@ async def test_traverse_then_collect(actions: Actions) -> None:
             "from": {"op": "traverse", "from": {"op": "subject"}, "hops": 2}}
     res = await run_composition(actions.pool, await _save(actions, "geo", spec), co)
     assert set(res["items"]) == {"United States", "United Arab Emirates"}
+
+
+# --- P1 ops: union / intersect / aggregate / order / take -------------------
+
+async def test_intersect_neighbourhood_with_type(actions: Actions) -> None:
+    """'Organizations within 2 hops of the subject' = intersect(neighbourhood, orgs).
+    The trial (a ClinicalTrial) and the subject itself fall out — set algebra, no join."""
+    co = await _scenario(actions)
+    spec = {"op": "intersect", "sets": [
+        {"op": "traverse", "from": {"op": "subject"}, "hops": 2},
+        {"op": "select", "object_type": "Organization"}]}
+    res = await run_composition(actions.pool, await _save(actions, "orgs-near", spec), co)
+    assert res["kind"] == "objects" and res["count"] == 2  # uae + us
+
+
+async def test_union_dedups(actions: Actions) -> None:
+    await _scenario(actions)
+    spec = {"op": "union", "sets": [
+        {"op": "select", "object_type": "Organization"},
+        {"op": "select", "object_type": "ClinicalTrial"}]}
+    res = await run_composition(actions.pool, await _save(actions, "everything", spec))
+    assert res["count"] == 4  # 3 orgs + 1 trial, no double-count
+
+
+async def _filings(actions: Actions) -> None:
+    for cik, sector, amt in [("10", "ai", "100"), ("11", "ai", "300"), ("12", "bio", "50")]:
+        o = await actions.create_or_find_object("Organization", f"cik:{cik}", "edgar")
+        await actions.assert_property(o, "sector", sector, "edgar", NOW, 0.85)
+        await actions.assert_property(o, "amount", amt, "edgar", NOW, 0.85)
+
+
+async def test_aggregate_order_take(actions: Actions) -> None:
+    """count per sector → order desc → take top 1: 'ai' wins with 2 (Palantir groupBy)."""
+    await _filings(actions)
+    spec = {"op": "take", "n": 1, "from": {
+        "op": "order", "dir": "desc", "from": {
+            "op": "aggregate", "group_by": ["sector"], "metric": {"type": "count"},
+            "from": {"op": "select", "object_type": "Organization"}}}}
+    res = await run_composition(actions.pool, await _save(actions, "top-sector", spec))
+    assert res["kind"] == "rows" and res["count"] == 1
+    assert res["items"][0]["group"]["sector"] == "ai"
+    assert res["items"][0]["metric"] == 2
+
+
+async def test_aggregate_sum_over_field(actions: Actions) -> None:
+    await _filings(actions)
+    spec = {"op": "aggregate", "group_by": ["sector"],
+            "metric": {"type": "sum", "field": "amount"},
+            "from": {"op": "select", "object_type": "Organization"}}
+    res = await run_composition(actions.pool, await _save(actions, "sum-amt", spec))
+    by = {r["group"]["sector"]: r["metric"] for r in res["items"]}
+    assert by["ai"] == 400.0 and by["bio"] == 50.0
+
+
+async def test_aggregate_dimension_cap(actions: Actions) -> None:
+    """Palantir's ≤3-dimension cap is enforced — a 4-dim aggregate is rejected."""
+    await _filings(actions)
+    spec = {"op": "aggregate", "group_by": ["a", "b", "c", "d"], "metric": {"type": "count"},
+            "from": {"op": "select", "object_type": "Organization"}}
+    with pytest.raises(ValueError, match="dimension"):
+        await run_composition(actions.pool, await _save(actions, "too-wide", spec))
 
 
 # --- persistence / forkability ----------------------------------------------

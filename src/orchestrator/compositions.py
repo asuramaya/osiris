@@ -7,16 +7,29 @@ into ONE first-class object, so opinion lives in the composition the USER owns �
 welded into engine code. Claude authors them from a sentence (the MCP tools); the
 substrate runs them; the views render them.
 
+The op set is small and CLOSED — grounded in Palantir's Object Set API + Notion's
+rollups, which independently land on the same vocabulary (see docs/COMPOSER.md). Anything
+the ops can't express is a Function (a named transform), never a new op.
+
 Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
   {"op":"subject"}                                 -> the object you're looking at
-  {"op":"select","object_type":?,"where":[...]}    -> objects matching conditions
-  {"op":"traverse","from":N,"direction":,"hops":}  -> objects N hops away (neighbourhood)
+  {"op":"select","object_type":?,"where":[...]}    -> objects matching conditions (.filter)
+  {"op":"traverse","from":N,"direction":,"hops":}  -> objects N hops away (.searchAround)
   {"op":"collect","from":N,"properties":[],"transform":?} -> the values of those props
-  {"op":"subtract","left":N,"right":N}             -> values in left not in right
+  {"op":"subtract","left":N,"right":N}             -> values in left not in right (.subtract)
+  {"op":"union","sets":[N,...]}                     -> combine sets (.union)
+  {"op":"intersect","sets":[N,...]}                 -> objects/values in ALL sets (.intersect)
+  {"op":"aggregate","from":N,"group_by":[],"metric":{...}} -> group + a metric (.groupBy / rollup)
+  {"op":"order","from":N,"by":?,"dir":}            -> rank a set/rows (.orderBy)
+  {"op":"take","from":N,"n":K}                      -> top-N (.take)
 
 The old `discrepancy` read-model is just one composition (opinion left the engine):
   subtract( collect(location, country) over traverse(subject, 2 hops),
             collect(home-props, country) over subject )
+
+There is deliberately NO generic `join` — relating two sets is `intersect` (set algebra)
+or `traverse` (a link), and fuzzy matching (screening) is a Function. Caps (Palantir's,
+load-tested): `traverse` ≤ 3 hops, `aggregate` ≤ 3 group_by dimensions.
 """
 
 from __future__ import annotations
@@ -40,17 +53,37 @@ _TRANSFORMS: dict[str, Any] = {
 }
 
 
+# Guardrails adopted from Palantir's Object Set API (load-tested, not arbitrary).
+MAX_TRAVERSE_HOPS = 3
+MAX_AGGREGATE_DIMS = 3
+
+
 @dataclass
 class Result:
-    """A composition's output — either an object set or a value list."""
+    """A composition's output — an object set, a value list, or aggregate rows."""
 
-    kind: str  # "objects" | "values"
+    kind: str  # "objects" | "values" | "rows"
     objects: list[uuid.UUID] = field(default_factory=list)
     values: list[str] = field(default_factory=list)
+    rows: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _coerce(v: Any) -> Any:
     return json.loads(v) if isinstance(v, str) else v
+
+
+def _num(v: Any) -> float | None:
+    """Best-effort numeric coercion for ordering/aggregation; None if not a number."""
+    if isinstance(v, bool):  # bool is an int subclass — exclude it
+        return None
+    if isinstance(v, int | float):
+        return float(v)
+    if isinstance(v, str):
+        try:
+            return float(v.replace(",", "").strip())
+        except ValueError:
+            return None
+    return None
 
 
 async def _props(pool: asyncpg.Pool, oid: uuid.UUID) -> dict[str, str]:
@@ -62,14 +95,24 @@ async def _props(pool: asyncpg.Pool, oid: uuid.UUID) -> dict[str, str]:
     return {r["name"]: r["v"] for r in rows}
 
 
-def _distinct(values: list[str]) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
+def _distinct[T](values: list[T]) -> list[T]:
+    seen: set[T] = set()
+    out: list[T] = []
     for v in values:
         if v not in seen:
             seen.add(v)
             out.append(v)
     return out
+
+
+def _setop[T](op: str, lists: list[list[T]]) -> list[T]:
+    """union (concat+dedup) or intersect, preserving the first set's order."""
+    if not lists:
+        return []
+    if op == "intersect":
+        common = set(lists[0]).intersection(*(set(x) for x in lists[1:]))
+        return [x for x in _distinct(lists[0]) if x in common]
+    return _distinct([x for lst in lists for x in lst])
 
 
 async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | None) -> Result:
@@ -96,7 +139,7 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         base = await _eval(pool, node["from"], subject)
         seeds = base.objects
         direction = node.get("direction", "both")
-        hops = int(node.get("hops", 1))
+        hops = min(int(node.get("hops", 1)), MAX_TRAVERSE_HOPS)
         ltype = node.get("link_type")
         seen, frontier = set(seeds), set(seeds)
         for _ in range(hops):
@@ -140,7 +183,103 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         rset = set(right.values)
         return Result("values", values=[v for v in left.values if v not in rset])
 
+    if op in ("union", "intersect"):
+        sets = [await _eval(pool, s, subject) for s in node.get("sets", [])]
+        if not sets:
+            return Result("objects")
+        kind = sets[0].kind
+        if any(s.kind != kind for s in sets) or kind == "rows":
+            raise ValueError(f"{op} requires same-kind object/value sets")
+        if kind == "objects":
+            return Result("objects", objects=_setop(op, [s.objects for s in sets]))
+        return Result("values", values=_setop(op, [s.values for s in sets]))
+
+    if op == "aggregate":
+        base = await _eval(pool, node["from"], subject)
+        group_by = node.get("group_by", []) or []
+        if len(group_by) > MAX_AGGREGATE_DIMS:
+            raise ValueError(f"aggregate supports ≤{MAX_AGGREGATE_DIMS} group_by dimensions")
+        metric = node.get("metric", {"type": "count"}) or {"type": "count"}
+        return Result("rows", rows=await _aggregate(pool, base.objects, group_by, metric))
+
+    if op == "order":
+        base = await _eval(pool, node["from"], subject)
+        return await _order(pool, base, node.get("by"), node.get("dir", "asc"))
+
+    if op == "take":
+        base = await _eval(pool, node["from"], subject)
+        n = max(0, int(node.get("n", 0)))
+        return Result(base.kind, objects=base.objects[:n], values=base.values[:n],
+                      rows=base.rows[:n])
+
     raise ValueError(f"unknown composition op: {op!r}")
+
+
+async def _aggregate(
+    pool: asyncpg.Pool, objects: list[uuid.UUID], group_by: list[str], metric: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Group objects by property values, compute one metric per group (Palantir groupBy /
+    Notion rollup). group_by=[] aggregates the whole set into a single row."""
+    mtype = metric.get("type", "count")
+    field_name = metric.get("field")
+    groups: dict[tuple[str | None, ...], list[dict[str, str]]] = {}
+    for oid in objects:
+        facts = await _props(pool, oid)
+        key = tuple(facts.get(g) for g in group_by)
+        groups.setdefault(key, []).append(facts)
+    rows: list[dict[str, Any]] = []
+    for key, members in groups.items():
+        group = {g: k for g, k in zip(group_by, key, strict=True)}
+        if mtype == "count":
+            value: float | int = len(members)
+        else:
+            raw = [m.get(field_name) for m in members] if field_name else []
+            if mtype == "cardinality":
+                value = len({v for v in raw if v is not None})
+            else:
+                nums = [n for n in (_num(v) for v in raw) if n is not None]
+                value = _metric_over(mtype, nums)
+        rows.append({"group": group, "metric": value})
+    return rows
+
+
+def _metric_over(mtype: str, nums: list[float]) -> float:
+    if not nums:
+        return 0.0
+    if mtype == "sum":
+        return sum(nums)
+    if mtype == "avg":
+        return sum(nums) / len(nums)
+    if mtype == "min":
+        return min(nums)
+    if mtype == "max":
+        return max(nums)
+    raise ValueError(f"unknown aggregate metric: {mtype!r}")
+
+
+async def _order(
+    pool: asyncpg.Pool, base: Result, by: str | None, direction: str
+) -> Result:
+    rev = direction == "desc"
+    if base.kind == "rows":
+        def rkey(r: dict[str, Any]) -> tuple[float, str]:
+            v = r["metric"] if by in (None, "metric") else r.get("group", {}).get(by)
+            n = _num(v)
+            return (n if n is not None else 0.0, str(v))
+        return Result("rows", rows=sorted(base.rows, key=rkey, reverse=rev))
+    if base.kind == "values":
+        def vkey(v: str) -> tuple[float, str]:
+            n = _num(v)
+            return (n if n is not None else float("inf"), v)
+        return Result("values", values=sorted(base.values, key=vkey, reverse=rev))
+    # objects — order by a property (numeric if possible, else lexical)
+    keyed: list[tuple[float, str, uuid.UUID]] = []
+    for oid in base.objects:
+        raw = (await _props(pool, oid)).get(by) if by else None
+        n = _num(raw)
+        keyed.append((n if n is not None else float("inf"), str(raw or ""), oid))
+    keyed.sort(key=lambda t: (t[0], t[1]), reverse=rev)
+    return Result("objects", objects=[t[2] for t in keyed])
 
 
 # --- persistence + run ------------------------------------------------------
@@ -191,10 +330,12 @@ async def run_composition(
     if spec is None:
         return {"error": f"no composition {ref!r}"}
     res = await _eval(pool, spec, subject)
-    items: list[Any] = (
-        [await _label(pool, oid) for oid in res.objects]
-        if res.kind == "objects" else res.values
-    )
+    if res.kind == "objects":
+        items: list[Any] = [await _label(pool, oid) for oid in res.objects]
+    elif res.kind == "rows":
+        items = res.rows
+    else:
+        items = res.values
     return {"composition": ref, "kind": res.kind, "count": len(items), "items": items}
 
 

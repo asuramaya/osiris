@@ -263,13 +263,21 @@ async def save_composition(
 ) -> dict[str, str]:
     """Save a COMPOSITION — a reusable, forkable query/lens over the graph (the
     composer's primitive). This is how a question becomes a first-class object instead
-    of throwaway tool calls. The spec is a small op-tree:
+    of throwaway tool calls. The spec is a small CLOSED op-tree (anything else is a named
+    transform, never a new op):
       {"op":"subject"}                                  the object in focus
       {"op":"select","object_type":?,"where":[{property,op,value}]}  matching objects
-      {"op":"traverse","from":<node>,"direction":"both|out|in","hops":N}  neighbourhood
+      {"op":"traverse","from":<node>,"direction":"both|out|in","hops":N}  neighbourhood (≤3)
       {"op":"collect","from":<node>,"properties":[..],"transform":"country|lower"}  values
-      {"op":"subtract","left":<node>,"right":<node>}    set difference
-    Example (operational vs disclosed geography — what `discrepancy` used to hardcode):
+      {"op":"subtract","left":<node>,"right":<node>}    set/value difference
+      {"op":"union","sets":[<node>,..]}                 combine sets
+      {"op":"intersect","sets":[<node>,..]}             objects/values in ALL sets
+      {"op":"aggregate","from":<node>,"group_by":["prop",..],   group + a metric (≤3 dims)
+       "metric":{"type":"count|sum|avg|min|max|cardinality","field":"prop"}}  -> rows
+      {"op":"order","from":<node>,"by":"metric|prop","dir":"asc|desc"}  rank
+      {"op":"take","from":<node>,"n":N}                 top-N
+    There is no `join` — relate sets via `intersect` or `traverse`, and fuzzy matching is a
+    Function. Example (operational vs disclosed geography — what `discrepancy` hardcoded):
       {"op":"subtract",
        "left":{"op":"collect","transform":"country","properties":["location"],
                "from":{"op":"traverse","from":{"op":"subject"},"hops":2}},
@@ -284,7 +292,7 @@ async def save_composition(
 @mcp.tool()
 async def run_composition(name: str, subject: str | None = None) -> dict[str, Any]:
     """Run a saved composition, optionally against a subject object (UUID or name).
-    Returns its result — an object set (each named) or a value list."""
+    Returns its result — an object set (each named), a value list, or aggregate rows."""
     pool = await _pool_get()
     sid = await _resolve(pool, subject) if subject else None
     return await comp.run_composition(pool, name, sid)
