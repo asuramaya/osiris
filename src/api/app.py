@@ -50,7 +50,12 @@ from src.ontology.resolution import (
 )
 from src.ontology.schema import catalog as ontology_catalog
 from src.orchestrator.cobrowse import cobrowse_open
-from src.orchestrator.compositions import save_watch
+from src.orchestrator.compositions import (
+    list_compositions,
+    run_composition,
+    save_composition,
+    save_watch,
+)
 from src.orchestrator.dossier import entity_dossier
 from src.orchestrator.federation import federated_query, promote, to_preview
 from src.orchestrator.frontier import subject_report
@@ -547,6 +552,35 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             selected=body.selected,
         )
 
+    # --- compositions: the composer's primitive (lenses + watches as one) ----
+    @app.get("/compositions")
+    async def list_compositions_route(
+        p: asyncpg.Pool = Depends(get_pool)
+    ) -> list[dict[str, Any]]:
+        """Every saved composition (lens + watch) — the user's questions, as objects."""
+        return await list_compositions(p)
+
+    @app.post("/compositions")
+    async def save_composition_route(
+        body: CompositionBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        """Save (or fork) a composition — a named op-tree the substrate runs. Authoring is
+        usually Claude-over-MCP; this is the human save/fork channel."""
+        cid = await save_composition(p, body.name, body.spec, body.kind)
+        return {"id": str(cid), "name": body.name}
+
+    @app.post("/compositions/{name}/run")
+    async def run_composition_route(
+        name: str, body: RunCompositionBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        """Run a saved composition (the LENS execution), optionally against a subject.
+        Returns its Result — objects / values / rows / data — for the generic renderer."""
+        subject = uuid.UUID(body.subject) if body.subject else None
+        try:
+            return await run_composition(p, name, subject)
+        except ValueError as exc:  # e.g. a Function that needs a subject, or a bad op
+            return {"error": str(exc)}
+
     @app.post("/subscriptions")
     async def create_subscription_route(
         body: SubscriptionBody, p: asyncpg.Pool = Depends(get_pool)
@@ -804,6 +838,16 @@ class SubscriptionBody(BaseModel):
     name: str
     criteria: dict[str, Any]
     webhook_url: str | None = None
+
+
+class CompositionBody(BaseModel):
+    name: str
+    spec: dict[str, Any]
+    kind: str = "lens"
+
+
+class RunCompositionBody(BaseModel):
+    subject: str | None = None
 
 
 class FederateBody(BaseModel):

@@ -3,24 +3,17 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Osiris · Analysis</title>
+<title>Osiris · Composer</title>
+<link rel="stylesheet" href="/ui/osiris.css" />
 <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
 <script src="https://unpkg.com/layout-base/layout-base.js"></script>
 <script src="https://unpkg.com/cose-base/cose-base.js"></script>
 <script src="https://unpkg.com/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
 <style>
-  :root{
-    --bg:#0b0e13; --panel:#11161d; --panel2:#161c25; --border:#222b36; --border2:#2c3744;
-    --text:#e6edf3; --muted:#7d8896; --faint:#566069; --accent:#3fb950; --blue:#4493f8;
-    --chip:#1b222c;
-  }
-  *{box-sizing:border-box}
   html,body{height:100%;margin:0}
-  body{background:var(--bg);color:var(--text);
-    font:13px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;overflow:hidden}
-  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-  a{color:var(--blue);text-decoration:none}
-  button,select,input{font:inherit;color:var(--text)}
+  body{background:var(--bg);color:var(--text);overflow:hidden;
+    font:13px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  button,select,input,textarea{font:inherit;color:var(--text)}
   #app{display:grid;grid-template-rows:46px 1fr;height:100vh}
 
   /* top bar */
@@ -28,124 +21,125 @@
     border-bottom:1px solid var(--border)}
   #bar .brand{font-weight:650;letter-spacing:.2px}
   #bar .brand b{color:var(--accent)}
-  select,.field{background:var(--bg);border:1px solid var(--border2);border-radius:7px;
-    padding:6px 9px;font-size:12.5px}
+  select,.field{background:var(--bg);border:1px solid var(--border2);border-radius:7px;padding:6px 9px;font-size:12.5px}
   #search{width:340px}
-  .iconbtn{background:var(--chip);border:1px solid var(--border2);border-radius:7px;
-    padding:6px 10px;font-size:12px;cursor:pointer;color:var(--text)}
+  .iconbtn{background:var(--chip);border:1px solid var(--border2);border-radius:7px;padding:6px 10px;
+    font-size:12px;cursor:pointer;color:var(--text)}
   .iconbtn:hover{border-color:var(--blue)}
   .spacer{flex:1}
-  .badge{background:#3a1212;color:#ff7b72;border:1px solid #5a1d1d;border-radius:999px;
-    padding:1px 7px;font-size:11px;font-weight:600}
 
   /* layout */
-  #main{display:grid;grid-template-columns:264px 1fr 350px;height:100%;min-height:0}
+  #main{display:grid;grid-template-columns:274px 1fr 350px;height:100%;min-height:0}
   .rail{background:var(--panel);overflow-y:auto;min-height:0}
   #left{border-right:1px solid var(--border)}
   #right{border-left:1px solid var(--border)}
-  .railhead{display:flex;align-items:center;gap:8px;padding:11px 14px 7px;
-    font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);font-weight:600}
+  .railhead{display:flex;align-items:center;gap:8px;padding:11px 14px 7px;font-size:10.5px;
+    letter-spacing:.7px;text-transform:uppercase;color:var(--faint);font-weight:600}
   .railhead .n{margin-left:auto;color:var(--muted);font-weight:500}
+  .railhead .add{margin-left:auto;cursor:pointer;color:var(--muted);font-size:14px;line-height:1}
+  .railhead .add:hover{color:var(--accent)}
   .pad{padding:0 14px 14px}
+  .filter{width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:7px;padding:6px 9px;
+    font-size:12px;margin:0 0 8px}
 
-  /* object set list */
-  .filter{width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:7px;
-    padding:6px 9px;font-size:12px;margin:0 0 8px}
-  .item{display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:6px;cursor:pointer;
+  /* composition list */
+  .comp{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:7px;cursor:pointer;
     border:1px solid transparent}
+  .comp:hover{background:var(--panel2)} .comp.sel{background:var(--panel2);border-color:var(--border2)}
+  .comp .cn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:550}
+  .kindb{font-size:9px;letter-spacing:.5px;text-transform:uppercase;border-radius:999px;padding:1px 6px;font-weight:700}
+  .kindb.lens{color:var(--blue);background:#15263b;border:1px solid #1f3a5a}
+  .kindb.watch{color:var(--accent);background:#10261a;border:1px solid #1d4a2e}
+
+  /* object set */
+  .item{display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:6px;cursor:pointer;border:1px solid transparent}
   .item:hover{background:var(--panel2)} .item.sel{background:var(--panel2);border-color:var(--border2)}
   .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
   .item .lab{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .item .ty{font-size:10px;color:var(--faint)}
-  .muted{color:var(--muted)} .faint{color:var(--faint)}
-  .empty{color:var(--faint);font-size:12px;padding:16px 0;text-align:center}
 
-  /* center board */
+  /* center: board OR result panel */
   #center{display:grid;grid-template-rows:40px 1fr 24px;min-height:0;min-width:0}
-  #tools{display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--panel2);
-    border-bottom:1px solid var(--border)}
-  #tools .title{font-weight:600}
-  #cy{background:
-    radial-gradient(circle at 1px 1px, #161c25 1px, transparent 0) 0 0/22px 22px,var(--bg);
-    min-height:0}
+  #tools{display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--panel2);border-bottom:1px solid var(--border)}
+  #tools .title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40%}
+  #stage{position:relative;min-height:0}
+  #cy{position:absolute;inset:0;background:
+    radial-gradient(circle at 1px 1px,#161c25 1px,transparent 0) 0 0/22px 22px,var(--bg)}
+  #result{position:absolute;inset:0;overflow:auto;padding:18px 22px;background:var(--bg);display:none}
+  #stage.panel #cy{display:none} #stage.panel #result{display:block}
   #statusbar{display:flex;align-items:center;gap:10px;padding:0 12px;background:var(--panel);
     border-top:1px solid var(--border);color:var(--faint);font-size:11px}
   .live{color:var(--accent)}
 
   /* inspector */
   .insp-empty{padding:40px 16px;color:var(--faint);font-size:12px;text-align:center}
-  .insp-top{padding:14px 16px 10px;border-bottom:1px solid var(--border)}
-  .type{font-size:10px;letter-spacing:.5px;text-transform:uppercase;border-radius:999px;
-    padding:2px 8px;font-weight:700}
-  .insp-title{font-size:16px;font-weight:650;margin:8px 0 2px}
-  .insp-canon{font-size:11px;color:var(--faint)}
-  .acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:11px}
-  .act{background:var(--chip);border:1px solid var(--border2);border-radius:7px;padding:6px 10px;
-    font-size:12px;cursor:pointer}
-  .act:hover{border-color:var(--blue)} .act.go{background:var(--accent);color:#06210f;border:0;font-weight:650}
-  .sect{padding:12px 16px;border-bottom:1px solid var(--border)}
-  .sect h3{font-size:10.5px;letter-spacing:.6px;text-transform:uppercase;color:var(--faint);
-    margin:0 0 9px;font-weight:600}
-  .pv{display:grid;grid-template-columns:96px 1fr;gap:3px 10px;font-size:12.5px}
-  .pv .k{color:var(--muted);text-transform:capitalize}
-  .pv .v{word-break:break-word}
-  .pvs{color:var(--faint);font-size:10.5px;grid-column:2;margin:-1px 0 5px}
-  .rel{display:flex;align-items:center;gap:7px;padding:5px 0}
-  .reltype{color:var(--muted);font-size:10.5px;background:var(--chip);border:1px solid var(--border2);
-    border-radius:5px;padding:0 6px}
-  .demo{font-size:10px;color:#d2a8ff;background:#3a1d40;border:1px solid #57306b;border-radius:999px;
-    padding:1px 7px;font-weight:700}
 
-  /* popover (type key, add) */
-  .pop{position:absolute;z-index:30;background:var(--panel);border:1px solid var(--border2);
-    border-radius:9px;padding:12px;box-shadow:0 12px 40px #000a;font-size:12px;min-width:200px}
+  /* popovers */
+  .pop{position:absolute;z-index:30;background:var(--panel);border:1px solid var(--border2);border-radius:9px;
+    padding:12px;box-shadow:0 12px 40px #000a;font-size:12px;min-width:200px}
   .keyrow{display:flex;align-items:center;gap:8px;padding:2px 0}
+  .tabs{display:flex;gap:6px;margin-bottom:10px}
+  .tab{padding:4px 10px;border-radius:6px;background:var(--chip);border:1px solid var(--border2);cursor:pointer}
+  .tab.on{border-color:var(--blue);color:var(--blue)}
+  .cond{display:grid;grid-template-columns:1fr 58px 1fr;gap:5px;margin-top:5px}
+  .cond select{width:58px;padding:5px}
+  label{display:block;font-size:11px;color:var(--muted);margin:8px 0 3px}
+  textarea{width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:7px;
+    padding:7px 9px;font:11.5px/1.45 ui-monospace,Menlo,monospace;min-height:120px;resize:vertical}
+  .badge{background:#3a1212;color:#ff7b72;border:1px solid #5a1d1d;border-radius:999px;padding:1px 7px;
+    font-size:11px;font-weight:600}
 </style>
 </head>
 <body>
 <div id="app">
   <div id="bar">
-    <span class="brand">◭ <b>Osiris</b></span>
+    <span class="brand">◭ <b>Osiris</b> <span class="o-faint" style="font-weight:400">composer</span></span>
     <select id="analysis" onchange="openAnalysis(this.value)" title="Analysis"></select>
     <button class="iconbtn" onclick="newAnalysis()" title="New analysis">＋</button>
     <input id="search" class="field" placeholder="Search the ontology — name or identifier…"
            oninput="debouncedSearch()" onfocus="debouncedSearch()" autocomplete="off" />
     <span class="spacer"></span>
     <button class="iconbtn" onclick="toggleKey(event)">Type key</button>
-    <button class="iconbtn" onclick="openReview()">Review <span id="reviewN" class="muted">0</span></button>
-    <a class="iconbtn" href="/ui/watch.html">Watch ▸</a>
+    <button class="iconbtn" onclick="openReview()">Review <span id="reviewN" class="o-muted">0</span></button>
   </div>
 
   <div id="main">
-    <!-- LEFT: object set -->
+    <!-- LEFT: compositions (the questions) + the object set -->
     <aside id="left" class="rail">
+      <div class="railhead">Compositions <span class="add" title="New composition" onclick="openCompose(event)">＋</span></div>
+      <div class="pad"><div id="comps"></div></div>
+
       <div class="railhead">Object set <span class="n" id="setn">0</span></div>
       <div class="pad">
         <input id="filter" class="filter" placeholder="Filter the set…" oninput="renderSet()" />
         <div id="set"></div>
       </div>
+
       <div class="railhead">Add to analysis</div>
       <div class="pad">
         <input id="seed" class="filter" placeholder="paste an identifier or name…" />
         <button class="iconbtn" style="width:100%" onclick="addSeed()">Add &amp; classify</button>
-        <div id="seedmsg" class="faint" style="margin-top:6px;font-size:11px"></div>
+        <div id="seedmsg" class="o-faint" style="margin-top:6px;font-size:11px"></div>
       </div>
     </aside>
 
-    <!-- CENTER: the board -->
+    <!-- CENTER: the render target (board for objects; panel for values/rows/data) -->
     <section id="center">
       <div id="tools">
         <span class="title" id="boardtitle">Board</span>
         <button class="iconbtn" id="aroundBtn" onclick="searchAround()" disabled>Search around</button>
         <button class="iconbtn" onclick="expandSet()" title="Run collectors to grow the set">Expand ▸</button>
         <span class="spacer"></span>
-        <button class="iconbtn" onclick="cyFit()">Fit</button>
-        <button class="iconbtn" onclick="relayout()">Re-layout</button>
-        <button class="iconbtn" onclick="clearBoard()">Clear</button>
+        <button class="iconbtn" onclick="board.fit()">Fit</button>
+        <button class="iconbtn" onclick="board.layout(false)">Re-layout</button>
+        <button class="iconbtn" onclick="showBoard();board.clear()">Clear</button>
       </div>
-      <div id="cy"></div>
+      <div id="stage">
+        <div id="cy"></div>
+        <div id="result"></div>
+      </div>
       <div id="statusbar">
-        <span id="status">Select an object to place it on the board.</span>
+        <span id="status">Run a composition, or place an object on the board.</span>
         <span class="spacer"></span><span id="live" class="live"></span>
       </div>
     </section>
@@ -154,71 +148,43 @@
     <aside id="right" class="rail">
       <div class="insp-empty" id="insp">Select an object to inspect it.<br><br>
         Click anything — an object in the set, a node on the board, a related entity — and it
-        opens here, with every fact and where it came from.</div>
+        opens here with every fact and where it came from.</div>
     </aside>
   </div>
 </div>
 
+<script src="/ui/osiris.js"></script>
 <script>
-const $ = id => document.getElementById(id);
-const esc = s => (s==null?"":String(s)).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
-const HOW = {authoritative_api:"authoritative",self_declared:"self-declared",
-  direct_observation:"observed",co_occurrence:"co-occurrence",derived:"inferred",
-  corroborated:"corroborated"};
+const { $, esc, ty, objectDetail, loadRels, makeBoard, renderResult } = Osiris;
+let ANALYSIS=null, SET=[], FOCUS=null, STREAM=null, COMPS=[], ACTIVE=null;
 
-// The type catalog is the SEMANTIC LAYER — fetched from /schema (ontology/schema.py),
-// never hardcoded here. The UI is an application over the ontology; it reads, never defines.
-let TYPE = {};
-const DEF = {c:'#6e7681',s:'ellipse',category:'Other',description:'An ontology object.'};
-const ty = t => TYPE[t]||DEF;
-async function loadSchema(){
-  const cat = await fetch('/schema').then(r=>r.json());
-  TYPE = Object.fromEntries(cat.object_types.map(t=>[t.name,
-    {c:t.color,s:t.shape,category:t.category,description:t.description}]));
-}
-
-let ANALYSIS=null, SET=[], FOCUS=null, STREAM=null;
-
-// ---- cytoscape board -------------------------------------------------------
-if (window.cytoscapeFcose) cytoscape.use(window.cytoscapeFcose);
-const HAS_FCOSE = !!window.cytoscapeFcose;
-const cy = cytoscape({ container:$('cy'), wheelSensitivity:.2, minZoom:.15, maxZoom:3,
-  style:[
-    {selector:'node',style:{'background-color':e=>ty(e.data('type')).c,'shape':e=>ty(e.data('type')).s,
-      'width':30,'height':30,'border-width':0,'label':'data(label)','color':'#cdd6df','font-size':10.5,
-      'text-valign':'bottom','text-margin-y':4,'text-wrap':'wrap','text-max-width':110,
-      'text-background-color':'#0b0e13','text-background-opacity':.7,'text-background-padding':3,
-      'text-background-shape':'roundrectangle','min-zoomed-font-size':7}},
-    {selector:'node.focus',style:{'border-width':3,'border-color':'#4493f8'}},
-    {selector:'edge',style:{'width':1.2,'line-color':'#2c3744','target-arrow-color':'#2c3744',
-      'target-arrow-shape':'triangle','curve-style':'bezier','arrow-scale':.85,'label':'data(type)',
-      'font-size':8.5,'color':'#7d8896','text-background-color':'#0b0e13','text-background-opacity':.85,
-      'text-background-padding':2,'text-rotation':'autorotate','min-zoomed-font-size':7}},
-  ]});
-cy.on('tap','node',e=>focus(e.target.id()));
-cy.on('dbltap','node',e=>searchAround(e.target.id()));
-
-function layout(preserve){
-  const o = HAS_FCOSE
-    ? {name:'fcose',animate:true,animationDuration:300,randomize:!preserve,quality:'proof',
-       nodeSeparation:120,idealEdgeLength:115,nodeRepulsion:9000,padding:45,packComponents:true}
-    : {name:'cose',animate:false,padding:45,nodeRepulsion:12000,idealEdgeLength:120};
-  cy.layout(o).run();
-}
-function mergeGraph(g){
-  let added=0;
-  g.nodes.forEach(n=>{ if(!cy.getElementById(n.id).length){
-    cy.add({group:'nodes',data:{id:n.id,type:n.type,label:n.label}}); added++; }});
-  g.edges.forEach(e=>{ const id=`${e.source}-${e.type}-${e.target}`;
-    if(!cy.getElementById(id).length && cy.getElementById(e.source).length && cy.getElementById(e.target).length)
-      cy.add({group:'edges',data:{id,source:e.source,target:e.target,type:e.type}}); });
-  return added;
-}
-function cyFit(){ cy.animate({fit:{padding:50},duration:250}); }
-function relayout(){ layout(false); }
-function clearBoard(){ cy.elements().remove(); FOCUS=null; $('aroundBtn').disabled=true;
-  setStatus('Board cleared.'); }
+const board = makeBoard($('cy'), (id)=>focus(id));
 function setStatus(s){ $('status').textContent=s; }
+function showBoard(){ $('stage').classList.remove('panel'); }
+function showPanel(){ $('stage').classList.add('panel'); }
+
+// ---- compositions (lenses + watches — one primitive) -----------------------
+async function loadComps(){
+  COMPS = await fetch('/compositions').then(r=>r.json());
+  $('comps').innerHTML = COMPS.length ? COMPS.map(c=>`
+    <div class="comp${ACTIVE===c.name?' sel':''}" onclick="runComp('${esc(c.name)}')" title="${esc(JSON.stringify(c.spec))}">
+      <span class="cn">${esc(c.name)}</span>
+      <span class="kindb ${c.kind==='watch'?'watch':'lens'}">${c.kind}</span>
+    </div>`).join('') : '<div class="o-empty">No compositions yet. ＋ to author one.</div>';
+}
+async function runComp(name){
+  ACTIVE=name; loadComps();
+  setStatus(`Running ${name}…`);
+  const res = await fetch(`/compositions/${encodeURIComponent(name)}/run`,{method:'POST',
+    headers:{'content-type':'application/json'},body:JSON.stringify({subject:FOCUS})}).then(r=>r.json());
+  if(res.error){ showPanel(); $('result').innerHTML=`<div class="o-empty">${esc(res.error)}<br><br>
+    Tip: focus a subject object first, then run.</div>`; $('boardtitle').textContent=name; return; }
+  const mode = await renderResult(res, {board, panel:$('result')});
+  if(mode==='graph'){ showBoard(); board.layout(true); }
+  else showPanel();
+  $('boardtitle').textContent = `${name} · ${res.kind} · ${res.count}`;
+  setStatus(`${name} → ${res.count} ${res.kind}.`);
+}
 
 // ---- analyses (cases) ------------------------------------------------------
 async function loadAnalyses(){
@@ -234,7 +200,7 @@ async function newAnalysis(){
   await loadAnalyses(); $('analysis').value=r.id; openAnalysis(r.id);
 }
 async function openAnalysis(id){
-  ANALYSIS=id; clearBoard();
+  ANALYSIS=id; board.clear(); showBoard();
   SET = await fetch(`/objects?case_id=${id}&limit=400`).then(r=>r.json());
   $('setn').textContent = SET.length; renderSet();
   refreshReview(); watch();
@@ -248,68 +214,37 @@ function renderSet(){
     <div class="item${FOCUS===o.id?' sel':''}" onclick="focus('${o.id}')" title="${esc(o.canonical)}">
       <span class="dot" style="background:${ty(o.type).c}"></span>
       <span class="lab">${esc(o.name||o.canonical)}</span><span class="ty">${o.type}</span>
-    </div>`).join('') || '<div class="empty">No objects match.</div>';
+    </div>`).join('') || '<div class="o-empty">No objects match.</div>';
 }
 
-// ---- focus / inspect / search-around --------------------------------------
+// ---- focus / inspect / search-around (the one noun) ------------------------
 async function focus(id){
   FOCUS=id; $('aroundBtn').disabled=false; renderSet();
-  if(!cy.getElementById(id).length) await searchAround(id, true);
-  cy.nodes().removeClass('focus'); cy.getElementById(id).addClass('focus');
+  showBoard();
+  if(!board.cy.getElementById(id).length) await searchAround(id, true);
+  board.focusNode(id);
   inspect(id);
 }
 async function searchAround(id, quiet){
   id = id || FOCUS; if(!id) return;
-  setStatus('Searching around…');
+  showBoard(); setStatus('Searching around…');
   const g = await fetch(`/objects/${id}/graph?hops=1`).then(r=>r.json());
-  const added = mergeGraph(g);
-  layout(cy.nodes().length>1);
-  if(!quiet) cy.getElementById(id).select();
-  setStatus(`${cy.nodes().length} objects on the board${added?` (+${added})`:''}.`);
-  $('boardtitle').textContent = `Board · ${cy.nodes().length} objects`;
+  const added = board.mergeGraph(g);
+  board.layout(board.cy.nodes().length>1);
+  setStatus(`${board.cy.nodes().length} objects on the board${added?` (+${added})`:''}.`);
+  $('boardtitle').textContent = `Board · ${board.cy.nodes().length} objects`;
 }
-
 async function inspect(id){
   const o = await fetch('/objects/'+id).then(r=>r.ok?r.json():null);
   if(!o){ $('insp').className='insp-empty'; $('insp').textContent='Object not found.'; return; }
-  const nameP=o.properties.find(p=>p.name==='name');
-  const demo=o.properties.some(p=>p.name==='demo'&&String(p.value).toLowerCase()==='true');
-  const title=(nameP&&nameP.value)||o.canonical;
-  const m=ty(o.type);
-  const facts=o.properties.filter(p=>!['name','demo','tag'].includes(p.name));
-  const pv = facts.map(p=>`<div class="k">${esc(p.name)}</div><div class="v">${esc(p.value)}</div>
-    <div class="pvs">${esc(p.source_label||p.source_id||'—')} · ${esc(p.how||'—')} · ${p.confidence!=null?Math.round(p.confidence*100)+'%':'—'}</div>`).join('')
-    || '<div class="muted" style="grid-column:1/3">No properties.</div>';
+  const acts = `<button class="o-act go" onclick="searchAround('${id}')">Search around</button>
+    <button class="o-act" onclick="showDossier('${id}')">Dossier</button>
+    <button class="o-act" onclick="tagIt('${id}')">Tag</button>`;
   const right=$('right'); right.className='rail';
-  right.innerHTML = `
-    <div class="insp-top">
-      <span class="type" style="color:${m.c};background:${m.c}1e;border:1px solid ${m.c}55">${esc(o.type)}</span>
-      ${demo?'<span class="demo" style="margin-left:6px">DEMO</span>':''}
-      <div class="insp-title">${esc(title)}</div>
-      <div class="insp-canon mono">${esc(o.canonical)}</div>
-      <div class="acts">
-        <button class="act go" onclick="searchAround('${id}')">Search around</button>
-        <button class="act" onclick="showDossier('${id}')">Dossier</button>
-        <button class="act" onclick="tagIt('${id}')">Tag</button>
-      </div>
-    </div>
-    <div class="sect"><h3>Properties · what &amp; how</h3><div class="pv">${pv}</div></div>
-    <div class="sect"><h3>Relationships</h3><div id="rels" class="muted">…</div></div>
-    <div class="sect" id="dossbox" style="display:none"><h3>Dossier</h3>
-      <pre id="doss" class="mono" style="white-space:pre-wrap;font-size:11.5px;margin:0"></pre></div>`;
-  loadRels(id);
-}
-async function loadRels(id){
-  const g=await fetch(`/objects/${id}/graph?hops=1`).then(r=>r.json());
-  const lab={}; g.nodes.forEach(n=>lab[n.id]=n);
-  const rows=g.edges.filter(e=>e.source===id||e.target===id).map(e=>{
-    const out=e.source===id, other=out?e.target:e.source, n=lab[other]||{label:other,type:'?'};
-    return `<div class="rel"><span class="faint">${out?'→':'←'}</span>
-      <span class="reltype">${esc(e.type)}</span>
-      <a onclick="focus('${other}')" style="cursor:pointer">${esc(n.label)}</a>
-      <span class="faint">${esc(n.type)}</span></div>`;
-  }).join('');
-  const el=$('rels'); if(el) el.innerHTML = rows || '<span class="faint">No links.</span>';
+  right.innerHTML = objectDetail(o, acts) +
+    `<div class="o-sect" id="dossbox" style="display:none"><h3>Dossier</h3>
+      <pre id="doss" class="r-pre"></pre></div>`;
+  loadRels(right.querySelector('[data-rels]'), id, focus);
 }
 async function showDossier(id){
   $('dossbox').style.display='block'; $('doss').textContent='loading…';
@@ -341,8 +276,65 @@ function watch(){
     $('live').textContent = s.total!=null ? `● ${s.total} objects` : '';
     const fresh=await fetch(`/objects?case_id=${ANALYSIS}&limit=400`).then(r=>r.json());
     if(fresh.length!==SET.length){ SET=fresh; $('setn').textContent=SET.length; renderSet();
-      if(FOCUS) searchAround(FOCUS,true); }
+      if(FOCUS && !$('stage').classList.contains('panel')) searchAround(FOCUS,true); }
   };
+}
+
+// ---- compose: author a composition (watch form or raw spec) ----------------
+let cmode='watch';
+function openCompose(ev){
+  ev.stopPropagation(); closePop();
+  const pop=document.createElement('div'); pop.className='pop'; pop.id='composepop';
+  pop.style.left='14px'; pop.style.top='52px'; pop.style.width='300px';
+  pop.innerHTML=`
+    <div class="tabs"><span class="tab on" data-m="watch" onclick="cmtab(this)">Watch</span>
+      <span class="tab" data-m="spec" onclick="cmtab(this)">Spec</span></div>
+    <div id="cm-watch">
+      <label>Object type</label><input id="w_type" class="filter" placeholder="e.g. Property · Organization">
+      <label>Conditions (all must hold)</label><div id="conds"></div>
+      <span class="iconbtn" style="margin-top:6px;display:inline-block" onclick="addCond()">+ condition</span>
+      <label>Deliver to (webhook, optional)</label><input id="w_hook" class="filter" placeholder="https://…">
+    </div>
+    <div id="cm-spec" style="display:none">
+      <label>Name</label><input id="s_name" class="filter" placeholder="my-composition">
+      <label>Op-tree (JSON) — Claude usually authors this over MCP</label>
+      <textarea id="s_spec">{"op":"select","object_type":"Organization"}</textarea>
+    </div>
+    <button class="o-act go" style="width:100%;margin-top:10px" onclick="saveCompose()">Save composition</button>
+    <div id="cmsg" class="o-faint" style="margin-top:6px"></div>`;
+  document.body.appendChild(pop);
+  cmode='watch'; addCond();
+  setTimeout(()=>document.addEventListener('click',function h(e){
+    if(!e.target.closest('#composepop')){pop.remove();document.removeEventListener('click',h);}}),0);
+}
+function cmtab(el){ cmode=el.dataset.m;
+  document.querySelectorAll('#composepop .tab').forEach(t=>t.classList.toggle('on',t===el));
+  $('cm-watch').style.display = cmode==='watch'?'block':'none';
+  $('cm-spec').style.display = cmode==='spec'?'block':'none'; }
+const OPSYM={eq:'=',contains:'~',lt:'<',gt:'>'};
+function addCond(prop='',op='eq',val=''){
+  const d=document.createElement('div'); d.className='cond';
+  d.innerHTML=`<input class="filter" style="margin:0" placeholder="property" value="${esc(prop)}">
+    <select>${Object.keys(OPSYM).map(o=>`<option ${o===op?'selected':''}>${o}</option>`).join('')}</select>
+    <input class="filter" style="margin:0" placeholder="value" value="${esc(val)}">`;
+  $('conds').appendChild(d);
+}
+async function saveCompose(){
+  if(cmode==='watch'){
+    const type=$('w_type').value.trim();
+    const where=[...$('conds').querySelectorAll('.cond')].map(d=>{
+      const [pi,sel,vi]=d.querySelectorAll('input,select');
+      return {property:pi.value.trim(),op:sel.value,value:vi.value.trim()};
+    }).filter(c=>c.property&&c.value);
+    const name=(type||'Any')+(where.length?` where ${where.map(c=>c.property+OPSYM[c.op]+c.value).join(' ∧ ')}`:'');
+    await fetch('/subscriptions',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({name,criteria:{object_type:type||null,where},webhook_url:$('w_hook').value.trim()||null})});
+  } else {
+    let spec; try{ spec=JSON.parse($('s_spec').value); }catch(e){ $('cmsg').textContent='Invalid JSON.'; return; }
+    await fetch('/compositions',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({name:$('s_name').value.trim()||'untitled',spec,kind:'lens'})});
+  }
+  closePop(); loadComps();
 }
 
 // ---- global search ---------------------------------------------------------
@@ -359,22 +351,24 @@ async function globalSearch(){
     <div class="item" onmousedown="pick('${o.id}')">
       <span class="dot" style="background:${ty(o.type).c}"></span>
       <span class="lab">${esc(o.name||o.canonical)}</span><span class="ty">${o.type}</span>
-    </div>`).join('') : '<div class="empty">No matches.</div>';
+    </div>`).join('') : '<div class="o-empty">No matches.</div>';
   document.body.appendChild(pop);
 }
 function pick(id){ closePop(); $('search').value=''; focus(id); }
-function closePop(){ const p=$('searchpop'); if(p) p.remove(); const k=$('keypop'); }
-document.addEventListener('click',e=>{ if(!e.target.closest('#search')&&!e.target.closest('#searchpop')) closePop(); });
+function closePop(){ ['searchpop','keypop','reviewpop'].forEach(i=>{const p=$(i);if(p)p.remove();}); }
+document.addEventListener('click',e=>{ if(!e.target.closest('#search')&&!e.target.closest('#searchpop')) {const p=$('searchpop');if(p)p.remove();} });
 
 // ---- type key + review -----------------------------------------------------
 function toggleKey(ev){ ev.stopPropagation(); const ex=$('keypop'); if(ex){ex.remove();return;}
   const pop=document.createElement('div'); pop.className='pop'; pop.id='keypop';
   const r=ev.target.getBoundingClientRect(); pop.style.right='14px'; pop.style.top=(r.bottom+5)+'px';
-  const cats={}; Object.entries(TYPE).forEach(([t,m])=>{(cats[m.category]=cats[m.category]||[]).push([t,m]);});
-  pop.innerHTML=Object.entries(cats).map(([cat,ts])=>
-    `<div class="faint" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin:6px 0 2px">${cat}</div>`+
-    ts.map(([t,m])=>`<div class="keyrow"><span class="dot" style="background:${m.c}"></span>${t}</div>`).join('')
-  ).join('');
+  fetch('/schema').then(r=>r.json()).then(cat=>{
+    const c={}; cat.object_types.forEach(t=>{(c[t.category]=c[t.category]||[]).push(t);});
+    pop.innerHTML=Object.entries(c).map(([cat,ts])=>
+      `<div class="o-faint" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin:6px 0 2px">${cat}</div>`+
+      ts.map(t=>`<div class="keyrow"><span class="dot" style="background:${t.color}"></span>${t.name}</div>`).join('')
+    ).join('');
+  });
   document.body.appendChild(pop);
   setTimeout(()=>document.addEventListener('click',function h(){pop.remove();document.removeEventListener('click',h);}),0);
 }
@@ -382,29 +376,28 @@ async function refreshReview(){
   const m=await fetch('/merge-candidates').then(r=>r.json()).catch(()=>[]);
   $('reviewN').textContent = (m&&m.length)||0;
 }
-async function openReview(ev){
+async function openReview(){
   closePop();
   const m=await fetch('/merge-candidates').then(r=>r.json()).catch(()=>[]);
   const pop=document.createElement('div'); pop.className='pop'; pop.id='reviewpop';
-  pop.style.right='14px'; pop.style.top='46px'; pop.style.width='320px';
-  pop.style.maxHeight='60vh'; pop.style.overflowY='auto';
+  pop.style.right='14px'; pop.style.top='46px'; pop.style.width='320px'; pop.style.maxHeight='60vh'; pop.style.overflowY='auto';
   pop.innerHTML = '<div class="railhead" style="padding:0 0 8px">Merge review · resolve in place</div>' +
     (m.length ? m.slice(0,40).map(c=>{
       const reason = Array.isArray(c.reasons)?c.reasons[0]:(c.reasons||'possible duplicate');
       return `<div style="padding:8px 0;border-top:1px solid var(--border)">
-        <div><b>${Math.round((c.score||0)*100)}%</b> <span class="muted">${esc(reason)}</span></div>
+        <div><b>${Math.round((c.score||0)*100)}%</b> <span class="o-muted">${esc(reason)}</span></div>
         <div style="font-size:12px;margin:3px 0">
           <a onmousedown="pick('${c.a_id}')" style="cursor:pointer">${esc(c.a_label)}</a>
-          <span class="faint">(${esc(c.a_type)})</span> <span class="faint">↔</span>
+          <span class="o-faint">(${esc(c.a_type)})</span> <span class="o-faint">↔</span>
           <a onmousedown="pick('${c.b_id}')" style="cursor:pointer">${esc(c.b_label)}</a>
-          <span class="faint">(${esc(c.b_type)})</span></div>
-        <div class="acts" style="margin-top:3px">
-          <button class="act go" onmousedown="resolveCand(${c.id},'merged')">Merge</button>
-          <button class="act" onmousedown="resolveCand(${c.id},'rejected')">Reject</button></div></div>`;
-    }).join('') : '<div class="empty">Nothing to review.</div>');
+          <span class="o-faint">(${esc(c.b_type)})</span></div>
+        <div class="o-acts" style="margin-top:3px">
+          <button class="o-act go" onmousedown="resolveCand(${c.id},'merged')">Merge</button>
+          <button class="o-act" onmousedown="resolveCand(${c.id},'rejected')">Reject</button></div></div>`;
+    }).join('') : '<div class="o-empty">Nothing to review.</div>');
   document.body.appendChild(pop);
   setTimeout(()=>document.addEventListener('click',function h(e){
-    if(!e.target.closest('#reviewpop')){pop.remove();document.removeEventListener('click',h);}},0);
+    if(!e.target.closest('#reviewpop')){pop.remove();document.removeEventListener('click',h);}}),0);
 }
 async function resolveCand(id, decision){
   await fetch(`/merge-candidates/${id}/resolve`,{method:'POST',
@@ -413,10 +406,17 @@ async function resolveCand(id, decision){
   if(ANALYSIS){ SET=await fetch(`/objects?case_id=${ANALYSIS}&limit=400`).then(r=>r.json());
     $('setn').textContent=SET.length; renderSet(); }
   if(FOCUS) inspect(FOCUS);
-  openReview();  // re-render the tray with the row gone
+  openReview();
 }
 
-loadSchema().then(loadAnalyses);
+// deep links: /ui/?id=<obj> focuses an object (the old object page); /ui/?run=<name>
+// runs a composition (the old watch page). The console pages are now render modes here.
+async function applyDeepLink(){
+  const q=new URLSearchParams(location.search);
+  if(q.get('id')) await focus(q.get('id'));
+  if(q.get('run')) await runComp(q.get('run'));
+}
+Osiris.loadSchema().then(async()=>{ await loadComps(); await loadAnalyses(); await applyDeepLink(); });
 </script>
 </body>
 </html>
