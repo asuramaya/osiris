@@ -36,6 +36,7 @@ from src.ontology.resolution import (
     resolve_cross_base,
     screen_network,
 )
+from src.orchestrator import compositions as comp
 from src.orchestrator.coinvest import coinvestment_ties
 from src.orchestrator.discrepancy import footprint_discrepancy
 from src.orchestrator.dossier import entity_dossier
@@ -252,6 +253,48 @@ async def dossier_report(object_ref: str) -> str:
     pool = await _pool_get()
     oid = await _resolve(pool, object_ref)
     return await build_dossier_report(pool, oid) if oid else f"# no object {object_ref!r}"
+
+
+# --- the composer: author/run/list compositions (the front end as a primitive) ---
+
+@mcp.tool()
+async def save_composition(
+    name: str, spec: dict[str, Any], kind: str = "lens"
+) -> dict[str, str]:
+    """Save a COMPOSITION — a reusable, forkable query/lens over the graph (the
+    composer's primitive). This is how a question becomes a first-class object instead
+    of throwaway tool calls. The spec is a small op-tree:
+      {"op":"subject"}                                  the object in focus
+      {"op":"select","object_type":?,"where":[{property,op,value}]}  matching objects
+      {"op":"traverse","from":<node>,"direction":"both|out|in","hops":N}  neighbourhood
+      {"op":"collect","from":<node>,"properties":[..],"transform":"country|lower"}  values
+      {"op":"subtract","left":<node>,"right":<node>}    set difference
+    Example (operational vs disclosed geography — what `discrepancy` used to hardcode):
+      {"op":"subtract",
+       "left":{"op":"collect","transform":"country","properties":["location"],
+               "from":{"op":"traverse","from":{"op":"subject"},"hops":2}},
+       "right":{"op":"collect","transform":"country",
+                "properties":["incorporation_state","address"],"from":{"op":"subject"}}}
+    """
+    pool = await _pool_get()
+    cid = await comp.save_composition(pool, name, spec, kind)
+    return {"id": str(cid), "name": name}
+
+
+@mcp.tool()
+async def run_composition(name: str, subject: str | None = None) -> dict[str, Any]:
+    """Run a saved composition, optionally against a subject object (UUID or name).
+    Returns its result — an object set (each named) or a value list."""
+    pool = await _pool_get()
+    sid = await _resolve(pool, subject) if subject else None
+    return await comp.run_composition(pool, name, sid)
+
+
+@mcp.tool()
+async def list_compositions() -> list[dict[str, Any]]:
+    """The saved compositions (lenses/watches) — the user's questions, as objects."""
+    pool = await _pool_get()
+    return await comp.list_compositions(pool)
 
 
 def main() -> None:

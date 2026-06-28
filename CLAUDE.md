@@ -937,3 +937,24 @@ and `docker run` do too.
   operator@example.com is a Person that the existing ER could resolve to github:asuramaya (cross-domain identity
   — the engine unifying its own creator). Osiris tracks Osiris. The same Actions/schema/provenance/graph
   surface that models sanctions + companies + foreclosures now models its own development.
+- **THE COMPOSER — first contact (DONE, 2026-06-28):** a long architecture thread concluded that the
+  FRONT END was never a page — it's the *composer*: the place where intent becomes a COMPOSITION over
+  neutral primitives (the Notion model — neutral abstractions + user-composed opinion + Claude as the
+  authoring hand). The three console pages (graph/watch/object) are render TARGETS, not destinations;
+  the opinionated read-models (discrepancy/coinvest/screen, named editorially — "shadow footprint",
+  "exposure") are the engine wrongly holding OPINION that belongs to the end user. First brick (cuts,
+  NOT a rewrite — pages still work, will be demoted later): migration 0008 `compositions` (a saved,
+  forkable op-tree; generalizes subscriptions — a watch is a composition with a tripwire execution).
+  `src/orchestrator/compositions.py`: 5 neutral ops — `subject` / `select{object_type,where}` /
+  `traverse{from,direction,hops,link_type}` / `collect{from,properties,transform}` / `subtract{left,
+  right}` (Notion's filter/relation/rollup equivalent) + an interpreter (`_eval`) + save/list/run +
+  `seed_default_compositions`. MCP tools `save_composition`/`run_composition`/`list_compositions` — the
+  authoring channel (Claude turns a sentence into a spec). **THE HEADLINE: `discrepancy` is now just a
+  composition** (`operational-vs-disclosed-geography` = subtract(collect(location,country) over
+  traverse(subject,2hops), collect(home-props,country) over subject)) — `test_discrepancy_is_just_a_
+  composition` proves it returns the SAME result as the hardcoded read-model; opinion left the engine,
+  became a forkable spec the user owns. 311 tests green (+5), ruff + mypy --strict clean. NEXT: a thin
+  generic renderer (composition result → reuse graph/card code as a library), fold the watch into a
+  composition kind, re-express coinvest/screen as compositions, THEN the pages die (demoted → removed).
+  The discipline: a composition must be saved · executable · renderable · authorable (a subscription
+  already passes all four; this brings the lens to parity).
