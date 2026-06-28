@@ -38,13 +38,19 @@ by hand — and so that an AI assistant can do it for them.
 - Is **drivable by an AI** through an [MCP](https://modelcontextprotocol.io) server (18
   tools) *and* by a human through a FastAPI app.
 
-**What it wants to do** (see [`ROADMAP.md`](ROADMAP.md))
-- Turn from a **lens** (investigate on demand) into a **tripwire** (watch a stream of
-  public events and fire a sourced lead when something matches) — the monitoring /
-  "cron" capability that serves brokers, compliance, and standing intelligence.
-- Pierce shell ownership end-to-end (deed → LLC → human) wherever open registries allow.
-- Add on-chain coverage beyond EVM (Solana), and document-level extraction (OCR + AI)
-  for the messy long tail.
+**Where it's heading** (see [`ROADMAP.md`](ROADMAP.md), [`docs/COMPOSER.md`](docs/COMPOSER.md))
+
+The shape is **"Palantir × Notion, composed by conversation"**: an entity-ontology
+*substrate* (Palantir's ontology, on the open record, with provenance) whose front end is
+a *composer* (Notion's neutral primitives + your own composed opinion + forkable
+templates), authored by an AI (Claude over MCP — the front end *is* the conversation). The
+intelligence is Claude; Osiris is what an intelligence lacks — durable, structured, sourced
+memory that runs when you're away.
+- The **tripwire** (watch the public record, fire a sourced lead — the monitoring/"cron"
+  capability) has landed; the active work is the **composer** — making every analysis a
+  forkable *composition the user owns*, so opinion lives with you, never welded into the engine.
+- Pierce shell ownership (deed → LLC → human) where open registries allow; broaden on-chain
+  coverage; AI document extraction (OCR + LLM) for the messy long tail — all keyless.
 
 **What it can't do yet**
 - It only reaches the open **entity** commons. By design (keyless), it is weak on private
@@ -153,9 +159,15 @@ interface, and two **surfaces** over it (the MCP server and the FastAPI app). Th
 imports no driver; drivers depend on the kernel. That seam is what lets the messy,
 ever-growing collection layer accrete without destabilizing the core.
 
+Over that kernel sits the **composer**: analyses are *compositions* — saved, forkable
+op-trees over the neutral graph (Notion's model), authored by Claude from a sentence. The
+opinionated read-models are being demoted from engine code to compositions the user owns.
+
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the current shape,
-[`docs/REFERENCE.md`](docs/REFERENCE.md) for the data model, evidence classes, source &
-tool registries, and repo map, and [`DESIGN.md`](DESIGN.md) for the original deep design.
+[`docs/COMPOSER.md`](docs/COMPOSER.md) for the composition op-vocabulary (grounded in
+Palantir's Object Set API + Notion's rollups), [`docs/REFERENCE.md`](docs/REFERENCE.md)
+for the data model, evidence classes, and registries, and [`DESIGN.md`](DESIGN.md) for the
+original deep design.
 
 ---
 

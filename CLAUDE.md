@@ -958,3 +958,29 @@ and `docker run` do too.
   composition kind, re-express coinvest/screen as compositions, THEN the pages die (demoted → removed).
   The discipline: a composition must be saved · executable · renderable · authorable (a subscription
   already passes all four; this brings the lens to parity).
+- **GROUNDED VISION + COMPOSER PLAN (2026-06-28) — read this to resume. See memories
+  [[osiris-grounded-vision]] + [[osiris-composer]].** Identity crystallized: **"Palantir × Notion,
+  composed by conversation"** — Palantir = the entity-ontology substrate (~80% built); Notion = the
+  composer front end (neutral primitives + user-composed opinion + forkable templates; ~25% built,
+  the active frontier); the "×" = AI-native (Claude-over-MCP is the authoring hand; the front end IS
+  the conversation). Key insight: the Notion-composer is the OSS replacement for Palantir's
+  forward-deployed engineers. The Osiris/Claude split: Osiris is what Claude ISN'T (durable memory ·
+  structure · provenance · continuity · the kinetic waist); Claude is the intelligence. Two modes:
+  LENS (Claude, on-demand) vs TRIPWIRE (the deterministic worker, always-on). The audit found the
+  engine BETRAYS the thin-substrate notion via opinionated read-models (discrepancy/coinvest/screen,
+  editorial vocab); the fix is the composer (opinion → forkable compositions the user owns).
+  - **`docs/COMPOSER.md`** = the GROUNDED op-vocabulary spec (Palantir Object Set API + Notion
+    rollups, which converge on the same closed ~10-op set). Closed ops + a Function escape hatch
+    (Palantir's exact split). DO NOT build a generic join (Palantir has none — screening is a
+    Function or intersect-after-link), a formula DSL, or kNN. Caps: traverse ≤3 hops, aggregate ≤3 dims.
+  - **PLAN (tasks #35–40), each a CUT (proven-equivalent before deletion), on branch `composer`:**
+    P1 ops (union/intersect/aggregate/order+take — NOT join) → P2 evict coinvest/screen/subject_report
+    as compositions → P3 fold subscriptions INTO compositions → P4 generic renderer (reuse graph/card
+    code as a library) → P5 composer shell + CUT the console pages → P6 promote `cron-persistence`→
+    `main` + push. DONE = engine holds no opinion · watch+lens one object · compositions render ·
+    composer is the front end. THEN the deployment bet (county satellite + sink + dedup/throttle +
+    dead-man's-switch + backups) to get one beat LIVE for the broker ([[osiris-roadmap-deployment]]).
+  - **BRANCH STATE:** on `composer` (off `cron-persistence`). `cron-persistence` = ~25 unpushed
+    commits past `main` (=v0.1.0 public). Throwaway demo DBs PG:5544/Redis:6399 may still be up; the
+    persistent demo graph is PG:5439 (now also holds Osiris's own git history via the self-track ingest).
+    No GITHUB_TOKEN / no ANTHROPIC_API_KEY in env (extraction/OCR/compose proven-but-deferred-live).
