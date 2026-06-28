@@ -384,15 +384,33 @@ async def list_compositions(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     ]
 
 
-async def _label(pool: asyncpg.Pool, oid: uuid.UUID) -> dict[str, str]:
-    r = await pool.fetchrow(
-        "SELECT o.type, o.canonical, (SELECT value #>> '{}' FROM current_assertions a "
-        "WHERE a.object_id=o.id AND a.name='name' LIMIT 1) AS name FROM objects o WHERE o.id=$1",
-        oid,
+async def _object_items(pool: asyncpg.Pool, ids: list[uuid.UUID]) -> list[dict[str, Any]]:
+    """Label a result set's objects AND carry their compact properties — in two batch
+    queries, not N. The view-switcher needs this: the Graph view uses label/type, the
+    Table view shows property columns (sector, date, …) without a per-row fetch."""
+    if not ids:
+        return []
+    objs = await pool.fetch(
+        "SELECT id, type, canonical FROM objects WHERE id = ANY($1::uuid[])", ids
     )
-    if r is None:
-        return {"id": str(oid), "label": str(oid), "type": "?"}
-    return {"id": str(oid), "label": r["name"] or r["canonical"], "type": r["type"]}
+    props: dict[uuid.UUID, dict[str, str]] = {}
+    for r in await pool.fetch(
+        "SELECT DISTINCT ON (object_id, name) object_id, name, value #>> '{}' AS v "
+        "FROM current_assertions WHERE object_id = ANY($1::uuid[]) "
+        "ORDER BY object_id, name, observed_at DESC",
+        ids,
+    ):
+        props.setdefault(r["object_id"], {})[r["name"]] = r["v"]
+    meta = {o["id"]: o for o in objs}
+    out: list[dict[str, Any]] = []
+    for oid in ids:  # preserve the composition's order
+        o = meta.get(oid)
+        if o is None:
+            continue
+        p = props.get(oid, {})
+        out.append({"id": str(oid), "type": o["type"], "canonical": o["canonical"],
+                    "label": p.get("name") or o["canonical"], "props": p})
+    return out
 
 
 async def run_composition(
@@ -404,7 +422,7 @@ async def run_composition(
         return {"error": f"no composition {ref!r}"}
     res = await _eval(pool, spec, subject)
     if res.kind == "objects":
-        items: Any = [await _label(pool, oid) for oid in res.objects]
+        items: Any = await _object_items(pool, res.objects)
     elif res.kind == "rows":
         items = res.rows
     elif res.kind == "data":

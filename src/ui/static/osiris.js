@@ -136,14 +136,23 @@ const Osiris = (() => {
     };
   }
 
-  // ---- THE GENERIC RENDERER (P4) -------------------------------------------
-  // A composition Result -> the right atom. `mounts` = {board, panel}. objects go on the
-  // board (graph); values/rows/data render into the panel. The shell decides which to show.
-  async function renderResult(result, mounts) {
+  // ---- THE GENERIC RENDERER (P4/W1) ----------------------------------------
+  // A composition Result -> the right atom, in the chosen VIEW (Notion's switchable views
+  // × Palantir's multi-modal object set). `mounts` = {board, panel}. An OBJECTS set renders
+  // as a clean Graph OR a Table; values/rows/data render into the panel. `onPick(id)` focuses
+  // a clicked row. Returns the mode the center should show ("graph" | "panel").
+  // VIEWS lists the views an objects set supports (the shell builds the switcher from this).
+  const VIEWS = ["graph", "table"];
+  function defaultView(result) {
+    if (result.kind !== "objects") return "panel";
+    return result.items.length > 30 ? "table" : "graph";  // a hairball past ~30 → table
+  }
+  async function renderResult(result, mounts, view, onPick) {
     const { board, panel } = mounts;
     const kind = result.kind, items = result.items;
     if (kind === "objects") {
-      if (board) await board.placeObjects(items);
+      if (view === "table") { objectsTable(panel, items, onPick); return "panel"; }
+      if (board) { board.clear(); await board.placeObjects(items); }  // a CLEAN result board
       return "graph";
     }
     if (kind === "values") {
@@ -152,13 +161,28 @@ const Osiris = (() => {
           : `<div class="o-empty">Empty result.</div>`);
       return "panel";
     }
-    if (kind === "rows") {
-      panel.innerHTML = renderRows(items);
-      return "panel";
-    }
-    // data — a Function's native output (list of dicts / dict of lists / scalar tree)
-    panel.innerHTML = renderData(items);
+    if (kind === "rows") { panel.innerHTML = renderRows(items); return "panel"; }
+    panel.innerHTML = renderData(items);  // a Function's native output, by shape
     return "panel";
+  }
+
+  // an objects set as a TABLE — Type · Name · the most-common property columns. The fix for
+  // the 80-node hairball: a scannable set, each row clickable into the inspector.
+  function objectsTable(panel, items, onPick) {
+    const skip = new Set(["name", "demo", "tag"]);
+    const freq = {};
+    items.forEach((o) => Object.keys(o.props || {}).forEach((k) => { if (!skip.has(k)) freq[k] = (freq[k] || 0) + 1; }));
+    const cols = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 4).map((e) => e[0]);
+    const head = `<th>Type</th><th>Name</th>${cols.map((c) => `<th>${esc(c)}</th>`).join("")}`;
+    const body = items
+      .map((o) => `<tr data-pick="${o.id}" style="cursor:pointer">
+        <td><span class="o-faint">${esc(o.type)}</span></td><td>${esc(o.label)}</td>
+        ${cols.map((c) => `<td>${esc((o.props || {})[c] || "")}</td>`).join("")}</tr>`)
+      .join("");
+    panel.innerHTML = `<div class="r-head">${items.length} object${items.length === 1 ? "" : "s"}</div>` +
+      (items.length ? `<table class="r-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
+        : `<div class="o-empty">Empty result.</div>`);
+    panel.querySelectorAll("[data-pick]").forEach((tr) => (tr.onclick = () => onPick && onPick(tr.dataset.pick)));
   }
 
   // aggregate rows: [{group:{prop:val,...}, metric:N}] -> a ranked table
@@ -199,5 +223,6 @@ const Osiris = (() => {
       <tbody>${list.map((o) => `<tr>${cols.map((c) => `<td>${cell(o ? o[c] : "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
   }
 
-  return { $, esc, HOW, pct, loadSchema, ty, objectDetail, loadRels, makeBoard, renderResult };
+  return { $, esc, HOW, pct, loadSchema, ty, objectDetail, loadRels, makeBoard,
+    renderResult, VIEWS, defaultView };
 })();

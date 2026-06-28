@@ -42,10 +42,12 @@ async def test_save_list_run_objects(client: httpx.AsyncClient, actions: Actions
     # it appears in the list alongside its kind (the rail reads this)
     names = {c["name"]: c for c in (await client.get("/compositions")).json()}
     assert names["all-orgs"]["kind"] == "lens"
-    # running it returns an OBJECTS result (the board render mode)
+    # running it returns an OBJECTS result, each item carrying label/type/canonical AND its
+    # compact properties — the Table view (W1) reads `props` for its columns (sector here)
     res = (await client.post("/compositions/all-orgs/run", json={})).json()
     assert res["kind"] == "objects" and res["count"] == 3
-    assert all("label" in it and "type" in it for it in res["items"])
+    assert all({"label", "type", "canonical", "props"} <= set(it) for it in res["items"])
+    assert {it["props"]["sector"] for it in res["items"]} == {"ai", "bio"}
 
 
 async def test_run_rows_aggregate(client: httpx.AsyncClient, actions: Actions) -> None:

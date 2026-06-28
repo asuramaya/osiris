@@ -61,7 +61,13 @@
   /* center: board OR result panel */
   #center{display:grid;grid-template-rows:40px 1fr 24px;min-height:0;min-width:0}
   #tools{display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--panel2);border-bottom:1px solid var(--border)}
-  #tools .title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40%}
+  #tools .title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:34%}
+  .viewsw{display:inline-flex;gap:0;border:1px solid var(--border2);border-radius:7px;overflow:hidden}
+  .viewsw button{background:transparent;border:0;border-left:1px solid var(--border2);padding:5px 10px;
+    font-size:11.5px;cursor:pointer;color:var(--muted)}
+  .viewsw button:first-child{border-left:0}
+  .viewsw button.on{background:var(--chip);color:var(--text)}
+  .viewsw button:hover{color:var(--text)}
   #stage{position:relative;min-height:0}
   #cy{position:absolute;inset:0;background:
     radial-gradient(circle at 1px 1px,#161c25 1px,transparent 0) 0 0/22px 22px,var(--bg)}
@@ -127,12 +133,13 @@
     <section id="center">
       <div id="tools">
         <span class="title" id="boardtitle">Board</span>
+        <span id="viewsw" class="viewsw"></span>
         <button class="iconbtn" id="aroundBtn" onclick="searchAround()" disabled>Search around</button>
         <button class="iconbtn" onclick="expandSet()" title="Run collectors to grow the set">Expand ▸</button>
         <span class="spacer"></span>
         <button class="iconbtn" onclick="board.fit()">Fit</button>
         <button class="iconbtn" onclick="board.layout(false)">Re-layout</button>
-        <button class="iconbtn" onclick="showBoard();board.clear()">Clear</button>
+        <button class="iconbtn" onclick="clearAll()">Clear</button>
       </div>
       <div id="stage">
         <div id="cy"></div>
@@ -172,19 +179,40 @@ async function loadComps(){
       <span class="kindb ${c.kind==='watch'?'watch':'lens'}">${c.kind}</span>
     </div>`).join('') : '<div class="o-empty">No compositions yet. ＋ to author one.</div>';
 }
+// W1: a composition yields a SET; the center is a switchable VIEW of that set. The result
+// is its own thing — running a composition shows it CLEANLY, never merged into the
+// exploration board.
+let RESULT=null, VIEW=null;
 async function runComp(name){
   ACTIVE=name; loadComps();
   setStatus(`Running ${name}…`);
   const res = await fetch(`/compositions/${encodeURIComponent(name)}/run`,{method:'POST',
     headers:{'content-type':'application/json'},body:JSON.stringify({subject:FOCUS})}).then(r=>r.json());
-  if(res.error){ showPanel(); $('result').innerHTML=`<div class="o-empty">${esc(res.error)}<br><br>
-    Tip: focus a subject object first, then run.</div>`; $('boardtitle').textContent=name; return; }
-  const mode = await renderResult(res, {board, panel:$('result')});
-  if(mode==='graph'){ showBoard(); board.layout(true); }
-  else showPanel();
-  $('boardtitle').textContent = `${name} · ${res.kind} · ${res.count}`;
-  setStatus(`${name} → ${res.count} ${res.kind}.`);
+  if(res.error){ RESULT=null; renderSwitcher(); showPanel();
+    $('result').innerHTML=`<div class="o-empty">${esc(res.error)}<br><br>
+      Tip: focus a subject object first, then run.</div>`; $('boardtitle').textContent=name; return; }
+  RESULT=res; RESULT.name=name; VIEW=Osiris.defaultView(res);
+  renderSwitcher(); await renderCurrent();
 }
+// a table row inspects in place (right panel) — it does NOT switch the center to the board,
+// so you keep your result set. (A graph node tap goes through focus(), which explores.)
+function inspectOnly(id){ FOCUS=id; renderSet(); inspect(id); }
+async function renderCurrent(){
+  if(!RESULT) return;
+  const mode = await renderResult(RESULT, {board, panel:$('result')}, VIEW, inspectOnly);
+  if(mode==='graph'){ showBoard(); board.layout(true); } else showPanel();
+  $('boardtitle').textContent = `${RESULT.name} · ${RESULT.kind} · ${RESULT.count}`;
+  setStatus(`${RESULT.name} → ${RESULT.count} ${RESULT.kind}.`);
+}
+function renderSwitcher(){
+  const el=$('viewsw');
+  if(!RESULT || RESULT.kind!=='objects'){ el.innerHTML=''; return; }
+  el.innerHTML = Osiris.VIEWS.map(v=>
+    `<button class="${v===VIEW?'on':''}" onclick="setView('${v}')">${v[0].toUpperCase()+v.slice(1)}</button>`).join('');
+}
+function setView(v){ VIEW=v; renderSwitcher(); renderCurrent(); }
+function clearAll(){ RESULT=null; VIEW=null; renderSwitcher(); showBoard(); board.clear();
+  $('boardtitle').textContent='Board'; setStatus('Cleared.'); }
 
 // ---- analyses (cases) ------------------------------------------------------
 async function loadAnalyses(){
@@ -220,6 +248,7 @@ function renderSet(){
 // ---- focus / inspect / search-around (the one noun) ------------------------
 async function focus(id){
   FOCUS=id; $('aroundBtn').disabled=false; renderSet();
+  RESULT=null; renderSwitcher();   // exploring the graph is not viewing a composition result
   showBoard();
   if(!board.cy.getElementById(id).length) await searchAround(id, true);
   board.focusNode(id);
