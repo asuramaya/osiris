@@ -30,6 +30,39 @@ const Osiris = (() => {
   }
 
   const pct = (v) => (v != null ? Math.round(v * 100) + "%" : "—");
+  const OPSYM = { eq: "=", contains: "~", lt: "<", gt: ">" };
+
+  // an op-tree -> a readable pipeline (innermost → outermost) — the lineage breadcrumb (W4).
+  // Makes a composition self-documenting: `select Organization → aggregate by sector → order ↓`.
+  function lineage(spec) {
+    if (!spec || typeof spec !== "object") return [];
+    const inner = spec.from ? lineage(spec.from) : [];
+    const where = (w) => (w && w.length ? " where " + w.map((c) => c.property + (OPSYM[c.op] || c.op) + c.value).join(" ∧ ") : "");
+    switch (spec.op) {
+      case "subject": return ["subject"];
+      case "select": return [`select ${spec.object_type || "any"}${spec.canonical_prefix ? " " + spec.canonical_prefix + "*" : ""}${where(spec.where)}`];
+      case "traverse": return [...inner, `traverse ${spec.direction || "both"} ${spec.hops || 1}↦`];
+      case "collect": return [...inner, `collect ${(spec.properties || []).join(", ")}${spec.transform && spec.transform !== "identity" ? " (" + spec.transform + ")" : ""}`];
+      case "subtract": return ["subtract"];
+      case "union": return ["union"];
+      case "intersect": return ["intersect"];
+      case "aggregate": return [...inner, `aggregate by ${(spec.group_by || []).join(", ") || "all"} (${(spec.metric || {}).type || "count"})`];
+      case "order": return [...inner, `order ${spec.dir || "asc"}`];
+      case "take": return [...inner, `take ${spec.n}`];
+      case "function": return [`${spec.name}()`];
+      default: return [spec.op || "?"];
+    }
+  }
+
+  // the innermost `select` node (where filter chips attach); null if the tree has none
+  function innerSelect(spec) {
+    let n = spec;
+    while (n && typeof n === "object") {
+      if (n.op === "select") return n;
+      n = n.from;
+    }
+    return null;
+  }
 
   // ---- atoms ---------------------------------------------------------------
   // a graded property row: value + WHERE IT CAME FROM (source · how · confidence)
@@ -255,6 +288,6 @@ const Osiris = (() => {
       <tbody>${list.map((o) => `<tr>${cols.map((c) => `<td>${cell(o ? o[c] : "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
   }
 
-  return { $, esc, HOW, pct, loadSchema, ty, objectDetail, loadRels, makeBoard,
-    renderResult, VIEWS, defaultView };
+  return { $, esc, HOW, pct, OPSYM, loadSchema, ty, objectDetail, loadRels, makeBoard,
+    renderResult, VIEWS, defaultView, lineage, innerSelect };
 })();

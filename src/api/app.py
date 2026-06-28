@@ -54,6 +54,7 @@ from src.orchestrator.compositions import (
     list_compositions,
     object_items,
     run_composition,
+    run_spec,
     save_composition,
     save_watch,
 )
@@ -637,6 +638,18 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         except ValueError as exc:  # e.g. a Function that needs a subject, or a bad op
             return {"error": str(exc)}
 
+    @app.post("/compositions/run-spec")
+    async def run_spec_route(
+        body: RunSpecBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        """Run an EPHEMERAL op-tree (the inline composer's working spec — W4). The chips
+        edit a working spec and re-run it here without saving; 'Save as' persists it."""
+        subject = uuid.UUID(body.subject) if body.subject else None
+        try:
+            return await run_spec(p, body.spec, subject, name=body.name or "(working)")
+        except ValueError as exc:
+            return {"error": str(exc)}
+
     @app.post("/subscriptions")
     async def create_subscription_route(
         body: SubscriptionBody, p: asyncpg.Pool = Depends(get_pool)
@@ -913,6 +926,12 @@ class CompositionBody(BaseModel):
 
 class RunCompositionBody(BaseModel):
     subject: str | None = None
+
+
+class RunSpecBody(BaseModel):
+    spec: dict[str, Any]
+    subject: str | None = None
+    name: str | None = None
 
 
 class FederateBody(BaseModel):

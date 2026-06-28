@@ -59,7 +59,19 @@
   .item .ty{font-size:10px;color:var(--faint)}
 
   /* center: board OR result panel */
-  #center{display:grid;grid-template-rows:40px 1fr 24px;min-height:0;min-width:0}
+  #center{display:grid;grid-template-rows:40px auto 1fr 24px;min-height:0;min-width:0}
+  #composerbar{display:none;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 12px;
+    background:var(--bg);border-bottom:1px solid var(--border);font-size:11.5px}
+  #composerbar.on{display:flex}
+  .lin{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}
+  .lin .step{background:var(--chip);border:1px solid var(--border2);border-radius:6px;padding:2px 7px;white-space:nowrap}
+  .lin .arr{color:var(--faint)}
+  .fchip{display:inline-flex;align-items:center;gap:5px;background:#15263b;border:1px solid #1f3a5a;
+    border-radius:999px;padding:2px 5px 2px 9px;color:var(--blue)}
+  .fchip .x{cursor:pointer;opacity:.7;font-weight:700} .fchip .x:hover{opacity:1}
+  .cbtn{background:var(--chip);border:1px solid var(--border2);border-radius:6px;padding:3px 8px;
+    cursor:pointer;color:var(--text);font-size:11px}
+  .cbtn:hover{border-color:var(--blue)}
   #tools{display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--panel2);border-bottom:1px solid var(--border)}
   #tools .title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:34%}
   .viewsw{display:inline-flex;gap:0;border:1px solid var(--border2);border-radius:7px;overflow:hidden}
@@ -144,6 +156,7 @@
         <button class="iconbtn" onclick="board.layout(false)">Re-layout</button>
         <button class="iconbtn" onclick="clearAll()">Clear</button>
       </div>
+      <div id="composerbar"></div>
       <div id="stage">
         <div id="cy"></div>
         <div id="result"></div>
@@ -178,7 +191,7 @@ async function loadRooms(){
 }
 async function switchRoom(id){
   ROOM=id; $('room').value=id;
-  ACTIVE=null; RESULT=null; renderSwitcher(); board.clear(); showBoard();
+  ACTIVE=null; RESULT=null; WORKING=null; renderSwitcher(); renderComposerBar(); board.clear(); showBoard();
   await loadComps(); await loadAnalyses();
 }
 async function newRoom(){
@@ -206,17 +219,60 @@ async function loadComps(){
 // W1: a composition yields a SET; the center is a switchable VIEW of that set. The result
 // is its own thing — running a composition shows it CLEANLY, never merged into the
 // exploration board.
-let RESULT=null, VIEW=null;
+let RESULT=null, VIEW=null, WORKING=null;
 async function runComp(name){
   ACTIVE=name; loadComps();
   setStatus(`Running ${name}…`);
   const res = await fetch(`/compositions/${encodeURIComponent(name)}/run`,{method:'POST',
     headers:{'content-type':'application/json'},body:JSON.stringify({subject:FOCUS})}).then(r=>r.json());
-  if(res.error){ RESULT=null; renderSwitcher(); showPanel();
+  if(res.error){ RESULT=null; WORKING=null; renderSwitcher(); renderComposerBar(); showPanel();
     $('result').innerHTML=`<div class="o-empty">${esc(res.error)}<br><br>
       Tip: focus a subject object first, then run.</div>`; $('boardtitle').textContent=name; return; }
-  RESULT=res; RESULT.name=name; VIEW=Osiris.defaultView(res);
-  renderSwitcher(); await renderCurrent();
+  RESULT=res; RESULT.name=name; WORKING = res.spec ? JSON.parse(JSON.stringify(res.spec)) : null;
+  VIEW=Osiris.defaultView(res); renderSwitcher(); await renderCurrent();
+}
+
+// W4: the inline composer. The active result's op-tree is shown as a lineage breadcrumb +
+// editable filter chips; editing re-runs an EPHEMERAL working spec (no save) until "Save as".
+function renderComposerBar(){
+  const bar=$('composerbar');
+  if(!RESULT || !WORKING){ bar.className=''; bar.innerHTML=''; return; }
+  bar.className='on';
+  const steps = Osiris.lineage(WORKING);
+  const lin = `<span class="lin">${steps.map((s,i)=>
+    (i?'<span class="arr">→</span>':'')+`<span class="step">${esc(s)}</span>`).join('')}</span>`;
+  const sel = Osiris.innerSelect(WORKING);
+  let chips='';
+  if(sel){
+    chips = (sel.where||[]).map((c,i)=>`<span class="fchip">${esc(c.property)}${Osiris.OPSYM[c.op]||c.op}${esc(c.value)}
+      <span class="x" data-rmf="${i}">×</span></span>`).join('') + `<span class="cbtn" id="addf">+ filter</span>`;
+  }
+  bar.innerHTML = lin + `<span style="flex:1"></span>` + chips + `<span class="cbtn" id="saveas">Save as…</span>`;
+  bar.querySelectorAll('[data-rmf]').forEach(x=>x.onclick=()=>{ sel.where.splice(+x.dataset.rmf,1); runWorking(); });
+  if($('addf')) $('addf').onclick=addFilter;
+  $('saveas').onclick=saveWorkingAs;
+}
+function addFilter(){
+  const sel=Osiris.innerSelect(WORKING); if(!sel) return;
+  const property=prompt('Filter property (e.g. sector, authored_date):'); if(!property) return;
+  const op=prompt('op — eq / contains / lt / gt','eq')||'eq';
+  const value=prompt('value:'); if(value==null) return;
+  sel.where=sel.where||[]; sel.where.push({property,op,value}); runWorking();
+}
+async function runWorking(){
+  setStatus('Re-running with edits…');
+  const res=await fetch('/compositions/run-spec',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({spec:WORKING,subject:FOCUS,name:RESULT.name})}).then(r=>r.json());
+  if(res.error){ setStatus(res.error); return; }
+  const name=RESULT.name; RESULT=res; RESULT.name=name;
+  WORKING = res.spec ? JSON.parse(JSON.stringify(res.spec)) : WORKING;
+  VIEW=Osiris.defaultView(res); renderSwitcher(); await renderCurrent();
+}
+async function saveWorkingAs(){
+  const name=prompt('Save this composition as:', (RESULT.name||'lens')+' (edited)'); if(!name) return;
+  await fetch('/compositions',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({name,spec:WORKING,kind:'lens',room_id:ROOM||null})});
+  await loadComps(); setStatus(`Saved '${name}' to this room.`);
 }
 // a table row inspects in place (right panel) — it does NOT switch the center to the board,
 // so you keep your result set. (A graph node tap goes through focus(), which explores.)
@@ -227,6 +283,7 @@ async function renderCurrent(){
   if(mode==='graph'){ showBoard(); board.layout(true); } else showPanel();
   $('boardtitle').textContent = `${RESULT.name} · ${RESULT.kind} · ${RESULT.count}`;
   setStatus(`${RESULT.name} → ${RESULT.count} ${RESULT.kind}.`);
+  renderComposerBar();
 }
 function renderSwitcher(){
   const el=$('viewsw');
@@ -235,8 +292,8 @@ function renderSwitcher(){
     `<button class="${v===VIEW?'on':''}" onclick="setView('${v}')">${v[0].toUpperCase()+v.slice(1)}</button>`).join('');
 }
 function setView(v){ VIEW=v; renderSwitcher(); renderCurrent(); }
-function clearAll(){ RESULT=null; VIEW=null; renderSwitcher(); showBoard(); board.clear();
-  $('boardtitle').textContent='Board'; setStatus('Cleared.'); }
+function clearAll(){ RESULT=null; VIEW=null; WORKING=null; renderSwitcher(); renderComposerBar();
+  showBoard(); board.clear(); $('boardtitle').textContent='Board'; setStatus('Cleared.'); }
 
 // ---- analyses (cases) ------------------------------------------------------
 async function loadAnalyses(){
@@ -274,7 +331,7 @@ function renderSet(){
 // ---- focus / inspect / search-around (the one noun) ------------------------
 async function focus(id){
   FOCUS=id; $('aroundBtn').disabled=false; renderSet();
-  RESULT=null; renderSwitcher();   // exploring the graph is not viewing a composition result
+  RESULT=null; WORKING=null; renderSwitcher(); renderComposerBar();  // exploring ≠ viewing a result
   showBoard();
   if(!board.cy.getElementById(id).length) await searchAround(id, true);
   board.focusNode(id);
@@ -308,7 +365,7 @@ async function openAsSet(oid, type, dir, label){
   setStatus(`Opening ${label}…`);
   const res = await fetch(`/objects/${oid}/related?type=${encodeURIComponent(type)}&direction=${dir}`)
     .then(r=>r.json());
-  res.name = label; RESULT=res; VIEW=Osiris.defaultView(res); ACTIVE=null; loadComps();
+  res.name = label; RESULT=res; WORKING=null; VIEW=Osiris.defaultView(res); ACTIVE=null; loadComps();
   renderSwitcher(); await renderCurrent();
 }
 async function showDossier(id){

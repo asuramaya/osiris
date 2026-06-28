@@ -423,13 +423,12 @@ async def object_items(pool: asyncpg.Pool, ids: list[uuid.UUID]) -> list[dict[st
     return out
 
 
-async def run_composition(
-    pool: asyncpg.Pool, ref: str, subject: uuid.UUID | None = None
+async def run_spec(
+    pool: asyncpg.Pool, spec: dict[str, Any], subject: uuid.UUID | None = None,
+    name: str = "(spec)",
 ) -> dict[str, Any]:
-    """Execute a saved composition (by name or id), optionally against a subject."""
-    spec = await _spec_of(pool, ref)
-    if spec is None:
-        return {"error": f"no composition {ref!r}"}
+    """Evaluate an op-tree and package the Result for the generic renderer. The inline
+    composer (W4) runs an EPHEMERAL working spec through here as you edit chips — no save."""
     res = await _eval(pool, spec, subject)
     if res.kind == "objects":
         items: Any = await object_items(pool, res.objects)
@@ -440,7 +439,17 @@ async def run_composition(
     else:
         items = res.values
     count = len(items) if isinstance(items, list | dict) else 1
-    return {"composition": ref, "kind": res.kind, "count": count, "items": items}
+    return {"composition": name, "kind": res.kind, "count": count, "items": items, "spec": spec}
+
+
+async def run_composition(
+    pool: asyncpg.Pool, ref: str, subject: uuid.UUID | None = None
+) -> dict[str, Any]:
+    """Execute a saved composition (by name or id), optionally against a subject."""
+    spec = await _spec_of(pool, ref)
+    if spec is None:
+        return {"error": f"no composition {ref!r}"}
+    return await run_spec(pool, spec, subject, name=ref)
 
 
 # --- default compositions (templates — the engine's opinions, now forkable) --

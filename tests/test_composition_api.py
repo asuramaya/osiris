@@ -102,6 +102,25 @@ async def test_related_pivot_returns_a_result_set(
     assert out["count"] == 0
 
 
+async def test_run_spec_is_ephemeral_and_echoes_spec(
+    client: httpx.AsyncClient, actions: Actions
+) -> None:
+    """W4: the inline composer runs an EPHEMERAL working spec (no save) and echoes it back
+    so the lineage breadcrumb + chips can re-render. Adding a where filters in place."""
+    await _orgs(actions)  # 2 ai + 1 bio
+    base = {"op": "select", "object_type": "Organization"}
+    res = (await client.post("/compositions/run-spec", json={"spec": base})).json()
+    assert res["count"] == 3 and res["spec"] == base  # spec echoed for the breadcrumb
+    # add a filter chip → re-run the working spec → fewer
+    filtered = {"op": "select", "object_type": "Organization",
+                "where": [{"property": "sector", "op": "eq", "value": "ai"}]}
+    res2 = (await client.post("/compositions/run-spec", json={"spec": filtered})).json()
+    assert res2["count"] == 2  # only the ai orgs
+    # nothing was saved (ephemeral) — the working spec never hit the compositions table
+    assert "(working" in res2["composition"] or res2["composition"] == "(spec)"
+    assert not any(c["spec"] == filtered for c in (await client.get("/compositions")).json())
+
+
 async def test_rooms_scope_artifacts_not_the_graph(
     client: httpx.AsyncClient, actions: Actions
 ) -> None:
