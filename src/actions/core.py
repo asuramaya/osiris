@@ -20,6 +20,8 @@ from typing import Any, cast
 
 import asyncpg
 
+from src.ontology.schema import check_link_type, check_object_type
+
 Json = dict[str, Any]
 
 
@@ -72,6 +74,7 @@ class Actions:
     ) -> uuid.UUID:
         """Deterministic find-or-create on (type, canonical). Emits object_created
         only on genuine creation. Adds case membership (idempotent) when scoped."""
+        check_object_type(type_)  # validate against the declared semantic layer
         async with self.pool.acquire() as conn, conn.transaction():
             row = await conn.fetchrow(
                 "INSERT INTO objects (type, canonical) VALUES ($1,$2) "
@@ -204,6 +207,7 @@ class Actions:
         frontier's primary anchor signal; see parsers/evidence.py). (Phase 0: plain
         insert; edge consolidation/dedup and valid_until come with later phases.)"""
         actor = actor or source_id
+        check_link_type(type_)  # validate against the declared semantic layer
         async with self.pool.acquire() as conn, conn.transaction():
             new_id = cast(
                 int,

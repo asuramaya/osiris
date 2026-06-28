@@ -6,20 +6,30 @@ declare, this fails — a new type must be a reviewed entry, not an inline strin
 """
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import httpx
+import pytest
 import pytest_asyncio
 from src.actions.core import Actions
 from src.api.app import create_app
+from src.ontology import schema
 from src.ontology.schema import (
     LINK_TYPES,
     OBJECT_TYPES,
+    UnknownTypeError,
     catalog,
+    check_link_type,
+    check_object_type,
     is_known_link_type,
     is_known_object_type,
     object_type,
+    render_reference,
 )
+
+_REFERENCE = Path(__file__).resolve().parent.parent / "docs" / "REFERENCE.md"
 
 # the types/links actually present in the demo graph (PG :5439) — the catalog must
 # cover every one. Extend these lists when a new collector lands, in lockstep with schema.
@@ -85,3 +95,35 @@ async def test_schema_endpoint_serves_the_catalog(client: httpx.AsyncClient) -> 
     names = {t["name"] for t in c["object_types"]}
     assert "Organization" in names and "Property" in names
     assert any(lt["name"] == "controlled_by" for lt in c["link_types"])
+
+
+# --- enforcement: the kinetic waist validates against the catalog -----------
+
+def test_guard_raises_in_strict_mode_passes_for_declared() -> None:
+    schema.set_strict(True)  # (the autouse fixture also sets this)
+    try:
+        check_object_type("Organization")  # declared — fine
+        check_link_type("controlled_by")
+        with pytest.raises(UnknownTypeError):
+            check_object_type("NotAThing")
+        with pytest.raises(UnknownTypeError):
+            check_link_type("not_a_real_link")
+        # warn mode never raises (a novel type logs but doesn't crash a user's run)
+        schema.set_strict(False)
+        check_object_type("NotAThing")
+    finally:
+        schema.set_strict(True)
+
+
+# --- the docs cannot drift: REFERENCE.md is generated from the catalog ------
+
+def test_reference_data_model_is_generated_from_schema() -> None:
+    """The data-model block in REFERENCE.md must equal schema.render_reference()
+    exactly. If a type changes, regenerate: `python -m src.ontology.schema`."""
+    txt = _REFERENCE.read_text()
+    m = re.search(r"<!-- BEGIN generated:schema.*?-->\n(.*?)\n<!-- END generated:schema -->",
+                  txt, re.S)
+    assert m, "generated:schema marker block missing from REFERENCE.md"
+    assert m.group(1) == render_reference().rstrip(), (
+        "REFERENCE.md is stale — run `python -m src.ontology.schema` to regenerate"
+    )

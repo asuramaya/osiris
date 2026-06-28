@@ -22,8 +22,11 @@ links actually in the graph.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger("osiris.schema")
 
 
 @dataclass(frozen=True)
@@ -104,6 +107,12 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                "A technique (MITRE ATT&CK Txxxx) — HOW something is done."),
     ObjectType("Indicator", "ThreatIntel", "#58a6ff", "triangle",
                "An IOC / detection signal — a hash, IP, or domain."),
+    ObjectType("CourseOfAction", "ThreatIntel", "#79c0ff", "round-rectangle",
+               "A mitigation / response to a technique (ATT&CK course-of-action)."),
+    ObjectType("Tactic", "ThreatIntel", "#a5d6ff", "diamond",
+               "An ATT&CK tactic — the adversary's goal a technique serves."),
+    ObjectType("Identity", "ThreatIntel", "#ffa657", "ellipse",
+               "A STIX identity — the named individual/org/sector behind activity."),
     # Observables
     ObjectType("IPv4", "Observable", "#2dd4bf", "ellipse", "An IPv4 address observable."),
     ObjectType("TelegramChannel", "Observable", "#56a3ff", "ellipse",
@@ -131,6 +140,10 @@ _LINK_TYPES: tuple[LinkType, ...] = (
     LinkType("directs", "Person directs the target org.", ("Person",), ("Organization",)),
     LinkType("promoter", "Promoter of the target."),
     LinkType("represents", "Legal/agent representation."),
+    LinkType("associate_of", "Known associate.", ("Person",), ("Person",)),
+    LinkType("member_of", "Membership in an organization.", ("Person",), ("Organization",)),
+    LinkType("employs", "Employment relationship.", ("Organization",), ("Person",)),
+    LinkType("not_same_as", "Negative ER memory — confirmed distinct (suppresses re-match)."),
     LinkType("family", "Familial relationship.", ("Person",), ("Person",)),
     LinkType("sponsors", "Sponsors the target (trial/event).",
              ("Organization",), ("ClinicalTrial",)),
@@ -155,6 +168,12 @@ _LINK_TYPES: tuple[LinkType, ...] = (
     LinkType("committed_as", "Commit-authored as the target email.", (), ("Email",)),
     LinkType("derived_handle", "Handle derived from a local-part (speculative)."),
     LinkType("co_occurs", "Co-occurs near the subject in a snippet (speculative)."),
+    LinkType("rel_me", "Self-declared identity link (rel=me / profile).",
+             ("Account", "Person"), ("Account", "URL")),
+    LinkType("spouse", "Spouse.", ("Person",), ("Person",)),
+    LinkType("registered_with", "Registered with the target authority/registry."),
+    LinkType("related_to", "Generic association — the specific kind (e.g. an AI-extracted "
+             "relationship) is kept in the link's `relation` property."),
     LinkType("search_variant", "A search/handle variant."),
     LinkType("linked_to", "Generic association."),
     LinkType("has_observation", "Points at raw observed evidence.", (), ("ObservedData",)),
@@ -187,6 +206,40 @@ def is_known_link_type(name: str) -> bool:
     return name in LINK_TYPES
 
 
+# --- enforcement: the kinetic waist validates against the semantic layer -----
+# Default is WARN (a novel type logs but never crashes a user's run). Tests flip this
+# to STRICT (an undeclared type raises) so the build fails — the discipline bites in CI
+# without breaking production on an edge case.
+
+class UnknownTypeError(Exception):
+    """Raised in strict mode when an undeclared object/link type is emitted."""
+
+
+_STRICT = False
+
+
+def set_strict(strict: bool) -> None:
+    global _STRICT
+    _STRICT = strict
+
+
+def _complain(kind: str, name: str) -> None:
+    msg = f"undeclared {kind} {name!r} — add it to ontology/schema.py (the catalog)"
+    if _STRICT:
+        raise UnknownTypeError(msg)
+    logger.warning(msg)
+
+
+def check_object_type(name: str) -> None:
+    if name not in OBJECT_TYPES:
+        _complain("object type", name)
+
+
+def check_link_type(name: str) -> None:
+    if name not in LINK_TYPES:
+        _complain("link type", name)
+
+
 def categories() -> list[str]:
     """Object-type categories in declaration order (for grouped display)."""
     out: list[str] = []
@@ -194,6 +247,40 @@ def categories() -> list[str]:
         if t.category not in out:
             out.append(t.category)
     return out
+
+
+def _connects(lt: LinkType) -> str:
+    dom = "/".join(lt.domain) if lt.domain else "*"
+    rng = "/".join(lt.range) if lt.range else "*"
+    return "—" if not lt.domain and not lt.range else f"{dom} → {rng}"
+
+
+def render_reference() -> str:
+    """Render the data-model section of docs/REFERENCE.md FROM this catalog, so the
+    docs can never drift from the code. Regenerate with `python -m src.ontology.schema`;
+    a test asserts REFERENCE.md matches this exactly."""
+    lines = ["## Data model", "",
+             "Generated from `src/ontology/schema.py` — the declared semantic layer "
+             "(the single source of truth). Do not edit by hand; run "
+             "`python -m src.ontology.schema`.", ""]
+    for cat in categories():
+        lines.append(f"### {cat} object types")
+        lines.append("")
+        lines.append("| Type | Canonical schemes | Description |")
+        lines.append("|------|-------------------|-------------|")
+        for t in _OBJECT_TYPES:
+            if t.category != cat:
+                continue
+            schemes = " · ".join(f"`{s}`" for s in t.schemes) or "—"
+            lines.append(f"| `{t.name}` | {schemes} | {t.description} |")
+        lines.append("")
+    lines.append("### Link types")
+    lines.append("")
+    lines.append("| Link | Connects | Meaning |")
+    lines.append("|------|----------|---------|")
+    for lt in _LINK_TYPES:
+        lines.append(f"| `{lt.name}` | {_connects(lt)} | {lt.description} |")
+    return "\n".join(lines) + "\n"
 
 
 def catalog() -> dict[str, Any]:
@@ -215,3 +302,7 @@ def catalog() -> dict[str, Any]:
         ],
         "categories": categories(),
     }
+
+
+if __name__ == "__main__":  # pragma: no cover - doc generator
+    print(render_reference(), end="")

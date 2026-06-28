@@ -107,3 +107,18 @@ async def test_extract_uses_configured_model(actions: Actions, case_id: str) -> 
     fake = _FakeLLM('{"entities":[]}')
     await extract_document(actions, "doc", fake, case_id=uuid.UUID(case_id), model="some-model")
     assert fake.model_used == "some-model"
+
+
+async def test_unknown_relationship_demotes_to_controlled_vocab(
+    actions: Actions, case_id: str
+) -> None:
+    """An LLM emits free-form relationship phrases; link types are a CONTROLLED
+    vocabulary. An undeclared phrase becomes a generic `related_to` link with the raw
+    phrase kept in `relation` — nuance survives as data, the catalog stays clean."""
+    doc = ('{"entities":[{"name":"Acme","type":"Organization"},'
+           '{"name":"Globex","type":"Organization"}],'
+           '"relationships":[{"from":"Acme","to":"Globex","type":"acquired_by"}]}')
+    await extract_document(actions, "d", _FakeLLM(doc), case_id=uuid.UUID(case_id))
+    row = await actions.pool.fetchrow("SELECT type, properties FROM links LIMIT 1")
+    assert row["type"] == "related_to"
+    assert row["properties"]["relation"] == "acquired_by"

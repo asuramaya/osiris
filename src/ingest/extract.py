@@ -32,6 +32,7 @@ import httpx
 from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.ontology.entity_type import classify_entity_type, clean_entity_name
+from src.ontology.schema import is_known_link_type
 from src.parsers.base import EvidenceClass
 
 _SOURCE = "ai_extract"
@@ -216,8 +217,17 @@ async def extract_document(
         f, t = ids.get(rel.from_name), ids.get(rel.to_name)
         if f is None or t is None:
             continue
+        # Link types are a CONTROLLED vocabulary (ontology/schema.py). An LLM emits
+        # free-form phrases ("officer_of", "acquired_by", …) — a known one passes
+        # through; anything else is demoted to a generic `related_to` link with the
+        # raw phrase kept in `relation`. Nuance survives as data; the catalog stays clean.
+        if is_known_link_type(rel.type):
+            link_type, props = rel.type, None
+        else:
+            link_type, props = "related_to", {"relation": rel.type}
         await actions.create_link(
-            f, t, rel.type, source_id, observed, _CONF, case_id=case_id, evidence_class=_EC.value
+            f, t, link_type, source_id, observed, _CONF, case_id=case_id,
+            properties=props, evidence_class=_EC.value,
         )
         n_links += 1
 

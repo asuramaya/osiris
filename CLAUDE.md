@@ -875,5 +875,18 @@ and `docker run` do too.
     invariants (actions/core + parsers/evidence), not per-type. Tests: `tests/test_schema.py` (5) —
     the catalog must stay a SUPERSET of types/links in the graph (a parser emitting an undeclared type
     fails the build), safe fallback, /schema endpoint. 291 tests green, ruff + mypy --strict clean.
-    NEXT: parsers/UI to validate-against / fully read the catalog; generate REFERENCE.md data-model
-    from schema.py; resolve-in-place for merge Review.
+  - **(3) the discipline now BITES + the docs are GENERATED (DONE, 2026-06-27):** validation wired into
+    the kinetic waist — `actions.create_or_find_object` calls `check_object_type`, `create_link` calls
+    `check_link_type`. Default is WARN (a novel type logs, never crashes a user's run); tests flip to
+    STRICT via an autouse conftest fixture, so an undeclared type RAISES and the build fails — the
+    discipline bites in CI without breaking prod. Running the suite strict ENUMERATED the gaps (the
+    method works): added `CourseOfAction`/`Identity`/`Tactic` (STIX) + `associate_of`/`member_of`/
+    `employs`/`not_same_as`/`rel_me`/`spouse`/`registered_with` links. KEY design finding — the AI
+    EXTRACTOR emits free-form relationship phrases (officer_of, acquired_by, ∞), which can't be
+    pre-declared; the fix keeps link types a CONTROLLED VOCABULARY: a known phrase passes, an unknown
+    one is demoted to a generic `related_to` link with the raw phrase kept in the `relation` property
+    (nuance survives as data, catalog stays clean) — `extract.py` reads `is_known_link_type`. Docs:
+    `schema.render_reference()` + `python -m src.ontology.schema` generate the REFERENCE.md data-model
+    tables (27 object types / 47 link types) between `<!-- generated:schema -->` markers; a test asserts
+    REFERENCE.md == the generated output (can't drift). 294 tests green, ruff + mypy --strict clean.
+    NEXT: resolve-in-place for merge Review; parsers could read schemes from the catalog too.

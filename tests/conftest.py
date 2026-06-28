@@ -35,6 +35,19 @@ def pg_dsn() -> Iterator[str]:
         yield dsn
 
 
+@pytest.fixture(autouse=True)
+def _strict_schema() -> Iterator[None]:
+    """Enforce the semantic layer in CI: any object/link type a test emits that the
+    catalog (ontology/schema.py) doesn't declare RAISES. Runtime stays warn-only."""
+    from src.ontology import schema
+
+    schema.set_strict(True)
+    try:
+        yield
+    finally:
+        schema.set_strict(False)
+
+
 @pytest_asyncio.fixture
 async def actions(pg_dsn: str) -> AsyncIterator[Actions]:
     pool = await create_pool(pg_dsn)
