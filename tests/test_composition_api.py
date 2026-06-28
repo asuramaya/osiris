@@ -81,6 +81,27 @@ async def test_watch_appears_as_a_composition(client: httpx.AsyncClient) -> None
     assert watch["spec"]["op"] == "select"  # a watch's spec is a runnable select
 
 
+async def test_related_pivot_returns_a_result_set(
+    client: httpx.AsyncClient, actions: Actions
+) -> None:
+    """W3: a relationship group opens as a SET. /related?type=&direction= returns the
+    typed neighbours as enriched object items (table-ready) — the pivot behind 'open as set'."""
+    dev = await actions.create_or_find_object("Person", "dev:x@y.z", "git")
+    await actions.assert_property(dev, "name", "Dev X", "git", NOW, 0.85)
+    for sha in ["c1", "c2", "c3"]:
+        c = await actions.create_or_find_object("Commit", f"commit:{sha}", "git")
+        await actions.assert_property(c, "subject", f"did {sha}", "git", NOW, 0.85)
+        await actions.create_link(c, dev, "authored_by", "git", NOW, 0.85)  # commit -> dev (in)
+    res = (await client.get(f"/objects/{dev}/related",
+                            params={"type": "authored_by", "direction": "in"})).json()
+    assert res["kind"] == "objects" and res["count"] == 3
+    assert {it["canonical"] for it in res["items"]} == {"commit:c1", "commit:c2", "commit:c3"}
+    assert all("subject" in it["props"] for it in res["items"])  # table columns available
+    # the other direction is empty (the dev didn't author anything outbound)
+    out = (await client.get(f"/objects/{dev}/related", params={"direction": "out"})).json()
+    assert out["count"] == 0
+
+
 async def test_console_pages_are_render_mode_stubs() -> None:
     """object.html and watch.html are CUT — thin redirect stubs into the composer."""
     ui = Path(__file__).resolve().parent.parent / "src" / "ui" / "static"

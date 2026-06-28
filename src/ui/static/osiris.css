@@ -35,6 +35,14 @@ a { color: var(--blue); text-decoration: none; }
 .o-rel { display: flex; align-items: center; gap: 7px; padding: 5px 0; }
 .o-reltype { color: var(--muted); font-size: 10.5px; background: var(--chip); border: 1px solid var(--border2);
   border-radius: 5px; padding: 0 6px; }
+.o-relgrp { margin-bottom: 2px; }
+.o-relhdr { display: flex; align-items: center; gap: 7px; padding: 5px 0; cursor: pointer; }
+.o-relhdr:hover .o-reltype { border-color: var(--blue); }
+.o-disc { color: var(--faint); font-size: 10px; }
+.o-openset { margin-left: auto; font-size: 10.5px; color: var(--blue); cursor: pointer; opacity: .75; }
+.o-openset:hover { opacity: 1; text-decoration: underline; }
+/* the table view's type cell shouldn't wrap ("Commi t") */
+.r-table td:first-child { white-space: nowrap; }
 
 /* generic result panel (values / rows / data) */
 .r-head { font-size: 11px; letter-spacing: .5px; text-transform: uppercase; color: var(--faint);

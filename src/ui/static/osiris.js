@@ -59,22 +59,54 @@ const Osiris = (() => {
       <div class="o-sect"><h3>Relationships</h3><div data-rels class="o-muted">…</div></div>`;
   }
 
-  // walk the 1-hop neighbourhood into clickable relationship rows
-  async function loadRels(el, id, onPick) {
+  // walk the 1-hop neighbourhood, GROUPED by (direction, link type) with counts (W3).
+  // The flat 80-row dump becomes `→ authored_by (80) ▸` — collapsed, expand on demand, and
+  // "open as set" promotes the group into the center as a result set (a typed pivot).
+  // `onOpenSet(type, dir, label)` renders that set; `onPick(id)` inspects one neighbour.
+  async function loadRels(el, id, onPick, onOpenSet) {
     const g = await fetch(`/objects/${id}/graph?hops=1`).then((r) => r.json());
     const lab = {}; g.nodes.forEach((n) => (lab[n.id] = n));
-    el.innerHTML =
-      g.edges
-        .filter((e) => e.source === id || e.target === id)
-        .map((e) => {
-          const out = e.source === id, other = out ? e.target : e.source, n = lab[other] || { label: other, type: "?" };
-          return `<div class="o-rel"><span class="o-faint">${out ? "→" : "←"}</span>
-            <span class="o-reltype">${esc(e.type)}</span>
-            <a data-pick="${other}" style="cursor:pointer">${esc(n.label)}</a>
-            <span class="o-faint">${esc(n.type)}</span></div>`;
-        })
-        .join("") || '<span class="o-faint">No links.</span>';
+    const groups = {};  // key: dir|type -> {dir, type, members:[{id,label,type}]}
+    g.edges.filter((e) => e.source === id || e.target === id).forEach((e) => {
+      const out = e.source === id, other = out ? e.target : e.source, dir = out ? "out" : "in";
+      const k = `${dir}|${e.type}`;
+      (groups[k] = groups[k] || { dir, type: e.type, members: [] }).members.push(lab[other] || { id: other, label: other, type: "?" });
+    });
+    const entries = Object.values(groups);
+    if (!entries.length) { el.innerHTML = '<span class="o-faint">No links.</span>'; return; }
+    el.innerHTML = entries
+      .map((gr, i) => {
+        const arrow = gr.dir === "out" ? "→" : "←";
+        const rows = gr.members
+          .map((m) => `<div class="o-rel" style="padding-left:18px"><a data-pick="${m.id}" style="cursor:pointer">${esc(m.label)}</a>
+            <span class="o-faint">${esc(m.type)}</span></div>`)
+          .join("");
+        return `<div class="o-relgrp">
+            <div class="o-relhdr" data-grp="${i}">
+              <span class="o-faint">${arrow}</span>
+              <span class="o-reltype">${esc(gr.type)}</span>
+              <span class="o-faint">(${gr.members.length})</span>
+              <span class="o-disc">▸</span>
+              <span class="o-openset" data-open="${i}" title="open these as a set">open as set</span>
+            </div>
+            <div class="o-relbody" data-body="${i}" style="display:none">${rows}</div>
+          </div>`;
+      })
+      .join("");
+    // expand/collapse a group
+    el.querySelectorAll("[data-grp]").forEach((h) => (h.onclick = (ev) => {
+      if (ev.target.dataset.open != null) return;  // the "open as set" link handles itself
+      const i = h.dataset.grp, body = el.querySelector(`[data-body="${i}"]`);
+      const open = body.style.display === "none";
+      body.style.display = open ? "block" : "none";
+      h.querySelector(".o-disc").textContent = open ? "▾" : "▸";
+    }));
     el.querySelectorAll("[data-pick]").forEach((a) => (a.onclick = () => onPick && onPick(a.dataset.pick)));
+    el.querySelectorAll("[data-open]").forEach((s) => (s.onclick = (ev) => {
+      ev.stopPropagation();
+      const gr = entries[s.dataset.open];
+      onOpenSet && onOpenSet(gr.type, gr.dir, `${gr.type} of this object`);
+    }));
   }
 
   // ---- the cytoscape board (objects render here) ---------------------------

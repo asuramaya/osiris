@@ -273,7 +273,17 @@ async function inspect(id){
   right.innerHTML = objectDetail(o, acts) +
     `<div class="o-sect" id="dossbox" style="display:none"><h3>Dossier</h3>
       <pre id="doss" class="r-pre"></pre></div>`;
-  loadRels(right.querySelector('[data-rels]'), id, focus);
+  loadRels(right.querySelector('[data-rels]'), id, inspectOnly,
+           (type,dir,label)=>openAsSet(id,type,dir,label));
+}
+// W3: promote a relationship group into the center as a RESULT SET (the typed pivot →
+// object set → view). Reuses the W1 view-switcher: the 80 'authored_by' become a table.
+async function openAsSet(oid, type, dir, label){
+  setStatus(`Opening ${label}…`);
+  const res = await fetch(`/objects/${oid}/related?type=${encodeURIComponent(type)}&direction=${dir}`)
+    .then(r=>r.json());
+  res.name = label; RESULT=res; VIEW=Osiris.defaultView(res); ACTIVE=null; loadComps();
+  renderSwitcher(); await renderCurrent();
 }
 async function showDossier(id){
   $('dossbox').style.display='block'; $('doss').textContent='loading…';

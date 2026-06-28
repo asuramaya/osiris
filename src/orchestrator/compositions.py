@@ -384,7 +384,7 @@ async def list_compositions(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     ]
 
 
-async def _object_items(pool: asyncpg.Pool, ids: list[uuid.UUID]) -> list[dict[str, Any]]:
+async def object_items(pool: asyncpg.Pool, ids: list[uuid.UUID]) -> list[dict[str, Any]]:
     """Label a result set's objects AND carry their compact properties — in two batch
     queries, not N. The view-switcher needs this: the Graph view uses label/type, the
     Table view shows property columns (sector, date, …) without a per-row fetch."""
@@ -422,7 +422,7 @@ async def run_composition(
         return {"error": f"no composition {ref!r}"}
     res = await _eval(pool, spec, subject)
     if res.kind == "objects":
-        items: Any = await _object_items(pool, res.objects)
+        items: Any = await object_items(pool, res.objects)
     elif res.kind == "rows":
         items = res.rows
     elif res.kind == "data":

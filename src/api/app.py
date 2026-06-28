@@ -52,6 +52,7 @@ from src.ontology.schema import catalog as ontology_catalog
 from src.orchestrator.cobrowse import cobrowse_open
 from src.orchestrator.compositions import (
     list_compositions,
+    object_items,
     run_composition,
     save_composition,
     save_watch,
@@ -393,6 +394,27 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             for r in edge_rows
         ]
         return {"nodes": nodes, "edges": edges}
+
+    @app.get("/objects/{object_id}/related")
+    async def object_related(
+        object_id: uuid.UUID,
+        p: asyncpg.Pool = Depends(get_pool),
+        type: str | None = None,
+        direction: str | None = None,
+    ) -> dict[str, Any]:
+        """The neighbours reached by a link type/direction, as a RESULT SET (enriched
+        objects, table-ready). This is the typed pivot behind 'open as set' (W3): a
+        relationship group → an object set → a view. `direction` = out | in | both."""
+        rows = await p.fetch(
+            "SELECT DISTINCT CASE WHEN from_id=$1 THEN to_id ELSE from_id END AS n "
+            "FROM links WHERE (from_id=$1 OR to_id=$1) "
+            "  AND ($2::text IS NULL OR type=$2) "
+            "  AND ($3::text IS NULL OR (CASE WHEN from_id=$1 THEN 'out' ELSE 'in' END)=$3)",
+            object_id, type, direction,
+        )
+        ids = [r["n"] for r in rows]
+        items = await object_items(p, ids)
+        return {"kind": "objects", "count": len(items), "items": items}
 
     @app.get("/objects/{object_id}/helpers")
     async def available_helpers(
