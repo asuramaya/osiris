@@ -146,10 +146,11 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     @app.post("/cases")
     async def create_case(body: NewCaseBody, p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
         cid = await p.fetchval(
-            "INSERT INTO cases (name, owner, budgets) VALUES ($1,$2,$3) RETURNING id",
+            "INSERT INTO cases (name, owner, budgets, room_id) VALUES ($1,$2,$3,$4) RETURNING id",
             body.name,
             get_settings().osiris_actor,
             body.budgets or {},
+            body.room_id,
         )
         return {"id": str(cid), "name": body.name}
 
@@ -198,14 +199,47 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         return dict(row)
 
     @app.get("/cases")
-    async def list_cases(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
+    async def list_cases(
+        room: uuid.UUID | None = None, p: asyncpg.Pool = Depends(get_pool)
+    ) -> list[dict[str, Any]]:
+        """Analyses, optionally scoped to a Room (the stance). `room` omitted = all."""
         rows = await p.fetch(
             "SELECT c.id, c.name, c.owner, count(DISTINCT co.object_id) AS object_count "
             "FROM cases c LEFT JOIN case_objects co ON co.case_id = c.id "
-            "WHERE c.archived_at IS NULL "
-            "GROUP BY c.id ORDER BY c.created_at DESC"
+            "WHERE c.archived_at IS NULL AND ($1::uuid IS NULL OR c.room_id = $1) "
+            "GROUP BY c.id ORDER BY c.created_at DESC",
+            room,
         )
         return [dict(r) for r in rows]
+
+    # --- rooms: the stance switcher (segmentation over the shared graph) ------
+    @app.get("/rooms")
+    async def list_rooms(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
+        """The Rooms (stances). Each carries how many cases + compositions it scopes — the
+        graph itself is never room-scoped, so resolution and search stay global."""
+        rows = await p.fetch(
+            "SELECT r.id, r.name, r.config, "
+            "  (SELECT count(*) FROM cases c "
+            "     WHERE c.room_id=r.id AND c.archived_at IS NULL) AS cases, "
+            "  (SELECT count(*) FROM compositions x WHERE x.room_id=r.id) AS compositions "
+            "FROM rooms r ORDER BY r.created_at"
+        )
+        return [
+            {"id": str(r["id"]), "name": r["name"], "config": _coerce_json(r["config"]) or {},
+             "cases": r["cases"], "compositions": r["compositions"]}
+            for r in rows
+        ]
+
+    @app.post("/rooms")
+    async def create_room(
+        body: RoomBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, str]:
+        rid = await p.fetchval(
+            "INSERT INTO rooms (name, config) VALUES ($1,$2) "
+            "ON CONFLICT (name) DO UPDATE SET config=EXCLUDED.config RETURNING id",
+            body.name, body.config,
+        )
+        return {"id": str(rid), "name": body.name}
 
     @app.get("/objects")
     async def list_objects(
@@ -577,10 +611,10 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     # --- compositions: the composer's primitive (lenses + watches as one) ----
     @app.get("/compositions")
     async def list_compositions_route(
-        p: asyncpg.Pool = Depends(get_pool)
+        room: uuid.UUID | None = None, p: asyncpg.Pool = Depends(get_pool)
     ) -> list[dict[str, Any]]:
-        """Every saved composition (lens + watch) — the user's questions, as objects."""
-        return await list_compositions(p)
+        """Saved compositions (lens + watch), optionally scoped to a Room. `room` omitted = all."""
+        return await list_compositions(p, room)
 
     @app.post("/compositions")
     async def save_composition_route(
@@ -588,7 +622,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     ) -> dict[str, Any]:
         """Save (or fork) a composition — a named op-tree the substrate runs. Authoring is
         usually Claude-over-MCP; this is the human save/fork channel."""
-        cid = await save_composition(p, body.name, body.spec, body.kind)
+        cid = await save_composition(p, body.name, body.spec, body.kind, room_id=body.room_id)
         return {"id": str(cid), "name": body.name}
 
     @app.post("/compositions/{name}/run")
@@ -613,6 +647,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         wid = await save_watch(
             p, body.name, body.criteria.get("object_type"),
             body.criteria.get("where", []) or [], webhook_url=body.webhook_url,
+            room_id=body.room_id,
         )
         return {"id": str(wid), "name": body.name}
 
@@ -816,6 +851,12 @@ def _coerce_json(v: Any) -> Any:
 class NewCaseBody(BaseModel):
     name: str
     budgets: dict[str, Any] | None = None
+    room_id: uuid.UUID | None = None
+
+
+class RoomBody(BaseModel):
+    name: str
+    config: dict[str, Any] = {}
 
 
 class IntakeBody(BaseModel):
@@ -860,12 +901,14 @@ class SubscriptionBody(BaseModel):
     name: str
     criteria: dict[str, Any]
     webhook_url: str | None = None
+    room_id: uuid.UUID | None = None
 
 
 class CompositionBody(BaseModel):
     name: str
     spec: dict[str, Any]
     kind: str = "lens"
+    room_id: uuid.UUID | None = None
 
 
 class RunCompositionBody(BaseModel):

@@ -343,28 +343,33 @@ async def _order(
 
 async def save_composition(
     pool: asyncpg.Pool, name: str, spec: dict[str, Any], kind: str = "lens",
-    *, webhook_url: str | None = None, active: bool = True,
+    *, webhook_url: str | None = None, active: bool = True, room_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     """Save (or update) a composition by name. Fork = save under a new name. `webhook_url`
-    and `active` are a watch's execution metadata (a lens ignores them)."""
+    and `active` are a watch's execution metadata (a lens ignores them). `room_id` scopes it
+    to a stance (NULL = unassigned; a re-save without a room keeps the existing one)."""
     return await pool.fetchval(  # type: ignore[no-any-return]
-        "INSERT INTO compositions (name, kind, spec, webhook_url, active) VALUES ($1,$2,$3,$4,$5) "
+        "INSERT INTO compositions (name, kind, spec, webhook_url, active, room_id) "
+        "VALUES ($1,$2,$3,$4,$5,$6) "
         "ON CONFLICT (name) DO UPDATE SET spec=EXCLUDED.spec, kind=EXCLUDED.kind, "
-        "  webhook_url=EXCLUDED.webhook_url, active=EXCLUDED.active RETURNING id",
-        name, kind, spec, webhook_url, active,
+        "  webhook_url=EXCLUDED.webhook_url, active=EXCLUDED.active, "
+        "  room_id=COALESCE(EXCLUDED.room_id, compositions.room_id) RETURNING id",
+        name, kind, spec, webhook_url, active, room_id,
     )
 
 
 async def save_watch(
     pool: asyncpg.Pool, name: str, object_type: str | None, where: list[dict[str, Any]],
     *, canonical_prefix: str | None = None, webhook_url: str | None = None,
+    room_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     """Save a WATCH — a composition whose spec is a `select` op. The same spec runs as a
     lens (current members) and drives the evaluator (alert on a new member). One primitive."""
     spec: dict[str, Any] = {"op": "select", "object_type": object_type, "where": where}
     if canonical_prefix:
         spec["canonical_prefix"] = canonical_prefix
-    return await save_composition(pool, name, spec, "watch", webhook_url=webhook_url)
+    return await save_composition(pool, name, spec, "watch", webhook_url=webhook_url,
+                                  room_id=room_id)
 
 
 async def _spec_of(pool: asyncpg.Pool, ref: str) -> dict[str, Any] | None:
@@ -374,12 +379,17 @@ async def _spec_of(pool: asyncpg.Pool, ref: str) -> dict[str, Any] | None:
     return _coerce(row["spec"]) if row else None
 
 
-async def list_compositions(pool: asyncpg.Pool) -> list[dict[str, Any]]:
+async def list_compositions(
+    pool: asyncpg.Pool, room_id: uuid.UUID | None = None
+) -> list[dict[str, Any]]:
+    """Saved compositions. `room_id` scopes to a stance (None = all rooms — the god view)."""
     return [
         {"id": str(r["id"]), "name": r["name"], "kind": r["kind"], "spec": _coerce(r["spec"]),
-         "webhook_url": r["webhook_url"], "active": r["active"]}
+         "webhook_url": r["webhook_url"], "active": r["active"],
+         "room_id": str(r["room_id"]) if r["room_id"] else None}
         for r in await pool.fetch(
-            "SELECT id, name, kind, spec, webhook_url, active FROM compositions ORDER BY created_at"
+            "SELECT id, name, kind, spec, webhook_url, active, room_id FROM compositions "
+            "WHERE ($1::uuid IS NULL OR room_id=$1) ORDER BY created_at", room_id
         )
     ]
 

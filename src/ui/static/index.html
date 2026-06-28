@@ -99,7 +99,10 @@
 <body>
 <div id="app">
   <div id="bar">
-    <span class="brand">◭ <b>Osiris</b> <span class="o-faint" style="font-weight:400">composer</span></span>
+    <span class="brand">◭ <b>Osiris</b></span>
+    <select id="room" onchange="switchRoom(this.value)" title="Room — your stance"></select>
+    <button class="iconbtn" onclick="newRoom()" title="New room">＋</button>
+    <span class="o-faint">/</span>
     <select id="analysis" onchange="openAnalysis(this.value)" title="Analysis"></select>
     <button class="iconbtn" onclick="newAnalysis()" title="New analysis">＋</button>
     <input id="search" class="field" placeholder="Search the ontology — name or identifier…"
@@ -163,7 +166,28 @@
 <script src="/ui/osiris.js"></script>
 <script>
 const { $, esc, ty, objectDetail, loadRels, makeBoard, renderResult } = Osiris;
-let ANALYSIS=null, SET=[], FOCUS=null, STREAM=null, COMPS=[], ACTIVE=null;
+let ANALYSIS=null, SET=[], FOCUS=null, STREAM=null, COMPS=[], ACTIVE=null, ROOM='';
+const roomQ = () => ROOM ? `?room=${ROOM}` : '';   // '' = the All room (god view)
+
+// ---- rooms: the stance (journalist / broker / engineer — segmentation, not silos) ------
+async function loadRooms(){
+  const rooms = await fetch('/rooms').then(r=>r.json());
+  $('room').innerHTML = `<option value="">All</option>` + rooms.map(r=>
+    `<option value="${r.id}">${esc(r.name)} · ${r.cases}/${r.compositions}</option>`).join('');
+  $('room').value = ROOM;
+}
+async function switchRoom(id){
+  ROOM=id; $('room').value=id;
+  ACTIVE=null; RESULT=null; renderSwitcher(); board.clear(); showBoard();
+  await loadComps(); await loadAnalyses();
+}
+async function newRoom(){
+  const name = prompt('Name this room (your stance — e.g. journalist, broker, engineer):');
+  if(!name) return;
+  const r = await fetch('/rooms',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({name})}).then(r=>r.json());
+  await loadRooms(); switchRoom(r.id);
+}
 
 const board = makeBoard($('cy'), (id)=>focus(id));
 function setStatus(s){ $('status').textContent=s; }
@@ -172,7 +196,7 @@ function showPanel(){ $('stage').classList.add('panel'); }
 
 // ---- compositions (lenses + watches — one primitive) -----------------------
 async function loadComps(){
-  COMPS = await fetch('/compositions').then(r=>r.json());
+  COMPS = await fetch('/compositions'+roomQ()).then(r=>r.json());
   $('comps').innerHTML = COMPS.length ? COMPS.map(c=>`
     <div class="comp${ACTIVE===c.name?' sel':''}" onclick="runComp('${esc(c.name)}')" title="${esc(JSON.stringify(c.spec))}">
       <span class="cn">${esc(c.name)}</span>
@@ -216,15 +240,17 @@ function clearAll(){ RESULT=null; VIEW=null; renderSwitcher(); showBoard(); boar
 
 // ---- analyses (cases) ------------------------------------------------------
 async function loadAnalyses(){
-  const cs = await fetch('/cases').then(r=>r.json());
+  const cs = await fetch('/cases'+roomQ()).then(r=>r.json());
   $('analysis').innerHTML = cs.map(c=>`<option value="${c.id}">${esc(c.name)} · ${c.object_count}</option>`).join('')
     || '<option value="">— no analyses —</option>';
   if(cs.length){ ANALYSIS=cs[0].id; await openAnalysis(ANALYSIS); }
+  else { ANALYSIS=null; SET=[]; $('setn').textContent=0; renderSet();
+    setStatus('No analyses in this room — ＋ to add one, or switch rooms.'); }
 }
 async function newAnalysis(){
   const name = prompt('Name this analysis:'); if(!name) return;
   const r = await fetch('/cases',{method:'POST',headers:{'content-type':'application/json'},
-    body:JSON.stringify({name})}).then(r=>r.json());
+    body:JSON.stringify({name, room_id:ROOM||null})}).then(r=>r.json());  // lands in the active room
   await loadAnalyses(); $('analysis').value=r.id; openAnalysis(r.id);
 }
 async function openAnalysis(id){
@@ -367,11 +393,12 @@ async function saveCompose(){
     }).filter(c=>c.property&&c.value);
     const name=(type||'Any')+(where.length?` where ${where.map(c=>c.property+OPSYM[c.op]+c.value).join(' ∧ ')}`:'');
     await fetch('/subscriptions',{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({name,criteria:{object_type:type||null,where},webhook_url:$('w_hook').value.trim()||null})});
+      body:JSON.stringify({name,criteria:{object_type:type||null,where},
+        webhook_url:$('w_hook').value.trim()||null, room_id:ROOM||null})});
   } else {
     let spec; try{ spec=JSON.parse($('s_spec').value); }catch(e){ $('cmsg').textContent='Invalid JSON.'; return; }
     await fetch('/compositions',{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({name:$('s_name').value.trim()||'untitled',spec,kind:'lens'})});
+      body:JSON.stringify({name:$('s_name').value.trim()||'untitled',spec,kind:'lens',room_id:ROOM||null})});
   }
   closePop(); loadComps();
 }
@@ -455,7 +482,8 @@ async function applyDeepLink(){
   if(q.get('id')) await focus(q.get('id'));
   if(q.get('run')) await runComp(q.get('run'));
 }
-Osiris.loadSchema().then(async()=>{ await loadComps(); await loadAnalyses(); await applyDeepLink(); });
+Osiris.loadSchema().then(async()=>{
+  await loadRooms(); await loadComps(); await loadAnalyses(); await applyDeepLink(); });
 </script>
 </body>
 </html>

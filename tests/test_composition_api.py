@@ -102,6 +102,41 @@ async def test_related_pivot_returns_a_result_set(
     assert out["count"] == 0
 
 
+async def test_rooms_scope_artifacts_not_the_graph(
+    client: httpx.AsyncClient, actions: Actions
+) -> None:
+    """W2: a Room scopes the WORK (cases + compositions) to a stance, but never the graph.
+    Switching rooms re-scopes /compositions and /cases; the objects stay global."""
+    eng = (await client.post("/rooms", json={"name": "engineer"})).json()["id"]
+    jour = (await client.post("/rooms", json={"name": "journalist"})).json()["id"]
+    # a composition + a case in each stance
+    await client.post("/compositions", json={
+        "name": "commits", "spec": {"op": "select", "object_type": "Commit"}, "room_id": eng})
+    await client.post("/compositions", json={
+        "name": "screen", "spec": {"op": "function", "name": "screen_network"}, "room_id": jour})
+    await client.post("/cases", json={"name": "self-track", "room_id": eng})
+    # a GLOBAL object exists regardless of room
+    await actions.create_or_find_object("Commit", "commit:z", "git")
+
+    # /compositions scopes to the stance
+    eng_comps = {c["name"] for c in (await client.get(f"/compositions?room={eng}")).json()}
+    assert eng_comps == {"commits"}  # not the journalist's
+    jour_comps = {c["name"] for c in (await client.get(f"/compositions?room={jour}")).json()}
+    assert jour_comps == {"screen"}
+    # the All view (no room) sees both
+    assert {"commits", "screen"} <= {c["name"] for c in (await client.get("/compositions")).json()}
+
+    # /cases scopes too; /rooms carries the counts
+    assert [c["name"] for c in (await client.get(f"/cases?room={eng}")).json()] == ["self-track"]
+    assert (await client.get(f"/cases?room={jour}")).json() == []
+    rooms = {r["name"]: r for r in (await client.get("/rooms")).json()}
+    assert rooms["engineer"]["compositions"] == 1 and rooms["engineer"]["cases"] == 1
+
+    # the GRAPH is never room-scoped: a global search sees the object from any stance
+    found = (await client.get("/objects", params={"q": "commit:z"})).json()
+    assert any(o["canonical"] == "commit:z" for o in found)
+
+
 async def test_console_pages_are_render_mode_stubs() -> None:
     """object.html and watch.html are CUT — thin redirect stubs into the composer."""
     ui = Path(__file__).resolve().parent.parent / "src" / "ui" / "static"
