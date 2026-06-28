@@ -22,6 +22,7 @@ Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
   {"op":"aggregate","from":N,"group_by":[],"metric":{...}} -> group + a metric (.groupBy / rollup)
   {"op":"order","from":N,"by":?,"dir":}            -> rank a set/rows (.orderBy)
   {"op":"take","from":N,"n":K}                      -> top-N (.take)
+  {"op":"function","name":,"args":{}}              -> a registered Function (the escape hatch)
 
 The old `discrepancy` read-model is just one composition (opinion left the engine):
   subtract( collect(location, country) over traverse(subject, 2 hops),
@@ -36,12 +37,16 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 import asyncpg
 
+from src.ontology.resolution import screen_network
+from src.orchestrator.coinvest import coinvestment_ties
 from src.orchestrator.discrepancy import _HOME_PROPS, country_of
+from src.orchestrator.frontier import subject_report
 from src.orchestrator.monitor import match_condition
 
 # Named pure transforms a `collect` op may apply to a value. Kept tiny and neutral —
@@ -51,6 +56,46 @@ _TRANSFORMS: dict[str, Any] = {
     "country": country_of,
     "lower": lambda v: v.lower() if isinstance(v, str) else v,
 }
+
+# Functions — the escape hatch (Palantir's exact split: a small closed op set + arbitrary
+# registered logic for anything the ops can't express). A read-model whose precision lives
+# in domain logic — merge-aware cluster resolution, a platform-degree filter, multi-signal
+# fuzzy matching — is a FUNCTION, not a worse pure-op rewrite. Registering it here lets a
+# forkable composition REFERENCE it ({"op":"function","name":...}), so the opinion leaves
+# engine code and becomes a named, listable, swappable artifact the user owns — without
+# losing a drop of the analytics. The subject passed to `run_composition` is the function's
+# anchor (an entity for coinvest/screen; a case for subject_report).
+Function = Callable[[asyncpg.Pool, uuid.UUID, dict[str, Any]], Awaitable[Any]]
+
+
+async def _fn_coinvest(pool: asyncpg.Pool, subject: uuid.UUID, args: dict[str, Any]) -> Any:
+    return await coinvestment_ties(
+        pool, subject,
+        limit=int(args.get("limit", 25)), platform_degree=int(args.get("platform_degree", 12)),
+    )
+
+
+async def _fn_subject_report(
+    pool: asyncpg.Pool, subject: uuid.UUID, args: dict[str, Any]
+) -> Any:
+    return await subject_report(pool, subject)  # `subject` is the case id here
+
+
+async def _fn_screen(pool: asyncpg.Pool, subject: uuid.UUID, args: dict[str, Any]) -> Any:
+    return await screen_network(pool, subject, min_len=int(args.get("min_len", 5)))
+
+
+_FUNCTIONS: dict[str, Function] = {
+    "coinvest": _fn_coinvest,
+    "subject_report": _fn_subject_report,
+    "screen_network": _fn_screen,
+}
+
+
+def list_functions() -> list[str]:
+    """The registered Functions a composition may reference (the authoring channel reads
+    this to know what's beyond the closed op set)."""
+    return sorted(_FUNCTIONS)
 
 
 # Guardrails adopted from Palantir's Object Set API (load-tested, not arbitrary).
@@ -62,10 +107,11 @@ MAX_AGGREGATE_DIMS = 3
 class Result:
     """A composition's output — an object set, a value list, or aggregate rows."""
 
-    kind: str  # "objects" | "values" | "rows"
+    kind: str  # "objects" | "values" | "rows" | "data"
     objects: list[uuid.UUID] = field(default_factory=list)
     values: list[str] = field(default_factory=list)
     rows: list[dict[str, Any]] = field(default_factory=list)
+    data: Any = None  # a Function's native output (list/dict) — opaque to the ops
 
 
 def _coerce(v: Any) -> Any:
@@ -210,7 +256,16 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         base = await _eval(pool, node["from"], subject)
         n = max(0, int(node.get("n", 0)))
         return Result(base.kind, objects=base.objects[:n], values=base.values[:n],
-                      rows=base.rows[:n])
+                      rows=base.rows[:n], data=base.data)
+
+    if op == "function":
+        name = str(node.get("name", ""))
+        fn = _FUNCTIONS.get(name)
+        if fn is None:
+            raise ValueError(f"unknown function: {name!r}")
+        if subject is None:
+            raise ValueError(f"function {name!r} requires a subject")
+        return Result("data", data=await fn(pool, subject, node.get("args", {}) or {}))
 
     raise ValueError(f"unknown composition op: {op!r}")
 
@@ -331,12 +386,15 @@ async def run_composition(
         return {"error": f"no composition {ref!r}"}
     res = await _eval(pool, spec, subject)
     if res.kind == "objects":
-        items: list[Any] = [await _label(pool, oid) for oid in res.objects]
+        items: Any = [await _label(pool, oid) for oid in res.objects]
     elif res.kind == "rows":
         items = res.rows
+    elif res.kind == "data":
+        items = res.data  # a Function's native output, passed through untouched
     else:
         items = res.values
-    return {"composition": ref, "kind": res.kind, "count": len(items), "items": items}
+    count = len(items) if isinstance(items, list | dict) else 1
+    return {"composition": ref, "kind": res.kind, "count": count, "items": items}
 
 
 # --- default compositions (templates — the engine's opinions, now forkable) --
@@ -353,6 +411,11 @@ GEOGRAPHY_DISCREPANCY: dict[str, Any] = {
 }
 DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "operational-vs-disclosed-geography": GEOGRAPHY_DISCREPANCY,
+    # the former bespoke read-models, now forkable compositions over named Functions —
+    # opinion left engine code (no more hardcoded read-model + bespoke MCP tool per lens).
+    "co-investment-ties": {"op": "function", "name": "coinvest"},
+    "who-is-this": {"op": "function", "name": "subject_report"},
+    "screen-financing-network": {"op": "function", "name": "screen_network"},
 }
 
 

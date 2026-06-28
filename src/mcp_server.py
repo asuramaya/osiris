@@ -305,6 +305,15 @@ async def list_compositions() -> list[dict[str, Any]]:
     return await comp.list_compositions(pool)
 
 
+@mcp.tool()
+async def list_functions() -> list[str]:
+    """The registered Functions a composition may reference via {"op":"function","name":..}
+    — the escape hatch for analytics the closed op set can't express (co-investment ties,
+    sanctions screening, the who-is-this report). Reference one in a spec instead of
+    re-deriving its logic."""
+    return comp.list_functions()
+
+
 def main() -> None:
     mcp.run()
 

@@ -73,21 +73,33 @@ adopt that split exactly:
 
 ## How the read-models decompose (validates the closed set)
 
-Every opinionated read-model is these ops + a Function — none needs anything new:
+Every opinionated read-model is ops + a Function — none needs a new op. But the split
+between "pure op-tree" and "Function" is sharper than first sketched. Reading the actual
+code (not the wish): **only `discrepancy` is a pure op-tree.** The other three are
+*Functions* — their precision lives in domain logic the closed ops deliberately can't
+express, which is exactly what Functions are for. Pretending otherwise would ship a worse,
+op-tree rewrite (e.g. a `coinvest` that drops its platform-degree filter). The eviction
+keeps the logic; it just moves it behind a *named, forkable* `{"op":"function"}` reference.
 
 - **`discrepancy`** = `subtract(collect(location, country°) over traverse(subject, 2),
-  collect(home-props, country°) over subject)` — *already a composition* (`country°` is a
-  Function). ✅ proven.
-- **`coinvest`** = `traverse(subject → operators) → traverse(operators → other companies)
-  → aggregate(group_by company, count) → order desc → take(n)`. Needs P1 `aggregate` +
-  `order/take`.
-- **`subject_report`** = `aggregate(select(identity fragments), group_by evidence-tier)`.
-  Needs P1 `aggregate`.
-- **`screen_network`** = traverse the network, then a **Function** (fuzzy watchlist match)
-  — *not* a join. Or `intersect` after resolution links the watchlist entity.
+  collect(home-props, country°) over subject)` — a **pure op-tree** (`country°` is a named
+  transform). ✅ proven byte-equal.
+- **`coinvest`** — a **Function**. The shape is `traverse → traverse → aggregate(count) →
+  order → take`, but the *precision* is merge-aware cluster resolution, a platform-**degree**
+  filter (an operator wired into >N companies is plumbing, not a thesis sponsor), and
+  feeder-SPV exclusion. None of that is op-expressible; it's registered logic. ✅ evicted as
+  a Function, byte-equal.
+- **`subject_report`** — a **Function**. Buckets identity fragments into verified /
+  corroborated / speculative by a *computed* evidence tier (strongest `evidence_class` +
+  distinct-source count + seed/subject status), not a stored property `aggregate` could
+  group on. ✅ evicted as a Function, byte-equal.
+- **`screen_network`** — a **Function** (fuzzy + shared-identifier watchlist match over the
+  financing network) — *not* a join. ✅ evicted as a Function, byte-equal.
 
-So P1 = `union` / `intersect` / `aggregate` / `order` / `take`. That closes the
-vocabulary, and every read-model becomes a composition or a Function — nothing more.
+So P1 closed the op vocabulary (`union`/`intersect`/`aggregate`/`order`/`take`); P2 proved
+the closed-ops-**plus-Functions** model end to end: one read-model is a pure composition,
+three are Functions a composition references — and *nothing* is a bespoke read-model welded
+into engine code anymore.
 
 ## Compositions as saved objects
 
