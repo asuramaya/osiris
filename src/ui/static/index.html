@@ -388,18 +388,32 @@ async function openReview(ev){
   const pop=document.createElement('div'); pop.className='pop'; pop.id='reviewpop';
   pop.style.right='14px'; pop.style.top='46px'; pop.style.width='320px';
   pop.style.maxHeight='60vh'; pop.style.overflowY='auto';
-  pop.innerHTML = '<div class="railhead" style="padding:0 0 8px">Merge review · resolve in the inspector</div>' +
-    (m.length ? m.slice(0,30).map(c=>{
+  pop.innerHTML = '<div class="railhead" style="padding:0 0 8px">Merge review · resolve in place</div>' +
+    (m.length ? m.slice(0,40).map(c=>{
       const reason = Array.isArray(c.reasons)?c.reasons[0]:(c.reasons||'possible duplicate');
-      return `<div style="padding:7px 0;border-top:1px solid var(--border)">
+      return `<div style="padding:8px 0;border-top:1px solid var(--border)">
         <div><b>${Math.round((c.score||0)*100)}%</b> <span class="muted">${esc(reason)}</span></div>
-        <div class="faint" style="font-size:11px;margin-top:2px">
-          <a onmousedown="pick('${c.a_id}')" style="cursor:pointer">open A</a> ·
-          <a onmousedown="pick('${c.b_id}')" style="cursor:pointer">open B</a></div></div>`;
+        <div style="font-size:12px;margin:3px 0">
+          <a onmousedown="pick('${c.a_id}')" style="cursor:pointer">${esc(c.a_label)}</a>
+          <span class="faint">(${esc(c.a_type)})</span> <span class="faint">↔</span>
+          <a onmousedown="pick('${c.b_id}')" style="cursor:pointer">${esc(c.b_label)}</a>
+          <span class="faint">(${esc(c.b_type)})</span></div>
+        <div class="acts" style="margin-top:3px">
+          <button class="act go" onmousedown="resolveCand(${c.id},'merged')">Merge</button>
+          <button class="act" onmousedown="resolveCand(${c.id},'rejected')">Reject</button></div></div>`;
     }).join('') : '<div class="empty">Nothing to review.</div>');
   document.body.appendChild(pop);
   setTimeout(()=>document.addEventListener('click',function h(e){
     if(!e.target.closest('#reviewpop')){pop.remove();document.removeEventListener('click',h);}},0);
+}
+async function resolveCand(id, decision){
+  await fetch(`/merge-candidates/${id}/resolve`,{method:'POST',
+    headers:{'content-type':'application/json'},body:JSON.stringify({decision})});
+  await refreshReview();
+  if(ANALYSIS){ SET=await fetch(`/objects?case_id=${ANALYSIS}&limit=400`).then(r=>r.json());
+    $('setn').textContent=SET.length; renderSet(); }
+  if(FOCUS) inspect(FOCUS);
+  openReview();  // re-render the tray with the row gone
 }
 
 loadSchema().then(loadAnalyses);

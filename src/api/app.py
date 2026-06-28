@@ -411,7 +411,17 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
     @app.get("/merge-candidates")
     async def merge_candidates(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
-        return await review_tray(p)
+        """The merge-review tray, each pair annotated with both sides' label + type so
+        the analyst can resolve in place (no raw uuids)."""
+        out: list[dict[str, Any]] = []
+        for c in await review_tray(p):
+            a, b = await _label(p, c["a_id"]), await _label(p, c["b_id"])
+            out.append({
+                "id": c["id"], "score": float(c["score"]), "reasons": _coerce_json(c["reasons"]),
+                "a_id": str(c["a_id"]), "a_label": a["label"], "a_type": a["type"],
+                "b_id": str(c["b_id"]), "b_label": b["label"], "b_type": b["type"],
+            })
+        return out
 
     @app.post("/merge-candidates/{candidate_id}/resolve")
     async def resolve_merge(
@@ -722,6 +732,19 @@ async def _object_card(p: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, Any] 
             "demo": demo,
         },
     }
+
+
+async def _label(p: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, str]:
+    """An object's display label (name → canonical) + type — for review/list rendering."""
+    r = await p.fetchrow(
+        "SELECT o.type, o.canonical, (SELECT value #>> '{}' FROM current_assertions a "
+        "WHERE a.object_id=o.id AND a.name='name' LIMIT 1) AS name "
+        "FROM objects o WHERE o.id=$1",
+        object_id,
+    )
+    if r is None:
+        return {"label": str(object_id), "type": "?"}
+    return {"label": r["name"] or r["canonical"], "type": r["type"]}
 
 
 def _coerce_json(v: Any) -> Any:
