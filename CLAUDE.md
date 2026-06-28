@@ -913,3 +913,27 @@ and `docker run` do too.
     same engine, different switches). NEXT toward live-for-broker: the county SATELLITE (the real Harris
     scrape — the gate, vantage-bound); a delivery SINK (email/SMS); alert DEDUP/THROTTLE; worker
     dead-man's-switch; backups. See [[osiris-roadmap-deployment]].
+  - **THE OSIRIS/CLAUDE SPLIT (architecture clarified):** the end user IS Claude-over-MCP (like this
+    session, minus building). Intelligence has TWO modes: LENS (Claude, on-demand — investigate,
+    navigate a new portal, set up a watch) and TRIPWIRE (the deterministic worker, always-on — Claude
+    CAN'T run 24/7). So Osiris is precisely what Claude isn't: durable memory (the graph) · continuity
+    (the worker) · determinism (recipe replay) · the audited kinetic waist. The "AI-navigator" that
+    kills the 3000-scraper landmine is NOT a framework — it's Claude (browser tool + `save_recipe`)
+    learning a portal once; Osiris's recipe-runner replays it cheaply forever; Claude re-invoked to
+    repair when it breaks. Three taxes: parser (DEAD — AI extractor+OCR), navigation (Claude-learns/
+    deterministic-replays/self-repairs), coverage (demand-driven + federation-first, N stays small).
+- **SELF-TRACKING — Osiris ingests its own genesis (DONE, 2026-06-27):** proof that the engine is a
+  GENERAL substrate (the "Osiris as AGI substrate" insight), by using OURSELVES as the subject. A git
+  history is just another structured source. `src/ingest/gitlog.py` (`ingest_repo`, `parse_git_log`,
+  CLI `python -m src.ingest.gitlog [path] [limit]`): maps a repo → SoftwareProject / Commit / Person(dev)
+  + authored_by / in_repo / follows (the history DAG), graded AUTHORITATIVE_API (the git log is the
+  authoritative dev record), commit-date as the observed-at clock (time-travel by commit). NEW ontology
+  domain "Software" added to the catalog (schema.py: SoftwareProject `repo:`, Commit `commit:`; +
+  authored_by/in_repo/follows; `dev:` scheme on Person) — extending Osiris to software development is
+  just CATALOG ENTRIES, no engine change (the abstraction holds; REFERENCE.md regenerated). 306 tests
+  green (+3: parse, hermetic-repo-ingest, idempotent), ruff + mypy --strict clean. LIVE on this very
+  repo: 112 commits · 111 follows · 112 authored_by edges; GENESIS = commit:483696706f3e "Phase 0:
+  schema, six-action mutation layer" (the kernel's birth) → HEAD = the providers commit. dev:asuramaya.
+  operator@example.com is a Person that the existing ER could resolve to github:asuramaya (cross-domain identity
+  — the engine unifying its own creator). Osiris tracks Osiris. The same Actions/schema/provenance/graph
+  surface that models sanctions + companies + foreclosures now models its own development.

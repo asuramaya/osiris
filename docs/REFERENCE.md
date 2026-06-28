@@ -21,7 +21,7 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | Type | Canonical schemes | Description |
 |------|-------------------|-------------|
 | `Organization` | `cik:` · `lei:` · `bc-reg:` · `Q` · `sec-org:` · `company:` · `ctgov-org:` | A company, fund, agency, or other organization. |
-| `Person` | `sec-person:` · `ctgov-person:` · `Q` · `subject:` · `cluster:` · `person:` | An individual — officer, director, investigator, identity hub (resolved probabilistically; never auto-merged). |
+| `Person` | `sec-person:` · `ctgov-person:` · `Q` · `subject:` · `cluster:` · `person:` · `dev:` | An individual — officer, director, investigator, developer, identity hub (resolved probabilistically; never auto-merged). |
 
 ### Asset object types
 
@@ -68,6 +68,13 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `CourseOfAction` | — | A mitigation / response to a technique (ATT&CK course-of-action). |
 | `Tactic` | — | An ATT&CK tactic — the adversary's goal a technique serves. |
 | `Identity` | — | A STIX identity — the named individual/org/sector behind activity. |
+
+### Software object types
+
+| Type | Canonical schemes | Description |
+|------|-------------------|-------------|
+| `SoftwareProject` | `repo:` | A software repository / project. |
+| `Commit` | `commit:` | A version-control commit — an event in a project's history. |
 
 ### Observable object types
 
@@ -130,6 +137,9 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `indicates` | Indicator → * | Indicator points at the linked malware/technique. |
 | `based-on` | Indicator → * | Indicator derived from raw observed evidence. |
 | `subtechnique-of` | AttackPattern → AttackPattern | A more specific technique under a broader one. |
+| `authored_by` | Commit → Person | Commit authored by a developer. |
+| `in_repo` | Commit → SoftwareProject | Commit belongs to a repository. |
+| `follows` | Commit → Commit | Commit follows its parent (the history DAG). |
 <!-- END generated:schema -->
 
 ## Evidence classes

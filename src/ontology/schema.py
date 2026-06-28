@@ -60,9 +60,9 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                "A company, fund, agency, or other organization.",
                ("cik:", "lei:", "bc-reg:", "Q", "sec-org:", "company:", "ctgov-org:")),
     ObjectType("Person", "Entity", "#e3b341", "ellipse",
-               "An individual — officer, director, investigator, identity hub "
+               "An individual — officer, director, investigator, developer, identity hub "
                "(resolved probabilistically; never auto-merged).",
-               ("sec-person:", "ctgov-person:", "Q", "subject:", "cluster:", "person:")),
+               ("sec-person:", "ctgov-person:", "Q", "subject:", "cluster:", "person:", "dev:")),
     # Assets
     ObjectType("CryptoAddress", "Asset", "#f0883e", "diamond",
                "An on-chain wallet/address (EVM, fused with OFAC designations).",
@@ -113,6 +113,12 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                "An ATT&CK tactic — the adversary's goal a technique serves."),
     ObjectType("Identity", "ThreatIntel", "#ffa657", "ellipse",
                "A STIX identity — the named individual/org/sector behind activity."),
+    # Software — a project tracking its own genesis (Osiris ingests its own git history;
+    # proof that the engine is a general substrate, not OSINT-only).
+    ObjectType("SoftwareProject", "Software", "#8ab4f8", "round-rectangle",
+               "A software repository / project.", ("repo:",)),
+    ObjectType("Commit", "Software", "#a371f7", "ellipse",
+               "A version-control commit — an event in a project's history.", ("commit:",)),
     # Observables
     ObjectType("IPv4", "Observable", "#2dd4bf", "ellipse", "An IPv4 address observable."),
     ObjectType("TelegramChannel", "Observable", "#56a3ff", "ellipse",
@@ -185,6 +191,10 @@ _LINK_TYPES: tuple[LinkType, ...] = (
     LinkType("based-on", "Indicator derived from raw observed evidence.", ("Indicator",)),
     LinkType("subtechnique-of", "A more specific technique under a broader one.",
              ("AttackPattern",), ("AttackPattern",)),
+    LinkType("authored_by", "Commit authored by a developer.", ("Commit",), ("Person",)),
+    LinkType("in_repo", "Commit belongs to a repository.", ("Commit",), ("SoftwareProject",)),
+    LinkType("follows", "Commit follows its parent (the history DAG).",
+             ("Commit",), ("Commit",)),
 )
 
 OBJECT_TYPES: dict[str, ObjectType] = {t.name: t for t in _OBJECT_TYPES}
