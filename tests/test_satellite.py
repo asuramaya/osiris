@@ -97,3 +97,46 @@ async def test_collector_error_fails_just_that_job(actions: Actions) -> None:
     assert out.startswith("failed:")
     status = await actions.pool.fetchval("SELECT status FROM collection_jobs")
     assert status == "failed"
+
+
+# --- D5: the Harris county collector (the real beat's vantage-bound last mile) ---
+
+async def test_harris_collector_emits_property_watchitems() -> None:
+    """The demo fetch drives the SAME collector the live scrape will — proving the seam:
+    notices → graded Property WatchItems. The live fetch is the WALL (needs portal access)."""
+    from src.ingest.harris_foreclosure import demo_fetch, harris_collector, make_harris_collector
+
+    coll = make_harris_collector(fetch=demo_fetch)
+    job = CollectionJob(uuid.uuid4(), "harris_foreclosure", "", None, None)
+    items = await coll(job)
+    assert items and all(i.type == "Property" for i in items)
+    assert all(i.canonical.startswith("harris-notice:") for i in items)
+    assert items[0].evidence_class is EvidenceClass.AUTHORITATIVE_API
+
+    # the LIVE collector hits the wall until a satellite runs it at a vantage with portal access
+    live_job = CollectionJob(uuid.uuid4(), "harris_foreclosure", "", None, None)
+    try:
+        await harris_collector(live_job)
+        raise AssertionError("live_fetch should not be implemented yet")
+    except NotImplementedError as exc:
+        assert "integration point" in str(exc)
+
+
+async def test_satellite_runs_the_harris_collector_into_the_graph(
+    actions: Actions, case_id: str
+) -> None:
+    """Dispatch a harris job → a satellite at the county vantage collects → Property objects
+    land in the CENTRAL graph (the demo collector stands in for the placeful scrape)."""
+    from src.ingest.harris_foreclosure import demo_fetch, make_harris_collector
+
+    cid = uuid.UUID(case_id)
+    await dispatch_collection(actions.pool, "harris_foreclosure", "", vantage="harris-portal",
+                              case_id=cid)
+    out = await run_satellite_once(
+        actions, "sat-harris", {"harris_foreclosure": make_harris_collector(fetch=demo_fetch)},
+        vantages=["harris-portal"],
+    )
+    assert out == "collected"
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Property' AND canonical LIKE 'harris-notice:%'")
+    assert n >= 8  # the demo notices, now in the graph via the satellite waist

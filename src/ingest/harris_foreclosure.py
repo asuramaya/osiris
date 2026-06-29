@@ -18,6 +18,7 @@ facts as AUTHORITATIVE_API assertions (a county record is authoritative).
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from src.orchestrator.monitor import Puller, PullResult, WatchItem
@@ -71,6 +72,27 @@ def make_harris_foreclosure_watcher(
     return puller
 
 
+# --- satellite collector: the vantage-bound last mile ------------------------
+
+def make_harris_collector(*, fetch: Any) -> Callable[[Any], Awaitable[list[WatchItem]]]:
+    """A satellite Collector over the county portal. It runs AT a vantage with portal
+    access (the placeful last mile — NOT a placeless mass-scrape; the ForeScan grave is
+    exactly the thing we don't re-enter). `job.target` carries the cursor (last filed_date);
+    only strictly-newer notices become Property WatchItems, emitted into the CENTRAL graph
+    by the satellite runner. `fetch` is injected (live_fetch in prod, demo_fetch in tests)."""
+
+    async def collector(job: Any) -> list[WatchItem]:
+        cursor = (getattr(job, "target", "") or None)
+        notices: list[dict[str, Any]] = await fetch(cursor)
+        fresh = [
+            n for n in notices
+            if n.get("doc_id") and (cursor is None or (n.get("filed_date") or "") > cursor)
+        ]
+        return [_watch_item(n) for n in fresh]
+
+    return collector
+
+
 # --- live fetch: the integration point (HTML/ASPX — satellite-shaped) --------
 
 async def live_fetch(cursor: str | None) -> list[dict[str, Any]]:  # pragma: no cover
@@ -83,6 +105,13 @@ async def live_fetch(cursor: str | None) -> list[dict[str, Any]]:  # pragma: no 
         f"live Harris County scrape is the integration point ({_PORTAL}); "
         "use the demo dataset or a satellite collector for now"
     )
+
+
+# The LIVE collector — registered as a satellite kind. THE WALL: `live_fetch` raises until a
+# satellite runs it on a box with portal access (FRCL_R.aspx is an ASPX postback / antibot
+# form). The seam is real and the whole pipeline past it (parse→grade→lead→alert) works; the
+# placeful last mile is the operator's vantage, dispatched as a collection job.
+harris_collector = make_harris_collector(fetch=live_fetch)
 
 
 # --- DEMO dataset: synthetic notices so the front end can be felt -------------

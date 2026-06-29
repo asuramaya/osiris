@@ -125,6 +125,15 @@ async def run_satellite_once(
 COLLECTORS: dict[str, Collector] = {}
 
 
+def register_default_collectors() -> None:
+    """Register the vantage-bound collectors a real satellite serves. Kept OUT of the
+    placeless kernel (imported lazily, only at the satellite process) so the core never
+    depends on a placeful scraper. The Harris collector's LIVE fetch is the WALL — it
+    runs only on a box with county-portal access."""
+    from src.ingest.harris_foreclosure import harris_collector
+    COLLECTORS.setdefault("harris_foreclosure", harris_collector)
+
+
 async def _run_loop(poll_secs: float = 2.0) -> None:  # pragma: no cover - process entrypoint
     """The satellite agent: poll for dispatched jobs at this vantage and serve them.
     A thin process — its only dependency is Postgres (the bus)."""
@@ -134,10 +143,14 @@ async def _run_loop(poll_secs: float = 2.0) -> None:  # pragma: no cover - proce
     from src.db.pool import create_pool
 
     settings = get_settings()
+    register_default_collectors()  # wire the vantage-bound collectors at the satellite
     vantages = [v.strip() for v in settings.osiris_satellite_vantages.split(",") if v.strip()]
     pool = await create_pool(settings.database_url)
     actions = Actions(pool)
-    logger.info("satellite %s up; vantages=%s", settings.osiris_satellite_id, vantages)
+    logger.info(
+        "satellite %s up; vantages=%s; collectors=%s",
+        settings.osiris_satellite_id, vantages, sorted(COLLECTORS),
+    )
     try:
         while True:
             out = await run_satellite_once(
