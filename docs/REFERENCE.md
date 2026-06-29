@@ -76,6 +76,7 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `SoftwareProject` | `repo:` | A software repository / project. |
 | `Commit` | `commit:` | A version-control commit — an event in a project's history. |
 | `Thread` | `thread:` | An open thread / wall / next-step — project memory of what's unresolved. |
+| `Reference` | `ref:` | A design/reference document — external canon (Palantir/Notion) or own docs, ingested as project memory. |
 
 ### Observable object types
 
@@ -143,6 +144,8 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `follows` | Commit → Commit | Commit follows its parent (the history DAG). |
 | `noted_in` | Thread → Commit | A thread / wall surfaced in this commit's rationale. |
 | `resolved_by` | Thread → Commit | The later commit that addressed this thread (closes it). |
+| `cites` | Reference → Reference | This document cites / draws from that reference. |
+| `informs` | Reference → SoftwareProject/Commit | This reference grounds / informs that artifact. |
 <!-- END generated:schema -->
 
 ## Evidence classes

@@ -122,6 +122,9 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
     ObjectType("Thread", "Software", "#f0883e", "diamond",
                "An open thread / wall / next-step — project memory of what's unresolved.",
                ("thread:",)),
+    ObjectType("Reference", "Software", "#7ee787", "round-rectangle",
+               "A design/reference document — external canon (Palantir/Notion) or own docs, "
+               "ingested as project memory.", ("ref:",)),
     # Observables
     ObjectType("IPv4", "Observable", "#2dd4bf", "ellipse", "An IPv4 address observable."),
     ObjectType("TelegramChannel", "Observable", "#56a3ff", "ellipse",
@@ -202,6 +205,10 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              ("Thread",), ("Commit",)),
     LinkType("resolved_by", "The later commit that addressed this thread (closes it).",
              ("Thread",), ("Commit",)),
+    LinkType("cites", "This document cites / draws from that reference.",
+             ("Reference",), ("Reference",)),
+    LinkType("informs", "This reference grounds / informs that artifact.",
+             ("Reference",), ("SoftwareProject", "Commit")),
 )
 
 OBJECT_TYPES: dict[str, ObjectType] = {t.name: t for t in _OBJECT_TYPES}
