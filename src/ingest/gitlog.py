@@ -15,6 +15,7 @@ Run: `python -m src.ingest.gitlog [path] [limit]`.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import uuid
 from dataclasses import dataclass, field
@@ -31,8 +32,14 @@ from src.parsers.evidence import confidence_for
 _SOURCE = "git"
 _EC = EvidenceClass.AUTHORITATIVE_API.value
 _CONF = confidence_for(EvidenceClass.AUTHORITATIVE_API)
-# unit-separator delimited fields, record-separated — robust against newlines in subjects
-_FMT = "%H%x1f%an%x1f%ae%x1f%aI%x1f%P%x1f%s%x1e"
+# unit-separator delimited fields, record-separated — robust against newlines in subjects.
+# %b (body) carries the rationale: each commit message IS a decision record, so the body is
+# project memory, not noise.
+_FMT = "%H%x1f%an%x1f%ae%x1f%aI%x1f%P%x1f%s%x1f%b%x1e"
+
+# Conventional Commits: `type(scope)!: summary`. The type+scope make a commit groupable
+# ("what changed in the composer?"), so the changelog is a query, not a string-scan.
+_CONVENTIONAL = re.compile(r"^(?P<type>[a-z]+)(?:\((?P<scope>[^)]+)\))?!?:\s*(?P<summary>.+)$")
 
 
 @dataclass
@@ -43,6 +50,19 @@ class Commit:
     date: str  # ISO 8601 with offset
     parents: list[str] = field(default_factory=list)
     subject: str = ""
+    body: str = ""
+
+
+def parse_subject(subject: str) -> dict[str, str]:
+    """Pull the Conventional-Commit type/scope/summary from a subject line (empty dict if
+    it isn't conventional). These become queryable Commit properties."""
+    m = _CONVENTIONAL.match(subject.strip())
+    if not m:
+        return {}
+    return {k: v for k, v in {
+        "change_type": m.group("type"), "scope": m.group("scope"),
+        "summary": m.group("summary"),
+    }.items() if v}
 
 
 def parse_git_log(raw: str) -> list[Commit]:
@@ -55,8 +75,9 @@ def parse_git_log(raw: str) -> list[Commit]:
         f = rec.split("\x1f")
         if len(f) < 6:
             continue
+        body = f[6].strip() if len(f) > 6 else ""
         out.append(Commit(f[0], f[1], f[2], f[3],
-                          f[4].split() if f[4].strip() else [], f[5]))
+                          f[4].split() if f[4].strip() else [], f[5], body))
     return out
 
 
@@ -114,6 +135,14 @@ async def ingest_repo(
                                       case_id=case_id, evidence_class=_EC)
         await actions.assert_property(cm, "authored_date", c.date, source_id, observed, _CONF,
                                       case_id=case_id, evidence_class=_EC)
+        # the structure that turns the log into queryable memory: type/scope (groupable) +
+        # the rationale body (why, not just what).
+        for name, value in parse_subject(c.subject).items():
+            await actions.assert_property(cm, name, value, source_id, observed, _CONF,
+                                          case_id=case_id, evidence_class=_EC)
+        if c.body:
+            await actions.assert_property(cm, "rationale", c.body, source_id, observed, _CONF,
+                                          case_id=case_id, evidence_class=_EC)
         if not c.parents:  # the first commit — the genesis
             await actions.assert_property(cm, "genesis", "true", source_id, observed, _CONF,
                                           case_id=case_id, evidence_class=_EC)

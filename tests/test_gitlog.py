@@ -71,3 +71,38 @@ async def test_ingest_is_idempotent(actions: Actions, tmp_path: Path) -> None:
     for _ in range(2):  # re-ingesting the same history must not fork the graph
         await ingest_repo(actions, str(repo))
     assert await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Commit'") == 1
+
+
+def test_parse_subject_extracts_conventional_commit() -> None:
+    """The structure that makes the log queryable memory: type + scope + summary."""
+    from src.ingest.gitlog import parse_subject
+    assert parse_subject("feat(composer): W5 — author a Room") == {
+        "change_type": "feat", "scope": "composer", "summary": "W5 — author a Room"}
+    assert parse_subject("docs: reflect the vision") == {
+        "change_type": "docs", "summary": "reflect the vision"}
+    assert parse_subject("Phase 0: schema") == {}  # not conventional → no false structure
+
+
+async def test_commit_carries_type_scope_and_rationale(actions: Actions, tmp_path: Path) -> None:
+    """A commit becomes a lightweight DECISION record: its type/scope are groupable and its
+    body is the rationale (why, not just what) — project memory, queryable."""
+    repo = tmp_path / "p2"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Ada")
+    _git(repo, "config", "user.email", "ada@x.io")
+    (repo / "f").write_text("1")
+    _git(repo, "add", ".")
+    msg = "feat(engine): close the op set\n\nwe chose a closed set + a Function hatch"
+    _git(repo, "commit", "-q", "-m", msg)
+
+    await ingest_repo(actions, str(repo))
+    p = actions.pool
+
+    async def prop(name: str) -> str | None:
+        return await p.fetchval(
+            "SELECT value #>> '{}' FROM current_assertions WHERE name=$1", name)
+
+    assert await prop("change_type") == "feat"
+    assert await prop("scope") == "engine"
+    assert "Function hatch" in (await prop("rationale") or "")
