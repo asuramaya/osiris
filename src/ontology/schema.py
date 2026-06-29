@@ -119,6 +119,9 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                "A software repository / project.", ("repo:",)),
     ObjectType("Commit", "Software", "#a371f7", "ellipse",
                "A version-control commit — an event in a project's history.", ("commit:",)),
+    ObjectType("Thread", "Software", "#f0883e", "diamond",
+               "An open thread / wall / next-step — project memory of what's unresolved.",
+               ("thread:",)),
     # Observables
     ObjectType("IPv4", "Observable", "#2dd4bf", "ellipse", "An IPv4 address observable."),
     ObjectType("TelegramChannel", "Observable", "#56a3ff", "ellipse",
@@ -195,6 +198,8 @@ _LINK_TYPES: tuple[LinkType, ...] = (
     LinkType("in_repo", "Commit belongs to a repository.", ("Commit",), ("SoftwareProject",)),
     LinkType("follows", "Commit follows its parent (the history DAG).",
              ("Commit",), ("Commit",)),
+    LinkType("noted_in", "A thread / wall surfaced in this commit's rationale.",
+             ("Thread",), ("Commit",)),
 )
 
 OBJECT_TYPES: dict[str, ObjectType] = {t.name: t for t in _OBJECT_TYPES}
