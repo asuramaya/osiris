@@ -58,6 +58,7 @@ from src.orchestrator.compositions import (
     save_composition,
     save_watch,
 )
+from src.orchestrator.console import get_console, set_console
 from src.orchestrator.dossier import entity_dossier
 from src.orchestrator.federation import federated_query, promote, to_preview
 from src.orchestrator.frontier import subject_report
@@ -662,6 +663,39 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         except ValueError as exc:
             return {"error": str(exc)}
 
+    # ---- the shared console cursor (real-time Claude↔front sync) -------------
+    @app.get("/console")
+    async def console_get(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        """The current shared cursor — room / composition / view / focused object."""
+        return await get_console(p)
+
+    @app.post("/console")
+    async def console_set(
+        body: ConsoleBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        """Move the shared cursor. Both the browser (by='human') and Claude (by='claude')
+        write here; `rev` + `updated_by` let each side ignore its own echo."""
+        fields = body.model_dump(exclude={"by"}, exclude_unset=True)
+        return await set_console(p, by=body.by, **fields)
+
+    @app.get("/console/stream")
+    async def console_stream(request: Request) -> StreamingResponse:
+        """SSE: push the shared cursor whenever its `rev` changes (same poll-and-diff loop
+        as the case stream). The browser applies remote moves; its own it suppresses by rev."""
+        async def gen() -> AsyncIterator[str]:
+            last = ""
+            while not await request.is_disconnected():
+                state = await get_console(request.app.state.pool)
+                payload = _json.dumps(state)
+                if payload != last:
+                    yield f"data: {payload}\n\n"
+                    last = payload
+                else:
+                    yield ": keep-alive\n\n"
+                await asyncio.sleep(1.0)
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
     @app.post("/subscriptions")
     async def create_subscription_route(
         body: SubscriptionBody, p: asyncpg.Pool = Depends(get_pool)
@@ -944,6 +978,17 @@ class RunSpecBody(BaseModel):
     spec: dict[str, Any]
     subject: str | None = None
     name: str | None = None
+
+
+class ConsoleBody(BaseModel):
+    """A partial move of the shared cursor. `by` is who moved (claude / human); only the
+    fields actually set are written (exclude_unset), so a focus-only move keeps the rest."""
+    by: str = "human"
+    room_id: uuid.UUID | None = None
+    composition: str | None = None
+    view: str | None = None
+    focused_object_id: uuid.UUID | None = None
+    working_spec: dict[str, Any] | None = None
 
 
 class FederateBody(BaseModel):

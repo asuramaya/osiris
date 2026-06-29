@@ -8,6 +8,10 @@
 }
 * { box-sizing: border-box; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* the shared-cursor link indicator — quiet when idle, flashes when Claude moves the screen */
+.syncbadge { font-size: 10.5px; color: var(--faint); border: 1px solid var(--border2);
+  border-radius: 10px; padding: 1px 8px; white-space: nowrap; transition: all .25s; }
+.syncbadge.claude { color: var(--accent); border-color: var(--accent); }
 a { color: var(--blue); text-decoration: none; }
 .o-muted { color: var(--muted); } .o-faint { color: var(--faint); }
 .o-empty { color: var(--faint); font-size: 12px; padding: 16px 0; text-align: center; }

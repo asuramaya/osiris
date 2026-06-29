@@ -38,6 +38,8 @@ from src.ontology.resolution import (
 )
 from src.orchestrator import compositions as comp
 from src.orchestrator.coinvest import coinvestment_ties
+from src.orchestrator.console import get_console as _get_console
+from src.orchestrator.console import set_console as _set_console
 from src.orchestrator.discrepancy import footprint_discrepancy
 from src.orchestrator.dossier import entity_dossier
 from src.orchestrator.sources import as_dicts, suggest
@@ -309,13 +311,46 @@ async def save_composition(
     return {"id": str(cid), "name": name}
 
 
+# --- the shared console (real-time Claude↔front sync) -----------------------
+
+@mcp.tool()
+async def get_console() -> dict[str, Any]:
+    """What the operator is looking at RIGHT NOW — the shared cursor (room / composition /
+    view / focused object). The front end is the conversation, so read this first to see
+    their screen before you act ('where are we?')."""
+    return await _get_console(await _pool_get())
+
+
+@mcp.tool()
+async def focus_object(object_ref: str) -> dict[str, Any]:
+    """Focus an object (UUID or name) on the operator's LIVE screen — drives the console so
+    they see what you're looking at. Returns the object's identity + properties so you can
+    reason about it too."""
+    pool = await _pool_get()
+    oid = await _resolve(pool, object_ref)
+    if oid is None:
+        return {"error": f"no object matches {object_ref!r}"}
+    await _set_console(pool, by="claude", focused_object_id=oid)
+    row = await pool.fetchrow("SELECT type, canonical FROM objects WHERE id=$1", oid)
+    props = await pool.fetch(
+        "SELECT name, value #>> '{}' AS value FROM current_assertions WHERE object_id=$1", oid
+    )
+    return {"focused": str(oid), "type": row["type"], "canonical": row["canonical"],
+            "properties": {p["name"]: p["value"] for p in props}}
+
+
 @mcp.tool()
 async def run_composition(name: str, subject: str | None = None) -> dict[str, Any]:
-    """Run a saved composition, optionally against a subject object (UUID or name).
-    Returns its result — an object set (each named), a value list, or aggregate rows."""
+    """Run a saved composition, optionally against a subject object (UUID or name), AND light
+    it up on the operator's live screen. Returns its result — an object set (each named), a
+    value list, or aggregate rows."""
     pool = await _pool_get()
     sid = await _resolve(pool, subject) if subject else None
-    return await comp.run_composition(pool, name, sid)
+    res = await comp.run_composition(pool, name, sid)
+    # drive the front end: show this composition (and its subject, so a subject-lens reproduces)
+    await _set_console(pool, by="claude", composition=name,
+                       **({"focused_object_id": sid} if sid else {}))
+    return res
 
 
 @mcp.tool()

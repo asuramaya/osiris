@@ -112,6 +112,7 @@
 <div id="app">
   <div id="bar">
     <span class="brand">◭ <b>Osiris</b></span>
+    <span id="syncbadge" class="syncbadge" title="Live shared cursor with Claude">⟲ live</span>
     <select id="room" onchange="switchRoom(this.value)" title="Room — your stance"></select>
     <button class="iconbtn" onclick="newRoom()" title="New room">＋</button>
     <span class="o-faint">/</span>
@@ -182,6 +183,45 @@ const { $, esc, ty, objectDetail, loadRels, makeBoard, renderResult } = Osiris;
 let ANALYSIS=null, SET=[], FOCUS=null, STREAM=null, COMPS=[], ACTIVE=null, ROOM='', ROOMS=[];
 const roomQ = () => ROOM ? `?room=${ROOM}` : '';   // '' = the All room (god view)
 
+// ---- the shared cursor: real-time bidirectional sync with Claude -----------
+// One console state both Claude (MCP) and this browser read/write. Claude focuses an object
+// or runs a lens → the screen follows; the operator navigates → Claude reads their cursor.
+// Echo-suppression: every write bumps `rev`; we ignore stream events at or below the last
+// rev we reconciled, and SYNCING gates our own posts while APPLYING a remote move.
+let CONSOLE_REV=-1, SYNCING=false;
+function postConsole(fields){
+  if(SYNCING) return;  // don't echo a move we're applying FROM the cursor
+  fetch('/console',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify(Object.assign({by:'human'},fields))})
+    .then(r=>r.json()).then(s=>{ if(s&&s.rev!=null) CONSOLE_REV=s.rev; }).catch(()=>{});
+}
+function setSyncBadge(by){
+  const b=$('syncbadge'); if(!b) return;
+  b.textContent = by==='claude' ? '⟲ Claude moved' : '⟲ live';
+  b.classList.toggle('claude', by==='claude');
+  if(by==='claude'){ clearTimeout(setSyncBadge._t);
+    setSyncBadge._t=setTimeout(()=>{ b.textContent='⟲ live'; b.classList.remove('claude'); },2500); }
+}
+function watchConsole(){
+  const es=new EventSource('/console/stream');
+  es.onmessage=async ev=>{
+    const s=JSON.parse(ev.data);
+    if(s.rev==null || s.rev<=CONSOLE_REV) return;   // our own echo, or stale
+    CONSOLE_REV=s.rev;
+    if(s.updated_by!=='human') await applyConsole(s);  // a remote (Claude) move → follow it
+  };
+}
+async function applyConsole(s){
+  SYNCING=true;
+  try{
+    setSyncBadge(s.updated_by);
+    if(s.room_id && s.room_id!==ROOM) await switchRoom(s.room_id);
+    if(s.focused_object_id && s.focused_object_id!==FOCUS) await focus(s.focused_object_id);
+    if(s.composition && s.composition!==ACTIVE) await runComp(s.composition);
+    if(s.view && RESULT && s.view!==VIEW) setView(s.view);
+  } finally { SYNCING=false; }
+}
+
 // ---- rooms: the stance (journalist / broker / engineer — segmentation, not silos) ------
 async function loadRooms(){
   ROOMS = await fetch('/rooms').then(r=>r.json());
@@ -190,7 +230,7 @@ async function loadRooms(){
   $('room').value = ROOM;
 }
 async function switchRoom(id){
-  ROOM=id; $('room').value=id;
+  ROOM=id; postConsole({room_id:id||null}); $('room').value=id;
   ACTIVE=null; RESULT=null; WORKING=null; renderSwitcher(); renderComposerBar(); board.clear(); showBoard();
   await loadComps(); await loadAnalyses();
   // ORIENT ON ARRIVAL: a desk auto-runs its home composition (the briefing — "where am I?").
@@ -226,7 +266,7 @@ async function loadComps(){
 // exploration board.
 let RESULT=null, VIEW=null, WORKING=null;
 async function runComp(name){
-  ACTIVE=name; loadComps();
+  ACTIVE=name; postConsole({composition:name}); loadComps();
   setStatus(`Running ${name}…`);
   const res = await fetch(`/compositions/${encodeURIComponent(name)}/run`,{method:'POST',
     headers:{'content-type':'application/json'},body:JSON.stringify({subject:FOCUS})}).then(r=>r.json());
@@ -308,7 +348,7 @@ function renderSwitcher(){
   el.innerHTML = Osiris.VIEWS.map(v=>
     `<button class="${v===VIEW?'on':''}" onclick="setView('${v}')">${v[0].toUpperCase()+v.slice(1)}</button>`).join('');
 }
-function setView(v){ VIEW=v; renderSwitcher(); renderCurrent(); }
+function setView(v){ VIEW=v; postConsole({view:v}); renderSwitcher(); renderCurrent(); }
 function clearAll(){ RESULT=null; VIEW=null; WORKING=null; renderSwitcher(); renderComposerBar();
   showBoard(); board.clear(); $('boardtitle').textContent='Board'; setStatus('Cleared.'); }
 
@@ -347,7 +387,7 @@ function renderSet(){
 
 // ---- focus / inspect / search-around (the one noun) ------------------------
 async function focus(id){
-  FOCUS=id; $('aroundBtn').disabled=false; renderSet();
+  FOCUS=id; postConsole({focused_object_id:id}); $('aroundBtn').disabled=false; renderSet();
   RESULT=null; WORKING=null; renderSwitcher(); renderComposerBar();  // exploring ≠ viewing a result
   showBoard();
   if(!board.cy.getElementById(id).length) await searchAround(id, true);
@@ -562,7 +602,8 @@ async function applyDeepLink(){
   if(q.get('run')) await runComp(q.get('run'));
 }
 Osiris.loadSchema().then(async()=>{
-  await loadRooms(); await loadComps(); await loadAnalyses(); await applyDeepLink(); });
+  await loadRooms(); await loadComps(); await loadAnalyses(); await applyDeepLink();
+  watchConsole(); });  // open the shared-cursor link with Claude
 </script>
 </body>
 </html>
