@@ -12,6 +12,30 @@
 .syncbadge { font-size: 10.5px; color: var(--faint); border: 1px solid var(--border2);
   border-radius: 10px; padding: 1px 8px; white-space: nowrap; transition: all .25s; }
 .syncbadge.claude { color: var(--accent); border-color: var(--accent); }
+/* the ⌘K affordance in the header */
+.kbtn { background: var(--chip); border: 1px solid var(--border2); color: var(--muted);
+  border-radius: 6px; padding: 4px 8px; font-size: 11px; cursor: pointer; letter-spacing: .3px; }
+.kbtn:hover { color: var(--text); border-color: var(--blue); }
+/* the command surface — Notion's one palette: calm, centered, summoned, dismissed */
+.palette-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 100;
+  display: none; align-items: flex-start; justify-content: center; padding-top: 12vh; }
+.palette-overlay.on { display: flex; }
+.palette { width: min(640px, 92vw); background: var(--panel); border: 1px solid var(--border2);
+  border-radius: 12px; box-shadow: 0 18px 56px rgba(0,0,0,.55); overflow: hidden; }
+#palinput { width: 100%; border: 0; background: transparent; color: var(--text); font-size: 15px;
+  padding: 16px 18px; outline: none; border-bottom: 1px solid var(--border); }
+.pallist { max-height: 52vh; overflow: auto; padding: 6px; }
+.pal-cat { font-size: 10px; text-transform: uppercase; letter-spacing: .6px; color: var(--faint);
+  padding: 9px 12px 3px; }
+.pal-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 7px;
+  cursor: pointer; }
+.pal-row.sel { background: var(--chip); }
+.pal-label { flex: 1; font-size: 13.5px; color: var(--text); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.pal-hint { font-size: 10px; color: var(--faint); text-transform: uppercase; letter-spacing: .4px; }
+.pal-empty { padding: 18px; color: var(--muted); text-align: center; font-size: 13px; }
+.pal-foot { border-top: 1px solid var(--border); padding: 7px 14px; font-size: 10.5px;
+  color: var(--faint); }
 /* timeline view — an ordered set as a concise date · summary list (Notion's Timeline view) */
 .tl { display: flex; flex-direction: column; }
 .tl-item { display: flex; gap: 12px; padding: 9px 4px; border-top: 1px solid var(--border);

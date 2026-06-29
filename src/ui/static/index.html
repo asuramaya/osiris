@@ -123,6 +123,7 @@
     <button class="iconbtn" onclick="newAnalysis()" title="New analysis">＋</button>
     <input id="search" class="field" placeholder="Search the ontology — name or identifier…"
            oninput="debouncedSearch()" onfocus="debouncedSearch()" autocomplete="off" />
+    <button class="kbtn" onclick="openPalette()" title="Command palette">⌘K</button>
     <span class="spacer"></span>
     <button class="iconbtn" onclick="toggleKey(event)">Type key</button>
     <button class="iconbtn" onclick="openReview()">Review <span id="reviewN" class="o-muted">0</span></button>
@@ -179,6 +180,9 @@
     </aside>
   </div>
 </div>
+
+<!-- the command surface: ⌘K / slash palette — the one home for every action (U1) -->
+<div id="palette" class="palette-overlay"></div>
 
 <script src="/ui/osiris.js"></script>
 <script>
@@ -628,6 +632,81 @@ async function applyDeepLink(){
   if(q.get('id')) await focus(q.get('id'));
   if(q.get('run')) await runComp(q.get('run'));
 }
+
+// ---- the command surface: ⌘K / slash palette (Notion's one command home) ---------------
+// Every action lives here — run a lens, find an object, search-around, expand, switch room,
+// the board verbs — summoned with a keystroke, dismissed when done. This is what lets the
+// global toolbar shrink toward zero (U4): the screen stays calm, the power stays one key away.
+let PAL_OPEN=false, PAL_SEL=0, PAL_CMDS=[];
+function paletteCommands(q){
+  const ql=q.toLowerCase(), cmds=[];
+  COMPS.forEach(c=>cmds.push({cat:'Run a lens', label:c.name, hint:c.kind, run:()=>runComp(c.name)}));
+  cmds.push({cat:'Room', label:'All — god view', run:()=>switchRoom('')});
+  ROOMS.forEach(r=>cmds.push({cat:'Room', label:r.name, run:()=>switchRoom(r.id)}));
+  [['Expand — run collectors',expandSet],
+   ['Search around the focused object',()=>FOCUS?searchAround(FOCUS):setStatus('Focus an object first.')],
+   ['Merge review',openReview], ['New analysis',newAnalysis],
+   ['Fit the board',()=>board.fit()], ['Re-layout',()=>board.layout(false)],
+   ['Clear the board',clearAll]
+  ].forEach(([label,run])=>cmds.push({cat:'Action', label, run}));
+  return ql ? cmds.filter(c=>c.label.toLowerCase().includes(ql)||c.cat.toLowerCase().includes(ql)) : cmds;
+}
+async function paletteObjects(q){
+  if(q.length<2) return [];
+  const r=await fetch(`/objects?q=${encodeURIComponent(q)}&limit=8`).then(r=>r.json()).catch(()=>[]);
+  return r.map(o=>({cat:'Object', label:o.label||o.canonical||o.id, hint:o.type, run:()=>focus(o.id)}));
+}
+function openPalette(){
+  PAL_OPEN=true; PAL_SEL=0;
+  const ov=$('palette'); ov.className='palette-overlay on';
+  ov.innerHTML=`<div class="palette" onclick="event.stopPropagation()">
+    <input id="palinput" placeholder="Run a lens, find an object, or an action…" autocomplete="off">
+    <div id="pallist" class="pallist"></div>
+    <div class="pal-foot"><span>↵ run · ↑↓ move · esc close</span></div></div>`;
+  ov.onclick=closePalette;
+  const inp=$('palinput'); inp.oninput=refreshPalette; inp.onkeydown=palKey; inp.focus();
+  refreshPalette();
+}
+function closePalette(){ PAL_OPEN=false; const o=$('palette'); o.className='palette-overlay'; o.innerHTML=''; }
+async function refreshPalette(){
+  const q=($('palinput')?.value||'').trim();
+  PAL_CMDS=[...await paletteObjects(q), ...paletteCommands(q)];  // objects first when searching
+  if(PAL_SEL>=PAL_CMDS.length) PAL_SEL=0;
+  renderPalette();
+}
+function renderPalette(){
+  const list=$('pallist'); if(!list) return;
+  if(!PAL_CMDS.length){ list.innerHTML='<div class="pal-empty">No matches.</div>'; return; }
+  let html='', lastCat=null;
+  PAL_CMDS.forEach((c,i)=>{
+    if(c.cat!==lastCat){ html+=`<div class="pal-cat">${esc(c.cat)}</div>`; lastCat=c.cat; }
+    html+=`<div class="pal-row${i===PAL_SEL?' sel':''}" data-i="${i}">
+      <span class="pal-label">${esc(c.label)}</span>${c.hint?`<span class="pal-hint">${esc(c.hint)}</span>`:''}</div>`;
+  });
+  list.innerHTML=html;
+  list.querySelectorAll('[data-i]').forEach(el=>{
+    el.onmouseenter=()=>{ PAL_SEL=+el.dataset.i; paintSel(); };
+    el.onclick=palExec;
+  });
+  paintSel();
+}
+function paintSel(){
+  document.querySelectorAll('#pallist .pal-row').forEach(el=>el.classList.toggle('sel',+el.dataset.i===PAL_SEL));
+  const sel=document.querySelector('#pallist .sel'); if(sel) sel.scrollIntoView({block:'nearest'});
+}
+function palKey(e){
+  if(e.key==='ArrowDown'){ e.preventDefault(); PAL_SEL=Math.min(PAL_SEL+1,PAL_CMDS.length-1); paintSel(); }
+  else if(e.key==='ArrowUp'){ e.preventDefault(); PAL_SEL=Math.max(PAL_SEL-1,0); paintSel(); }
+  else if(e.key==='Enter'){ e.preventDefault(); palExec(); }
+  else if(e.key==='Escape'){ e.preventDefault(); closePalette(); }
+}
+function palExec(){ const c=PAL_CMDS[PAL_SEL]; if(!c) return; closePalette(); c.run(); }
+document.addEventListener('keydown',e=>{
+  const inField=/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){ e.preventDefault(); PAL_OPEN?closePalette():openPalette(); }
+  else if(e.key==='/'&&!PAL_OPEN&&!inField){ e.preventDefault(); openPalette(); }
+});
+
 Osiris.loadSchema().then(async()=>{
   await loadRooms(); await loadComps(); await loadAnalyses(); await applyDeepLink();
   watchConsole(); });  // open the shared-cursor link with Claude
