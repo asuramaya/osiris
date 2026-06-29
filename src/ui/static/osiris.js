@@ -223,22 +223,30 @@ const Osiris = (() => {
   const VIEWS = ["graph", "table"];
   // a composition that ranks/sequences (order / take) or rolls up (aggregate) is a LIST, not
   // a graph — rendering it on the board throws away the very ordering it computed. So intent
-  // wins over count: a ranked objects set defaults to Table regardless of size.
+  // wins over count (this is the Notion lesson: the view follows the data's shape).
   function isRanked(spec) {
     for (let s = spec; s && typeof s === "object"; s = s.from)
       if (s.op === "order" || s.op === "take" || s.op === "aggregate") return true;
     return false;
   }
+  // the views an objects result supports — a ranked/sequenced set earns a Timeline (the order
+  // it computed is the point); everything keeps Graph + Table. The shell builds the switcher
+  // from this, so a ranking offers Timeline first and a flat set offers Graph first.
+  function viewsFor(result) {
+    if (result.kind !== "objects") return [];
+    return isRanked(result.spec) ? ["timeline", "table", "graph"] : ["graph", "table"];
+  }
   function defaultView(result) {
     if (result.kind !== "objects") return "panel";
-    if (isRanked(result.spec)) return "table";            // a ranking/sequence is a list
+    if (isRanked(result.spec)) return "timeline";         // a ranking is a timeline, not a graph
     return result.items.length > 30 ? "table" : "graph";  // else a hairball past ~30 → table
   }
-  async function renderResult(result, mounts, view, onPick) {
+  async function renderResult(result, mounts, view, onPick, onDrill) {
     const { board, panel } = mounts;
     const kind = result.kind, items = result.items;
     if (kind === "objects") {
       if (view === "table") { objectsTable(panel, items, onPick); return "panel"; }
+      if (view === "timeline") { timelineList(panel, items, onPick); return "panel"; }
       if (board) { board.clear(); await board.placeObjects(items); }  // a CLEAN result board
       return "graph";
     }
@@ -248,9 +256,31 @@ const Osiris = (() => {
           : `<div class="o-empty">Empty result.</div>`);
       return "panel";
     }
-    if (kind === "rows") { panel.innerHTML = renderRows(items); return "panel"; }
+    if (kind === "rows") { renderRows(panel, items, result.spec, onDrill); return "panel"; }
     panel.innerHTML = renderData(items);  // a Function's native output, by shape
     return "panel";
+  }
+
+  // an ORDERED objects set as a Timeline — the concise read the operator asked for: a date +
+  // the one salient summary per item, in the order the composition computed. NOT a column dump
+  // of every property (which buried 'recent work' under full commit rationale).
+  const _DATEKEYS = ["authored_date", "observed_at", "filed_date", "sale_date", "date", "first_seen"];
+  const _SUMKEYS = ["summary", "change", "subject", "title", "status", "description", "rationale"];
+  function _pick(props, keys) { for (const k of keys) if (props && props[k]) return props[k]; return null; }
+  function timelineList(panel, items, onPick) {
+    if (!items.length) { panel.innerHTML = `<div class="o-empty">Empty result.</div>`; return; }
+    const body = items.map((o, i) => {
+      const p = o.props || {};
+      const d = _pick(p, _DATEKEYS), s = _pick(p, _SUMKEYS);
+      const when = d ? esc(String(d).slice(0, 10)) : `#${i + 1}`;
+      const sum = s ? `<div class="tl-sum">${esc(String(s).slice(0, 160))}</div>` : "";
+      return `<div class="tl-item" data-pick="${o.id}">
+        <span class="tl-when">${when}</span>
+        <div class="tl-main"><span class="o-faint">${esc(o.type)}</span> ${esc(o.label)}${sum}</div></div>`;
+    }).join("");
+    panel.innerHTML = `<div class="r-head">${items.length} item${items.length === 1 ? "" : "s"} · in order</div>
+      <div class="tl">${body}</div>`;
+    panel.querySelectorAll("[data-pick]").forEach((el) => (el.onclick = () => onPick && onPick(el.dataset.pick)));
   }
 
   // an objects set as a TABLE — Type · Name · the most-common property columns. The fix for
@@ -272,16 +302,23 @@ const Osiris = (() => {
     panel.querySelectorAll("[data-pick]").forEach((tr) => (tr.onclick = () => onPick && onPick(tr.dataset.pick)));
   }
 
-  // aggregate rows: [{group:{prop:val,...}, metric:N}] -> a ranked table
-  function renderRows(rows) {
-    if (!rows || !rows.length) return `<div class="o-empty">No groups.</div>`;
+  // aggregate rows: [{group:{prop:val,...}, metric:N}] -> a ranked table where each row DRILLS
+  // INTO the objects it counts (the missing interactive primitive — 'changelog by area' was a
+  // dead list; now clicking 'composer · 6' opens those 6 commits). onDrill(group, spec) is the
+  // shell's hook back to a select filtered by the group.
+  function renderRows(panel, rows, spec, onDrill) {
+    if (!rows || !rows.length) { panel.innerHTML = `<div class="o-empty">No groups.</div>`; return; }
     const dims = Object.keys(rows[0].group || {});
     const head = dims.map((d) => `<th>${esc(d)}</th>`).join("") + "<th>metric</th>";
     const body = rows
-      .map((r) => `<tr>${dims.map((d) => `<td>${esc(r.group[d])}</td>`).join("")}<td class="r-num">${esc(r.metric)}</td></tr>`)
+      .map((r) => `<tr style="cursor:pointer">${dims.map((d) =>
+        `<td>${esc(r.group[d] || "(none)")}</td>`).join("")}<td class="r-num">${esc(r.metric)}</td></tr>`)
       .join("");
-    return `<div class="r-head">${rows.length} group${rows.length === 1 ? "" : "s"}</div>
+    panel.innerHTML = `<div class="r-head">${rows.length} group${rows.length === 1 ? "" : "s"} ·
+      click a row to open its objects</div>
       <table class="r-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+    panel.querySelectorAll("tbody tr").forEach((tr, i) =>
+      (tr.onclick = () => onDrill && onDrill(rows[i].group, spec)));
   }
 
   // a Function's output, rendered generically by shape (no per-Function knowledge)
@@ -311,5 +348,5 @@ const Osiris = (() => {
   }
 
   return { $, esc, HOW, pct, OPSYM, loadSchema, ty, objectDetail, loadRels, makeBoard,
-    renderResult, VIEWS, defaultView, lineage, innerSelect };
+    renderResult, VIEWS, viewsFor, defaultView, lineage, innerSelect };
 })();

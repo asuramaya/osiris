@@ -336,7 +336,7 @@ function inspectOnly(id){ FOCUS=id; renderSet(); inspect(id); }
 async function renderCurrent(){
   if(!RESULT) return;
   if(VIEW==='graph') showBoard();  // reveal BEFORE placeObjects lays out, so #cy is measurable
-  const mode = await renderResult(RESULT, {board, panel:$('result')}, VIEW, inspectOnly);
+  const mode = await renderResult(RESULT, {board, panel:$('result')}, VIEW, inspectOnly, drillInto);
   if(mode==='graph'){ showBoard(); board.resizeFit(); board.layout(true); } else showPanel();
   $('boardtitle').textContent = `${RESULT.name} · ${RESULT.kind} · ${RESULT.count}`;
   setStatus(`${RESULT.name} → ${RESULT.count} ${RESULT.kind}.`);
@@ -344,9 +344,27 @@ async function renderCurrent(){
 }
 function renderSwitcher(){
   const el=$('viewsw');
-  if(!RESULT || RESULT.kind!=='objects'){ el.innerHTML=''; return; }
-  el.innerHTML = Osiris.VIEWS.map(v=>
+  const views = RESULT ? Osiris.viewsFor(RESULT) : [];
+  if(!views.length){ el.innerHTML=''; return; }
+  el.innerHTML = views.map(v=>
     `<button class="${v===VIEW?'on':''}" onclick="setView('${v}')">${v[0].toUpperCase()+v.slice(1)}</button>`).join('');
+}
+// drill an aggregate group into the objects it counts: rebuild the base select + filter it to
+// the group, then run it. 'changelog by area' → click 'composer' → select Commit where
+// scope=composer. The aggregate's own op-tree carries everything we need.
+function aggNode(spec){ for(let s=spec; s&&typeof s==='object'; s=s.from) if(s.op==='aggregate') return s; return null; }
+async function drillInto(group, spec){
+  const agg=aggNode(spec); if(!agg){ setStatus("This result can't be drilled."); return; }
+  const base=agg.from && agg.from.op==='select' ? JSON.parse(JSON.stringify(agg.from)) : {op:'select'};
+  base.where=(base.where||[]).concat((agg.group_by||[]).map(p=>({property:p,op:'eq',value:String(group[p]??'')})));
+  const label=(agg.group_by||[]).map(p=>`${p}=${group[p]??'(none)'}`).join(', ');
+  setStatus(`Opening ${label}…`);
+  const res=await fetch('/compositions/run-spec',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({spec:base,subject:FOCUS,name:`${ACTIVE||'group'} · ${label}`})}).then(r=>r.json());
+  if(res.error){ setStatus(res.error); return; }
+  RESULT=res; RESULT.name=`${ACTIVE||'group'} · ${label}`;
+  WORKING=res.spec?JSON.parse(JSON.stringify(res.spec)):null;
+  VIEW=Osiris.defaultView(res); renderSwitcher(); await renderCurrent();
 }
 function setView(v){ VIEW=v; postConsole({view:v}); renderSwitcher(); renderCurrent(); }
 function clearAll(){ RESULT=null; VIEW=null; WORKING=null; renderSwitcher(); renderComposerBar();
