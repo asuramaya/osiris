@@ -295,8 +295,9 @@ async function saveWorkingAs(){
 function inspectOnly(id){ FOCUS=id; renderSet(); inspect(id); }
 async function renderCurrent(){
   if(!RESULT) return;
+  if(VIEW==='graph') showBoard();  // reveal BEFORE placeObjects lays out, so #cy is measurable
   const mode = await renderResult(RESULT, {board, panel:$('result')}, VIEW, inspectOnly);
-  if(mode==='graph'){ showBoard(); board.layout(true); } else showPanel();
+  if(mode==='graph'){ showBoard(); board.resizeFit(); board.layout(true); } else showPanel();
   $('boardtitle').textContent = `${RESULT.name} · ${RESULT.kind} · ${RESULT.count}`;
   setStatus(`${RESULT.name} → ${RESULT.count} ${RESULT.kind}.`);
   renderComposerBar();
@@ -364,7 +365,10 @@ async function searchAround(id, quiet){
 }
 async function inspect(id){
   const o = await fetch('/objects/'+id).then(r=>r.ok?r.json():null);
-  if(!o){ $('insp').className='insp-empty'; $('insp').textContent='Object not found.'; return; }
+  // render the empty state into #right directly — the first successful inspect replaces
+  // #right's innerHTML (destroying the original #insp), so dereferencing it here threw.
+  if(!o){ const right=$('right'); right.className='rail';
+    right.innerHTML='<div class="insp-empty">Object not found.</div>'; return; }
   const acts = `<button class="o-act go" onclick="searchAround('${id}')">Search around</button>
     <button class="o-act" onclick="showDossier('${id}')">Dossier</button>
     <button class="o-act" onclick="tagIt('${id}')">Tag</button>`;
@@ -414,7 +418,9 @@ function watch(){
     $('live').textContent = s.total!=null ? `● ${s.total} objects` : '';
     const fresh=await fetch(`/objects?case_id=${ANALYSIS}&limit=400`).then(r=>r.json());
     if(fresh.length!==SET.length){ SET=fresh; $('setn').textContent=SET.length; renderSet();
-      if(FOCUS && !$('stage').classList.contains('panel')) searchAround(FOCUS,true); }
+      // only auto-grow the board while EXPLORING (no result shown). A composition RESULT is
+      // never clobbered by a stream tick — that was the blank-board bug.
+      if(FOCUS && RESULT===null && !$('stage').classList.contains('panel')) searchAround(FOCUS,true); }
   };
 }
 

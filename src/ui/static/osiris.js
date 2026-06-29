@@ -187,15 +187,28 @@ const Osiris = (() => {
     return {
       cy, layout, mergeGraph,
       fit: () => cy.animate({ fit: { padding: 50 }, duration: 250 }),
+      // re-measure after the container becomes visible (Cytoscape can't size a hidden #cy),
+      // then frame the graph. Without this a board revealed from a panel paints blank.
+      resizeFit: () => { cy.resize(); cy.fit(undefined, 40); },
       clear: () => cy.elements().remove(),
       focusNode: (id) => { cy.nodes().removeClass("focus"); cy.getElementById(id).addClass("focus"); },
-      // place a set of {id,label,type} as nodes, then draw whatever edges exist among them
+      // place a set of {id,label,type} as nodes + the links AMONG the set only. NOT each
+      // node's 1-hop neighborhood — that pulled in strangers and made the hairball. A result
+      // SET renders as itself; neighborhood expansion is "search around", a separate verb.
       async placeObjects(items) {
         items.forEach((o) => {
           if (!cy.getElementById(o.id).length)
             cy.add({ group: "nodes", data: { id: o.id, type: o.type, label: o.label } });
         });
-        for (const o of items) mergeGraph(await fetch(`/objects/${o.id}/graph?hops=1`).then((r) => r.json()));
+        for (const o of items) {
+          const g = await fetch(`/objects/${o.id}/graph?hops=1`).then((r) => r.json());
+          g.edges.forEach((e) => {  // mergeGraph already drops edges with a missing endpoint
+            const id = `${e.source}-${e.type}-${e.target}`;
+            if (!cy.getElementById(id).length &&
+                cy.getElementById(e.source).length && cy.getElementById(e.target).length)
+              cy.add({ group: "edges", data: { id, source: e.source, target: e.target, type: e.type } });
+          });
+        }
         layout(false);
       },
     };
@@ -208,9 +221,18 @@ const Osiris = (() => {
   // a clicked row. Returns the mode the center should show ("graph" | "panel").
   // VIEWS lists the views an objects set supports (the shell builds the switcher from this).
   const VIEWS = ["graph", "table"];
+  // a composition that ranks/sequences (order / take) or rolls up (aggregate) is a LIST, not
+  // a graph — rendering it on the board throws away the very ordering it computed. So intent
+  // wins over count: a ranked objects set defaults to Table regardless of size.
+  function isRanked(spec) {
+    for (let s = spec; s && typeof s === "object"; s = s.from)
+      if (s.op === "order" || s.op === "take" || s.op === "aggregate") return true;
+    return false;
+  }
   function defaultView(result) {
     if (result.kind !== "objects") return "panel";
-    return result.items.length > 30 ? "table" : "graph";  // a hairball past ~30 → table
+    if (isRanked(result.spec)) return "table";            // a ranking/sequence is a list
+    return result.items.length > 30 ? "table" : "graph";  // else a hairball past ~30 → table
   }
   async function renderResult(result, mounts, view, onPick) {
     const { board, panel } = mounts;
