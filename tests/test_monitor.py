@@ -243,6 +243,22 @@ async def test_alert_delivery_is_rate_capped(
     assert n_rows == 4 and n_delivered == 2  # every row kept; 2 suppressed, readable at /alerts
 
 
+async def test_worker_heartbeat_liveness(actions: Actions) -> None:
+    """D3 — the dead-man's-switch. No beat → None (never); after write_heartbeat → ~0s
+    fresh; an old beat reads stale-old, so /health/worker can flag a dead tripwire."""
+    from src.orchestrator.monitor import heartbeat_age_secs, write_heartbeat
+    assert await heartbeat_age_secs(actions.pool) is None  # never beaten
+    await write_heartbeat(actions.pool)
+    age = await heartbeat_age_secs(actions.pool)
+    assert age is not None and age < 5  # just beaten — fresh
+    # simulate a dead worker: backdate the heartbeat 10 minutes
+    await actions.pool.execute(
+        "UPDATE watermarks SET updated_at = now() - interval '600 seconds' "
+        "WHERE key='worker:heartbeat'")
+    stale = await heartbeat_age_secs(actions.pool)
+    assert stale is not None and stale > 500  # detectably stale
+
+
 async def test_default_sink_routes_by_channel(monkeypatch: pytest.MonkeyPatch) -> None:
     """D2 — the pluggable sink. No webhook + no email config → the log channel (delivers).
     Email requested but SMTP unconfigured → recorded-only (returns False), never crashes."""

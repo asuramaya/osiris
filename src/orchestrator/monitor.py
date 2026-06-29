@@ -60,6 +60,28 @@ async def set_cursor(pool: asyncpg.Pool, key: str, cursor: str) -> None:
     )
 
 
+# --- worker dead-man's-switch (D3): the heartbeat IS a watermark's freshness ----
+WORKER_HEARTBEAT_KEY = "worker:heartbeat"
+
+
+async def write_heartbeat(pool: asyncpg.Pool) -> None:
+    """The worker touches this each cron tick. Its `updated_at` is the liveness signal."""
+    await pool.execute(
+        "INSERT INTO watermarks (key, cursor, updated_at) VALUES ($1, now()::text, now()) "
+        "ON CONFLICT (key) DO UPDATE SET cursor=now()::text, updated_at=now()",
+        WORKER_HEARTBEAT_KEY,
+    )
+
+
+async def heartbeat_age_secs(pool: asyncpg.Pool) -> float | None:
+    """Seconds since the worker's last heartbeat, or None if it has never beaten."""
+    age: float | None = await pool.fetchval(
+        "SELECT extract(epoch FROM (now() - updated_at)) FROM watermarks WHERE key=$1",
+        WORKER_HEARTBEAT_KEY,
+    )
+    return age
+
+
 # --- tick: a source-agnostic scheduled pull ---------------------------------
 
 @dataclass

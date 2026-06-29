@@ -25,7 +25,7 @@ from src.db.redis import create_redis
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, expand_case, run_cascade
 from src.orchestrator.manifests import load_manifests
-from src.orchestrator.monitor import Puller, evaluate_watches, tick
+from src.orchestrator.monitor import Puller, evaluate_watches, tick, write_heartbeat
 from src.orchestrator.ratelimit import RateLimiter
 from src.orchestrator.runner import reap_stale_runs
 from src.orchestrator.watchers import make_form_d_watcher
@@ -104,6 +104,13 @@ async def reap_runs(ctx: dict[str, Any]) -> int:
     return await reap_stale_runs(ctx["pool"])
 
 
+async def heartbeat(ctx: dict[str, Any]) -> int:
+    """The dead-man's-switch: touch the heartbeat watermark so a silently-dead worker is
+    visible at GET /health/worker (a stale beat) instead of an invisible tripwire gap."""
+    await write_heartbeat(ctx["pool"])
+    return 1
+
+
 class WorkerSettings:
     # enqueueable jobs (the API hands heavy work here instead of running it inline)
     functions: list[Any] = [expand_case_job]
@@ -115,6 +122,8 @@ class WorkerSettings:
         cron(run_source_ticks, minute=set(range(0, 60)), second={0}),
         # self-heal orphaned claims every 5 min (the failure-drill recovery path).
         cron(reap_runs, minute=set(range(0, 60, 5)), run_at_startup=True),
+        # liveness heartbeat every 30s (the dead-man's-switch /health/worker reads).
+        cron(heartbeat, second={0, 30}, run_at_startup=True),
     ]
     on_startup = startup
     on_shutdown = shutdown

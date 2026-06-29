@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     osiris_smtp_port: int = 587
     osiris_smtp_user: str = ""
     osiris_smtp_password: str = ""
+    # Worker dead-man's-switch (D3): the worker heartbeats each cron tick; GET /health/worker
+    # reports 'stale' if the last beat is older than this — a silently-dead tripwire becomes
+    # visible instead of an invisible gap.
+    osiris_worker_heartbeat_stale_secs: int = 120
 
 
 def get_settings() -> Settings:

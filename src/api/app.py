@@ -66,6 +66,7 @@ from src.orchestrator.handoff import tray as handoff_tray
 from src.orchestrator.manifests import load_manifests, project_triggers
 from src.orchestrator.monitor import (
     evaluate_watches,
+    heartbeat_age_secs,
     match_condition,
     tick,
 )
@@ -137,6 +138,17 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/health/worker")
+    async def worker_health(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        """The dead-man's-switch: is the worker (the tripwire) alive? Reports the age of its
+        last heartbeat vs. the staleness threshold. 'never' = it has not beaten yet."""
+        age = await heartbeat_age_secs(p)
+        threshold = get_settings().osiris_worker_heartbeat_stale_secs
+        if age is None:
+            return {"status": "never", "age_secs": None, "threshold_secs": threshold}
+        return {"status": "ok" if age <= threshold else "stale",
+                "age_secs": round(age, 1), "threshold_secs": threshold}
 
     @app.get("/schema")
     async def get_schema() -> dict[str, Any]:
