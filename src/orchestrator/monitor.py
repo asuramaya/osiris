@@ -242,8 +242,8 @@ async def _active_watches(pool: asyncpg.Pool) -> list[Watch]:
 
 # --- the dumb alert sink ----------------------------------------------------
 
-# A sink delivers an alert OUTSIDE the durable `alerts` table (which is always
-# written first). Default: POST to the subscription's webhook if it has one. NOT a
+# A sink delivers an alert OUTSIDE the durable `alerts` table (which is always written
+# first). The default routes by channel (webhook → email → log; see `default_sink`). NOT a
 # CRM — a table row + an optional notification, nothing more. Injectable for tests.
 Sink = Callable[["Alert"], Awaitable[bool]]
 
@@ -259,8 +259,8 @@ class Alert:
     webhook_url: str | None
 
 
-async def _post_webhook(alert: Alert) -> bool:
-    """Best-effort webhook delivery. Returns True if it should be marked delivered."""
+async def _sink_webhook(alert: Alert) -> bool:
+    """POST the alert to the watch's webhook. Returns True if it should be marked delivered."""
     if not alert.webhook_url:
         return False
     import httpx
@@ -275,6 +275,55 @@ async def _post_webhook(alert: Alert) -> bool:
         resp = await client.post(alert.webhook_url, json=payload)
         resp.raise_for_status()
     return True
+
+
+async def _sink_log(alert: Alert) -> bool:
+    """The default channel: a structured log line. Always 'delivers' (the record IS the log
+    + the durable /alerts row) — the right fallback for a single-operator box with no webhook."""
+    logger.info(
+        "ALERT watch=%r event=%s object=%s matched=%s",
+        alert.watch_name, alert.event_type, alert.object_id, alert.matched,
+    )
+    return True
+
+
+async def _sink_email(alert: Alert) -> bool:
+    """Email channel (the seam). Requires OSIRIS_SMTP_HOST; absent => recorded-only + warn,
+    never crash a run. Sends via stdlib smtplib only when fully configured."""
+    s = get_settings()
+    if not s.osiris_smtp_host:
+        logger.warning(
+            "email requested (OSIRIS_ALERT_EMAIL) but OSIRIS_SMTP_HOST unset; alert %s "
+            "recorded only", alert.id,
+        )
+        return False
+    import smtplib
+    import ssl
+    from email.message import EmailMessage
+    msg = EmailMessage()
+    msg["Subject"] = f"Osiris alert · {alert.watch_name}"
+    msg["From"] = s.osiris_smtp_user or "osiris@localhost"
+    msg["To"] = s.osiris_alert_email
+    msg.set_content(
+        f"Watch: {alert.watch_name}\nEvent: {alert.event_type}\n"
+        f"Object: {alert.object_id}\nMatched: {alert.matched}\n"
+    )
+    with smtplib.SMTP(s.osiris_smtp_host, s.osiris_smtp_port, timeout=15) as srv:
+        srv.starttls(context=ssl.create_default_context())
+        if s.osiris_smtp_user:
+            srv.login(s.osiris_smtp_user, s.osiris_smtp_password)
+        srv.send_message(msg)
+    return True
+
+
+async def default_sink(alert: Alert) -> bool:
+    """Route an alert to its channel: a watch's webhook → webhook; else if an alert email is
+    configured → email; else → the log. A pluggable side-channel over the durable record."""
+    if alert.webhook_url:
+        return await _sink_webhook(alert)
+    if get_settings().osiris_alert_email:
+        return await _sink_email(alert)
+    return await _sink_log(alert)
 
 
 async def _load_event(pool: asyncpg.Pool, row: asyncpg.Record) -> GraphEvent:
@@ -334,7 +383,7 @@ async def evaluate_watches(
     The claim is gap-free (FOR UPDATE SKIP LOCKED on the unevaluated flag), and the
     evaluator never touches `published_at`, so it is fully decoupled from the cascade.
     """
-    deliver: Sink = sink if sink is not None else _post_webhook
+    deliver: Sink = sink if sink is not None else default_sink
     watches = await _active_watches(pool)
 
     rows = await pool.fetch(

@@ -243,6 +243,18 @@ async def test_alert_delivery_is_rate_capped(
     assert n_rows == 4 and n_delivered == 2  # every row kept; 2 suppressed, readable at /alerts
 
 
+async def test_default_sink_routes_by_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+    """D2 — the pluggable sink. No webhook + no email config → the log channel (delivers).
+    Email requested but SMTP unconfigured → recorded-only (returns False), never crashes."""
+    from src.orchestrator.monitor import default_sink
+
+    plain = Alert(uuid.uuid4(), uuid.uuid4(), "w", None, "object_created", {}, None)
+    assert await default_sink(plain) is True  # falls back to the log channel
+
+    monkeypatch.setenv("OSIRIS_ALERT_EMAIL", "ops@example.com")  # but no OSIRIS_SMTP_HOST
+    assert await default_sink(plain) is False  # email requested, unconfigured → recorded only
+
+
 async def test_evaluator_decoupled_from_cascade_published_at(actions: Actions) -> None:
     """The evaluator claims via evaluated_at, never published_at — so draining the
     cascade and evaluating watches are independent passes over one outbox."""

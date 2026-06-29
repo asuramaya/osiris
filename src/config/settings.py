@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     osiris_alert_max_per_window: int = 20
     osiris_alert_window_secs: int = 3600
     osiris_alert_cooldown_secs: int = 86400
+    # Delivery sink (D2): a watch with a webhook_url POSTs there; else, if OSIRIS_ALERT_EMAIL
+    # is set it emails (needs OSIRIS_SMTP_HOST — absent => recorded-only + warn, never crash);
+    # else the alert is logged. The durable /alerts row is the record regardless.
+    osiris_alert_email: str = ""
+    osiris_smtp_host: str = ""
+    osiris_smtp_port: int = 587
+    osiris_smtp_user: str = ""
+    osiris_smtp_password: str = ""
 
 
 def get_settings() -> Settings:
