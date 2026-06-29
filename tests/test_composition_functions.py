@@ -104,7 +104,31 @@ async def test_subject_report_function_is_byte_equal(actions: Actions, case_id: 
 # --- the registry + guards --------------------------------------------------
 
 async def test_function_registry_is_listable(actions: Actions) -> None:
-    assert list_functions() == ["coinvest", "screen_network", "subject_report"]
+    assert list_functions() == ["briefing", "coinvest", "screen_network", "subject_report"]
+
+
+async def test_briefing_orients_without_a_subject(actions: Actions) -> None:
+    """The human-side memory prosthesis: a subject-free Function that orients you on
+    arrival — open threads (what's blocked) + recent work (what happened). A returning
+    human and a fresh Claude are in the same zero-context state; this restores it."""
+    cm = await actions.create_or_find_object("Commit", "commit:aa", "git")
+    await actions.assert_property(cm, "summary", "ship the thing", "git", NOW, 0.85)
+    await actions.assert_property(cm, "scope", "ui", "git", NOW, 0.85)
+    await actions.assert_property(cm, "authored_date", "2026-06-29T00:00:00+00:00",
+                                  "git", NOW, 0.85)
+    th = await actions.create_or_find_object("Thread", "thread:1", "git-memory")
+    await actions.assert_property(th, "summary", "THE WALL: needs portal access", "git-memory",
+                                 NOW, 0.4)
+    await actions.assert_property(th, "status", "open", "git-memory", NOW, 0.4)
+
+    await save_composition(actions.pool, "briefing", {"op": "function", "name": "briefing"})
+    # runs with NO subject (it briefs the project, not an entity)
+    res = await run_composition(actions.pool, "briefing")
+    assert res["kind"] == "data"
+    threads = next(v for k, v in res["items"].items() if "Open threads" in k)
+    recent = next(v for k, v in res["items"].items() if "Recent work" in k)
+    assert any("THE WALL" in t["thread"] for t in threads)
+    assert any(r["change"] == "ship the thing" and r["scope"] == "ui" for r in recent)
 
 
 async def test_unknown_function_and_missing_subject_raise(actions: Actions) -> None:

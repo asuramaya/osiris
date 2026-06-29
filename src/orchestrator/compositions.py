@@ -65,10 +65,11 @@ _TRANSFORMS: dict[str, Any] = {
 # engine code and becomes a named, listable, swappable artifact the user owns — without
 # losing a drop of the analytics. The subject passed to `run_composition` is the function's
 # anchor (an entity for coinvest/screen; a case for subject_report).
-Function = Callable[[asyncpg.Pool, uuid.UUID, dict[str, Any]], Awaitable[Any]]
+Function = Callable[[asyncpg.Pool, uuid.UUID | None, dict[str, Any]], Awaitable[Any]]
 
 
-async def _fn_coinvest(pool: asyncpg.Pool, subject: uuid.UUID, args: dict[str, Any]) -> Any:
+async def _fn_coinvest(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
+    assert subject is not None  # the op guard requires a subject for this Function
     return await coinvestment_ties(
         pool, subject,
         limit=int(args.get("limit", 25)), platform_degree=int(args.get("platform_degree", 12)),
@@ -76,20 +77,59 @@ async def _fn_coinvest(pool: asyncpg.Pool, subject: uuid.UUID, args: dict[str, A
 
 
 async def _fn_subject_report(
-    pool: asyncpg.Pool, subject: uuid.UUID, args: dict[str, Any]
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
+    assert subject is not None
     return await subject_report(pool, subject)  # `subject` is the case id here
 
 
-async def _fn_screen(pool: asyncpg.Pool, subject: uuid.UUID, args: dict[str, Any]) -> Any:
+async def _fn_screen(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
+    assert subject is not None
     return await screen_network(pool, subject, min_len=int(args.get("min_len", 5)))
+
+
+async def _fn_briefing(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
+    """The orientation a human (or a fresh Claude) needs on ARRIVAL — "where am I?" restored
+    in one read. A memory prosthesis for the symmetric problem: a person returning after a
+    week is in the same zero-context state as a new session. Open threads (what's blocked) +
+    recent work (what just happened). Subject-free — it briefs the project, not an entity."""
+    threads = await pool.fetch(
+        "SELECT (SELECT value #>> '{}' FROM current_assertions a "
+        "        WHERE a.object_id=o.id AND a.name='summary') AS thread "
+        "FROM objects o WHERE o.type='Thread' AND EXISTS ("
+        "  SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
+        "  AND s.name='status' AND s.value #>> '{}' = 'open') LIMIT 25"
+    )
+    recent = await pool.fetch(
+        "SELECT "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='summary') AS change, "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='scope') AS scope, "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='authored_date') AS date "
+        "FROM objects o WHERE o.type='Commit' ORDER BY date DESC NULLS LAST LIMIT 8"
+    )
+    return {
+        "Open threads — what's unresolved": [
+            {"thread": r["thread"]} for r in threads if r["thread"]
+        ],
+        "Recent work — what just happened": [
+            {"change": r["change"], "scope": r["scope"] or "—",
+             "when": (r["date"] or "")[:10]} for r in recent if r["change"]
+        ],
+    }
 
 
 _FUNCTIONS: dict[str, Function] = {
     "coinvest": _fn_coinvest,
     "subject_report": _fn_subject_report,
     "screen_network": _fn_screen,
+    "briefing": _fn_briefing,
 }
+
+# Functions that brief the whole project rather than anchor on one entity — no subject needed.
+_SUBJECT_FREE = {"briefing"}
 
 
 def list_functions() -> list[str]:
@@ -265,7 +305,7 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         fn = _FUNCTIONS.get(name)
         if fn is None:
             raise ValueError(f"unknown function: {name!r}")
-        if subject is None:
+        if subject is None and name not in _SUBJECT_FREE:
             raise ValueError(f"function {name!r} requires a subject")
         return Result("data", data=await fn(pool, subject, node.get("args", {}) or {}))
 

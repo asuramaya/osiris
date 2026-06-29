@@ -179,13 +179,13 @@
 <script src="/ui/osiris.js"></script>
 <script>
 const { $, esc, ty, objectDetail, loadRels, makeBoard, renderResult } = Osiris;
-let ANALYSIS=null, SET=[], FOCUS=null, STREAM=null, COMPS=[], ACTIVE=null, ROOM='';
+let ANALYSIS=null, SET=[], FOCUS=null, STREAM=null, COMPS=[], ACTIVE=null, ROOM='', ROOMS=[];
 const roomQ = () => ROOM ? `?room=${ROOM}` : '';   // '' = the All room (god view)
 
 // ---- rooms: the stance (journalist / broker / engineer — segmentation, not silos) ------
 async function loadRooms(){
-  const rooms = await fetch('/rooms').then(r=>r.json());
-  $('room').innerHTML = `<option value="">All</option>` + rooms.map(r=>
+  ROOMS = await fetch('/rooms').then(r=>r.json());
+  $('room').innerHTML = `<option value="">All</option>` + ROOMS.map(r=>
     `<option value="${r.id}">${esc(r.name)} · ${r.cases}/${r.compositions}</option>`).join('');
   $('room').value = ROOM;
 }
@@ -193,6 +193,11 @@ async function switchRoom(id){
   ROOM=id; $('room').value=id;
   ACTIVE=null; RESULT=null; WORKING=null; renderSwitcher(); renderComposerBar(); board.clear(); showBoard();
   await loadComps(); await loadAnalyses();
+  // ORIENT ON ARRIVAL: a desk auto-runs its home composition (the briefing — "where am I?").
+  // The human (and a fresh Claude) is greeted with their context, not a blank board.
+  const room = ROOMS.find(r=>r.id===id);
+  const home = room && room.config && room.config.home;
+  if(home) await runComp(home);
 }
 async function newRoom(){
   const name = prompt('Name this room (your stance — e.g. journalist, broker, engineer):');
