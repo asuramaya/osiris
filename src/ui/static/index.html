@@ -183,6 +183,8 @@
 
 <!-- the command surface: ⌘K / slash palette — the one home for every action (U1) -->
 <div id="palette" class="palette-overlay"></div>
+<!-- summoned "peek" surfaces (review / compose) — their own clean panel, never over the rail (U2) -->
+<div id="peek" class="peek-overlay"></div>
 
 <script src="/ui/osiris.js"></script>
 <script>
@@ -498,10 +500,8 @@ function watch(){
 // ---- compose: author a composition (watch form or raw spec) ----------------
 let cmode='watch';
 function openCompose(ev){
-  ev.stopPropagation(); closePop();
-  const pop=document.createElement('div'); pop.className='pop'; pop.id='composepop';
-  pop.style.left='14px'; pop.style.top='52px'; pop.style.width='300px';
-  pop.innerHTML=`
+  if(ev) ev.stopPropagation(); closePop();
+  openPeek('Compose a watch or composition', `
     <div class="tabs"><span class="tab on" data-m="watch" onclick="cmtab(this)">Watch</span>
       <span class="tab" data-m="spec" onclick="cmtab(this)">Spec</span></div>
     <div id="cm-watch">
@@ -516,14 +516,11 @@ function openCompose(ev){
       <textarea id="s_spec">{"op":"select","object_type":"Organization"}</textarea>
     </div>
     <button class="o-act go" style="width:100%;margin-top:10px" onclick="saveCompose()">Save composition</button>
-    <div id="cmsg" class="o-faint" style="margin-top:6px"></div>`;
-  document.body.appendChild(pop);
-  cmode='watch'; addCond();
-  setTimeout(()=>document.addEventListener('click',function h(e){
-    if(!e.target.closest('#composepop')){pop.remove();document.removeEventListener('click',h);}}),0);
+    <div id="cmsg" class="o-faint" style="margin-top:6px"></div>`,
+    ()=>{ cmode='watch'; addCond(); });
 }
 function cmtab(el){ cmode=el.dataset.m;
-  document.querySelectorAll('#composepop .tab').forEach(t=>t.classList.toggle('on',t===el));
+  document.querySelectorAll('#peekbody .tab').forEach(t=>t.classList.toggle('on',t===el));
   $('cm-watch').style.display = cmode==='watch'?'block':'none';
   $('cm-spec').style.display = cmode==='spec'?'block':'none'; }
 const OPSYM={eq:'=',contains:'~',lt:'<',gt:'>'};
@@ -550,7 +547,7 @@ async function saveCompose(){
     await fetch('/compositions',{method:'POST',headers:{'content-type':'application/json'},
       body:JSON.stringify({name:$('s_name').value.trim()||'untitled',spec,kind:'lens',room_id:ROOM||null})});
   }
-  closePop(); loadComps();
+  closePeek(); loadComps();
 }
 
 // ---- global search ---------------------------------------------------------
@@ -595,12 +592,9 @@ async function refreshReview(){
 async function openReview(){
   closePop();
   const m=await fetch('/merge-candidates').then(r=>r.json()).catch(()=>[]);
-  const pop=document.createElement('div'); pop.className='pop'; pop.id='reviewpop';
-  pop.style.right='14px'; pop.style.top='46px'; pop.style.width='320px'; pop.style.maxHeight='60vh'; pop.style.overflowY='auto';
-  pop.innerHTML = '<div class="railhead" style="padding:0 0 8px">Merge review · resolve in place</div>' +
-    (m.length ? m.slice(0,40).map(c=>{
+  const body = m.length ? m.slice(0,40).map(c=>{
       const reason = Array.isArray(c.reasons)?c.reasons[0]:(c.reasons||'possible duplicate');
-      return `<div style="padding:8px 0;border-top:1px solid var(--border)">
+      return `<div class="rev-row">
         <div><b>${Math.round((c.score||0)*100)}%</b> <span class="o-muted">${esc(reason)}</span></div>
         <div style="font-size:12px;margin:3px 0">
           <a onmousedown="pick('${c.a_id}')" style="cursor:pointer">${esc(c.a_label)}</a>
@@ -610,10 +604,8 @@ async function openReview(){
         <div class="o-acts" style="margin-top:3px">
           <button class="o-act go" onmousedown="resolveCand(${c.id},'merged')">Merge</button>
           <button class="o-act" onmousedown="resolveCand(${c.id},'rejected')">Reject</button></div></div>`;
-    }).join('') : '<div class="o-empty">Nothing to review.</div>');
-  document.body.appendChild(pop);
-  setTimeout(()=>document.addEventListener('click',function h(e){
-    if(!e.target.closest('#reviewpop')){pop.remove();document.removeEventListener('click',h);}}),0);
+    }).join('') : '<div class="o-empty">Nothing to review.</div>';
+  openPeek('Merge review · resolve in place', body);
 }
 async function resolveCand(id, decision){
   await fetch(`/merge-candidates/${id}/resolve`,{method:'POST',
@@ -633,6 +625,20 @@ async function applyDeepLink(){
   if(q.get('run')) await runComp(q.get('run'));
 }
 
+// ---- peek: a summoned surface with its OWN panel (U2 — one panel, one job) --------------
+// Review / compose used to float as popovers OVER the inspector rail, covering the focused
+// object (two jobs in one place). They're now clean centered "peeks" with a dim backdrop —
+// summoned, dismissible (esc / click-out), and the rail is left to do only its one job.
+function openPeek(title, html, onMount){
+  const ov=$('peek'); ov.className='peek-overlay on';
+  ov.innerHTML=`<div class="peek" onclick="event.stopPropagation()">
+    <div class="peek-head"><span>${esc(title)}</span><span class="peek-x" onclick="closePeek()">✕</span></div>
+    <div class="peek-body" id="peekbody">${html}</div></div>`;
+  ov.onclick=closePeek;
+  if(onMount) onMount($('peekbody'));
+}
+function closePeek(){ const o=$('peek'); o.className='peek-overlay'; o.innerHTML=''; }
+
 // ---- the command surface: ⌘K / slash palette (Notion's one command home) ---------------
 // Every action lives here — run a lens, find an object, search-around, expand, switch room,
 // the board verbs — summoned with a keystroke, dismissed when done. This is what lets the
@@ -645,7 +651,8 @@ function paletteCommands(q){
   ROOMS.forEach(r=>cmds.push({cat:'Room', label:r.name, run:()=>switchRoom(r.id)}));
   [['Expand — run collectors',expandSet],
    ['Search around the focused object',()=>FOCUS?searchAround(FOCUS):setStatus('Focus an object first.')],
-   ['Merge review',openReview], ['New analysis',newAnalysis],
+   ['Compose a watch / composition',()=>openCompose()], ['Merge review',openReview],
+   ['New analysis',newAnalysis],
    ['Fit the board',()=>board.fit()], ['Re-layout',()=>board.layout(false)],
    ['Clear the board',clearAll]
   ].forEach(([label,run])=>cmds.push({cat:'Action', label, run}));
@@ -670,7 +677,9 @@ function openPalette(){
 function closePalette(){ PAL_OPEN=false; const o=$('palette'); o.className='palette-overlay'; o.innerHTML=''; }
 async function refreshPalette(){
   const q=($('palinput')?.value||'').trim();
-  PAL_CMDS=[...await paletteObjects(q), ...paletteCommands(q)];  // objects first when searching
+  // commands first (the palette is a COMMAND surface); object hits follow. A query that
+  // matches no command (a name) is naturally object-dominated.
+  PAL_CMDS=[...paletteCommands(q), ...await paletteObjects(q)];
   if(PAL_SEL>=PAL_CMDS.length) PAL_SEL=0;
   renderPalette();
 }
@@ -705,6 +714,7 @@ document.addEventListener('keydown',e=>{
   const inField=/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
   if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){ e.preventDefault(); PAL_OPEN?closePalette():openPalette(); }
   else if(e.key==='/'&&!PAL_OPEN&&!inField){ e.preventDefault(); openPalette(); }
+  else if(e.key==='Escape'&&$('peek').className.includes('on')){ closePeek(); }
 });
 
 Osiris.loadSchema().then(async()=>{

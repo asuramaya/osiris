@@ -36,6 +36,21 @@
 .pal-empty { padding: 18px; color: var(--muted); text-align: center; font-size: 13px; }
 .pal-foot { border-top: 1px solid var(--border); padding: 7px 14px; font-size: 10.5px;
   color: var(--faint); }
+/* peek — a summoned surface (review / compose) with its OWN panel, never over the rail (U2) */
+.peek-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 100;
+  display: none; align-items: flex-start; justify-content: center; padding-top: 11vh; }
+.peek-overlay.on { display: flex; }
+.peek { width: min(460px, 92vw); max-height: 74vh; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--border2); border-radius: 12px;
+  box-shadow: 0 18px 56px rgba(0,0,0,.55); overflow: hidden; }
+.peek-head { display: flex; align-items: center; justify-content: space-between; padding: 13px 16px;
+  border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600; color: var(--text);
+  text-transform: uppercase; letter-spacing: .4px; }
+.peek-x { cursor: pointer; color: var(--muted); font-size: 13px; }
+.peek-x:hover { color: var(--text); }
+.peek-body { padding: 14px 16px; overflow: auto; }
+.rev-row { padding: 9px 0; border-top: 1px solid var(--border); }
+.rev-row:first-child { border-top: 0; }
 /* timeline view — an ordered set as a concise date · summary list (Notion's Timeline view) */
 .tl { display: flex; flex-direction: column; }
 .tl-item { display: flex; gap: 12px; padding: 9px 4px; border-top: 1px solid var(--border);
