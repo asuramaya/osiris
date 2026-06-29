@@ -1,0 +1,43 @@
+name: CI
+
+# The quality gates that run on every change — the same ones enforced locally:
+# ruff (lint), mypy --strict (types), and the full pytest suite (real Postgres + Redis via
+# testcontainers, never mocks). Chromium is installed so the renderer STRESS test
+# (tests/test_ui_render.py) runs in CI — it renders the generic renderer with adversarial
+# content and fails on CSS overflow / crushed columns, so a render regression can't merge.
+
+on:
+  push:
+    branches: [main, composer, cron-persistence]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv (pinned Python)
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install dependencies (locked)
+        run: uv sync --locked
+
+      - name: Lint — ruff
+        run: uv run ruff check src/ tests/
+
+      - name: Types — mypy --strict
+        run: uv run mypy --strict src/
+
+      - name: Install Chromium (for the renderer stress test)
+        run: uv run playwright install --with-deps chromium
+
+      - name: Tests — pytest (real Postgres/Redis via testcontainers + UI render stress)
+        run: uv run pytest -q

@@ -19,7 +19,7 @@
 .tl-item:hover { background: var(--panel2); }
 .tl-when { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums;
   white-space: nowrap; padding-top: 1px; min-width: 78px; }
-.tl-main { font-size: 13px; }
+.tl-main { font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
 .tl-sum { color: var(--muted); font-size: 12px; margin-top: 2px; line-height: 1.45; }
 /* a long property value (commit rationale, doc body) clamps to a few lines; click to expand
    — the inspector stays scannable instead of dumping a wall of text down a narrow column */
@@ -60,19 +60,21 @@ a { color: var(--blue); text-decoration: none; }
 .o-disc { color: var(--faint); font-size: 10px; }
 .o-openset { margin-left: auto; font-size: 10.5px; color: var(--blue); cursor: pointer; opacity: .75; }
 .o-openset:hover { opacity: 1; text-decoration: underline; }
-/* the table view's type cell shouldn't wrap ("Commi t") */
-.r-table td:first-child { white-space: nowrap; }
-
 /* generic result panel (values / rows / data) */
 .r-head { font-size: 11px; letter-spacing: .5px; text-transform: uppercase; color: var(--faint);
   font-weight: 600; margin: 0 0 10px; }
-.r-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.7; }
-.r-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.r-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+/* table-layout:fixed shares width across columns so NO single long cell (a sentence) can steal
+   it all and crush the others into a one-char-per-line column (the briefing "BY" overflow). */
+.r-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12.5px; }
 .r-table th { text-align: left; color: var(--faint); font-weight: 600; font-size: 10.5px;
-  text-transform: uppercase; letter-spacing: .4px; padding: 6px 8px; border-bottom: 1px solid var(--border2); }
-.r-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; word-break: break-word; }
+  text-transform: uppercase; letter-spacing: .4px; padding: 6px 8px; border-bottom: 1px solid var(--border2);
+  overflow-wrap: anywhere; }
+.r-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top;
+  word-break: break-word; overflow-wrap: anywhere; }
 .r-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; }
 .r-group { margin-bottom: 18px; }
 .r-group h3 { font-size: 11px; letter-spacing: .5px; text-transform: uppercase; color: var(--text);
   margin: 0 0 8px; font-weight: 650; }
-.r-pre { white-space: pre-wrap; font: 11.5px/1.5 ui-monospace, Menlo, monospace; color: var(--text); margin: 0; }
+.r-pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 11.5px/1.5 ui-monospace, Menlo, monospace;
+  color: var(--text); margin: 0; }
