@@ -330,7 +330,8 @@ async def focus_object(object_ref: str) -> dict[str, Any]:
     oid = await _resolve(pool, object_ref)
     if oid is None:
         return {"error": f"no object matches {object_ref!r}"}
-    await _set_console(pool, by="claude", focused_object_id=oid)
+    # focusing is explore mode — clear the active composition so it doesn't re-run on top
+    await _set_console(pool, by="claude", focused_object_id=oid, composition=None)
     row = await pool.fetchrow("SELECT type, canonical FROM objects WHERE id=$1", oid)
     props = await pool.fetch(
         "SELECT name, value #>> '{}' AS value FROM current_assertions WHERE object_id=$1", oid

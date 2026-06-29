@@ -60,9 +60,12 @@
 
   /* center: board OR result panel */
   #center{display:grid;grid-template-rows:40px auto 1fr 24px;min-height:0;min-width:0}
-  #composerbar{display:none;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 12px;
+  /* ALWAYS a grid item (never display:none) — collapse to 0 height when empty instead. If it
+     drops out of the grid, the rows shift up and #stage lands on the wrong track (0 height) →
+     the blank board. :empty keeps the track present at 0px. */
+  #composerbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 12px;
     background:var(--bg);border-bottom:1px solid var(--border);font-size:11.5px}
-  #composerbar.on{display:flex}
+  #composerbar:empty{padding:0;border:0}
   .lin{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}
   .lin .step{background:var(--chip);border:1px solid var(--border2);border-radius:6px;padding:2px 7px;white-space:nowrap}
   .lin .arr{color:var(--faint)}
@@ -405,10 +408,16 @@ function renderSet(){
 
 // ---- focus / inspect / search-around (the one noun) ------------------------
 async function focus(id){
-  FOCUS=id; postConsole({focused_object_id:id}); $('aroundBtn').disabled=false; renderSet();
+  // focusing is EXPLORE mode — clear the active composition in the shared cursor so a stale
+  // lens doesn't re-run on top of the focus (for us and for a synced Claude).
+  FOCUS=id; postConsole({focused_object_id:id, composition:null}); ACTIVE=null;
+  $('aroundBtn').disabled=false; renderSet();
   RESULT=null; WORKING=null; renderSwitcher(); renderComposerBar();  // exploring ≠ viewing a result
   showBoard();
-  if(!board.cy.getElementById(id).length) await searchAround(id, true);
+  // ALWAYS draw the neighbourhood (idempotent merge) — clicking a node should SHOW what it
+  // connects to, not just highlight it among strangers. This is what surfaces "the meat"
+  // (a thread → the commits that noted it) onto the board instead of burying it in the rail.
+  await searchAround(id, true);
   board.focusNode(id);
   inspect(id);
 }

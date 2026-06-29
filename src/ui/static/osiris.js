@@ -65,9 +65,16 @@ const Osiris = (() => {
   }
 
   // ---- atoms ---------------------------------------------------------------
-  // a graded property row: value + WHERE IT CAME FROM (source · how · confidence)
+  // a graded property row: value + WHERE IT CAME FROM (source · how · confidence). A long
+  // value (a commit rationale, a doc body) is CLAMPED to a few lines — click to expand —
+  // so the inspector stays scannable instead of a 400-word wall in a narrow column.
   function propRow(p) {
-    return `<div class="o-k">${esc(p.name)}</div><div class="o-v">${esc(p.value)}</div>
+    const v = String(p.value);
+    const cls = v.length > 200 ? "o-v clamp" : "o-v";
+    const val = v.length > 200
+      ? `<div class="${cls}" onclick="this.classList.toggle('clamp')" title="click to expand">${esc(v)}</div>`
+      : `<div class="o-v">${esc(v)}</div>`;
+    return `<div class="o-k">${esc(p.name)}</div>${val}
       <div class="o-pv">${esc(p.source_label || p.source_id || "—")} · ${esc(p.how || "—")} · ${pct(p.confidence)}</div>`;
   }
 
@@ -165,10 +172,14 @@ const Osiris = (() => {
     });
     const layout = (preserve) => {
       const o = HAS_FCOSE
-        ? { name: "fcose", animate: true, animationDuration: 300, randomize: !preserve, quality: "proof",
+        ? { name: "fcose", animate: false, randomize: !preserve, quality: "proof",
             nodeSeparation: 120, idealEdgeLength: 115, nodeRepulsion: 9000, padding: 45, packComponents: true }
         : { name: "cose", animate: false, padding: 45, nodeRepulsion: 12000, idealEdgeLength: 120 };
-      cy.layout(o).run();
+      cy.layout(o).run();        // non-animated: positions synchronously, so we can frame NOW
+      // ALWAYS resize+frame right after — animated layouts raced other events and left the
+      // nodes off-viewport (the recurring "opening leads to nothing" blank board).
+      cy.resize();
+      cy.fit(undefined, 45);
     };
     const mergeGraph = (g) => {
       let added = 0;

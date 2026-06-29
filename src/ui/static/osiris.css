@@ -21,6 +21,12 @@
   white-space: nowrap; padding-top: 1px; min-width: 78px; }
 .tl-main { font-size: 13px; }
 .tl-sum { color: var(--muted); font-size: 12px; margin-top: 2px; line-height: 1.45; }
+/* a long property value (commit rationale, doc body) clamps to a few lines; click to expand
+   — the inspector stays scannable instead of dumping a wall of text down a narrow column */
+.o-v.clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical;
+  overflow: hidden; cursor: pointer; position: relative; }
+.o-v.clamp::after { content: "… more"; position: absolute; right: 0; bottom: 0;
+  background: var(--panel); color: var(--blue); font-size: 11px; padding-left: 6px; }
 a { color: var(--blue); text-decoration: none; }
 .o-muted { color: var(--muted); } .o-faint { color: var(--faint); }
 .o-empty { color: var(--faint); font-size: 12px; padding: 16px 0; text-align: center; }
