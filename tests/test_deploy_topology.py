@@ -56,3 +56,15 @@ def test_satellite_is_opt_in_profile() -> None:
 def test_bringup_scripts_are_executable_and_present() -> None:
     for name in ("up.sh", "down.sh"):
         assert (_ROOT / "deploy" / name).exists()
+
+
+def test_backup_and_restore_scripts_present() -> None:
+    """D4: the graph is the asset — a one-command backup + a tested restore ship with it."""
+    backup = _ROOT / "deploy" / "backup.sh"
+    restore = _ROOT / "deploy" / "restore.sh"
+    assert backup.exists() and restore.exists()
+    assert "pg_dump" in backup.read_text()
+    restore_text = restore.read_text()
+    assert "pg_restore" in restore_text
+    # the restore must recreate a clean schema first (else a partial overlay)
+    assert "DROP SCHEMA" in restore_text

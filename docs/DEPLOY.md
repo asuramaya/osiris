@@ -74,6 +74,32 @@ On a box without the compose plugin yet, `deploy/up.sh` brings the same topology
 infra as containers and the API/worker as local processes (`deploy/down.sh` tears down).
 The manifest is guarded by `tests/test_deploy_topology.py` so it can't silently drift.
 
+## Operational tail (before a beat goes live for a user)
+
+A watch that pages a real operator needs guards the demo doesn't:
+
+- **Alert throttle (the 3am-false-alert guard).** The durable `alerts` row is always
+  written; only *delivery* is rate-capped — `OSIRIS_ALERT_MAX_PER_WINDOW` per
+  `OSIRIS_ALERT_WINDOW_SECS` per watch, and never the same (watch, object) inside
+  `OSIRIS_ALERT_COOLDOWN_SECS`. A burst floods the table, not the operator; suppressed
+  deliveries are logged and readable at `GET /alerts`.
+- **Delivery sink.** A watch with a `webhook_url` POSTs there; else, if `OSIRIS_ALERT_EMAIL`
+  is set, it emails (`OSIRIS_SMTP_HOST`/`_PORT`/`_USER`/`_PASSWORD`); else it logs. Email
+  requested but SMTP unset → recorded-only + a warning, never a crash.
+- **Worker dead-man's-switch.** The worker heartbeats every 30s; `GET /health/worker`
+  returns `{status: ok|stale|never, age_secs}` (`stale` past
+  `OSIRIS_WORKER_HEARTBEAT_STALE_SECS`). Point an uptime check at it so a silently-dead
+  tripwire is visible, not discovered via a missed alert.
+- **Backups.** The event-sourced graph is the asset. `deploy/backup.sh` writes a
+  timestamped, pruned `pg_dump`; `deploy/restore.sh` restores one (drops + recreates the
+  schema first). Cron the backup daily and **test the restore** against a throwaway DB —
+  an untested backup is not a backup.
+
+  ```bash
+  DATABASE_URL=… OSIRIS_BACKUP_DIR=/var/backups/osiris KEEP=14 deploy/backup.sh
+  DATABASE_URL=…(throwaway) deploy/restore.sh /var/backups/osiris/osiris-<stamp>.dump
+  ```
+
 ## Later cuts (not yet)
 
 When a pool bites, split the worker by resource class (light federators / heavy
