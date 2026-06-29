@@ -200,6 +200,8 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              ("Commit",), ("Commit",)),
     LinkType("noted_in", "A thread / wall surfaced in this commit's rationale.",
              ("Thread",), ("Commit",)),
+    LinkType("resolved_by", "The later commit that addressed this thread (closes it).",
+             ("Thread",), ("Commit",)),
 )
 
 OBJECT_TYPES: dict[str, ObjectType] = {t.name: t for t in _OBJECT_TYPES}

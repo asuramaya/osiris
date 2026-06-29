@@ -2,11 +2,21 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from src.actions.core import Actions
-from src.ingest.threads import extract_threads, mine_threads
+from src.ingest.threads import extract_threads, mine_threads, resolve_threads
 
 NOW = datetime(2026, 6, 28, tzinfo=UTC)
+
+
+async def _commit(actions: Actions, canon: str, date: str, **props: str) -> None:
+    cm = await actions.create_or_find_object("Commit", canon, "git")
+    await actions.assert_property(cm, "authored_date", date, "git",
+                                  datetime.fromisoformat(date), 0.85)
+    for name, value in props.items():
+        await actions.assert_property(cm, name, value, "git",
+                                      datetime.fromisoformat(date), 0.85)
 
 
 def test_extract_threads_is_high_signal() -> None:
@@ -44,3 +54,48 @@ async def test_mine_threads_creates_linked_threads(actions: Actions) -> None:
     again = await mine_threads(actions)
     assert await p.fetchval("SELECT count(*) FROM objects WHERE type='Thread'") == 1
     assert again["threads"] == 1  # found it, but find-or-create deduped
+
+
+async def _thread_status(p: Any, like: str) -> tuple[str, str | None, str | None]:
+    return await p.fetchrow(  # type: ignore[no-any-return]
+        "SELECT "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='status') AS status, "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='resolved_in') AS resolved_in, "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='resolved_because') AS because "
+        "FROM objects o JOIN current_assertions s ON s.object_id=o.id "
+        "WHERE o.type='Thread' AND s.name='summary' AND s.value #>> '{}' LIKE $1", like)
+
+
+async def test_resolve_threads_self_heals_addressed_threads(actions: Actions) -> None:
+    """A later commit that addressed a thread closes it (the briefing self-heals); a wall
+    with no follow-up stays open; the closer must be strictly LATER than the raising commit."""
+    p = actions.pool
+    # one commit raises two threads: a satellite WALL and a renderer NEXT-step
+    await _commit(actions, "commit:org", "2026-06-20T00:00:00+00:00",
+                  rationale="THE WALL: the satellite needs portal access. "
+                            "NEXT: the generic renderer for compositions.")
+    await mine_threads(actions)
+    # a PRIOR renderer commit must NOT resolve it (can't close a thread before it's raised)
+    await _commit(actions, "commit:pre", "2026-06-10T00:00:00+00:00",
+                  summary="early generic renderer spike")
+    # the real closer — strictly later, shares >=2 distinctive tokens (generic, renderer)
+    await _commit(actions, "commit:later", "2026-06-25T00:00:00+00:00",
+                  summary="implement the generic renderer", scope="renderer")
+
+    res = await resolve_threads(actions)
+    assert res["resolved"] == 1 and res["open_remaining"] == 1
+
+    status, resolved_in, because = await _thread_status(p, "%renderer%")
+    assert status == "resolved"
+    assert resolved_in == "commit:later"          # the LATER commit, not the prior spike
+    assert "renderer" in because                  # auditable: WHY it was closed
+
+    wall_status, _, _ = await _thread_status(p, "%satellite%")
+    assert wall_status == "open"                   # no follow-up → stays a live wall
+
+    # idempotent: a second pass closes nothing new
+    again = await resolve_threads(actions)
+    assert again["resolved"] == 0

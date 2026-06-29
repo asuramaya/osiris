@@ -120,6 +120,15 @@ async def test_briefing_orients_without_a_subject(actions: Actions) -> None:
     await actions.assert_property(th, "summary", "THE WALL: needs portal access", "git-memory",
                                  NOW, 0.4)
     await actions.assert_property(th, "status", "open", "git-memory", NOW, 0.4)
+    # a thread a later commit already closed — must self-heal OUT of the open list and INTO
+    # the resolved section, carrying the provenance of why it was closed.
+    done = await actions.create_or_find_object("Thread", "thread:2", "git-memory")
+    await actions.assert_property(done, "summary", "NEXT: build the renderer", "git-memory",
+                                  NOW, 0.4)
+    await actions.assert_property(done, "status", "resolved", "git-memory", NOW, 0.4)
+    await actions.assert_property(done, "resolved_in", "commit:zz", "git-memory", NOW, 0.4)
+    await actions.assert_property(done, "resolved_because", "renderer, generic", "git-memory",
+                                  NOW, 0.4)
 
     await save_composition(actions.pool, "briefing", {"op": "function", "name": "briefing"})
     # runs with NO subject (it briefs the project, not an entity)
@@ -127,8 +136,11 @@ async def test_briefing_orients_without_a_subject(actions: Actions) -> None:
     assert res["kind"] == "data"
     threads = next(v for k, v in res["items"].items() if "Open threads" in k)
     recent = next(v for k, v in res["items"].items() if "Recent work" in k)
+    healed = next(v for k, v in res["items"].items() if "Resolved" in k)
     assert any("THE WALL" in t["thread"] for t in threads)
+    assert not any("renderer" in t["thread"] for t in threads)   # resolved → not still open
     assert any(r["change"] == "ship the thing" and r["scope"] == "ui" for r in recent)
+    assert any(h["by"] == "commit:zz" and "renderer" in h["because"] for h in healed)
 
 
 async def test_unknown_function_and_missing_subject_raise(actions: Actions) -> None:

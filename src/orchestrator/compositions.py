@@ -110,6 +110,21 @@ async def _fn_briefing(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict
         "  WHERE a.object_id=o.id AND a.name='authored_date') AS date "
         "FROM objects o WHERE o.type='Commit' ORDER BY date DESC NULLS LAST LIMIT 8"
     )
+    # the self-healing made visible: threads a later commit closed, freshest first. Showing
+    # WHY (the commit + the matching tokens) is what makes auto-resolution trustworthy.
+    healed = await pool.fetch(
+        "SELECT s.value #>> '{}' AS thread, "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='resolved_in') AS commit, "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='resolved_because') AS because, "
+        " (SELECT max(observed_at) FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='status') AS at "
+        "FROM objects o JOIN current_assertions st ON st.object_id=o.id "
+        " JOIN current_assertions s ON s.object_id=o.id AND s.name='summary' "
+        "WHERE o.type='Thread' AND st.name='status' AND st.value #>> '{}' = 'resolved' "
+        "ORDER BY at DESC NULLS LAST LIMIT 8"
+    )
     return {
         "Open threads — what's unresolved": [
             {"thread": r["thread"]} for r in threads if r["thread"]
@@ -117,6 +132,10 @@ async def _fn_briefing(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict
         "Recent work — what just happened": [
             {"change": r["change"], "scope": r["scope"] or "—",
              "when": (r["date"] or "")[:10]} for r in recent if r["change"]
+        ],
+        "Resolved — self-healed by later commits": [
+            {"thread": r["thread"], "by": r["commit"], "because": r["because"]}
+            for r in healed if r["thread"]
         ],
     }
 

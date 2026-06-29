@@ -142,6 +142,7 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `in_repo` | Commit → SoftwareProject | Commit belongs to a repository. |
 | `follows` | Commit → Commit | Commit follows its parent (the history DAG). |
 | `noted_in` | Thread → Commit | A thread / wall surfaced in this commit's rationale. |
+| `resolved_by` | Thread → Commit | The later commit that addressed this thread (closes it). |
 <!-- END generated:schema -->
 
 ## Evidence classes
