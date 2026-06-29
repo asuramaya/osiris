@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+import pytest
 from src.actions.core import Actions
 from src.orchestrator.compositions import save_watch
 from src.orchestrator.monitor import (
@@ -213,6 +214,33 @@ async def test_evaluator_sink_failure_keeps_the_alert(actions: Actions) -> None:
     assert fired == 1
     row = await actions.pool.fetchrow("SELECT delivered_at FROM alerts")
     assert row is not None and row["delivered_at"] is None  # recorded, not delivered
+
+
+async def test_alert_delivery_is_rate_capped(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D1 — the 3am-false-alert guard: a burst writes every durable row, but DELIVERY is
+    capped per watch per window. The rows are never lost; only the side-channel is throttled."""
+    monkeypatch.setenv("OSIRIS_ALERT_MAX_PER_WINDOW", "2")
+    monkeypatch.setenv("OSIRIS_ALERT_COOLDOWN_SECS", "0")  # isolate the rate cap
+
+    await save_watch(actions.pool, "all orgs", "Organization", [])
+    for i in range(4):  # a burst of 4 matching new objects
+        await actions.create_or_find_object("Organization", f"cik:{i}", "edgar")
+
+    delivered: list[Alert] = []
+
+    async def sink(a: Alert) -> bool:
+        delivered.append(a)
+        return True
+
+    fired = await evaluate_watches(actions.pool, sink=sink)
+    assert fired == 4                 # 4 durable rows written
+    assert len(delivered) == 2        # only 2 delivered (the cap) — no 3am flood
+    n_rows = await actions.pool.fetchval("SELECT count(*) FROM alerts")
+    n_delivered = await actions.pool.fetchval(
+        "SELECT count(*) FROM alerts WHERE delivered_at IS NOT NULL")
+    assert n_rows == 4 and n_delivered == 2  # every row kept; 2 suppressed, readable at /alerts
 
 
 async def test_evaluator_decoupled_from_cascade_published_at(actions: Actions) -> None:

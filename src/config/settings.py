@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     # (comma-separated). It claims dispatched collection jobs needing one of these.
     osiris_satellite_id: str = "satellite:local"
     osiris_satellite_vantages: str = ""
+    # Alert delivery throttle (the 3am-false-alert guard). The durable `alerts` row is
+    # ALWAYS written; only DELIVERY (the side-channel sink) is rate-capped: at most
+    # `osiris_alert_max_per_window` deliveries per watch per `osiris_alert_window_secs`,
+    # and never the same (watch,object) twice inside `osiris_alert_cooldown_secs`. Excess
+    # rows are kept + logged (a digest count), never lost.
+    osiris_alert_max_per_window: int = 20
+    osiris_alert_window_secs: int = 3600
+    osiris_alert_cooldown_secs: int = 86400
 
 
 def get_settings() -> Settings:

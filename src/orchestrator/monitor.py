@@ -35,6 +35,7 @@ from typing import Any
 import asyncpg
 
 from src.actions.core import Actions
+from src.config.settings import Settings, get_settings
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -374,7 +375,13 @@ async def evaluate_watches(
 
     # deliver to the side-channel sink AFTER the durable rows are committed. A sink
     # failure must never lose the alert (the table row stands) or abort the batch.
+    # DELIVERY is throttled (the 3am-false-alert guard); the durable rows are never.
+    settings = get_settings()
+    suppressed = 0
     for alert in fired:
+        if not await _deliverable(pool, alert, settings):
+            suppressed += 1  # row kept, delivery suppressed (cooldown or rate cap)
+            continue
         try:
             if await deliver(alert):
                 await pool.execute(
@@ -382,4 +389,26 @@ async def evaluate_watches(
                 )
         except Exception as exc:
             logger.warning("alert sink failed for %s: %r", alert.id, exc)
+    if suppressed:
+        logger.info("throttled %d alert deliveries (rows kept, read /alerts)", suppressed)
     return len(fired)
+
+
+async def _deliverable(pool: asyncpg.Pool, alert: Alert, s: Settings) -> bool:
+    """Should this alert be DELIVERED (vs. recorded-only)? Suppress a re-alert of the same
+    (watch, object) inside the cooldown, and cap deliveries per watch per window — so a
+    burst or a flapping object can't flood the operator. The durable row stands regardless."""
+    if alert.object_id is not None and s.osiris_alert_cooldown_secs > 0:
+        recent = await pool.fetchval(
+            "SELECT 1 FROM alerts WHERE composition_id=$1 AND object_id=$2 "
+            "AND delivered_at > now() - ($3::int * interval '1 second') AND id<>$4 LIMIT 1",
+            alert.watch_id, alert.object_id, s.osiris_alert_cooldown_secs, alert.id,
+        )
+        if recent is not None:
+            return False
+    delivered_in_window: int = await pool.fetchval(
+        "SELECT count(*) FROM alerts WHERE composition_id=$1 "
+        "AND delivered_at > now() - ($2::int * interval '1 second')",
+        alert.watch_id, s.osiris_alert_window_secs,
+    )
+    return delivered_in_window < s.osiris_alert_max_per_window
