@@ -29,7 +29,19 @@
   .spacer{flex:1}
 
   /* layout */
-  #main{display:grid;grid-template-columns:274px 1fr 350px;height:100%;min-height:0}
+  #main{display:grid;grid-template-columns:274px 1fr 350px;height:100%;min-height:0;
+    transition:grid-template-columns .16s ease}
+  /* calm: collapse the side panels to give the content room (U3 — open calm). NEVER
+     display:none a panel — that drops it from the grid and shifts #center onto the 0px
+     track (a 0-width center). Keep it a grid item at 0 width, clipped. */
+  #main.lefthidden{grid-template-columns:0 1fr 350px}
+  #main.lefthidden #left{overflow:hidden}
+  #main.righthidden{grid-template-columns:274px 1fr 0}
+  #main.righthidden #right{overflow:hidden}
+  #main.lefthidden.righthidden{grid-template-columns:0 1fr 0}
+  .panel-toggle{background:transparent;border:0;color:var(--muted);cursor:pointer;font-size:15px;
+    padding:0 4px;line-height:1}
+  .panel-toggle:hover{color:var(--text)}
   .rail{background:var(--panel);overflow-y:auto;min-height:0}
   #left{border-right:1px solid var(--border)}
   #right{border-left:1px solid var(--border)}
@@ -114,6 +126,7 @@
 <body>
 <div id="app">
   <div id="bar">
+    <button class="panel-toggle" onclick="toggleLeft()" title="Toggle sidebar ( [ )">☰</button>
     <span class="brand">◭ <b>Osiris</b></span>
     <span id="syncbadge" class="syncbadge" title="Live shared cursor with Claude">⟲ live</span>
     <select id="room" onchange="switchRoom(this.value)" title="Room — your stance"></select>
@@ -127,6 +140,7 @@
     <span class="spacer"></span>
     <button class="iconbtn" onclick="toggleKey(event)">Type key</button>
     <button class="iconbtn" onclick="openReview()">Review <span id="reviewN" class="o-muted">0</span></button>
+    <button class="panel-toggle" onclick="toggleRight()" title="Toggle inspector ( ] )">⊟</button>
   </div>
 
   <div id="main">
@@ -224,10 +238,13 @@ async function applyConsole(s){
   SYNCING=true;
   try{
     setSyncBadge(s.updated_by);
+    const compChanged = s.composition && s.composition!==ACTIVE;
     if(s.room_id && s.room_id!==ROOM) await switchRoom(s.room_id);
     if(s.focused_object_id && s.focused_object_id!==FOCUS) await focus(s.focused_object_id);
-    if(s.composition && s.composition!==ACTIVE) await runComp(s.composition);
-    if(s.view && RESULT && s.view!==VIEW) setView(s.view);
+    if(compChanged) await runComp(s.composition);
+    // apply a synced view ONLY on the current composition — never let a stale view override a
+    // freshly-run composition's shape-aware default (the graph-instead-of-timeline bug).
+    if(s.view && RESULT && s.view!==VIEW && !compChanged) setView(s.view);
   } finally { SYNCING=false; }
 }
 
@@ -275,7 +292,8 @@ async function loadComps(){
 // exploration board.
 let RESULT=null, VIEW=null, WORKING=null;
 async function runComp(name){
-  ACTIVE=name; postConsole({composition:name}); loadComps();
+  // clear the synced view so a new composition starts at its own shape-aware default
+  ACTIVE=name; postConsole({composition:name, view:null}); loadComps();
   setStatus(`Running ${name}…`);
   const res = await fetch(`/compositions/${encodeURIComponent(name)}/run`,{method:'POST',
     headers:{'content-type':'application/json'},body:JSON.stringify({subject:FOCUS})}).then(r=>r.json());
@@ -625,6 +643,11 @@ async function applyDeepLink(){
   if(q.get('run')) await runComp(q.get('run'));
 }
 
+// ---- calm: collapse the side panels to give the content room (U3 — open calm) ----------
+function _afterResize(){ if(board&&board.resizeFit) setTimeout(()=>board.resizeFit(),180); }
+function toggleLeft(){ $('main').classList.toggle('lefthidden'); _afterResize(); }
+function toggleRight(){ $('main').classList.toggle('righthidden'); _afterResize(); }
+
 // ---- peek: a summoned surface with its OWN panel (U2 — one panel, one job) --------------
 // Review / compose used to float as popovers OVER the inspector rail, covering the focused
 // object (two jobs in one place). They're now clean centered "peeks" with a dim backdrop —
@@ -653,6 +676,7 @@ function paletteCommands(q){
    ['Search around the focused object',()=>FOCUS?searchAround(FOCUS):setStatus('Focus an object first.')],
    ['Compose a watch / composition',()=>openCompose()], ['Merge review',openReview],
    ['New analysis',newAnalysis],
+   ['Toggle the sidebar',toggleLeft], ['Toggle the inspector',toggleRight],
    ['Fit the board',()=>board.fit()], ['Re-layout',()=>board.layout(false)],
    ['Clear the board',clearAll]
   ].forEach(([label,run])=>cmds.push({cat:'Action', label, run}));
@@ -715,6 +739,8 @@ document.addEventListener('keydown',e=>{
   if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){ e.preventDefault(); PAL_OPEN?closePalette():openPalette(); }
   else if(e.key==='/'&&!PAL_OPEN&&!inField){ e.preventDefault(); openPalette(); }
   else if(e.key==='Escape'&&$('peek').className.includes('on')){ closePeek(); }
+  else if(e.key==='['&&!inField){ e.preventDefault(); toggleLeft(); }
+  else if(e.key===']'&&!inField){ e.preventDefault(); toggleRight(); }
 });
 
 Osiris.loadSchema().then(async()=>{
