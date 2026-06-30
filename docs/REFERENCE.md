@@ -78,6 +78,7 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `Thread` | `thread:` | An open thread / wall / next-step — project memory of what's unresolved. |
 | `Reference` | `ref:` | A design/reference document — external canon (Palantir/Notion) or own docs, ingested as project memory. |
 | `Decision` | `decision:` | An architectural/design decision mined from the project's own commit rationale — the 'why', as queryable institutional memory. |
+| `File` | `file:` | A tracked file in a repository (metadata only — content stays in git, read on demand). Its `role` lets analogous files be compared across repos. |
 
 ### Observable object types
 
@@ -141,7 +142,7 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `based-on` | Indicator → * | Indicator derived from raw observed evidence. |
 | `subtechnique-of` | AttackPattern → AttackPattern | A more specific technique under a broader one. |
 | `authored_by` | Commit → Person | Commit authored by a developer. |
-| `in_repo` | Commit → SoftwareProject | Commit belongs to a repository. |
+| `in_repo` | Commit/File → SoftwareProject | Commit or file belongs to a repository. |
 | `follows` | Commit → Commit | Commit follows its parent (the history DAG). |
 | `noted_in` | Thread → Commit | A thread / wall surfaced in this commit's rationale. |
 | `resolved_by` | Thread → Commit | The later commit that addressed this thread (closes it). |

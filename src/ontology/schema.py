@@ -128,6 +128,10 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
     ObjectType("Decision", "Software", "#d2a8ff", "octagon",
                "An architectural/design decision mined from the project's own commit "
                "rationale — the 'why', as queryable institutional memory.", ("decision:",)),
+    ObjectType("File", "Software", "#6cb6ff", "round-rectangle",
+               "A tracked file in a repository (metadata only — content stays in git, "
+               "read on demand). Its `role` lets analogous files be compared across repos.",
+               ("file:",)),
     # Observables
     ObjectType("IPv4", "Observable", "#2dd4bf", "ellipse", "An IPv4 address observable."),
     ObjectType("TelegramChannel", "Observable", "#56a3ff", "ellipse",
@@ -201,7 +205,8 @@ _LINK_TYPES: tuple[LinkType, ...] = (
     LinkType("subtechnique-of", "A more specific technique under a broader one.",
              ("AttackPattern",), ("AttackPattern",)),
     LinkType("authored_by", "Commit authored by a developer.", ("Commit",), ("Person",)),
-    LinkType("in_repo", "Commit belongs to a repository.", ("Commit",), ("SoftwareProject",)),
+    LinkType("in_repo", "Commit or file belongs to a repository.",
+             ("Commit", "File"), ("SoftwareProject",)),
     LinkType("follows", "Commit follows its parent (the history DAG).",
              ("Commit",), ("Commit",)),
     LinkType("noted_in", "A thread / wall surfaced in this commit's rationale.",
