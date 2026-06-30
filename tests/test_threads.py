@@ -24,13 +24,17 @@ def test_extract_threads_is_high_signal() -> None:
         "Shipped the dossier. DONE, proven live.\n"
         "THE WALL: running this live needs a satellite with portal access.\n"
         "NEXT: wire the renderer and fold the watch in.\n"
-        "This handles pending handoffs nicely and the tray opens."
+        "This handles pending handoffs nicely and the tray opens.\n"
+        "Tuned the author-intended markers (NEXT: / THE WALL / gated on / needs-a-key).\n"
+        "INSPECTOR WALL: a long value now clamps to 4 lines with a toggle."
     )
     out = extract_threads(body)
-    assert any("THE WALL" in t for t in out)          # a wall is surfaced
+    assert any("THE WALL" in t for t in out)          # a real wall is surfaced
     assert any(t.startswith("NEXT:") for t in out)    # a next-step is surfaced
     assert not any("handoffs" in t for t in out)      # 'pending' is no longer a marker (noise)
     assert not any("DONE" in t for t in out)          # a CLOSED sentence is skipped
+    assert not any("markers" in t for t in out)       # META: a sentence ABOUT markers is dropped
+    assert not any("INSPECTOR WALL" in t for t in out)  # a "X WALL:" heading isn't "THE WALL"
 
 
 async def test_mine_threads_creates_linked_threads(actions: Actions) -> None:

@@ -30,11 +30,16 @@ _CONF = confidence_for(EvidenceClass.DERIVED)
 # resolutions, so we keep only the explicit, author-intended flags. Mining prose is rough by
 # nature — this is why the AI extractor exists; deterministic stays tight to stay trustworthy.
 _OPEN = re.compile(
-    r"(\bNEXT:|\bTHE WALL\b|\bWALL:|\bREMAINING\b|gated on|not yet live|"
+    r"(\bNEXT:|\bTHE WALL\b|\bREMAINING\b|gated on|not yet live|"
     r"needs a (?:real )?(?:free )?(?:key|token|vantage|portal|cred|GITHUB_TOKEN|ANTHROPIC))"
 )
 # a sentence that's really CLOSED ("DONE", "PROVEN") even if it brushes a marker — skip
 _CLOSED = re.compile(r"\b(DONE|PROVEN|FIXED|resolved|shipped)\b", re.IGNORECASE)
+# META noise: a sentence DESCRIBING the markers/walls (a commit about the thread-miner itself,
+# or a CAPS section-heading like "INSPECTOR WALL:" that introduces a fix) — not a real thread.
+# Dropped `\bWALL:` above (it caught any "X WALL:" heading); only the exact phrase "THE WALL"
+# counts. Plus skip a sentence that talks ABOUT markers, or enumerates several at once.
+_META = re.compile(r"\bmarkers?\b", re.IGNORECASE)
 
 # Generic engineering vocabulary — present in half the commits, so a SHARED generic word
 # is no evidence a later commit addressed a thread. Resolution requires shared DISTINCTIVE
@@ -64,7 +69,7 @@ def extract_threads(body: str) -> list[str]:
         s = frag.strip(" .-—\t")
         if not (12 <= len(s) <= 240):
             continue
-        if _OPEN.search(s) and not _CLOSED.search(s):
+        if _OPEN.search(s) and not _CLOSED.search(s) and not _META.search(s):
             key = re.sub(r"\W+", "", s.lower())
             if key not in seen:
                 seen.add(key)
