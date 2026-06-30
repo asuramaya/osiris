@@ -64,11 +64,17 @@
   .kindb.watch{color:var(--accent);background:#10261a;border:1px solid #1d4a2e}
 
   /* object set */
-  .item{display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:6px;cursor:pointer;border:1px solid transparent}
+  .item{display:flex;align-items:center;gap:8px;padding:4px 7px 4px 24px;border-radius:6px;cursor:pointer;border:1px solid transparent}
   .item:hover{background:var(--panel2)} .item.sel{background:var(--panel2);border-color:var(--border2)}
   .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
-  .item .lab{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .item .lab{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
   .item .ty{font-size:10px;color:var(--faint)}
+  /* the object set, grouped by type — hierarchy over a flat hash list (U5) */
+  .set-group{display:flex;align-items:center;gap:7px;padding:7px 7px 4px;cursor:pointer;user-select:none}
+  .set-group:hover .set-gname{color:var(--text)}
+  .set-caret{color:var(--faint);font-size:9px;width:9px}
+  .set-gname{font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);font-weight:600}
+  .set-gn{margin-left:auto;font-size:10.5px;color:var(--faint)}
 
   /* center: board OR result panel */
   #center{display:grid;grid-template-rows:40px auto 1fr 24px;min-height:0;min-width:0}
@@ -423,15 +429,27 @@ async function openAnalysis(id){
   if(SET.length) focus(SET[0].id);
   else setStatus('Empty analysis — add an object below, or run Expand.');
 }
+let SET_COLLAPSED={};
 function renderSet(){
   const q=($('filter').value||'').toLowerCase();
   const rows = SET.filter(o => (o.name||o.canonical).toLowerCase().includes(q) || o.type.toLowerCase().includes(q));
-  $('set').innerHTML = rows.slice(0,200).map(o=>`
-    <div class="item${FOCUS===o.id?' sel':''}" onclick="focus('${o.id}')" title="${esc(o.canonical)}">
-      <span class="dot" style="background:${ty(o.type).c}"></span>
-      <span class="lab">${esc(o.name||o.canonical)}</span><span class="ty">${o.type}</span>
-    </div>`).join('') || '<div class="o-empty">No objects match.</div>';
+  if(!rows.length){ $('set').innerHTML='<div class="o-empty">No objects match.</div>'; return; }
+  // group by type — a calm hierarchy (Commit ▾ 60 / Thread ▾ 5 …) over a flat hash list.
+  const groups={};
+  rows.forEach(o=>(groups[o.type]=groups[o.type]||[]).push(o));
+  const types=Object.keys(groups).sort((a,b)=>groups[b].length-groups[a].length);  // biggest first
+  $('set').innerHTML = types.map(t=>{
+    const items=groups[t], open=!SET_COLLAPSED[t];
+    const head=`<div class="set-group" onclick="toggleSetGroup('${esc(t)}')">
+      <span class="set-caret">${open?'▾':'▸'}</span><span class="dot" style="background:${ty(t).c}"></span>
+      <span class="set-gname">${esc(t)}</span><span class="set-gn">${items.length}</span></div>`;
+    const body=open?items.slice(0,200).map(o=>`
+      <div class="item${FOCUS===o.id?' sel':''}" onclick="focus('${o.id}')" title="${esc(o.canonical)}">
+        <span class="lab">${esc(o.name||o.canonical)}</span></div>`).join('') : '';
+    return head+body;
+  }).join('');
 }
+function toggleSetGroup(t){ SET_COLLAPSED[t]=!SET_COLLAPSED[t]; renderSet(); }
 
 // ---- focus / inspect / search-around (the one noun) ------------------------
 async function focus(id){
