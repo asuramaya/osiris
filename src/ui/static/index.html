@@ -731,7 +731,14 @@ function closePeek(){ const o=$('peek'); o.className='peek-overlay'; o.innerHTML
 // Every action lives here — run a lens, find an object, search-around, expand, switch room,
 // the board verbs — summoned with a keystroke, dismissed when done. This is what lets the
 // global toolbar shrink toward zero (U4): the screen stays calm, the power stays one key away.
-let PAL_OPEN=false, PAL_SEL=0, PAL_CMDS=[];
+let PAL_OPEN=false, PAL_SEL=0, PAL_CMDS=[], PAL_FLAT=false;
+// rank a result by match quality so intent beats coincidence: exact < prefix < word-start <
+// substring (typing 'compose' puts the Compose ACTION above the 'composer arc' lens).
+function _palScore(label, ql){
+  const l=label.toLowerCase();
+  if(l===ql) return 0; if(l.startsWith(ql)) return 1;
+  return new RegExp('\\b'+ql.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).test(l) ? 2 : 3;
+}
 function paletteCommands(q){
   const ql=q.toLowerCase(), cmds=[];
   COMPS.forEach(c=>cmds.push({cat:'Run a lens', label:c.name, hint:c.kind, run:()=>runComp(c.name)}));
@@ -766,9 +773,10 @@ function openPalette(){
 function closePalette(){ PAL_OPEN=false; const o=$('palette'); o.className='palette-overlay'; o.innerHTML=''; }
 async function refreshPalette(){
   const q=($('palinput')?.value||'').trim();
-  // commands first (the palette is a COMMAND surface); object hits follow. A query that
-  // matches no command (a name) is naturally object-dominated.
-  PAL_CMDS=[...paletteCommands(q), ...await paletteObjects(q)];
+  let cmds=[...paletteCommands(q), ...await paletteObjects(q)];
+  if(q){ const ql=q.toLowerCase();  // searching → flat, ranked by relevance (intent first)
+    cmds=cmds.map((c,i)=>[_palScore(c.label,ql),i,c]).sort((a,b)=>a[0]-b[0]||a[1]-b[1]).map(x=>x[2]); }
+  PAL_CMDS=cmds; PAL_FLAT=!!q;  // empty → grouped by category (browse)
   if(PAL_SEL>=PAL_CMDS.length) PAL_SEL=0;
   renderPalette();
 }
@@ -777,9 +785,10 @@ function renderPalette(){
   if(!PAL_CMDS.length){ list.innerHTML='<div class="pal-empty">No matches.</div>'; return; }
   let html='', lastCat=null;
   PAL_CMDS.forEach((c,i)=>{
-    if(c.cat!==lastCat){ html+=`<div class="pal-cat">${esc(c.cat)}</div>`; lastCat=c.cat; }
+    if(!PAL_FLAT && c.cat!==lastCat){ html+=`<div class="pal-cat">${esc(c.cat)}</div>`; lastCat=c.cat; }
+    const hint = PAL_FLAT ? (c.hint||c.cat) : c.hint;  // flat rows show their category as the hint
     html+=`<div class="pal-row${i===PAL_SEL?' sel':''}" data-i="${i}">
-      <span class="pal-label">${esc(c.label)}</span>${c.hint?`<span class="pal-hint">${esc(c.hint)}</span>`:''}</div>`;
+      <span class="pal-label">${esc(c.label)}</span>${hint?`<span class="pal-hint">${esc(hint)}</span>`:''}</div>`;
   });
   list.innerHTML=html;
   list.querySelectorAll('[data-i]').forEach(el=>{
