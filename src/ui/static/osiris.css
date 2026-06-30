@@ -51,6 +51,9 @@
 .peek-body { padding: 14px 16px; overflow: auto; }
 .rev-row { padding: 9px 0; border-top: 1px solid var(--border); }
 .rev-row:first-child { border-top: 0; }
+/* board fiddly verbs (fit/re-layout/clear) — calm by default, disclose on hover (U4) */
+.boardtools { display: inline-flex; gap: 6px; opacity: .3; transition: opacity .15s; }
+#tools:hover .boardtools, .boardtools:hover { opacity: 1; }
 /* timeline view — an ordered set as a concise date · summary list (Notion's Timeline view) */
 .tl { display: flex; flex-direction: column; }
 .tl-item { display: flex; gap: 12px; padding: 9px 4px; border-top: 1px solid var(--border);

@@ -168,12 +168,15 @@
       <div id="tools">
         <span class="title" id="boardtitle">Board</span>
         <span id="viewsw" class="viewsw"></span>
-        <button class="iconbtn" id="aroundBtn" onclick="searchAround()" disabled>Search around</button>
+        <button class="iconbtn" id="aroundBtn" onclick="searchAround()" disabled hidden>Search around</button>
         <button class="iconbtn" onclick="expandSet()" title="Run collectors to grow the set">Expand ▸</button>
         <span class="spacer"></span>
+        <!-- board fiddly verbs — quiet by default, reveal on hover; all also in ⌘K (U4) -->
+        <span class="boardtools">
         <button class="iconbtn" onclick="board.fit()">Fit</button>
         <button class="iconbtn" onclick="board.layout(false)">Re-layout</button>
         <button class="iconbtn" onclick="clearAll()">Clear</button>
+        </span>
       </div>
       <div id="composerbar"></div>
       <div id="stage">
