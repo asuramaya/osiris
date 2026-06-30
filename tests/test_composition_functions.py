@@ -22,6 +22,7 @@ from src.orchestrator.coinvest import coinvestment_ties
 from src.orchestrator.compositions import (
     list_functions,
     run_composition,
+    run_spec,
     save_composition,
     seed_default_compositions,
 )
@@ -104,7 +105,8 @@ async def test_subject_report_function_is_byte_equal(actions: Actions, case_id: 
 # --- the registry + guards --------------------------------------------------
 
 async def test_function_registry_is_listable(actions: Actions) -> None:
-    assert list_functions() == ["briefing", "coinvest", "screen_network", "subject_report"]
+    assert list_functions() == ["briefing", "canon", "coinvest", "screen_network",
+                                "subject_report"]
 
 
 async def test_briefing_orients_without_a_subject(actions: Actions) -> None:
@@ -150,3 +152,54 @@ async def test_unknown_function_and_missing_subject_raise(actions: Actions) -> N
     await save_composition(actions.pool, "needs-subj", {"op": "function", "name": "coinvest"})
     with pytest.raises(ValueError, match="requires a subject"):
         await run_composition(actions.pool, "needs-subj", None)
+
+
+# --- canon: consult the design canon (cite, don't re-derive) ----------------
+
+async def _ref(actions: Actions, canon: str, title: str, vendor: str, grounds: str,
+               body: str) -> None:
+    r = await actions.create_or_find_object("Reference", canon, f"ref:{vendor}")
+    for name, value in (("name", title), ("vendor", vendor), ("grounds", grounds),
+                        ("body", body)):
+        await actions.assert_property(r, name, value, f"ref:{vendor}", NOW, 0.85)
+
+
+async def test_canon_retrieves_ranked_sections(actions: Actions) -> None:
+    """The keystone: a design query returns the matching canon SECTIONS, ranked, each carrying
+    the module it grounds — what a designer calls BEFORE re-deriving a solved problem."""
+    await _ref(actions, "ref:palantir-object-sets", "Object Sets", "palantir",
+               "src/orchestrator/compositions.py",
+               "# Object Sets\n\nThe closed op vocabulary.\n\n## Operations\nfilter, traverse, "
+               "aggregate; relating two sets is set algebra — never a join.\n\n## Functions\n"
+               "the escape hatch for anything the ops can't express.")
+    await _ref(actions, "ref:notion-uiux", "Calm UI", "notion", "src/ui/static/index.html",
+               "# Calm UI\n\nintro.\n\n## Progressive disclosure\nhide complexity until asked.")
+
+    # query by a design word → the object-sets doc ranks top, its section is returned
+    res = await run_spec(actions.pool, {"op": "function", "name": "canon",
+                                        "args": {"q": "join"}}, None, name="design-canon")
+    assert res["kind"] == "data"
+    hits = next(iter(res["items"].values()))
+    assert hits and hits[0]["reference"] == "Object Sets"
+    assert any("never a join" in h["text"] for h in hits)
+    assert hits[0]["grounds"] == "src/orchestrator/compositions.py"   # carries what it grounds
+
+    # query by a MODULE PATH (the grounds field) → surfaces that doc even with no body match
+    bymod = await run_spec(actions.pool, {"op": "function", "name": "canon",
+                                          "args": {"q": "index.html"}}, None)
+    modhits = next(iter(bymod["items"].values()))
+    assert modhits and all(h["reference"] == "Calm UI" for h in modhits)
+
+    # empty query → the canon INDEX: one overview row per reference, subject-free (no raise)
+    idx = await run_spec(actions.pool, {"op": "function", "name": "canon", "args": {}}, None)
+    idxhits = next(iter(idx["items"].values()))
+    assert len(idxhits) == 2 and {h["reference"] for h in idxhits} == {"Object Sets", "Calm UI"}
+
+
+async def test_canon_is_subject_free_and_seeded(actions: Actions) -> None:
+    """`canon` is registered + subject-free (a design question, not an entity), and the
+    `design-canon` view is a default composition the operator can switch to."""
+    assert "canon" in list_functions()
+    await seed_default_compositions(actions.pool)
+    res = await run_composition(actions.pool, "design-canon")     # NO subject → must not raise
+    assert res["kind"] == "data"

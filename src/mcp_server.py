@@ -370,6 +370,20 @@ async def list_functions() -> list[str]:
     return comp.list_functions()
 
 
+@mcp.tool()
+async def consult_canon(query: str = "") -> dict[str, Any]:
+    """Consult the design canon — Palantir's Object Set / Ontology / Action models + Notion's
+    databases / relations-rollups / UI-UX, plus Osiris's own docs, all ingested as References.
+    'Cite, don't re-derive': given a topic, a module path, or a design word, returns the
+    matching canon SECTIONS (the source + the module each grounds). Call this BEFORE
+    re-deriving a problem these companies already solved — the closed op set & "no generic
+    join", aggregation caps, the kinetic write path, the renderer's view rules, calm UI.
+    Empty query → the whole canon index."""
+    pool = await _pool_get()
+    spec = {"op": "function", "name": "canon", "args": {"q": query}}
+    return await comp.run_spec(pool, spec, None, name="design-canon")
+
+
 def main() -> None:
     mcp.run()
 

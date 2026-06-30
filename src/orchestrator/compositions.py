@@ -36,6 +36,7 @@ load-tested): `traverse` ≤ 3 hops, `aggregate` ≤ 3 group_by dimensions.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -140,15 +141,89 @@ async def _fn_briefing(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict
     }
 
 
+_CANON_MAX_HITS = 12
+_CANON_SNIPPET = 500
+
+
+def _canon_sections(body: str) -> list[tuple[str, str]]:
+    """Split a markdown reference into (heading, text) sections by `## ` headers. Text before
+    the first `##` (minus the H1) is the '(overview)' section. Pure."""
+    parts = re.split(r"^##\s+(.+)$", body, flags=re.M)
+    out: list[tuple[str, str]] = []
+    intro = re.sub(r"^#\s+.+$", "", parts[0], count=1, flags=re.M).strip()
+    if intro:
+        out.append(("(overview)", intro))
+    for i in range(1, len(parts), 2):
+        out.append((parts[i].strip(), parts[i + 1].strip() if i + 1 < len(parts) else ""))
+    return out
+
+
+def _trim(text: str) -> str:
+    return text[:_CANON_SNIPPET] + ("…" if len(text) > _CANON_SNIPPET else "")
+
+
+async def _fn_canon(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
+    """Consult the design canon — Palantir/Notion's models + Osiris's own docs, ingested as
+    `Reference` objects (src/ingest/reference.py). 'Cite, don't re-derive': given a query (a
+    topic, a `grounds` module path, or a design word), return the matching canon SECTIONS
+    ranked, each with its source + the module it grounds. Empty query → the canon index (one
+    overview row per reference). Subject-FREE — it answers a design question, not an entity;
+    this is what a designer (human or Claude, via `consult_canon`) calls BEFORE re-deriving a
+    problem Palantir/Notion already solved (the closed op set, aggregation caps, the kinetic
+    write path, the renderer's view rules)."""
+    q = str(args.get("q", "")).strip().lower()
+    refs = await pool.fetch(
+        "SELECT "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='name') AS title, "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='vendor') AS vendor, "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='topic') AS topic, "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='grounds') AS grounds, "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='source_url') AS source, "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='body') AS body "
+        "FROM objects o WHERE o.type='Reference' AND o.status='active'"
+    )
+    if not q:  # the index — one overview row per reference, ordered by vendor then title
+        index = []
+        for r in sorted(refs, key=lambda x: (x["vendor"] or "", x["title"] or "")):
+            secs = _canon_sections(r["body"] or "")
+            index.append({"reference": r["title"], "vendor": r["vendor"],
+                          "grounds": r["grounds"], "source": r["source"],
+                          "text": _trim(secs[0][1]) if secs else ""})
+        return {"Design canon — Palantir · Notion · own docs": index}
+    hits: list[tuple[int, dict[str, Any]]] = []
+    for r in refs:
+        meta = " ".join(
+            filter(None, [r["title"], r["topic"], r["vendor"], r["grounds"]])).lower()
+        meta_score = 3 if q in meta else 0      # the whole reference is about this
+        for heading, text in _canon_sections(r["body"] or ""):
+            score = (meta_score + (2 if q in heading.lower() else 0)
+                     + (1 if q in text.lower() else 0))
+            if score <= 0:
+                continue
+            hits.append((score, {
+                "reference": r["title"], "vendor": r["vendor"], "grounds": r["grounds"],
+                "section": heading, "source": r["source"], "text": _trim(text),
+            }))
+    hits.sort(key=lambda h: h[0], reverse=True)
+    return {f'Canon — "{q}"': [h[1] for h in hits[:_CANON_MAX_HITS]]}
+
+
 _FUNCTIONS: dict[str, Function] = {
     "coinvest": _fn_coinvest,
     "subject_report": _fn_subject_report,
     "screen_network": _fn_screen,
     "briefing": _fn_briefing,
+    "canon": _fn_canon,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
-_SUBJECT_FREE = {"briefing"}
+_SUBJECT_FREE = {"briefing", "canon"}
 
 
 def list_functions() -> list[str]:
@@ -563,6 +638,9 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "co-investment-ties": {"op": "function", "name": "coinvest"},
     "who-is-this": {"op": "function", "name": "subject_report"},
     "screen-financing-network": {"op": "function", "name": "screen_network"},
+    # the dedicated canon view: the project's design memory (Palantir/Notion + own docs),
+    # rendered as a sectioned read-model. Run with no subject; `consult_canon(q)` queries it.
+    "design-canon": {"op": "function", "name": "canon", "args": {}},
 }
 
 
