@@ -184,6 +184,74 @@ async def find_person_merge_candidates(pool: asyncpg.Pool) -> int:
     return queued
 
 
+_GH_NOREPLY = re.compile(
+    r"^(?:\d+\+)?([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)@users\.noreply\.github\.com$", re.I)
+
+
+def _github_handle(email: str) -> str | None:
+    """The handle encoded in a GitHub no-reply commit email (`NNN+handle@…` or `handle@…`).
+    The one strong cross-repo dev signal: the no-reply email literally names the account."""
+    m = _GH_NOREPLY.match((email or "").strip())
+    return m.group(1).lower() if m else None
+
+
+async def find_dev_identity_candidates(pool: asyncpg.Pool) -> int:
+    """Cross-repo developer-identity resolution. The same person commits under several emails
+    (personal vs GitHub no-reply) across repos, fragmenting into multiple `dev:` Person nodes —
+    so a multi-repo graph double-counts you. The OSINT resolver misses it (same name, different
+    email, no DOB/employer). This blocks dev Persons by shared name/handle and scores: a no-reply
+    handle that matches the other identity's name is near-certain (0.9); a bare shared dev name is
+    a weaker lead (0.6). Review-gated — never auto-merges a Person (#3). Candidate-gated: pairs
+    are generated only WITHIN a block (shared key), never all-pairs, so it scales to N repos."""
+    rows = await pool.fetch(
+        "SELECT o.id, "
+        " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='name' ORDER BY confidence DESC LIMIT 1) AS name, "
+        " array(SELECT DISTINCT value #>> '{}' FROM current_assertions a "
+        "       WHERE a.object_id=o.id AND a.name='email') AS emails "
+        "FROM objects o WHERE o.type='Person' AND o.status='active' AND o.canonical LIKE 'dev:%'")
+    # BLOCKING — key each dev by its name and by any github handle; a dev's name is itself a
+    # handle-candidate, so name 'asuramaya' lands in the same block as handle 'asuramaya'.
+    blocks: dict[str, set[uuid.UUID]] = {}
+    meta: dict[uuid.UUID, tuple[str, set[str]]] = {}
+    for r in rows:
+        name = (r["name"] or "").strip().lower()
+        handles: set[str] = set()
+        for e in r["emails"] or []:
+            h = _github_handle(e)
+            if h:
+                handles.add(h)
+        meta[r["id"]] = (name, handles)
+        for key in ({name} | handles) - {""}:
+            blocks.setdefault(key, set()).add(r["id"])
+
+    scored: dict[Pair, tuple[float, list[str]]] = {}
+    for key, ids in blocks.items():
+        ordered = sorted(ids)
+        for i in range(len(ordered)):
+            for j in range(i + 1, len(ordered)):
+                a, b = ordered[i], ordered[j]
+                (na, ha), (nb, hb) = meta[a], meta[b]
+                if (na and na in hb) or (nb and nb in ha) or (ha & hb):
+                    score, reason = 0.9, f"github handle matches identity: {key}"
+                elif na and na == nb:
+                    score, reason = 0.6, f"shared dev name: {na}"
+                else:
+                    continue
+                prev = scored.get((a, b))
+                if prev is None or score > prev[0]:
+                    scored[(a, b)] = (score, [reason])
+
+    suppressed = await _suppressed(pool)
+    queued = 0
+    for (a, b), (score, reasons) in scored.items():
+        if frozenset((a, b)) in suppressed:
+            continue
+        if await _insert(pool, a, b, score, reasons):
+            queued += 1
+    return queued
+
+
 async def find_behavioral_merge_candidates(
     pool: asyncpg.Pool, *, min_techniques: int = 3, min_tools: int = 2
 ) -> int:
