@@ -146,6 +146,7 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `resolved_by` | Thread → Commit | The later commit that addressed this thread (closes it). |
 | `cites` | Reference → Reference | This document cites / draws from that reference. |
 | `informs` | Reference → SoftwareProject/Commit | This reference grounds / informs that artifact. |
+| `mentions` | Reference/Commit → Organization/Person | This document names that entity in its text (the doc joins the graph). |
 <!-- END generated:schema -->
 
 ## Evidence classes

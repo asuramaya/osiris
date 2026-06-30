@@ -113,7 +113,54 @@ async def ingest_canon(actions: Actions, *, case_id: uuid.UUID | None = None) ->
                                       case_id=case_id,
                                       evidence_class=EvidenceClass.SELF_DECLARED.value)
             cites += 1
-    return {"vendor": len(vendor_refs), "own": len(own), "cites": cites}
+    # Layer 3: join the docs to the entity graph by the names they mention
+    mentions = await mine_mentions(actions, case_id=case_id)
+    return {"vendor": len(vendor_refs), "own": len(own), "cites": cites,
+            "mentions": mentions["mentions"]}
+
+
+async def mine_mentions(
+    actions: Actions, *, min_name_len: int = 6, source_id: str = "mentions",
+    case_id: uuid.UUID | None = None,
+) -> dict[str, Any]:
+    """Layer 3 — join the docs to the entity graph, KEYLESS. Scan each document's body for the
+    names of real entities (Person/Organization/… with a distinctive name, length >= min) and
+    mint a `mentions` edge doc->entity. Graded CO_OCCURRENCE — a name match is an inference,
+    so the mentioned node stays a speculative LEAF in the frontier until corroborated; never
+    auto-expands. Idempotent. (The AI extractor is the smarter, keyed version of this.)"""
+    pool = actions.pool
+    ec = EvidenceClass.CO_OCCURRENCE
+    conf, now = confidence_for(ec), datetime.now(UTC)
+    ents = await pool.fetch(
+        "SELECT o.id, (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='name' LIMIT 1) AS name "
+        "FROM objects o WHERE o.status='active' "
+        "  AND o.type NOT IN ('Reference','Commit','Thread','SoftwareProject') "
+        "  AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+        "    AND a.name='name' AND length(a.value #>> '{}') >= $1)", min_name_len)
+    docs = await pool.fetch(
+        "SELECT o.id, (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='body' LIMIT 1) AS body "
+        "FROM objects o WHERE o.status='active' AND EXISTS (SELECT 1 FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='body')")
+    named = [(e["id"], e["name"]) for e in ents if e["name"]]
+    # create_link is a plain append — dedup against existing mentions so a re-run is idempotent
+    existing = {(r["from_id"], r["to_id"]) for r in
+                await pool.fetch("SELECT from_id, to_id FROM links WHERE type='mentions'")}
+    mentions = 0
+    for d in docs:
+        body = (d["body"] or "").lower()
+        if not body:
+            continue
+        for eid, name in named:
+            if eid == d["id"] or (d["id"], eid) in existing:
+                continue
+            if re.search(r"\b" + re.escape(name.lower()) + r"\b", body):
+                await actions.create_link(d["id"], eid, "mentions", source_id, now, conf,
+                                          case_id=case_id, evidence_class=ec.value)
+                existing.add((d["id"], eid))
+                mentions += 1
+    return {"docs": len(docs), "entities": len(named), "mentions": mentions}
 
 
 def main() -> None:  # pragma: no cover - CLI

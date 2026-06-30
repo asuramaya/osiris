@@ -5,9 +5,18 @@ gradeable objects, so the canon is queryable next to the commits and threads tha
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from src.actions.core import Actions
-from src.ingest.reference import ingest_canon, ingest_reference_doc, parse_doc
+from src.ingest.reference import (
+    ingest_canon,
+    ingest_reference_doc,
+    mine_mentions,
+    parse_doc,
+)
 from src.ontology.schema import LINK_TYPES, OBJECT_TYPES
+
+NOW = datetime(2026, 6, 28, tzinfo=UTC)
 
 
 def test_parse_doc_pulls_header_title_body() -> None:
@@ -24,7 +33,36 @@ def test_parse_doc_tolerates_no_header() -> None:
 
 def test_schema_declares_reference() -> None:
     assert "Reference" in OBJECT_TYPES
-    assert "cites" in LINK_TYPES and "informs" in LINK_TYPES
+    assert "cites" in LINK_TYPES and "informs" in LINK_TYPES and "mentions" in LINK_TYPES
+
+
+async def test_mine_mentions_joins_a_doc_to_the_entities_it_names(actions: Actions) -> None:
+    """Layer 3, keyless: a doc links to the named entities that appear in its text — and only
+    distinctive ones (a short/common name doesn't false-match)."""
+    org = await actions.create_or_find_object("Organization", "cik:1", "edgar")
+    await actions.assert_property(org, "name", "Neuralink Corp", "edgar", NOW, 0.85)
+    short = await actions.create_or_find_object("Organization", "cik:2", "edgar")
+    await actions.assert_property(short, "name", "AI", "edgar", NOW, 0.85)  # too short → ignored
+    absent = await actions.create_or_find_object("Person", "p:1", "edgar")
+    await actions.assert_property(absent, "name", "Elon Musk", "edgar", NOW, 0.85)
+    doc = await actions.create_or_find_object("Reference", "ref:note", "ref:osiris")
+    await actions.assert_property(
+        doc, "body", "A note on Neuralink Corp and the AI sector.", "ref:osiris", NOW, 0.6)
+
+    res = await mine_mentions(actions)
+    assert res["mentions"] == 1                      # only the distinctive name matched
+    p = actions.pool
+    tgt = await p.fetchval(
+        "SELECT to_id FROM links WHERE type='mentions' AND from_id=$1", doc)
+    assert tgt == org                                # the doc mentions Neuralink Corp
+    assert await p.fetchval(                          # not "AI" (too short), not the unnamed
+        "SELECT count(*) FROM links WHERE type='mentions'") == 1
+    ec = await p.fetchval("SELECT evidence_class FROM links WHERE type='mentions' LIMIT 1")
+    assert ec == "co_occurrence"                      # a name match is a speculative inference
+    # idempotent: a re-run creates 0 new (create_link is a plain append; we dedup)
+    again = await mine_mentions(actions)
+    assert again["mentions"] == 0
+    assert await p.fetchval("SELECT count(*) FROM links WHERE type='mentions'") == 1
 
 
 async def test_ingest_reference_doc_grades_and_dedups(actions: Actions, tmp_path: object) -> None:

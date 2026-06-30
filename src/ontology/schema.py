@@ -209,6 +209,8 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              ("Reference",), ("Reference",)),
     LinkType("informs", "This reference grounds / informs that artifact.",
              ("Reference",), ("SoftwareProject", "Commit")),
+    LinkType("mentions", "This document names that entity in its text (the doc joins the graph).",
+             ("Reference", "Commit"), ("Organization", "Person")),
 )
 
 OBJECT_TYPES: dict[str, ObjectType] = {t.name: t for t in _OBJECT_TYPES}
