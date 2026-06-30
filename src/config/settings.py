@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     # reports 'stale' if the last beat is older than this — a silently-dead tripwire becomes
     # visible instead of an invisible gap.
     osiris_worker_heartbeat_stale_secs: int = 120
+    # The developer-persona heartbeat (pulse): comma-separated local repo paths the autonomic
+    # loop senses + re-ingests on each tick. Empty => the pulse watches nothing (no-op).
+    osiris_dev_repos: str = ""
 
 
 def get_settings() -> Settings:

@@ -349,6 +349,26 @@ async def _fn_family_drift(
     return {f"Family content drift — {len(rmap)} repos": out}
 
 
+async def _fn_pulse(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """The heartbeat digest — what the off-the-clock loop (src/orchestrator/pulse.py) found
+    since the last pulse(s). The morning prosthesis: you return and it tells you what changed
+    across your repos while you were away, newest first. `args.last` = how many pulses back."""
+    rows = await pool.fetch(
+        "SELECT ran_at, synced, findings FROM dev_pulses ORDER BY id DESC LIMIT $1",
+        max(1, int(args.get("last", 1))))
+    out = []
+    for r in rows:
+        for finding in (_coerce(r["findings"]) or []):
+            out.append({"finding": finding, "when": str(r["ran_at"])[:19],
+                        "synced": ", ".join(_coerce(r["synced"]) or []) or "—"})
+    if not out:
+        out = [{"finding": "no pulse yet — run `python -m src.orchestrator.pulse`",
+                "when": "—", "synced": "—"}]
+    return {"Pulse — what changed while you were away": out}
+
+
 _FUNCTIONS: dict[str, Function] = {
     "coinvest": _fn_coinvest,
     "subject_report": _fn_subject_report,
@@ -358,10 +378,11 @@ _FUNCTIONS: dict[str, Function] = {
     "decisions": _fn_decisions,
     "family": _fn_family,
     "family_drift": _fn_family_drift,
+    "pulse": _fn_pulse,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
-_SUBJECT_FREE = {"briefing", "canon", "decisions", "family", "family_drift"}
+_SUBJECT_FREE = {"briefing", "canon", "decisions", "family", "family_drift", "pulse"}
 
 
 def list_functions() -> list[str]:
@@ -785,6 +806,8 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "family-consistency": {"op": "function", "name": "family"},
     # content drift: for the files a family shares, do they AGREE (license type / config bytes)?
     "family-drift": {"op": "function", "name": "family_drift"},
+    # the heartbeat digest: what the off-the-clock pulse found while you were away.
+    "pulse-digest": {"op": "function", "name": "pulse"},
 }
 
 
