@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import shutil
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -145,20 +146,22 @@ def llm_provider(settings: Settings | None = None) -> LLMClient | None:
     """The configured text LLM, or None if no backend is wired (extraction then needs an
     explicitly-injected client, or is skipped). Keeps a keyless run from crashing.
 
-    `claude-cli` = the local Claude Code install (no API key, subscription-covered) — the
-    core box; `anthropic` = an API key — satellites / remote deployments with no CLI."""
+    `auto` (default) = prefer the local Claude CLI if installed, else an API key; `claude-cli`
+    = force the local install (no key, core box); `anthropic` = force a key (satellites/remote)."""
     s = settings or get_settings()
-    if s.osiris_extract_provider == "claude-cli":
+    p = s.osiris_extract_provider
+    if p in ("claude-cli", "auto") and shutil.which(s.osiris_claude_binary):
         return ClaudeCliClient(s.osiris_claude_binary)
-    if s.osiris_extract_provider == "anthropic" and s.anthropic_api_key:
+    if p in ("anthropic", "auto") and s.anthropic_api_key:
         return AnthropicClient(s.anthropic_api_key)
     return None
 
 
 def vision_provider(settings: Settings | None = None) -> VisionClient | None:
-    """The configured vision/OCR backend, or None."""
+    """The configured vision/OCR backend, or None. OCR (scanned pages) is the keyed path —
+    the local CLI doesn't do image input here — so 'auto'/'anthropic' both need a key."""
     s = settings or get_settings()
-    if s.osiris_extract_provider == "anthropic" and s.anthropic_api_key:
+    if s.osiris_extract_provider in ("anthropic", "auto") and s.anthropic_api_key:
         return AnthropicVisionClient(s.anthropic_api_key)
     return None
 

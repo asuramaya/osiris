@@ -21,7 +21,7 @@ from typing import Any
 
 from src.actions.core import Actions
 from src.ingest.extract import extract_document
-from src.ingest.providers import LLMClient, document_to_text
+from src.ingest.providers import LLMClient, document_to_text, llm_provider
 from src.ontology.resolution import find_cross_base_candidates
 from src.orchestrator.monitor import get_cursor, set_cursor
 
@@ -54,7 +54,7 @@ async def watch_extract_tick(
     source_id: str,
     delta: DocDelta,
     fetch: DocFetch,
-    llm: LLMClient,
+    llm: LLMClient | None = None,
     *,
     case_id: uuid.UUID | None = None,
     resolve: bool = True,
@@ -63,8 +63,16 @@ async def watch_extract_tick(
     graded entities, resolve cross-base, advance the cursor. The extracted nodes write
     the outbox, so a saved subscription fires the lead. Returns roll-up counts.
 
-    A single bad document (fetch error, garbage text) is logged and skipped — it must
-    never abort the cron or lose the cursor for the documents that did parse."""
+    `llm` defaults to the configured provider (`auto` → the LOCAL claude CLI on the core
+    box, keyless; an API key on a satellite) — the deployment wires the backend, not the
+    caller. A single bad document (fetch error, garbage text) is logged and skipped — it
+    must never abort the cron or lose the cursor for the documents that did parse."""
+    llm = llm or llm_provider()
+    if llm is None:
+        raise RuntimeError(
+            "no LLM provider for compose — install Claude Code (provider 'auto'/'claude-cli') "
+            "or set ANTHROPIC_API_KEY (the extraction seam)"
+        )
     pool = actions.pool
     cursor = await get_cursor(pool, f"docsource:{source_id}")
     docs, new_cursor = await delta(cursor)

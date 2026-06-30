@@ -22,15 +22,31 @@ from src.ingest.providers import (
 )
 
 
-def test_llm_provider_resolves_from_config() -> None:
-    assert llm_provider(Settings(anthropic_api_key="")) is None  # no key → no provider
+def test_llm_provider_resolves_from_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    import src.ingest.providers as prov
+    monkeypatch.setattr(prov.shutil, "which", lambda _: None)  # no local claude CLI here
+    assert llm_provider(Settings(anthropic_api_key="",
+                                 osiris_extract_provider="anthropic")) is None  # no key
     p = llm_provider(Settings(anthropic_api_key="sk-test", osiris_extract_provider="anthropic"))
     assert isinstance(p, AnthropicClient) and p.api_key == "sk-test"
-    # a self-hoster who turns the provider off (e.g. local-only) gets None, not a crash
+    # turned off (local-only with no backend wired) → None, not a crash
     assert llm_provider(Settings(anthropic_api_key="sk", osiris_extract_provider="none")) is None
-    # the LOCAL Claude Code CLI backend — no API key needed (subscription-covered, core box)
+    # explicit claude-cli backend → the local CLI when it's installed (subscription, no key)
+    monkeypatch.setattr(prov.shutil, "which", lambda _: "/usr/bin/cc")
     cli = llm_provider(Settings(osiris_extract_provider="claude-cli", osiris_claude_binary="cc"))
     assert isinstance(cli, ClaudeCliClient) and cli.binary == "cc"
+
+
+def test_auto_prefers_local_cli_then_the_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """'auto' (the default) is the deployment story: the core box has the CLI → keyless local
+    Claude; a satellite has no CLI but a key → the API; neither → None (no crash)."""
+    import src.ingest.providers as prov
+    monkeypatch.setattr(prov.shutil, "which", lambda _: "/usr/bin/claude")
+    assert isinstance(llm_provider(Settings(osiris_extract_provider="auto")), ClaudeCliClient)
+    monkeypatch.setattr(prov.shutil, "which", lambda _: None)
+    assert isinstance(llm_provider(Settings(osiris_extract_provider="auto",
+                                            anthropic_api_key="k")), AnthropicClient)
+    assert llm_provider(Settings(osiris_extract_provider="auto")) is None
 
 
 async def test_claude_cli_client_spawns_and_parses(tmp_path: Path) -> None:
