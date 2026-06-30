@@ -14,7 +14,9 @@ model" becomes a deployment switch, not a rewrite. Live providers use httpx dire
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -102,12 +104,52 @@ class AnthropicVisionClient:
             )
 
 
+def _cli_result(stdout: bytes) -> str:
+    """Pull the completion text out of `claude -p --output-format json`'s envelope."""
+    data = json.loads(stdout.decode() or "{}")
+    if data.get("is_error"):
+        raise RuntimeError(f"claude CLI error: {str(data.get('result', ''))[:200]}")
+    return str(data.get("result", ""))
+
+
+@dataclass
+class ClaudeCliClient:
+    """Local text LLM via the installed `claude` CLI (Claude Code) in headless -p/--print mode.
+
+    Uses the box's OWN Claude Code auth (subscription / OAuth) — NO API key embedded. This is
+    the right backend for the CORE box where Claude Code is installed: the always-on worker
+    borrows the local Claude instance for per-document extraction, and API keys are reserved
+    for SATELLITES / remote deployments that have no CLI. `--system-prompt` replaces the heavy
+    default Code prompt, so each extraction call stays lean.
+    """
+
+    binary: str = "claude"
+
+    async def complete(
+        self, *, system: str, prompt: str, model: str, max_tokens: int = 2048
+    ) -> str:
+        proc = await asyncio.create_subprocess_exec(
+            self.binary, "-p", prompt, "--model", model, "--system-prompt", system,
+            "--output-format", "json",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        out, err = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(f"claude CLI exit {proc.returncode}: {err.decode()[:200]}")
+        return _cli_result(out)
+
+
 # --- factories: resolve the backend from config (the deployment switch) -----
 
 def llm_provider(settings: Settings | None = None) -> LLMClient | None:
     """The configured text LLM, or None if no backend is wired (extraction then needs an
-    explicitly-injected client, or is skipped). Keeps a keyless run from crashing."""
+    explicitly-injected client, or is skipped). Keeps a keyless run from crashing.
+
+    `claude-cli` = the local Claude Code install (no API key, subscription-covered) — the
+    core box; `anthropic` = an API key — satellites / remote deployments with no CLI."""
     s = settings or get_settings()
+    if s.osiris_extract_provider == "claude-cli":
+        return ClaudeCliClient(s.osiris_claude_binary)
     if s.osiris_extract_provider == "anthropic" and s.anthropic_api_key:
         return AnthropicClient(s.anthropic_api_key)
     return None

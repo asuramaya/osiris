@@ -7,11 +7,15 @@ model is deferred (needs a key), exactly like the extractor.
 """
 from __future__ import annotations
 
+import stat
+from pathlib import Path
+
 import pytest
 from src.config.settings import Settings
 from src.ingest.providers import (
     AnthropicClient,
     AnthropicVisionClient,
+    ClaudeCliClient,
     document_to_text,
     llm_provider,
     vision_provider,
@@ -24,6 +28,28 @@ def test_llm_provider_resolves_from_config() -> None:
     assert isinstance(p, AnthropicClient) and p.api_key == "sk-test"
     # a self-hoster who turns the provider off (e.g. local-only) gets None, not a crash
     assert llm_provider(Settings(anthropic_api_key="sk", osiris_extract_provider="none")) is None
+    # the LOCAL Claude Code CLI backend — no API key needed (subscription-covered, core box)
+    cli = llm_provider(Settings(osiris_extract_provider="claude-cli", osiris_claude_binary="cc"))
+    assert isinstance(cli, ClaudeCliClient) and cli.binary == "cc"
+
+
+async def test_claude_cli_client_spawns_and_parses(tmp_path: Path) -> None:
+    """The CLI backend shells out to `claude -p … --output-format json` and pulls `.result`
+    out of the envelope — proven against a fake binary so CI needs no real claude install."""
+    fake = tmp_path / "claude"
+    fake.write_text('#!/bin/sh\necho \'{"result":"Acme Corp","is_error":false}\'\n')
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    client = ClaudeCliClient(binary=str(fake))
+    out = await client.complete(system="extract", prompt="a doc", model="haiku")
+    assert out == "Acme Corp"
+
+
+async def test_claude_cli_client_raises_on_error(tmp_path: Path) -> None:
+    fake = tmp_path / "claude"
+    fake.write_text('#!/bin/sh\necho \'{"result":"rate limited","is_error":true}\'\n')
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    with pytest.raises(RuntimeError, match="claude CLI error"):
+        await ClaudeCliClient(binary=str(fake)).complete(system="s", prompt="p", model="m")
 
 
 def test_vision_provider_resolves_from_config() -> None:

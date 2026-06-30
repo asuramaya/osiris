@@ -26,10 +26,13 @@ class Settings(BaseSettings):
     osiris_extract_model: str = "claude-haiku-4-5-20251001"
     anthropic_api_key: str = ""
     # Inference providers — the GPU-as-an-API-key abstraction (src/ingest/providers.py).
-    # The engine never runs a GPU; the model is a hosted API (a key) or a local backend.
-    # `osiris_extract_provider`: which backend ('anthropic' | 'none'). `osiris_vision_model`
-    # OCRs a scanned document page → text before extraction (county notices are scans).
+    # The engine never runs a GPU; the model is a hosted API (a key), the LOCAL claude CLI
+    # (subscription-covered, no key), or a local GPU backend. `osiris_extract_provider`:
+    # 'claude-cli' (the installed Claude Code, ideal for the core box) | 'anthropic' (an API
+    # key, for satellites/remote with no CLI) | 'none'. `osiris_vision_model` OCRs a scanned
+    # page → text before extraction (county notices are scans).
     osiris_extract_provider: str = "anthropic"
+    osiris_claude_binary: str = "claude"
     osiris_vision_model: str = "claude-haiku-4-5-20251001"
     # Placeful satellite (cron Phase 6/7): this agent's id + the vantages it provides
     # (comma-separated). It claims dispatched collection jobs needing one of these.
