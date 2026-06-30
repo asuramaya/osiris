@@ -105,8 +105,8 @@ async def test_subject_report_function_is_byte_equal(actions: Actions, case_id: 
 # --- the registry + guards --------------------------------------------------
 
 async def test_function_registry_is_listable(actions: Actions) -> None:
-    assert list_functions() == ["briefing", "canon", "coinvest", "screen_network",
-                                "subject_report"]
+    assert list_functions() == ["briefing", "canon", "coinvest", "decisions",
+                                "screen_network", "subject_report"]
 
 
 async def test_briefing_orients_without_a_subject(actions: Actions) -> None:

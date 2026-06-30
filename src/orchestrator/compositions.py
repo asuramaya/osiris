@@ -214,16 +214,47 @@ async def _fn_canon(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[st
     return {f'Canon — "{q}"': [h[1] for h in hits[:_CANON_MAX_HITS]]}
 
 
+async def _fn_decisions(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """The decision log — the project's WHY, mined from its own commit rationale into `Decision`
+    objects (src/ingest/decisions.py). 'Why is it this way?' as a read-model: each decision, its
+    kind (reset/override/ruling/rejection/choice), and the commit it was decided in, newest
+    first. Subject-FREE — it briefs the project, not an entity. Optional args `kind` filters."""
+    want = str(args.get("kind", "")).strip().lower()
+    rows = await pool.fetch(
+        "SELECT "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='summary') AS statement, "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='kind') AS kind, "
+        " (SELECT c.canonical FROM links l JOIN objects c ON c.id=l.to_id "
+        "  WHERE l.from_id=o.id AND l.type='decided_in' LIMIT 1) AS commit, "
+        " (SELECT a.value #>> '{}' FROM links l JOIN current_assertions a ON a.object_id=l.to_id "
+        "  WHERE l.from_id=o.id AND l.type='decided_in' AND a.name='authored_date' LIMIT 1)"
+        "   AS cdate "
+        "FROM objects o WHERE o.type='Decision' AND o.status='active'"
+    )
+    items = [
+        {"decision": r["statement"], "kind": r["kind"], "in": r["commit"],
+         "when": (r["cdate"] or "")[:10]}
+        for r in rows if r["statement"] and (not want or (r["kind"] or "").lower() == want)
+    ]
+    items.sort(key=lambda x: x["when"], reverse=True)
+    return {"Decisions — the project's WHY (mined from commit rationale)": items}
+
+
 _FUNCTIONS: dict[str, Function] = {
     "coinvest": _fn_coinvest,
     "subject_report": _fn_subject_report,
     "screen_network": _fn_screen,
     "briefing": _fn_briefing,
     "canon": _fn_canon,
+    "decisions": _fn_decisions,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
-_SUBJECT_FREE = {"briefing", "canon"}
+_SUBJECT_FREE = {"briefing", "canon", "decisions"}
 
 
 def list_functions() -> list[str]:
@@ -641,6 +672,8 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     # the dedicated canon view: the project's design memory (Palantir/Notion + own docs),
     # rendered as a sectioned read-model. Run with no subject; `consult_canon(q)` queries it.
     "design-canon": {"op": "function", "name": "canon", "args": {}},
+    # the decision log: the project's WHY, mined from its own commit rationale.
+    "decision-log": {"op": "function", "name": "decisions"},
 }
 
 

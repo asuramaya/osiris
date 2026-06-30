@@ -125,6 +125,9 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
     ObjectType("Reference", "Software", "#7ee787", "round-rectangle",
                "A design/reference document — external canon (Palantir/Notion) or own docs, "
                "ingested as project memory.", ("ref:",)),
+    ObjectType("Decision", "Software", "#d2a8ff", "octagon",
+               "An architectural/design decision mined from the project's own commit "
+               "rationale — the 'why', as queryable institutional memory.", ("decision:",)),
     # Observables
     ObjectType("IPv4", "Observable", "#2dd4bf", "ellipse", "An IPv4 address observable."),
     ObjectType("TelegramChannel", "Observable", "#56a3ff", "ellipse",
@@ -211,6 +214,12 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              ("Reference",), ("SoftwareProject", "Commit")),
     LinkType("mentions", "This document names that entity in its text (the doc joins the graph).",
              ("Reference", "Commit"), ("Organization", "Person")),
+    LinkType("decided_in", "Decision was stated in this commit (the 'why', sourced).",
+             ("Decision",), ("Commit",)),
+    LinkType("supersedes", "This decision overrides/replaces an earlier one.",
+             ("Decision",), ("Decision",)),
+    LinkType("grounded_by", "Decision is grounded by this design reference (the canon).",
+             ("Decision",), ("Reference",)),
 )
 
 OBJECT_TYPES: dict[str, ObjectType] = {t.name: t for t in _OBJECT_TYPES}

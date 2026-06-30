@@ -77,6 +77,7 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `Commit` | `commit:` | A version-control commit — an event in a project's history. |
 | `Thread` | `thread:` | An open thread / wall / next-step — project memory of what's unresolved. |
 | `Reference` | `ref:` | A design/reference document — external canon (Palantir/Notion) or own docs, ingested as project memory. |
+| `Decision` | `decision:` | An architectural/design decision mined from the project's own commit rationale — the 'why', as queryable institutional memory. |
 
 ### Observable object types
 
@@ -147,6 +148,9 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `cites` | Reference → Reference | This document cites / draws from that reference. |
 | `informs` | Reference → SoftwareProject/Commit | This reference grounds / informs that artifact. |
 | `mentions` | Reference/Commit → Organization/Person | This document names that entity in its text (the doc joins the graph). |
+| `decided_in` | Decision → Commit | Decision was stated in this commit (the 'why', sourced). |
+| `supersedes` | Decision → Decision | This decision overrides/replaces an earlier one. |
+| `grounded_by` | Decision → Reference | Decision is grounded by this design reference (the canon). |
 <!-- END generated:schema -->
 
 ## Evidence classes
