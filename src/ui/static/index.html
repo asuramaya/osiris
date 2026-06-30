@@ -9,6 +9,7 @@
 <script src="https://unpkg.com/layout-base/layout-base.js"></script>
 <script src="https://unpkg.com/cose-base/cose-base.js"></script>
 <script src="https://unpkg.com/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
+<script src="https://unpkg.com/marked@12.0.0/marked.min.js"></script>
 <style>
   html,body{height:100%;margin:0}
   body{background:var(--bg);color:var(--text);overflow:hidden;
@@ -494,7 +495,12 @@ async function inspect(id){
   // #right's innerHTML (destroying the original #insp), so dereferencing it here threw.
   if(!o){ const right=$('right'); right.className='rail';
     right.innerHTML='<div class="insp-empty">Object not found.</div>'; return; }
+  // a Commit's content is its diff; a Reference/doc's is its markdown — the document-viewer
+  // primitive. Offer "Read ▸" wherever there's renderable content.
+  const hasContent = ['Commit','Reference','SoftwareProject'].includes(o.type)
+    || o.properties.some(p=>['body','rationale'].includes(p.name));
   const acts = `<button class="o-act go" onclick="searchAround('${id}')">Search around</button>
+    ${hasContent?`<button class="o-act" onclick="viewContent('${id}')">Read ▸</button>`:''}
     <button class="o-act" onclick="showDossier('${id}')">Dossier</button>
     <button class="o-act" onclick="tagIt('${id}')">Tag</button>`;
   const right=$('right'); right.className='rail';
@@ -503,6 +509,31 @@ async function inspect(id){
       <pre id="doss" class="r-pre"></pre></div>`;
   loadRels(right.querySelector('[data-rels]'), id, inspectOnly,
            (type,dir,label)=>openAsSet(id,type,dir,label));
+}
+// ---- the document viewer: render a node's CONTENT properly in the center (a doc primitive) -
+// A Reference/doc → its markdown rendered; a Commit → its git-show DIFF, syntax-coloured. The
+// knowledge in the graph becomes READABLE, not a clamped text blob.
+async function viewContent(id){
+  setStatus('Loading…');
+  const c=await fetch('/objects/'+id+'/content').then(r=>r.ok?r.json():null);
+  if(!c||c.kind==='none'){ setStatus('No readable content for this object.'); return; }
+  RESULT=null; WORKING=null; renderSwitcher(); renderComposerBar();
+  const panel=$('result');
+  const head=`<div class="doc-h">${esc(c.title)}${c.kind==='diff'?' · diff':''}</div>`;
+  panel.innerHTML=`<div class="docview">${head}`+(c.kind==='diff'
+    ? renderDiff(c.content)
+    : `<div class="md">${marked.parse(c.content)}</div>`)+`</div>`;
+  showPanel(); $('boardtitle').textContent=c.title; setStatus(`Reading ${c.title}.`);
+}
+function renderDiff(text){
+  const body=text.split('\n').map(l=>{
+    const c = (l[0]==='+'&&l.slice(0,3)!=='+++')?'add'
+      : (l[0]==='-'&&l.slice(0,3)!=='---')?'del'
+      : l.startsWith('@@')?'hunk'
+      : (l.startsWith('diff ')||l.startsWith('index ')||l.startsWith('+++')||l.startsWith('---'))?'meta':'';
+    return `<span class="dl ${c}">${esc(l)||' '}</span>`;
+  }).join('');
+  return `<div class="diff">${body}</div>`;
 }
 // W3: promote a relationship group into the center as a RESULT SET (the typed pivot →
 // object set → view). Reuses the W1 view-switcher: the 80 'authored_by' become a table.

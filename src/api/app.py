@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import os
+import re
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -309,6 +311,34 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
                 for r in props
             ],
         }
+
+    @app.get("/objects/{object_id}/content")
+    async def object_content(
+        object_id: uuid.UUID, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        """The renderable CONTENT of a node — the document-viewer primitive. A Commit returns
+        its `git show` DIFF (the git backbone made readable); a Reference / any object with a
+        `body` returns its markdown; a PDF source returns a url. Generic, no per-type UI code."""
+        row = await p.fetchrow(
+            "SELECT o.type, o.canonical, " + _OBJ_LABEL + " AS name FROM objects o WHERE o.id=$1",
+            object_id,
+        )
+        if row is None:
+            raise HTTPException(404, "object not found")
+        title = row["name"] or row["canonical"]
+        if row["type"] == "Commit" and row["canonical"].startswith("commit:"):
+            diff = await _git_show(row["canonical"].split(":", 1)[1])
+            if diff:
+                return {"kind": "diff", "title": title, "content": diff}
+        body = await p.fetchval(
+            "SELECT value #>> '{}' FROM current_assertions "
+            "WHERE object_id=$1 AND name IN ('body','rationale') "
+            "ORDER BY (name='body') DESC LIMIT 1",
+            object_id,
+        )
+        if body:
+            return {"kind": "markdown", "title": title, "content": body}
+        return {"kind": "none", "title": title, "content": ""}
 
     # --- node management (all via the audited Actions layer) ----------------
     @app.post("/objects/{object_id}/properties")
@@ -819,6 +849,26 @@ _OBJ_LABEL = "COALESCE(" + ", ".join(
     f"(SELECT value #>> '{{}}' FROM current_assertions a "
     f"WHERE a.object_id=o.id AND a.name='{_p}' LIMIT 1)" for _p in _LABEL_PROPS
 ) + ", o.canonical)"
+
+
+# The git backbone, made viewable: a Commit's "content" is its diff. Resolve the short sha
+# from the canonical and `git show` it in the tracked repo (the same repo gitlog ingested).
+_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+_REPO_DIR = os.environ.get("OSIRIS_REPO_DIR", ".")
+
+
+async def _git_show(sha: str) -> str | None:
+    if not _SHA_RE.match(sha):
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "-C", _REPO_DIR, "show", "--stat", "-p", "--no-color", sha,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await proc.communicate()
+    except OSError:
+        return None
+    return out.decode("utf-8", "replace")[:200_000] if proc.returncode == 0 else None
 
 
 # Friendly labels for provenance display — generic over every source/class, no vertical.
