@@ -77,13 +77,14 @@ async def ingest_reference_doc(
     ref = await actions.create_or_find_object("Reference", canon, source_id, case_id)
     await actions.assert_property(ref, "name", doc["title"], source_id, now, conf,
                                   case_id=case_id, evidence_class=ec.value)
-    for name in ("vendor", "source", "topic", "body"):
+    for name in ("vendor", "source", "topic", "body", "grounds"):
         value = vendor if name == "vendor" else doc.get(name, "")
         if value:
             prop = "source_url" if name == "source" else name
             await actions.assert_property(ref, prop, value, source_id, now, conf,
                                           case_id=case_id, evidence_class=ec.value)
-    return {"id": ref, "canonical": canon, "title": doc["title"], "vendor": vendor}
+    return {"id": ref, "canonical": canon, "title": doc["title"], "vendor": vendor,
+            "grounds": doc.get("grounds", "")}
 
 
 async def ingest_reference_dir(
@@ -113,10 +114,40 @@ async def ingest_canon(actions: Actions, *, case_id: uuid.UUID | None = None) ->
                                       case_id=case_id,
                                       evidence_class=EvidenceClass.SELF_DECLARED.value)
             cites += 1
+    # the self-referential loop: attach the design canon to the project it grounds
+    informs = await _wire_informs(actions, vendor_refs + own, case_id=case_id)
     # Layer 3: join the docs to the entity graph by the names they mention
     mentions = await mine_mentions(actions, case_id=case_id)
     return {"vendor": len(vendor_refs), "own": len(own), "cites": cites,
-            "mentions": mentions["mentions"]}
+            "informs": informs, "mentions": mentions["mentions"]}
+
+
+async def _wire_informs(
+    actions: Actions, refs: list[dict[str, Any]], *, case_id: uuid.UUID | None = None
+) -> int:
+    """Link each reference to the project it grounds — `Reference --informs--> SoftwareProject`
+    (the self-referential loop). Coarse on purpose: the *precise* module is in the ref's
+    `grounds` property; this edge just attaches the design canon to the repo so "what grounds
+    this project?" is a one-hop traversal. Skipped if no repo node exists yet; idempotent."""
+    pool = actions.pool
+    repos = await pool.fetch(
+        "SELECT id FROM objects WHERE type='SoftwareProject' AND status='active'")
+    if not repos:
+        return 0
+    ec = EvidenceClass.SELF_DECLARED
+    conf, now = confidence_for(ec), datetime.now(UTC)
+    existing = {(r["from_id"], r["to_id"]) for r in
+                await pool.fetch("SELECT from_id, to_id FROM links WHERE type='informs'")}
+    n = 0
+    for ref in refs:
+        for repo in repos:
+            if (ref["id"], repo["id"]) in existing:
+                continue
+            await actions.create_link(ref["id"], repo["id"], "informs", "ref:osiris", now,
+                                      conf, case_id=case_id, evidence_class=ec.value)
+            existing.add((ref["id"], repo["id"]))
+            n += 1
+    return n
 
 
 async def mine_mentions(

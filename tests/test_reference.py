@@ -87,6 +87,36 @@ async def test_ingest_reference_doc_grades_and_dedups(actions: Actions, tmp_path
         "SELECT count(*) FROM objects WHERE type='Reference'") == 1
 
 
+async def test_grounds_property_is_stored(actions: Actions, tmp_path: object) -> None:
+    """A reference carries the precise module it grounds (the `grounds:` header) as a property —
+    the field the retrieval Function searches to point 'how was X solved?' at the right canon."""
+    p = tmp_path / "palantir-thing.md"  # type: ignore[attr-defined]
+    p.write_text("<!-- source: http://p | vendor: palantir | topic: t | grounds: src/x.py -->\n"
+                 "# Thing\n\nbody")
+    r = await ingest_reference_doc(actions, str(p))
+    assert r["grounds"] == "src/x.py"
+    g = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.type='Reference' AND a.name='grounds'")
+    assert g == "src/x.py"
+
+
+async def test_ingest_canon_informs_the_repo(actions: Actions) -> None:
+    """The self-referential loop: every reference attaches to the project it grounds via an
+    `informs` edge, so 'what design canon grounds this repo?' is one hop from the repo node."""
+    repo = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "gitlog")
+    res = await ingest_canon(actions)
+    assert res["informs"] >= 7                            # 7 vendor + own docs, all inform it
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE type='informs' AND to_id=$1", repo)
+    assert n == res["informs"]
+    ec = await actions.pool.fetchval(
+        "SELECT evidence_class FROM links WHERE type='informs' LIMIT 1")
+    assert ec == "self_declared"                          # our own attribution, not vendor canon
+    again = await ingest_canon(actions)                   # idempotent — no duplicate edges
+    assert again["informs"] == 0
+
+
 async def test_ingest_canon_wires_cites_edges(actions: Actions) -> None:
     """The real repo canon: docs/reference/* + own docs, and COMPOSER cites the vendor refs
     (the link COMPOSER.md actually declares — design memory that knows its own sources)."""
