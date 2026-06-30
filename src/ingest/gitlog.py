@@ -117,6 +117,20 @@ async def ingest_repo(
     await actions.assert_property(repo, "name", name, source_id, latest, _CONF,
                                   case_id=case_id, evidence_class=_EC)
 
+    # create_link is a plain append, so re-ingesting a repo (the normal way to pick up new
+    # commits) would DUPLICATE every structural edge. Objects dedup on canonical, but the
+    # authored_by/in_repo/follows links don't — dedup them so a re-ingest is truly idempotent.
+    existing = {(r["from_id"], r["to_id"], r["type"]) for r in await actions.pool.fetch(
+        "SELECT from_id, to_id, type FROM links "
+        "WHERE type IN ('authored_by', 'in_repo', 'follows')")}
+
+    async def _link(frm: uuid.UUID, to: uuid.UUID, typ: str, observed: datetime) -> None:
+        if (frm, to, typ) in existing:
+            return
+        await actions.create_link(frm, to, typ, source_id, observed, _CONF,
+                                  case_id=case_id, evidence_class=_EC)
+        existing.add((frm, to, typ))
+
     devs: set[str] = set()
     for c in commits:
         observed = datetime.fromisoformat(c.date)
@@ -147,16 +161,13 @@ async def ingest_repo(
             await actions.assert_property(cm, "genesis", "true", source_id, observed, _CONF,
                                           case_id=case_id, evidence_class=_EC)
 
-        await actions.create_link(cm, dev, "authored_by", source_id, observed, _CONF,
-                                  case_id=case_id, evidence_class=_EC)
-        await actions.create_link(cm, repo, "in_repo", source_id, observed, _CONF,
-                                  case_id=case_id, evidence_class=_EC)
+        await _link(cm, dev, "authored_by", observed)
+        await _link(cm, repo, "in_repo", observed)
         for parent in c.parents:
             par = await actions.create_or_find_object(
                 "Commit", f"commit:{parent[:12]}", source_id, case_id
             )
-            await actions.create_link(cm, par, "follows", source_id, observed, _CONF,
-                                      case_id=case_id, evidence_class=_EC)
+            await _link(cm, par, "follows", observed)
 
     return {"repo": name, "commits": len(commits), "developers": len(devs)}
 

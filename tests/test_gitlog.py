@@ -84,9 +84,17 @@ async def test_ingest_is_idempotent(actions: Actions, tmp_path: Path) -> None:
     (repo / "f").write_text("x")
     _git(repo, "add", ".")
     _git(repo, "commit", "-q", "-m", "only")
-    for _ in range(2):  # re-ingesting the same history must not fork the graph
+    (repo / "g").write_text("y")          # a second commit, so there's a follows edge to dedup
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "feat(x): two")
+    for _ in range(3):  # re-ingesting the same history must not fork the graph OR its edges
         await ingest_repo(actions, str(repo))
-    assert await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Commit'") == 1
+    p = actions.pool
+    assert await p.fetchval("SELECT count(*) FROM objects WHERE type='Commit'") == 2
+    # the regression: links are append-only, so a naive re-ingest used to triple every edge
+    assert await p.fetchval("SELECT count(*) FROM links WHERE type='authored_by'") == 2
+    assert await p.fetchval("SELECT count(*) FROM links WHERE type='in_repo'") == 2
+    assert await p.fetchval("SELECT count(*) FROM links WHERE type='follows'") == 1
 
 
 def test_parse_subject_extracts_conventional_commit() -> None:
