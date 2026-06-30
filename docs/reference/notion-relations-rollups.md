@@ -1,4 +1,4 @@
-<!-- source: https://www.notion.com/help/relations-and-rollups | vendor: notion | topic: relations and rollups -->
+<!-- source: https://www.notion.com/help/relations-and-rollups | vendor: notion | topic: relations and rollups | grounds: src/orchestrator/compositions.py -->
 # Notion — relations & rollups
 
 The prosumer half of Osiris's op grounding. Notion independently lands on the same shape as

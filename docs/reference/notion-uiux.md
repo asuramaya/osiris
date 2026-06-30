@@ -1,4 +1,4 @@
-<!-- source: https://raw.studio/blog/how-notion-ux-converts-100-million-users/ + https://dashibase.com/blog/notion-ui/ + notion.com/help | vendor: notion | topic: ui-ux complexity management -->
+<!-- source: https://raw.studio/blog/how-notion-ux-converts-100-million-users/ + https://dashibase.com/blog/notion-ui/ + notion.com/help | vendor: notion | topic: ui-ux complexity management | grounds: src/ui/static/index.html -->
 # Notion — carrying capability without the UI collapsing
 
 The north star for Osiris's UI/UX pass. Notion holds an enormous feature surface (docs +

@@ -1,4 +1,4 @@
-<!-- source: https://www.palantir.com/docs/foundry/api/v2/ontologies-v2-resources/ontology-object-sets/aggregate-object-set | vendor: palantir | topic: aggregate object set -->
+<!-- source: https://www.palantir.com/docs/foundry/api/v2/ontologies-v2-resources/ontology-object-sets/aggregate-object-set | vendor: palantir | topic: aggregate object set | grounds: src/orchestrator/compositions.py, src/ui/static/osiris.js -->
 # Palantir Foundry — Aggregate Object Set
 
 Computes aggregations over an object set: grouping dimensions + metric calculations. Osiris's

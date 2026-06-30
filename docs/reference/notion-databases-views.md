@@ -1,4 +1,4 @@
-<!-- source: https://www.notion.com/help/intro-to-databases | vendor: notion | topic: databases and views -->
+<!-- source: https://www.notion.com/help/intro-to-databases | vendor: notion | topic: databases and views | grounds: src/ui/static/osiris.js -->
 # Notion — databases & views
 
 The model behind Osiris's **shape-aware renderer** (Phase 3): one set of data, many switchable

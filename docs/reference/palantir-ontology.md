@@ -1,4 +1,4 @@
-<!-- source: https://www.palantir.com/docs/foundry/ontology/core-concepts | vendor: palantir | topic: ontology core concepts -->
+<!-- source: https://www.palantir.com/docs/foundry/ontology/core-concepts | vendor: palantir | topic: ontology core concepts | grounds: src/ontology/schema.py -->
 # Palantir Foundry — Ontology core concepts
 
 The semantic-layer model Osiris's `src/ontology/schema.py` descends from: a typed catalog over

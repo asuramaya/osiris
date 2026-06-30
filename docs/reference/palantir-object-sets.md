@@ -1,4 +1,4 @@
-<!-- source: https://www.palantir.com/docs/foundry/functions/api-object-sets | vendor: palantir | topic: object-set operations -->
+<!-- source: https://www.palantir.com/docs/foundry/functions/api-object-sets | vendor: palantir | topic: object-set operations | grounds: src/orchestrator/compositions.py -->
 # Palantir Foundry — Object Set operations
 
 The closed vocabulary Osiris's composition ops descend from. An Object Set is an unordered
