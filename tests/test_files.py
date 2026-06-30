@@ -55,3 +55,31 @@ async def test_ingest_files(actions: Actions, tmp_path: Path) -> None:
     assert again["files"] == 4
     assert await p.fetchval("SELECT count(*) FROM objects WHERE type='File'") == 4
     assert await p.fetchval("SELECT count(*) FROM links WHERE type='in_repo'") == 4
+
+
+def test_classify_license() -> None:
+    from src.ingest.files import classify_license
+    assert classify_license("Permission is hereby granted, free of charge, to anyone") == "MIT"
+    assert classify_license("Apache License\nVersion 2.0, January 2004") == "Apache-2.0"
+    assert classify_license("GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007") == "GPL-3.0"
+    assert classify_license("some random text") == "unknown"
+
+
+async def test_ingest_records_content_facts(actions: Actions, tmp_path: Path) -> None:
+    """Role-bearing files carry a content_hash (identity drift) and, for a license, its TYPE —
+    the facts the drift audit compares (the body itself is never stored)."""
+    repo = tmp_path / "u"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "LICENSE").write_text("Permission is hereby granted, free of charge, to any person")
+    (repo / ".gitignore").write_text("*.pyc\n__pycache__/\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "init")
+
+    await ingest_files(actions, str(repo))
+    p = actions.pool
+    lt = await p.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE name='license_type'")
+    assert lt == "MIT"
+    n = await p.fetchval("SELECT count(*) FROM current_assertions WHERE name='content_hash'")
+    assert n == 2                                       # license + gitignore (the role files)

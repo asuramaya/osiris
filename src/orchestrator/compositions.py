@@ -244,6 +244,27 @@ async def _fn_decisions(
     return {"Decisions — the project's WHY (mined from commit rationale)": items}
 
 
+# config roles where two repos' files SHOULD agree in CONTENT (legal/config), unlike prose
+# (readme/changelog/contributing) which are expected to differ — so the drift audit skips prose.
+_CONFIG_ROLES = frozenset(
+    {"license", "gitignore", "editorconfig", "makefile", "ci", "manifest", "dockerfile"})
+
+
+async def _family_repos(pool: asyncpg.Pool, args: dict[str, Any]) -> dict[uuid.UUID, str]:
+    """Repos in scope for a family audit — those with an ingested file tree, optionally filtered
+    to `args.repos`. Returns {repo_id: name}; a family needs ≥2 (caller guards)."""
+    want = {str(w).lower() for w in (args.get("repos") or [])}
+    repos = await pool.fetch(
+        "SELECT o.id, (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='name' LIMIT 1) AS name "
+        "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active'")
+    have_files = {r["repo"] for r in await pool.fetch(
+        "SELECT DISTINCT l.to_id AS repo FROM links l "
+        "JOIN objects f ON f.id=l.from_id AND f.type='File' WHERE l.type='in_repo'")}
+    return {r["id"]: r["name"] for r in repos
+            if r["name"] and r["id"] in have_files and (not want or r["name"].lower() in want)}
+
+
 async def _fn_family(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
@@ -253,18 +274,8 @@ async def _fn_family(
     inconsistency (a missing license, a CI one repo skipped). Subject-free; `args.repos` scopes
     the family (default: every repo whose tree is ingested). CANDIDATE-GATED — blocks by role,
     never all-files-all-pairs — so it holds as the family grows. (Presence audit; content drift
-    — e.g. different license TYPES — is the next layer, read on demand from git.)"""
-    want = {str(w).lower() for w in (args.get("repos") or [])}
-    repos = await pool.fetch(
-        "SELECT o.id, (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='name' LIMIT 1) AS name "
-        "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active'")
-    # only repos whose tree is ingested (have File nodes) can be audited
-    have_files = {r["repo"] for r in await pool.fetch(
-        "SELECT DISTINCT l.to_id AS repo FROM links l "
-        "JOIN objects f ON f.id=l.from_id AND f.type='File' WHERE l.type='in_repo'")}
-    rmap = {r["id"]: r["name"] for r in repos
-            if r["name"] and r["id"] in have_files and (not want or r["name"].lower() in want)}
+    is `family_drift`.)"""
+    rmap = await _family_repos(pool, args)
     if len(rmap) < 2:
         return {"Family consistency": [{"note": "need ≥2 repos with ingested file trees"}]}
     pairs = await pool.fetch(
@@ -287,6 +298,57 @@ async def _fn_family(
     return {f"Family consistency — {len(rmap)} repos ({', '.join(sorted(rmap.values()))})": rows}
 
 
+async def _fn_family_drift(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """Content-drift audit — the deeper layer over the presence audit. For the files a family
+    SHARES, do they AGREE? License TYPE across the family (MIT in one repo, Apache in another is
+    a real inconsistency), and config files (gitignore/ci/editorconfig/makefile/manifest/
+    dockerfile) byte-identical or diverged. Prose roles (readme/changelog/contributing) are
+    EXPECTED to differ, so they're excluded. Reads pre-computed hashes/license-types from the
+    graph (content stays in git). Role-blocked, so it scales like the presence audit."""
+    rmap = await _family_repos(pool, args)
+    if len(rmap) < 2:
+        return {"Family content drift": [{"note": "need ≥2 repos with ingested file trees"}]}
+    rows = await pool.fetch(
+        "SELECT l.to_id AS repo, "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=f.id AND a.name='role' LIMIT 1) AS role, "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=f.id AND a.name='content_hash' LIMIT 1) AS h, "
+        " (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=f.id AND a.name='license_type' LIMIT 1) AS lt "
+        "FROM links l JOIN objects f ON f.id=l.from_id AND f.type='File' "
+        "WHERE l.type='in_repo' AND l.to_id = ANY($1::uuid[])", list(rmap))
+    # role -> repo -> [hashes]; a repo may have several files of one role (e.g. CI workflows),
+    # so its signature is all of them combined — then signatures compare across repos.
+    sigs: dict[str, dict[uuid.UUID, list[str]]] = {}
+    ltypes: dict[uuid.UUID, set[str]] = {}
+    for r in rows:
+        if r["role"] in _CONFIG_ROLES and r["h"]:
+            sigs.setdefault(r["role"], {}).setdefault(r["repo"], []).append(r["h"])
+            if r["role"] == "license" and r["lt"]:
+                ltypes.setdefault(r["repo"], set()).add(r["lt"])
+    out = []
+    for role, per in sigs.items():
+        if len(per) < 2:               # only one repo has it → presence audit's job, not drift
+            continue
+        if role == "license":
+            types = {rmap[rid]: "/".join(sorted(ltypes.get(rid) or {"unknown"})) for rid in per}
+            drift = len(set(types.values())) > 1
+            detail = ", ".join(f"{r}: {t}" for r, t in sorted(types.items()))
+        else:
+            signatures = {rid: "|".join(sorted(hs)) for rid, hs in per.items()}
+            distinct = len(set(signatures.values()))
+            drift = distinct > 1
+            repos_l = ", ".join(sorted(rmap[rid] for rid in per))
+            detail = (f"{distinct} distinct versions across {repos_l}" if drift
+                      else f"identical across {repos_l}")
+        out.append({"role": role, "drift": drift, "detail": detail})
+    out.sort(key=lambda x: (not x["drift"], x["role"]))       # drift (the findings) first
+    return {f"Family content drift — {len(rmap)} repos": out}
+
+
 _FUNCTIONS: dict[str, Function] = {
     "coinvest": _fn_coinvest,
     "subject_report": _fn_subject_report,
@@ -295,10 +357,11 @@ _FUNCTIONS: dict[str, Function] = {
     "canon": _fn_canon,
     "decisions": _fn_decisions,
     "family": _fn_family,
+    "family_drift": _fn_family_drift,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
-_SUBJECT_FREE = {"briefing", "canon", "decisions", "family"}
+_SUBJECT_FREE = {"briefing", "canon", "decisions", "family", "family_drift"}
 
 
 def list_functions() -> list[str]:
@@ -720,6 +783,8 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "decision-log": {"op": "function", "name": "decisions"},
     # the family audit: what drifted across a set of similar repos (every ingested family).
     "family-consistency": {"op": "function", "name": "family"},
+    # content drift: for the files a family shares, do they AGREE (license type / config bytes)?
+    "family-drift": {"op": "function", "name": "family_drift"},
 }
 
 

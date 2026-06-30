@@ -8,6 +8,7 @@ compare every repo's `license`, every repo's `ci`, within a role — never all-f
 """
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import uuid
 from datetime import UTC, datetime
@@ -62,6 +63,42 @@ def _ext(path: str) -> str:
     return base.rsplit(".", 1)[-1].lower() if "." in base else ""
 
 
+# License classification by signature phrase — ordered most-specific first (BSD's
+# "redistribution and use" is generic, so the named licenses are matched before it).
+_LICENSE_SIGNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("MIT", ("permission is hereby granted, free of charge",)),
+    ("Apache-2.0", ("apache license", "version 2.0")),
+    ("AGPL-3.0", ("gnu affero general public license",)),
+    ("GPL-3.0", ("gnu general public license", "version 3")),
+    ("GPL-2.0", ("gnu general public license", "version 2")),
+    ("LGPL", ("gnu lesser general public license",)),
+    ("MPL-2.0", ("mozilla public license", "version 2.0")),
+    ("Unlicense", ("this is free and unencumbered software released into the public domain",)),
+    ("ISC", ("isc license",)),
+    ("BSD-3-Clause", ("redistribution and use", "neither the name")),
+    ("BSD-2-Clause", ("redistribution and use",)),
+)
+
+
+def classify_license(text: str) -> str:
+    """The SPDX-ish license family from a LICENSE file's text — so a family using MIT in one
+    repo and Apache in another is a real, flaggable inconsistency (not just 'both have one')."""
+    t = text.lower()
+    for name, needles in _LICENSE_SIGNS:
+        if all(n in t for n in needles):
+            return name
+    return "unknown"
+
+
+def _read(top: str, rel: str) -> str | None:
+    """Read a tracked text file from the working tree (content stays in git; we only derive a
+    hash + a license type at ingest, never store the body). None on a binary/unreadable file."""
+    try:
+        return (Path(top) / rel).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
 def _git(path: str, *args: str) -> str:
     return subprocess.run(["git", "-C", path, *args], capture_output=True, text=True,
                           check=True).stdout
@@ -79,7 +116,8 @@ async def ingest_files(
     """Ingest a repo's tracked-file tree as `File` nodes (metadata only) linked `in_repo` the
     SoftwareProject, each carrying its `role`/`ext`. Idempotent: objects dedup on canonical,
     and the in_repo link is deduped (the gitlog lesson — re-ingest must not inflate edges)."""
-    name = Path(_git(path, "rev-parse", "--show-toplevel").strip()).name
+    top = _git(path, "rev-parse", "--show-toplevel").strip()
+    name = Path(top).name
     now = datetime.now(UTC)
     repo = await actions.create_or_find_object("SoftwareProject", f"repo:{name}", source_id,
                                                case_id)
@@ -97,6 +135,17 @@ async def ingest_files(
             await actions.assert_property(fo, "role", role, source_id, now, _CONF,
                                           case_id=case_id, evidence_class=_EC)
             roles += 1
+            # content facts for the drift audit — a hash (identity drift) and, for a license,
+            # its classified TYPE. The body is never stored; we keep only what we audit on.
+            content = _read(top, f)
+            if content is not None:
+                h = hashlib.sha256(content.encode("utf-8", "replace")).hexdigest()[:16]
+                await actions.assert_property(fo, "content_hash", h, source_id, now, _CONF,
+                                              case_id=case_id, evidence_class=_EC)
+                if role == "license":
+                    await actions.assert_property(fo, "license_type", classify_license(content),
+                                                  source_id, now, _CONF, case_id=case_id,
+                                                  evidence_class=_EC)
         ext = _ext(f)
         if ext:
             await actions.assert_property(fo, "ext", ext, source_id, now, _CONF,

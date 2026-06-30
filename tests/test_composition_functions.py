@@ -106,7 +106,7 @@ async def test_subject_report_function_is_byte_equal(actions: Actions, case_id: 
 
 async def test_function_registry_is_listable(actions: Actions) -> None:
     assert list_functions() == ["briefing", "canon", "coinvest", "decisions", "family",
-                                "screen_network", "subject_report"]
+                                "family_drift", "screen_network", "subject_report"]
 
 
 async def test_briefing_orients_without_a_subject(actions: Actions) -> None:
@@ -239,3 +239,39 @@ async def test_family_consistency_audit(actions: Actions) -> None:
     solo = await run_spec(actions.pool, {"op": "function", "name": "family",
                                          "args": {"repos": ["phanspeed"]}}, None)
     assert "need ≥2 repos" in str(next(iter(solo["items"].values())))
+
+
+async def test_family_content_drift(actions: Actions) -> None:
+    """Content drift: two repos both HAVE a license (presence-consistent) but of different
+    TYPES — the deeper audit flags it. A shared .gitignore that diverged is flagged too; an
+    identical one is not."""
+    a = await actions.create_or_find_object("SoftwareProject", "repo:phanspeed", "git")
+    await actions.assert_property(a, "name", "phanspeed", "git", NOW, 0.9)
+    b = await actions.create_or_find_object("SoftwareProject", "repo:coldspot", "git")
+    await actions.assert_property(b, "name", "coldspot", "git", NOW, 0.9)
+
+    async def lic(repo: uuid.UUID, rn: str, ltype: str) -> None:
+        f = await actions.create_or_find_object("File", f"file:{rn}/LICENSE", "git-tree")
+        await actions.assert_property(f, "role", "license", "git-tree", NOW, 0.9)
+        await actions.assert_property(f, "content_hash", f"h-{ltype}", "git-tree", NOW, 0.9)
+        await actions.assert_property(f, "license_type", ltype, "git-tree", NOW, 0.9)
+        await actions.create_link(f, repo, "in_repo", "git-tree", NOW, 0.9)
+
+    async def gi(repo: uuid.UUID, rn: str, h: str) -> None:
+        f = await actions.create_or_find_object("File", f"file:{rn}/.gitignore", "git-tree")
+        await actions.assert_property(f, "role", "gitignore", "git-tree", NOW, 0.9)
+        await actions.assert_property(f, "content_hash", h, "git-tree", NOW, 0.9)
+        await actions.create_link(f, repo, "in_repo", "git-tree", NOW, 0.9)
+
+    await lic(a, "phanspeed", "MIT")
+    await lic(b, "coldspot", "Apache-2.0")        # same role, different license TYPE → drift
+    await gi(a, "phanspeed", "same")
+    await gi(b, "coldspot", "same")               # identical .gitignore → no drift
+
+    res = await run_spec(actions.pool, {"op": "function", "name": "family_drift",
+                                        "args": {}}, None)
+    rows = next(iter(res["items"].values()))
+    by = {r["role"]: r for r in rows}
+    assert by["license"]["drift"] is True and "MIT" in by["license"]["detail"]
+    assert by["gitignore"]["drift"] is False
+    assert rows[0]["role"] == "license"           # drift findings sort first
