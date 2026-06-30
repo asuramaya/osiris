@@ -137,8 +137,8 @@ async def ingest_repo(
                                       case_id=case_id, evidence_class=_EC)
         # the structure that turns the log into queryable memory: type/scope (groupable) +
         # the rationale body (why, not just what).
-        for name, value in parse_subject(c.subject).items():
-            await actions.assert_property(cm, name, value, source_id, observed, _CONF,
+        for prop, value in parse_subject(c.subject).items():  # not `name` — it shadows the repo
+            await actions.assert_property(cm, prop, value, source_id, observed, _CONF,
                                           case_id=case_id, evidence_class=_EC)
         if c.body:
             await actions.assert_property(cm, "rationale", c.body, source_id, observed, _CONF,

@@ -59,6 +59,22 @@ async def test_ingests_a_repo_history(actions: Actions, tmp_path: Path) -> None:
     assert ec == "authoritative_api"
 
 
+async def test_repo_name_survives_conventional_commits(actions: Actions, tmp_path: Path) -> None:
+    """Regression: the property loop used to reuse `name`, shadowing the repo name, so a repo
+    of Conventional Commits returned repo='summary' (the last property key). The node was fine
+    but the return was wrong — and multi-repo ingest leans on that return."""
+    repo = tmp_path / "proj2"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Ada")
+    _git(repo, "config", "user.email", "ada@x.io")
+    (repo / "f").write_text("x")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "feat(core): the thing")   # conventional → triggers the loop
+    res = await ingest_repo(actions, str(repo))
+    assert res["repo"] == "proj2"                                # not "summary"
+
+
 async def test_ingest_is_idempotent(actions: Actions, tmp_path: Path) -> None:
     repo = tmp_path / "p"
     repo.mkdir()
