@@ -105,7 +105,7 @@ async def test_subject_report_function_is_byte_equal(actions: Actions, case_id: 
 # --- the registry + guards --------------------------------------------------
 
 async def test_function_registry_is_listable(actions: Actions) -> None:
-    assert list_functions() == ["briefing", "canon", "coinvest", "decisions",
+    assert list_functions() == ["briefing", "canon", "coinvest", "decisions", "family",
                                 "screen_network", "subject_report"]
 
 
@@ -203,3 +203,39 @@ async def test_canon_is_subject_free_and_seeded(actions: Actions) -> None:
     await seed_default_compositions(actions.pool)
     res = await run_composition(actions.pool, "design-canon")     # NO subject → must not raise
     assert res["kind"] == "data"
+
+
+# --- family consistency audit (the developer persona, multi-repo) ------------
+
+async def _file(actions: Actions, repo: uuid.UUID, rname: str, path: str, role: str) -> None:
+    f = await actions.create_or_find_object("File", f"file:{rname}/{path}", "git-tree")
+    await actions.assert_property(f, "name", path, "git-tree", NOW, 0.9)
+    if role:
+        await actions.assert_property(f, "role", role, "git-tree", NOW, 0.9)
+    await actions.create_link(f, repo, "in_repo", "git-tree", NOW, 0.9)
+
+
+async def test_family_consistency_audit(actions: Actions) -> None:
+    """Block files by ROLE across the family; a role present in some-but-not-all is the
+    inconsistency. Here kast lacks CI that phanspeed has — exactly what an audit should flag."""
+    a = await actions.create_or_find_object("SoftwareProject", "repo:phanspeed", "git")
+    await actions.assert_property(a, "name", "phanspeed", "git", NOW, 0.9)
+    b = await actions.create_or_find_object("SoftwareProject", "repo:kast", "git")
+    await actions.assert_property(b, "name", "kast", "git", NOW, 0.9)
+    await _file(actions, a, "phanspeed", "LICENSE", "license")
+    await _file(actions, a, "phanspeed", "README.md", "readme")
+    await _file(actions, a, "phanspeed", ".github/workflows/ci.yml", "ci")
+    await _file(actions, b, "kast", "LICENSE", "license")
+    await _file(actions, b, "kast", "README.md", "readme")          # kast has NO ci
+
+    res = await run_spec(actions.pool, {"op": "function", "name": "family", "args": {}}, None)
+    assert res["kind"] == "data"
+    rows = next(iter(res["items"].values()))
+    by = {r["role"]: r for r in rows}
+    assert by["ci"]["consistent"] is False and "kast" in by["ci"]["missing"]   # the finding
+    assert by["license"]["consistent"] is True and by["readme"]["consistent"] is True
+    assert rows[0]["role"] == "ci"                                  # inconsistencies sort first
+    # scoping to one repo (or none) can't audit a family
+    solo = await run_spec(actions.pool, {"op": "function", "name": "family",
+                                         "args": {"repos": ["phanspeed"]}}, None)
+    assert "need ≥2 repos" in str(next(iter(solo["items"].values())))

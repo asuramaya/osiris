@@ -244,6 +244,49 @@ async def _fn_decisions(
     return {"Decisions — the project's WHY (mined from commit rationale)": items}
 
 
+async def _fn_family(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """Family consistency audit — make a set of similar repos a real FAMILY by auditing what
+    drifted across them. Compares repos by file ROLE (license/readme/ci/manifest/…): for each
+    role, which repos have it and which LACK it. A role present in some-but-not-all is an
+    inconsistency (a missing license, a CI one repo skipped). Subject-free; `args.repos` scopes
+    the family (default: every repo whose tree is ingested). CANDIDATE-GATED — blocks by role,
+    never all-files-all-pairs — so it holds as the family grows. (Presence audit; content drift
+    — e.g. different license TYPES — is the next layer, read on demand from git.)"""
+    want = {str(w).lower() for w in (args.get("repos") or [])}
+    repos = await pool.fetch(
+        "SELECT o.id, (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='name' LIMIT 1) AS name "
+        "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active'")
+    # only repos whose tree is ingested (have File nodes) can be audited
+    have_files = {r["repo"] for r in await pool.fetch(
+        "SELECT DISTINCT l.to_id AS repo FROM links l "
+        "JOIN objects f ON f.id=l.from_id AND f.type='File' WHERE l.type='in_repo'")}
+    rmap = {r["id"]: r["name"] for r in repos
+            if r["name"] and r["id"] in have_files and (not want or r["name"].lower() in want)}
+    if len(rmap) < 2:
+        return {"Family consistency": [{"note": "need ≥2 repos with ingested file trees"}]}
+    pairs = await pool.fetch(
+        "SELECT DISTINCT l.to_id AS repo, a.value #>> '{}' AS role "
+        "FROM links l JOIN objects f ON f.id=l.from_id AND f.type='File' "
+        "JOIN current_assertions a ON a.object_id=f.id AND a.name='role' "
+        "WHERE l.type='in_repo' AND l.to_id = ANY($1::uuid[])", list(rmap))
+    role_repos: dict[str, set[uuid.UUID]] = {}
+    for p in pairs:
+        role_repos.setdefault(p["role"], set()).add(p["repo"])
+    everyone = set(rmap)
+    rows = []
+    for role in role_repos:
+        missing = everyone - role_repos[role]
+        rows.append({"role": role,
+                     "have": ", ".join(sorted(rmap[i] for i in role_repos[role])),
+                     "missing": ", ".join(sorted(rmap[i] for i in missing)) or "—",
+                     "consistent": not missing})
+    rows.sort(key=lambda r: (r["consistent"], r["role"]))   # inconsistencies (the findings) first
+    return {f"Family consistency — {len(rmap)} repos ({', '.join(sorted(rmap.values()))})": rows}
+
+
 _FUNCTIONS: dict[str, Function] = {
     "coinvest": _fn_coinvest,
     "subject_report": _fn_subject_report,
@@ -251,10 +294,11 @@ _FUNCTIONS: dict[str, Function] = {
     "briefing": _fn_briefing,
     "canon": _fn_canon,
     "decisions": _fn_decisions,
+    "family": _fn_family,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
-_SUBJECT_FREE = {"briefing", "canon", "decisions"}
+_SUBJECT_FREE = {"briefing", "canon", "decisions", "family"}
 
 
 def list_functions() -> list[str]:
@@ -674,6 +718,8 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "design-canon": {"op": "function", "name": "canon", "args": {}},
     # the decision log: the project's WHY, mined from its own commit rationale.
     "decision-log": {"op": "function", "name": "decisions"},
+    # the family audit: what drifted across a set of similar repos (every ingested family).
+    "family-consistency": {"op": "function", "name": "family"},
 }
 
 
