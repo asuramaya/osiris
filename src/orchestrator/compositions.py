@@ -507,8 +507,11 @@ async def object_items(pool: asyncpg.Pool, ids: list[uuid.UUID]) -> list[dict[st
         if o is None:
             continue
         p = props.get(oid, {})
+        # the best human label — never a raw hash when a name/title/summary exists
+        label = (p.get("name") or p.get("title") or p.get("summary")
+                 or p.get("subject") or o["canonical"])
         out.append({"id": str(oid), "type": o["type"], "canonical": o["canonical"],
-                    "label": p.get("name") or o["canonical"], "props": p})
+                    "label": label, "props": p})
     return out
 
 

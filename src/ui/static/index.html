@@ -466,13 +466,26 @@ async function focus(id){
   board.focusNode(id);
   inspect(id);
 }
+const NEIGHBOR_CAP=28;
 async function searchAround(id, quiet){
   id = id || FOCUS; if(!id) return;
   showBoard(); setStatus('Searching around…');
   const g = await fetch(`/objects/${id}/graph?hops=1`).then(r=>r.json());
+  // degree-aware: a hub (asuramaya authored 100+ commits) would explode the board into an
+  // unreadable hairball. Summarize, don't enumerate — keep the focused node + the nearest
+  // NEIGHBOR_CAP; the FULL set stays reachable via the inspector's grouped "open as set".
+  let capped=0;
+  if(g.nodes.length>NEIGHBOR_CAP+1){
+    capped=g.nodes.length-1;
+    const keep=new Set([id, ...g.nodes.filter(n=>n.id!==id).slice(0,NEIGHBOR_CAP).map(n=>n.id)]);
+    g.nodes=g.nodes.filter(n=>keep.has(n.id));
+    g.edges=g.edges.filter(e=>keep.has(e.source)&&keep.has(e.target));
+  }
   const added = board.mergeGraph(g);
   board.layout(board.cy.nodes().length>1);
-  setStatus(`${board.cy.nodes().length} objects on the board${added?` (+${added})`:''}.`);
+  setStatus(capped
+    ? `Showing ${NEIGHBOR_CAP} of ${capped} connections — open a relationship as a set (inspector) for all.`
+    : `${board.cy.nodes().length} objects on the board${added?` (+${added})`:''}.`);
   $('boardtitle').textContent = `Board · ${board.cy.nodes().length} objects`;
 }
 async function inspect(id){

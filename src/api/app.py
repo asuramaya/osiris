@@ -264,9 +264,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         limit: int = Query(100, le=500),
     ) -> list[dict[str, Any]]:
         rows = await p.fetch(
-            "SELECT id, type, canonical, status, "
-            "  (SELECT value #>> '{}' FROM current_assertions a "
-            "   WHERE a.object_id=o.id AND a.name='name' LIMIT 1) AS name "
+            "SELECT id, type, canonical, status, " + _OBJ_LABEL + " AS name "
             "FROM objects o "
             "WHERE status NOT IN ('archived','merged') "
             "  AND ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM case_objects co "
@@ -422,9 +420,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             frontier = nxt
 
         node_rows = await p.fetch(
-            "SELECT o.id, o.type, o.canonical, "
-            "  (SELECT value #>> '{}' FROM current_assertions a "
-            "   WHERE a.object_id=o.id AND a.name='name' LIMIT 1) AS name "
+            "SELECT o.id, o.type, o.canonical, " + _OBJ_LABEL + " AS name "
             "FROM objects o WHERE o.id = ANY($1::uuid[])",
             list(seen),
         )
@@ -815,6 +811,16 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     return app
 
 
+# The best HUMAN label for an object — never a raw hash/id when a name/title/summary exists.
+# A Commit has no `name` but has `summary`; without this the UI shows `commit:7f0…` for every
+# node and row (the hairball / hash-wall). Generic, no per-type code.
+_LABEL_PROPS = ("name", "title", "summary", "subject")
+_OBJ_LABEL = "COALESCE(" + ", ".join(
+    f"(SELECT value #>> '{{}}' FROM current_assertions a "
+    f"WHERE a.object_id=o.id AND a.name='{_p}' LIMIT 1)" for _p in _LABEL_PROPS
+) + ", o.canonical)"
+
+
 # Friendly labels for provenance display — generic over every source/class, no vertical.
 _SOURCE_LABELS = {
     "harris_county_clerk": "Harris County Clerk",
@@ -892,8 +898,7 @@ async def _object_card(p: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, Any] 
 async def _label(p: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, str]:
     """An object's display label (name → canonical) + type — for review/list rendering."""
     r = await p.fetchrow(
-        "SELECT o.type, o.canonical, (SELECT value #>> '{}' FROM current_assertions a "
-        "WHERE a.object_id=o.id AND a.name='name' LIMIT 1) AS name "
+        "SELECT o.type, o.canonical, " + _OBJ_LABEL + " AS name "
         "FROM objects o WHERE o.id=$1",
         object_id,
     )
