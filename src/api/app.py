@@ -330,6 +330,10 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             diff = await _git_show(row["canonical"].split(":", 1)[1])
             if diff:
                 return {"kind": "diff", "title": title, "content": diff}
+        if row["type"] == "SoftwareProject":
+            readme = await _git_file("HEAD:README.md")
+            if readme:
+                return {"kind": "markdown", "title": title, "content": readme}
         body = await p.fetchval(
             "SELECT value #>> '{}' FROM current_assertions "
             "WHERE object_id=$1 AND name IN ('body','rationale') "
@@ -863,6 +867,21 @@ async def _git_show(sha: str) -> str | None:
     try:
         proc = await asyncio.create_subprocess_exec(
             "git", "-C", _REPO_DIR, "show", "--stat", "-p", "--no-color", sha,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await proc.communicate()
+    except OSError:
+        return None
+    return out.decode("utf-8", "replace")[:200_000] if proc.returncode == 0 else None
+
+
+async def _git_file(ref: str) -> str | None:
+    """`git show <ref>` for a file (e.g. HEAD:README.md) — the repo node's own doc."""
+    if not re.match(r"^[\w./:-]+$", ref):
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "-C", _REPO_DIR, "show", ref,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
         )
         out, _ = await proc.communicate()
