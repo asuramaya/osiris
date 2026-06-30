@@ -171,7 +171,11 @@ const Osiris = (() => {
       ],
     });
     const layout = (preserve) => {
-      const o = HAS_FCOSE
+      // a DISCONNECTED set (unrelated nodes, no edges — e.g. 5 open threads) force-packs into
+      // an overlapping cluster under fcose; a grid spreads them cleanly. Edges → force layout.
+      const o = (cy.edges().length === 0 && cy.nodes().length > 1)
+        ? { name: "grid", avoidOverlap: true, avoidOverlapPadding: 14, padding: 45, condense: false }
+        : HAS_FCOSE
         ? { name: "fcose", animate: false, randomize: !preserve, quality: "proof",
             nodeSeparation: 120, idealEdgeLength: 115, nodeRepulsion: 9000, padding: 45, packComponents: true }
         : { name: "cose", animate: false, padding: 45, nodeRepulsion: 12000, idealEdgeLength: 120 };
