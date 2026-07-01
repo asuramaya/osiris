@@ -1,10 +1,22 @@
 # Responsible use
 
-Osiris produces claims about real people and organizations by aggregating the public
-record. That makes it powerful and dual-use: the same engine that exposes a fraud can be
-pointed at someone for harassment. Read this before you use it.
+Osiris has two faces (see [`README.md`](README.md)). Pointed at **your own work** (repos,
+decisions, commits) it is project memory and raises none of the concerns below. Pointed at
+the **public record** it produces claims about real people and organizations — and *that*
+is powerful and dual-use: the same engine that exposes a fraud can be pointed at someone
+for harassment. **This document governs the public-record face.** Read it before you use it
+that way.
 
-## Intended use
+## No hands (both faces)
+
+Osiris reads and *tells*; it does not act. It will not write to your repositories, commit,
+send, or automate a mutation of any system. It produces a sourced finding; a human — or
+Claude with a shell, or `git` — applies it. This is a deliberate boundary, not a missing
+feature: an autonomous mutator you must supervise is the opposite of a tool you can trust,
+so acting stays with hands that already have authority. See
+[`ROADMAP.md`](ROADMAP.md#deliberately-not-done-and-why).
+
+## Intended use (the public-record face)
 
 Osiris is for **authorized investigation, journalism, due diligence, compliance, and
 research** on the public record. It is *not* for stalking, harassment, doxxing, or
