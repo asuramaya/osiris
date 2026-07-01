@@ -26,6 +26,10 @@ Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
        "link_type":?,"object_type":?,"of":count|max|min|sum|avg,"property":?}}
   {"op":"order","from":N,"by":?,"dir":}            -> rank a set/rows (.orderBy)
   {"op":"take","from":N,"n":K}                      -> top-N (.take)
+  {"op":"sections","sections":[{"title":,"body":N},...]} -> stack named sub-compositions into
+       one titled read-model (Notion's page-of-blocks). Each body is its own op-tree; the
+       result is {title: rendered-items}. This is what a "briefing"/"dossier" IS — a page of
+       compositions, not bespoke code.
   {"op":"function","name":,"args":{}}              -> a registered Function (the escape hatch)
 
 The old `discrepancy` read-model is just one composition (opinion left the engine):
@@ -93,57 +97,10 @@ async def _fn_screen(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     return await screen_network(pool, subject, min_len=int(args.get("min_len", 5)))
 
 
-async def _fn_briefing(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
-    """The orientation a human (or a fresh Claude) needs on ARRIVAL — "where am I?" restored
-    in one read. A memory prosthesis for the symmetric problem: a person returning after a
-    week is in the same zero-context state as a new session. Open threads (what's blocked) +
-    recent work (what just happened). Subject-free — it briefs the project, not an entity."""
-    threads = await pool.fetch(
-        "SELECT (SELECT value #>> '{}' FROM current_assertions a "
-        "        WHERE a.object_id=o.id AND a.name='summary') AS thread "
-        "FROM objects o WHERE o.type='Thread' AND EXISTS ("
-        "  SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
-        "  AND s.name='status' AND s.value #>> '{}' = 'open') LIMIT 25"
-    )
-    recent = await pool.fetch(
-        "SELECT "
-        " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='summary') AS change, "
-        " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='scope') AS scope, "
-        " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='authored_date') AS date "
-        "FROM objects o WHERE o.type='Commit' ORDER BY date DESC NULLS LAST LIMIT 8"
-    )
-    # the self-healing made visible: threads a later commit closed, freshest first. Showing
-    # WHY (the commit + the matching tokens) is what makes auto-resolution trustworthy.
-    healed = await pool.fetch(
-        "SELECT s.value #>> '{}' AS thread, "
-        " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='resolved_in') AS commit, "
-        " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='resolved_because') AS because, "
-        " (SELECT max(observed_at) FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='status') AS at "
-        "FROM objects o JOIN current_assertions st ON st.object_id=o.id "
-        " JOIN current_assertions s ON s.object_id=o.id AND s.name='summary' "
-        "WHERE o.type='Thread' AND st.name='status' AND st.value #>> '{}' = 'resolved' "
-        "ORDER BY at DESC NULLS LAST LIMIT 8"
-    )
-    return {
-        "Open threads — what's unresolved": [
-            {"thread": r["thread"]} for r in threads if r["thread"]
-        ],
-        "Recent work — what just happened": [
-            {"change": r["change"], "scope": r["scope"] or "—",
-             "when": (r["date"] or "")[:10]} for r in recent if r["change"]
-        ],
-        "Resolved — self-healed by later commits": [
-            {"thread": r["thread"], "by": r["commit"], "because": r["because"]}
-            for r in healed if r["thread"]
-        ],
-    }
-
+# NB: `briefing` was a hand-written Function (three SQL queries). It is GONE — it decomposed
+# into a `sections` op-tree (see BRIEFING below): each section is a pure select→table, so the
+# "where am I?" read-model is now a composition the user owns, not bespoke code. This is the
+# canonical proof that a "briefing"/"dossier" is a PAGE OF COMPOSITIONS, never a coded page.
 
 _CANON_MAX_HITS = 12
 _CANON_SNIPPET = 500
@@ -426,7 +383,6 @@ _FUNCTIONS: dict[str, Function] = {
     "coinvest": _fn_coinvest,
     "subject_report": _fn_subject_report,
     "screen_network": _fn_screen,
-    "briefing": _fn_briefing,
     "canon": _fn_canon,
     "decisions": _fn_decisions,
     "family": _fn_family,
@@ -438,9 +394,9 @@ _FUNCTIONS: dict[str, Function] = {
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
 # `project` is here too: it drills into ONE repo, taken from the focused subject OR `args.repo`,
 # so it must run without a bound subject (it returns a "focus a repo" note if given neither).
-# NB: `projects` is GONE — it decomposed into a pure `table` op-tree (see DEFAULT_COMPOSITIONS),
-# the first eviction of the "hardcoded slop": opinion → primitives the user owns.
-_SUBJECT_FREE = {"briefing", "canon", "decisions", "family", "family_drift", "pulse", "project"}
+# NB: `projects` and `briefing` are GONE as Functions — they decomposed into pure op-trees (a
+# `table` and a `sections`, see DEFAULT_COMPOSITIONS): opinion → primitives the user owns.
+_SUBJECT_FREE = {"canon", "decisions", "family", "family_drift", "pulse", "project"}
 
 
 def list_functions() -> list[str]:
@@ -614,6 +570,18 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         n = max(0, int(node.get("n", 0)))
         return Result(base.kind, objects=base.objects[:n], values=base.values[:n],
                       rows=base.rows[:n], data=base.data)
+
+    if op == "sections":
+        # a page of compositions: eval each section's body, render it to items, key by title.
+        # This is Notion's page-of-blocks / a "briefing" — the shape every subject-free
+        # read-model already returns, now composed from primitives instead of hand-written SQL.
+        data: dict[str, Any] = {}
+        for sec in node.get("sections", []) or []:
+            title = str(sec.get("title", "section"))
+            body = sec.get("body")
+            res = await _eval(pool, body, subject) if body else Result("values")
+            data[title] = await _package(pool, res)
+        return Result("data", data=data)
 
     if op == "function":
         name = str(node.get("name", ""))
@@ -882,6 +850,19 @@ async def object_items(pool: asyncpg.Pool, ids: list[uuid.UUID]) -> list[dict[st
     return out
 
 
+async def _package(pool: asyncpg.Pool, res: Result) -> Any:
+    """Render a Result into the items the generic renderer consumes — objects become labelled
+    rows, rows/values/data pass through. Shared by `run_spec` and the `sections` op (a section
+    body is packaged exactly as a top-level composition would be)."""
+    if res.kind == "objects":
+        return await object_items(pool, res.objects)
+    if res.kind == "rows":
+        return res.rows
+    if res.kind == "data":
+        return res.data  # a Function's / sections' native output, passed through untouched
+    return res.values
+
+
 async def run_spec(
     pool: asyncpg.Pool, spec: dict[str, Any], subject: uuid.UUID | None = None,
     name: str = "(spec)",
@@ -889,14 +870,7 @@ async def run_spec(
     """Evaluate an op-tree and package the Result for the generic renderer. The inline
     composer (W4) runs an EPHEMERAL working spec through here as you edit chips — no save."""
     res = await _eval(pool, spec, subject)
-    if res.kind == "objects":
-        items: Any = await object_items(pool, res.objects)
-    elif res.kind == "rows":
-        items = res.rows
-    elif res.kind == "data":
-        items = res.data  # a Function's native output, passed through untouched
-    else:
-        items = res.values
+    items = await _package(pool, res)
     count = len(items) if isinstance(items, list | dict) else 1
     return {"composition": name, "kind": res.kind, "count": count, "items": items, "spec": spec}
 
@@ -923,8 +897,39 @@ GEOGRAPHY_DISCREPANCY: dict[str, Any] = {
     "right": {"op": "collect", "transform": "country", "properties": list(_HOME_PROPS),
               "from": {"op": "subject"}},
 }
+# `briefing` — "where am I?" restored in one read (the arrival prosthesis: a returning human
+# and a fresh Claude share the same zero-context state). Formerly three hand-written SQL queries;
+# now a `sections` op-tree — each section a pure select→(order→take)→table. Opinion left the
+# engine: the briefing is a page of compositions the user can fork, not coded output.
+BRIEFING: dict[str, Any] = {
+    "op": "sections",
+    "sections": [
+        {"title": "Open threads — what's unresolved",
+         "body": {"op": "table",
+                  "from": {"op": "select", "object_type": "Thread",
+                           "where": [{"property": "status", "op": "eq", "value": "open"}]},
+                  "columns": [{"name": "thread", "property": "summary"}]}},
+        {"title": "Recent work — what just happened",
+         "body": {"op": "table",
+                  "from": {"op": "take", "n": 8,
+                           "from": {"op": "order", "by": "authored_date", "dir": "desc",
+                                    "from": {"op": "select", "object_type": "Commit"}}},
+                  "columns": [{"name": "change", "property": "summary"},
+                              {"name": "scope", "property": "scope"},
+                              {"name": "when", "property": "authored_date"}]}},
+        {"title": "Resolved — self-healed by later commits",
+         "body": {"op": "table",
+                  "from": {"op": "select", "object_type": "Thread",
+                           "where": [{"property": "status", "op": "eq", "value": "resolved"}]},
+                  "columns": [{"name": "thread", "property": "summary"},
+                              {"name": "by", "property": "resolved_in"},
+                              {"name": "because", "property": "resolved_because"}]}},
+    ],
+}
 DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "operational-vs-disclosed-geography": GEOGRAPHY_DISCREPANCY,
+    # the arrival briefing — a `sections` op-tree, no longer a hand-written Function.
+    "briefing": BRIEFING,
     # the former bespoke read-models, now forkable compositions over named Functions —
     # opinion left engine code (no more hardcoded read-model + bespoke MCP tool per lens).
     "co-investment-ties": {"op": "function", "name": "coinvest"},

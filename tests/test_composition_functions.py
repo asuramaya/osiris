@@ -105,15 +105,16 @@ async def test_subject_report_function_is_byte_equal(actions: Actions, case_id: 
 # --- the registry + guards --------------------------------------------------
 
 async def test_function_registry_is_listable(actions: Actions) -> None:
-    assert list_functions() == ["briefing", "canon", "coinvest", "decisions", "family",
+    # `briefing` is NOT here — it decomposed into a `sections` op-tree (see the test below).
+    assert list_functions() == ["canon", "coinvest", "decisions", "family",
                                 "family_drift", "project", "pulse",
                                 "screen_network", "subject_report"]
 
 
-async def test_briefing_orients_without_a_subject(actions: Actions) -> None:
-    """The human-side memory prosthesis: a subject-free Function that orients you on
-    arrival — open threads (what's blocked) + recent work (what happened). A returning
-    human and a fresh Claude are in the same zero-context state; this restores it."""
+async def test_briefing_is_a_sections_op_tree(actions: Actions) -> None:
+    """The eviction proof: `briefing` is no longer a hand-written Function — it's a `sections`
+    op-tree (select→table per section) the user owns. Same orientation read-model (open threads,
+    recent work, self-healed threads), no bespoke SQL. A "briefing" is a PAGE OF COMPOSITIONS."""
     cm = await actions.create_or_find_object("Commit", "commit:aa", "git")
     await actions.assert_property(cm, "summary", "ship the thing", "git", NOW, 0.85)
     await actions.assert_property(cm, "scope", "ui", "git", NOW, 0.85)
@@ -133,7 +134,8 @@ async def test_briefing_orients_without_a_subject(actions: Actions) -> None:
     await actions.assert_property(done, "resolved_because", "renderer, generic", "git-memory",
                                   NOW, 0.4)
 
-    await save_composition(actions.pool, "briefing", {"op": "function", "name": "briefing"})
+    await seed_default_compositions(actions.pool)      # `briefing` is now a seeded sections tree
+    assert "briefing" not in list_functions()          # the hand-written Function is gone
     # runs with NO subject (it briefs the project, not an entity)
     res = await run_composition(actions.pool, "briefing")
     assert res["kind"] == "data"
@@ -144,6 +146,27 @@ async def test_briefing_orients_without_a_subject(actions: Actions) -> None:
     assert not any("renderer" in t["thread"] for t in threads)   # resolved → not still open
     assert any(r["change"] == "ship the thing" and r["scope"] == "ui" for r in recent)
     assert any(h["by"] == "commit:zz" and "renderer" in h["because"] for h in healed)
+
+
+async def test_sections_op_stacks_mixed_body_kinds(actions: Actions) -> None:
+    """The `sections` primitive: a page of compositions. Each body is its own op-tree and is
+    packaged the way a top-level composition would be — an `objects` body becomes labelled rows,
+    a `table` body stays rows — so a briefing/dossier is stackable primitives, not coded output."""
+    d = await actions.create_or_find_object("Decision", "decision:1", "mine")
+    await actions.assert_property(d, "summary", "keyless by design", "mine", NOW, 0.85)
+    c = await actions.create_or_find_object("Commit", "commit:x", "git")
+    await actions.assert_property(c, "summary", "wire the sections op", "git", NOW, 0.85)
+
+    res = await run_spec(actions.pool, {"op": "sections", "sections": [
+        {"title": "Decisions", "body": {"op": "select", "object_type": "Decision"}},
+        {"title": "Commits", "body": {"op": "table",
+                                      "from": {"op": "select", "object_type": "Commit"},
+                                      "columns": [{"name": "msg", "property": "summary"}]}},
+    ]}, None)
+    assert res["kind"] == "data"
+    # objects body → labelled rows (object_items shape); table body → the plain rollup rows
+    assert res["items"]["Decisions"][0]["label"] == "keyless by design"
+    assert res["items"]["Commits"][0]["msg"] == "wire the sections op"
 
 
 async def test_unknown_function_and_missing_subject_raise(actions: Actions) -> None:
