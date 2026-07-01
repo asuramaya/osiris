@@ -20,6 +20,10 @@ Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
   {"op":"union","sets":[N,...]}                     -> combine sets (.union)
   {"op":"intersect","sets":[N,...]}                 -> objects/values in ALL sets (.intersect)
   {"op":"aggregate","from":N,"group_by":[],"metric":{...}} -> group + a metric (.groupBy / rollup)
+  {"op":"table","from":N,"columns":[...]}          -> one ROW per object, columns = a property
+       OR a rollup-over-a-link (Notion's database+rollups / Palantir's object-set+per-object
+       aggregate). column = {"name":,"property":P} | {"name":,"rollup":{"direction":in|out|both,
+       "link_type":?,"object_type":?,"of":count|max|min|sum|avg,"property":?}}
   {"op":"order","from":N,"by":?,"dir":}            -> rank a set/rows (.orderBy)
   {"op":"take","from":N,"n":K}                      -> top-N (.take)
   {"op":"function","name":,"args":{}}              -> a registered Function (the escape hatch)
@@ -349,36 +353,6 @@ async def _fn_family_drift(
     return {f"Family content drift — {len(rmap)} repos": out}
 
 
-async def _fn_projects(
-    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
-) -> Any:
-    """The developer's project browser — your repos as a scannable list, not a hairball. Graph
-    is for shape, a LIST is for volume: 247 commits across 5 repos belong in a table you skim,
-    with each project's vitals. The landing for the developer persona; drill into one with
-    `project`. Subject-free."""
-    rows = await pool.fetch(
-        "SELECT o.id, "
-        " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='name' LIMIT 1) AS name, "
-        " (SELECT count(*) FROM links l JOIN objects c ON c.id=l.from_id AND c.type='Commit' "
-        "  WHERE l.to_id=o.id AND l.type='in_repo') AS commits, "
-        " (SELECT count(*) FROM links l JOIN objects f ON f.id=l.from_id AND f.type='File' "
-        "  WHERE l.to_id=o.id AND l.type='in_repo') AS files "
-        "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active'")
-    projects = []
-    for r in rows:
-        if not r["name"]:
-            continue
-        last = await pool.fetchval(
-            "SELECT max(a.value #>> '{}') FROM links l "
-            "JOIN current_assertions a ON a.object_id=l.from_id AND a.name='authored_date' "
-            "WHERE l.to_id=$1 AND l.type='in_repo'", r["id"])
-        projects.append({"project": r["name"], "commits": r["commits"], "files": r["files"],
-                         "last_touched": (last or "")[:10] or "—"})
-    projects.sort(key=lambda p: p["last_touched"], reverse=True)
-    return {"Your projects": projects}
-
-
 async def _fn_project(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
@@ -458,15 +432,15 @@ _FUNCTIONS: dict[str, Function] = {
     "family": _fn_family,
     "family_drift": _fn_family_drift,
     "pulse": _fn_pulse,
-    "projects": _fn_projects,
     "project": _fn_project,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
 # `project` is here too: it drills into ONE repo, taken from the focused subject OR `args.repo`,
 # so it must run without a bound subject (it returns a "focus a repo" note if given neither).
-_SUBJECT_FREE = {"briefing", "canon", "decisions", "family", "family_drift", "pulse",
-                 "projects", "project"}
+# NB: `projects` is GONE — it decomposed into a pure `table` op-tree (see DEFAULT_COMPOSITIONS),
+# the first eviction of the "hardcoded slop": opinion → primitives the user owns.
+_SUBJECT_FREE = {"briefing", "canon", "decisions", "family", "family_drift", "pulse", "project"}
 
 
 def list_functions() -> list[str]:
@@ -627,6 +601,10 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         metric = node.get("metric", {"type": "count"}) or {"type": "count"}
         return Result("rows", rows=await _aggregate(pool, base.objects, group_by, metric))
 
+    if op == "table":
+        base = await _eval(pool, node["from"], subject)
+        return Result("rows", rows=await _table(pool, base.objects, node.get("columns", []) or []))
+
     if op == "order":
         base = await _eval(pool, node["from"], subject)
         return await _order(pool, base, node.get("by"), node.get("dir", "asc"))
@@ -647,6 +625,72 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         return Result("data", data=await fn(pool, subject, node.get("args", {}) or {}))
 
     raise ValueError(f"unknown composition op: {op!r}")
+
+
+async def _table(
+    pool: asyncpg.Pool, objects: list[uuid.UUID], columns: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """One ROW per object; each column is a property value or a rollup over a link (Notion's
+    database+rollups / Palantir's object-set + per-object aggregate). Over a bounded set (a
+    select/traverse result), so per-object queries are fine — the whole point is that the SET
+    is already candidate-gated by the op that produced it."""
+    rows: list[dict[str, Any]] = []
+    for oid in objects:
+        facts = await _props(pool, oid)
+        row: dict[str, Any] = {}
+        for col in columns:
+            name = str(col.get("name") or col.get("property") or "col")
+            if "property" in col:
+                row[name] = facts.get(str(col["property"]))
+            elif "rollup" in col:
+                row[name] = await _rollup(pool, oid, col["rollup"])
+            else:
+                row[name] = None
+        rows.append(row)
+    return rows
+
+
+async def _rollup(pool: asyncpg.Pool, oid: uuid.UUID, spec: dict[str, Any]) -> Any:
+    """A single rollup over one object's links: count of (or max/min/sum/avg of a property on)
+    the objects reached by `link_type` in `direction`, optionally filtered to `object_type`."""
+    direction = spec.get("direction", "both")
+    ltype = spec.get("link_type")
+    if direction == "in":
+        clause, rel = "l.to_id = $1", "l.from_id"
+    elif direction == "out":
+        clause, rel = "l.from_id = $1", "l.to_id"
+    else:
+        clause = "(l.from_id = $1 OR l.to_id = $1)"
+        rel = "CASE WHEN l.from_id = $1 THEN l.to_id ELSE l.from_id END"
+    rids = [r["rid"] for r in await pool.fetch(
+        f"SELECT {rel} AS rid FROM links l WHERE {clause} AND ($2::text IS NULL OR l.type=$2)",
+        oid, ltype)]
+    otype = spec.get("object_type")
+    if otype and rids:
+        rids = [r["id"] for r in await pool.fetch(
+            "SELECT id FROM objects WHERE id = ANY($1::uuid[]) AND type=$2", rids, otype)]
+    of = spec.get("of", "count")
+    if of == "count":
+        return len(rids)
+    prop = spec.get("property")
+    if not rids or not prop:
+        return None
+    values = [r["v"] for r in await pool.fetch(
+        "SELECT DISTINCT ON (object_id) value #>> '{}' AS v FROM current_assertions "
+        "WHERE object_id = ANY($1::uuid[]) AND name=$2 ORDER BY object_id, observed_at DESC",
+        rids, str(prop)) if r["v"] is not None]
+    if not values:
+        return None
+    if of == "max":
+        return max(values)
+    if of == "min":
+        return min(values)
+    nums = [n for n in (_num(v) for v in values) if n is not None]
+    if of == "sum":
+        return sum(nums)
+    if of == "avg":
+        return sum(nums) / len(nums) if nums else None
+    return None
 
 
 async def _aggregate(
@@ -697,7 +741,12 @@ async def _order(
     rev = direction == "desc"
     if base.kind == "rows":
         def rkey(r: dict[str, Any]) -> tuple[float, str]:
-            v = r["metric"] if by in (None, "metric") else r.get("group", {}).get(by)
+            if by in (None, "metric"):
+                v = r.get("metric")
+            elif by in r:                       # a flat `table` column
+                v = r.get(by)
+            else:                               # an aggregate group dimension
+                v = r.get("group", {}).get(by)
             n = _num(v)
             return (n if n is not None else 0.0, str(v))
         return Result("rows", rows=sorted(base.rows, key=rkey, reverse=rev))
@@ -892,8 +941,26 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "family-drift": {"op": "function", "name": "family_drift"},
     # the heartbeat digest: what the off-the-clock pulse found while you were away.
     "pulse-digest": {"op": "function", "name": "pulse"},
-    # the developer project browser: land on your repos (list, not hairball) → drill into one.
-    "projects": {"op": "function", "name": "projects"},
+    # the developer project browser — DECOMPOSED: no longer a hardcoded Function, a pure op-tree
+    # the user owns. `select` the repos → `table` with rollup columns (Notion database+rollups)
+    # → `order` by last-touched. This is what "everything is composed" means in practice.
+    "projects": {
+        "op": "order", "by": "last_touched", "dir": "desc",
+        "from": {
+            "op": "table",
+            "from": {"op": "select", "object_type": "SoftwareProject"},
+            "columns": [
+                {"name": "project", "property": "name"},
+                {"name": "commits", "rollup": {"direction": "in", "link_type": "in_repo",
+                                               "object_type": "Commit", "of": "count"}},
+                {"name": "files", "rollup": {"direction": "in", "link_type": "in_repo",
+                                             "object_type": "File", "of": "count"}},
+                {"name": "last_touched", "rollup": {"direction": "in", "link_type": "in_repo",
+                                                    "object_type": "Commit", "of": "max",
+                                                    "property": "authored_date"}},
+            ],
+        },
+    },
     "project": {"op": "function", "name": "project"},
 }
 

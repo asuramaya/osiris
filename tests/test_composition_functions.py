@@ -106,7 +106,7 @@ async def test_subject_report_function_is_byte_equal(actions: Actions, case_id: 
 
 async def test_function_registry_is_listable(actions: Actions) -> None:
     assert list_functions() == ["briefing", "canon", "coinvest", "decisions", "family",
-                                "family_drift", "project", "projects", "pulse",
+                                "family_drift", "project", "pulse",
                                 "screen_network", "subject_report"]
 
 
@@ -276,3 +276,36 @@ async def test_family_content_drift(actions: Actions) -> None:
     assert by["license"]["drift"] is True and "MIT" in by["license"]["detail"]
     assert by["gitignore"]["drift"] is False
     assert rows[0]["role"] == "license"           # drift findings sort first
+
+
+# --- decomposition: the `table` op evicts the hardcoded `projects` Function ---
+
+async def _repo(actions: Actions, canon: str, name: str, *, commits: int, day0: int) -> uuid.UUID:
+    repo = await actions.create_or_find_object("SoftwareProject", canon, "git")
+    await actions.assert_property(repo, "name", name, "git", NOW, 0.9)
+    for i in range(commits):
+        c = await actions.create_or_find_object("Commit", f"commit:{name}{i}", "git")
+        await actions.assert_property(c, "authored_date", f"2026-06-{day0+i:02d}T00:00:00+00:00",
+                                      "git", NOW, 0.9)
+        await actions.create_link(c, repo, "in_repo", "git", NOW, 0.9)
+    return repo
+
+
+async def test_projects_decomposed_to_a_table_op(actions: Actions) -> None:
+    """The first eviction: `projects` is no longer a hardcoded Function — it's a pure `table`
+    op-tree the user owns (select repos → rollup columns → order). Same rows, no Python. This
+    is what 'everything is composed' means: a per-object table with rollup-over-link columns
+    (Notion's database+rollups) is now a PRIMITIVE, not bespoke code."""
+    osiris = await _repo(actions, "repo:osiris", "osiris", commits=3, day0=20)   # newest: 06-22
+    await _repo(actions, "repo:kast", "kast", commits=1, day0=20)                # 06-20
+    f = await actions.create_or_find_object("File", "file:osiris/LICENSE", "git-tree")
+    await actions.create_link(f, osiris, "in_repo", "git-tree", NOW, 0.9)        # a files rollup
+
+    await seed_default_compositions(actions.pool)
+    res = await run_composition(actions.pool, "projects")               # the op-tree, no subject
+    assert res["kind"] == "rows"                                        # a table, not Function data
+    by = {r["project"]: r for r in res["items"]}
+    assert by["osiris"]["commits"] == 3 and by["kast"]["commits"] == 1  # count rollup over in_repo
+    assert by["osiris"]["files"] == 1 and by["kast"]["files"] == 0      # a second rollup, typed
+    assert res["items"][0]["project"] == "osiris"                       # order by last_touched desc
+    assert "projects" not in list_functions()                          # the slop is gone
