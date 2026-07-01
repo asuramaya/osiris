@@ -23,7 +23,9 @@ Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
   {"op":"table","from":N,"columns":[...]}          -> one ROW per object, columns = a property
        OR a rollup-over-a-link (Notion's database+rollups / Palantir's object-set+per-object
        aggregate). column = {"name":,"property":P} | {"name":,"rollup":{"direction":in|out|both,
-       "link_type":?,"object_type":?,"of":count|max|min|sum|avg,"property":?}}
+       "link_type":?,"object_type":?,"of":count|first|max|min|sum|avg,"property":?}}. `first` =
+       Notion's show-original (pluck a single relation's value, incl. an object column like
+       `canonical` — how a linked commit/entity is named).
   {"op":"order","from":N,"by":?,"dir":}            -> rank a set/rows (.orderBy)
   {"op":"take","from":N,"n":K}                      -> top-N (.take)
   {"op":"sections","sections":[{"title":,"body":N},...]} -> stack named sub-compositions into
@@ -618,9 +620,17 @@ async def _table(
     return rows
 
 
+# object columns a rollup may pluck directly (not assertions) — the canonical is how a linked
+# Commit/entity is named, so `show-original` over a link needs it. Whitelisted → safe to inline.
+_OBJ_COLS = frozenset({"canonical", "type", "status"})
+
+
 async def _rollup(pool: asyncpg.Pool, oid: uuid.UUID, spec: dict[str, Any]) -> Any:
-    """A single rollup over one object's links: count of (or max/min/sum/avg of a property on)
-    the objects reached by `link_type` in `direction`, optionally filtered to `object_type`."""
+    """A single rollup over one object's links: count / max / min / sum / avg of a property on
+    the objects reached by `link_type` in `direction`, optionally filtered to `object_type`.
+    `of:"first"` is Notion's SHOW-ORIGINAL — for a single relation, plucks the one related
+    object's value (a property OR an object column like `canonical`); the enabler for showing
+    a linked commit's hash/date without abusing max()."""
     direction = spec.get("direction", "both")
     ltype = spec.get("link_type")
     if direction == "in":
@@ -643,12 +653,19 @@ async def _rollup(pool: asyncpg.Pool, oid: uuid.UUID, spec: dict[str, Any]) -> A
     prop = spec.get("property")
     if not rids or not prop:
         return None
-    values = [r["v"] for r in await pool.fetch(
-        "SELECT DISTINCT ON (object_id) value #>> '{}' AS v FROM current_assertions "
-        "WHERE object_id = ANY($1::uuid[]) AND name=$2 ORDER BY object_id, observed_at DESC",
-        rids, str(prop)) if r["v"] is not None]
+    if str(prop) in _OBJ_COLS:            # an object column (canonical/type/status), whitelisted
+        values = [r["v"] for r in await pool.fetch(
+            f"SELECT {prop} AS v FROM objects WHERE id = ANY($1::uuid[]) ORDER BY {prop}",
+            rids) if r["v"] is not None]
+    else:
+        values = [r["v"] for r in await pool.fetch(
+            "SELECT DISTINCT ON (object_id) value #>> '{}' AS v FROM current_assertions "
+            "WHERE object_id = ANY($1::uuid[]) AND name=$2 ORDER BY object_id, observed_at DESC",
+            rids, str(prop)) if r["v"] is not None]
     if not values:
         return None
+    if of == "first":                     # show-original: the single related object's value
+        return values[0]
     if of == "max":
         return max(values)
     if of == "min":

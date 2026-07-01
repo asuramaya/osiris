@@ -169,6 +169,32 @@ async def test_sections_op_stacks_mixed_body_kinds(actions: Actions) -> None:
     assert res["items"]["Commits"][0]["msg"] == "wire the sections op"
 
 
+async def test_rollup_show_original_plucks_a_single_relation(actions: Actions) -> None:
+    """`of:"first"` (Notion's show-original): a table rollup over a single relation plucks the
+    related object's value — a property AND an object column (`canonical`). This is the enabler
+    for a decision showing its `decided_in` commit's hash + date without abusing max(). No
+    dedicated Function needed: the linked commit is named by a pure op-tree."""
+    d = await actions.create_or_find_object("Decision", "decision:keyless", "mine")
+    await actions.assert_property(d, "summary", "keyless by design", "mine", NOW, 0.85)
+    c = await actions.create_or_find_object("Commit", "commit:abc123", "git")
+    await actions.assert_property(c, "authored_date", "2026-06-30T12:00:00+00:00", "git", NOW, 0.9)
+    await actions.create_link(d, c, "decided_in", "mine", NOW, 0.9)
+
+    res = await run_spec(actions.pool, {"op": "table",
+        "from": {"op": "select", "object_type": "Decision"},
+        "columns": [
+            {"name": "decision", "property": "summary"},
+            {"name": "in", "rollup": {"direction": "out", "link_type": "decided_in",
+                                      "of": "first", "property": "canonical"}},
+            {"name": "when", "rollup": {"direction": "out", "link_type": "decided_in",
+                                        "of": "first", "property": "authored_date"}},
+        ]}, None)
+    row = res["items"][0]
+    assert row["decision"] == "keyless by design"
+    assert row["in"] == "commit:abc123"                     # object column, plucked (show-original)
+    assert row["when"] == "2026-06-30T12:00:00+00:00"       # a property of the single relation
+
+
 async def test_unknown_function_and_missing_subject_raise(actions: Actions) -> None:
     await save_composition(actions.pool, "bogus", {"op": "function", "name": "nope"})
     with pytest.raises(ValueError, match="unknown function"):
