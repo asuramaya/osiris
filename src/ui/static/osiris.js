@@ -322,7 +322,17 @@ const Osiris = (() => {
   // dead list; now clicking 'composer · 6' opens those 6 commits). onDrill(group, spec) is the
   // shell's hook back to a select filtered by the group.
   function renderRows(panel, rows, spec, onDrill) {
-    if (!rows || !rows.length) { panel.innerHTML = `<div class="o-empty">No groups.</div>`; return; }
+    if (!rows || !rows.length) { panel.innerHTML = `<div class="o-empty">No rows.</div>`; return; }
+    // TWO row shapes share the "rows" kind: an `aggregate` yields {group, metric} (a ranked,
+    // drill-able table); a `table` op yields a FLAT column dict per object. Render each as itself
+    // — the flat table through the generic column renderer, so any `table` composition just works.
+    const agg = Object.prototype.hasOwnProperty.call(rows[0], "group")
+      && Object.prototype.hasOwnProperty.call(rows[0], "metric");
+    if (!agg) {
+      panel.innerHTML = `<div class="r-head">${rows.length} row${rows.length === 1 ? "" : "s"}</div>` +
+        table(rows);
+      return;
+    }
     const dims = Object.keys(rows[0].group || {});
     const head = dims.map((d) => `<th>${esc(d)}</th>`).join("") + "<th>metric</th>";
     const body = rows
