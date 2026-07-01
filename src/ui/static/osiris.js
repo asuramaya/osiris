@@ -367,7 +367,13 @@ const Osiris = (() => {
   function table(list) {
     const cols = [...new Set(list.flatMap((o) => (o && typeof o === "object" ? Object.keys(o) : [])))];
     if (!cols.length) return `<ul class="r-list">${list.map((v) => `<li>${esc(v)}</li>`).join("")}</ul>`;
-    const cell = (v) => esc(Array.isArray(v) ? v.join(", ") : v && typeof v === "object" ? JSON.stringify(v) : v);
+    const cell = (v) => {
+      if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v)) v = v.slice(0, 10);   // ISO → date
+      const s = v == null ? "" : Array.isArray(v) ? v.join(", ")
+        : typeof v === "object" ? JSON.stringify(v) : String(v);
+      return s.length > 160                        // clamp a wall of text; full text in the tooltip
+        ? `<span title="${esc(s)}">${esc(s.slice(0, 157))}…</span>` : esc(s);
+    };
     return `<table class="r-table"><thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead>
       <tbody>${list.map((o) => `<tr>${cols.map((c) => `<td>${cell(o ? o[c] : "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
   }

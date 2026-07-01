@@ -370,6 +370,21 @@ async function saveWorkingAs(){
 // a table row inspects in place (right panel) — it does NOT switch the center to the board,
 // so you keep your result set. (A graph node tap goes through focus(), which explores.)
 function inspectOnly(id){ FOCUS=id; renderSet(); inspect(id); }
+// A composition RESULT is ONE view — sync the OTHER two panes to it so they don't keep showing
+// a stale entity (the "panes don't sync" bleed: center=projects while the rail=Zephyr). A lens
+// has no single focused object → clear the inspector; if the result IS an object set the left
+// set reflects it, else the set clears. This makes the three panes one coherent view.
+function syncPanesToResult(){
+  FOCUS=null;
+  SET = (RESULT && RESULT.kind==='objects' && Array.isArray(RESULT.items))
+    ? RESULT.items.map(o=>({id:o.id, type:o.type, canonical:o.canonical, name:o.label})) : [];
+  renderSet();
+  const right=$('right'); right.className='rail';
+  right.innerHTML = `<div class="insp-empty">Showing <b>${esc(RESULT?RESULT.name:'')}</b> — ${
+    RESULT?RESULT.count:0} ${RESULT?RESULT.kind:''}.<br><br>${
+    RESULT&&RESULT.kind==='objects' ? 'Click a row to inspect an object.'
+      : 'A lens over the graph — no single object to inspect.'}</div>`;
+}
 async function renderCurrent(){
   if(!RESULT) return;
   if(VIEW==='graph') showBoard();  // reveal BEFORE placeObjects lays out, so #cy is measurable
@@ -377,6 +392,7 @@ async function renderCurrent(){
   if(mode==='graph'){ showBoard(); board.resizeFit(); board.layout(true); } else showPanel();
   $('boardtitle').textContent = `${RESULT.name} · ${RESULT.kind} · ${RESULT.count}`;
   setStatus(`${RESULT.name} → ${RESULT.count} ${RESULT.kind}.`);
+  syncPanesToResult();
   renderComposerBar();
 }
 function renderSwitcher(){
