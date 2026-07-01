@@ -177,34 +177,11 @@ async def _fn_canon(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[st
     return {f'Canon — "{q}"': [h[1] for h in hits[:_CANON_MAX_HITS]]}
 
 
-async def _fn_decisions(
-    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
-) -> Any:
-    """The decision log — the project's WHY, mined from its own commit rationale into `Decision`
-    objects (src/ingest/decisions.py). 'Why is it this way?' as a read-model: each decision, its
-    kind (reset/override/ruling/rejection/choice), and the commit it was decided in, newest
-    first. Subject-FREE — it briefs the project, not an entity. Optional args `kind` filters."""
-    want = str(args.get("kind", "")).strip().lower()
-    rows = await pool.fetch(
-        "SELECT "
-        " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='summary') AS statement, "
-        " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='kind') AS kind, "
-        " (SELECT c.canonical FROM links l JOIN objects c ON c.id=l.to_id "
-        "  WHERE l.from_id=o.id AND l.type='decided_in' LIMIT 1) AS commit, "
-        " (SELECT a.value #>> '{}' FROM links l JOIN current_assertions a ON a.object_id=l.to_id "
-        "  WHERE l.from_id=o.id AND l.type='decided_in' AND a.name='authored_date' LIMIT 1)"
-        "   AS cdate "
-        "FROM objects o WHERE o.type='Decision' AND o.status='active'"
-    )
-    items = [
-        {"decision": r["statement"], "kind": r["kind"], "in": r["commit"],
-         "when": (r["cdate"] or "")[:10]}
-        for r in rows if r["statement"] and (not want or (r["kind"] or "").lower() == want)
-    ]
-    items.sort(key=lambda x: x["when"], reverse=True)
-    return {"Decisions — the project's WHY (mined from commit rationale)": items}
+# NB: `decisions` was a hand-written Function (a SQL query joining decided_in → commit). It is
+# GONE — it decomposed into DECISION_LOG (a `sections` op-tree): select Decision (summary-present)
+# → table with `of:"first"` rollups plucking the decided_in commit's canonical + date → order.
+# The show-original rollup is what made this possible without abusing max(). A kind filter is now
+# a `where` on the select the user forks in, not a bespoke arg.
 
 
 # config roles where two repos' files SHOULD agree in CONTENT (legal/config), unlike prose
@@ -386,7 +363,6 @@ _FUNCTIONS: dict[str, Function] = {
     "subject_report": _fn_subject_report,
     "screen_network": _fn_screen,
     "canon": _fn_canon,
-    "decisions": _fn_decisions,
     "family": _fn_family,
     "family_drift": _fn_family_drift,
     "pulse": _fn_pulse,
@@ -396,9 +372,10 @@ _FUNCTIONS: dict[str, Function] = {
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
 # `project` is here too: it drills into ONE repo, taken from the focused subject OR `args.repo`,
 # so it must run without a bound subject (it returns a "focus a repo" note if given neither).
-# NB: `projects` and `briefing` are GONE as Functions — they decomposed into pure op-trees (a
-# `table` and a `sections`, see DEFAULT_COMPOSITIONS): opinion → primitives the user owns.
-_SUBJECT_FREE = {"canon", "decisions", "family", "family_drift", "pulse", "project"}
+# NB: `projects`, `briefing`, `decisions` are GONE as Functions — they decomposed into pure
+# op-trees (a `table`, a `sections`, a `sections`+show-original — see DEFAULT_COMPOSITIONS):
+# opinion → primitives the user owns.
+_SUBJECT_FREE = {"canon", "family", "family_drift", "pulse", "project"}
 
 
 def list_functions() -> list[str]:
@@ -930,7 +907,9 @@ BRIEFING: dict[str, Any] = {
          "body": {"op": "table",
                   "from": {"op": "take", "n": 8,
                            "from": {"op": "order", "by": "authored_date", "dir": "desc",
-                                    "from": {"op": "select", "object_type": "Commit"}}},
+                                    "from": {"op": "select", "object_type": "Commit",
+                                             "where": [{"property": "summary",
+                                                        "op": "present"}]}}},
                   "columns": [{"name": "change", "property": "summary"},
                               {"name": "scope", "property": "scope"},
                               {"name": "when", "property": "authored_date"}]}},
@@ -941,6 +920,30 @@ BRIEFING: dict[str, Any] = {
                   "columns": [{"name": "thread", "property": "summary"},
                               {"name": "by", "property": "resolved_in"},
                               {"name": "because", "property": "resolved_because"}]}},
+    ],
+}
+# `decision-log` — the project's WHY, mined into `Decision` objects. Formerly a SQL Function;
+# now a single-section `sections` op-tree: the `of:"first"` (show-original) rollup plucks each
+# decision's `decided_in` commit canonical + date (the renderer formats the ISO date), ordered
+# newest-first. `summary present` drops empty rows. A kind filter = a `where` the user forks in.
+DECISION_LOG: dict[str, Any] = {
+    "op": "sections",
+    "sections": [
+        {"title": "Decisions — the project's WHY (mined from commit rationale)",
+         "body": {"op": "order", "by": "when", "dir": "desc",
+                  "from": {"op": "table",
+                           "from": {"op": "select", "object_type": "Decision",
+                                    "where": [{"property": "summary", "op": "present"}]},
+                           "columns": [
+                               {"name": "decision", "property": "summary"},
+                               {"name": "kind", "property": "kind"},
+                               {"name": "in", "rollup": {"direction": "out",
+                                    "link_type": "decided_in", "of": "first",
+                                    "property": "canonical"}},
+                               {"name": "when", "rollup": {"direction": "out",
+                                    "link_type": "decided_in", "of": "first",
+                                    "property": "authored_date"}},
+                           ]}}},
     ],
 }
 DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
@@ -955,8 +958,8 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     # the dedicated canon view: the project's design memory (Palantir/Notion + own docs),
     # rendered as a sectioned read-model. Run with no subject; `consult_canon(q)` queries it.
     "design-canon": {"op": "function", "name": "canon", "args": {}},
-    # the decision log: the project's WHY, mined from its own commit rationale.
-    "decision-log": {"op": "function", "name": "decisions"},
+    # the decision log: the project's WHY — a `sections` op-tree (was a Function).
+    "decision-log": DECISION_LOG,
     # the family audit: what drifted across a set of similar repos (every ingested family).
     "family-consistency": {"op": "function", "name": "family"},
     # content drift: for the files a family shares, do they AGREE (license type / config bytes)?

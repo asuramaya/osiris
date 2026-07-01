@@ -227,8 +227,13 @@ def matches(criteria: dict[str, Any], event: GraphEvent) -> dict[str, Any] | Non
 
 def match_condition(actual: Any, op: str, expected: Any) -> bool:
     """One beat condition. Ops: eq / contains (case-insensitive substring) / lt / gt
-    (numeric). A missing value or an un-parseable number fails closed (no false match).
+    (numeric) / present / absent (the value exists / is missing-or-blank — `expected` is
+    ignored). A missing value or an un-parseable number fails closed (no false match).
     Shared by the evaluator (matches) and the read-model feed (/matches)."""
+    if op == "present":                       # the property exists and isn't blank
+        return actual is not None and str(actual).strip() != ""
+    if op == "absent":                        # missing or blank — the complement
+        return actual is None or str(actual).strip() == ""
     if actual is None:
         return False
     if op == "eq":

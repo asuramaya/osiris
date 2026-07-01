@@ -12,7 +12,12 @@ from datetime import UTC, datetime
 from src.actions.core import Actions
 from src.ingest.decisions import extract_decisions, mine_decisions
 from src.ontology.schema import LINK_TYPES, OBJECT_TYPES
-from src.orchestrator.compositions import run_spec
+from src.orchestrator.compositions import (
+    list_functions,
+    run_composition,
+    run_spec,
+    seed_default_compositions,
+)
 
 NOW = datetime(2026, 6, 28, tzinfo=UTC)
 
@@ -73,22 +78,27 @@ async def test_mine_decisions_links_and_dedups(actions: Actions) -> None:
     assert await p.fetchval("SELECT count(*) FROM links WHERE type='decided_in'") == 3
 
 
-async def test_decision_log_function(actions: Actions) -> None:
-    """The `decisions` read-model — the WHY as a queryable log, newest first, subject-free."""
+async def test_decision_log_is_a_sections_op_tree(actions: Actions) -> None:
+    """The eviction proof: `decision-log` is no longer a SQL Function — it's a `sections` op-tree
+    (select Decision → table with `of:"first"` show-original rollups plucking the decided_in
+    commit's hash + date → order). Same WHY-log, newest first; the show-original rollup names the
+    commit. A kind filter is a `where`, not a bespoke arg."""
     await _commit(actions, "commit:a", "We chose to event-source merges.",
                   "2026-06-20T00:00:00+00:00")
     await _commit(actions, "commit:b", "RESET — engine is the product.",
                   "2026-06-24T00:00:00+00:00")
     await mine_decisions(actions)
 
-    res = await run_spec(actions.pool, {"op": "function", "name": "decisions", "args": {}},
-                         None, name="decision-log")
+    await seed_default_compositions(actions.pool)
+    assert "decisions" not in list_functions()                   # the hand-written Function is gone
+    res = await run_composition(actions.pool, "decision-log")
     assert res["kind"] == "data"
     log = next(iter(res["items"].values()))
-    assert len(log) == 2 and log[0]["when"] == "2026-06-24"       # newest decision first
-    assert log[0]["kind"] == "reset" and log[0]["in"] == "commit:b"
-    # kind filter narrows the log
-    choices = await run_spec(actions.pool, {"op": "function", "name": "decisions",
-                                            "args": {"kind": "choice"}}, None)
-    only = next(iter(choices["items"].values()))
-    assert len(only) == 1 and only[0]["kind"] == "choice"
+    assert len(log) == 2 and log[0]["when"][:10] == "2026-06-24"  # newest first (full ISO)
+    assert log[0]["kind"] == "reset" and log[0]["in"] == "commit:b"   # show-original: the hash
+    # a kind filter is now just a `where` on the select the user forks in — not a Function arg
+    choices = await run_spec(actions.pool, {"op": "table",
+        "from": {"op": "select", "object_type": "Decision",
+                 "where": [{"property": "kind", "op": "eq", "value": "choice"}]},
+        "columns": [{"name": "kind", "property": "kind"}]}, None)
+    assert len(choices["items"]) == 1 and choices["items"][0]["kind"] == "choice"
