@@ -349,6 +349,85 @@ async def _fn_family_drift(
     return {f"Family content drift — {len(rmap)} repos": out}
 
 
+async def _fn_projects(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """The developer's project browser — your repos as a scannable list, not a hairball. Graph
+    is for shape, a LIST is for volume: 247 commits across 5 repos belong in a table you skim,
+    with each project's vitals. The landing for the developer persona; drill into one with
+    `project`. Subject-free."""
+    rows = await pool.fetch(
+        "SELECT o.id, "
+        " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='name' LIMIT 1) AS name, "
+        " (SELECT count(*) FROM links l JOIN objects c ON c.id=l.from_id AND c.type='Commit' "
+        "  WHERE l.to_id=o.id AND l.type='in_repo') AS commits, "
+        " (SELECT count(*) FROM links l JOIN objects f ON f.id=l.from_id AND f.type='File' "
+        "  WHERE l.to_id=o.id AND l.type='in_repo') AS files "
+        "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active'")
+    projects = []
+    for r in rows:
+        if not r["name"]:
+            continue
+        last = await pool.fetchval(
+            "SELECT max(a.value #>> '{}') FROM links l "
+            "JOIN current_assertions a ON a.object_id=l.from_id AND a.name='authored_date' "
+            "WHERE l.to_id=$1 AND l.type='in_repo'", r["id"])
+        projects.append({"project": r["name"], "commits": r["commits"], "files": r["files"],
+                         "last_touched": (last or "")[:10] or "—"})
+    projects.sort(key=lambda p: p["last_touched"], reverse=True)
+    return {"Your projects": projects}
+
+
+async def _fn_project(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """One project's scope — its recent commits, decisions, and file roles, as lists. The drill
+    from the project browser (`projects`). The subject is the repo (focus it, or pass
+    `args.repo` = the name). Volume as lists, never a graph."""
+    repo = subject
+    if repo is None and args.get("repo"):
+        repo = await pool.fetchval(
+            "SELECT o.id FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+            "WHERE o.type='SoftwareProject' AND a.name='name' AND a.value #>> '{}'=$1 LIMIT 1",
+            str(args["repo"]))
+    if repo is None:
+        return {"Project": [{"note": "focus a repo, or pass args.repo = its name"}]}
+    name = await pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='name' LIMIT 1",
+        repo) or "(project)"
+    commits = await pool.fetch(
+        "SELECT (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=c.id "
+        "        AND a.name='summary' LIMIT 1) AS summary, "
+        " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=c.id "
+        "        AND a.name='authored_date' LIMIT 1) AS date "
+        "FROM links l JOIN objects c ON c.id=l.from_id AND c.type='Commit' "
+        "WHERE l.to_id=$1 AND l.type='in_repo' ORDER BY date DESC NULLS LAST LIMIT 15", repo)
+    decisions = await pool.fetch(
+        "SELECT DISTINCT ON (d.id) "
+        " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=d.id "
+        "  AND a.name='summary' LIMIT 1) AS summary, "
+        " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=d.id "
+        "  AND a.name='kind' LIMIT 1) AS kind "
+        "FROM objects d JOIN links dl ON dl.from_id=d.id AND dl.type='decided_in' "
+        "JOIN links rl ON rl.from_id=dl.to_id AND rl.type='in_repo' AND rl.to_id=$1 "
+        "WHERE d.type='Decision' LIMIT 20", repo)
+    roles = await pool.fetch(
+        "SELECT DISTINCT (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=f.id "
+        "        AND a.name='role' LIMIT 1) AS role "
+        "FROM links l JOIN objects f ON f.id=l.from_id AND f.type='File' "
+        "WHERE l.to_id=$1 AND l.type='in_repo'", repo)
+    role_list = sorted(r["role"] for r in roles if r["role"])
+    return {
+        f"{name} — recent commits": [
+            {"when": (c["date"] or "")[:10], "commit": c["summary"]}
+            for c in commits if c["summary"]],
+        f"{name} — decisions": [
+            {"kind": d["kind"], "decision": d["summary"]} for d in decisions if d["summary"]],
+        f"{name} — file roles": [{"roles": ", ".join(role_list) or "—"}],
+    }
+
+
 async def _fn_pulse(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
@@ -379,10 +458,15 @@ _FUNCTIONS: dict[str, Function] = {
     "family": _fn_family,
     "family_drift": _fn_family_drift,
     "pulse": _fn_pulse,
+    "projects": _fn_projects,
+    "project": _fn_project,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
-_SUBJECT_FREE = {"briefing", "canon", "decisions", "family", "family_drift", "pulse"}
+# `project` is here too: it drills into ONE repo, taken from the focused subject OR `args.repo`,
+# so it must run without a bound subject (it returns a "focus a repo" note if given neither).
+_SUBJECT_FREE = {"briefing", "canon", "decisions", "family", "family_drift", "pulse",
+                 "projects", "project"}
 
 
 def list_functions() -> list[str]:
@@ -808,6 +892,9 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "family-drift": {"op": "function", "name": "family_drift"},
     # the heartbeat digest: what the off-the-clock pulse found while you were away.
     "pulse-digest": {"op": "function", "name": "pulse"},
+    # the developer project browser: land on your repos (list, not hairball) → drill into one.
+    "projects": {"op": "function", "name": "projects"},
+    "project": {"op": "function", "name": "project"},
 }
 
 
