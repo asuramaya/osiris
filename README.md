@@ -1,184 +1,186 @@
 # Osiris
 
-**A keyless, provenance-first entity engine for following the money through the public record — and an AI can drive it.**
+**The memory an AI doesn't have.** A keyless, provenance-first entity-graph engine that
+turns a stream of records — *your own work, or the public record* — into durable, sourced,
+always-watched memory you compose by conversation. It remembers, it watches, and it tells
+you what changed while you were away. It does **not** act for you.
 
-Paste a name. Osiris federates the open public record — corporate filings, sanctions
-lists, court dockets, the global company registry, on-chain activity — into one
-entity graph where **every fact carries its source, how it was obtained, and when**,
-then emits a sourced, litigation-defensible dossier.
+Point it at your repositories and it becomes cross-project memory: every decision you made
+and why, every open thread, what drifted across a family of similar projects, and a
+heartbeat that notices the moment something changes. Point it at the public record and it
+becomes an entity-intelligence engine: companies, filings, sanctions, litigation, on-chain
+activity, fused into one graph. Same engine, same kinetic waist, same provenance — two
+proven faces.
 
-It is built so that a single person, with no subpoena, no LexisNexis, and no API keys
-they have to pay for, can assemble the public record into a case faster than they could
-by hand — and so that an AI assistant can do it for them.
-
-> **Status: v0.1.0 — first public release.** The engine is real and proven (see
-> [Proof](#proof-so-far)). It is also honest about its edges (see
-> [What it can't do yet](#what-it-cant-do-yet)). It was built by one operator with an AI
-> pair; the development log is kept in the open in [`CLAUDE.md`](CLAUDE.md).
+> **Status.** The kernel is real and proven (379 tests, real Postgres/Redis, `ruff` +
+> `mypy --strict` clean). It has deliberately reset **twice** toward *engine-as-product* —
+> the domain is never the identity, the engine is. The development log is kept in the open
+> in [`CLAUDE.md`](CLAUDE.md), and Osiris tracks its own git history *inside itself* (the
+> first and most-dogfooded use). This is a pre-`v0.2` working tree, honest about its edges.
 
 ---
 
-**What it does today**
-- Federates **keyless open bases** into one provenance-graded entity graph: SEC EDGAR
-  (companies + Form D private placements), OpenSanctions (sanctions/PEP + OFAC crypto
-  wallets), Wikidata, GLEIF (global LEI registry + ownership), OrgBook BC (Canadian
-  corporate registry), CourtListener (federal litigation), ClinicalTrials.gov, and
-  Etherscan (EVM on-chain traces — the one source that needs a free key).
-- **Resolves entities across those bases** — the same company fragmented as `cik:`,
-  `Qxxx`, `lei:`, `bc-reg:` is fused; a person and an org are told apart; a shared LEI is
-  a deterministic merge.
-- **Grades every claim** by *how it was obtained* (self-declared / authoritative-API /
-  direct-observation / co-occurrence / derived / corroborated) — confidence is a
-  projection of provenance, not a guess.
-- **Produces a sourced dossier**: identity, principals, financing (Form D feeders),
-  litigation, footprint discrepancy, co-investment, on-chain + sanctions exposure —
-  every line tagged `source · how-obtained · date`.
-- **Screens a network**: is anyone in this entity's financing network — its principals,
-  feeder funds, fund operators — on a sanctions/PEP list?
-- Is **drivable by an AI** through an [MCP](https://modelcontextprotocol.io) server (18
-  tools) *and* by a human through a FastAPI app.
+## Why it exists — the Osiris/Claude split
 
-**Where it's heading** (see [`ROADMAP.md`](ROADMAP.md), [`docs/COMPOSER.md`](docs/COMPOSER.md))
+An AI has intelligence but no persistent memory, no provenance, and no continuity — it
+can't remember last week, can't tell you *how* it knows a thing, and can't run while you're
+asleep. **Osiris is precisely those missing organs.** The division of labor:
+
+- **Osiris is the brain and the alarm clock** — a durable graph (memory), where every fact
+  carries *how it was obtained* (provenance), watched by an autonomic loop (continuity).
+- **Claude is the intelligence**, in two modes: a **lens** (foreground, on-demand — you
+  ask, it reasons and drives) and a **tripwire** (background, always-on, flash-tier — it
+  narrates what changed, cheaply, 24/7).
+- **Neither has hands.** Osiris reads and tells; it never mutates your systems. Acting is
+  left to you, to `git`, to your own tools — the last inch stays where trust already lives.
+
+Everything below follows from that split.
+
+---
+
+## What the engine does
+
+- **Turns records into a provenance-graded graph.** Every property and link records its
+  **evidence class** — self-declared / authoritative-API / direct-observation /
+  co-occurrence / derived / corroborated — so *confidence is a projection of provenance,
+  not a guess*. The graph is an append-only, event-sourced ledger; a merge is a reversible
+  event.
+- **Resolves entities without ever guessing blindly.** Resolution is **candidate-gated** —
+  block on a cheap key, judge only the bounded candidates, never all-pairs — so it scales,
+  and it *never auto-merges a person*: it queues a review with its reasons.
+- **Comes alive with a heartbeat.** An autonomic *pulse* senses when a tracked source
+  changes, re-ingests only the delta, re-runs the lenses, and accumulates a *"what changed
+  while you were away"* digest. Off-the-clock insight you return to.
+- **Is composed by conversation.** Analyses are **compositions** — saved, forkable op-trees
+  over the neutral graph (Notion's model, grounded in Palantir's Object Set API) authored by
+  Claude from a sentence. Opinion lives in the composition *you* own, never welded into the
+  engine.
+- **Is driven two ways.** An [MCP](https://modelcontextprotocol.io) server (AI-facing) and a
+  FastAPI console (human-facing), over the same engine. The front end *is* the conversation:
+  a shared cursor means when Claude focuses something, your screen follows.
 
 The shape is **"Palantir × Notion, composed by conversation"**: an entity-ontology
-*substrate* (Palantir's ontology, on the open record, with provenance) whose front end is
-a *composer* (Notion's neutral primitives + your own composed opinion + forkable
-templates), authored by an AI (Claude over MCP — the front end *is* the conversation). The
-intelligence is Claude; Osiris is what an intelligence lacks — durable, structured, sourced
-memory that runs when you're away.
-- The **tripwire** (watch the public record, fire a sourced lead — the monitoring/"cron"
-  capability) has landed; the active work is the **composer** — making every analysis a
-  forkable *composition the user owns*, so opinion lives with you, never welded into the engine.
-- Pierce shell ownership (deed → LLC → human) where open registries allow; broaden on-chain
-  coverage; AI document extraction (OCR + LLM) for the messy long tail — all keyless.
-
-**What it can't do yet**
-- It only reaches the open **entity** commons. By design (keyless), it is weak on private
-  *persons* — it federates companies, filings, PEPs, and wallets, not your neighbour.
-  This is a [safety feature, not only a limitation](RESPONSIBLE_USE.md).
-- No property/county-records connectors yet; no always-on monitoring yet; the human web
-  UI is partial (the MCP surface is ahead of it).
-- The deliverable still has known data-quality noise (entity-resolution and geocoding
-  edge cases). Provenance makes errors *auditable*, not *absent* — read tiers and
-  sources, don't trust blindly. See [`ROADMAP.md`](ROADMAP.md#known-noise).
+*substrate* (Palantir, with provenance) whose front end is a *composer* (Notion's neutral
+primitives), authored by an AI. See [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ---
 
-## Who it's for
+## The two proven faces
 
-The same capability — *resolve an entity, map its network from the public record, attach
-provenance* — is one sword held by many hands: the investigative journalist following
-grift, the investor doing diligence, the analyst piercing a shell, the compliance team
-screening a counterparty. Osiris is the sword, not any one hand.
+### 1. Your own work — cross-project memory (the flagship)
 
-The first hand we built for, and the one the documentation speaks to, is the
-**independent follow-the-money investigator** — because they publish, they credit their
-tools, and they need every claim to survive a defamation threat. The provenance kernel is
-built for exactly that.
+Point Osiris at your repositories. It ingests each git history, tree, and decision, resolves
+*you* across repos even when you commit under different emails, and holds your work as one
+graph:
+
+- **Decisions & threads, mined from your own commit messages** — "why is it this way?" and
+  "what's still blocked?" become a *query*, not a re-read of hundreds of commits.
+- **Cross-repo identity resolution** — the same developer fragmented across personal and
+  GitHub no-reply emails is surfaced for review (never auto-merged).
+- **Family audit** — for a set of sibling projects, what *drifted*: which repos lack a
+  CONTRIBUTING, and — the deeper layer — whether the shared files actually *agree* (it found
+  a real family licensed inconsistently: MIT in one repo, AGPL in the others).
+- **The heartbeat** — a daemon that watches your repos and, the second a commit lands,
+  senses it, mines its decisions, and logs the finding — unattended.
+- **The design canon** — Palantir/Notion's models ingested as queryable memory, so you
+  *cite* a solved problem instead of re-deriving it (`consult_canon("no join")`).
+
+Osiris uses this on **itself** — its own genesis is a subject in its graph.
+
+### 2. The public record — entity intelligence
+
+Point Osiris at open bases and it federates them into one provenance-graded entity graph,
+keyless: SEC EDGAR (companies + Form D private placements), OpenSanctions (sanctions/PEP +
+OFAC crypto wallets), Wikidata, GLEIF (global LEI + ownership), OrgBook BC, CourtListener,
+ClinicalTrials.gov, and Etherscan (EVM on-chain — the one source needing a free key). It
+resolves the same company across `cik:` / `Qxxx` / `lei:` / `bc-reg:`, grades every claim,
+and emits a sourced, litigation-defensible dossier — identity, principals, financing,
+litigation, on-chain + sanctions exposure — every line tagged `source · how-obtained · date`.
+
+Same kernel, same resolution, same provenance as face #1. The domain is not the identity.
 
 ---
 
 ## Quickstart
 
-### Drive it with an AI (the short path)
-
-Osiris exposes its capabilities as an MCP server. Point any MCP client (Claude Desktop,
-Claude Code, an agent) at it and ask it to investigate something:
+### Track your projects (the flagship path)
 
 ```bash
 uv sync
-# bring up Postgres + Redis (see docker-compose.yml)
 DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5432/osiris uv run alembic upgrade head
-uv run python -m src.mcp_server        # stdio transport; add to your MCP client config
+# ingest a repo's history + tree, mine its decisions/threads
+uv run python -m src.ingest.gitlog /path/to/your/repo
+uv run python -m src.ingest.files  /path/to/your/repo
+uv run python -m src.ingest.decisions
+# start the heartbeat over several repos (senses changes, builds the digest)
+OSIRIS_DEV_REPOS=/path/a,/path/b uv run python -m src.orchestrator.pulse --watch 600
 ```
 
-Then: *"Use Osiris to build a dossier on Celsius Network"* — the assistant calls
-`search → suggest_sources → ingest_* → screen_financing_network → dossier_report` and
-hands you a sourced case file.
-
-### Run it as a library / CLI
-
-Every connector is also a module:
+### Drive it with an AI
 
 ```bash
-uv run python -m src.ingest.edgar_formd "Neuralink"          # SEC Form D financing
-uv run python -m src.ingest.gleif "Tesla, Inc."              # global LEI + ownership
-uv run python -m src.ingest.courtlistener "Celsius Network"  # litigation
-ETHERSCAN_API_KEY=... uv run python -m src.ingest.etherscan 0xADDRESS   # on-chain trace
+uv run python -m src.mcp_server        # stdio transport; add to your MCP client config
 ```
+Then, in any MCP client: *"What decisions have I made across my repos, and what drifted in
+the family?"* — or, for the public-record face, *"Build a dossier on Celsius Network."*
 
 ### Develop
 
 ```bash
-cp .env.example .env
-docker compose up -d
-uv sync
+cp .env.example .env && docker compose up -d && uv sync
 DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5432/osiris uv run alembic upgrade head
 uv run pytest            # real Postgres/Redis via testcontainers, never mocks
-ruff check src/ tests/   # lint
-uv run mypy --strict src/
+ruff check src/ tests/ && uv run mypy --strict src/
 ```
-
-Python 3.12 (uv), async throughout (asyncpg, httpx, arq), FastAPI, Postgres 16 + Redis 7,
-Alembic migrations. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
-
----
-
-## Proof so far
-
-The engine is validated by pointing it at real, hard targets and following the money
-end-to-end — not by toy fixtures:
-
-- **Neuralink** — federated the entity, then surfaced the buried Form D financing swarm
-  (a long tail of named SPVs funnelling small global investors into a company most assume
-  is closed), the SPV operators, the clinical-trial footprint, and a footprint
-  discrepancy between disclosed and operational geography. Then *verified and killed* two
-  tempting-but-false leads (a "China capital" thread that resolved to a Vancouver firm) —
-  the discipline working.
-- **Celsius / Mashinsky** — a documented collapse where the financing *is* the story:
-  the Form D officers resolve to the criminally-charged principals; the litigation is the
-  bankruptcy and clawback suits; one clean sourced dossier, AI-driven.
-- **Sanctions fusion** — a live Etherscan trace of an OFAC-listed wallet (CHATEX,
-  Andariel/DPRK) fuses with the federated sanctions base on a shared on-chain canonical,
-  and screening surfaces a sanctioned counterparty it sent 34 ETH to — the crawl × base
-  edge, with provenance.
-
-237 tests green (real Postgres/Redis), `ruff` + `mypy --strict` clean.
-
-**See it for yourself:** [`samples/`](samples/) ships the literal `dossier_report` output
-and graded-evidence exports for Celsius and Neuralink — real dossiers, shown with their
-warts, because provenance is the point.
+Python 3.12 (uv), async throughout (asyncpg, httpx, arq), FastAPI, Postgres 16 + Redis 7.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ---
 
-## How it's built
+## Proof
 
-A small, stable **kernel** (event-sourced, evidence-graded, merge-aware entity graph)
-with a ring of **drivers** (the federators) that only ever *emit* into it through a narrow
-interface, and two **surfaces** over it (the MCP server and the FastAPI app). The kernel
-imports no driver; drivers depend on the kernel. That seam is what lets the messy,
-ever-growing collection layer accrete without destabilizing the core.
+Validated on real, hard targets — not toy fixtures:
 
-Over that kernel sits the **composer**: analyses are *compositions* — saved, forkable
-op-trees over the neutral graph (Notion's model), authored by Claude from a sentence. The
-opinionated read-models are being demoted from engine code to compositions the user owns.
+- **Osiris on itself** — its own git history is a subject in its graph; the `briefing`
+  lens orients a fresh session on arrival, the family audit found a real license
+  inconsistency across a sibling project family, and the heartbeat caught a live commit
+  and mined its decision *unattended*, the second it landed.
+- **Neuralink** — federated the entity, then surfaced the buried Form D financing swarm,
+  the SPV operators, the clinical footprint, and a disclosed-vs-operational geography
+  discrepancy — then *verified and killed* two tempting-but-false leads. The discipline
+  working.
+- **Sanctions fusion** — a live Etherscan trace of an OFAC-listed wallet fuses with the
+  federated sanctions base on a shared on-chain canonical; screening surfaces a sanctioned
+  counterparty it sent 34 ETH to.
 
-See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the current shape,
-[`docs/COMPOSER.md`](docs/COMPOSER.md) for the composition op-vocabulary (grounded in
-Palantir's Object Set API + Notion's rollups), [`docs/REFERENCE.md`](docs/REFERENCE.md)
-for the data model, evidence classes, and registries, and [`DESIGN.md`](DESIGN.md) for the
-original deep design.
+[`samples/`](samples/) ships literal dossier output for the public-record face — real
+dossiers, shown with their warts, because provenance is the point.
+
+---
+
+## What it can't do (yet, or by design)
+
+- **It has no hands, on purpose.** It will not write to your repos, commit, or act in your
+  systems. It produces the sourced finding; you (or Claude with a shell) apply it. Crossing
+  into autonomous mutation of your systems is a
+  [trap it deliberately refuses](ROADMAP.md#deliberately-not-done-and-why).
+- **The public-record face reaches only the open *entity* commons** — by design (keyless),
+  it is weak on private *persons*. A [safety feature, not only a limitation](RESPONSIBLE_USE.md).
+- **Provenance makes errors auditable, not absent.** There is known entity-resolution and
+  extraction noise — read the tiers and sources, don't trust blindly. See
+  [`ROADMAP.md`](ROADMAP.md).
+- The heartbeat's *reflection* layer (flash-tier Claude narrating the meaning of a change)
+  is the active next step; today the pulse reports reliable facts, not yet interpretation.
 
 ---
 
 ## License & responsible use
 
-Licensed under **AGPL-3.0** (see [`LICENSE`](LICENSE)). Osiris produces claims about real
-people and organizations from public records. It is a dual-use tool: read
-[`RESPONSIBLE_USE.md`](RESPONSIBLE_USE.md) before you use it — it covers intended use, the
-data-source licenses (notably OpenSanctions' non-commercial terms), and why "only public
-data" is both the ethic and the legal shield.
+Licensed under **AGPL-3.0** (see [`LICENSE`](LICENSE)). The public-record face produces
+claims about real people and organizations; it is dual-use. Read
+[`RESPONSIBLE_USE.md`](RESPONSIBLE_USE.md) — intended use, the data-source licenses (notably
+OpenSanctions' non-commercial terms), and why "only public data" is both the ethic and the
+legal shield.
 
-*No warranty. Osiris surfaces and sources the public record; it does not adjudicate truth.
-Every claim it emits must be read with its provenance and verified before you act or
-publish.*
+*No warranty. Osiris surfaces and sources; it does not adjudicate truth. Every claim it
+emits must be read with its provenance and verified before you act or publish.*

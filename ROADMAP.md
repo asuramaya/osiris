@@ -8,22 +8,32 @@ deliberately not done.
 
 ## The shape — "Palantir × Notion, composed by conversation"
 
-Osiris is an entity-ontology **substrate** (Palantir's ontology, on the open public
-record, with provenance and a 24/7 tripwire) whose front end is a **composer** (Notion's
-neutral primitives + the user's own composed opinion), authored by an **AI** (Claude over
-MCP — the front end is the conversation). The intelligence is Claude; Osiris is what an
-intelligence lacks: durable, structured, sourced memory that runs when you're away. The
-composer is the open-source answer to Palantir's forward-deployed engineers — Claude
-composes the ontology from a sentence instead of a consulting army.
+Osiris is an entity-ontology **substrate** (Palantir's ontology, with provenance and a
+24/7 loop) whose front end is a **composer** (Notion's neutral primitives + the user's own
+composed opinion), authored by an **AI** (Claude over MCP — the front end is the
+conversation). The intelligence is Claude; Osiris is what an intelligence lacks: durable,
+structured, sourced memory that runs when you're away. The composer is the open-source
+answer to Palantir's forward-deployed engineers — Claude composes the ontology from a
+sentence instead of a consulting army.
 
-**The active arc — finish the composer** (see [`docs/COMPOSER.md`](docs/COMPOSER.md)). A
-composition is a saved, forkable op-tree over the graph; the op vocabulary is a small
-*closed* set (grounded in Palantir's Object Set API + Notion's rollups) plus a Function
-escape hatch. The work, each a cut: complete the ops (`aggregate`/`order`/`union`/
-`intersect`) → evict the opinionated read-models (`discrepancy` is already a composition)
-so opinion lives in forkable specs the user owns → fold the watch and the lens into one
-primitive → a generic renderer → the composer becomes the front end and the console pages
-are cut. Done = the engine holds no opinion.
+**The engine serves two corpora, unchanged** — *your own work* (git history, decisions,
+the file tree) and *the public record*. The developer/project-memory face is the flagship
+(and the most-dogfooded: Osiris tracks its own genesis inside itself); the public-record
+face is entity intelligence. The domain is never the identity, the engine is.
+
+**The principle that bounds it: no hands.** Osiris reads and tells; it never mutates your
+systems (writes a file, commits, sends). It produces the sourced finding; *you*, or Claude
+with a shell, or `git`, apply it. Crossing into autonomous action over the user's real
+systems is a trap the engine deliberately refuses — the moat is the memory and the
+provenance, not a robot arm, and blast radius would destroy the trust that is the whole
+point.
+
+**The composer shipped.** The op vocabulary is a small *closed* set (grounded in Palantir's
+Object Set API + Notion's rollups) plus a Function escape hatch (see
+[`docs/COMPOSER.md`](docs/COMPOSER.md)); the opinionated read-models are Functions a
+forkable composition references; the front end is the composer. **The active arc is the
+developer persona and the living memory** — the pulse that senses your work and, next, a
+flash-tier reflection layer that narrates what a change *means*.
 
 ## The capability ladder
 
@@ -32,40 +42,40 @@ one rung at a time, and each rung is a demonstrable proof.
 
 | Rung | Holder | Capability it forces | Status |
 |------|--------|----------------------|--------|
-| **Convergence** | investigative journalist | resolve disparate public facts into one sourced picture, on demand — the **lens** | ✅ **proven** (Neuralink, Celsius) |
-| **Persistence** | broker / monitor | watch a stream of public events and fire a sourced lead when something matches — the **tripwire** | ✅ **built** (cron ladder; not yet live for a user) |
-| **Correlation at scale** | analyst / compliance | fire *accurately* on a whole population, not just on a target | ○ planned |
-| **Standing system** | — | a live, self-updating entity graph that surfaces emergent patterns | ○ horizon |
+| **Convergence** | journalist / developer | resolve disparate facts into one sourced picture, on demand — the **lens** | ✅ **proven** (Neuralink, Celsius; your repos → decisions, threads, the family audit) |
+| **Persistence** | developer / broker | sense a stream of events the moment it changes and accumulate it — the **tripwire / the pulse** | ✅ **proven** (the heartbeat catches a live commit + mines its decision, unattended) |
+| **Reflection** | developer | narrate what a change *means*, not just that it happened — flash-tier Claude in the loop | ○ **active** |
+| **Correlation at scale** | analyst / compliance | fire *accurately* on a whole population, not just a target | ○ planned |
+| **Standing system** | — | a live, self-updating graph that surfaces emergent patterns | ○ horizon |
 
 The lens is **retrospective** ("who is this / what happened"); the tripwire is
 **prospective** ("tell me when X happens"). Convergence + persistence is the line between
 an *investigation tool* and an *intelligence system* — and the half that the open-source
 world doesn't have.
 
-## Next: persistence (the "cron" / monitoring capability)
+## Shipped: persistence (the "cron" / the pulse)
 
-The broker proof is not about real estate; it is the proof that the kernel can **watch**,
-not just **resolve**. Build order (each step proves one thing and leaves a clean seam —
-and we never combine two new hard things in one step, which is the mistake that sinks
-collection-first projects):
+The kernel can **watch**, not just **resolve** — proven end to end. The full ladder
+landed: a source-agnostic scheduler + per-source watermark + a subscription evaluator that
+drains the durable outbox and emits alerts; the worker ⊥ surface cut (a runaway job can't
+take down the console) with a self-healing reaper; a real source watcher; the
+AI-extraction driver (one messy document → graded entities, no bespoke parser); and the
+composed *document → sourced lead* pipeline. For the developer face this became the
+**pulse** — an autonomic loop that senses a repo's HEAD moving, re-ingests the delta,
+re-runs the lenses, and accumulates a "what changed while you were away" digest. It caught
+a live commit and mined its decision, unattended. All of it inherited the kernel's
+reliability (idempotent emit, atomic claim, durable outbox) — the payoff of building the
+kernel first.
 
-1. **Resurrect the watch, source-agnostic** — scheduler (Arq cron) + per-source watermark
-   + a **subscription evaluator** that drains the durable outbox, matches new graph
-   mutations against saved criteria, and emits an alert. The one new primitive.
-2. **Worker ⊥ surface cut** — isolate the worker process from the API so a runaway
-   monitoring job can never take down the console or corrupt the truth. The deployment
-   foundation. *Proof: a failure drill.*
-3. **Broker PoC on easy collection** — prove the full loop (schedule → delta → ingest →
-   resolve → trigger → sourced alert) on a source that already works (new filings,
-   dockets, sanctions deltas). *And prove it stays quiet on noise.*
-4. **AI-extraction driver, alone** — prove that one messy document → graded entities with
-   no bespoke parser, collapsing the per-source parser tax.
-5. **Compose** — cron watches a document source → AI-extracts → emits graded → resolves →
-   fires a sourced lead. This is "document → lead, done right."
+## Next: the living memory (reflection)
 
-The reliability this needs — idempotent emit, atomic claim, durable outbox, global rate
-limits — is already in the kernel. The monitoring capability *inherits* it. That is the
-payoff of building the kernel first.
+The pulse today reports reliable **facts** (N new commits, new drift, a new decision). The
+active work is the **reflection** layer — a flash-tier Claude (Haiku, headless, keyless via
+the local CLI) that runs in the loop and narrates what a change *means*: "you're porting
+this pattern across the family," "this decision contradicts one in another repo," "you've
+solved this problem three different ways." Deterministic facts stay the trusted floor;
+reflection is a graded, speculative lead you glance at. This is the turn from *current* to
+*insightful* — off-the-clock insight, not just off-the-clock detection.
 
 ## Deployment, as a sequence of cuts (not a rewrite)
 
@@ -105,6 +115,11 @@ tier. Each rung of the capability ladder is also a rung of deployment commitment
   merge is worse than no merge. Resolution stays deterministic-or-review-gated.
 - **De-anonymizing private individuals.** The keyless constraint structurally points the
   tool at the open entity commons, not at private persons. We keep it that way on purpose.
+- **Acting over the user's systems (no hands).** Osiris will not write to your repos,
+  commit, send, or automate a mutation of your real systems. It produces the sourced
+  finding; you or Claude-with-a-shell apply it. This isn't a missing feature — it's a
+  refused one: the moat is the memory and the provenance, not a robot arm, and an
+  autonomous mutator you have to *watch* is the opposite of the trust the tool is for.
 
 ## Known noise
 

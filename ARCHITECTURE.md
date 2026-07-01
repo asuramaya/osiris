@@ -14,16 +14,24 @@ That seam — the **narrow waist** — is the whole architecture. It lets the me
 ever-growing collection layer (every connector, every messy source) accrete and fail
 independently without ever destabilizing the core or the read models.
 
+The same kernel serves two corpora with no change — **your own work** (git history,
+decisions, the file tree) and **the public record** — because the domain is never the
+identity, the engine is. And an autonomic loop, the **pulse**, keeps it fresh: it senses
+when a tracked source changes, re-ingests only the delta, and accumulates what changed. The
+engine *reads and tells*; it never mutates the world (it has no hands — see the surfaces).
+
 ```
-        surfaces        MCP server  ·  FastAPI app
+        surfaces        MCP server  ·  FastAPI console  ·  compositions (the composer)
                               │
         ─────────────── narrow waist (Actions API) ───────────────
                               │
         kernel          event-sourced graph  +  resolution
                               │
-        drivers         federators · extractors · vantage-bound crawlers
+        loop            the pulse — sense a change · re-ingest the delta · digest it
                               │
-        world           EDGAR · OpenSanctions · GLEIF · Wikidata · courts · chain · …
+        drivers         self-track (git) · federators · extractors · vantage-bound crawlers
+                              │
+        world           your repos · EDGAR · OpenSanctions · GLEIF · Wikidata · courts · chain · …
 ```
 
 ## The kernel
@@ -31,9 +39,11 @@ independently without ever destabilizing the core or the read models.
 The source of truth. Append-only and audited; nothing is overwritten, so provenance
 survives forever.
 
-- **Objects / assertions / links / events** in Postgres. Objects are entities
-  (Organization, Person, CryptoAddress, CourtCase, …). Assertions are graded facts about
-  them. Links are typed, graded edges.
+- **Objects / assertions / links / events** in Postgres. Objects are entities — for the
+  public record: Organization, Person, CryptoAddress, CourtCase, …; for your own work:
+  SoftwareProject, Commit, Decision, Thread, File, Reference. Assertions are graded facts
+  about them; links are typed, graded edges. The type catalog is a declared semantic layer
+  (`ontology/schema.py`); the UI reads it, it never hardcodes types.
 - **Event-sourced identity.** Merges are events (`object_events` is truth;
   `objects.status / merged_into` is a projection). A snapshot replays events to a time;
   an unmerge is a compensating event. Loser links stay in place and are resolved on read.
@@ -58,6 +68,11 @@ survives forever.
 Drivers reach into the messy world and emit graded, sourced mutations through the waist.
 They differ along one axis that dictates everything — **placefulness**:
 
+- **Self-track drivers** — the developer face. `gitlog` (a repo's history → SoftwareProject
+  / Commit / developer), `files` (the tree → File nodes, metadata only; content stays in
+  git, read on demand), and miners that turn commit rationale into `Decision` and `Thread`
+  objects. Federating *your own work* is federation too: same waist, same grading, and
+  cross-repo identity resolution fuses *you* across your repos.
 - **Placeless federators** — pure HTTP over open bases; stateless, rate-limited per
   origin, run anywhere. EDGAR (companies + Form D), OpenSanctions (sanctions/PEP + OFAC
   crypto wallets), Wikidata, GLEIF (LEI + ownership), OrgBook BC, CourtListener,
@@ -74,16 +89,21 @@ They differ along one axis that dictates everything — **placefulness**:
 
 Two thin, stateless edges over the same kernel — they hold no truth:
 
-- **MCP server** (`mcp_server.py`) — the AI-facing surface; 18 tools, each accepting a
-  UUID or a name. External, optional, audited (every tool flows through the Actions
-  layer), never embedded in the kernel. This is the primary adoption path.
-- **FastAPI app** (`api/app.py`) — the human surface. Cases, objects, graph view,
-  dossiers, the review tray. Currently behind the MCP in coverage (parity is on the
-  roadmap, intentionally last).
+- **MCP server** (`mcp_server.py`) — the AI-facing surface; each tool accepts a UUID or a
+  name. External, optional, audited (every tool flows through the Actions layer), never
+  embedded in the kernel. This is the primary adoption path.
+- **FastAPI console** (`api/app.py`) — the human surface, sharing a live cursor with the
+  MCP: when Claude focuses an object or runs a lens, the screen follows (the front end *is*
+  the conversation). Cases, objects, the graph view, dossiers, the review tray, the
+  document viewer.
 
-A keystone both surfaces read: `orchestrator/sources.py` — the investigation playbook *as
-data* (`suggest(object_type)` → which sources/analyses apply). It externalizes the "what
-do I do next?" judgment so neither a human nor an AI has to carry it.
+Over both sits the **composer**: analyses are *compositions* — saved, forkable op-trees
+over the neutral graph (a small closed op set grounded in Palantir's Object Set API +
+Notion's rollups, plus a Function escape hatch). Opinionated read-models (a dossier, a
+family audit, the pulse digest) are Functions a composition references, so opinion lives in
+a forkable spec the user owns, not welded into engine code. Two keystones both surfaces
+read: `orchestrator/sources.py` (the investigation playbook *as data*) and
+`ontology/schema.py` (the type catalog). Neither surface holds truth or opinion.
 
 ## Deployment rings
 
@@ -95,9 +115,10 @@ service discovery.
 - **Ring 0 — core:** Postgres + the kernel. Singleton, stateful, protected, backed up.
   Nothing else's failure may touch it. Imports no driver.
 - **Ring 1 — edges:** the API and MCP processes. Stateless, restartable, later replicable.
-- **Ring 2 — workers:** the Arq workers (cascades, ingestion, the coming monitoring loops).
-  Where the flaky, long-running work and its failures live — must be fate-isolated from
-  core and edges.
+- **Ring 2 — workers:** the Arq workers (cascades, ingestion) and the **pulse** — the
+  autonomic loop that senses when a tracked repo/source changes, re-ingests the delta,
+  re-runs the lenses, and accumulates a "what changed while you were away" digest. Where
+  the flaky, long-running, always-on work lives — must be fate-isolated from core and edges.
 - **Ring 3 — drivers:** as above, split by placefulness.
 
 The kernel is **placeless** (runs on any reliable box); the federators are
