@@ -277,14 +277,25 @@ const Osiris = (() => {
   // an ORDERED objects set as a Timeline — the concise read the operator asked for: a date +
   // the one salient summary per item, in the order the composition computed. NOT a column dump
   // of every property (which buried 'recent work' under full commit rationale).
-  const _DATEKEYS = ["authored_date", "observed_at", "filed_date", "sale_date", "date", "first_seen"];
-  const _SUMKEYS = ["summary", "change", "subject", "title", "status", "description", "rationale"];
-  function _pick(props, keys) { for (const k of keys) if (props && props[k]) return props[k]; return null; }
+  // pick the salient DATE / SUMMARY property for a timeline row — domain-NEUTRAL: a couple of
+  // common preferred names, then any date-shaped property by pattern (…_date / …_at / date / time)
+  // or an ISO-dated value. No hardcoded domain keys (was a mix of git/real-estate/…). The shell
+  // reads the object's shape; it doesn't know what domain it is.
+  const _ISO = /^\d{4}-\d{2}-\d{2}/;
+  function _pickDate(p) {
+    for (const k of ["authored_date", "observed_at", "created_at", "date"]) if (p && p[k]) return p[k];
+    for (const k in p) if (p[k] && (/(_date|_at|^date$|time)/i.test(k) || _ISO.test(String(p[k])))) return p[k];
+    return null;
+  }
+  function _pickSummary(p) {
+    for (const k of ["summary", "title", "subject", "description", "label"]) if (p && p[k]) return p[k];
+    return null;
+  }
   function timelineList(panel, items, onPick, onCtx) {
     if (!items.length) { panel.innerHTML = `<div class="o-empty">Empty result.</div>`; return; }
     const body = items.map((o, i) => {
       const p = o.props || {};
-      const d = _pick(p, _DATEKEYS), s = _pick(p, _SUMKEYS);
+      const d = _pickDate(p), s = _pickSummary(p);
       const when = d ? esc(String(d).slice(0, 10)) : `#${i + 1}`;
       const sum = s ? `<div class="tl-sum">${esc(String(s).slice(0, 160))}</div>` : "";
       return `<div class="tl-item" data-pick="${o.id}" data-type="${esc(o.type)}">
