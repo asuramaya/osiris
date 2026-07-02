@@ -48,6 +48,11 @@ adopt that split exactly:
 **group_by dimensions** (`{property, type: exact|range}`) and a **metric**
 (`{type: count|sum|avg|min|max|cardinality, field?}`).
 
+`select`'s `where` filters a property with a predicate op — `eq` · `contains` ·
+`matches_all` (every whitespace token present, any order — word-order-proof recall) ·
+`lt` · `gt` · `present` · `absent` (`monitor.match_condition`, shared by the lens and the
+watch evaluator).
+
 ## Guardrails (adopt Palantir's, they're load-tested)
 
 - **`traverse` depth ≤ 3 hops** — Palantir caps `searchAround` at 3 per query. Deep

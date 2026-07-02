@@ -20,6 +20,7 @@ from src.orchestrator.monitor import (
     WatchItem,
     evaluate_watches,
     get_cursor,
+    match_condition,
     matches,
     set_cursor,
     tick,
@@ -71,6 +72,16 @@ def test_matches_value_contains_on_property_added() -> None:
 def test_matches_canonical_contains_case_insensitive() -> None:
     assert matches({"canonical_contains": "0001"}, _ev(canonical="cik:0001")) is not None
     assert matches({"canonical_contains": "ZZZ"}, _ev(canonical="cik:0001")) is None
+
+
+def test_match_condition_matches_all_is_word_order_proof() -> None:
+    hay = "atomic claim via a partial unique index on active statuses (retry-safe)"
+    assert match_condition(hay, "matches_all", "atomic claim")       # adjacent, in order
+    assert match_condition(hay, "matches_all", "claim atomic")       # reordered
+    assert match_condition(hay, "matches_all", "atomic index retry")  # non-adjacent tokens
+    assert not match_condition(hay, "matches_all", "atomic missing")  # one token absent
+    assert match_condition(hay, "matches_all", "")                   # no tokens → vacuous
+    assert not match_condition(None, "matches_all", "atomic")        # missing value fails closed
 
 
 # --- watermarks -------------------------------------------------------------

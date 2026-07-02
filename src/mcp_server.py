@@ -36,6 +36,8 @@ from src.ontology.resolution import (
     resolve_cross_base,
     screen_network,
 )
+from src.ontology.schema import catalog
+from src.orchestrator import capture
 from src.orchestrator import compositions as comp
 from src.orchestrator.coinvest import coinvestment_ties
 from src.orchestrator.console import get_console as _get_console
@@ -44,7 +46,18 @@ from src.orchestrator.discrepancy import footprint_discrepancy
 from src.orchestrator.dossier import entity_dossier
 from src.orchestrator.sources import as_dicts, suggest
 
-mcp = FastMCP("osiris")
+mcp = FastMCP(
+    "osiris",
+    instructions=(
+        "Osiris is the durable memory a session doesn't have — the graph remembers what "
+        "you learn and decide after you're gone. On connect, orient with "
+        "run_composition('briefing') to see open threads and recent work, and call "
+        "get_schema to learn the object/link types before you author a composition or read "
+        "a result. Before the session ends, write back: record_decision for every ruling or "
+        "pivot you made, and open_thread / resolve_thread for what's left unresolved — so "
+        "the next session inherits your context instead of starting blind."
+    ),
+)
 _pool: asyncpg.Pool | None = None
 
 
@@ -106,6 +119,30 @@ async def search(query: str, limit: int = 15) -> list[dict[str, Any]]:
         query, limit,
     )
     return [{"id": str(r["id"]), "type": r["type"], "name": r["name"]} for r in rows]
+
+
+@mcp.tool()
+async def get_schema() -> dict[str, Any]:
+    """The ontology — the object types (with category + canonical schemes) and link types
+    the graph declares. Read this before authoring a composition or reading a result, so you
+    reference REAL types/links, not guesses; it is the vocabulary of the whole graph. Compact
+    by design (colours/shapes dropped — those are for the UI)."""
+    cat = catalog()
+    return {
+        "object_types": [
+            {"name": t["name"], "category": t["category"], "schemes": t["schemes"],
+             "description": t["description"]}
+            for t in cat["object_types"]
+        ],
+        "link_types": [
+            {"name": lt["name"],
+             "connects": (f"{'/'.join(lt['domain']) or '*'} -> {'/'.join(lt['range']) or '*'}"
+                          if (lt["domain"] or lt["range"]) else "*"),
+             "description": lt["description"]}
+            for lt in cat["link_types"]
+        ],
+        "categories": cat["categories"],
+    }
 
 
 # --- collect (federate a base) ----------------------------------------------
@@ -287,6 +324,8 @@ async def save_composition(
     transform, never a new op):
       {"op":"subject"}                                  the object in focus
       {"op":"select","object_type":?,"where":[{property,op,value}]}  matching objects
+        (where op ∈ eq|contains|matches_all|lt|gt|present|absent; matches_all = every
+         whitespace token present, any order — word-order-proof recall)
       {"op":"traverse","from":<node>,"direction":"both|out|in","hops":N}  neighbourhood (≤3)
       {"op":"collect","from":<node>,"properties":[..],"transform":"country|lower"}  values
       {"op":"subtract","left":<node>,"right":<node>}    set/value difference
@@ -382,6 +421,46 @@ async def consult_canon(query: str = "") -> dict[str, Any]:
     pool = await _pool_get()
     spec = {"op": "function", "name": "canon", "args": {"q": query}}
     return await comp.run_spec(pool, spec, None, name="design-canon")
+
+
+# --- write-back: the prosthesis (capture what you decided / what's still open) ---
+
+@mcp.tool()
+async def record_decision(
+    summary: str, kind: str = "ruling", rationale: str | None = None, repo: str | None = None
+) -> dict[str, str]:
+    """Write back a DECISION you made this session — a ruling, an architecture pivot, a
+    deliberate rejection — so the WHY becomes durable graph memory the next session inherits
+    (don't leave it to be regex-mined out of some future commit; the epochal ones never land
+    in a commit at all). `kind`: ruling|reset|override|rejection|choice|decision. `rationale`
+    = the reasoning; `repo` = a SoftwareProject name to file it under. Renders in the
+    `decision-log` composition beside mined decisions, graded SELF_DECLARED (higher trust).
+    Idempotent on the summary."""
+    d = await capture.record_decision(
+        Actions(await _pool_get()), summary, kind=kind, rationale=rationale, repo=repo
+    )
+    return {"id": str(d), "kind": kind, "summary": summary}
+
+
+@mcp.tool()
+async def open_thread(summary: str, repo: str | None = None) -> dict[str, str]:
+    """Open a THREAD — an unresolved question or next-step you want the next session to pick
+    up. Surfaces in run_composition('briefing') under open threads, beside mined ones. `repo`
+    files it under a SoftwareProject. Idempotent on the summary. This is how a session hands
+    off its loose ends instead of losing them."""
+    t = await capture.open_thread(Actions(await _pool_get()), summary, repo=repo)
+    return {"id": str(t), "summary": summary, "status": "open"}
+
+
+@mcp.tool()
+async def resolve_thread(ref: str, because: str | None = None) -> dict[str, str]:
+    """Close a THREAD you (or an earlier session) resolved — `ref` is its UUID or a summary
+    substring; `because` records why. It leaves briefing's open list and joins the resolved
+    section. Event-sourced (never deleted), so the close is auditable and reversible."""
+    tid = await capture.resolve_thread(Actions(await _pool_get()), ref, because=because)
+    if tid is None:
+        return {"error": f"no open thread matches {ref!r}"}
+    return {"id": str(tid), "status": "resolved"}
 
 
 def main() -> None:

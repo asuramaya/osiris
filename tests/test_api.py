@@ -60,6 +60,29 @@ async def test_list_and_get_object(client: httpx.AsyncClient, actions: Actions) 
     assert "Lazarus Group" in names
 
 
+async def test_objects_search_is_word_order_proof(
+    client: httpx.AsyncClient, actions: Actions
+) -> None:
+    from src.orchestrator.capture import record_decision
+
+    # summary carries some tokens, rationale others — so a query can span both properties
+    d = await record_decision(
+        actions, "the atomic claim uses a partial unique index",
+        rationale="idempotent retry-safe dedup on active statuses",
+    )
+
+    async def ids(q: str) -> set[str]:
+        r = await client.get("/objects", params={"q": q})
+        assert r.status_code == 200
+        return {o["id"] for o in r.json()}
+
+    assert str(d) in await ids("claim atomic")        # reordered, both in summary
+    assert str(d) in await ids("idempotent claim")    # cross-property AND (rationale + summary)
+    assert str(d) in await ids("index atomic dedup")  # non-adjacent, both properties
+    assert str(d) not in await ids("claim nonexistenttoken")  # every token must hit
+    assert str(d) in await ids("idempotent")          # single-token behaviour unchanged
+
+
 async def test_object_graph(client: httpx.AsyncClient, actions: Actions) -> None:
     await _seed(actions)
     oid = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical=$1", LAZARUS)

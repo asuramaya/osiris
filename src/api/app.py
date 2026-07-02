@@ -265,6 +265,13 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         q: str | None = None,
         limit: int = Query(100, le=2000),
     ) -> list[dict[str, Any]]:
+        # Word-order-proof recall: tokenize `q` on whitespace; an object matches when EVERY
+        # token appears SOMEWHERE in its searched content (canonical or a name/summary/title/
+        # rationale assertion) — the tokens may land in different properties. So "idempotent
+        # claim" and "atomic ingest" hit even though adjacency/order differ from the stored
+        # text. Single-token behaviour is unchanged. SQL-side and bounded (≤6 tokens): the
+        # NOT-EXISTS says "no token failed to match anywhere" = all tokens matched.
+        tokens = (q.split()[:6] if q else None) or None
         rows = await p.fetch(
             "SELECT id, type, canonical, status, " + _OBJ_LABEL + " AS name "
             "FROM objects o "
@@ -272,14 +279,17 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             "  AND ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM case_objects co "
             "        WHERE co.object_id = o.id AND co.case_id = $1)) "
             "  AND ($2::text IS NULL OR type = $2) "
-            "  AND ($3::text IS NULL OR canonical ILIKE '%' || $3 || '%' "
-            "       OR EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
-            "          AND a.name IN ('name','summary','title','rationale') "
-            "          AND a.value #>> '{}' ILIKE '%' || $3 || '%')) "
+            "  AND ($3::text[] IS NULL OR NOT EXISTS ("
+            "        SELECT 1 FROM unnest($3::text[]) AS tok "
+            "        WHERE o.canonical NOT ILIKE '%' || tok || '%' "
+            "          AND NOT EXISTS (SELECT 1 FROM current_assertions a "
+            "             WHERE a.object_id=o.id "
+            "             AND a.name IN ('name','summary','title','rationale') "
+            "             AND a.value #>> '{}' ILIKE '%' || tok || '%'))) "
             "ORDER BY type, created_at DESC LIMIT $4",
             case_id,
             type,
-            q,
+            tokens,
             limit,
         )
         return [dict(r) for r in rows]

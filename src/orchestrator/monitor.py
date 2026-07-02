@@ -226,10 +226,12 @@ def matches(criteria: dict[str, Any], event: GraphEvent) -> dict[str, Any] | Non
 
 
 def match_condition(actual: Any, op: str, expected: Any) -> bool:
-    """One beat condition. Ops: eq / contains (case-insensitive substring) / lt / gt
-    (numeric) / present / absent (the value exists / is missing-or-blank — `expected` is
-    ignored). A missing value or an un-parseable number fails closed (no false match).
-    Shared by the evaluator (matches) and the read-model feed (/matches)."""
+    """One beat condition. Ops: eq / contains (case-insensitive substring) / matches_all
+    (every whitespace-separated token in `expected` present in `actual`, any order —
+    word-order-proof) / lt / gt (numeric) / present / absent (the value exists / is
+    missing-or-blank — `expected` is ignored). A missing value or an un-parseable number
+    fails closed (no false match). Shared by the evaluator (matches), composition `where`
+    clauses (select's _eval), and the read-model feed (/matches)."""
     if op == "present":                       # the property exists and isn't blank
         return actual is not None and str(actual).strip() != ""
     if op == "absent":                        # missing or blank — the complement
@@ -240,6 +242,9 @@ def match_condition(actual: Any, op: str, expected: Any) -> bool:
         return str(actual).strip().lower() == str(expected).strip().lower()
     if op == "contains":
         return str(expected).lower() in str(actual).lower()
+    if op == "matches_all":                   # word-order-proof: all tokens present, any order
+        hay = str(actual).lower()
+        return all(tok in hay for tok in str(expected).lower().split())
     if op in ("lt", "gt"):
         try:
             a, b = float(actual), float(expected)
