@@ -144,7 +144,9 @@ const Osiris = (() => {
   }
 
   // ---- the cytoscape board (objects render here) ---------------------------
-  function makeBoard(container, onFocus) {
+  // onFocus(id, deep, type): tap = select (deep=false), double-tap = primary action (deep=true).
+  // onCtx(id, type, mouseEvent): right-click = the object's contextual action menu.
+  function makeBoard(container, onFocus, onCtx) {
     if (window.cytoscapeFcose) cytoscape.use(window.cytoscapeFcose);
     const HAS_FCOSE = !!window.cytoscapeFcose;
     const cy = cytoscape({
@@ -191,8 +193,12 @@ const Osiris = (() => {
       });
       return added;
     };
-    cy.on("tap", "node", (e) => onFocus && onFocus(e.target.id()));
-    cy.on("dbltap", "node", (e) => onFocus && onFocus(e.target.id(), true));
+    cy.on("tap", "node", (e) => onFocus && onFocus(e.target.id(), false, e.target.data("type")));
+    cy.on("dbltap", "node", (e) => onFocus && onFocus(e.target.id(), true, e.target.data("type")));
+    cy.on("cxttap", "node", (e) => {
+      if (e.originalEvent) e.originalEvent.preventDefault();
+      onCtx && onCtx(e.target.id(), e.target.data("type"), e.originalEvent);
+    });
     return {
       cy, layout, mergeGraph,
       fit: () => cy.animate({ fit: { padding: 50 }, duration: 250 }),

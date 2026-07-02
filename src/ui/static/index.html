@@ -247,7 +247,7 @@ async function applyConsole(s){
     setSyncBadge(s.updated_by);
     const compChanged = s.composition && s.composition!==ACTIVE;
     if(s.room_id && s.room_id!==ROOM) await switchRoom(s.room_id);
-    if(s.focused_object_id && s.focused_object_id!==FOCUS) await focus(s.focused_object_id);
+    if(s.focused_object_id && s.focused_object_id!==FOCUS) inspectOnly(s.focused_object_id);
     if(compChanged) await runComp(s.composition);
     // apply a synced view ONLY on the current composition — never let a stale view override a
     // freshly-run composition's shape-aware default (the graph-instead-of-timeline bug).
@@ -280,7 +280,9 @@ async function newRoom(){
   await loadRooms(); switchRoom(r.id);
 }
 
-const board = makeBoard($('cy'), (id)=>focus(id));
+const board = makeBoard($('cy'),
+  (id, deep, type)=> deep ? primaryAction(id, type) : inspectOnly(id),   // tap=select, dbl=primary
+  (id, type, ev)=> ev && showActionMenu(ev.clientX, ev.clientY, id, type));  // right-click=menu
 function setStatus(s){ $('status').textContent=s; }
 function showBoard(){ $('stage').classList.remove('panel'); }
 function showPanel(){ $('stage').classList.add('panel'); }
@@ -366,7 +368,9 @@ async function saveWorkingAs(){
 }
 // a table row inspects in place (right panel) — it does NOT switch the center to the board,
 // so you keep your result set. (A graph node tap goes through focus(), which explores.)
-function inspectOnly(id){ FOCUS=id; renderSet(); inspect(id); }
+// single-click = SELECT: inspect the object + post the cursor (Claude follows), never touching
+// the center lens or the board. The one light, safe click — same meaning everywhere.
+function inspectOnly(id){ FOCUS=id; postConsole({focused_object_id:id}); renderSet(); inspect(id); }
 // A composition RESULT is ONE view — sync the OTHER two panes to it so they don't keep showing
 // a stale entity (the "panes don't sync" bleed: center=projects while the rail=Zephyr). A lens
 // has no single focused object → clear the inspector; if the result IS an object set the left
@@ -441,8 +445,9 @@ async function openAnalysis(id){
   SET = await fetch(`/objects?case_id=${id}&limit=400`).then(r=>r.json());
   $('setn').textContent = SET.length; renderSet();
   refreshReview(); watch();
-  if(SET.length) focus(SET[0].id);
-  else setStatus('Empty analysis — add an object below, or run Expand.');
+  // NO auto-focus — the room's home lens (briefing) is the landing; auto-exploring the first
+  // object drew a stray graph that the home lens then overrode (wasted work + a flicker).
+  if(!SET.length) setStatus('Empty analysis — add an object below, or run Expand.');
 }
 let SET_COLLAPSED={};
 function renderSet(){
@@ -459,7 +464,10 @@ function renderSet(){
       <span class="set-caret">${open?'▾':'▸'}</span><span class="dot" style="background:${ty(t).c}"></span>
       <span class="set-gname">${esc(t)}</span><span class="set-gn">${items.length}</span></div>`;
     const body=open?items.slice(0,200).map(o=>`
-      <div class="item${FOCUS===o.id?' sel':''}" onclick="focus('${o.id}')" title="${esc(o.canonical)}">
+      <div class="item${FOCUS===o.id?' sel':''}" onclick="inspectOnly('${o.id}')"
+        ondblclick="primaryAction('${o.id}','${esc(o.type)}')"
+        oncontextmenu="event.preventDefault();showActionMenu(event.clientX,event.clientY,'${o.id}','${esc(o.type)}')"
+        title="${esc(o.canonical)}">
         <span class="lab">${esc(o.name||o.canonical)}</span></div>`).join('') : '';
     return head+body;
   }).join('');
@@ -467,9 +475,10 @@ function renderSet(){
 function toggleSetGroup(t){ SET_COLLAPSED[t]=!SET_COLLAPSED[t]; renderSet(); }
 
 // ---- focus / inspect / search-around (the one noun) ------------------------
+// focus() is the EXPLORE verb now — invoked from the right-click "Search around" action (or a
+// double-click on a non-doc), NOT from a single click. It leaves the current lens (clears the
+// composition cursor), draws the object's neighbourhood on the board, and inspects it.
 async function focus(id){
-  // focusing is EXPLORE mode — clear the active composition in the shared cursor so a stale
-  // lens doesn't re-run on top of the focus (for us and for a synced Claude).
   FOCUS=id; postConsole({focused_object_id:id, composition:null}); ACTIVE=null;
   renderSet();
   RESULT=null; WORKING=null; renderSwitcher(); renderComposerBar();  // exploring ≠ viewing a result
@@ -503,23 +512,54 @@ async function searchAround(id, quiet){
     : `${board.cy.nodes().length} objects on the board${added?` (+${added})`:''}.`);
   $('boardtitle').textContent = `Board · ${board.cy.nodes().length} objects`;
 }
+// ---- the object action menu (right-click) — type-aware, reads the ontology ---------------
+// One click INSPECTS (light, safe). A right-click offers what you can DO with this object,
+// scoped to its TYPE (a Commit reads its diff; a Person gets a Dossier). These actions moved
+// OUT of the always-visible inspector chrome into here — the shell frame stays neutral, the
+// menu is contextual. Double-click runs the primary (first) action. Later this map can live in
+// /schema; for now a small type→actions map with universal fallbacks (Search around / Tag).
+const _CONTENT_TYPES = new Set(['Commit','Reference','SoftwareProject']);
+const _ENTITY_TYPES = new Set(['Person','Organization','CryptoAddress','Property','CourtCase',
+                               'ClinicalTrial','Identity']);
+function actionsFor(type){
+  const a=[];
+  if(_CONTENT_TYPES.has(type)) a.push({label:'Read ▸', run:viewContent});   // primary for docs
+  a.push({label:'Search around', run:focus});                                // explore on the board
+  if(_ENTITY_TYPES.has(type)) a.push({label:'Dossier', run:dossierFor});
+  a.push({label:'Tag…', run:tagIt});
+  return a;
+}
+function primaryAction(id, type){ const a=actionsFor(type)[0]; if(a) a.run(id); }  // double-click
+async function dossierFor(id){ await inspect(id); showDossier(id); }               // inspect, then dossier
+let ACTIONMENU=null;
+function closeActionMenu(){ if(ACTIONMENU){ ACTIONMENU.remove(); ACTIONMENU=null; } }
+function showActionMenu(x, y, id, type){
+  closeActionMenu();
+  const acts=actionsFor(type);
+  const m=document.createElement('div'); m.className='actionmenu'; ACTIONMENU=m;
+  m.innerHTML=`<div class="am-h">${esc(type||'object')}</div>`+
+    acts.map((a,i)=>`<div class="am-i" data-i="${i}">${esc(a.label)}</div>`).join('');
+  document.body.appendChild(m);
+  const r=m.getBoundingClientRect();
+  m.style.left=Math.min(x, innerWidth-r.width-8)+'px';
+  m.style.top=Math.min(y, innerHeight-r.height-8)+'px';
+  m.querySelectorAll('.am-i').forEach(el=> el.onclick=(ev)=>{ ev.stopPropagation();
+    const a=acts[+el.dataset.i]; closeActionMenu(); a.run(id); });
+}
+document.addEventListener('mousedown', e=>{ if(ACTIONMENU && !ACTIONMENU.contains(e.target)) closeActionMenu(); });
+
 async function inspect(id){
   const o = await fetch('/objects/'+id).then(r=>r.ok?r.json():null);
   // render the empty state into #right directly — the first successful inspect replaces
   // #right's innerHTML (destroying the original #insp), so dereferencing it here threw.
   if(!o){ const right=$('right'); right.className='rail';
     right.innerHTML='<div class="insp-empty">Object not found.</div>'; return; }
-  // a Commit's content is its diff; a Reference/doc's is its markdown — the document-viewer
-  // primitive. Offer "Read ▸" wherever there's renderable content.
-  const hasContent = ['Commit','Reference','SoftwareProject'].includes(o.type)
-    || o.properties.some(p=>['body','rationale'].includes(p.name));
-  const acts = `<button class="o-act go" onclick="searchAround('${id}')">Search around</button>
-    ${hasContent?`<button class="o-act" onclick="viewContent('${id}')">Read ▸</button>`:''}
-    <button class="o-act" onclick="showDossier('${id}')">Dossier</button>
-    <button class="o-act" onclick="tagIt('${id}')">Tag</button>`;
+  // the inspector is DISPLAY-only — its actions moved to the right-click menu (contextual,
+  // type-aware). A tiny hint keeps them discoverable without cluttering the frame with chrome.
   const right=$('right'); right.className='rail';
-  right.innerHTML = objectDetail(o, acts) +
-    `<div class="o-sect" id="dossbox" style="display:none"><h3>Dossier</h3>
+  right.innerHTML = objectDetail(o) +
+    `<div class="o-hint">right-click for actions · double-click for the primary one</div>
+     <div class="o-sect" id="dossbox" style="display:none"><h3>Dossier</h3>
       <pre id="doss" class="r-pre"></pre></div>`;
   loadRels(right.querySelector('[data-rels]'), id, inspectOnly,
            (type,dir,label)=>openAsSet(id,type,dir,label));
