@@ -126,8 +126,6 @@
   label{display:block;font-size:11px;color:var(--muted);margin:8px 0 3px}
   textarea{width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:7px;
     padding:7px 9px;font:11.5px/1.45 ui-monospace,Menlo,monospace;min-height:120px;resize:vertical}
-  .badge{background:#3a1212;color:#ff7b72;border:1px solid #5a1d1d;border-radius:999px;padding:1px 7px;
-    font-size:11px;font-weight:600}
 </style>
 </head>
 <body>
@@ -175,7 +173,6 @@
       <div id="tools">
         <span class="title" id="boardtitle">Board</span>
         <span id="viewsw" class="viewsw"></span>
-        <button class="iconbtn" id="aroundBtn" onclick="searchAround()" disabled hidden>Search around</button>
         <button class="iconbtn" onclick="expandSet()" title="Run collectors to grow the set">Expand ▸</button>
         <span class="spacer"></span>
         <!-- board fiddly verbs — quiet by default, reveal on hover; all also in ⌘K (U4) -->
@@ -473,7 +470,7 @@ async function focus(id){
   // focusing is EXPLORE mode — clear the active composition in the shared cursor so a stale
   // lens doesn't re-run on top of the focus (for us and for a synced Claude).
   FOCUS=id; postConsole({focused_object_id:id, composition:null}); ACTIVE=null;
-  $('aroundBtn').disabled=false; renderSet();
+  renderSet();
   RESULT=null; WORKING=null; renderSwitcher(); renderComposerBar();  // exploring ≠ viewing a result
   showBoard();
   // ALWAYS draw the neighbourhood (idempotent merge) — clicking a node should SHOW what it
@@ -622,11 +619,10 @@ function cmtab(el){ cmode=el.dataset.m;
   document.querySelectorAll('#peekbody .tab').forEach(t=>t.classList.toggle('on',t===el));
   $('cm-watch').style.display = cmode==='watch'?'block':'none';
   $('cm-spec').style.display = cmode==='spec'?'block':'none'; }
-const OPSYM={eq:'=',contains:'~',lt:'<',gt:'>'};
 function addCond(prop='',op='eq',val=''){
   const d=document.createElement('div'); d.className='cond';
   d.innerHTML=`<input class="filter" style="margin:0" placeholder="property" value="${esc(prop)}">
-    <select>${Object.keys(OPSYM).map(o=>`<option ${o===op?'selected':''}>${o}</option>`).join('')}</select>
+    <select>${Object.keys(Osiris.OPSYM).map(o=>`<option ${o===op?'selected':''}>${o}</option>`).join('')}</select>
     <input class="filter" style="margin:0" placeholder="value" value="${esc(val)}">`;
   $('conds').appendChild(d);
 }
@@ -637,7 +633,7 @@ async function saveCompose(){
       const [pi,sel,vi]=d.querySelectorAll('input,select');
       return {property:pi.value.trim(),op:sel.value,value:vi.value.trim()};
     }).filter(c=>c.property&&c.value);
-    const name=(type||'Any')+(where.length?` where ${where.map(c=>c.property+OPSYM[c.op]+c.value).join(' ∧ ')}`:'');
+    const name=(type||'Any')+(where.length?` where ${where.map(c=>c.property+Osiris.OPSYM[c.op]+c.value).join(' ∧ ')}`:'');
     await fetch('/subscriptions',{method:'POST',headers:{'content-type':'application/json'},
       body:JSON.stringify({name,criteria:{object_type:type||null,where},
         webhook_url:$('w_hook').value.trim()||null, room_id:ROOM||null})});
@@ -667,7 +663,7 @@ async function globalSearch(){
   document.body.appendChild(pop);
 }
 function pick(id){ closePop(); $('search').value=''; focus(id); }
-function closePop(){ ['searchpop','keypop','reviewpop'].forEach(i=>{const p=$(i);if(p)p.remove();}); }
+function closePop(){ ['searchpop','keypop'].forEach(i=>{const p=$(i);if(p)p.remove();}); }
 document.addEventListener('click',e=>{ if(!e.target.closest('#search')&&!e.target.closest('#searchpop')) {const p=$('searchpop');if(p)p.remove();} });
 
 // ---- type key + review -----------------------------------------------------

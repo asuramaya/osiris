@@ -122,9 +122,19 @@ One surface, no entity chrome. A persona is a **room of compositions**, never co
 
 1. **Data purge** (Part I.A) — deletion + room-scoping, reversible; de-noises the instance so
    the canvas is built against clean, quiet data. *(done — see the purge record below.)*
-2. **Dead-code + renderer-leaf cleanup** (I.C, I.F) — small, safe, mechanical.
-3. **The canvas rebuild** (I.B, I.D, I.E) — the entity-console shell → the neutral canvas of
-   Part III: one selection model, one renderer, one click semantics.
+2. **Dead-code cleanup** (I.C) — *done.* Removed `HOW` map + `VIEWS` const (+ their exports)
+   from `osiris.js`; deduped `OPSYM` to the single library copy (inline dup gone, `index.html`
+   uses `Osiris.OPSYM`); removed the dead `#aroundBtn` (hidden, never shown) + its enable line;
+   dropped the phantom `reviewpop` from `closePop`; removed unused `.mono`/`.badge` CSS.
+   Non-breaking (no console errors; `test_ui_render` green; eyes-verified).
+   **Re-scoped on review:** the "renderer leaves" (I.F) split in two — the DEMO badge and the
+   `{name, demo, tag}` skip-set are **generic Osiris conventions** (flag synthetic data, hide
+   internal tags), *not* domain leaks → KEPT. The real leaks (`_DATEKEYS`/`_SUMKEYS` timeline
+   heuristics, the `viewContent`/`renderDiff` diff-viewer competing with `renderResult`) are
+   **redesign, not deletion** → moved to step 3.
+3. **The canvas rebuild** (I.B, I.D, I.E, + the I.F redesign) — the entity-console shell → the
+   neutral canvas of Part III: one selection model, one renderer (fold the diff-viewer in as a
+   `kind`; make the timeline key-picking schema-driven), one click semantics.
 
 Deferred (belongs to the persona/composer work, not the canvas): **persona-scoped default
 seeding** — `DEFAULT_COMPOSITIONS` should declare a room per composition so a fresh instance

@@ -7,7 +7,6 @@
   --amber: #d29922; --chip: #1b222c;
 }
 * { box-sizing: border-box; }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 /* the shared-cursor link indicator — quiet when idle, flashes when Claude moves the screen */
 .syncbadge { font-size: 10.5px; color: var(--faint); border: 1px solid var(--border2);
   border-radius: 10px; padding: 1px 8px; white-space: nowrap; transition: all .25s; }

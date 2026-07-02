@@ -10,12 +10,6 @@ const Osiris = (() => {
   const $ = (id) => document.getElementById(id);
   const esc = (s) =>
     (s == null ? "" : String(s)).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
-  // evidence_class -> a plain-language "how obtained" (provenance is the whole point)
-  const HOW = {
-    authoritative_api: "authoritative", self_declared: "self-declared",
-    direct_observation: "observed", co_occurrence: "co-occurrence",
-    derived: "inferred", corroborated: "corroborated",
-  };
 
   // ---- the semantic layer (object/link types, read from /schema) -----------
   let TYPE = {};
@@ -234,8 +228,6 @@ const Osiris = (() => {
   // × Palantir's multi-modal object set). `mounts` = {board, panel}. An OBJECTS set renders
   // as a clean Graph OR a Table; values/rows/data render into the panel. `onPick(id)` focuses
   // a clicked row. Returns the mode the center should show ("graph" | "panel").
-  // VIEWS lists the views an objects set supports (the shell builds the switcher from this).
-  const VIEWS = ["graph", "table"];
   // a composition that ranks/sequences (order / take) or rolls up (aggregate) is a LIST, not
   // a graph — rendering it on the board throws away the very ordering it computed. So intent
   // wins over count (this is the Notion lesson: the view follows the data's shape).
@@ -378,6 +370,6 @@ const Osiris = (() => {
       <tbody>${list.map((o) => `<tr>${cols.map((c) => `<td>${cell(o ? o[c] : "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
   }
 
-  return { $, esc, HOW, pct, OPSYM, loadSchema, ty, objectDetail, loadRels, makeBoard,
-    renderResult, VIEWS, viewsFor, defaultView, lineage, innerSelect };
+  return { $, esc, pct, OPSYM, loadSchema, ty, objectDetail, loadRels, makeBoard,
+    renderResult, viewsFor, defaultView, lineage, innerSelect };
 })();
