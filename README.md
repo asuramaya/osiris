@@ -108,6 +108,9 @@ Same kernel, same resolution, same provenance as face #1. The domain is not the 
 ```bash
 uv sync
 DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5432/osiris uv run alembic upgrade head
+# seed the default rooms + lenses and ingest the design canon (idempotent — a fresh DB is
+# otherwise an empty shell: no rooms, no compositions, no canon)
+uv run python -m src.init
 # ingest a repo WHOLE — history + file tree + mined decisions, one idempotent call
 uv run python -m src.ingest.project /path/to/your/repo
 # start the heartbeat over several repos (senses changes, builds the digest)
@@ -119,8 +122,10 @@ OSIRIS_DEV_REPOS=/path/a,/path/b uv run python -m src.orchestrator.pulse --watch
 ```bash
 uv run python -m src.mcp_server        # stdio transport; add to your MCP client config
 ```
-Then, in any MCP client: *"What decisions have I made across my repos, and what drifted in
-the family?"* — or, for the public-record face, *"Build a dossier on Celsius Network."*
+The repo ships a project-scoped [`.mcp.json`](.mcp.json), so Claude Code registers the `osiris`
+server automatically — no manual config. Then, in any MCP client: *"What decisions have I made
+across my repos, and what drifted in the family?"* — or, for the public-record face, *"Build a
+dossier on Celsius Network."*
 
 ### Develop
 
