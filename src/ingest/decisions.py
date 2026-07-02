@@ -24,6 +24,7 @@ from typing import Any
 from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.db.pool import create_pool
+from src.ingest.mined import reconcile_mined, unquoted, well_bounded
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -48,9 +49,18 @@ _MARKERS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("choice", re.compile(r"\b(we chose|chose to|decided to|the decision (?:was|is))\b", re.I)),
     ("decision", re.compile(r"\bDECISION\b")),
 )
-# META noise: a sentence ABOUT decision-mining itself (a commit that builds this very feature)
-# — not a decision. Same guard the thread-miner needs against self-description.
-_META = re.compile(r"\bdecision (?:miner|mining|records?|log|object|node|type)\b", re.I)
+# META noise: a sentence ABOUT decision-mining itself (a commit that builds or TUNES this very
+# feature) — not a decision. The live audit's receipt: "Tightened `override` to decision-shaped
+# phrasings + a lowercase-fragment guard → 11 clean decisions (ruling #3 … appears 5×" was mined
+# as a ruling. Miner-tuning language (markers, guards, "N clean decisions", decision-shaped) is
+# documentation about the miner, same as the thread-miner's `markers` guard.
+_META = re.compile(
+    r"\bdecision[- ](?:miner|mining|records?|logs?|objects?|nodes?|types?|shaped|sentences?)\b"
+    r"|\bmarkers?\b|\bfragment guard\b|\bclean decisions\b",
+    re.I,
+)
+# the ruling number is the durable identity of a ruling — restatements all cite it
+_RULING = re.compile(r"\bruling #?(\d+)", re.I)
 
 
 def extract_decisions(body: str) -> list[tuple[str, str]]:
@@ -59,14 +69,20 @@ def extract_decisions(body: str) -> list[tuple[str, str]]:
     seen: set[str] = set()
     flat = re.sub(r"\n(?=\S)", " ", body)          # join soft wraps (commit bodies are wrapped)
     for frag in re.split(r"(?:\. |\n|; )", flat):
-        s = frag.strip(" .-—\t")
+        s = frag.strip(" .,;:-—\t")
         if not (16 <= len(s) <= 240) or _META.search(s):
             continue
         if s[0].islower():            # a mid-sentence fragment from the split, not a decision
             continue
-        kind = next((k for k, rx in _MARKERS if rx.search(s)), None)
-        if kind is None:
+        if not well_bounded(s):       # unbalanced delimiters = a capture that starts/ends mid-
+            continue                  # sentence (`Leon" vs "Daniel Leon") render…`)
+        # markers only count OUTSIDE quotes/backticks; a sentence firing 3+ distinct markers
+        # is enumerating them (documentation about the miner), not deciding anything
+        vis = unquoted(s)
+        hits = [(k, m.group(0)) for k, rx in _MARKERS for m in rx.finditer(vis)]
+        if not hits or len({h.lower() for _, h in hits}) >= 3:
             continue
+        kind = hits[0][0]                          # _MARKERS is ordered most-specific-first
         key = re.sub(r"\W+", "", s.lower())
         if key not in seen:
             seen.add(key)
@@ -74,11 +90,24 @@ def extract_decisions(body: str) -> list[tuple[str, str]]:
     return out
 
 
+def _dedup_key(text: str) -> str:
+    """The restatement-collapse key. A ruling's identity is its NUMBER ("ruling #3" restated
+    five ways is ONE decision); anything else keys on the punctuation/case-normalized text so
+    trivially re-worded repeats collapse while distinct decisions stay distinct."""
+    m = _RULING.search(text)
+    if m:
+        return f"ruling-{m.group(1)}"
+    return hashlib.sha1(re.sub(r"\W+", "", text.lower()).encode()).hexdigest()[:12]
+
+
 async def mine_decisions(
     actions: Actions, *, source_id: str = _SOURCE, case_id: uuid.UUID | None = None
 ) -> dict[str, Any]:
-    """Scan every Commit's rationale, mint a Decision per decision sentence (idempotent on a
-    content hash), record its kind, and link it `decided_in` the commit. Returns counts."""
+    """Scan every Commit's rationale, collapse restatements of the same decision (a ruling
+    invoked in five commits is ONE Decision — the earliest, fullest statement wins), mint each
+    keeper (idempotent on a content hash), record its kind, and link it `decided_in` the commit
+    it was decided in. A re-mine then RECONCILES: mined Decisions the fresh pass no longer
+    produces are archived (event-sourced, reversible). Returns counts."""
     pool = actions.pool
     rows = await pool.fetch(
         "SELECT o.id, "
@@ -88,28 +117,41 @@ async def mine_decisions(
         "  WHERE a.object_id=o.id AND a.name='authored_date') AS date "
         "FROM objects o WHERE o.type='Commit'"
     )
-    # create_link is a plain append — dedup the decided_in edge so a re-run is idempotent
-    existing = {(r["from_id"], r["to_id"]) for r in
-                await pool.fetch("SELECT from_id, to_id FROM links WHERE type='decided_in'")}
-    decisions = 0
+    # pass 1 — extract everything, then pick ONE keeper per dedup key: the EARLIEST commit's
+    # statement (that's when it was decided; later mentions are echoes), fullest as tiebreak.
+    best: dict[str, tuple[datetime, int, str, str, Any]] = {}
     for r in rows:
         body = r["body"] or ""
         if not body:
             continue
         observed = datetime.fromisoformat(r["date"]) if r["date"] else datetime.now(UTC)
         for text, kind in extract_decisions(body):
-            canon = f"decision:{hashlib.sha1(text.encode()).hexdigest()[:12]}"
-            d = await actions.create_or_find_object("Decision", canon, source_id, case_id)
-            await actions.assert_property(d, "summary", text, source_id, observed, _CONF,
-                                          case_id=case_id, evidence_class=_EC)
-            await actions.assert_property(d, "kind", kind, source_id, observed, _CONF,
-                                          case_id=case_id, evidence_class=_EC)
-            if (d, r["id"]) not in existing:
-                await actions.create_link(d, r["id"], "decided_in", source_id, observed, _CONF,
-                                          case_id=case_id, evidence_class=_EC)
-                existing.add((d, r["id"]))
-            decisions += 1
-    return {"decisions": decisions, "commits_scanned": len(rows)}
+            key = _dedup_key(text)
+            cand = (observed, -len(text), text, kind, r["id"])
+            if key not in best or cand[:2] < best[key][:2]:
+                best[key] = cand
+    # pass 2 — mint the keepers. create_link is a plain append — dedup the decided_in edge
+    # so a re-run is idempotent.
+    existing = {(r["from_id"], r["to_id"]) for r in
+                await pool.fetch("SELECT from_id, to_id FROM links WHERE type='decided_in'")}
+    produced: set[str] = set()
+    for observed, _, text, kind, commit_id in best.values():
+        canon = f"decision:{hashlib.sha1(text.encode()).hexdigest()[:12]}"
+        produced.add(canon)
+        d = await actions.create_or_find_object("Decision", canon, source_id, case_id)
+        await actions.assert_property(d, "summary", text, source_id, observed, _CONF,
+                                      case_id=case_id, evidence_class=_EC)
+        await actions.assert_property(d, "kind", kind, source_id, observed, _CONF,
+                                      case_id=case_id, evidence_class=_EC)
+        if (d, commit_id) not in existing:
+            await actions.create_link(d, commit_id, "decided_in", source_id, observed, _CONF,
+                                      case_id=case_id, evidence_class=_EC)
+            existing.add((d, commit_id))
+    out: dict[str, Any] = {"decisions": len(best), "commits_scanned": len(rows)}
+    if rows:  # never reconcile against an empty commit record (nothing to compare to)
+        out |= await reconcile_mined(actions, object_type="Decision", prefix="decision:",
+                                     produced=produced, source_id=source_id, case_id=case_id)
+    return out
 
 
 def main() -> None:  # pragma: no cover - CLI

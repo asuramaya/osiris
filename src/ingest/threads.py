@@ -18,6 +18,7 @@ from typing import Any
 from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.db.pool import create_pool
+from src.ingest.mined import reconcile_mined, unquoted, well_bounded
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -60,16 +61,28 @@ def _distinctive(text: str) -> set[str]:
 
 
 def extract_threads(body: str) -> list[str]:
-    """The open-thread sentences in a commit body (deduped, trimmed). Pure."""
+    """The open-thread sentences in a commit body (deduped, trimmed). Pure.
+
+    Three precision guards (from the 2026-07 live audit, where fragments like
+    ``anchor), app start gated on …`` landed on the briefing):
+    * `well_bounded` — unbalanced parens/quotes betray a capture that starts or ends
+      mid-sentence; those are split artifacts, never threads. (No lowercase-start guard
+      here: real threads like "live compose needs a key" begin lowercase.)
+    * markers only count OUTSIDE quotes/backticks — ``the exact phrase "THE WALL"`` is
+      someone talking ABOUT the marker.
+    * a sentence firing 3+ distinct markers is ENUMERATING them (a commit documenting
+      the miner), not raising three walls at once.
+    """
     out: list[str] = []
     seen: set[str] = set()
     # split on sentence ends + newlines; commit bodies are wrapped, so join soft wraps first
     flat = re.sub(r"\n(?=\S)", " ", body)
     for frag in re.split(r"(?:\. |\n|; )", flat):
-        s = frag.strip(" .-—\t")
-        if not (12 <= len(s) <= 240):
+        s = frag.strip(" .,;:-—\t")
+        if not (12 <= len(s) <= 240) or not well_bounded(s):
             continue
-        if _OPEN.search(s) and not _CLOSED.search(s) and not _META.search(s):
+        hits = {m.group(0).lower() for m in _OPEN.finditer(unquoted(s))}
+        if hits and len(hits) < 3 and not _CLOSED.search(s) and not _META.search(s):
             key = re.sub(r"\W+", "", s.lower())
             if key not in seen:
                 seen.add(key)
@@ -81,7 +94,8 @@ async def mine_threads(
     actions: Actions, *, source_id: str = _SOURCE, case_id: uuid.UUID | None = None
 ) -> dict[str, Any]:
     """Scan every Commit's rationale, mint a Thread per open-thread sentence (idempotent on a
-    content hash), and link it `noted_in` the commit. Returns counts."""
+    content hash), and link it `noted_in` the commit. A re-mine then RECONCILES: mined Threads
+    the fresh pass no longer produces are archived (event-sourced, reversible). Returns counts."""
     pool = actions.pool
     rows = await pool.fetch(
         "SELECT o.id, "
@@ -91,7 +105,11 @@ async def mine_threads(
         "  WHERE a.object_id=o.id AND a.name='authored_date') AS date "
         "FROM objects o WHERE o.type='Commit'"
     )
+    # create_link is a plain append — dedup the noted_in edge so a re-mine never inflates
+    existing = {(r["from_id"], r["to_id"]) for r in
+                await pool.fetch("SELECT from_id, to_id FROM links WHERE type='noted_in'")}
     threads = 0
+    produced: set[str] = set()
     for r in rows:
         body = r["body"] or ""
         if not body:
@@ -99,15 +117,22 @@ async def mine_threads(
         observed = datetime.fromisoformat(r["date"]) if r["date"] else datetime.now(UTC)
         for text in extract_threads(body):
             canon = f"thread:{hashlib.sha1(text.encode()).hexdigest()[:12]}"
+            produced.add(canon)
             t = await actions.create_or_find_object("Thread", canon, source_id, case_id)
             await actions.assert_property(t, "summary", text, source_id, observed, _CONF,
                                           case_id=case_id, evidence_class=_EC)
             await actions.assert_property(t, "status", "open", source_id, observed, _CONF,
                                           case_id=case_id, evidence_class=_EC)
-            await actions.create_link(t, r["id"], "noted_in", source_id, observed, _CONF,
-                                      case_id=case_id, evidence_class=_EC)
+            if (t, r["id"]) not in existing:
+                await actions.create_link(t, r["id"], "noted_in", source_id, observed, _CONF,
+                                          case_id=case_id, evidence_class=_EC)
+                existing.add((t, r["id"]))
             threads += 1
-    return {"threads": threads, "commits_scanned": len(rows)}
+    out: dict[str, Any] = {"threads": threads, "commits_scanned": len(rows)}
+    if rows:  # never reconcile against an empty commit record (nothing to compare to)
+        out |= await reconcile_mined(actions, object_type="Thread", prefix="thread:",
+                                     produced=produced, source_id=source_id, case_id=case_id)
+    return out
 
 
 async def resolve_threads(
