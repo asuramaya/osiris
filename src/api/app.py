@@ -274,7 +274,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             "  AND ($2::text IS NULL OR type = $2) "
             "  AND ($3::text IS NULL OR canonical ILIKE '%' || $3 || '%' "
             "       OR EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
-            "          AND a.name='name' AND a.value #>> '{}' ILIKE '%' || $3 || '%')) "
+            "          AND a.name IN ('name','summary','title','rationale') "
+            "          AND a.value #>> '{}' ILIKE '%' || $3 || '%')) "
             "ORDER BY type, created_at DESC LIMIT $4",
             case_id,
             type,
