@@ -56,6 +56,36 @@ sudo systemctl enable --now osiris-api osiris-worker
 Both units are `Restart=always`. Postgres and Redis are the only shared dependencies;
 run them as their own services (or containers) the units order after.
 
+## The heartbeat + user-level units (single-operator dev box)
+
+The units above are **system** units (a service account, `/opt` deploy, `EnvironmentFile`).
+On the single-operator box where Osiris IS the operator's own workspace, the same processes
+install as **user** units — running as you, against your dev instance and the repos in your
+home dir. Two are relevant there:
+
+| Unit | Process | Role |
+|------|---------|------|
+| `osiris-worker` | `arq …WorkerSettings` | the tripwire (evaluator + ticks), cascade drain, reaper — turns the kernel from a *lens* into a *tripwire* |
+| `osiris-pulse` | `python -m src.orchestrator.pulse --watch N` | the developer-persona **heartbeat**: senses which repos' HEAD moved, re-ingests, re-runs the lenses, records the delta as findings (read back via the `pulse-digest` lens). Read-only on the repos. |
+
+`deploy/osiris-pulse.service` is the user-unit template (its header documents the install).
+Install both:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploy/osiris-pulse.service ~/.config/systemd/user/
+# author ~/.config/systemd/user/osiris-worker.service from deploy/osiris-worker.service in the
+# same user-level form: drop User=/EnvironmentFile=, set WorkingDirectory=<repo>, put the DB/
+# Redis URLs inline as Environment=, and use the absolute venv arq (user units get no shell PATH).
+systemctl --user daemon-reload
+systemctl --user enable --now osiris-pulse osiris-worker
+loginctl enable-linger "$USER"   # keep them running after logout / across reboots
+```
+
+The heartbeat's liveness is a **dead-man's-switch computed on read**: `pulse-digest` leads with
+a status row that re-derives staleness every time you look, so if the pulse unit dies the digest
+says *heartbeat DEAD since &lt;time&gt;* — the alarm can't die with the daemon that rings it.
+
 ## Full topology as one stack (containers)
 
 The whole ring set — Postgres, Redis, a one-shot migration, the API, the worker, and

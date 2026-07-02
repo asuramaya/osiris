@@ -50,6 +50,7 @@ import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -338,24 +339,91 @@ async def _fn_project(
     }
 
 
+# The digest reads the pulse LOG on demand, so its liveness verdict is re-derived every time
+# you look — the loop can die (the daemon stops) without the dead-man's-switch dying with it.
+# A newest-pulse older than this ⇒ the heartbeat is DEAD, surfaced as the lead row.
+_PULSE_STALE = timedelta(minutes=45)
+# Default window: aggregate findings across the last 24h of pulses, ANCHORED at the most recent
+# one (so a stale/dead loop still shows what changed before it stopped) — not just the single
+# last tick. Bounded so a fast `--watch` loop can't return thousands of rows.
+_PULSE_WINDOW = timedelta(hours=24)
+_PULSE_CAP = 200
+_PULSE_TITLE = "Pulse — what changed while you were away"
+
+
+def _ago(delta: timedelta) -> str:
+    """A compact human age: 'under a minute' / 'N minutes' / 'N hours' / 'N days'."""
+    mins = max(0, int(delta.total_seconds())) // 60
+    if mins < 1:
+        return "under a minute"
+    if mins < 60:
+        return f"{mins} minute{'s' if mins != 1 else ''}"
+    hours = mins // 60
+    if hours < 24:
+        return f"{hours} hour{'s' if hours != 1 else ''}"
+    days = hours // 24
+    return f"{days} day{'s' if days != 1 else ''}"
+
+
+def _pulse_now(args: dict[str, Any]) -> datetime:
+    """'Now' for the staleness verdict — overridable (a datetime or ISO string) so tests can
+    freeze it; production reads the wall clock ON EACH LOOK (that IS the dead-man's-switch)."""
+    v = args.get("now")
+    if isinstance(v, datetime):
+        return v if v.tzinfo else v.replace(tzinfo=UTC)
+    if isinstance(v, str):
+        try:
+            d = datetime.fromisoformat(v)
+            return d if d.tzinfo else d.replace(tzinfo=UTC)
+        except ValueError:
+            pass
+    return datetime.now(UTC)
+
+
 async def _fn_pulse(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
     """The heartbeat digest — what the off-the-clock loop (src/orchestrator/pulse.py) found
-    since the last pulse(s). The morning prosthesis: you return and it tells you what changed
-    across your repos while you were away, newest first. `args.last` = how many pulses back."""
+    while you were away, aggregated across a real WINDOW of pulses (newest first), not just the
+    last tick. (The old bug: `LIMIT 1` read only the newest pulse, so a quiet last tick lied
+    'no pulse yet' with a full log, and a loop that DIED with its daemon looked like one that
+    never ran.) It ALWAYS leads with a heartbeat-status row derived ON READ: a newest pulse
+    older than ~45 min ⇒ the loop is DEAD — the lens re-checks liveness every look, so it can't
+    die with the daemon (the dead-man's-switch). `args.last` overrides the window to the last N
+    pulses; default = the last 24h of pulses (bounded)."""
+    override = args.get("last")
+    cap = max(1, int(override)) if override is not None else _PULSE_CAP
     rows = await pool.fetch(
-        "SELECT ran_at, synced, findings FROM dev_pulses ORDER BY id DESC LIMIT $1",
-        max(1, int(args.get("last", 1))))
-    out = []
-    for r in rows:
+        "SELECT ran_at, synced, findings FROM dev_pulses ORDER BY id DESC LIMIT $1", cap)
+    if not rows:                                    # the loop has NEVER run — keep the how-to row
+        return {_PULSE_TITLE: [
+            {"finding": "no pulse yet — run `python -m src.orchestrator.pulse`",
+             "when": "—", "synced": "—"}]}
+
+    last_ran = rows[0]["ran_at"]
+    age = _pulse_now(args) - last_ran
+    if age > _PULSE_STALE:                          # DEAD — lead with the dead-since row
+        status = {"finding": f"heartbeat DEAD — no pulse since {str(last_ran)[:19]} "
+                             f"({_ago(age)} ago); the loop is not running",
+                  "when": str(last_ran)[:19], "synced": "—"}
+    else:
+        status = {"finding": f"heartbeat alive — last pulse {_ago(age)} ago",
+                  "when": str(last_ran)[:19], "synced": "—"}
+
+    # explicit `last` ⇒ exactly those N pulses; else the last 24h anchored at the newest pulse.
+    window = rows if override is not None else [
+        r for r in rows if r["ran_at"] >= last_ran - _PULSE_WINDOW]
+    findings: list[dict[str, Any]] = []
+    for r in window:
         for finding in (_coerce(r["findings"]) or []):
-            out.append({"finding": finding, "when": str(r["ran_at"])[:19],
-                        "synced": ", ".join(_coerce(r["synced"]) or []) or "—"})
-    if not out:
-        out = [{"finding": "no pulse yet — run `python -m src.orchestrator.pulse`",
-                "when": "—", "synced": "—"}]
-    return {"Pulse — what changed while you were away": out}
+            findings.append({"finding": finding, "when": str(r["ran_at"])[:19],
+                             "synced": ", ".join(_coerce(r["synced"]) or []) or "—"})
+    if not findings:                                # pulses ran, nothing changed in the window
+        findings = [{"finding": f"quiet — no changes across {len(window)} pulse"
+                                f"{'s' if len(window) != 1 else ''} since "
+                                f"{str(window[-1]['ran_at'])[:19]}",
+                     "when": str(last_ran)[:19], "synced": "—"}]
+    return {_PULSE_TITLE: [status, *findings]}
 
 
 _FUNCTIONS: dict[str, Function] = {
