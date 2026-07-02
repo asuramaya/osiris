@@ -53,6 +53,20 @@ class Commit:
     body: str = ""
 
 
+# Machine trailers git appends to a body — provenance, NOT rationale. The body is memory
+# (decision-mining, recall, and cross-repo derivation all read the `rationale` property), and
+# these lines poison it: the Co-Authored-By / *-Session trailers made "claude" / "anthropic" /
+# "noreply" the top cross-repo "concern" in all seven repos. Allow-listed keys only — a plain
+# "Note:" or "Fixes:" body line is never treated as a trailer.
+_TRAILER = re.compile(
+    r"^\s*(?:co-authored-by|signed-off-by|[\w-]*-session)\s*:|^\s*🤖?\s*generated with\b", re.I)
+
+
+def strip_trailers(body: str) -> str:
+    """A commit body with its machine trailer lines removed — the human rationale only. Pure."""
+    return "\n".join(ln for ln in body.splitlines() if not _TRAILER.match(ln)).strip()
+
+
 def parse_subject(subject: str) -> dict[str, str]:
     """Pull the Conventional-Commit type/scope/summary from a subject line (empty dict if
     it isn't conventional). These become queryable Commit properties."""
@@ -154,8 +168,9 @@ async def ingest_repo(
         for prop, value in parse_subject(c.subject).items():  # not `name` — it shadows the repo
             await actions.assert_property(cm, prop, value, source_id, observed, _CONF,
                                           case_id=case_id, evidence_class=_EC)
-        if c.body:
-            await actions.assert_property(cm, "rationale", c.body, source_id, observed, _CONF,
+        rationale = strip_trailers(c.body)
+        if rationale:
+            await actions.assert_property(cm, "rationale", rationale, source_id, observed, _CONF,
                                           case_id=case_id, evidence_class=_EC)
         if not c.parents:  # the first commit — the genesis
             await actions.assert_property(cm, "genesis", "true", source_id, observed, _CONF,

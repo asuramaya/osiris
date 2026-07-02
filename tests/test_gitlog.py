@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 
 from src.actions.core import Actions
-from src.ingest.gitlog import ingest_repo, parse_git_log
+from src.ingest.gitlog import ingest_repo, parse_git_log, strip_trailers
 
 
 def test_parse_git_log_is_tolerant() -> None:
@@ -130,3 +130,23 @@ async def test_commit_carries_type_scope_and_rationale(actions: Actions, tmp_pat
     assert await prop("change_type") == "feat"
     assert await prop("scope") == "engine"
     assert "Function hatch" in (await prop("rationale") or "")
+
+
+def test_strip_trailers_removes_machine_provenance_keeps_rationale() -> None:
+    """The body is memory; the trailers are noise. Strip Co-Authored-By / *-Session / Generated
+    lines (which made 'claude'/'anthropic' the top cross-repo 'concern'), keep the human why —
+    and never eat a plain 'Note:'/'Fixes:' line, which is real rationale, not a trailer."""
+    body = (
+        "we chose a closed op set + a Function hatch\n"
+        "Note: this supersedes the earlier DSL idea\n"
+        "\n"
+        "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n"
+        "Claude-Session: https://claude.ai/code/session_abc\n"
+        "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+    )
+    out = strip_trailers(body)
+    assert "closed op set" in out and "Note: this supersedes" in out   # rationale kept
+    assert "claude" not in out.lower() and "anthropic" not in out.lower()  # trailers gone
+    assert "Generated with" not in out
+    # a body that is ONLY a trailer collapses to empty (→ no rationale asserted)
+    assert strip_trailers("Co-Authored-By: Claude <noreply@anthropic.com>") == ""
