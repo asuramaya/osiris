@@ -108,11 +108,17 @@ async def ingest_canon(actions: Actions, *, case_id: uuid.UUID | None = None) ->
     cites = 0
     if composer is not None:
         now = datetime.now(UTC)
+        # create_link is a plain append — dedup against existing cites so a re-run is idempotent
+        existing = {(r["from_id"], r["to_id"]) for r in await actions.pool.fetch(
+            "SELECT from_id, to_id FROM links WHERE type='cites'")}
         for v in vendor_refs:
+            if (composer["id"], v["id"]) in existing:
+                continue
             await actions.create_link(composer["id"], v["id"], "cites", "ref:osiris", now,
                                       confidence_for(EvidenceClass.SELF_DECLARED),
                                       case_id=case_id,
                                       evidence_class=EvidenceClass.SELF_DECLARED.value)
+            existing.add((composer["id"], v["id"]))
             cites += 1
     # the self-referential loop: attach the design canon to the project it grounds
     informs = await _wire_informs(actions, vendor_refs + own, case_id=case_id)

@@ -4,8 +4,8 @@ The one piece of judgment that lived in the operator's head (or the AI's): given
 object, WHICH sources are worth pulling and WHICH analyses apply. Encoding it here
 turns "what do I do next?" into a lookup both the human front-end and an MCP client can
 read — so neither has to *know* that a private company means SEC Form D. Every entry
-maps to a real capability (an ingest function or a read-model), names what it yields,
-and is keyless unless flagged.
+maps to a real capability (an ingest function, a read-model, or a saved composition), names
+what it yields, and is keyless unless flagged.
 """
 
 from __future__ import annotations
@@ -21,7 +21,8 @@ class Capability:
     kind: Literal["collect", "analyze"]
     applies_to: tuple[str, ...]        # object types this is worth running on
     yields: str                        # what it surfaces, in one line
-    tool: str                          # the MCP tool / function that runs it
+    tool: str                          # how it's invoked: an MCP tool / function name, or a
+    #                                    run_composition('<name>', subject=...) invocation
     keyless: bool = True
 
 
@@ -86,17 +87,18 @@ _ANALYZE: tuple[Capability, ...] = (
     Capability(
         "discrepancy", "Footprint discrepancy", "analyze", ("Organization",),
         "operational geography that the disclosed home omits (shadow footprint)",
-        "footprint_discrepancy",
+        "run_composition('operational-vs-disclosed-geography', subject=...)",
     ),
     Capability(
         "coinvestment", "Co-investment ties", "analyze", ("Organization",),
         "other companies funded by SPVs that share an operator with this one",
-        "coinvestment_ties",
+        "run_composition('co-investment-ties', subject=...)",
     ),
     Capability(
         "subject_report", "Subject report (footprint)", "analyze",
         ("Person", "Account", "Username", "Email"),
-        "who is this? — Verified / Corroborated / Speculative tiers", "subject_report",
+        "who is this? — Verified / Corroborated / Speculative tiers",
+        "run_composition('who-is-this', subject=...)",
     ),
     Capability(
         "sanctions_screen", "Watchlist screening", "analyze", ("Person", "Organization"),
@@ -112,7 +114,7 @@ _ANALYZE: tuple[Capability, ...] = (
         "network_screen", "Financing-network watchlist screen", "analyze",
         ("Organization", "Person"),
         "is anyone in this entity's money network (principals/SPVs/operators) on a list?",
-        "screen_financing_network",
+        "run_composition('screen-financing-network', subject=...)",
     ),
 )
 

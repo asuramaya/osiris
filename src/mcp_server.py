@@ -34,15 +34,12 @@ from src.ontology.resolution import (
     find_cross_base_candidates,
     reclassify_mistyped_entities,
     resolve_cross_base,
-    screen_network,
 )
 from src.ontology.schema import catalog
 from src.orchestrator import capture
 from src.orchestrator import compositions as comp
-from src.orchestrator.coinvest import coinvestment_ties
 from src.orchestrator.console import get_console as _get_console
 from src.orchestrator.console import set_console as _set_console
-from src.orchestrator.discrepancy import footprint_discrepancy
 from src.orchestrator.dossier import entity_dossier
 from src.orchestrator.sources import as_dicts, suggest
 
@@ -256,32 +253,6 @@ async def dossier(object_ref: str) -> dict[str, Any]:
     pool = await _pool_get()
     oid = await _resolve(pool, object_ref)
     return await entity_dossier(pool, oid) if oid else {"error": f"no object {object_ref!r}"}
-
-
-@mcp.tool()
-async def discrepancy(object_ref: str) -> dict[str, Any]:
-    """Footprint discrepancy: operational geography the disclosed home omits."""
-    pool = await _pool_get()
-    oid = await _resolve(pool, object_ref)
-    return await footprint_discrepancy(pool, oid) if oid else {"error": f"no object {object_ref!r}"}
-
-
-@mcp.tool()
-async def coinvestment(object_ref: str) -> list[dict[str, Any]] | dict[str, str]:
-    """Co-investment ties: companies funded by SPVs that share an operator with this one."""
-    pool = await _pool_get()
-    oid = await _resolve(pool, object_ref)
-    return await coinvestment_ties(pool, oid) if oid else {"error": f"no object {object_ref!r}"}
-
-
-@mcp.tool()
-async def screen_financing_network(object_ref: str) -> list[dict[str, Any]] | dict[str, str]:
-    """Screen an entity's FINANCING NETWORK — its principals, feeder SPVs, and those
-    SPVs' operators — against the ingested sanctions/PEP watchlist. Answers 'is anyone
-    in this company's money network on a list?'. Empty result = clean network."""
-    pool = await _pool_get()
-    oid = await _resolve(pool, object_ref)
-    return await screen_network(pool, oid) if oid else {"error": f"no object {object_ref!r}"}
 
 
 @mcp.tool()

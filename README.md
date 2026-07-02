@@ -12,7 +12,7 @@ becomes an entity-intelligence engine: companies, filings, sanctions, litigation
 activity, fused into one graph. Same engine, same kinetic waist, same provenance — two
 proven faces.
 
-> **Status.** The kernel is real and proven (379 tests, real Postgres/Redis, `ruff` +
+> **Status.** The kernel is real and proven (415 tests, real Postgres/Redis, `ruff` +
 > `mypy --strict` clean). It has deliberately reset **twice** toward *engine-as-product* —
 > the domain is never the identity, the engine is. The development log is kept in the open
 > in [`CLAUDE.md`](CLAUDE.md), and Osiris tracks its own git history *inside itself* (the

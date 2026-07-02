@@ -129,3 +129,15 @@ async def test_ingest_canon_wires_cites_edges(actions: Actions) -> None:
         "SELECT evidence_class FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical='ref:composer' AND a.name='name'")
     assert own_ec == "self_declared"
+
+
+async def test_ingest_canon_cites_is_idempotent(actions: Actions) -> None:
+    """The `cites` wiring (COMPOSER → each vendor ref) must dedup like informs/mentions — a
+    second ingest_canon adds no duplicate edges (regression: it went 7→14 before the guard)."""
+    first = await ingest_canon(actions)
+    n = await actions.pool.fetchval("SELECT count(*) FROM links WHERE type='cites'")
+    assert n == first["cites"] and n >= 5                 # every new cite is counted once
+    again = await ingest_canon(actions)                   # re-run creates no duplicate cites
+    assert again["cites"] == 0
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE type='cites'") == n

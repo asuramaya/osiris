@@ -50,9 +50,8 @@ uv sync
 DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5432/osiris uv run alembic upgrade head
 uv run pytest
 ```
-NOTE: `docker compose` plugin is not yet installed on this box
-(`sudo apt install docker-compose-plugin`). The Docker daemon works, so testcontainers
-and `docker run` do too.
+NOTE: the `docker compose` plugin is installed on this box now — `docker compose up -d`
+brings the stack up. The Docker daemon works, so testcontainers and `docker run` do too.
 
 ## Front door + caching (post-Phase-9 increment)
 - `classify()` regex front door (`src/ontology/classify.py`): paste anything → type.
