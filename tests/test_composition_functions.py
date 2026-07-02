@@ -107,7 +107,7 @@ async def test_subject_report_function_is_byte_equal(actions: Actions, case_id: 
 async def test_function_registry_is_listable(actions: Actions) -> None:
     # `briefing`/`decisions` are NOT here — they decomposed into op-trees (see the tests below).
     assert list_functions() == ["canon", "coinvest", "family",
-                                "family_drift", "project", "pulse",
+                                "family_drift", "portfolio", "project", "pulse",
                                 "screen_network", "subject_report"]
 
 

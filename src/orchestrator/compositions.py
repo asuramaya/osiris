@@ -48,6 +48,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -339,6 +340,80 @@ async def _fn_project(
     }
 
 
+_WORD = re.compile(r"[a-z][a-z0-9_+]{3,}")   # a term ≥4 chars — the derivation's unit
+_EXT = re.compile(r"\.([a-z0-9]{1,6})$")     # a file extension
+
+
+async def _fn_portfolio(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """The developer's project portfolio, DERIVED — for each ingested repo: its STACK (top file
+    types), what it's ABOUT (the terms DISTINCTIVE to it), and its size. The substrate half of
+    cross-repo cognition: it gathers the candidate signal deterministically; NAMING the shared
+    primitive that recurs across repos is a judgment left to the lens (Claude on the MCP) or the
+    tripwire (a small model on the cron) — gather here, judge there.
+
+    'Distinctive' = LOW document-frequency (a term in ≤ ~a third of repos), which is the whole
+    trick: the terms every repo shares are generic noise ('config', 'test', 'while'); the signal
+    is in the rare terms that name a repo ('cgroup'/'metered' → a throttle; 'miracast'/'airplay'
+    → a cast receiver). So generic words fall out FOR FREE with no stoplist — the same 'never
+    the whole flat corpus, only the distinctive bounded set' law the resolver uses. Subject-free;
+    `args.repos` scopes it, `args.terms` caps the per-repo term count (default 10)."""
+    want = {str(w).lower() for w in (args.get("repos") or [])}
+    rmap = {r["id"]: r["name"] for r in await pool.fetch(
+        "SELECT o.id, (SELECT value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='name' LIMIT 1) AS name "
+        "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active'")
+        if r["name"] and (not want or r["name"].lower() in want)}
+    if not rmap:
+        return {"Portfolio": [{"note": "no ingested repos"}]}
+
+    exts: dict[uuid.UUID, Counter[str]] = {rid: Counter() for rid in rmap}
+    for r in await pool.fetch(
+        "SELECT l.to_id AS repo, o.canonical FROM links l "
+        "JOIN objects o ON o.id=l.from_id AND o.type='File' "
+        "WHERE l.type='in_repo' AND l.to_id = ANY($1::uuid[])", list(rmap)):
+        m = _EXT.search((r["canonical"] or "").lower())
+        if m and r["repo"] in exts:
+            exts[r["repo"]][m.group(1)] += 1
+
+    tf: dict[uuid.UUID, Counter[str]] = {rid: Counter() for rid in rmap}
+    ncommits: Counter[uuid.UUID] = Counter()
+    for r in await pool.fetch(
+        "SELECT l.to_id AS repo, "
+        " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='summary' LIMIT 1) AS s, "
+        " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='rationale' LIMIT 1) AS r "
+        "FROM links l JOIN objects o ON o.id=l.from_id AND o.type='Commit' "
+        "WHERE l.type='in_repo' AND l.to_id = ANY($1::uuid[])", list(rmap)):
+        if r["repo"] not in tf:
+            continue
+        ncommits[r["repo"]] += 1
+        for t in set(_WORD.findall(f"{r['s'] or ''} {r['r'] or ''}".lower())):
+            tf[r["repo"]][t] += 1
+
+    docfreq: Counter[str] = Counter()
+    for c in tf.values():
+        docfreq.update(c.keys())
+    cutoff = max(2, round(len(rmap) * 0.35))     # distinctive: in ≤ ~a third of repos
+    cap = max(1, int(args.get("terms", 10)))
+
+    rows = []
+    for rid, name in rmap.items():
+        distinctive = sorted(
+            (t for t in tf[rid] if docfreq[t] <= cutoff and tf[rid][t] >= 2),
+            key=lambda t: (docfreq[t], -tf[rid][t]))       # rarest-across-repos first
+        rows.append({
+            "repo": name,
+            "stack": ", ".join(e for e, _ in exts[rid].most_common(4)) or "—",
+            "about": ", ".join(distinctive[:cap]) or "—",
+            "commits": ncommits[rid],
+        })
+    rows.sort(key=lambda x: -x["commits"])
+    return {f"Portfolio — {len(rmap)} repos": rows}
+
+
 # The digest reads the pulse LOG on demand, so its liveness verdict is re-derived every time
 # you look — the loop can die (the daemon stops) without the dead-man's-switch dying with it.
 # A newest-pulse older than this ⇒ the heartbeat is DEAD, surfaced as the lead row.
@@ -433,6 +508,7 @@ _FUNCTIONS: dict[str, Function] = {
     "canon": _fn_canon,
     "family": _fn_family,
     "family_drift": _fn_family_drift,
+    "portfolio": _fn_portfolio,
     "pulse": _fn_pulse,
     "project": _fn_project,
 }
@@ -443,7 +519,7 @@ _FUNCTIONS: dict[str, Function] = {
 # NB: `projects`, `briefing`, `decisions` are GONE as Functions — they decomposed into pure
 # op-trees (a `table`, a `sections`, a `sections`+show-original — see DEFAULT_COMPOSITIONS):
 # opinion → primitives the user owns.
-_SUBJECT_FREE = {"canon", "family", "family_drift", "pulse", "project"}
+_SUBJECT_FREE = {"canon", "family", "family_drift", "portfolio", "pulse", "project"}
 
 
 def list_functions() -> list[str]:
@@ -1032,6 +1108,9 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "family-consistency": {"op": "function", "name": "family"},
     # content drift: for the files a family shares, do they AGREE (license type / config bytes)?
     "family-drift": {"op": "function", "name": "family_drift"},
+    # the portfolio map: every ingested repo's stack + what it's ABOUT (distinctive terms) —
+    # cross-repo cognition's gather step; the lens/tripwire names the shared primitives.
+    "portfolio": {"op": "function", "name": "portfolio"},
     # the heartbeat digest: what the off-the-clock pulse found while you were away.
     "pulse-digest": {"op": "function", "name": "pulse"},
     # the developer project browser — DECOMPOSED: no longer a hardcoded Function, a pure op-tree
