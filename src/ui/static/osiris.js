@@ -254,12 +254,12 @@ const Osiris = (() => {
     if (isRanked(result.spec)) return "timeline";         // a ranking is a timeline, not a graph
     return result.items.length > 30 ? "table" : "graph";  // else a hairball past ~30 → table
   }
-  async function renderResult(result, mounts, view, onPick, onDrill) {
+  async function renderResult(result, mounts, view, onPick, onDrill, onCtx) {
     const { board, panel } = mounts;
     const kind = result.kind, items = result.items;
     if (kind === "objects") {
-      if (view === "table") { objectsTable(panel, items, onPick); return "panel"; }
-      if (view === "timeline") { timelineList(panel, items, onPick); return "panel"; }
+      if (view === "table") { objectsTable(panel, items, onPick, onCtx); return "panel"; }
+      if (view === "timeline") { timelineList(panel, items, onPick, onCtx); return "panel"; }
       if (board) { board.clear(); await board.placeObjects(items); }  // a CLEAN result board
       return "graph";
     }
@@ -280,39 +280,47 @@ const Osiris = (() => {
   const _DATEKEYS = ["authored_date", "observed_at", "filed_date", "sale_date", "date", "first_seen"];
   const _SUMKEYS = ["summary", "change", "subject", "title", "status", "description", "rationale"];
   function _pick(props, keys) { for (const k of keys) if (props && props[k]) return props[k]; return null; }
-  function timelineList(panel, items, onPick) {
+  function timelineList(panel, items, onPick, onCtx) {
     if (!items.length) { panel.innerHTML = `<div class="o-empty">Empty result.</div>`; return; }
     const body = items.map((o, i) => {
       const p = o.props || {};
       const d = _pick(p, _DATEKEYS), s = _pick(p, _SUMKEYS);
       const when = d ? esc(String(d).slice(0, 10)) : `#${i + 1}`;
       const sum = s ? `<div class="tl-sum">${esc(String(s).slice(0, 160))}</div>` : "";
-      return `<div class="tl-item" data-pick="${o.id}">
+      return `<div class="tl-item" data-pick="${o.id}" data-type="${esc(o.type)}">
         <span class="tl-when">${when}</span>
         <div class="tl-main"><span class="o-faint">${esc(o.type)}</span> ${esc(o.label)}${sum}</div></div>`;
     }).join("");
     panel.innerHTML = `<div class="r-head">${items.length} item${items.length === 1 ? "" : "s"} · in order</div>
       <div class="tl">${body}</div>`;
-    panel.querySelectorAll("[data-pick]").forEach((el) => (el.onclick = () => onPick && onPick(el.dataset.pick)));
+    _wireRows(panel, onPick, onCtx);
   }
 
   // an objects set as a TABLE — Type · Name · the most-common property columns. The fix for
   // the 80-node hairball: a scannable set, each row clickable into the inspector.
-  function objectsTable(panel, items, onPick) {
+  // wire a result panel's [data-pick] rows: click = select (inspect), right-click = the
+  // object's contextual action menu. onCtx(id, type, mouseEvent) — same menu as the set list.
+  function _wireRows(panel, onPick, onCtx) {
+    panel.querySelectorAll("[data-pick]").forEach((el) => {
+      el.onclick = () => onPick && onPick(el.dataset.pick);
+      el.oncontextmenu = (e) => { if (onCtx) { e.preventDefault(); onCtx(el.dataset.pick, el.dataset.type, e); } };
+    });
+  }
+  function objectsTable(panel, items, onPick, onCtx) {
     const skip = new Set(["name", "demo", "tag"]);
     const freq = {};
     items.forEach((o) => Object.keys(o.props || {}).forEach((k) => { if (!skip.has(k)) freq[k] = (freq[k] || 0) + 1; }));
     const cols = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 4).map((e) => e[0]);
     const head = `<th>Type</th><th>Name</th>${cols.map((c) => `<th>${esc(c)}</th>`).join("")}`;
     const body = items
-      .map((o) => `<tr data-pick="${o.id}" style="cursor:pointer">
+      .map((o) => `<tr data-pick="${o.id}" data-type="${esc(o.type)}" style="cursor:pointer">
         <td><span class="o-faint">${esc(o.type)}</span></td><td>${esc(o.label)}</td>
         ${cols.map((c) => `<td>${esc((o.props || {})[c] || "")}</td>`).join("")}</tr>`)
       .join("");
     panel.innerHTML = `<div class="r-head">${items.length} object${items.length === 1 ? "" : "s"}</div>` +
       (items.length ? `<table class="r-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
         : `<div class="o-empty">Empty result.</div>`);
-    panel.querySelectorAll("[data-pick]").forEach((tr) => (tr.onclick = () => onPick && onPick(tr.dataset.pick)));
+    _wireRows(panel, onPick, onCtx);
   }
 
   // aggregate rows: [{group:{prop:val,...}, metric:N}] -> a ranked table where each row DRILLS

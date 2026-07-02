@@ -390,7 +390,8 @@ function syncPanesToResult(){
 async function renderCurrent(){
   if(!RESULT) return;
   if(VIEW==='graph') showBoard();  // reveal BEFORE placeObjects lays out, so #cy is measurable
-  const mode = await renderResult(RESULT, {board, panel:$('result')}, VIEW, inspectOnly, drillInto);
+  const mode = await renderResult(RESULT, {board, panel:$('result')}, VIEW, inspectOnly, drillInto,
+    (id, type, ev)=> showActionMenu(ev.clientX, ev.clientY, id, type));  // right-click on result rows
   if(mode==='graph'){ showBoard(); board.resizeFit(); board.layout(true); } else showPanel();
   $('boardtitle').textContent = `${RESULT.name} · ${RESULT.kind} · ${RESULT.count}`;
   setStatus(`${RESULT.name} → ${RESULT.count} ${RESULT.kind}.`);
