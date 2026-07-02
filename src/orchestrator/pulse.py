@@ -94,12 +94,18 @@ def _diff(prev: dict[str, Any], cur: dict[str, Any]) -> list[str]:
         elif c > pr[name]:
             n = c - pr[name]
             out.append(f"{n} new commit{'s' if n != 1 else ''} in {name}")
-    for label, d in (("open thread", cur["open_threads"] - prev.get("open_threads", 0)),
-                     ("decision recorded", cur["decisions"] - prev.get("decisions", 0)),
-                     ("identity/merge candidate to review",
-                      cur["candidates"] - prev.get("candidates", 0))):
+    # (noun, plural) — pluralize the NOUN, not the trailing phrase ("2 decisions recorded",
+    # never "2 decision recordeds")
+    for one, many, d in (
+        ("open thread", "open threads",
+         cur["open_threads"] - prev.get("open_threads", 0)),
+        ("decision recorded", "decisions recorded",
+         cur["decisions"] - prev.get("decisions", 0)),
+        ("identity/merge candidate to review", "identity/merge candidates to review",
+         cur["candidates"] - prev.get("candidates", 0)),
+    ):
         if d > 0:
-            out.append(f"{d} new {label}{'s' if d != 1 else ''}")
+            out.append(f"{d} new {one if d == 1 else many}")
     for role in sorted(set(cur["drift_roles"]) - set(prev.get("drift_roles", []))):
         out.append(f"new content drift in '{role}' across the family")
     return out
