@@ -372,10 +372,11 @@ function inspectOnly(id){ FOCUS=id; renderSet(); inspect(id); }
 // has no single focused object → clear the inspector; if the result IS an object set the left
 // set reflects it, else the set clears. This makes the three panes one coherent view.
 function syncPanesToResult(){
-  FOCUS=null;
-  SET = (RESULT && RESULT.kind==='objects' && Array.isArray(RESULT.items))
-    ? RESULT.items.map(o=>({id:o.id, type:o.type, canonical:o.canonical, name:o.label})) : [];
-  renderSet();
+  // a composition RESULT is a CENTER view, not a single selected object: clear the inspector to
+  // a summary and drop the focus highlight. The left OBJECT SET is the analysis's STABLE working
+  // set (its navigator) and is deliberately LEFT ALONE — running a lens must not empty it. That
+  // clobber was the "OBJECT SET 60 / No objects match" mismatch.
+  FOCUS=null; renderSet();
   const right=$('right'); right.className='rail';
   right.innerHTML = `<div class="insp-empty">Showing <b>${esc(RESULT?RESULT.name:'')}</b> — ${
     RESULT?RESULT.count:0} ${RESULT?RESULT.kind:''}.<br><br>${
