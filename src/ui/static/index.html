@@ -447,12 +447,25 @@ async function newAnalysis(){
 }
 async function openAnalysis(id){
   ANALYSIS=id; board.clear(); showBoard();
-  SET = await fetch(`/objects?case_id=${id}&limit=400`).then(r=>r.json());
-  $('setn').textContent = SET.length; renderSet();
+  await loadObjectSet();
   refreshReview(); watch();
   // NO auto-focus — the room's home lens (briefing) is the landing; auto-exploring the first
   // object drew a stray graph that the home lens then overrode (wasted work + a flicker).
-  if(!SET.length) setStatus('Empty analysis — add an object below, or run Expand.');
+  if(!SET.length) setStatus('Nothing ingested yet — add a source, or switch rooms.');
+}
+// The left navigator's contents. For a COLLECTION room it's the selected case's objects; for a
+// developer room (no collection) it's the whole GRAPH — so a newly-ingested repo shows up at
+// once (ingest adds to the graph, not to a case; the case-scoped set was blind to it). Capped +
+// grouped/collapsed by type keeps it browsable.
+function objectSetUrl(){
+  const room = ROOMS.find(r=>r.id===ROOM);
+  const collect = !!(room && room.config && room.config.collect);
+  return (collect && ANALYSIS) ? `/objects?case_id=${ANALYSIS}&limit=1500` : `/objects?limit=1500`;
+}
+async function loadObjectSet(){
+  const r = await fetch(objectSetUrl()).then(r=>r.json()).catch(()=>[]);
+  SET = Array.isArray(r) ? r : [];   // never let an error body poison the set (SET.filter)
+  $('setn').textContent = SET.length; renderSet();
 }
 let SET_COLLAPSED={};
 function renderSet(){
@@ -462,9 +475,14 @@ function renderSet(){
   // group by type — a calm hierarchy (Commit ▾ 60 / Thread ▾ 5 …) over a flat hash list.
   const groups={};
   rows.forEach(o=>(groups[o.type]=groups[o.type]||[]).push(o));
-  const types=Object.keys(groups).sort((a,b)=>groups[b].length-groups[a].length);  // biggest first
+  // fewest-first: the small, navigable sets (5 repos, 13 decisions, 8 threads) surface ABOVE
+  // the bulk (hundreds of commits/files), instead of being buried under them.
+  const types=Object.keys(groups).sort((a,b)=>groups[a].length-groups[b].length);
   $('set').innerHTML = types.map(t=>{
-    const items=groups[t], open=!SET_COLLAPSED[t];
+    // default: small groups (repos/decisions/threads) OPEN, bulk groups (100s of commits/files)
+    // COLLAPSED — so the navigable sets show at a glance; an explicit toggle always wins.
+    const items=groups[t];
+    const open = t in SET_COLLAPSED ? !SET_COLLAPSED[t] : items.length<=40;
     const head=`<div class="set-group" onclick="toggleSetGroup('${esc(t)}')">
       <span class="set-caret">${open?'▾':'▸'}</span><span class="dot" style="background:${ty(t).c}"></span>
       <span class="set-gname">${esc(t)}</span><span class="set-gn">${items.length}</span></div>`;
@@ -631,7 +649,7 @@ function watch(){
   STREAM.onmessage=async ev=>{
     const s=JSON.parse(ev.data);
     $('live').textContent = s.total!=null ? `● ${s.total} objects` : '';
-    const fresh=await fetch(`/objects?case_id=${ANALYSIS}&limit=400`).then(r=>r.json());
+    const fresh=await fetch(objectSetUrl()).then(r=>r.json());
     if(fresh.length!==SET.length){ SET=fresh; $('setn').textContent=SET.length; renderSet();
       // only auto-grow the board while EXPLORING (no result shown). A composition RESULT is
       // never clobbered by a stream tick — that was the blank-board bug.
@@ -752,8 +770,7 @@ async function resolveCand(id, decision){
   await fetch(`/merge-candidates/${id}/resolve`,{method:'POST',
     headers:{'content-type':'application/json'},body:JSON.stringify({decision})});
   await refreshReview();
-  if(ANALYSIS){ SET=await fetch(`/objects?case_id=${ANALYSIS}&limit=400`).then(r=>r.json());
-    $('setn').textContent=SET.length; renderSet(); }
+  await loadObjectSet();   // a merge changed the object set — refresh it (room-aware)
   if(FOCUS) inspect(FOCUS);
   openReview();
 }

@@ -263,7 +263,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         case_id: uuid.UUID | None = None,
         type: str | None = None,
         q: str | None = None,
-        limit: int = Query(100, le=500),
+        limit: int = Query(100, le=2000),
     ) -> list[dict[str, Any]]:
         rows = await p.fetch(
             "SELECT id, type, canonical, status, " + _OBJ_LABEL + " AS name "
