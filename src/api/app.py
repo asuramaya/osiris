@@ -395,6 +395,38 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         await find_person_merge_candidates(p)
         return {"subject": str(object_id), "hub": str(hub_id)}
 
+    @app.post("/objects/{object_id}/claim-identity")
+    async def claim_identity(
+        object_id: uuid.UUID, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, str]:
+        """'This is me' for the developer persona. The resolver unifies dev identities that
+        share a name/handle (asuramaya ↔ asuramaya), but CAN'T infer that a real name and a
+        handle are the same person (hector ↔ asuramaya share no key). That's a human call.
+        The first claim TAGS a Person as the canonical operator identity ('self'); a later
+        claim MERGES that identity into the self — so you unify across repos by asserting it.
+        Merge is event-sourced + reversible; the loser's commits re-attribute to the winner."""
+        actor = get_settings().osiris_actor
+        row = await p.fetchrow(
+            "SELECT type FROM objects WHERE id=$1 AND status='active'", object_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="object not found")
+        if row["type"] != "Person":
+            raise HTTPException(status_code=400, detail="only a Person can be claimed as identity")
+        self_id = await p.fetchval(
+            "SELECT o.id FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+            "WHERE o.type='Person' AND o.status='active' "
+            "AND a.name='tag' AND a.value->>'tag'='self' LIMIT 1"
+        )
+        if self_id is None:
+            await Actions(p).tag_object(object_id, "self", "operator", actor)
+            return {"action": "designated", "self": str(object_id)}
+        if self_id == object_id:
+            return {"action": "already-self", "self": str(object_id)}
+        await Actions(p).merge_objects(
+            self_id, object_id, "operator: this is me (cross-repo identity)", actor
+        )
+        return {"action": "merged", "self": str(self_id), "merged": str(object_id)}
+
     @app.get("/objects/{object_id}/subject-report")
     async def subject_report_ep(
         object_id: uuid.UUID, case_id: uuid.UUID, p: asyncpg.Pool = Depends(get_pool)

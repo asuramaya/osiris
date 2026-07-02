@@ -548,9 +548,21 @@ function actionsFor(type){
   const a=[];
   if(_CONTENT_TYPES.has(type)) a.push({label:'Read ▸', run:viewContent});   // primary for docs
   a.push({label:'Search around', run:focus});                                // explore on the board
+  if(type==='Person') a.push({label:'★ This is me', run:claimIdentity});     // unify your dev identity
   if(_ENTITY_TYPES.has(type)) a.push({label:'Dossier', run:dossierFor});
   a.push({label:'Tag…', run:tagIt});
   return a;
+}
+// "This is me": the first Person claimed becomes your canonical identity; a later claim merges
+// that identity into it — unifying you across repos where the resolver can't (real name vs handle).
+async function claimIdentity(id){
+  const r=await fetch(`/objects/${id}/claim-identity`,{method:'POST'}).then(r=>r.ok?r.json():null).catch(()=>null);
+  if(!r){ setStatus('Could not claim identity.'); return; }
+  setStatus({designated:'Marked as you — now claim your other identities too.',
+             merged:'Merged into your identity — your work is unified across repos.',
+             'already-self':'That identity is already you.'}[r.action] || 'Done.');
+  await loadObjectSet();          // a Person may have merged away — refresh the navigator
+  if(r.self) inspectOnly(r.self);
 }
 function primaryAction(id, type){ const a=actionsFor(type)[0]; if(a) a.run(id); }  // double-click
 async function dossierFor(id){ await inspect(id); showDossier(id); }               // inspect, then dossier
