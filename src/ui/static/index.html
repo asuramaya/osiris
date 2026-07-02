@@ -138,8 +138,8 @@
     <button class="iconbtn" onclick="newRoom()" title="New room">＋</button>
     <span class="o-faint">/</span>
     <select id="analysis" onchange="openAnalysis(this.value)" title="Analysis"></select>
-    <button class="iconbtn" onclick="newAnalysis()" title="New analysis">＋</button>
-    <input id="search" class="field" placeholder="Search the ontology — name or identifier…"
+    <button class="iconbtn collect-only" onclick="newAnalysis()" title="New analysis">＋</button>
+    <input id="search" class="field" placeholder="Find an object…"
            oninput="debouncedSearch()" onfocus="debouncedSearch()" autocomplete="off" />
     <button class="kbtn" onclick="openPalette()" title="Command palette">⌘K</button>
     <span class="spacer"></span>
@@ -160,8 +160,8 @@
         <div id="set"></div>
       </div>
 
-      <div class="railhead">Add to analysis</div>
-      <div class="pad">
+      <div class="railhead collect-only">Add to analysis</div>
+      <div class="pad collect-only">
         <input id="seed" class="filter" placeholder="paste an identifier or name…" />
         <button class="iconbtn" style="width:100%" onclick="addSeed()">Add &amp; classify</button>
         <div id="seedmsg" class="o-faint" style="margin-top:6px;font-size:11px"></div>
@@ -173,7 +173,7 @@
       <div id="tools">
         <span class="title" id="boardtitle">Board</span>
         <span id="viewsw" class="viewsw"></span>
-        <button class="iconbtn" onclick="expandSet()" title="Run collectors to grow the set">Expand ▸</button>
+        <button class="iconbtn collect-only" onclick="expandSet()" title="Run collectors to grow the set">Expand ▸</button>
         <span class="spacer"></span>
         <!-- board fiddly verbs — quiet by default, reveal on hover; all also in ⌘K (U4) -->
         <span class="boardtools">
@@ -266,9 +266,13 @@ async function switchRoom(id){
   ROOM=id; postConsole({room_id:id||null}); $('room').value=id;
   ACTIVE=null; RESULT=null; WORKING=null; renderSwitcher(); renderComposerBar(); board.clear(); showBoard();
   await loadComps(); await loadAnalyses();
-  // ORIENT ON ARRIVAL: a desk auto-runs its home composition (the briefing — "where am I?").
-  // The human (and a fresh Claude) is greeted with their context, not a blank board.
   const room = ROOMS.find(r=>r.id===id);
+  // COLLECTION is persona-scoped: the intake box + Expand-collectors + New-analysis are shown
+  // only for a room that opts in (`config.collect`). The developer ingests via CLI, so the
+  // engineer room hides them — the frame stays neutral, not an entity-collection console.
+  const collect = !!(room && room.config && room.config.collect);
+  document.querySelectorAll('.collect-only').forEach(el=> el.style.display = collect ? '' : 'none');
+  // ORIENT ON ARRIVAL: a desk auto-runs its home composition (the briefing — "where am I?").
   const home = room && room.config && room.config.home;
   if(home) await runComp(home);
 }
