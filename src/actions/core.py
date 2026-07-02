@@ -144,8 +144,9 @@ class Actions:
         HOW the fact was obtained (see parsers/evidence.py)."""
         actor = actor or source_id
         async with self.pool.acquire() as conn, conn.transaction():
-            prior = await conn.fetchval(
-                "SELECT a.id FROM assertions a "
+            prior_row = await conn.fetchrow(
+                "SELECT a.id, a.value, a.observed_at, a.confidence, a.evidence_class "
+                "FROM assertions a "
                 "WHERE a.object_id=$1 AND a.name=$2 AND a.source_id=$3 "
                 "  AND NOT EXISTS (SELECT 1 FROM assertions s WHERE s.supersedes=a.id) "
                 "ORDER BY a.observed_at DESC, a.created_at DESC LIMIT 1",
@@ -153,6 +154,21 @@ class Actions:
                 name,
                 source_id,
             )
+            prior = prior_row["id"] if prior_row else None
+            # A byte-identical re-assertion carries ZERO information — same source re-observing
+            # the same value at the same instant (a re-ingest of an unchanged commit re-asserts
+            # with the identical authored-date clock). Skip it, or a 600s cron stacks unbounded
+            # supersession chains (live: one commit's summary reached 286 rows). A same-value
+            # assertion at a NEW observed_at still lands — "confirmed still true at T2" is real
+            # information. No audit/outbox on skip: nothing happened.
+            if (
+                prior_row is not None
+                and prior_row["value"] == value
+                and prior_row["observed_at"] == observed_at
+                and float(prior_row["confidence"]) == float(confidence)
+                and prior_row["evidence_class"] == evidence_class
+            ):
+                return cast(int, prior_row["id"])
             new_id = cast(
                 int,
                 await conn.fetchval(
