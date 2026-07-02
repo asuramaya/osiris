@@ -108,10 +108,8 @@ Same kernel, same resolution, same provenance as face #1. The domain is not the 
 ```bash
 uv sync
 DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5432/osiris uv run alembic upgrade head
-# ingest a repo's history + tree, mine its decisions/threads
-uv run python -m src.ingest.gitlog /path/to/your/repo
-uv run python -m src.ingest.files  /path/to/your/repo
-uv run python -m src.ingest.decisions
+# ingest a repo WHOLE — history + file tree + mined decisions, one idempotent call
+uv run python -m src.ingest.project /path/to/your/repo
 # start the heartbeat over several repos (senses changes, builds the digest)
 OSIRIS_DEV_REPOS=/path/a,/path/b uv run python -m src.orchestrator.pulse --watch 600
 ```
