@@ -79,12 +79,16 @@ async def reconcile_mined(
     human's deliberate archive is never undone by a cron re-mine.
     """
     pool = actions.pool
+    # Ownership = the miner authored the DEFINING assertion (`summary`), not merely touched
+    # the object with some later assertion. Otherwise a stray miner write onto a session
+    # object (e.g. a false auto-resolve) would make it look mined and get it archived as
+    # "stale" — silently deleting a session's write-back. Scope stays inside the source.
     rows = await pool.fetch(
         "SELECT o.id, o.canonical, o.status FROM objects o "
         "WHERE o.type=$1 AND o.canonical LIKE $2 || '%' "
         "  AND o.status IN ('active','archived') "
         "  AND EXISTS (SELECT 1 FROM assertions a "
-        "              WHERE a.object_id=o.id AND a.source_id=$3)",
+        "              WHERE a.object_id=o.id AND a.name='summary' AND a.source_id=$3)",
         object_type,
         prefix,
         source_id,

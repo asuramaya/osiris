@@ -17,7 +17,8 @@ from typing import Any
 from src.actions.core import Actions
 from src.ingest.decisions import extract_decisions, mine_decisions
 from src.ingest.project import ingest_project
-from src.ingest.threads import extract_threads, mine_threads
+from src.ingest.threads import extract_threads, mine_threads, resolve_threads
+from src.orchestrator.capture import open_thread
 
 NOW = datetime(2026, 7, 1, tzinfo=UTC)
 
@@ -244,3 +245,64 @@ async def test_end_to_end_receipts_through_git(actions: Actions, tmp_path: Path)
     r3 = [s for s in decisions.values() if "ruling #3" in s]
     assert r3 == ["Never auto-merges Persons (ruling #3) — only queues for the tray"]
     assert not any("Tightened" in s for s in decisions.values())
+
+
+# --- the miner must NOT eat a session's write-back (prosthesis boundary) -------
+
+async def _thread_state(pool: Any, tid: Any) -> tuple[str, str | None]:
+    """(object status, current 'status' assertion) for a thread — the two ways it can die."""
+    obj = await pool.fetchval("SELECT status FROM objects WHERE id=$1", tid)
+    assertion = await pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions "
+        "WHERE object_id=$1 AND name='status' AND source_id='session'", tid)
+    return obj, assertion
+
+
+async def test_a_session_thread_survives_a_full_remine(actions: Actions) -> None:
+    """A session-captured thread must outlive the pulse re-mine. The live bug: resolve_threads
+    grabbed EVERY open thread (source-blind), false-resolved a `session` thread off two generic
+    shared tokens (`claude`, `local`), and the resulting `git-memory` assertion then made
+    reconcile_mined archive it as 'stale'. Both halves must now leave session captures alone —
+    while the miner still self-heals its OWN mined threads (the positive control below)."""
+    # a session write-back — the operator/Claude opened it, source='session'
+    sess = await open_thread(
+        actions, "neuralink sanctions screening still needs a manual review pass")
+
+    # a mined thread the miner DOES own, from a commit body carrying a real marker
+    await _commit(actions, "commit:spike",
+                  "NEXT: the wikidata enricher backfills the qid stubs.",
+                  "2026-06-20T00:00:00+00:00")
+    # a later commit whose SUMMARY (what resolve_threads tokenizes) collides with BOTH threads:
+    # 'wikidata'+'enricher' resolves the mined one; 'neuralink'+'sanctions' would have
+    # false-resolved the session one under the old, source-blind code.
+    cm = await actions.create_or_find_object("Commit", "commit:later", "git")
+    await actions.assert_property(
+        cm, "summary",
+        "wikidata enricher shipped; neuralink sanctions fusion landed", "git", NOW, 0.85)
+    await actions.assert_property(
+        cm, "authored_date", "2026-06-28T00:00:00+00:00", "git", NOW, 0.85)
+
+    # two full pulse ticks (mine → resolve, mine → resolve). The SECOND mine is where the old
+    # code archived the session thread, once resolve had stamped git-memory onto it.
+    for _ in range(2):
+        await mine_threads(actions)
+        await resolve_threads(actions)
+
+    # the session thread is untouched: object active, its own status still 'open'
+    obj_status, sess_status = await _thread_state(actions.pool, sess)
+    assert obj_status == "active", "reconcile_mined archived a session write-back"
+    assert sess_status == "open", "resolve_threads false-resolved a session thread"
+    # and it carries NO git-memory assertion — the miner never reached across the boundary
+    crossed = await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND source_id='git-memory'", sess)
+    assert crossed == 0
+
+    # positive control: the fix is surgical — the miner STILL self-heals a thread it authored
+    mined = await actions.pool.fetchval(
+        "SELECT o.id FROM objects o WHERE o.type='Thread' AND EXISTS ("
+        "  SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='summary' AND a.value #>> '{}' LIKE 'NEXT: the wikidata%')")
+    mined_status = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions "
+        "WHERE object_id=$1 AND name='status'", mined)
+    assert mined_status == "resolved", "the fix wrongly disabled legitimate self-heal"

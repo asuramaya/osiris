@@ -151,6 +151,12 @@ async def resolve_threads(
     so a human can audit and reverse it.
     """
     pool = actions.pool
+    # ONLY threads the miner itself authored (summary asserted by its own source). A
+    # session-captured thread is the session's to close, not the miner's — self-healing one
+    # by a loose token match would let a pulse re-mine silently evaporate a write-back (it
+    # did: a `session` thread got a `git-memory` 'resolved' off two generic shared tokens,
+    # which then made reconcile_mined treat it as mined and archive it). The miner's reach
+    # stops at the source boundary.
     open_threads = await pool.fetch(
         "SELECT o.id, "
         " (SELECT value #>> '{}' FROM current_assertions a "
@@ -161,7 +167,10 @@ async def resolve_threads(
         "  LIMIT 1) AS origin_date "
         "FROM objects o WHERE o.type='Thread' AND EXISTS ("
         "  SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
-        "  AND s.name='status' AND s.value #>> '{}' = 'open')"
+        "  AND s.name='status' AND s.value #>> '{}' = 'open') "
+        "AND EXISTS (SELECT 1 FROM assertions own WHERE own.object_id=o.id "
+        "  AND own.name='summary' AND own.source_id=$1)",
+        source_id,
     )
     commit_rows = await pool.fetch(
         "SELECT o.id, o.canonical, "
