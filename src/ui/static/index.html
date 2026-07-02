@@ -830,7 +830,20 @@ document.addEventListener('keydown',e=>{
 });
 
 Osiris.loadSchema().then(async()=>{
-  await loadRooms(); await loadComps(); await loadAnalyses(); await applyDeepLink();
+  await loadRooms();
+  // LAND ON THE CONSOLE ROOM (the persona), not the first case's graph. switchRoom loads the
+  // room's compositions and runs its `home` lens (engineer → briefing) — the "where am I?"
+  // surface. If the cursor named a different composition, resume that. Falls back to the All
+  // room when the cursor names none. (The old boot opened the first case and focused its first
+  // object — that's why it always landed on a stray case graph, ignoring the room.)
+  const cur = await fetch('/console').then(r=>r.ok?r.json():null).catch(()=>null);
+  await switchRoom((cur && cur.room_id) || '');
+  // switchRoom ran the room's HOME lens (the orientation). Only override it when CLAUDE is
+  // actively steering — then a reload follows Claude's view; a human always gets a fresh
+  // "where am I" (home), not wherever they last happened to click.
+  if(cur && cur.updated_by==='claude' && cur.composition && cur.composition!==ACTIVE)
+    await runComp(cur.composition);
+  await applyDeepLink();
   watchConsole(); });  // open the shared-cursor link with Claude
 </script>
 </body>
