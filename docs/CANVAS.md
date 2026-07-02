@@ -145,10 +145,24 @@ One surface, no entity chrome. A persona is a **room of compositions**, never co
      moved OUT of the inspector chrome into the menu — the inspector is display-only. This also
      dissolves a chunk of I.B (entity chrome) by making per-object actions contextual, not
      global. Works on the set list, graph nodes (cxttap), and result rows.
-   - **remaining:** brick 3 — the rest of the global chrome (Type key / Review / "Add &
-     classify" intake / "ontology" search framing / Expand-collectors); brick 4 — one renderer
-     (fold `viewContent`/`renderDiff` in as a `kind`; schema-drive the timeline `_DATEKEYS`/
-     `_SUMKEYS`).
+   - **brick 3 (7fc447d) — persona-scope the collection chrome.** The "Add to analysis" intake,
+     "Expand ▸" collectors, and New-analysis ＋ are gated on `room.config.collect` (a
+     `.collect-only` class + a `switchRoom` toggle). The engineer room hides them (CLI-ingested);
+     the analyst room opts in and keeps them. Search de-jargoned ("ontology" → "Find an object").
+     KEPT (not chrome): Type key (schema-driven legend) + Review (a real cross-persona feature —
+     the dev-identity merge). Eyes-verified both rooms.
+   - **brick 4a (9f3515d) — neutralize the timeline's domain keys.** `timelineList` no longer
+     hardcodes `_DATEKEYS`/`_SUMKEYS` (git/real-estate mix); it picks the date/summary by pattern
+     (…_date/…_at/ISO). Output-equivalent, domain knowledge gone.
+   - **remaining (optional, architectural — lower user-visible value):** brick 4b — fold the
+     `viewContent`/`renderDiff` document viewer into `renderResult` as a `kind` (it currently
+     renders into `#result` bypassing the generic renderer). Better done deliberately; the canvas
+     is functionally complete and neutral without it.
+
+The canvas rebuild's substantive goals (Part III) are **met**: one selection model, one click
+semantics (+ the type-aware right-click menu), persona = room of compositions, land on the room,
+no entity chrome in the frame. Highest-leverage next move: **dogfood the clean canvas** (use
+reveals the real gap — the recurring lesson) before further internal polish.
 
 Deferred (belongs to the persona/composer work, not the canvas): **persona-scoped default
 seeding** — `DEFAULT_COMPOSITIONS` should declare a room per composition so a fresh instance
