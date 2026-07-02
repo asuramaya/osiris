@@ -133,8 +133,22 @@ One surface, no entity chrome. A persona is a **room of compositions**, never co
    heuristics, the `viewContent`/`renderDiff` diff-viewer competing with `renderResult`) are
    **redesign, not deletion** → moved to step 3.
 3. **The canvas rebuild** (I.B, I.D, I.E, + the I.F redesign) — the entity-console shell → the
-   neutral canvas of Part III: one selection model, one renderer (fold the diff-viewer in as a
-   `kind`; make the timeline key-picking schema-driven), one click semantics.
+   neutral canvas of Part III, brick by brick (each eyes-verified):
+   - **brick 1 (91e421f) — land on the console room.** Boot routes through `switchRoom(room)`
+     → runs the room's `home` lens (engineer → briefing), not the first case's graph.
+   - **brick 2a (dcf9694) — stop the SET clobber.** The left OBJECT SET is the analysis's
+     stable navigator; `syncPanesToResult` no longer overwrites it (killed "60 / No objects").
+   - **brick 2b (271ce29, 8a903d6) — one click semantics + the right-click action menu.**
+     Single-click = SELECT (inspect, lens preserved) everywhere; right-click = the object's
+     TYPE-AWARE action menu (reads the ontology — Commit: Read/Search-around/Tag; Person adds
+     Dossier); double-click = the primary action. The Search-around/Read/Dossier/Tag buttons
+     moved OUT of the inspector chrome into the menu — the inspector is display-only. This also
+     dissolves a chunk of I.B (entity chrome) by making per-object actions contextual, not
+     global. Works on the set list, graph nodes (cxttap), and result rows.
+   - **remaining:** brick 3 — the rest of the global chrome (Type key / Review / "Add &
+     classify" intake / "ontology" search framing / Expand-collectors); brick 4 — one renderer
+     (fold `viewContent`/`renderDiff` in as a `kind`; schema-drive the timeline `_DATEKEYS`/
+     `_SUMKEYS`).
 
 Deferred (belongs to the persona/composer work, not the canvas): **persona-scoped default
 seeding** — `DEFAULT_COMPOSITIONS` should declare a room per composition so a fresh instance
