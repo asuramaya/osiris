@@ -983,3 +983,41 @@ brings the stack up. The Docker daemon works, so testcontainers and `docker run`
     commits past `main` (=v0.1.0 public). Throwaway demo DBs PG:5544/Redis:6399 may still be up; the
     persistent demo graph is PG:5439 (now also holds Osiris's own git history via the self-track ingest).
     No GITHUB_TOKEN / no ANTHROPIC_API_KEY in env (extraction/OCR/compose proven-but-deferred-live).
+- **THE LIVENESS NIGHT — fresh-eyes audit + fleet repair (DONE, 2026-07-02, Fable, autonomous;
+  6 commits 480ee77..):** operator asked a fresh Claude to USE the product and say why it sucks /
+  where it betrays its visions, then went to sleep and handed over the night. AUDIT VERDICT:
+  **proven ≠ alive** — every capability real, none a lived default (seeds called only by tests →
+  fresh installs were empty shells; MCP socket registered NOWHERE, not even in the sessions that
+  build it; pulse dead 2 days with 2,344 unevaluated events and a digest that LIED "no pulse yet"
+  off a LIMIT 1; briefing led with miner garbage; recall died on word order; the "evicted" opinion
+  read-models still welded in parallel with their compositions; operator = 3 unmerged Persons on
+  his own instance). ENDGAME NAMED by operator: **prosthesis for Claude + lens for asuramaya = a
+  composition SHAPE-SHIFTER** (recorded in the graph as the first captured decision). Fixed by a
+  4-agent Opus fleet on disjoint lanes, each return reviewed + gated:
+  (1) **init** (`python -m src.init` + `.mcp.json`): seeds rooms/lenses/canon idempotently;
+  stranger-tested on a wiped DB — the README's promised question now answers. (2) **the alarm
+  clock**: systemd user units (osiris-pulse + osiris-worker, linger, Restart=always; week-test:
+  kill → resurrect) against :5601; first tick caught 29 missed commits, worker drained the whole
+  backlog; `_fn_pulse` honest (24h window + heartbeat-DEAD-since row computed ON READ = the free
+  dead-man's-switch). (3) **miner precision** (`src/ingest/mined.py`): well_bounded/unquoted
+  guards, marker-enumeration + tuning-note rejection, ruling-N dedup, `reconcile_mined` (re-mine
+  HEALS: archives stale event-sourced, resurrects only miner-archived); live heal → decisions
+  13→8 real (ruling #3 6→1), threads 9→4, briefing ZERO garbage. (4) **capture-at-source**
+  (`src/orchestrator/capture.py` + MCP record_decision/open_thread/resolve_thread + get_schema +
+  server-instructions RITUAL: orient via briefing → work → write back before dying): session
+  decisions are SELF_DECLARED > miner's DERIVED — the miner demotes to backfill; recall now
+  word-order-proof (tokenized AND in /objects?q= + `matches_all` op). (5) **the cut FINISHED**:
+  discrepancy/coinvestment/screen_financing_network MCP tools + /subject-report endpoint DELETED
+  (run_composition is the only path; sources.py repointed with an existence guard-test); canon
+  `cites` idempotency fixed; 28 MCP tools. (6) pulse digest pluralization.
+  **PROSTHESIS TEST PASSED LIVE** (two lives over the real stdio socket): life 1 oriented from
+  briefing, recorded the endgame + feature-freeze-until-alive rulings, opened the settings.local
+  thread, authored the `fable-commits` lens from one sentence (**LENS TEST** — a new question →
+  saved roomed composition → renders, zero code), died; life 2 inherited all of it. Identity
+  unified via claim-identity (asuramaya.hq = self; github-noreply + hector merged in). gestalt
+  finally ingested (4 commits); pulse watches all 6 repos (family lives under ~/code/REPOS/).
+  415 tests green, ruff + mypy --strict clean. **MORNING LIST for operator:** (a) one-liner
+  `.claude/settings.local.json` env `DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris`
+  (Claude may not edit its own settings; the open thread in briefing tracks it); (b) push
+  composer→main still GATED on you; (c) console live on :8011 (in-process job, ~18h);
+  (d) compose stack :5432/:6379 up holding the stranger-test install (docker compose down -v to drop).
