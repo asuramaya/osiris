@@ -50,9 +50,11 @@ mcp = FastMCP(
         "you learn and decide after you're gone. On connect, orient with "
         "run_composition('briefing') to see open threads and recent work, and call "
         "get_schema to learn the object/link types before you author a composition or read "
-        "a result. Before the session ends, write back: record_decision for every ruling or "
-        "pivot you made, and open_thread / resolve_thread for what's left unresolved — so "
-        "the next session inherits your context instead of starting blind."
+        "a result. Write back AS YOU GO — record_decision the moment a ruling lands, "
+        "open_thread when work starts or blocks, resolve_thread the moment it closes; "
+        "never batch it for the session's end. A session can be compacted or killed at ANY "
+        "instant: the graph, not the context window, is your memory, and anything not "
+        "written back does not exist."
     ),
 )
 _pool: asyncpg.Pool | None = None
