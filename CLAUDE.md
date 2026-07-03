@@ -1021,3 +1021,21 @@ brings the stack up. The Docker daemon works, so testcontainers and `docker run`
   (Claude may not edit its own settings; the open thread in briefing tracks it); (b) push
   composer→main still GATED on you; (c) console live on :8011 (in-process job, ~18h);
   (d) compose stack :5432/:6379 up holding the stranger-test install (docker compose down -v to drop).
+- **LOOP DAY (2026-07-02, cont.):** neo harness removed from Claude config/daemon/pipx (repo
+  ingested instead; 7 repos watched). Dogfooding capture caught the miner EATING session
+  write-backs → prosthesis-boundary fix (5b2b5fe): resolve/reconcile only touch objects whose
+  DEFINING assertion the miner authored. Trailer-strip at gitlog ingest (d84e929). `portfolio`
+  lens (a42c915): per-repo stack + distinctive terms (low doc-frequency IS the trick) — the
+  GATHER half of cross-repo cognition; the model names primitives (JUDGE). Kernel: byte-dup
+  assertion skip (59020a8; one commit summary had reached 286 rows). THE FRAME crystallized
+  (see memory osiris-strange-loop): reify-the-shared (identity=merge vs structure=link) ·
+  gather-then-judge · the strange loop world↔model↔agent↔human, membrane = never-silent/
+  never-irreversible · loop-pathology = named bug class (3 receipts in one day) · **done =
+  only judgment left manual**. OPERATOR'S SHARPENED TEST: compaction at any point must not
+  matter → the failure named: THE AGENT IS THE LAST UNSENSED SOURCE (repos/feeds sensed;
+  the session must confess). Ritual tense fixed in the socket (a37c8b8: write back AS YOU
+  GO). NEXT (threads in-graph): session-sensing — point compose/extract/claude-CLI at
+  ~/.claude/projects/*.jsonl, DERIVED backfill, PreCompact trigger, REDACT secrets
+  (transcripts hold printed keys — ruling f8f22e14); then the lap lens; then discovered-types.
+  Rulings in-graph: 62c4d152 (finish line) · 4ba0414a (compass-not-cargo) · 10f4058b
+  (unsensed source) · f8f22e14 (secrets). 419 tests green; 10 commits today; push gated.
