@@ -176,6 +176,116 @@ def _repo_from_cwd(cwd: str | None) -> str | None:
     return Path(cwd).name if cwd else None
 
 
+# --- source model = the missing provenance dimension ----------------------------------
+#
+# "Which Claude authored this?" is provenance, not trivia: an Opus assertion and a Haiku
+# assertion carry different reliability, and a model CHANGE mid-session is a warm rug-pull
+# (the safety router silently swapping Fable→Opus). The only trustworthy signal is the
+# harness's own `message.model` on each assistant line — NOT the system prompt (a swapped
+# model inherits the old prompt's identity claim unchanged) and NOT the weights (undreadable
+# from inside). So the model is read the same way everything else is: off the transcript.
+
+_SYNTHETIC = "<synthetic>"
+
+
+def _model_of(d: dict[str, Any]) -> str | None:
+    """The model that produced one transcript line, or None (non-assistant / synthetic)."""
+    if d.get("type") != "assistant":
+        return None
+    m = (d.get("message") or {}).get("model")
+    return m if isinstance(m, str) and m and m != _SYNTHETIC else None
+
+
+def _iter_models(lines: list[str]) -> list[str]:
+    out: list[str] = []
+    for raw in lines:
+        try:
+            d = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        m = _model_of(d) if isinstance(d, dict) else None
+        if m:
+            out.append(m)
+    return out
+
+
+def models_in(lines: list[str]) -> list[str]:
+    """The distinct assistant models across these lines, in first-seen order. Length > 1
+    is a swap — a warm rug-pull inside a single session."""
+    seen: list[str] = []
+    for m in _iter_models(lines):
+        if m not in seen:
+            seen.append(m)
+    return seen
+
+
+def latest_model(lines: list[str]) -> str | None:
+    """The model of the most recent assistant turn — the best in-session answer to 'which
+    model am I', modulo a swap since that turn was written."""
+    models = _iter_models(lines)
+    return models[-1] if models else None
+
+
+def _tail_lines(path: Path, nbytes: int = 512 * 1024) -> list[str]:
+    """Complete lines from the last `nbytes` of a file (drops the partial leading line).
+    A running session's transcript is large; the current model lives at its tail."""
+    size = path.stat().st_size
+    with path.open("rb") as f:
+        f.seek(max(0, size - nbytes))
+        data = f.read()
+    lines = data.decode("utf-8", "replace").splitlines()
+    return lines[1:] if size > nbytes else lines
+
+
+def _job_id(job_dir: str | None) -> str | None:
+    """The session/job id from CLAUDE_JOB_DIR — the component right after `jobs` (the dir
+    is `…/jobs/<id>` or `…/jobs/<id>/tmp`). This id is the session UUID's leading segment,
+    which is exactly the transcript filename's prefix (<id>-….jsonl) — a precise anchor."""
+    if not job_dir:
+        return None
+    parts = Path(job_dir).parts
+    if "jobs" in parts:
+        i = parts.index("jobs")
+        if i + 1 < len(parts):
+            return parts[i + 1]
+    return None
+
+
+def locate_current_transcript(root: Path, job_dir: str | None) -> Path | None:
+    """This session's own transcript, anchored on the job id (the multi-session box runs a
+    FLEET — newest-mtime alone grabs whatever parallel session is hottest, proven live).
+    Falls back to newest only when the anchor finds nothing. This is how a running agent
+    finds the file that records what model it actually is."""
+    files = [p for p in root.expanduser().glob("*/*.jsonl") if p.is_file()]
+    if not files:
+        return None
+    jid = _job_id(job_dir)
+    if jid:
+        anchored = [p for p in files if p.stem.startswith(jid)]
+        if anchored:
+            return max(anchored, key=lambda p: p.stat().st_mtime)
+    return max(files, key=lambda p: p.stat().st_mtime)
+
+
+def current_model(
+    root: Path | None = None, job_dir: str | None = None
+) -> tuple[str | None, list[str], Path | None]:
+    """Probe THIS session's actual model from its transcript. Returns
+    (current_model, swap_history, transcript_path). `swap_history` with >1 entry means the
+    session was warm-swapped. Reads the tail for the current model, the whole file for the
+    history (a session file is large but a one-shot probe can afford it)."""
+    import os
+
+    root = root or (Path.home() / ".claude/projects")
+    job_dir = job_dir or os.environ.get("CLAUDE_JOB_DIR")
+    path = locate_current_transcript(root, job_dir)
+    if path is None:
+        return None, [], None
+    cur = latest_model(_tail_lines(path))
+    history = models_in(path.read_text("utf-8", errors="replace").splitlines())
+    return cur, history, path
+
+
 # --- the delta: complete new lines past the cursor, bounded ---------------------------
 
 def _watermark_key(path: Path) -> str:
@@ -365,7 +475,7 @@ async def _foreign_owned(pool: asyncpg.Pool, canonical: str) -> bool:
 
 async def _emit_thread(
     actions: Actions, summary: str, *, repo: str | None,
-    observed: datetime, kind: str | None = None,
+    observed: datetime, kind: str | None = None, source_model: str | None = None,
 ) -> Any | None:
     """Returns the thread id, or None when the ownership boundary skipped the write."""
     canon = _canon("thread", summary)
@@ -379,10 +489,33 @@ async def _emit_thread(
     if kind:
         await actions.assert_property(t, "kind", kind, _SOURCE, observed, _CONF,
                                       evidence_class=_EC)
+    if source_model:  # provenance: which Claude authored the turn this was mined from
+        await actions.assert_property(t, "source_model", source_model, _SOURCE, observed,
+                                      _CONF, evidence_class=_EC)
     if repo:
         await link_repo(actions, t, repo, observed,
                         source=_SOURCE, evidence_class=_EC, confidence=_CONF)
     return t
+
+
+async def _record_swap(
+    actions: Actions, path: Path, models: list[str], repo: str | None
+) -> int:
+    """A model CHANGED inside one session — the warm rug-pull the running agent can't feel
+    (its system prompt kept asserting the old identity). The sensor reports what the agent
+    can't: an obligation naming the session and the transition, idempotent per (session,
+    transition) so a re-mine doesn't re-flag. Returns 1 if flagged, 0 if the boundary
+    skipped it. This is the external detector the cold-boot confession can never be."""
+    summary = (
+        f"warm model swap in session {path.stem[:8]}: {' → '.join(models)} — the safety "
+        "router changed the model mid-session; verify which model authored the affected "
+        "decisions/threads (source_model is now stamped on each). Identity rug-pull."
+    )
+    tid = await _emit_thread(
+        actions, summary, repo=repo, observed=datetime.now(UTC),
+        kind="obligation", source_model=models[-1],
+    )
+    return 1 if tid is not None else 0
 
 
 async def _resolve_own_threads(
@@ -431,11 +564,12 @@ async def _resolve_own_threads(
 
 async def emit_yield(
     actions: Actions, y: SessionYield, *, repo: str | None,
-    observed: datetime | None = None,
+    observed: datetime | None = None, source_model: str | None = None,
 ) -> dict[str, int]:
     """Write a parsed yield into the graph, DERIVED, behind the ownership boundary.
     Returns counts; `skipped_foreign` is the boundary doing its job (already captured at
-    higher trust), never an error."""
+    higher trust), never an error. `source_model` = which Claude authored the mined turns
+    (read off the transcript), stamped on each object as the missing provenance dimension."""
     observed = observed or datetime.now(UTC)
     counts = {"decisions": 0, "threads": 0, "obligations": 0, "resolved": 0,
               "skipped_foreign": 0}
@@ -452,13 +586,17 @@ async def emit_yield(
         if d["rationale"]:
             await actions.assert_property(oid, "rationale", d["rationale"], _SOURCE,
                                           observed, _CONF, evidence_class=_EC)
+        if source_model:
+            await actions.assert_property(oid, "source_model", source_model, _SOURCE,
+                                          observed, _CONF, evidence_class=_EC)
         if repo:
             await link_repo(actions, oid, repo, observed,
                             source=_SOURCE, evidence_class=_EC, confidence=_CONF)
         counts["decisions"] += 1
     opened_now: set[Any] = set()
     for text in y.threads_opened:
-        tid = await _emit_thread(actions, text, repo=repo, observed=observed)
+        tid = await _emit_thread(actions, text, repo=repo, observed=observed,
+                                 source_model=source_model)
         if tid is not None:
             counts["threads"] += 1
             opened_now.add(tid)
@@ -466,7 +604,7 @@ async def emit_yield(
             counts["skipped_foreign"] += 1
     for text in y.obligations:
         tid = await _emit_thread(actions, text, repo=repo, observed=observed,
-                                 kind="obligation")
+                                 kind="obligation", source_model=source_model)
         if tid is not None:
             counts["obligations"] += 1
             opened_now.add(tid)
@@ -505,7 +643,7 @@ async def sense_sessions_tick(
     model = model or get_settings().osiris_extract_model
     pool = actions.pool
     report = {"files": 0, "chunks": 0, "decisions": 0, "threads": 0, "obligations": 0,
-              "resolved": 0, "skipped_foreign": 0, "planted": 0}
+              "resolved": 0, "skipped_foreign": 0, "planted": 0, "swaps": 0}
 
     files = [only] if only is not None else await asyncio.to_thread(_list_transcripts, root)
 
@@ -533,6 +671,7 @@ async def sense_sessions_tick(
             if end <= offset:
                 break
             scanned += end - offset
+            chunk_models = models_in(lines)  # provenance: who authored this excerpt
             text, cwd = distill(lines)
             if len(text) < _MIN_DISTILLED:
                 offset = end  # not worth a model call — advance free
@@ -541,8 +680,13 @@ async def sense_sessions_tick(
             raw = await llm.complete(system=_SYSTEM, prompt=_sandwich(redact(text)),
                                      model=model)
             counts = await emit_yield(
-                actions, parse_session_yield(raw), repo=_repo_from_cwd(cwd)
+                actions, parse_session_yield(raw), repo=_repo_from_cwd(cwd),
+                source_model=chunk_models[-1] if chunk_models else None,
             )
+            if len(chunk_models) > 1:  # a warm rug-pull inside one session — flag it
+                report["swaps"] += await _record_swap(
+                    actions, path, chunk_models, _repo_from_cwd(cwd)
+                )
             offset = end
             await set_cursor(pool, key, str(offset))  # after emit: crash-safe
             report["chunks"] += 1
@@ -561,11 +705,25 @@ def main() -> None:  # pragma: no cover - CLI
     sweep [transcript]   sense ONE file to EOF now — the PreCompact hook path (reads
                          the hook's JSON on stdin when no path is given)
     backfill <transcript>  mine a file's HISTORY from byte 0 (explicit, never a cron)
+    whoami [root]        probe THIS session's actual model from its transcript (the
+                         source-model provenance probe — no DB, no weights, no prompt)
     """
     import sys
 
     cmd = sys.argv[1] if len(sys.argv) > 1 else "tick"
     arg = sys.argv[2] if len(sys.argv) > 2 else None
+
+    if cmd == "whoami":  # pure probe — no DB
+        r = Path(arg).expanduser() if arg else Path.home() / ".claude/projects"
+        cur, history, path = current_model(root=r)
+        print(f"current model: {cur}")
+        print(f"swap history:  {' → '.join(history) if history else '(none)'}")
+        print(f"transcript:    {path}")
+        if len(history) > 1:
+            print(f"WARM SWAP: this session ran {len(history)} models — "
+                  "the system prompt's identity claim is unreliable here.")
+        return
+
     target: Path | None = None
     if cmd == "tick":
         root = Path(arg).expanduser() if arg else Path.home() / ".claude/projects"

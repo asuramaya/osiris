@@ -316,3 +316,95 @@ def test_worker_registers_the_sensing_cron() -> None:
 
     names = {c.coroutine.__name__ for c in WorkerSettings.cron_jobs}
     assert "sense_sessions" in names
+
+
+# --- source model as provenance (the probe) --------------------------------------------
+
+def _amodel(text: str, model: str) -> str:
+    """An assistant transcript line carrying the harness's `model` field."""
+    return json.dumps({"type": "assistant", "cwd": _CWD,
+                       "message": {"model": model, "content": [{"type": "text", "text": text}]}})
+
+
+def test_model_probe_reads_the_harness_field_not_the_prompt() -> None:
+    from src.ingest.sessions import latest_model, models_in
+
+    lines = [
+        _amodel("first", "claude-fable-5"),
+        _line("user", "a question"),
+        _amodel("synthetic filler", "<synthetic>"),   # ignored — not a real model
+        _amodel("second", "claude-opus-4-8"),
+    ]
+    assert models_in(lines) == ["claude-fable-5", "claude-opus-4-8"]  # first-seen order
+    assert latest_model(lines) == "claude-opus-4-8"                   # the current turn
+    assert models_in([_line("user", "no assistant here")]) == []
+
+
+def test_locate_anchors_on_job_id_over_newest(tmp_path: Path) -> None:
+    """The multi-session box runs a FLEET; newest-mtime grabs the hottest parallel session
+    (proven live — the probe found 'heinrich' then 'xxit' before the anchor was fixed)."""
+    from src.ingest.sessions import locate_current_transcript
+
+    mine = tmp_path / "-home-x-code-osiris"
+    other = tmp_path / "-home-x-code-heinrich"
+    mine.mkdir()
+    other.mkdir()
+    ours = mine / "ad1a1cb0-5985-491e-9ac2-abcdef012345.jsonl"
+    ours.write_text(_amodel("hi", "claude-opus-4-8") + "\n")
+    hot = other / "99999999-0000-0000-0000-000000000000.jsonl"
+    hot.write_text(_amodel("busy", "claude-fable-5") + "\n")
+    # `hot` is newer, but the job-id anchor must still pick OUR session
+    import os
+
+    os.utime(hot, (10**10, 10**10))
+    got = locate_current_transcript(tmp_path, "/home/u/.claude/jobs/ad1a1cb0")
+    assert got == ours
+    got = locate_current_transcript(tmp_path, "/home/u/.claude/jobs/ad1a1cb0/tmp")
+    assert got == ours  # handles the .../<id>/tmp shape too
+    # no anchor → newest wins (the honest fallback)
+    assert locate_current_transcript(tmp_path, None) == hot
+
+
+async def test_source_model_stamped_on_emitted_yield(actions: Actions) -> None:
+    y = SessionYield(
+        decisions=[{"summary": "the source model is a provenance datapoint", "kind": "ruling",
+                    "rationale": ""}],
+        threads_opened=["wire the model probe into the miner"],
+    )
+    await emit_yield(actions, y, repo=None, source_model="claude-opus-4-8")
+    for typ in ("Decision", "Thread"):
+        sm = await actions.pool.fetchval(
+            "SELECT value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+            "WHERE o.type=$1 AND a.name='source_model' LIMIT 1", typ)
+        assert sm == "claude-opus-4-8"  # which Claude wrote it, on every write
+
+
+async def test_tick_detects_a_warm_swap_and_raises_an_obligation(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """A model change inside one session is the warm rug-pull the running agent can't feel;
+    the sensor reports what the agent can't."""
+    proj = tmp_path / "-home-x-code-osiris"
+    proj.mkdir()
+    t = proj / "s.jsonl"
+    with t.open("w") as f:
+        f.write(_line("user", "we decided the composer is the front end " * 6) + "\n")
+        f.write(_amodel("recorded that ruling " * 6, "claude-fable-5") + "\n")
+        f.write(_line("user", "and now a follow-up question about the renderer " * 6) + "\n")
+        f.write(_amodel("agreed, the renderer stays generic " * 6, "claude-opus-4-8") + "\n")
+
+    llm = FakeLLM({"decisions": [], "threads_opened": [], "threads_resolved": [],
+                   "obligations": []})
+    rep = await sense_sessions_tick(actions, tmp_path, llm, only=t, backfill=True)
+    assert rep["swaps"] == 1
+    swap = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.type='Thread' AND a.name='summary' AND a.value #>> '{}' ILIKE '%warm model swap%'")
+    assert swap is not None
+    assert "claude-fable-5 → claude-opus-4-8" in swap
+    kind = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.type='Thread' AND a.name='kind' AND a.object_id IN "
+        "(SELECT object_id FROM current_assertions WHERE name='summary' "
+        " AND value #>> '{}' ILIKE '%warm model swap%')")
+    assert kind == "obligation"

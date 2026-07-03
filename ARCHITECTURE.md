@@ -1,8 +1,10 @@
 # Architecture
 
-This describes the **current shape** of Osiris. [`DESIGN.md`](DESIGN.md) is the original,
-deeper design document; where the two differ, this file reflects what is actually built.
-The build history, with rationale and dead-ends, is in [`CLAUDE.md`](CLAUDE.md).
+This describes the **current shape** of Osiris. The build history, with rationale and
+dead-ends, is frozen in [`docs/HISTORY.md`](docs/HISTORY.md); the original design
+document lives in git history (`DESIGN.md`, removed 2026-07) and, like the history, as
+queryable `Reference` nodes inside the graph itself — Osiris is its own documentation
+store (`consult_canon` over MCP).
 
 ## The one idea
 
