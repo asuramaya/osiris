@@ -68,6 +68,11 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["src.mcp_server"]                  # FastMCP's .tool() is an untyped decorator
 disallow_untyped_decorators = false
+# FastMCP detects the context param by finding the BARE `Context` class inside the
+# annotation's args (find_context_parameter uses issubclass on a class); a parametrized
+# `Context[Any,Any,Any]` breaks that detection and turns ctx into a client-facing arg. So
+# the annotation must stay bare `Context | None` — which trips mypy's type-arg check here.
+disable_error_code = ["type-arg"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

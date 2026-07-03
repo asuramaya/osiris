@@ -16,7 +16,7 @@ import uuid
 from typing import Any
 
 import asyncpg
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from src.actions.core import Actions
 from src.config.settings import get_settings
@@ -38,6 +38,7 @@ from src.ontology.resolution import (
 from src.ontology.schema import catalog
 from src.orchestrator import capture
 from src.orchestrator import compositions as comp
+from src.orchestrator.agents import AgentIdentity, register_agent, resolve_identity
 from src.orchestrator.console import get_console as _get_console
 from src.orchestrator.console import set_console as _set_console
 from src.orchestrator.dossier import entity_dossier
@@ -47,8 +48,11 @@ mcp = FastMCP(
     "osiris",
     instructions=(
         "Osiris is the durable memory a session doesn't have — the graph remembers what "
-        "you learn and decide after you're gone. On connect, orient with "
-        "run_composition('briefing') to see open threads and recent work, and call "
+        "you learn and decide after you're gone, and it is SHARED across the whole fleet of "
+        "Claude instances. FIRST, call mount(cwd=<your working dir>, job_dir=$CLAUDE_JOB_DIR) "
+        "to link in as a first-class agent — this attributes everything you write to YOU "
+        "(which instance, which model, which project) instead of an anonymous bucket. Then "
+        "orient() for your bearings (open threads, obligations, recent decisions), and "
         "get_schema to learn the object/link types before you author a composition or read "
         "a result. Write back AS YOU GO — record_decision the moment a ruling lands, "
         "open_thread when work starts or blocks (kind='obligation' for a duty an action "
@@ -62,6 +66,31 @@ mcp = FastMCP(
     ),
 )
 _pool: asyncpg.Pool | None = None
+
+
+# The fleet registry: each connected agent's identity, keyed by its connection. On the
+# shared server every agent writes through ONE process, so without this their writes
+# collapse into the single `session` source. `mount` populates this; the capture tools
+# read it so each write is attributed to `agent:<session>`. In-memory (rebuilt on mount
+# after a restart); the Agent OBJECTS live durably in the graph.
+_agents: dict[int, AgentIdentity] = {}
+
+
+def _conn_key(ctx: Context | None) -> int | None:
+    """A stable per-connection key: the id() of the persistent ServerSession object (one
+    per client connection for the connection's lifetime). None under stdio / no context."""
+    try:
+        return id(ctx.request_context.session) if ctx is not None else None
+    except (AttributeError, LookupError):
+        return None
+
+
+def _source_for(ctx: Context | None) -> str:
+    """The attributing actor for a write: the mounted agent on this connection, else the
+    lone-operator `session` (back-compat — an un-mounted agent still writes, just coarsely)."""
+    key = _conn_key(ctx)
+    ident = _agents.get(key) if key is not None else None
+    return ident.agent_id if ident else "session"
 
 
 async def _pool_get() -> asyncpg.Pool:
@@ -405,11 +434,54 @@ async def consult_canon(query: str = "") -> dict[str, Any]:
     return await comp.run_spec(pool, spec, None, name="design-canon")
 
 
+# --- mount: link to the graph as a first-class fleet member ---
+
+@mcp.tool()
+async def mount(
+    cwd: str, job_dir: str | None = None, model: str | None = None, ctx: Context | None = None
+) -> dict[str, str]:
+    """Link this agent to Osiris as a first-class fleet member — call it ONCE, first thing.
+    Pass your working directory `cwd` (names your project) and, if you can, your `job_dir`
+    ($CLAUDE_JOB_DIR) so the server can read your ACTUAL model off your transcript (not your
+    system prompt, which lies after a model swap). Registers an Agent object (works_in your
+    project, acts_for the principal) and, for the rest of this connection, attributes every
+    decision/thread you record to `agent:<you>` instead of the shared `session` bucket — so
+    the graph knows WHICH instance, on WHICH model, decided what. Then call orient()."""
+    ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model)
+    await register_agent(
+        Actions(await _pool_get()), ident, actor=get_settings().osiris_actor
+    )
+    key = _conn_key(ctx)
+    if key is not None:
+        _agents[key] = ident
+    return {"agent": ident.agent_id, "project": ident.project or "?",
+            "model": ident.model or "unknown",
+            "note": "linked — writes now attributed to you; call orient() next"}
+
+
+@mcp.tool()
+async def orient(project: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
+    """Get your bearings — the mount ritual as one call. Returns who you are (if mounted) and
+    the briefing: open threads, obligations, and recent decisions. Call after mount(), and
+    again after any compaction, to inherit instead of starting blind. `project` is advisory."""
+    pool = await _pool_get()
+    key = _conn_key(ctx)
+    ident = _agents.get(key) if key is not None else None
+    briefing = await comp.run_composition(pool, "briefing")
+    return {
+        "you": ident.agent_id if ident else "session (un-mounted — call mount(cwd) first)",
+        "model": (ident.model if ident else None),
+        "project": (ident.project if ident else project),
+        "briefing": briefing,
+    }
+
+
 # --- write-back: the prosthesis (capture what you decided / what's still open) ---
 
 @mcp.tool()
 async def record_decision(
-    summary: str, kind: str = "ruling", rationale: str | None = None, repo: str | None = None
+    summary: str, kind: str = "ruling", rationale: str | None = None,
+    repo: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
     """Write back a DECISION you made this session — a ruling, an architecture pivot, a
     deliberate rejection — so the WHY becomes durable graph memory the next session inherits
@@ -417,16 +489,18 @@ async def record_decision(
     in a commit at all). `kind`: ruling|reset|override|rejection|choice|decision. `rationale`
     = the reasoning; `repo` = a SoftwareProject name to file it under. Renders in the
     `decision-log` composition beside mined decisions, graded SELF_DECLARED (higher trust).
-    Idempotent on the summary."""
+    Attributed to you if you mount()ed. Idempotent on the summary."""
     d = await capture.record_decision(
-        Actions(await _pool_get()), summary, kind=kind, rationale=rationale, repo=repo
+        Actions(await _pool_get()), summary, kind=kind, rationale=rationale, repo=repo,
+        source=_source_for(ctx),
     )
     return {"id": str(d), "kind": kind, "summary": summary}
 
 
 @mcp.tool()
 async def open_thread(
-    summary: str, repo: str | None = None, kind: str | None = None
+    summary: str, repo: str | None = None, kind: str | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, str]:
     """Open a THREAD — an unresolved question or next-step you want the next session to pick
     up. Surfaces in run_composition('briefing') under open threads, beside mined ones. `repo`
@@ -434,16 +508,22 @@ async def open_thread(
     off its loose ends instead of losing them. `kind='obligation'` marks a DUTY minted by an
     action ('kernel changed → daemons need restart') — record those the moment they're minted;
     they are neither rulings nor commits and otherwise die with the context window."""
-    t = await capture.open_thread(Actions(await _pool_get()), summary, repo=repo, kind=kind)
+    t = await capture.open_thread(
+        Actions(await _pool_get()), summary, repo=repo, kind=kind, source=_source_for(ctx)
+    )
     return {"id": str(t), "summary": summary, "status": "open"}
 
 
 @mcp.tool()
-async def resolve_thread(ref: str, because: str | None = None) -> dict[str, str]:
+async def resolve_thread(
+    ref: str, because: str | None = None, ctx: Context | None = None
+) -> dict[str, str]:
     """Close a THREAD you (or an earlier session) resolved — `ref` is its UUID or a summary
     substring; `because` records why. It leaves briefing's open list and joins the resolved
     section. Event-sourced (never deleted), so the close is auditable and reversible."""
-    tid = await capture.resolve_thread(Actions(await _pool_get()), ref, because=because)
+    tid = await capture.resolve_thread(
+        Actions(await _pool_get()), ref, because=because, source=_source_for(ctx)
+    )
     if tid is None:
         return {"error": f"no open thread matches {ref!r}"}
     return {"id": str(tid), "status": "resolved"}

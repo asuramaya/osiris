@@ -79,6 +79,7 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `Reference` | `ref:` | A design/reference document — external canon (Palantir/Notion) or own docs, ingested as project memory. |
 | `Decision` | `decision:` | An architectural/design decision mined from the project's own commit rationale — the 'why', as queryable institutional memory. |
 | `File` | `file:` | A tracked file in a repository (metadata only — content stays in git, read on demand). Its `role` lets analogous files be compared across repos. |
+| `Agent` | `agent:` | A Claude instance operating over the graph — an analyst in the fleet. Carries its model (source-model provenance) and works in a project on behalf of a principal. 'A man and all his imaginary friends.' |
 
 ### Observable object types
 
@@ -135,6 +136,8 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `search_variant` | — | A search/handle variant. |
 | `linked_to` | — | Generic association. |
 | `has_observation` | * → ObservedData | Points at raw observed evidence. |
+| `acts_for` | Agent → Person | Agent acts on behalf of the principal. |
+| `works_in` | Agent → SoftwareProject | Agent operates in the target project. |
 | `archived_snapshot` | * → URL | A Wayback/archive snapshot of the target. |
 | `same_as` | — | Identity merge edge (loser → winner). |
 | `uses` | — | Actor/source employs this capability or technique. |

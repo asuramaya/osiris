@@ -92,30 +92,34 @@ async def link_repo(
 
 async def record_decision(
     actions: Actions, summary: str, *, kind: str = "ruling",
-    rationale: str | None = None, repo: str | None = None,
+    rationale: str | None = None, repo: str | None = None, source: str = _SOURCE,
 ) -> uuid.UUID:
     """Capture a decision at the moment it is made — the WHY, declared, not mined.
 
     `kind` labels it the way the miner does (ruling / reset / override / rejection /
     choice / decision). `rationale`, if given, is the reasoning stored inline (an
     enrichment the miner can't produce — it only has the commit body). `repo` files the
-    decision under a SoftwareProject. Idempotent on the summary hash. Returns the id."""
+    decision under a SoftwareProject. `source` is the attributing actor — the static
+    `session` for a lone operator, or `agent:<session>` for a fleet member so provenance
+    records WHICH instance decided (still SELF_DECLARED, still the high-trust channel).
+    Idempotent on the summary hash. Returns the id."""
     observed = datetime.now(UTC)
-    d = await actions.create_or_find_object("Decision", _canon("decision", summary), _SOURCE)
-    await actions.assert_property(d, "summary", summary, _SOURCE, observed, _CONF,
+    d = await actions.create_or_find_object("Decision", _canon("decision", summary), source)
+    await actions.assert_property(d, "summary", summary, source, observed, _CONF,
                                   evidence_class=_EC)
-    await actions.assert_property(d, "kind", kind, _SOURCE, observed, _CONF,
+    await actions.assert_property(d, "kind", kind, source, observed, _CONF,
                                   evidence_class=_EC)
     if rationale:
-        await actions.assert_property(d, "rationale", rationale, _SOURCE, observed, _CONF,
+        await actions.assert_property(d, "rationale", rationale, source, observed, _CONF,
                                       evidence_class=_EC)
     if repo:
-        await link_repo(actions, d, repo, observed)
+        await link_repo(actions, d, repo, observed, source=source, evidence_class=_EC)
     return d
 
 
 async def open_thread(
-    actions: Actions, summary: str, *, repo: str | None = None, kind: str | None = None
+    actions: Actions, summary: str, *, repo: str | None = None, kind: str | None = None,
+    source: str = _SOURCE,
 ) -> uuid.UUID:
     """Open a thread at source — an unresolved question / next-step for the next session
     to inherit. Same shape as a mined Thread (props summary + status=open) so it appears in
@@ -124,18 +128,19 @@ async def open_thread(
     `kind='obligation'` marks the obligations class (ruling 7336c5fc): a DUTY minted by an
     action ("kernel changed → daemons need restart") — neither a ruling nor ordinary work,
     exactly the thing that used to die with the context window. Same Thread shape, so it
-    surfaces in briefing beside the rest; the kind stays as data for filtering."""
+    surfaces in briefing beside the rest; the kind stays as data for filtering. `source`
+    attributes the opening actor (a fleet agent vs the lone `session`)."""
     observed = datetime.now(UTC)
-    t = await actions.create_or_find_object("Thread", _canon("thread", summary), _SOURCE)
-    await actions.assert_property(t, "summary", summary, _SOURCE, observed, _CONF,
+    t = await actions.create_or_find_object("Thread", _canon("thread", summary), source)
+    await actions.assert_property(t, "summary", summary, source, observed, _CONF,
                                   evidence_class=_EC)
-    await actions.assert_property(t, "status", "open", _SOURCE, observed, _CONF,
+    await actions.assert_property(t, "status", "open", source, observed, _CONF,
                                   evidence_class=_EC)
     if kind:
-        await actions.assert_property(t, "kind", kind, _SOURCE, observed, _CONF,
+        await actions.assert_property(t, "kind", kind, source, observed, _CONF,
                                       evidence_class=_EC)
     if repo:
-        await link_repo(actions, t, repo, observed)
+        await link_repo(actions, t, repo, observed, source=source, evidence_class=_EC)
     return t
 
 
@@ -155,7 +160,7 @@ async def _find_thread(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
 
 
 async def resolve_thread(
-    actions: Actions, ref: str, *, because: str | None = None
+    actions: Actions, ref: str, *, because: str | None = None, source: str = _SOURCE
 ) -> uuid.UUID | None:
     """Close a thread at source — the session marking a question answered, so it leaves the
     open list and joins the resolved section. Matches the miner's self-heal shape
@@ -168,11 +173,11 @@ async def resolve_thread(
     if tid is None:
         return None
     observed = datetime.now(UTC)
-    await actions.assert_property(tid, "status", "resolved", _SOURCE, observed, _CONF,
+    await actions.assert_property(tid, "status", "resolved", source, observed, _CONF,
                                   evidence_class=_EC)
-    await actions.assert_property(tid, "resolved_in", "session", _SOURCE, observed, _CONF,
-                                  evidence_class=_EC)
+    await actions.assert_property(tid, "resolved_in", source, source, observed,
+                                  _CONF, evidence_class=_EC)
     if because:
-        await actions.assert_property(tid, "resolved_because", because, _SOURCE, observed,
+        await actions.assert_property(tid, "resolved_because", because, source, observed,
                                       _CONF, evidence_class=_EC)
     return tid

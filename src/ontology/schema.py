@@ -132,6 +132,10 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                "A tracked file in a repository (metadata only — content stays in git, "
                "read on demand). Its `role` lets analogous files be compared across repos.",
                ("file:",)),
+    ObjectType("Agent", "Software", "#f778ba", "hexagon",
+               "A Claude instance operating over the graph — an analyst in the fleet. "
+               "Carries its model (source-model provenance) and works in a project on "
+               "behalf of a principal. 'A man and all his imaginary friends.'", ("agent:",)),
     # Observables
     ObjectType("IPv4", "Observable", "#2dd4bf", "ellipse", "An IPv4 address observable."),
     ObjectType("TelegramChannel", "Observable", "#56a3ff", "ellipse",
@@ -196,6 +200,9 @@ _LINK_TYPES: tuple[LinkType, ...] = (
     LinkType("search_variant", "A search/handle variant."),
     LinkType("linked_to", "Generic association."),
     LinkType("has_observation", "Points at raw observed evidence.", (), ("ObservedData",)),
+    LinkType("acts_for", "Agent acts on behalf of the principal.", ("Agent",), ("Person",)),
+    LinkType("works_in", "Agent operates in the target project.",
+             ("Agent",), ("SoftwareProject",)),
     LinkType("archived_snapshot", "A Wayback/archive snapshot of the target.", (), ("URL",)),
     LinkType("same_as", "Identity merge edge (loser → winner)."),
     LinkType("uses", "Actor/source employs this capability or technique."),
