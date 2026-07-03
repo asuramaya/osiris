@@ -46,7 +46,7 @@ ROOM_CONFIG: dict[str, dict[str, Any]] = {
 ROOM_COMPOSITIONS: dict[str, tuple[str, ...]] = {
     "engineer": (
         "briefing", "decision-log", "design-canon", "family-consistency", "family-drift",
-        "portfolio", "pulse-digest", "projects", "project",
+        "portfolio", "pulse-digest", "projects", "project", "fleet",
     ),
     "analyst": (
         "who-is-this", "operational-vs-disclosed-geography", "co-investment-ties",

@@ -144,6 +144,18 @@ class Actions:
         HOW the fact was obtained (see parsers/evidence.py)."""
         actor = actor or source_id
         async with self.pool.acquire() as conn, conn.transaction():
+            # Within-source supersession is a read-modify-write (find the non-superseded
+            # prior, then INSERT pointing `supersedes` at it). Under a FLEET, the same source
+            # can assert the same property concurrently — and without serialization every
+            # racer reads the SAME prior and they all insert, forking the chain into N live
+            # rows (caught by the concurrency stress test: 18 lived where 1 should). A
+            # txn-scoped advisory lock on the exact (object,name,source) triple serializes
+            # just that contended key — different triples and different SOURCES never wait,
+            # so multi-source parallelism (the common fleet case) is untouched.
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext($1))",
+                f"{object_id}:{name}:{source_id}",
+            )
             prior_row = await conn.fetchrow(
                 "SELECT a.id, a.value, a.observed_at, a.confidence, a.evidence_class "
                 "FROM assertions a "

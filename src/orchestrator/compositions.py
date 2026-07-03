@@ -1113,6 +1113,18 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "portfolio": {"op": "function", "name": "portfolio"},
     # the heartbeat digest: what the off-the-clock pulse found while you were away.
     "pulse-digest": {"op": "function", "name": "pulse"},
+    # the fleet roster — every Claude instance registered in the shared graph, its model and
+    # project. "A man and all his imaginary friends", on the human console. A pure op-tree
+    # (select Agent → table), not a hardcoded panel: the composer discipline holds even here.
+    "fleet": {
+        "op": "table",
+        "from": {"op": "select", "object_type": "Agent"},
+        "columns": [
+            {"name": "agent", "property": "name"},
+            {"name": "model", "property": "source_model"},
+            {"name": "project", "property": "project"},
+        ],
+    },
     # the developer project browser — DECOMPOSED: no longer a hardcoded Function, a pure op-tree
     # the user owns. `select` the repos → `table` with rollup columns (Notion database+rollups)
     # → `order` by last-touched. This is what "everything is composed" means in practice.
