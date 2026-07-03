@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     # The developer-persona heartbeat (pulse): comma-separated local repo paths the autonomic
     # loop senses + re-ingests on each tick. Empty => the pulse watches nothing (no-op).
     osiris_dev_repos: str = ""
+    # Session-sensing (the last unsensed source): path to the Claude Code projects root
+    # (usually ~/.claude/projects) whose session transcripts the worker senses on a cron —
+    # distill → redact → extract → DERIVED backfill of decisions/threads/obligations the
+    # session forgot to write back. Empty => off. Forward-only: an unseen transcript starts
+    # at its current end; history is `python -m src.ingest.sessions backfill`'s explicit job.
+    osiris_sense_sessions: str = ""
 
 
 def get_settings() -> Settings:

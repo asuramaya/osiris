@@ -64,25 +64,30 @@ async def _resolve_repo(pool: asyncpg.Pool, name: str) -> uuid.UUID | None:
     )
 
 
-async def _link_repo(actions: Actions, obj_id: uuid.UUID, repo: str, observed: datetime) -> None:
+async def link_repo(
+    actions: Actions, obj_id: uuid.UUID, repo: str, observed: datetime,
+    *, source: str = _SOURCE, evidence_class: str = _EC, confidence: float = _CONF,
+) -> None:
     """Attach a captured Decision/Thread to its project. A session item has no commit, so
     it links `in_repo` → the SoftwareProject directly (the miner's `decided_in`→Commit→
     `in_repo` chain collapsed by one hop). Find-or-create on `repo:<name>` so the link
     always lands — and a decision recorded before the repo is ingested pre-attaches to the
-    same object gitlog will later find-or-create. The edge is deduped (re-capture is a no-op)."""
+    same object gitlog will later find-or-create. The edge is deduped (re-capture is a no-op).
+    The session-miner reuses this with its own source + DERIVED grade — one implementation,
+    two trust tiers (the same split capture/miner already have)."""
     name = repo.removeprefix("repo:").strip()
     proj = await _resolve_repo(actions.pool, name)
     if proj is None:  # a stub the eventual gitlog ingest will land on (same repo: canonical)
-        proj = await actions.create_or_find_object("SoftwareProject", f"repo:{name}", _SOURCE)
-        await actions.assert_property(proj, "name", name, _SOURCE, observed, _CONF,
-                                      evidence_class=_EC)
+        proj = await actions.create_or_find_object("SoftwareProject", f"repo:{name}", source)
+        await actions.assert_property(proj, "name", name, source, observed, confidence,
+                                      evidence_class=evidence_class)
     exists = await actions.pool.fetchval(
         "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='in_repo' LIMIT 1",
         obj_id, proj,
     )
     if not exists:
-        await actions.create_link(obj_id, proj, "in_repo", _SOURCE, observed, _CONF,
-                                  evidence_class=_EC)
+        await actions.create_link(obj_id, proj, "in_repo", source, observed, confidence,
+                                  evidence_class=evidence_class)
 
 
 async def record_decision(
@@ -105,24 +110,32 @@ async def record_decision(
         await actions.assert_property(d, "rationale", rationale, _SOURCE, observed, _CONF,
                                       evidence_class=_EC)
     if repo:
-        await _link_repo(actions, d, repo, observed)
+        await link_repo(actions, d, repo, observed)
     return d
 
 
 async def open_thread(
-    actions: Actions, summary: str, *, repo: str | None = None
+    actions: Actions, summary: str, *, repo: str | None = None, kind: str | None = None
 ) -> uuid.UUID:
     """Open a thread at source — an unresolved question / next-step for the next session
     to inherit. Same shape as a mined Thread (props summary + status=open) so it appears in
-    `briefing`'s open-threads section beside mined ones. Idempotent on the summary hash."""
+    `briefing`'s open-threads section beside mined ones. Idempotent on the summary hash.
+
+    `kind='obligation'` marks the obligations class (ruling 7336c5fc): a DUTY minted by an
+    action ("kernel changed → daemons need restart") — neither a ruling nor ordinary work,
+    exactly the thing that used to die with the context window. Same Thread shape, so it
+    surfaces in briefing beside the rest; the kind stays as data for filtering."""
     observed = datetime.now(UTC)
     t = await actions.create_or_find_object("Thread", _canon("thread", summary), _SOURCE)
     await actions.assert_property(t, "summary", summary, _SOURCE, observed, _CONF,
                                   evidence_class=_EC)
     await actions.assert_property(t, "status", "open", _SOURCE, observed, _CONF,
                                   evidence_class=_EC)
+    if kind:
+        await actions.assert_property(t, "kind", kind, _SOURCE, observed, _CONF,
+                                      evidence_class=_EC)
     if repo:
-        await _link_repo(actions, t, repo, observed)
+        await link_repo(actions, t, repo, observed)
     return t
 
 

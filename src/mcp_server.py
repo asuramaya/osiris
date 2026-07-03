@@ -51,10 +51,14 @@ mcp = FastMCP(
         "run_composition('briefing') to see open threads and recent work, and call "
         "get_schema to learn the object/link types before you author a composition or read "
         "a result. Write back AS YOU GO — record_decision the moment a ruling lands, "
-        "open_thread when work starts or blocks, resolve_thread the moment it closes; "
-        "never batch it for the session's end. A session can be compacted or killed at ANY "
-        "instant: the graph, not the context window, is your memory, and anything not "
-        "written back does not exist."
+        "open_thread when work starts or blocks (kind='obligation' for a duty an action "
+        "minted), resolve_thread the moment it closes; never batch it for the session's "
+        "end. A session can be compacted or killed at ANY instant: the graph, not the "
+        "context window, is your memory, and anything not written back does not exist. "
+        "IDENTITY CHECK: the operator's standing choice is that sessions here run Fable 5. "
+        "Harness degradations silently swap the model mid-session; if your environment "
+        "says you are a different model, SAY SO to the operator in your first reply — "
+        "a rug-pull must be confessed, never inherited blind."
     ),
 )
 _pool: asyncpg.Pool | None = None
@@ -416,12 +420,16 @@ async def record_decision(
 
 
 @mcp.tool()
-async def open_thread(summary: str, repo: str | None = None) -> dict[str, str]:
+async def open_thread(
+    summary: str, repo: str | None = None, kind: str | None = None
+) -> dict[str, str]:
     """Open a THREAD — an unresolved question or next-step you want the next session to pick
     up. Surfaces in run_composition('briefing') under open threads, beside mined ones. `repo`
     files it under a SoftwareProject. Idempotent on the summary. This is how a session hands
-    off its loose ends instead of losing them."""
-    t = await capture.open_thread(Actions(await _pool_get()), summary, repo=repo)
+    off its loose ends instead of losing them. `kind='obligation'` marks a DUTY minted by an
+    action ('kernel changed → daemons need restart') — record those the moment they're minted;
+    they are neither rulings nor commits and otherwise die with the context window."""
+    t = await capture.open_thread(Actions(await _pool_get()), summary, repo=repo, kind=kind)
     return {"id": str(t), "summary": summary, "status": "open"}
 
 

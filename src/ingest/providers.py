@@ -17,7 +17,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 import shutil
+import tempfile
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -129,10 +131,23 @@ class ClaudeCliClient:
     async def complete(
         self, *, system: str, prompt: str, model: str, max_tokens: int = 2048
     ) -> str:
+        # Context isolation: without it, a `claude -p` run inside a repo inherits the
+        # project's CLAUDE.md + settings — ~52k tokens of the project's own opinions
+        # pre-loaded into what is supposed to be a NEUTRAL extraction call (measured live:
+        # --setting-sources "" cuts cache-creation 51,900 → 7,362 tokens). The neutral cwd
+        # is belt-and-braces for the same leak. An extractor must read its input with
+        # nothing but its instructions.
+        # The cwd is a DEDICATED dir, not bare /tmp: each -p call writes its own session
+        # transcript under ~/.claude/projects/<cwd-slug>/, and the session-miner senses
+        # that tree — a recognizable slug lets it exclude the extractor's own transcripts
+        # (an instrument reading itself is the loop-pathology class).
+        workdir = os.path.join(tempfile.gettempdir(), "osiris-extract")
+        os.makedirs(workdir, exist_ok=True)
         proc = await asyncio.create_subprocess_exec(
             self.binary, "-p", prompt, "--model", model, "--system-prompt", system,
-            "--output-format", "json",
+            "--output-format", "json", "--setting-sources", "",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            cwd=workdir,
         )
         out, err = await proc.communicate()
         if proc.returncode != 0:

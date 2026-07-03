@@ -22,6 +22,7 @@ from src.config.settings import get_settings
 from src.connectors.registry import CONNECTORS
 from src.db.pool import create_pool
 from src.db.redis import create_redis
+from src.ingest.sessions import sense_sessions_tick
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, expand_case, run_cascade
 from src.orchestrator.manifests import load_manifests
@@ -111,6 +112,25 @@ async def heartbeat(ctx: dict[str, Any]) -> int:
     return 1
 
 
+async def sense_sessions(ctx: dict[str, Any]) -> int:
+    """Sense the session transcripts — the last unsensed source. Distill new dialogue,
+    redact, extract, land the yield DERIVED. Off unless OSIRIS_SENSE_SESSIONS names the
+    projects root; a failed pass logs and waits for the next tick (cursors only advance
+    past what was actually emitted)."""
+    root = get_settings().osiris_sense_sessions
+    if not root:
+        return 0
+    actions: Actions = ctx["cascade"].actions
+    try:
+        report = await sense_sessions_tick(actions, Path(root))  # ~ expanded at listing
+    except Exception as exc:  # a bad transcript/LLM hiccup must not kill the cron
+        _log.warning("session sensing failed: %r", exc)
+        return 0
+    if report["chunks"] or report["planted"]:
+        _log.info("session sensing: %s", report)
+    return report["chunks"]
+
+
 class WorkerSettings:
     # enqueueable jobs (the API hands heavy work here instead of running it inline)
     functions: list[Any] = [expand_case_job]
@@ -124,6 +144,8 @@ class WorkerSettings:
         cron(reap_runs, minute=set(range(0, 60, 5)), run_at_startup=True),
         # liveness heartbeat every 30s (the dead-man's-switch /health/worker reads).
         cron(heartbeat, second={0, 30}, run_at_startup=True),
+        # session-sensing every 10 min (a few LLM calls max per tick; no-op when unset).
+        cron(sense_sessions, minute=set(range(0, 60, 10)), second={30}),
     ]
     on_startup = startup
     on_shutdown = shutdown
