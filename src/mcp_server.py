@@ -476,6 +476,42 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
     }
 
 
+@mcp.tool()
+async def fleet() -> dict[str, Any]:
+    """The roster — every agent registered in the shared graph, its model + project, most
+    recent first, plus how many are connected right now. This is the fleet made visible:
+    'a man and all his imaginary friends.' Use it to see who else is working where."""
+    pool = await _pool_get()
+    rows = await pool.fetch(
+        "SELECT o.canonical, "
+        " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='source_model') AS model, "
+        " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='project') AS project "
+        "FROM objects o WHERE o.type='Agent' AND o.status='active' ORDER BY o.id DESC"
+    )
+    return {
+        "connected_now": len(_agents),
+        "registered": [
+            {"agent": r["canonical"], "model": r["model"], "project": r["project"]}
+            for r in rows
+        ],
+    }
+
+
+@mcp.tool()
+async def bootstrap(cwd: str) -> dict[str, Any]:
+    """Onboard a project by migrating its markdown MEMORY (CLAUDE.md build log / DESIGN.md /
+    memory essays) INTO the shared graph as retrieval-sized Reference nodes — so its history
+    becomes a bounded query (consult_canon) instead of bloat re-injected into every context.
+    Registers the project and returns a suggested boot-sector CLAUDE.md. Osiris does NOT touch
+    your files (no hands): review the suggestion, write it yourself, archive the originals.
+    Public docs (README/ARCHITECTURE) are left alone — they're human-facing exports, not memory."""
+    from src.orchestrator.bootstrap import bootstrap_project
+
+    return await bootstrap_project(Actions(await _pool_get()), cwd)
+
+
 # --- write-back: the prosthesis (capture what you decided / what's still open) ---
 
 @mcp.tool()
