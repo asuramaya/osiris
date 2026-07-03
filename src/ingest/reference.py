@@ -45,10 +45,21 @@ def _existing(paths: tuple[str, ...]) -> list[str]:
     return [p for p in paths if Path(p).exists()]
 
 
+_FRONTMATTER = re.compile(r"\A---\s*\n.*?\n---\s*\n", re.S)
+
+
 def parse_doc(text: str) -> dict[str, str]:
     """Pull the leading `<!-- source: … | vendor: … | topic: … -->` header (if any) + the
-    title (first H1) + the body. Pure; tolerant of docs with no header (our own)."""
+    title (first H1) + the body. Pure; tolerant of docs with no header (our own). YAML
+    frontmatter (the memory-essay format) is stripped — metadata about a file is not the
+    knowledge in it."""
     meta: dict[str, str] = {}
+    fm = _FRONTMATTER.match(text.lstrip())
+    fm_name = ""
+    if fm:
+        nm = re.search(r"^name:\s*(.+)$", fm.group(0), re.M)
+        fm_name = nm.group(1).strip().strip("\"'") if nm else ""
+    text = _FRONTMATTER.sub("", text.lstrip())
     m = _HEADER.match(text.lstrip())
     if m:
         for part in m.group(1).split("|"):
@@ -57,9 +68,103 @@ def parse_doc(text: str) -> dict[str, str]:
                 meta[k.strip()] = v.strip()
     body = _HEADER.sub("", text, count=1).strip()
     title_m = re.search(r"^#\s+(.+)$", body, re.M)
-    meta["title"] = title_m.group(1).strip() if title_m else "(untitled)"
+    # H1 wins; an essay with only frontmatter titles itself by its `name:` slug
+    meta["title"] = title_m.group(1).strip() if title_m else (fm_name or "(untitled)")
     meta["body"] = body
     return meta
+
+
+# --- log chunking: a dated build log becomes PER-ENTRY nodes, never one dump -----------
+
+_DATE = re.compile(r"\b(20\d\d-\d\d(?:-\d\d)?)\b")
+# DOTALL: a long bold header wraps across lines in the arc-log format — without it the
+# wrapped entries fail to split and get swallowed into the previous entry's chunk
+# (live: 'liveness' retrieved THE COMPOSER's node because THE LIVENESS NIGHT never split).
+_BOLD_BULLET = re.compile(r"^- \*\*(.+?)\*\*", re.M | re.S)
+# a bullet must be substantial to earn its own node — small ones stay with their section
+_MIN_ENTRY = 400
+
+
+def parse_log(text: str) -> list[dict[str, str]]:
+    """Chunk a markdown build log into retrieval-sized entries. Pure.
+
+    Two levels: every `## ` section is a chunk, and within a section, each top-level
+    `- **Header…**` bullet of ≥400 chars splits out as its own dated entry (the arc-log
+    format CLAUDE.md grew). This is the load-bearing move of the md-kill: 'what was the
+    liveness night?' must return THAT entry, not the whole log — a dump behind an API is
+    still a dump. Each chunk carries title / body / date (first ISO date in the title or
+    first line, empty if none)."""
+    out: list[dict[str, str]] = []
+
+    def _date_of(title: str, body: str) -> str:
+        m = _DATE.search(title) or _DATE.search(body[:300])
+        return m.group(1) if m else ""
+
+    for heading, section in _canon_like_sections(text):
+        # split out the big bold bullets; whatever remains stays with the section
+        remainder: list[str] = []
+        pos = 0
+        bullets: list[tuple[str, str]] = []
+        starts = list(_BOLD_BULLET.finditer(section))
+        for i, m in enumerate(starts):
+            if m.start() > pos:
+                remainder.append(section[pos:m.start()].strip())
+            end = starts[i + 1].start() if i + 1 < len(starts) else len(section)
+            chunk = section[m.start():end].strip()
+            if len(chunk) >= _MIN_ENTRY:
+                title = " ".join(m.group(1).split()).rstrip(":")
+                bullets.append((title, chunk))
+            else:
+                remainder.append(chunk)
+            pos = end
+        if pos < len(section):
+            remainder.append(section[pos:].strip())
+        rest = "\n".join(r for r in remainder if r).strip()
+        if rest:
+            out.append({"title": heading, "body": rest, "date": _date_of(heading, rest)})
+        for title, chunk in bullets:
+            out.append({"title": title, "body": chunk, "date": _date_of(title, chunk)})
+    return out
+
+
+def _canon_like_sections(text: str) -> list[tuple[str, str]]:
+    """(heading, text) by `## ` headers; pre-`##` prose (minus the H1) is '(overview)'."""
+    parts = re.split(r"^##\s+(.+)$", text, flags=re.M)
+    out: list[tuple[str, str]] = []
+    intro = re.sub(r"^#\s+.+$", "", parts[0], count=1, flags=re.M).strip()
+    if intro:
+        out.append(("(overview)", intro))
+    for i in range(1, len(parts), 2):
+        out.append((parts[i].strip(), parts[i + 1].strip() if i + 1 < len(parts) else ""))
+    return out
+
+
+async def ingest_log(
+    actions: Actions, path: str, *, topic: str, case_id: uuid.UUID | None = None
+) -> dict[str, Any]:
+    """Ingest a build log as per-entry `Reference` nodes (canonical
+    `ref:<topic>-[<date>-]<title-slug>`), SELF_DECLARED (our own record of our own work).
+    Idempotent: canonical find-or-create + the byte-dup assertion skip absorb re-runs."""
+    ec = EvidenceClass.SELF_DECLARED
+    conf, now = confidence_for(ec), datetime.now(UTC)
+    source_id = "ref:osiris"
+    entries = parse_log(_read(path))
+    ids: list[uuid.UUID] = []
+    for e in entries:
+        stem = f"{e['date']}-{_slug(e['title'])}" if e["date"] else _slug(e["title"])
+        canon = f"ref:{topic}-{stem[:80]}"
+        ref = await actions.create_or_find_object("Reference", canon, source_id, case_id)
+        await actions.assert_property(ref, "name", e["title"], source_id, now, conf,
+                                      case_id=case_id, evidence_class=ec.value)
+        await actions.assert_property(ref, "topic", topic, source_id, now, conf,
+                                      case_id=case_id, evidence_class=ec.value)
+        await actions.assert_property(ref, "body", e["body"], source_id, now, conf,
+                                      case_id=case_id, evidence_class=ec.value)
+        if e["date"]:
+            await actions.assert_property(ref, "date", e["date"], source_id, now, conf,
+                                          case_id=case_id, evidence_class=ec.value)
+        ids.append(ref)
+    return {"entries": len(ids), "topic": topic, "path": path}
 
 
 async def ingest_reference_doc(
@@ -201,12 +306,23 @@ async def mine_mentions(
 
 
 def main() -> None:  # pragma: no cover - CLI
+    """`python -m src.ingest.reference` — the design canon (vendor + own docs).
+    `... log <path> <topic>` — chunk-ingest a dated build log (per-entry nodes).
+    `... doc <path>` — one markdown file (frontmatter-stripped) as a single node."""
     import asyncio
+    import sys
 
     async def run() -> None:
         pool = await create_pool(get_settings().database_url)
         try:
-            print(await ingest_canon(Actions(pool)))
+            actions = Actions(pool)
+            if len(sys.argv) > 2 and sys.argv[1] == "log":
+                topic = sys.argv[3] if len(sys.argv) > 3 else "history"
+                print(await ingest_log(actions, sys.argv[2], topic=topic))
+            elif len(sys.argv) > 2 and sys.argv[1] == "doc":
+                print(await ingest_reference_doc(actions, sys.argv[2]))
+            else:
+                print(await ingest_canon(actions))
         finally:
             await pool.close()
 

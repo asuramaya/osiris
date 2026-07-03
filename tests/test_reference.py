@@ -141,3 +141,80 @@ async def test_ingest_canon_cites_is_idempotent(actions: Actions) -> None:
     assert again["cites"] == 0
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE type='cites'") == n
+
+
+# --- the md-kill (task #18): a build log ingests as PER-ENTRY nodes, never one dump -----
+
+_LOG = """# CLAUDE.md — session-start notes
+
+Read the graph first.
+
+## Runtime context (locked)
+Single machine, single operator. Services bind to 127.0.0.1.
+
+## Build order
+- **Phase 0 (DONE):** schema + six actions + audit/outbox + tests. """ + "kernel " * 70 + """
+- **THE LIVENESS NIGHT — fresh-eyes audit (DONE, 2026-07-02):** proven is not alive; """ \
+    + "fleet repair " * 40 + """
+- **tiny note:** too small to be its own entry.
+"""
+
+
+def test_parse_log_chunks_sections_and_dated_entries() -> None:
+    from src.ingest.reference import parse_log
+
+    entries = parse_log(_LOG)
+    titles = {e["title"] for e in entries}
+    assert "(overview)" in titles                      # pre-## prose survives
+    assert "Runtime context (locked)" in titles        # a ## section is a chunk
+    assert "Phase 0 (DONE)" in titles                  # a big bullet is its own entry
+    liveness = next(e for e in entries if "LIVENESS" in e["title"])
+    assert liveness["date"] == "2026-07-02"            # dated from its own header
+    assert "fleet repair" in liveness["body"]
+    # the tiny bullet did NOT become a node — it stays with its section's remainder
+    assert not any(e["title"] == "tiny note" for e in entries)
+    build = next(e for e in entries if e["title"] == "Build order")
+    assert "too small" in build["body"]
+
+
+def test_parse_doc_strips_essay_frontmatter() -> None:
+    doc = parse_doc("---\nname: osiris-strange-loop\ntype: project\n---\n\n# The frame\n\nbody.")
+    assert doc["title"] == "The frame"
+    assert "name: osiris" not in doc["body"]
+
+
+async def test_ingest_log_is_idempotent_per_entry(actions: Actions, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from src.ingest.reference import ingest_log
+
+    p = tmp_path / "log.md"
+    p.write_text(_LOG)
+    r1 = await ingest_log(actions, str(p), topic="history")
+    n1 = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Reference' AND canonical LIKE 'ref:history-%'")
+    r2 = await ingest_log(actions, str(p), topic="history")
+    n2 = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Reference' AND canonical LIKE 'ref:history-%'")
+    assert r1["entries"] == r2["entries"] and n1 == n2  # re-ingest mints nothing new
+    # bounded retrieval: the liveness entry is its OWN node with its date
+    row = await actions.pool.fetchrow(
+        "SELECT o.canonical, (SELECT value #>> '{}' FROM current_assertions a "
+        " WHERE a.object_id=o.id AND a.name='date') AS d "
+        "FROM objects o WHERE o.canonical LIKE 'ref:history-2026-07-02%'")
+    assert row is not None and row["d"] == "2026-07-02"
+
+
+def test_parse_log_splits_entries_whose_bold_header_wraps() -> None:
+    """Live receipt: THE LIVENESS NIGHT's header wraps a line; without DOTALL it never
+    split and got swallowed into the previous entry — retrieval returned the wrong node."""
+    from src.ingest.reference import parse_log
+
+    log = ("## Build order\n"
+           "- **FIRST ENTRY (DONE, 2026-06-01):** " + "alpha " * 90 + "\n"
+           "- **THE WRAPPED NIGHT — a header long enough that the operator's editor\n"
+           "  wraps it (DONE, 2026-07-02):** " + "beta " * 90 + "\n")
+    entries = parse_log(log)
+    wrapped = next(e for e in entries if "WRAPPED NIGHT" in e["title"])
+    assert wrapped["date"] == "2026-07-02"
+    assert "beta" in wrapped["body"] and "alpha" not in wrapped["body"]
+    first = next(e for e in entries if "FIRST ENTRY" in e["title"])
+    assert "beta" not in first["body"]  # the wrapped entry no longer swallowed
