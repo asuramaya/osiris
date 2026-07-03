@@ -1,11 +1,8 @@
 {
   "mcpServers": {
     "osiris": {
-      "command": "uv",
-      "args": ["run", "python", "-m", "src.mcp_server"],
-      "env": {
-        "DATABASE_URL": "${DATABASE_URL:-postgresql://osiris:osiris@127.0.0.1:5432/osiris}"
-      }
+      "type": "http",
+      "url": "http://127.0.0.1:8790/mcp"
     }
   }
 }

@@ -63,6 +63,19 @@ class Settings(BaseSettings):
     # The developer-persona heartbeat (pulse): comma-separated local repo paths the autonomic
     # loop senses + re-ingests on each tick. Empty => the pulse watches nothing (no-op).
     osiris_dev_repos: str = ""
+    # The PERSISTENT MCP server (the fleet floodgate). `stdio` (default) = one server per
+    # session (each agent spawns its own subprocess + pool — fine for one, exhausts PG at
+    # fleet scale: N agents × the pool). `streamable-http` = ONE always-on server on
+    # (host, port) that the whole fleet connects to over HTTP, sharing a SINGLE pool — so
+    # connections stay bounded no matter how many agents link. The systemd `osiris-mcp` unit
+    # runs the http mode; other projects point their .mcp.json at the URL.
+    osiris_mcp_transport: str = "stdio"
+    osiris_mcp_host: str = "127.0.0.1"
+    osiris_mcp_port: int = 8790
+    # The shared server's pool: ONE pool for the whole fleet (min_size stays 1 so it's cheap
+    # idle; grows to this under concurrency). 20 << PG max_connections=100, vs the old
+    # per-agent 10 × 56 = 560 that would have exhausted it.
+    osiris_mcp_pool_size: int = 20
     # Session-sensing (the last unsensed source): path to the Claude Code projects root
     # (usually ~/.claude/projects) whose session transcripts the worker senses on a cron —
     # distill → redact → extract → DERIVED backfill of decisions/threads/obligations the

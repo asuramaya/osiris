@@ -1,0 +1,23 @@
+[Unit]
+# The persistent, always-on MCP server — the fleet floodgate. Under streamable-http this
+# is ONE process the whole fleet of Claude instances connects to over HTTP, sharing a
+# SINGLE database pool. That is what keeps connections bounded: N agents linking in does
+# not mean N pools (the per-session stdio model would exhaust Postgres at fleet scale).
+Description=Osiris persistent MCP server (streamable-http; one shared pool for the fleet)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=osiris
+WorkingDirectory=/opt/osiris
+EnvironmentFile=/etc/osiris/osiris.env
+Environment=OSIRIS_MCP_TRANSPORT=streamable-http
+ExecStart=/opt/osiris/.venv/bin/python -m src.mcp_server
+Restart=always
+RestartSec=5
+# One shared server; a modest cap contains a runaway without starving the fleet.
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

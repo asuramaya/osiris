@@ -67,7 +67,12 @@ _pool: asyncpg.Pool | None = None
 async def _pool_get() -> asyncpg.Pool:
     global _pool
     if _pool is None:
-        _pool = await create_pool(get_settings().database_url)
+        # ONE pool for the whole server. Under streamable-http this single pool backs the
+        # entire fleet (the whole point — bounded connections); under stdio it's this one
+        # session. min_size stays 1 so an idle server is cheap.
+        _pool = await create_pool(
+            get_settings().database_url, max_size=get_settings().osiris_mcp_pool_size
+        )
     return _pool
 
 
@@ -445,7 +450,17 @@ async def resolve_thread(ref: str, because: str | None = None) -> dict[str, str]
 
 
 def main() -> None:
-    mcp.run()
+    """Run the server. `OSIRIS_MCP_TRANSPORT=streamable-http` = the PERSISTENT fleet server
+    (one always-on process on host:port, one shared pool); default `stdio` = one server for
+    this session (the classic per-agent subprocess). The systemd `osiris-mcp` unit sets http."""
+    s = get_settings()
+    transport = s.osiris_mcp_transport
+    if transport in ("streamable-http", "sse"):
+        mcp.settings.host = s.osiris_mcp_host
+        mcp.settings.port = s.osiris_mcp_port
+        mcp.run(transport=transport)  # type: ignore[arg-type]
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":
