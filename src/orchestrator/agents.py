@@ -25,7 +25,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from src.actions.core import Actions
-from src.ingest.sessions import _job_id, current_model
+from src.ingest.sessions import (
+    _job_id,
+    _tail_lines,
+    current_model,
+    latest_model,
+    locate_transcript_by_cwd,
+)
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -49,13 +55,22 @@ def resolve_identity(
     session: str | None = None, model: str | None = None,
 ) -> AgentIdentity:
     """Resolve an agent's identity from what it can tell the server about itself. The
-    project comes from its cwd; the model is PROBED off its own transcript (via the job
-    dir anchor) unless already given — never trusted from a self-report. `session` falls
-    back to the job id, then to 'unknown' (still a valid, if coarse, actor)."""
+    project comes from its cwd; the session + model are PROBED off its own transcript,
+    never a self-report. Two probe paths: the CLAUDE_JOB_DIR anchor (precise), or — when
+    that's absent (not every session sets it; decepticons surfaced this live, falling to
+    the anonymous bucket) — the cwd's project dir, whose newest transcript is the active
+    session. Only if BOTH fail does it fall to 'unknown'."""
     project = Path(cwd).name if cwd else None
-    sid = session or _job_id(job_dir) or "unknown"
+    sid = session or _job_id(job_dir)
     if model is None and job_dir:
         model, _, _ = current_model(job_dir=job_dir)  # authoritative harness record
+    if sid is None and cwd:  # no job dir → find the session by its project directory
+        path = locate_transcript_by_cwd(cwd)
+        if path is not None:
+            sid = path.stem.split("-")[0]  # the 8-char handle, matching the job-id scheme
+            if model is None:
+                model = latest_model(_tail_lines(path))
+    sid = sid or "unknown"
     return AgentIdentity(agent_id=f"agent:{sid}", session=sid, project=project,
                          model=model, cwd=cwd)
 

@@ -365,6 +365,26 @@ def test_locate_anchors_on_job_id_over_newest(tmp_path: Path) -> None:
     assert locate_current_transcript(tmp_path, None) == hot
 
 
+def test_locate_transcript_by_cwd_when_no_job_dir(tmp_path: Path) -> None:
+    """The decepticons fix: when CLAUDE_JOB_DIR is empty, find the session by its cwd's
+    project dir (newest transcript = active session) instead of falling to 'unknown'."""
+    from src.ingest.sessions import locate_transcript_by_cwd
+
+    proj = tmp_path / "-home-x-code-decepticons"
+    proj.mkdir()
+    old = proj / "aaaaaaaa-1111.jsonl"
+    old.write_text(_amodel("old", "claude-fable-5") + "\n")
+    active = proj / "0806072e-fd95.jsonl"
+    active.write_text(_amodel("live", "claude-fable-5") + "\n")
+    import os
+
+    os.utime(active, (10**10, 10**10))  # newest = the active session
+    assert locate_transcript_by_cwd("/home/x/code/decepticons", root=tmp_path) == active
+    # a trailing slash is tolerated; an unknown project → None (anonymous, never a crash)
+    assert locate_transcript_by_cwd("/home/x/code/decepticons/", root=tmp_path) == active
+    assert locate_transcript_by_cwd("/home/x/code/ghost", root=tmp_path) is None
+
+
 async def test_source_model_stamped_on_emitted_yield(actions: Actions) -> None:
     y = SessionYield(
         decisions=[{"summary": "the source model is a provenance datapoint", "kind": "ruling",

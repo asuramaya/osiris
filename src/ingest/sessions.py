@@ -251,6 +251,21 @@ def _job_id(job_dir: str | None) -> str | None:
     return None
 
 
+def locate_transcript_by_cwd(cwd: str, root: Path | None = None) -> Path | None:
+    """The active session's transcript for a project, found by its cwd — the fallback when
+    CLAUDE_JOB_DIR is absent (not every session has it set; a foreign agent surfaced this
+    live, falling back to the anonymous `agent:unknown` bucket). Claude Code stores a
+    project's transcripts under ~/.claude/projects/<cwd-with-each-slash-as-a-dash>/; the
+    newest is the active session. Multi-session-per-project picks the hottest — best-effort,
+    but far better than no identity at all."""
+    base = (root or (Path.home() / ".claude/projects")).expanduser()
+    d = base / str(cwd).rstrip("/").replace("/", "-")
+    if not d.is_dir():
+        return None
+    files = [p for p in d.glob("*.jsonl") if p.is_file()]
+    return max(files, key=lambda p: p.stat().st_mtime) if files else None
+
+
 def locate_current_transcript(root: Path, job_dir: str | None) -> Path | None:
     """This session's own transcript, anchored on the job id (the multi-session box runs a
     FLEET — newest-mtime alone grabs whatever parallel session is hottest, proven live).

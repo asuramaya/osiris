@@ -459,20 +459,61 @@ async def mount(
             "note": "linked — writes now attributed to you; call orient() next"}
 
 
+async def _project_briefing(pool: asyncpg.Pool, project: str) -> dict[str, Any] | None:
+    """A working agent's SCOPED bearings: its OWN project's open threads + recent decisions,
+    not the whole fleet's ~150 (decepticons surfaced that orient's flood costs more context
+    than it saves). Threads/decisions link `in_repo` their project, so scope is one join."""
+    proj = await pool.fetchval(
+        "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1", f"repo:{project}")
+    if proj is None:
+        return None
+
+    async def _scoped(otype: str, only_open: bool, limit: int) -> list[dict[str, Any]]:
+        clause = (
+            " AND EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
+            " AND s.name='status' AND s.value #>> '{}' = 'open')" if only_open else "")
+        rows = await pool.fetch(
+            "SELECT (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "         AND a.name='summary') AS summary, "
+            "       (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "         AND a.name='kind') AS kind "
+            "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+            f"WHERE o.type=$2 AND o.status='active'{clause} ORDER BY o.id DESC LIMIT $3",
+            proj, otype, limit)
+        return [{"summary": r["summary"], "kind": r["kind"]} for r in rows if r["summary"]]
+
+    return {"open_threads": await _scoped("Thread", True, 40),
+            "recent_decisions": await _scoped("Decision", False, 15)}
+
+
 @mcp.tool()
 async def orient(project: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
-    """Get your bearings — the mount ritual as one call. Returns who you are (if mounted) and
-    the briefing: open threads, obligations, and recent decisions. Call after mount(), and
-    again after any compaction, to inherit instead of starting blind. `project` is advisory."""
+    """Get your bearings — the mount ritual as one call. If you're mounted (or pass a
+    `project`), returns a SCOPED briefing: YOUR project's open threads + recent decisions,
+    plus a count of fleet-wide threads not shown. Un-mounted with no project falls back to
+    the whole-fleet briefing. Call after mount(), and again after any compaction, to inherit
+    instead of starting blind."""
     pool = await _pool_get()
     key = _conn_key(ctx)
     ident = _agents.get(key) if key is not None else None
-    briefing = await comp.run_composition(pool, "briefing")
+    proj = ident.project if ident else project
+    who = ident.agent_id if ident else "session (un-mounted — call mount(cwd) first)"
+    scoped = await _project_briefing(pool, proj) if proj else None
+    if scoped is not None:
+        fleet_open = await pool.fetchval(
+            "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "
+            "AND EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
+            "  AND s.name='status' AND s.value #>> '{}' = 'open')")
+        return {
+            "you": who, "model": (ident.model if ident else None), "project": proj,
+            **scoped,
+            "fleet_open_threads_total": fleet_open,
+            "note": f"scoped to {proj}; {fleet_open} fleet-wide open threads not shown "
+                    "(run_composition('briefing') for the whole graph).",
+        }
     return {
-        "you": ident.agent_id if ident else "session (un-mounted — call mount(cwd) first)",
-        "model": (ident.model if ident else None),
-        "project": (ident.project if ident else project),
-        "briefing": briefing,
+        "you": who, "model": (ident.model if ident else None), "project": proj,
+        "briefing": await comp.run_composition(pool, "briefing"),
     }
 
 
