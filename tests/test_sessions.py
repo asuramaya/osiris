@@ -365,6 +365,22 @@ def test_locate_anchors_on_job_id_over_newest(tmp_path: Path) -> None:
     assert locate_current_transcript(tmp_path, None) == hot
 
 
+def test_repo_from_cwd_walks_to_the_git_root(tmp_path: Path) -> None:
+    """The provenance-audit fix: a session working in a SUBDIR must attribute to the
+    project (its git root), not the subdir basename (which minted a junk repo:my)."""
+    from src.ingest.sessions import _repo_from_cwd
+
+    proj = tmp_path / "monsterhouse"
+    (proj / ".git").mkdir(parents=True)
+    (proj / "my").mkdir()
+    assert _repo_from_cwd(str(proj / "my")) == "monsterhouse"  # subdir → project
+    assert _repo_from_cwd(str(proj)) == "monsterhouse"
+    loose = tmp_path / "loose" / "dir"
+    loose.mkdir(parents=True)
+    assert _repo_from_cwd(str(loose)) == "dir"  # no .git → basename fallback
+    assert _repo_from_cwd(None) is None
+
+
 def test_locate_transcript_by_cwd_when_no_job_dir(tmp_path: Path) -> None:
     """The decepticons fix: when CLAUDE_JOB_DIR is empty, find the session by its cwd's
     project dir (newest transcript = active session) instead of falling to 'unknown'."""

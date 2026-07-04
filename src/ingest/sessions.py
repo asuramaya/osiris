@@ -171,9 +171,21 @@ def distill(lines: list[str]) -> tuple[str, str | None]:
 
 
 def _repo_from_cwd(cwd: str | None) -> str | None:
-    """The repo a session was working in — the transcript records its own cwd, so no
-    fragile project-slug decoding."""
-    return Path(cwd).name if cwd else None
+    """The PROJECT a session was working in. Walk up from the cwd to the git-repo root, so a
+    session working in a SUBDIRECTORY (e.g. monsterhouse/my) attributes to the project
+    (monsterhouse), not the subdir basename — which minted a junk `repo:my`, caught in the
+    provenance audit. Falls back to the basename when no `.git` is found (a non-repo dir).
+    Does filesystem IO (walks parents), so callers run it off the event loop."""
+    if not cwd:
+        return None
+    path = Path(cwd)
+    for d in (path, *path.parents):
+        try:
+            if (d / ".git").exists():
+                return d.name
+        except OSError:
+            break
+    return path.name
 
 
 # --- source model = the missing provenance dimension ----------------------------------
@@ -692,16 +704,15 @@ async def sense_sessions_tick(
                 offset = end  # not worth a model call — advance free
                 await set_cursor(pool, key, str(offset))
                 continue
+            repo = await asyncio.to_thread(_repo_from_cwd, cwd)  # git-root resolve, off-loop
             raw = await llm.complete(system=_SYSTEM, prompt=_sandwich(redact(text)),
                                      model=model)
             counts = await emit_yield(
-                actions, parse_session_yield(raw), repo=_repo_from_cwd(cwd),
+                actions, parse_session_yield(raw), repo=repo,
                 source_model=chunk_models[-1] if chunk_models else None,
             )
             if len(chunk_models) > 1:  # a warm rug-pull inside one session — flag it
-                report["swaps"] += await _record_swap(
-                    actions, path, chunk_models, _repo_from_cwd(cwd)
-                )
+                report["swaps"] += await _record_swap(actions, path, chunk_models, repo)
             offset = end
             await set_cursor(pool, key, str(offset))  # after emit: crash-safe
             report["chunks"] += 1
