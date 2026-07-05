@@ -42,6 +42,7 @@ from src.orchestrator.agents import AgentIdentity, register_agent, resolve_ident
 from src.orchestrator.console import get_console as _get_console
 from src.orchestrator.console import set_console as _set_console
 from src.orchestrator.dossier import entity_dossier
+from src.orchestrator.mailbox import read_inbox, send_message, unread_count
 from src.orchestrator.sources import as_dicts, suggest
 
 mcp = FastMCP(
@@ -59,6 +60,9 @@ mcp = FastMCP(
         "minted), resolve_thread the moment it closes; never batch it for the session's "
         "end. A session can be compacted or killed at ANY instant: the graph, not the "
         "context window, is your memory, and anything not written back does not exist. "
+        "The fleet shares a MAILBOX: another agent can address a message to your project — "
+        "mount() and orient() report your unread count and inbox() reads it (pull, never "
+        "push: you perceive mail only when you check, so glance when you arrive). "
         "IDENTITY CHECK: the operator's standing choice is that sessions here run Fable 5. "
         "Harness degradations silently swap the model mid-session; if your environment "
         "says you are a different model, SAY SO to the operator in your first reply — "
@@ -447,15 +451,16 @@ async def mount(
     project, acts_for the principal) and, for the rest of this connection, attributes every
     decision/thread you record to `agent:<you>` instead of the shared `session` bucket — so
     the graph knows WHICH instance, on WHICH model, decided what. Then call orient()."""
+    pool = await _pool_get()
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model)
-    await register_agent(
-        Actions(await _pool_get()), ident, actor=get_settings().osiris_actor
-    )
+    await register_agent(Actions(pool), ident, actor=get_settings().osiris_actor)
     key = _conn_key(ctx)
     if key is not None:
         _agents[key] = ident
+    unread = await unread_count(pool, ident.project) if ident.project else 0
     return {"agent": ident.agent_id, "project": ident.project or "?",
             "model": ident.model or "unknown",
+            "mail": f"{unread} unread — call inbox()" if unread else "none",
             "note": "linked — writes now attributed to you; call orient() next"}
 
 
@@ -492,6 +497,8 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
     ident = _agents.get(key) if key is not None else None
     proj = ident.project if ident else project
     who = ident.agent_id if ident else "session (un-mounted — call mount(cwd) first)"
+    unread = await unread_count(pool, proj) if proj else 0
+    mail = f"{unread} unread — inbox()" if unread else "none"
     scoped = await _project_briefing(pool, proj) if proj else None
     if scoped is not None:
         fleet_open = await pool.fetchval(
@@ -501,6 +508,7 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
             "  = 'open'")
         return {
             "you": who, "model": (ident.model if ident else None), "project": proj,
+            "mail": mail,
             **scoped,
             "fleet_open_threads_total": fleet_open,
             "note": f"scoped to {proj}; {fleet_open} fleet-wide open threads not shown "
@@ -508,6 +516,7 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
         }
     return {
         "you": who, "model": (ident.model if ident else None), "project": proj,
+        "mail": mail,
         "briefing": await comp.run_composition(pool, "briefing"),
     }
 
@@ -533,6 +542,39 @@ async def fleet() -> dict[str, Any]:
             for r in rows
         ],
     }
+
+
+@mcp.tool()
+async def send(to: str, body: str, ctx: Context | None = None) -> dict[str, Any]:
+    """Message another agent (the fleet mailbox). `to` = the recipient PROJECT/repo name —
+    stable across their session changes, addressing whoever works there. You must be mounted;
+    the message is stamped from YOU. PULL, not push: they read it on their next mount/orient
+    (Osiris never interrupts a live agent). For DURABLE knowledge use record_decision /
+    open_thread — this lane is disposable coordination, not memory."""
+    key = _conn_key(ctx)
+    ident = _agents.get(key) if key is not None else None
+    if ident is None:
+        return {"error": "mount(cwd) first — a message must say who it's from"}
+    mid = await send_message(await _pool_get(), from_agent=ident.agent_id,
+                             from_project=ident.project, to_project=to, body=body)
+    return {"sent": mid, "to": to.removeprefix("repo:").strip(), "from": ident.agent_id}
+
+
+@mcp.tool()
+async def inbox(project: str | None = None, peek: bool = False,
+                ctx: Context | None = None) -> dict[str, Any]:
+    """Read messages other agents left for you (the fleet mailbox). Defaults to YOUR mounted
+    project; pass `project` to read another's. Reading MARKS them read (mailbox semantics)
+    unless peek=True. Check this when you mount and after any compaction — mount()/orient()
+    report your unread count."""
+    key = _conn_key(ctx)
+    ident = _agents.get(key) if key is not None else None
+    proj = project or (ident.project if ident else None)
+    if proj is None:
+        return {"error": "mount(cwd) first, or pass project=<repo>"}
+    msgs = await read_inbox(await _pool_get(), proj, mark_read=not peek)
+    where = "peek — left unread" if peek else ("marked read" if msgs else "empty")
+    return {"project": proj.removeprefix("repo:").strip(), "unread": msgs, "note": where}
 
 
 @mcp.tool()
