@@ -56,8 +56,8 @@ from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.db.pool import create_pool
 from src.ingest.extract import _strip_fences
+from src.ingest.mined import _distinctive, consolidate_memory
 from src.ingest.providers import LLMClient, llm_provider
-from src.ingest.threads import _distinctive
 from src.orchestrator.capture import link_repo
 from src.orchestrator.monitor import get_cursor, set_cursor
 from src.parsers.base import EvidenceClass
@@ -721,6 +721,15 @@ async def sense_sessions_tick(
                 report[k] += v
         if touched:
             report["files"] += 1
+
+    # Backfill that YIELDS: fold this miner's DERIVED thread-echoes into the deliberate
+    # captures they shadow, so orient doesn't accrete a reworded copy every tick. THREADS
+    # ONLY in v1 — a dry run showed decision near-dups are distinct WHY-records a broad
+    # ruling would over-absorb (a duplicate decision is cheaper than an erased one), so those
+    # route to the review-queue layer (thread 56b8e275), never auto-merged. Event-sourced.
+    for k, v in (await consolidate_memory(
+            actions, object_type="Thread", prefix="thread:")).items():
+        report[k] = report.get(k, 0) + v
     return report
 
 

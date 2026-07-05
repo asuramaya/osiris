@@ -18,7 +18,7 @@ from typing import Any
 from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.db.pool import create_pool
-from src.ingest.mined import reconcile_mined, unquoted, well_bounded
+from src.ingest.mined import _distinctive, reconcile_mined, unquoted, well_bounded
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -41,23 +41,6 @@ _CLOSED = re.compile(r"\b(DONE|PROVEN|FIXED|resolved|shipped)\b", re.IGNORECASE)
 # Dropped `\bWALL:` above (it caught any "X WALL:" heading); only the exact phrase "THE WALL"
 # counts. Plus skip a sentence that talks ABOUT markers, or enumerates several at once.
 _META = re.compile(r"\bmarkers?\b", re.IGNORECASE)
-
-# Generic engineering vocabulary — present in half the commits, so a SHARED generic word
-# is no evidence a later commit addressed a thread. Resolution requires shared DISTINCTIVE
-# tokens (the project's own nouns: renderer, satellite, composer, briefing), never these.
-_GENERIC = frozenset({
-    "wire", "fold", "adds", "added", "build", "built", "ship", "make", "made", "feat",
-    "fix", "test", "tests", "code", "into", "over", "with", "this", "that", "then",
-    "when", "next", "wall", "remaining", "needs", "need", "live", "gated", "work",
-    "thing", "things", "part", "pass", "runs", "real", "free", "file", "files", "from",
-    "have", "still", "yet", "via", "all", "new", "key", "token", "first", "more", "one",
-    "two", "the", "and", "for", "but", "now", "its",
-})
-
-
-def _distinctive(text: str) -> set[str]:
-    """The project-distinctive tokens of a string (>=4 chars, minus generic vocabulary)."""
-    return {t for t in re.findall(r"[a-z][a-z0-9_]{3,}", text.lower())} - _GENERIC
 
 
 def extract_threads(body: str) -> list[str]:
