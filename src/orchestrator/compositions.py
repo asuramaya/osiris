@@ -563,9 +563,14 @@ def _num(v: Any) -> float | None:
 
 
 async def _props(pool: asyncpg.Pool, oid: uuid.UUID) -> dict[str, str]:
+    # The current value of each property is the WINNING assertion across sources, resolved
+    # by evidence GRADE first (constitution #5: SELF_DECLARED > … > DERIVED), then recency —
+    # so a fresh DERIVED re-assertion never overrides an older SELF_DECLARED one (the miner
+    # re-opening a thread a session already resolved must NOT win). `confidence` is the
+    # faithful projection of the class, so it ranks grade; matches ontology/export.py.
     rows = await pool.fetch(
         "SELECT DISTINCT ON (name) name, value #>> '{}' AS v FROM current_assertions "
-        "WHERE object_id=$1 ORDER BY name, observed_at DESC",
+        "WHERE object_id=$1 ORDER BY name, confidence DESC, observed_at DESC",
         oid,
     )
     return {r["name"]: r["v"] for r in rows}

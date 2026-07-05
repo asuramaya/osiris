@@ -7,9 +7,14 @@ graph in the SAME shape the miner produces, so it renders in the real `decision-
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from src.actions.core import Actions
-from src.orchestrator.capture import open_thread, record_decision, resolve_thread
-from src.orchestrator.compositions import run_composition, seed_default_compositions
+from src.mcp_server import _project_briefing
+from src.orchestrator.capture import link_repo, open_thread, record_decision, resolve_thread
+from src.orchestrator.compositions import _props, run_composition, seed_default_compositions
+from src.parsers.base import EvidenceClass
+from src.parsers.evidence import confidence_for
 
 _DECISION_LOG = "Decisions — the project's WHY (mined from commit rationale)"
 _OPEN = "Open threads — what's unresolved"
@@ -102,3 +107,45 @@ async def test_resolve_thread_leaves_open_and_joins_resolved(actions: Actions) -
 
 async def test_resolve_thread_returns_none_when_nothing_matches(actions: Actions) -> None:
     assert await resolve_thread(actions, "no such thread anywhere") is None
+
+
+async def test_status_resolution_honors_grade_over_recency(actions: Actions) -> None:
+    """A thread's status, on every read surface, is the WINNING assertion by evidence GRADE —
+    not 'any source says open', not most-recent-wins. The miner opens a thread (DERIVED), a
+    session resolves it (SELF_DECLARED), then the miner RE-OPENS it later (DERIVED, the
+    freshest status). The session's higher-grade resolution must win. Regression for the 15
+    threads that sat open-AND-resolved: orient used EXISTS(status='open'), and the composer's
+    _props ordered by recency alone — so a fresh DERIVED re-open would have buried the close."""
+    now = datetime.now(UTC)
+    d_ec, d_conf = EvidenceClass.DERIVED.value, confidence_for(EvidenceClass.DERIVED)
+    summary = "the miner-opened thread a session then closed"
+
+    # the miner opens it — DERIVED, an older observation, filed under osiris
+    t = await actions.create_or_find_object("Thread", "thread:graderegress", "session-miner")
+    await actions.assert_property(t, "summary", summary, "session-miner",
+                                  now - timedelta(days=2), d_conf, evidence_class=d_ec)
+    await actions.assert_property(t, "status", "open", "session-miner",
+                                  now - timedelta(days=2), d_conf, evidence_class=d_ec)
+    await link_repo(actions, t, "osiris", now - timedelta(days=2),
+                    source="session-miner", evidence_class=d_ec, confidence=d_conf)
+
+    # a session resolves it — SELF_DECLARED, through the real capture path
+    assert await resolve_thread(actions, "miner-opened thread a session", because="handled") == t
+
+    # the miner re-senses and RE-OPENS it — DERIVED, now the most recent status assertion
+    await actions.assert_property(t, "status", "open", "session-miner",
+                                  now + timedelta(days=365), d_conf, evidence_class=d_ec)
+
+    # 1) the composer's resolver picks the higher grade, not the fresher timestamp
+    assert (await _props(actions.pool, t))["status"] == "resolved"
+
+    # 2) the briefing composition — gone from open, present in resolved
+    await seed_default_compositions(actions.pool)
+    res = await run_composition(actions.pool, "briefing")
+    assert not any(r["thread"] == summary for r in res["items"][_OPEN])
+    assert any(r["thread"] == summary for r in res["items"][_RESOLVED])
+
+    # 3) the scoped orient briefing (bespoke SQL, a distinct read path) also excludes it
+    scoped = await _project_briefing(actions.pool, "osiris")
+    assert scoped is not None
+    assert not any(r["summary"] == summary for r in scoped["open_threads"])

@@ -469,9 +469,10 @@ async def _project_briefing(pool: asyncpg.Pool, project: str) -> dict[str, Any] 
         return None
 
     async def _scoped(otype: str, only_open: bool, limit: int) -> list[dict[str, Any]]:
-        clause = (
-            " AND EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
-            " AND s.name='status' AND s.value #>> '{}' = 'open')" if only_open else "")
+        clause = (  # open iff the WINNING status assertion (by grade, then recency) is 'open'
+            " AND (SELECT s.value #>> '{}' FROM current_assertions s WHERE s.object_id=o.id "
+            " AND s.name='status' ORDER BY s.confidence DESC, s.observed_at DESC LIMIT 1)"
+            " = 'open'" if only_open else "")
         rows = await pool.fetch(
             "SELECT (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
             "         AND a.name='summary') AS summary, "
@@ -502,8 +503,9 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
     if scoped is not None:
         fleet_open = await pool.fetchval(
             "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "
-            "AND EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
-            "  AND s.name='status' AND s.value #>> '{}' = 'open')")
+            "AND (SELECT s.value #>> '{}' FROM current_assertions s WHERE s.object_id=o.id "
+            "  AND s.name='status' ORDER BY s.confidence DESC, s.observed_at DESC LIMIT 1)"
+            "  = 'open'")
         return {
             "you": who, "model": (ident.model if ident else None), "project": proj,
             **scoped,
