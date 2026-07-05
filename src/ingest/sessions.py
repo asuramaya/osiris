@@ -57,7 +57,8 @@ from src.config.settings import get_settings
 from src.db.pool import create_pool
 from src.ingest.extract import _strip_fences
 from src.ingest.mined import _distinctive, consolidate_memory
-from src.ingest.providers import LLMClient, llm_provider
+from src.ingest.providers import LLMClient, Usage, llm_provider
+from src.ingest.usage import record_usage, usage_summary
 from src.orchestrator.capture import link_repo
 from src.orchestrator.monitor import get_cursor, set_cursor
 from src.parsers.base import EvidenceClass
@@ -712,8 +713,12 @@ async def sense_sessions_tick(
                 await set_cursor(pool, key, str(offset))
                 continue
             repo = await asyncio.to_thread(_repo_from_cwd, cwd)  # git-root resolve, off-loop
+            usage_out: list[Usage] = []
             raw = await llm.complete(system=_SYSTEM, prompt=_sandwich(redact(text)),
-                                     model=model)
+                                     model=model, usage_out=usage_out)
+            if usage_out:  # per-call token/cost telemetry (llm_usage) — no longer an estimate
+                await record_usage(actions.pool, purpose="session-extract",
+                                   usage=usage_out[-1])
             counts = await emit_yield(
                 actions, parse_session_yield(raw), repo=repo,
                 source_model=chunk_models[-1] if chunk_models else None,
@@ -749,6 +754,7 @@ def main() -> None:  # pragma: no cover - CLI
     backfill <transcript>  mine a file's HISTORY from byte 0 (explicit, never a cron)
     whoami [root]        probe THIS session's actual model from its transcript (the
                          source-model provenance probe — no DB, no weights, no prompt)
+    usage [hours]        what the auto-ingest actually burned (reads llm_usage; default 24h)
     """
     import sys
 
@@ -764,6 +770,18 @@ def main() -> None:  # pragma: no cover - CLI
         if len(history) > 1:
             print(f"WARM SWAP: this session ran {len(history)} models — "
                   "the system prompt's identity claim is unreliable here.")
+        return
+
+    if cmd == "usage":  # what the auto-ingest actually burned (reads the llm_usage table)
+        async def _usage_report() -> None:
+            pool = await create_pool(get_settings().database_url)
+            try:
+                print(json.dumps(await usage_summary(pool, hours=int(arg or 24)),
+                                 indent=2, default=str))
+            finally:
+                await pool.close()
+
+        asyncio.run(_usage_report())
         return
 
     target: Path | None = None

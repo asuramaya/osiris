@@ -35,7 +35,8 @@ class FakeLLM:
         self.prompts: list[str] = []
 
     async def complete(
-        self, *, system: str, prompt: str, model: str, max_tokens: int = 2048
+        self, *, system: str, prompt: str, model: str, max_tokens: int = 2048,
+        usage_out: list[Any] | None = None,
     ) -> str:
         self.prompts.append(prompt)
         return self.payload if isinstance(self.payload, str) else json.dumps(self.payload)

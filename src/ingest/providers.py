@@ -21,7 +21,7 @@ import os
 import shutil
 import tempfile
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 import httpx
 
@@ -31,11 +31,44 @@ _ANTHROPIC = "https://api.anthropic.com"
 _VERSION = "2023-06-01"
 
 
+@dataclass
+class Usage:
+    """What one completion cost. `cost_usd` comes free from the CLI envelope; None on the API
+    path (tokens only). cache_* split cheap/discounted input from fresh input."""
+
+    model: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    cost_usd: float | None = None
+    duration_ms: int | None = None
+
+
+def _usage(data: dict[str, Any], model: str, *, with_cost: bool) -> Usage:
+    """Read usage from an Anthropic/CLI response envelope (both nest it under 'usage' with the
+    same token keys). cost_usd + duration_ms are the CLI envelope's extras (with_cost=True)."""
+    u = data.get("usage")
+    u = u if isinstance(u, dict) else {}
+    cost = data.get("total_cost_usd") if with_cost else None
+    dur = data.get("duration_ms") if with_cost else None
+    return Usage(
+        model=model,
+        input_tokens=int(u.get("input_tokens") or 0),
+        output_tokens=int(u.get("output_tokens") or 0),
+        cache_read_tokens=int(u.get("cache_read_input_tokens") or 0),
+        cache_creation_tokens=int(u.get("cache_creation_input_tokens") or 0),
+        cost_usd=float(cost) if isinstance(cost, (int, float)) else None,
+        duration_ms=int(dur) if isinstance(dur, (int, float)) else None,
+    )
+
+
 class LLMClient(Protocol):
     """A document-grounded text completion returning JSON/text."""
 
     async def complete(
-        self, *, system: str, prompt: str, model: str, max_tokens: int = 2048
+        self, *, system: str, prompt: str, model: str, max_tokens: int = 2048,
+        usage_out: list[Usage] | None = None,
     ) -> str: ...
 
 
@@ -55,7 +88,8 @@ class AnthropicClient:
     base_url: str = _ANTHROPIC
 
     async def complete(
-        self, *, system: str, prompt: str, model: str, max_tokens: int = 2048
+        self, *, system: str, prompt: str, model: str, max_tokens: int = 2048,
+        usage_out: list[Usage] | None = None,
     ) -> str:
         async with httpx.AsyncClient(timeout=60.0) as client:
             r = await client.post(
@@ -67,6 +101,8 @@ class AnthropicClient:
             )
             r.raise_for_status()
             data = r.json()
+            if usage_out is not None:
+                usage_out.append(_usage(data, model, with_cost=False))
             return "".join(
                 b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"
             )
@@ -129,7 +165,8 @@ class ClaudeCliClient:
     binary: str = "claude"
 
     async def complete(
-        self, *, system: str, prompt: str, model: str, max_tokens: int = 2048
+        self, *, system: str, prompt: str, model: str, max_tokens: int = 2048,
+        usage_out: list[Usage] | None = None,
     ) -> str:
         # Context isolation: without it, a `claude -p` run inside a repo inherits the
         # project's CLAUDE.md + settings — ~52k tokens of the project's own opinions
@@ -152,7 +189,10 @@ class ClaudeCliClient:
         out, err = await proc.communicate()
         if proc.returncode != 0:
             raise RuntimeError(f"claude CLI exit {proc.returncode}: {err.decode()[:200]}")
-        return _cli_result(out)
+        text = _cli_result(out)
+        if usage_out is not None:  # the CLI envelope carries usage AND the real cost_usd
+            usage_out.append(_usage(json.loads(out.decode() or "{}"), model, with_cost=True))
+        return text
 
 
 # --- factories: resolve the backend from config (the deployment switch) -----
