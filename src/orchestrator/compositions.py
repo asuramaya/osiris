@@ -866,6 +866,17 @@ async def _order(
             n = _num(v)
             return (n if n is not None else float("inf"), v)
         return Result("values", values=sorted(base.values, key=vkey, reverse=rev))
+    # objects — 'recency' orders by object birth (created_at), the one axis a property sort
+    # can't reach (created_at is an object column, not an assertion): "newest first" / "recent
+    # N" views (orient's recent decisions, any what's-new lens). Surfaced by dogfooding the
+    # scoped briefing — the composer couldn't order by time until here.
+    if by in ("recency", "newest", "created"):
+        rows = await pool.fetch(
+            "SELECT id FROM objects WHERE id = ANY($1::uuid[]) "
+            f"ORDER BY created_at {'DESC' if rev else 'ASC'}, id",
+            base.objects,
+        )
+        return Result("objects", objects=[r["id"] for r in rows])
     # objects — order by a property (numeric if possible, else lexical)
     keyed: list[tuple[float, str, uuid.UUID]] = []
     for oid in base.objects:
@@ -1095,10 +1106,40 @@ DECISION_LOG: dict[str, Any] = {
                            ]}}},
     ],
 }
+# the SCOPED arrival briefing — orient's project view as a pure composition (was bespoke SQL
+# in mcp_server._project_briefing, #20). The fleet-wide `briefing`'s selects, INTERSECTED with
+# the subject project's in_repo neighbourhood and recency-ordered. Run with a SoftwareProject
+# subject; each section is take(table(order(intersect(select, traverse)))).
+PROJECT_BRIEFING: dict[str, Any] = {
+    "op": "sections",
+    "sections": [
+        {"title": "open_threads", "body": {
+            "op": "take", "n": 40, "from": {
+                "op": "table", "columns": [{"property": "summary"}, {"property": "kind"}],
+                "from": {"op": "order", "by": "recency", "dir": "desc", "from": {
+                    "op": "intersect", "sets": [
+                        {"op": "select", "object_type": "Thread", "where": [
+                            {"property": "status", "op": "eq", "value": "open"}]},
+                        {"op": "traverse", "from": {"op": "subject"}, "direction": "in",
+                         "link_type": "in_repo", "hops": 1}]}}}}},
+        {"title": "recent_decisions", "body": {
+            "op": "take", "n": 15, "from": {
+                "op": "table", "columns": [{"property": "summary"}, {"property": "kind"}],
+                "from": {"op": "order", "by": "recency", "dir": "desc", "from": {
+                    "op": "intersect", "sets": [
+                        {"op": "select", "object_type": "Decision"},
+                        {"op": "traverse", "from": {"op": "subject"}, "direction": "in",
+                         "link_type": "in_repo", "hops": 1}]}}}}},
+    ],
+}
+
+
 DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "operational-vs-disclosed-geography": GEOGRAPHY_DISCREPANCY,
     # the arrival briefing — a `sections` op-tree, no longer a hand-written Function.
     "briefing": BRIEFING,
+    # the SCOPED briefing — orient's per-project bearings, subject = a SoftwareProject (#20).
+    "project-briefing": PROJECT_BRIEFING,
     # the former bespoke read-models, now forkable compositions over named Functions —
     # opinion left engine code (no more hardcoded read-model + bespoke MCP tool per lens).
     "co-investment-ties": {"op": "function", "name": "coinvest"},

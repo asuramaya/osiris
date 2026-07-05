@@ -45,8 +45,8 @@ ROOM_CONFIG: dict[str, dict[str, Any]] = {
 # in the test) — this seeds NO new compositions, it only rooms the ones the composer already owns.
 ROOM_COMPOSITIONS: dict[str, tuple[str, ...]] = {
     "engineer": (
-        "briefing", "decision-log", "design-canon", "family-consistency", "family-drift",
-        "portfolio", "pulse-digest", "projects", "project", "fleet",
+        "briefing", "project-briefing", "decision-log", "design-canon", "family-consistency",
+        "family-drift", "portfolio", "pulse-digest", "projects", "project", "fleet",
     ),
     "analyst": (
         "who-is-this", "operational-vs-disclosed-geography", "co-investment-ties",

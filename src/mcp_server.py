@@ -460,31 +460,24 @@ async def mount(
 
 
 async def _project_briefing(pool: asyncpg.Pool, project: str) -> dict[str, Any] | None:
-    """A working agent's SCOPED bearings: its OWN project's open threads + recent decisions,
-    not the whole fleet's ~150 (decepticons surfaced that orient's flood costs more context
-    than it saves). Threads/decisions link `in_repo` their project, so scope is one join."""
+    """A working agent's SCOPED bearings — its OWN project's open threads + recent decisions,
+    not the whole fleet's (decepticons surfaced that orient's flood costs more context than it
+    saves). NOW A PURE COMPOSITION (#20): orient runs the `project-briefing` op-tree with the
+    project as subject — the fleet briefing's selects intersected with the project's in_repo
+    neighbourhood, recency-ordered. The bespoke SQL is gone; orient dogfoods the composer on
+    its own need, and the view is forkable like any lens."""
     proj = await pool.fetchval(
         "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1", f"repo:{project}")
     if proj is None:
         return None
-
-    async def _scoped(otype: str, only_open: bool, limit: int) -> list[dict[str, Any]]:
-        clause = (  # open iff the WINNING status assertion (by grade, then recency) is 'open'
-            " AND (SELECT s.value #>> '{}' FROM current_assertions s WHERE s.object_id=o.id "
-            " AND s.name='status' ORDER BY s.confidence DESC, s.observed_at DESC LIMIT 1)"
-            " = 'open'" if only_open else "")
-        rows = await pool.fetch(
-            "SELECT (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-            "         AND a.name='summary') AS summary, "
-            "       (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-            "         AND a.name='kind') AS kind "
-            "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
-            f"WHERE o.type=$2 AND o.status='active'{clause} ORDER BY o.id DESC LIMIT $3",
-            proj, otype, limit)
-        return [{"summary": r["summary"], "kind": r["kind"]} for r in rows if r["summary"]]
-
-    return {"open_threads": await _scoped("Thread", True, 40),
-            "recent_decisions": await _scoped("Decision", False, 15)}
+    res = await comp.run_composition(pool, "project-briefing", proj)
+    items = res.get("items") if isinstance(res, dict) else None
+    if not isinstance(items, dict):  # unseeded / error — never crash orient, just show empty
+        return {"open_threads": [], "recent_decisions": []}
+    return {
+        "open_threads": [r for r in (items.get("open_threads") or []) if r.get("summary")],
+        "recent_decisions": [r for r in (items.get("recent_decisions") or []) if r.get("summary")],
+    }
 
 
 @mcp.tool()

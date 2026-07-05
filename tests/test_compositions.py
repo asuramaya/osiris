@@ -10,6 +10,7 @@ import pytest
 from src.actions.core import Actions
 from src.orchestrator.compositions import (
     DEFAULT_COMPOSITIONS,
+    _eval,
     list_compositions,
     run_composition,
     save_composition,
@@ -36,6 +37,45 @@ async def _scenario(actions: Actions):
     await actions.assert_property(us, "location", "Miami, Florida, United States", src, NOW, 0.85)
     await actions.create_link(trial, us, "site", src, NOW, 0.85)
     return co
+
+
+# --- #20: orient's scoped briefing IS a composition + recency ordering -------
+
+async def test_order_by_recency_sorts_by_object_birth(actions: Actions) -> None:
+    a = await actions.create_or_find_object("Thread", "thread:rec-a", "session")
+    b = await actions.create_or_find_object("Thread", "thread:rec-b", "session")
+    # force a distinct birth order (a is older) so the assertion can't flake on equal timestamps
+    await actions.pool.execute(
+        "UPDATE objects SET created_at = now() - interval '1 hour' WHERE id=$1", a)
+    spec = {"op": "order", "by": "recency", "dir": "desc",
+            "from": {"op": "select", "object_type": "Thread", "canonical_prefix": "thread:rec-"}}
+    assert (await _eval(actions.pool, spec, None)).objects == [b, a]      # newest first
+    spec["dir"] = "asc"
+    assert (await _eval(actions.pool, spec, None)).objects == [a, b]      # oldest first
+
+
+async def test_project_briefing_composition_scopes_to_its_subject(actions: Actions) -> None:
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:demo", "session")
+    await actions.assert_property(proj, "name", "demo", "session", NOW, 0.9)
+    t = await actions.create_or_find_object("Thread", "thread:demo-1", "session")
+    await actions.assert_property(t, "summary", "the demo open thread", "session", NOW, 0.9)
+    await actions.assert_property(t, "status", "open", "session", NOW, 0.9)
+    await actions.create_link(t, proj, "in_repo", "session", NOW, 0.9)
+    d = await actions.create_or_find_object("Decision", "decision:demo-1", "session")
+    await actions.assert_property(d, "summary", "the demo ruling", "session", NOW, 0.9)
+    await actions.assert_property(d, "kind", "ruling", "session", NOW, 0.9)
+    await actions.create_link(d, proj, "in_repo", "session", NOW, 0.9)
+    foreign = await actions.create_or_find_object("Thread", "thread:foreign", "session")
+    await actions.assert_property(foreign, "summary", "a foreign thread", "session", NOW, 0.9)
+    await actions.assert_property(foreign, "status", "open", "session", NOW, 0.9)
+
+    await seed_default_compositions(actions.pool)
+    items = (await run_composition(actions.pool, "project-briefing", proj))["items"]
+    assert set(items) == {"open_threads", "recent_decisions"}
+    threads = [r["summary"] for r in items["open_threads"]]
+    assert "the demo open thread" in threads
+    assert "a foreign thread" not in threads       # scoped OUT of the project's neighbourhood
+    assert "the demo ruling" in [r["summary"] for r in items["recent_decisions"]]
 
 
 # --- the headline: discrepancy IS a composition -----------------------------
