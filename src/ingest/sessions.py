@@ -549,6 +549,34 @@ async def _resolve_own_threads(
     return count
 
 
+async def _known_projects(pool: asyncpg.Pool, exclude: str | None) -> dict[str, str]:
+    """Registered SoftwareProject names (distinctive, >=4 chars), lowercased -> name, minus the
+    session's own repo. The candidate set for re-homing an item that names ANOTHER project."""
+    rows = await pool.fetch(
+        "SELECT (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "        AND a.name='name') AS name "
+        "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active'")
+    ex = (exclude or "").removeprefix("repo:").strip().lower()
+    out: dict[str, str] = {}
+    for r in rows:
+        low = (r["name"] or "").strip().lower()
+        if len(low) >= 4 and low != ex:
+            out[low] = r["name"].strip()
+    return out
+
+
+def _home_repo(known: dict[str, str], summary: str, default: str) -> str:
+    """The project an item BELONGS to: its own repo, UNLESS the item distinctively names exactly
+    ONE other registered project and NOT its own — the provenance fix (cwd-blind attribution
+    filed cross-project mentions under the working repo). Conservative: ambiguity keeps default."""
+    s = summary.lower()
+    own = default.removeprefix("repo:").strip().lower()
+    if own and re.search(rf"\b{re.escape(own)}\b", s):
+        return default  # names its own project → keep it here, even if it also names another
+    hits = [name for low, name in known.items() if re.search(rf"\b{re.escape(low)}\b", s)]
+    return hits[0] if len(hits) == 1 else default
+
+
 async def emit_yield(
     actions: Actions, y: SessionYield, *, repo: str | None,
     observed: datetime | None = None, source_model: str | None = None,
@@ -560,6 +588,8 @@ async def emit_yield(
     observed = observed or datetime.now(UTC)
     counts = {"decisions": 0, "threads": 0, "obligations": 0, "resolved": 0,
               "skipped_foreign": 0}
+    # re-home each item to the project it NAMES, not the session's cwd (the provenance fix).
+    known = await _known_projects(actions.pool, repo) if repo else {}
     for d in y.decisions:
         canon = _canon("decision", d["summary"])
         if await _foreign_owned(actions.pool, canon):
@@ -577,21 +607,22 @@ async def emit_yield(
             await actions.assert_property(oid, "source_model", source_model, _SOURCE,
                                           observed, _CONF, evidence_class=_EC)
         if repo:
-            await link_repo(actions, oid, repo, observed,
+            await link_repo(actions, oid, _home_repo(known, d["summary"], repo), observed,
                             source=_SOURCE, evidence_class=_EC, confidence=_CONF)
         counts["decisions"] += 1
     opened_now: set[Any] = set()
     for text in y.threads_opened:
-        tid = await _emit_thread(actions, text, repo=repo, observed=observed,
-                                 source_model=source_model)
+        tid = await _emit_thread(actions, text, observed=observed, source_model=source_model,
+                                 repo=_home_repo(known, text, repo) if repo else repo)
         if tid is not None:
             counts["threads"] += 1
             opened_now.add(tid)
         else:
             counts["skipped_foreign"] += 1
     for text in y.obligations:
-        tid = await _emit_thread(actions, text, repo=repo, observed=observed,
-                                 kind="obligation", source_model=source_model)
+        tid = await _emit_thread(actions, text, kind="obligation", observed=observed,
+                                 source_model=source_model,
+                                 repo=_home_repo(known, text, repo) if repo else repo)
         if tid is not None:
             counts["obligations"] += 1
             opened_now.add(tid)

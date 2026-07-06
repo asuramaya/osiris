@@ -8,6 +8,7 @@ transcripts are synthetic files in tmp_path; Postgres is real (never mocks).
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,31 @@ from src.orchestrator.capture import open_thread, record_decision
 from src.orchestrator.compositions import run_composition, seed_default_compositions
 
 _CWD = "/home/someone/code/testrepo"
+
+
+async def test_emit_yield_rehomes_cross_project_items(actions: Actions) -> None:
+    """The provenance fix: an item that distinctively names ANOTHER registered project is homed
+    THERE, not blanket-attributed to the session's cwd repo. Ambiguity/self-mention keeps cwd."""
+    now = datetime.now(UTC)
+    for name in ("osiris", "chronohorn"):
+        p = await actions.create_or_find_object("SoftwareProject", f"repo:{name}", "gitlog")
+        await actions.assert_property(p, "name", name, "gitlog", now, 0.9)
+    y = SessionYield(threads_opened=[
+        "Build chronohorn's local executor with mandatory checkpoints",  # -> chronohorn
+        "wire the osiris composer authoring shell",                      # -> osiris (self-named)
+        "tune the extractor inheritance test until it converges",        # -> osiris (default)
+    ])
+    await emit_yield(actions, y, repo="osiris")
+    rows = await actions.pool.fetch(
+        "SELECT (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "        AND a.name='summary') AS s, "
+        " (SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
+        "  WHERE l.from_id=o.id AND l.type='in_repo' LIMIT 1) AS home "
+        "FROM objects o WHERE o.type='Thread'")
+    home = {r["s"]: r["home"] for r in rows}
+    assert home["Build chronohorn's local executor with mandatory checkpoints"] == "repo:chronohorn"
+    assert home["wire the osiris composer authoring shell"] == "repo:osiris"
+    assert home["tune the extractor inheritance test until it converges"] == "repo:osiris"
 
 
 class FakeLLM:
