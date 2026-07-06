@@ -51,38 +51,52 @@ class AgentIdentity:
     # HOW model was resolved — grades the source_model assertion (job_dir probe = observation,
     # cwd = a weaker guess, self_report = the agent's own word). None when model is unknown.
     model_method: str | None = None
+    # divergence flag (ruling 17516660): the agent's SELF-REPORT of its model (if it passed one)
+    # and whether it DISAGREES with the harness observation — a self-report that lies is a flag.
+    model_declared: str | None = None
+    model_divergent: bool = False
 
 
 def resolve_identity(
     *, cwd: str | None = None, job_dir: str | None = None,
-    session: str | None = None, model: str | None = None,
+    session: str | None = None, model: str | None = None, root: Path | None = None,
 ) -> AgentIdentity:
-    """Resolve an agent's identity from what it can tell the server about itself. The
-    project comes from its cwd; the session + model are PROBED off its own transcript,
-    never a self-report. Two probe paths: the CLAUDE_JOB_DIR anchor (precise), or — when
-    that's absent (not every session sets it; decepticons surfaced this live, falling to
-    the anonymous bucket) — the cwd's project dir, whose newest transcript is the active
-    session. Only if BOTH fail does it fall to 'unknown'."""
+    """Resolve an agent's identity from what it can tell the server + what the harness RECORDS.
+    The project comes from its cwd; the session + model are OBSERVED off its own transcript. Two
+    probe paths: the CLAUDE_JOB_DIR anchor (precise), or — when absent — the cwd's project dir,
+    whose newest transcript is the active session. Ruling 17516660: OBSERVATION outranks the
+    agent's self-report (the harness doesn't lie; a swap is below the agent's own horizon), so a
+    passed `model` is used only when nothing can be observed, and a passed model that DISAGREES
+    with the observation is kept as `model_declared` + flagged `model_divergent`. `root` overrides
+    the transcript search dir (tests inject a tmp root; production reads ~/.claude/projects)."""
     project = Path(cwd).name if cwd else None
     sid = session or _job_id(job_dir)
-    # track WHICH channel gave us the model, so register_agent can grade it (see _MODEL_EC):
-    # a passed-in model is the agent's own word; a probe off its transcript is an observation.
-    model_method: str | None = "self_report" if model is not None else None
-    if model is None and job_dir:
-        model, _, _ = current_model(job_dir=job_dir)  # authoritative harness record
-        if model is not None:
-            model_method = "job_dir"
-    if sid is None and cwd:  # no job dir → find the session by its project directory
-        path = locate_transcript_by_cwd(cwd)
+    declared = model  # the agent's SELF-REPORT of its model (may be None) — the WEAK signal
+    observed: str | None = None
+    method: str | None = None
+    if job_dir:
+        observed, _, _ = current_model(root=root, job_dir=job_dir)  # the harness's own record
+        if observed is not None:
+            method = "job_dir"
+    if sid is None and cwd:  # no job dir → find the session (and, if unseen, the model) by cwd
+        path = locate_transcript_by_cwd(cwd, root=root)
         if path is not None:
             sid = path.stem.split("-")[0]  # the 8-char handle, matching the job-id scheme
-            if model is None:
-                model = latest_model(_tail_lines(path))
-                if model is not None:
-                    model_method = "cwd"
+            if observed is None:
+                observed = latest_model(_tail_lines(path))
+                if observed is not None:
+                    method = "cwd"
+    if observed is not None:                # the harness's word WINS over the agent's own
+        model = observed
+        divergent = bool(declared and declared != observed)  # self-report != observation = FLAG
+    else:                                   # nothing to observe → fall back to the self-report
+        model = declared
+        method = "self_report" if declared else None
+        divergent = False
     sid = sid or "unknown"
-    return AgentIdentity(agent_id=f"agent:{sid}", session=sid, project=project,
-                         model=model, cwd=cwd, model_method=model_method)
+    return AgentIdentity(agent_id=f"agent:{sid}", session=sid, project=project, model=model,
+                         cwd=cwd, model_method=method, model_declared=declared,
+                         model_divergent=divergent)
 
 
 async def _link_once(
@@ -95,16 +109,16 @@ async def _link_once(
         await actions.create_link(frm, to, ltype, src, when, _CONF, evidence_class=_EC)
 
 
-# For the source_model property, the resolution METHOD is the provenance: reading the model off
-# the agent's own transcript (job_dir) is a DIRECT_OBSERVATION of the harness record; the cwd
-# fallback is a weaker DERIVED guess (it may read a co-located session's transcript); a
-# self-reported model is the agent's own word. NB: self_report stays SELF_DECLARED for now —
-# whether it should INVERT below observation (a swap is below the agent's own horizon) is a
-# ruling still under discussion, deliberately NOT baked in here.
+# For the source_model property, the resolution METHOD is the provenance, and (ruling 17516660)
+# OBSERVATION outranks self-report for this substrate-fact: reading the model off the agent's own
+# transcript (job_dir) is a DIRECT_OBSERVATION of the harness record; the cwd fallback is a weaker
+# DERIVED guess (it may read a co-located session's transcript); a self-reported model is the
+# agent's own word about its own substrate — the WEAKEST signal (a swap is below its horizon), so
+# it grades CO_OCCURRENCE, below both observations.
 _MODEL_EC = {
     "job_dir": EvidenceClass.DIRECT_OBSERVATION,
     "cwd": EvidenceClass.DERIVED,
-    "self_report": EvidenceClass.SELF_DECLARED,
+    "self_report": EvidenceClass.CO_OCCURRENCE,
 }
 
 
@@ -122,9 +136,15 @@ async def register_agent(
     await actions.assert_property(a, "session", identity.session, src, now, _CONF,
                                   evidence_class=_EC)
     if identity.model:
-        ec = _MODEL_EC.get(identity.model_method or "", EvidenceClass.SELF_DECLARED)
+        ec = _MODEL_EC.get(identity.model_method or "", EvidenceClass.CO_OCCURRENCE)
         await actions.assert_property(a, "source_model", identity.model, src, now,
                                       confidence_for(ec), evidence_class=ec.value)
+    if identity.model_divergent and identity.model_declared:
+        # the agent self-reported a model that DISAGREES with the harness (ruling 17516660): keep
+        # its word as the weak signal it is — the mismatch with source_model (observed) IS the flag.
+        sr = EvidenceClass.CO_OCCURRENCE
+        await actions.assert_property(a, "source_model_declared", identity.model_declared, src,
+                                      now, confidence_for(sr), evidence_class=sr.value)
     if identity.project:
         await actions.assert_property(a, "project", identity.project, src, now, _CONF,
                                       evidence_class=_EC)
