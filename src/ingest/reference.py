@@ -20,6 +20,7 @@ from typing import Any
 from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.db.pool import create_pool
+from src.ingest.redact import redact
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -34,7 +35,9 @@ def _slug(name: str) -> str:
 
 # file I/O stays in sync helpers — the async functions do DB work only (ASYNC240)
 def _read(path: str) -> str:
-    return Path(path).read_text()
+    # redact BEFORE the md text becomes graph assertions (ruling f8f22e14): a project's
+    # CLAUDE.md / DESIGN.md / essays can carry printed key material just like a transcript.
+    return redact(Path(path).read_text())
 
 
 def _md_files(directory: str) -> list[str]:

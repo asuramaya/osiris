@@ -58,6 +58,7 @@ from src.db.pool import create_pool
 from src.ingest.extract import _strip_fences
 from src.ingest.mined import _distinctive, consolidate_memory
 from src.ingest.providers import LLMClient, Usage, llm_provider
+from src.ingest.redact import credential_shaped, redact
 from src.ingest.usage import record_usage, usage_summary
 from src.orchestrator.capture import link_repo
 from src.orchestrator.monitor import get_cursor, set_cursor
@@ -75,55 +76,6 @@ _MIN_DISTILLED = 200
 # raw bytes a single tick may scan per file even without LLM calls (bounds I/O on a
 # file whose delta is megabytes of tool traffic that distills to nothing)
 _MAX_SCAN_BYTES = 16 * 1024 * 1024
-
-
-# --- redaction (ruling f8f22e14): strike credential shapes BEFORE the LLM sees text ---
-
-_REDACTIONS: list[tuple[re.Pattern[str], str]] = [
-    # Bearer first — the assignment rule below would otherwise eat the word "Bearer"
-    # out of "Authorization: Bearer <token>" and leave the bare token standing.
-    (re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{8,}"), "Bearer [REDACTED]"),
-    # labelled assignments: ETHERSCAN_API_KEY=..., "token": "...", Authorization: ...
-    # The [\w-]* prefix matters: env names like ETHERSCAN_API_KEY have no word boundary
-    # before "API", which is exactly the shape that leaked in the live transcript.
-    (re.compile(
-        r"""(?i)\b([\w-]*(?:key|token|secret|passwd|password|credential|authorization)"""
-        r"""s?\b["']?\s*[:=]\s*)["']?[^\s"',;]{6,}"""),
-     r"\1[REDACTED]"),
-    # vendor key prefixes (Anthropic/OpenAI, GitHub, Slack, AWS, JWT)
-    (re.compile(r"\bsk-(?:ant-)?[A-Za-z0-9_-]{12,}"), "[REDACTED-KEY]"),
-    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"), "[REDACTED-KEY]"),
-    (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"), "[REDACTED-KEY]"),
-    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[REDACTED-KEY]"),
-    (re.compile(r"\beyJ[A-Za-z0-9_-]{16,}\.[A-Za-z0-9._-]{16,}"), "[REDACTED-JWT]"),
-    # long opaque blobs. Full 40-hex SHAs go too — rationales cite SHORT refs, which
-    # survive; UUIDs survive (dash every ≤12 chars breaks the runs).
-    (re.compile(r"\b[0-9a-fA-F]{40,}\b"), "[REDACTED-BLOB]"),
-    (re.compile(r"\b[A-Za-z0-9+/=]{48,}\b"), "[REDACTED-BLOB]"),
-    (re.compile(r"\b[A-Za-z0-9_-]{64,}\b"), "[REDACTED-BLOB]"),
-]
-
-
-def redact(text: str) -> str:
-    """Strike credential-shaped spans from distilled dialogue. Conservative on purpose:
-    short commit refs, UUIDs, and ordinary prose pass untouched; anything labelled or
-    key-shaped is replaced before the model (or the graph) can see it."""
-    for pat, repl in _REDACTIONS:
-        text = pat.sub(repl, text)
-    return text
-
-
-_CRED_VALUE = re.compile(
-    r"(?i)\[REDACTED|\bBearer\s+\S|\b[\w-]*(?:key|token|secret|password)\b\s*[:=]"
-    r"|\b[A-Za-z0-9+/=]{32,}\b"
-)
-
-
-def credential_shaped(value: str) -> bool:
-    """The emit-time hard gate: no extracted assertion may carry a credential shape —
-    including a redaction marker (a summary BUILT AROUND a struck secret is still about
-    the secret). Defense in depth behind `redact`."""
-    return bool(_CRED_VALUE.search(value))
 
 
 # --- distillation: the dialogue, never the transcript ---------------------------------

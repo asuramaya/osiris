@@ -9,12 +9,27 @@ from datetime import UTC, datetime
 
 from src.actions.core import Actions
 from src.ingest.reference import (
+    _read,
     ingest_canon,
     ingest_reference_doc,
     mine_mentions,
     parse_doc,
 )
 from src.ontology.schema import LINK_TYPES, OBJECT_TYPES
+
+
+def test_ingest_read_redacts_credentials(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """The ingest read strips credential shapes (ruling f8f22e14) — a project's mds can carry
+    printed key material just like a transcript, and must not enter the graph raw."""
+    p = tmp_path / "NOTES.md"
+    p.write_text(
+        "# Notes\n\nExport ETHERSCAN_API_KEY=abcdef1234567890secretvalue then run.\n"
+        "The token sk-ant-abcdef0123456789xyz must never land in the graph.\n")
+    out = _read(str(p))
+    assert "abcdef1234567890secretvalue" not in out
+    assert "sk-ant-abcdef0123456789xyz" not in out
+    assert "[REDACTED" in out
+    assert "# Notes" in out          # ordinary prose survives
 
 NOW = datetime(2026, 6, 28, tzinfo=UTC)
 
