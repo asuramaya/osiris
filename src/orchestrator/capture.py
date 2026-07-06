@@ -181,3 +181,29 @@ async def resolve_thread(
         await actions.assert_property(tid, "resolved_because", because, source, observed,
                                       _CONF, evidence_class=_EC)
     return tid
+
+
+async def record_tension(
+    actions: Actions, pole_a: str, pole_b: str, *, lean: str | None = None,
+    why: str | None = None, repo: str | None = None, source: str = _SOURCE,
+) -> uuid.UUID:
+    """Hold a live TENSION — two positions in productive tension, neither settled. Unlike
+    record_decision (which SETTLES) or open_thread (which CLOSES), a tension is HELD: the
+    current `lean` and `why` are captured, but the object is never auto-resolved or consolidated
+    away — because it is its own type, grade-resolution and dedup structurally cannot flatten it.
+    Re-record the same poles to MOVE the lean; the lean assertion history is the dance across
+    sessions. Idempotent on the unordered pole pair (so (a,b) and (b,a) are one tension)."""
+    observed = datetime.now(UTC)
+    key = "||".join(sorted((pole_a, pole_b)))  # unordered: the pair, not the order, is identity
+    t = await actions.create_or_find_object("Tension", _canon("tension", key), source)
+    await actions.assert_property(t, "pole_a", pole_a, source, observed, _CONF, evidence_class=_EC)
+    await actions.assert_property(t, "pole_b", pole_b, source, observed, _CONF, evidence_class=_EC)
+    if lean:
+        await actions.assert_property(t, "lean", lean, source, observed, _CONF, evidence_class=_EC)
+    if why:
+        await actions.assert_property(t, "lean_why", why, source, observed, _CONF,
+                                      evidence_class=_EC)
+    if repo:
+        await link_repo(actions, t, repo, observed, source=source, evidence_class=_EC,
+                        confidence=_CONF)
+    return t

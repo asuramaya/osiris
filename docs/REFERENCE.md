@@ -80,6 +80,7 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `Decision` | `decision:` | An architectural/design decision mined from the project's own commit rationale — the 'why', as queryable institutional memory. |
 | `File` | `file:` | A tracked file in a repository (metadata only — content stays in git, read on demand). Its `role` lets analogous files be compared across repos. |
 | `Agent` | `agent:` | A Claude instance operating over the graph — an analyst in the fleet. Carries its model (source-model provenance) and works in a project on behalf of a principal. 'A man and all his imaginary friends.' |
+| `Tension` | `tension:` | A held POLARITY — two positions in productive tension, neither settled. Unlike a Decision (which settles) or a Thread (which closes), a tension is HELD: the current lean is recorded but never auto-resolved or consolidated away; the lean history is the dance across sessions. |
 
 ### Observable object types
 

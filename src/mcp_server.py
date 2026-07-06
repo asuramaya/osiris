@@ -482,6 +482,7 @@ async def _project_briefing(pool: asyncpg.Pool, project: str) -> dict[str, Any] 
     return {
         "open_threads": [r for r in (items.get("open_threads") or []) if r.get("summary")],
         "recent_decisions": [r for r in (items.get("recent_decisions") or []) if r.get("summary")],
+        "tensions": [r for r in (items.get("tensions") or []) if r.get("pole_a")],
     }
 
 
@@ -641,6 +642,27 @@ async def resolve_thread(
     if tid is None:
         return {"error": f"no open thread matches {ref!r}"}
     return {"id": str(tid), "status": "resolved"}
+
+
+@mcp.tool()
+async def hold_tension(
+    pole_a: str, pole_b: str, lean: str | None = None, why: str | None = None,
+    repo: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Record a live TENSION — two positions held in productive tension, neither settled.
+    Unlike record_decision (which SETTLES) or open_thread (which CLOSES), a tension is HELD:
+    your current `lean` and `why` are captured, but it is NEVER auto-resolved or consolidated
+    away — a Tension is its OWN type, so grade-resolution and dedup structurally cannot flatten
+    it into a false answer. Re-hold the same poles to MOVE the lean; the lean history is the
+    dance across sessions. For a real polarity to navigate over time (bounded recall vs complete
+    memory), never a question to answer. Surfaces in orient under `tensions`."""
+    key = _conn_key(ctx)
+    ident = _agents.get(key) if key is not None else None
+    t = await capture.record_tension(
+        Actions(await _pool_get()), pole_a, pole_b, lean=lean, why=why,
+        repo=repo or (ident.project if ident else None), source=_source_for(ctx),
+    )
+    return {"held": str(t), "poles": [pole_a, pole_b], "lean": lean}
 
 
 def main() -> None:

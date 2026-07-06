@@ -11,7 +11,13 @@ from datetime import UTC, datetime, timedelta
 
 from src.actions.core import Actions
 from src.mcp_server import _project_briefing
-from src.orchestrator.capture import link_repo, open_thread, record_decision, resolve_thread
+from src.orchestrator.capture import (
+    link_repo,
+    open_thread,
+    record_decision,
+    record_tension,
+    resolve_thread,
+)
 from src.orchestrator.compositions import _props, run_composition, seed_default_compositions
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
@@ -149,3 +155,28 @@ async def test_status_resolution_honors_grade_over_recency(actions: Actions) -> 
     scoped = await _project_briefing(actions.pool, "osiris")
     assert scoped is not None
     assert not any(r["summary"] == summary for r in scoped["open_threads"])
+
+
+async def test_record_tension_holds_a_polarity_and_moves_the_lean(actions: Actions) -> None:
+    a = "bounded recall — memory is a query"
+    b = "complete memory — never lose anything"
+    t1 = await record_tension(actions, a, b, lean="bounded, for now", why="cargo problem",
+                              repo="osiris")
+    props = await _props(actions.pool, t1)
+    assert props["pole_a"] == a and props["pole_b"] == b and props["lean"] == "bounded, for now"
+    # re-holding the same poles (EITHER order) MOVES the lean — one object, the dance
+    t2 = await record_tension(actions, b, a, lean="leaning complete after the leak")
+    assert t2 == t1
+    assert (await _props(actions.pool, t1))["lean"] == "leaning complete after the leak"
+    # it is a Tension, never a Thread/Decision — grade-resolution & consolidation can't reach it
+    assert await actions.pool.fetchval("SELECT type FROM objects WHERE id=$1", t1) == "Tension"
+
+
+async def test_tension_surfaces_in_the_scoped_briefing(actions: Actions) -> None:
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:demo", "session")
+    await actions.assert_property(proj, "name", "demo", "session", datetime.now(UTC), 0.9)
+    await record_tension(actions, "speed", "safety", lean="safety", repo="demo")
+    await seed_default_compositions(actions.pool)
+    items = (await run_composition(actions.pool, "project-briefing", proj))["items"]
+    assert "tensions" in items
+    assert ("speed", "safety") in [(r["pole_a"], r["pole_b"]) for r in items["tensions"]]

@@ -1130,6 +1130,17 @@ PROJECT_BRIEFING: dict[str, Any] = {
                         {"op": "select", "object_type": "Decision"},
                         {"op": "traverse", "from": {"op": "subject"}, "direction": "in",
                          "link_type": "in_repo", "hops": 1}]}}}}},
+        # the live tensions — held polarities the session inherits (not a verdict). A Tension
+        # is its own type, so grade-resolution / consolidation never flatten it into an answer.
+        {"title": "tensions", "body": {
+            "op": "take", "n": 20, "from": {
+                "op": "table", "columns": [{"property": "pole_a"}, {"property": "pole_b"},
+                                           {"property": "lean"}],
+                "from": {"op": "order", "by": "recency", "dir": "desc", "from": {
+                    "op": "intersect", "sets": [
+                        {"op": "select", "object_type": "Tension"},
+                        {"op": "traverse", "from": {"op": "subject"}, "direction": "in",
+                         "link_type": "in_repo", "hops": 1}]}}}}},
     ],
 }
 

@@ -71,7 +71,7 @@ async def test_project_briefing_composition_scopes_to_its_subject(actions: Actio
 
     await seed_default_compositions(actions.pool)
     items = (await run_composition(actions.pool, "project-briefing", proj))["items"]
-    assert set(items) == {"open_threads", "recent_decisions"}
+    assert set(items) == {"open_threads", "recent_decisions", "tensions"}
     threads = [r["summary"] for r in items["open_threads"]]
     assert "the demo open thread" in threads
     assert "a foreign thread" not in threads       # scoped OUT of the project's neighbourhood

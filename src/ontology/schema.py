@@ -136,6 +136,11 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                "A Claude instance operating over the graph — an analyst in the fleet. "
                "Carries its model (source-model provenance) and works in a project on "
                "behalf of a principal. 'A man and all his imaginary friends.'", ("agent:",)),
+    ObjectType("Tension", "Software", "#e685b5", "vee",
+               "A held POLARITY — two positions in productive tension, neither settled. Unlike a "
+               "Decision (which settles) or a Thread (which closes), a tension is HELD: the "
+               "current lean is recorded but never auto-resolved or consolidated away; the lean "
+               "history is the dance across sessions.", ("tension:",)),
     # Observables
     ObjectType("IPv4", "Observable", "#2dd4bf", "ellipse", "An IPv4 address observable."),
     ObjectType("TelegramChannel", "Observable", "#56a3ff", "ellipse",
