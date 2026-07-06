@@ -579,12 +579,10 @@ async def _props(pool: asyncpg.Pool, oid: uuid.UUID) -> dict[str, str]:
     # The current value of each property is the WINNING assertion across sources, resolved
     # by evidence GRADE first (constitution #5: SELF_DECLARED > … > DERIVED), then recency —
     # so a fresh DERIVED re-assertion never overrides an older SELF_DECLARED one (the miner
-    # re-opening a thread a session already resolved must NOT win). `confidence` is the
-    # faithful projection of the class, so it ranks grade; matches ontology/export.py.
+    # re-opening a thread a session already resolved must NOT win). winning_props (migration
+    # 0015) is the ONE definition of that ordering; every read site calls it, so it can't drift.
     rows = await pool.fetch(
-        "SELECT DISTINCT ON (name) name, value #>> '{}' AS v FROM current_assertions "
-        "WHERE object_id=$1 ORDER BY name, confidence DESC, observed_at DESC",
-        oid,
+        "SELECT name, value #>> '{}' AS v FROM winning_props(ARRAY[$1]::uuid[])", oid,
     )
     return {r["name"]: r["v"] for r in rows}
 
@@ -798,8 +796,7 @@ async def _rollup(pool: asyncpg.Pool, oid: uuid.UUID, spec: dict[str, Any]) -> A
             rids) if r["v"] is not None]
     else:
         values = [r["v"] for r in await pool.fetch(
-            "SELECT DISTINCT ON (object_id) value #>> '{}' AS v FROM current_assertions "
-            "WHERE object_id = ANY($1::uuid[]) AND name=$2 ORDER BY object_id, observed_at DESC",
+            "SELECT value #>> '{}' AS v FROM winning_props($1::uuid[]) WHERE name=$2",
             rids, str(prop)) if r["v"] is not None]
     if not values:
         return None
@@ -996,10 +993,7 @@ async def object_items(pool: asyncpg.Pool, ids: list[uuid.UUID]) -> list[dict[st
     )
     props: dict[uuid.UUID, dict[str, str]] = {}
     for r in await pool.fetch(
-        "SELECT DISTINCT ON (object_id, name) object_id, name, value #>> '{}' AS v "
-        "FROM current_assertions WHERE object_id = ANY($1::uuid[]) "
-        "ORDER BY object_id, name, observed_at DESC",
-        ids,
+        "SELECT object_id, name, value #>> '{}' AS v FROM winning_props($1::uuid[])", ids,
     ):
         props.setdefault(r["object_id"], {})[r["name"]] = r["v"]
     meta = {o["id"]: o for o in objs}

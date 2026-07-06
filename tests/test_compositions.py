@@ -200,3 +200,25 @@ async def test_default_compositions_seeded(actions: Actions) -> None:
 async def _save(actions: Actions, name: str, spec: dict) -> str:
     await save_composition(actions.pool, name, spec)
     return name
+
+
+async def test_object_items_resolves_props_by_grade_not_recency(actions: Actions) -> None:
+    """Resolver-unify regression: object_items (the composer's object-list / Table renderer)
+    resolved each property by RECENCY ONLY — a fresh DERIVED re-assertion buried an older
+    SELF_DECLARED (the stuck-open-threads bug class). It now routes through winning_props (grade,
+    THEN recency) like _props, so the cross-source winner ordering is one definition, not five."""
+    from src.orchestrator.compositions import object_items
+    from src.parsers.base import EvidenceClass
+    from src.parsers.evidence import confidence_for
+
+    older, newer = datetime(2026, 6, 26, tzinfo=UTC), datetime(2026, 6, 28, tzinfo=UTC)
+    sd, dv = EvidenceClass.SELF_DECLARED, EvidenceClass.DERIVED
+    o = await actions.create_or_find_object("Thread", "thread:grade-bulk", "session")
+    # an OLDER SELF_DECLARED status=resolved, then a NEWER DERIVED status=open (a miner re-open)
+    await actions.assert_property(o, "status", "resolved", "session", older,
+                                  confidence_for(sd), evidence_class=sd.value)
+    await actions.assert_property(o, "status", "open", "session-miner", newer,
+                                  confidence_for(dv), evidence_class=dv.value)
+    items = await object_items(actions.pool, [o])
+    status = next(it["props"]["status"] for it in items if it["id"] == str(o))
+    assert status == "resolved"   # GRADE wins over the fresher DERIVED re-open (was "open")
