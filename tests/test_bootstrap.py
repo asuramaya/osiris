@@ -79,3 +79,38 @@ async def test_bootstrap_empty_project_is_a_clean_noop(
     # a greenfield project still gets registered (so agents can work_in it)
     assert await actions.pool.fetchval(
         "SELECT 1 FROM objects WHERE type='SoftwareProject' AND canonical='repo:greenfield'")
+
+
+async def test_bootstrap_discovers_docs_layout_not_just_osiris_shape(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """A repo that keeps its memory under docs/ (not memory/) must be FULLY migrated — the
+    dogfood gap Heinrich surfaced: bootstrap was osiris-shaped and would have silently dropped
+    the whole docs/ pile, migrating only the root CLAUDE.md."""
+    root = tmp_path / "heinrich"
+    (root / "docs").mkdir(parents=True)
+    (root / "web").mkdir()
+    (root / "CLAUDE.md").write_text(_LOG)
+    (root / "PLAN.md").write_text("# Plan\n\nship the probe library.\n")
+    (root / "docs" / "DESIGN.md").write_text(
+        "# Design\n\n## The between\n" + "geometry " * 80 + "\n")
+    (root / "docs" / "session11-findings.md").write_text(
+        "# Session 11 findings\n\nthe null-shart protocol held.\n")
+    (root / "docs" / "probe-library.md").write_text("# Probe library\n\nthe probes.\n")
+    (root / "web" / "README.md").write_text("# public web export — must NOT migrate\n")
+
+    res = await bootstrap_project(actions, str(root))
+
+    # the docs/ notes each became a Reference node (the pile that used to be dropped)
+    for canon in ("ref:session11-findings", "ref:probe-library", "ref:plan"):
+        assert await actions.pool.fetchval(
+            "SELECT 1 FROM objects WHERE type='Reference' AND canonical=$1", canon), canon
+    # docs/DESIGN.md was chunked as a LOG under the design topic, not a single doc node
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='Reference' AND canonical LIKE 'ref:heinrich-design-%'")
+    # the public web/ tree was NOT swept (only docs/ | memory/ | paper/ + root PLAN.md)
+    assert not await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='Reference' AND canonical LIKE '%readme%'")
+    # the displayed manifest names the docs/ files by their real relative path
+    files = {i["file"] for i in res["ingested"]}
+    assert "docs/session11-findings.md" in files and "PLAN.md" in files

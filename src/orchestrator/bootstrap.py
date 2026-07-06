@@ -28,27 +28,57 @@ from src.parsers.evidence import confidence_for
 _EC = EvidenceClass.SELF_DECLARED
 _CONF = confidence_for(_EC)
 
-# what the migration recognizes as a project's own MEMORY (not its public exports —
-# README/ARCHITECTURE stay as human-facing docs; those are kept, per the md-kill ruling).
+# What the migration recognizes as a project's own MEMORY vs its public exports. Two shapes:
+#   LOGS  — a dated build log (CLAUDE.md) / design doc (DESIGN.md), chunked PER-ENTRY;
+#   DOCS  — working notes / essays under a memory dir, one Reference each.
+# Repos differ in layout, so we look in the common PLACES, not one shape.
 _LOGS = (("CLAUDE.md", "history"), ("DESIGN.md", "design"))
+_LOG_DIRS = ("", "docs")  # a log may sit at the repo root or under docs/
+_DOC_DIRS = ("docs", "memory", "paper")  # where a project's working notes / essays live
+# exports / index stubs kept as files, never ingested as memory (md-kill ruling):
+_EXPORTS = frozenset({"README.md", "ARCHITECTURE.md", "CONTRIBUTING.md",
+                      "CODE_OF_CONDUCT.md", "MEMORY.md"})
 
 
 def _plan(path: str, project: str | None) -> tuple[str, list[tuple[str, str, str]], list[str]]:
     """Sync (all path/file IO lives here, off the async body): resolve the project name and
-    discover its memory mds — the dated logs as (path, topic, display) and the memory/ essay
-    paths. Conservative: only files we know are project memory, never a directory sweep."""
+    discover its memory mds — dated LOGS as (path, topic, display) + DOC essay paths.
+
+    Layout-tolerant, not osiris-shaped: a log is found at the root OR under docs/; essays are
+    the top-level *.md under docs/ | memory/ | paper/ plus a root PLAN.md. Exports
+    (README/ARCHITECTURE/…) and anything already taken as a log are excluded. Deliberately not
+    a blind recursive sweep — that would drag in .venv / node_modules / a public web/ tree."""
     root = Path(path).expanduser()
     proj = project or root.name
-    log_specs = [(str(root / f), t, f) for f, t in _LOGS if (root / f).is_file()]
+    log_specs: list[tuple[str, str, str]] = []
+    seen: set[Path] = set()
+    for fname, topic in _LOGS:
+        for d in _LOG_DIRS:
+            p = (root / d / fname) if d else (root / fname)
+            if p.is_file():
+                log_specs.append((str(p), topic, f"{d}/{fname}" if d else fname))
+                seen.add(p.resolve())
+                break  # first location wins per log type
+    candidates: list[Path] = []
+    for d in _DOC_DIRS:
+        sub = root / d
+        if sub.is_dir():
+            candidates.extend(sorted(sub.glob("*.md")))
+    if (root / "PLAN.md").is_file():
+        candidates.append(root / "PLAN.md")
     essays: list[str] = []
-    mem = root / "memory"
-    if mem.is_dir():
-        essays = [str(p) for p in sorted(mem.glob("*.md")) if p.name != "MEMORY.md"]
+    for p in candidates:
+        rp = p.resolve()
+        if p.name in _EXPORTS or rp in seen:  # skip exports + the log already taken
+            continue
+        seen.add(rp)
+        essays.append(str(p))
     return proj, log_specs, essays
 
 
 def _essay_display(essay: str) -> str:
-    return f"memory/{Path(essay).name}"
+    p = Path(essay)
+    return f"{p.parent.name}/{p.name}" if p.parent.name in _DOC_DIRS else p.name
 
 
 def _boot_template(project: str, entries: int) -> str:
@@ -58,8 +88,9 @@ def _boot_template(project: str, entries: int) -> str:
     return f"""# CLAUDE.md — boot sector
 
 {project} is backed by Osiris — the shared memory graph. This file is the key, not the
-memory. {entries} history/design/essay entries were migrated to the graph
-(`ref:{project}-*`, `consult_canon`); DO NOT append history here.
+memory. {entries} history/design/essay entries are indexed in the graph
+(`ref:{project}-*`, `consult_canon`) — the source docs stay on disk; this file just points
+in. DO NOT append history here.
 
 ## Mount FIRST (before anything)
 Osiris MCP is at http://127.0.0.1:8790/mcp (a `.mcp.json` points here). On connect:
@@ -102,9 +133,11 @@ async def bootstrap_project(
         ingested.append({"file": _essay_display(essay), "entries": 1, "as": "doc"})
 
     migrated = (
-        f"Knowledge migrated to the graph (ref:{project}-*). Review the suggested boot "
-        "sector, write it as your CLAUDE.md, and archive the originals — Osiris does not "
-        "touch your files. Then mount() and orient()."
+        f"Indexed into the graph (ref:{project}-*, query via consult_canon). Migration is "
+        "ADDITIVE: this is a second, queryable index over your docs — it never replaces or "
+        "removes them. The one file to shrink is CLAUDE.md (write the suggested boot sector) "
+        "so its history stops loading into every context; your source docs STAY on disk, and "
+        "Osiris never touches your files. Then mount() and orient()."
     )
     return {
         "project": project,
