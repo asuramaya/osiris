@@ -62,6 +62,7 @@ class SubAgent:
     description: str
     tool_use_id: str       # the spawn tool-call that created this agent → resolves the parent
     transcript: Path
+    last_active: datetime  # the transcript's mtime — the agent's last sign of life (lifecycle)
 
 
 def _root_agent_id(session_uuid: str) -> str:
@@ -101,12 +102,14 @@ def scan_subagents(session_dir: Path) -> list[SubAgent]:
             model = latest_model(_tail_lines(transcript))
         except OSError:
             pass
+        last_active = datetime.fromtimestamp(transcript.stat().st_mtime, UTC)
         out.append(SubAgent(
             agent_id=f"agent:{handle}", handle=handle, session=session_uuid, project=project,
             model=model, spawn_depth=int(meta.get("spawnDepth", 1)),
             agent_type=str(meta.get("agentType", "")),
             description=str(meta.get("description", "")),
             tool_use_id=str(meta.get("toolUseId", "")), transcript=transcript,
+            last_active=last_active,
         ))
     out.sort(key=lambda s: (s.spawn_depth, s.handle))
     return out
@@ -205,6 +208,7 @@ async def register_swarm(
         await prop("session", s.session)
         await prop("spawn_depth", s.spawn_depth)
         await prop("is_sidechain", True)
+        await prop("last_active", s.last_active.isoformat())  # lifecycle: live vs historical
         if s.agent_type:
             await prop("agent_type", s.agent_type)
         if s.description:

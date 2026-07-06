@@ -13,6 +13,7 @@ Actions layer.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -529,10 +530,11 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
 @mcp.tool()
 async def fleet() -> dict[str, Any]:
     """The roster AS A TREE — mounted roots and the sub-agent swarms they spawned (spawned_by
-    = delegation), each carrying its OWN model. A sub-agent inherits the parent's job_dir, so
-    it can't self-register (it would collapse into the parent); the miner reconstructs the tree
-    from disk instead. 'A man and all his imaginary friends' — now the friends' friends too,
-    fractally. `tree` is the glanceable render; `registered` the flat rows (depth + parent)."""
+    = delegation), each carrying its OWN model and LIFECYCLE (● live vs ○ historical, from its
+    last sign of life). A sub-agent inherits the parent's job_dir, so it can't self-register (it
+    would collapse into the parent); the miner reconstructs the tree from disk. 'A man and all
+    his imaginary friends' — now the friends' friends too, fractally. `tree` is the glanceable
+    render; `registered` the flat rows (depth + parent + last_active)."""
     pool = await _pool_get()
     rows = await pool.fetch(
         "SELECT o.canonical, "
@@ -542,11 +544,26 @@ async def fleet() -> dict[str, Any]:
         "  AND a.name='project') AS project, "
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
         "  AND a.name='spawn_depth') AS depth, "
+        " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='last_active') AS last_active, "
         " (SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
         "  WHERE l.from_id=o.id AND l.type='spawned_by' LIMIT 1) AS parent "
         "FROM objects o WHERE o.type='Agent' AND o.status='active' ORDER BY o.canonical"
     )
+    now = datetime.now(UTC)
+
+    def _live(last_active: str | None) -> bool:
+        # live = a sign of life within the last 15 min (its transcript was written), else historical
+        if not last_active:
+            return False
+        try:
+            return now - datetime.fromisoformat(last_active) < timedelta(minutes=15)
+        except ValueError:
+            return False
+
     nodes: dict[str, dict[str, Any]] = {str(r["canonical"]): dict(r) for r in rows}
+    for n in nodes.values():
+        n["live"] = _live(n["last_active"])
     children: dict[str | None, list[str]] = {}
     for canon, n in nodes.items():
         children.setdefault(n["parent"], []).append(canon)
@@ -560,7 +577,9 @@ async def fleet() -> dict[str, Any]:
         seen.add(canon)
         n = nodes[canon]
         prefix = "    " * indent + ("└─ " if indent else "")
-        lines.append(f"{prefix}{canon}  {n['model'] or '?'}  {n['project'] or ''}".rstrip())
+        mark = "●" if n["live"] else "○"   # live vs historical, at a glance
+        lines.append(
+            f"{prefix}{mark} {canon}  {n['model'] or '?'}  {n['project'] or ''}".rstrip())
         for ch in sorted(children.get(canon, [])):
             render(ch, indent + 1, seen)
 
@@ -570,11 +589,13 @@ async def fleet() -> dict[str, Any]:
     return {
         "connected_now": len(_agents),
         "count": len(nodes),
+        "live": sum(1 for n in nodes.values() if n["live"]),
         "swarm": sum(1 for n in nodes.values() if n["parent"]),
         "tree": "\n".join(lines),
         "registered": [
             {"agent": c, "model": n["model"], "project": n["project"],
-             "depth": int(n["depth"]) if n["depth"] else 0, "parent": n["parent"]}
+             "depth": int(n["depth"]) if n["depth"] else 0, "parent": n["parent"],
+             "live": n["live"], "last_active": n["last_active"]}
             for c, n in nodes.items()
         ],
     }

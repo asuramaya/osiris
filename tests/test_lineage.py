@@ -130,3 +130,16 @@ async def test_sense_swarms_walks_every_session(actions: Actions, tmp_path: Path
     # empty on a second pass? no — idempotent re-registration still reports what it saw
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Agent' AND canonical LIKE 'agent:gc%'") == 1
+
+
+async def test_register_swarm_records_last_active_for_lifecycle(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """Lifecycle (#4): each sub-agent carries last_active (its transcript's mtime) so fleet() can
+    show ● live vs ○ historical, not a growing pile of dead ephemerals all reading present."""
+    await register_swarm(actions, _write_swarm(tmp_path))
+    la = await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='agent:child01' AND a.name='last_active'")
+    assert la is not None
+    datetime.fromisoformat(la)  # a parseable ISO timestamp (raises if not)
