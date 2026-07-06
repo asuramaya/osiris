@@ -48,6 +48,9 @@ class AgentIdentity:
     project: str | None
     model: str | None
     cwd: str | None
+    # HOW model was resolved — grades the source_model assertion (job_dir probe = observation,
+    # cwd = a weaker guess, self_report = the agent's own word). None when model is unknown.
+    model_method: str | None = None
 
 
 def resolve_identity(
@@ -62,17 +65,24 @@ def resolve_identity(
     session. Only if BOTH fail does it fall to 'unknown'."""
     project = Path(cwd).name if cwd else None
     sid = session or _job_id(job_dir)
+    # track WHICH channel gave us the model, so register_agent can grade it (see _MODEL_EC):
+    # a passed-in model is the agent's own word; a probe off its transcript is an observation.
+    model_method: str | None = "self_report" if model is not None else None
     if model is None and job_dir:
         model, _, _ = current_model(job_dir=job_dir)  # authoritative harness record
+        if model is not None:
+            model_method = "job_dir"
     if sid is None and cwd:  # no job dir → find the session by its project directory
         path = locate_transcript_by_cwd(cwd)
         if path is not None:
             sid = path.stem.split("-")[0]  # the 8-char handle, matching the job-id scheme
             if model is None:
                 model = latest_model(_tail_lines(path))
+                if model is not None:
+                    model_method = "cwd"
     sid = sid or "unknown"
     return AgentIdentity(agent_id=f"agent:{sid}", session=sid, project=project,
-                         model=model, cwd=cwd)
+                         model=model, cwd=cwd, model_method=model_method)
 
 
 async def _link_once(
@@ -83,6 +93,19 @@ async def _link_once(
     )
     if not exists:
         await actions.create_link(frm, to, ltype, src, when, _CONF, evidence_class=_EC)
+
+
+# For the source_model property, the resolution METHOD is the provenance: reading the model off
+# the agent's own transcript (job_dir) is a DIRECT_OBSERVATION of the harness record; the cwd
+# fallback is a weaker DERIVED guess (it may read a co-located session's transcript); a
+# self-reported model is the agent's own word. NB: self_report stays SELF_DECLARED for now —
+# whether it should INVERT below observation (a swap is below the agent's own horizon) is a
+# ruling still under discussion, deliberately NOT baked in here.
+_MODEL_EC = {
+    "job_dir": EvidenceClass.DIRECT_OBSERVATION,
+    "cwd": EvidenceClass.DERIVED,
+    "self_report": EvidenceClass.SELF_DECLARED,
+}
 
 
 async def register_agent(
@@ -99,8 +122,9 @@ async def register_agent(
     await actions.assert_property(a, "session", identity.session, src, now, _CONF,
                                   evidence_class=_EC)
     if identity.model:
-        await actions.assert_property(a, "source_model", identity.model, src, now, _CONF,
-                                      evidence_class=_EC)
+        ec = _MODEL_EC.get(identity.model_method or "", EvidenceClass.SELF_DECLARED)
+        await actions.assert_property(a, "source_model", identity.model, src, now,
+                                      confidence_for(ec), evidence_class=ec.value)
     if identity.project:
         await actions.assert_property(a, "project", identity.project, src, now, _CONF,
                                       evidence_class=_EC)

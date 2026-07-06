@@ -8,8 +8,9 @@ attributed to IT — hermetic against real Postgres.
 from __future__ import annotations
 
 from src.actions.core import Actions
-from src.orchestrator.agents import register_agent, resolve_identity
+from src.orchestrator.agents import AgentIdentity, register_agent, resolve_identity
 from src.orchestrator.capture import record_decision
+from src.parsers.base import EvidenceClass
 
 
 def test_resolve_identity_derives_project_and_session() -> None:
@@ -71,3 +72,32 @@ def test_schema_declares_the_actor_types() -> None:
 
     assert "Agent" in OBJECT_TYPES
     assert "acts_for" in LINK_TYPES and "works_in" in LINK_TYPES
+
+
+def test_resolve_identity_tags_the_model_method() -> None:
+    # a passed-in model is the agent's OWN WORD (self-report), tagged as such
+    assert resolve_identity(cwd="/w/osiris", session="s",
+                            model="claude-fable-5").model_method == "self_report"
+    # no model resolvable anywhere → no method (and no false certainty)
+    ident = resolve_identity(cwd=None, job_dir=None)
+    assert ident.model is None and ident.model_method is None
+
+
+async def test_source_model_is_graded_by_resolution_method(actions: Actions) -> None:
+    """The freebie: source_model's evidence grade IS how it was resolved. A model read off the
+    agent's own transcript is a DIRECT_OBSERVATION of the harness record; a self-reported model
+    is only the agent's own word (SELF_DECLARED for now — the inversion is a separate ruling,
+    deliberately not baked in). So the graph makes 'how well do we know this model?' queryable."""
+    async def _model_ec(ident: AgentIdentity) -> str | None:
+        a = await register_agent(actions, ident, actor="analyst:operator")
+        return await actions.pool.fetchval(  # type: ignore[no-any-return]
+            "SELECT evidence_class FROM current_assertions "
+            "WHERE object_id=$1 AND name='source_model'", a)
+
+    observed = AgentIdentity(agent_id="agent:obs", session="obs", project="osiris",
+                             model="claude-opus-4-8", cwd="/w/osiris", model_method="job_dir")
+    self_reported = AgentIdentity(agent_id="agent:sr", session="sr", project="osiris",
+                                  model="claude-fable-5", cwd="/w/osiris",
+                                  model_method="self_report")
+    assert await _model_ec(observed) == EvidenceClass.DIRECT_OBSERVATION.value
+    assert await _model_ec(self_reported) == EvidenceClass.SELF_DECLARED.value
