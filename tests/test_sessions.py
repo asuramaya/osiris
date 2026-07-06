@@ -471,3 +471,38 @@ async def test_tick_detects_a_warm_swap_and_raises_an_obligation(
         "(SELECT object_id FROM current_assertions WHERE name='summary' "
         " AND value #>> '{}' ILIKE '%warm model swap%')")
     assert kind == "obligation"
+
+
+async def test_miner_defers_to_a_self_documenting_session(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """The ownership boundary (rule #7): the miner backfills the SILENT and never re-mines a
+    session that captures its OWN memory (SELF_DECLARED). This is the fix for the miner burying
+    a live design session under DERIVED echoes of the very discussion producing it."""
+    proj = tmp_path / "-home-x-code-osiris"
+    proj.mkdir(parents=True)
+    # the stem's first segment is the session's agent id → agent:selfdocc
+    t = proj / "selfdocc-1111-2222-3333-444455556666.jsonl"
+    long_turn = ("an open question we deliberately leave unresolved for a future session to "
+                 "inherit, weighed at length across several angles without settling, which the "
+                 "extractor would happily mint as a durable thread if it ever ran on this. ")
+    t.write_text("\n".join(_dialogue("let us weigh the design", long_turn * 2)) + "\n")
+
+    # control — a session with NO deliberate captures is mined (backfill from byte 0)
+    llm1 = FakeLLM({"decisions": [], "threads_opened": ["a durable open question worth keeping"],
+                    "threads_resolved": [], "obligations": []})
+    rep1 = await sense_sessions_tick(actions, tmp_path, llm1, backfill=True)
+    assert llm1.prompts and rep1.get("threads", 0) >= 1  # the extractor ran and minted
+
+    # the session becomes self-documenting: its agent authors >= 3 SELF_DECLARED decisions
+    for i in range(3):
+        await record_decision(actions, f"a deliberate ruling number {i}", source="agent:selfdocc")
+
+    # re-mine from byte 0 — the miner now DEFERS: the extractor is never even called
+    before = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Thread'")
+    llm2 = FakeLLM({"threads_opened": ["a thread the miner would mint if it still ran"]})
+    rep2 = await sense_sessions_tick(actions, tmp_path, llm2, backfill=True)
+    after = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Thread'")
+    assert rep2.get("deferred", 0) >= 1   # the boundary fired
+    assert llm2.prompts == []             # decisive: the extractor was NEVER called
+    assert rep2.get("threads", 0) == 0 and after == before  # nothing new mined

@@ -577,6 +577,19 @@ def _home_repo(known: dict[str, str], summary: str, default: str) -> str:
     return hits[0] if len(hits) == 1 else default
 
 
+async def _is_self_documenting(pool: asyncpg.Pool, agent_id: str, *, floor: int = 3) -> bool:
+    """True if this session's agent captures its OWN memory deliberately — it has authored at
+    least `floor` SELF_DECLARED decisions/threads. The miner's OWNERSHIP BOUNDARY (rule #7): it
+    backfills the SILENT (unmounted / non-capturing sessions) and never second-guesses the
+    diligent. A self-documenting session's DERIVED echoes are exactly the noise that buries the
+    deliberate record — a soft loop pathology (the miner mining the scribe as it writes)."""
+    n = await pool.fetchval(
+        "SELECT count(DISTINCT a.object_id) FROM current_assertions a JOIN objects o "
+        "ON o.id=a.object_id WHERE a.source_id=$1 AND a.evidence_class='self_declared' "
+        "AND o.type IN ('Decision','Thread')", agent_id)
+    return bool(n and n >= floor)
+
+
 async def emit_yield(
     actions: Actions, y: SessionYield, *, repo: str | None,
     observed: datetime | None = None, source_model: str | None = None,
@@ -681,6 +694,8 @@ async def sense_sessions_tick(
         # when a forward cursor exists (a planted cursor deliberately skipped history).
         # Idempotent: canonical find-or-create + the byte-dup assertion skip absorb re-runs.
         offset = 0 if backfill else int(cur if cur is not None else 0)
+        # ownership boundary: a session that captures its own memory is not re-mined (see below)
+        self_doc = await _is_self_documenting(pool, f"agent:{path.stem.split('-')[0]}")
         scanned = 0
         touched = False
         while report["chunks"] < max_chunks and scanned < _MAX_SCAN_BYTES:
@@ -690,6 +705,11 @@ async def sense_sessions_tick(
             if end <= offset:
                 break
             scanned += end - offset
+            if self_doc:  # this session self-documents (SELF_DECLARED) — the miner defers to it
+                offset = end
+                await set_cursor(pool, key, str(offset))
+                report["deferred"] = report.get("deferred", 0) + 1
+                continue
             chunk_models = models_in(lines)  # provenance: who authored this excerpt
             text, cwd = distill(lines)
             if len(text) < _MIN_DISTILLED:
