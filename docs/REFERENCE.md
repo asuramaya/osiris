@@ -137,8 +137,9 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `search_variant` | — | A search/handle variant. |
 | `linked_to` | — | Generic association. |
 | `has_observation` | * → ObservedData | Points at raw observed evidence. |
-| `acts_for` | Agent → Person | Agent acts on behalf of the principal. |
+| `acts_for` | Agent → Person | Agent acts on behalf of the principal (AUTHORITY). |
 | `works_in` | Agent → SoftwareProject | Agent operates in the target project. |
+| `spawned_by` | Agent → Agent | Sub-agent was spawned by (delegated from) its direct parent agent — the fractal DELEGATION tree, distinct from acts_for (authority). |
 | `archived_snapshot` | * → URL | A Wayback/archive snapshot of the target. |
 | `same_as` | — | Identity merge edge (loser → winner). |
 | `uses` | — | Actor/source employs this capability or technique. |

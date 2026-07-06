@@ -1,0 +1,132 @@
+"""Swarm lineage — the fractal fleet reconstructed from the harness's on-disk record.
+
+Proven empirically (spawn experiment): a sub-agent inherits the parent's job_dir, so mounting
+COLLAPSES it into the parent (a Sonnet child records as the Opus parent). These tests drive the
+reconstruction that fixes it — from `subagents/agent-<id>.{jsonl,meta.json}`, with fixtures that
+mirror the REAL layout: model in `{"type":"assistant","message":{"model":…}}`, a spawn as a
+`tool_use` block whose id is the child's `toolUseId`.
+"""
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+
+from src.actions.core import Actions
+from src.orchestrator.lineage import (
+    register_swarm,
+    resolve_parents,
+    scan_subagents,
+    sense_swarms,
+)
+from src.parsers.base import EvidenceClass
+
+NOW = datetime(2026, 7, 6, tzinfo=UTC)
+_ROOT = "agent:abc12345"  # first segment of the session uuid = the mounted root's id
+
+
+def _assistant(model: str, *tool_use_ids: str) -> str:
+    """One assistant transcript line: carries the model, and emits the given tool_use ids
+    (the spawn calls this agent made — how a parent is linked to the children it spawned)."""
+    content = [{"type": "tool_use", "id": t, "name": "Agent", "input": {}} for t in tool_use_ids]
+    content.append({"type": "text", "text": "ok"})
+    return json.dumps({"type": "assistant", "message": {"model": model, "content": content}})
+
+
+def _write_swarm(tmp_path: Path) -> Path:
+    """A root session with a depth-1 child (Sonnet) that spawned a depth-2 grandchild (Haiku).
+    The child's transcript EMITS the grandchild's spawn tool_use (`tu-gc`); the child's own
+    `toolUseId` (`tu-child`) is emitted by no sibling → its parent resolves to the root."""
+    session = tmp_path / "-home-x-code-demo" / "abc12345-5985-491e-9ac2-af94587b18ab"
+    subs = session / "subagents"
+    subs.mkdir(parents=True)
+    (subs / "agent-child01.meta.json").write_text(json.dumps(
+        {"agentType": "general-purpose", "description": "the child probe",
+         "toolUseId": "tu-child", "spawnDepth": 1}))
+    (subs / "agent-child01.jsonl").write_text(_assistant("claude-sonnet-5", "tu-gc") + "\n")
+    (subs / "agent-gc000002.meta.json").write_text(json.dumps(
+        {"agentType": "general-purpose", "description": "the grandchild probe",
+         "toolUseId": "tu-gc", "spawnDepth": 2}))
+    (subs / "agent-gc000002.jsonl").write_text(_assistant("claude-haiku-4-5-20251001") + "\n")
+    return session
+
+
+def test_scan_reads_each_subagents_OWN_model(tmp_path: Path) -> None:
+    by = {s.handle: s for s in scan_subagents(_write_swarm(tmp_path))}
+    # the whole point: the model comes from the child's OWN transcript, not the parent's
+    assert by["child01"].model == "claude-sonnet-5"
+    assert by["gc000002"].model == "claude-haiku-4-5-20251001"
+    assert by["child01"].spawn_depth == 1 and by["gc000002"].spawn_depth == 2
+    assert by["gc000002"].description == "the grandchild probe"
+    assert by["child01"].project == "demo"  # from the -home-x-code-demo dir name
+
+
+def test_resolve_parents_is_deterministic_from_tooluseid(tmp_path: Path) -> None:
+    subs = scan_subagents(_write_swarm(tmp_path))
+    parents = resolve_parents(subs)
+    # grandchild's toolUseId (tu-gc) was emitted by the child's transcript → child is the parent
+    assert parents["agent:gc000002"] == "agent:child01"
+    # child's toolUseId (tu-child) emitted by no sibling → the root session spawned it
+    assert parents["agent:child01"] == _ROOT
+
+
+async def test_register_swarm_wires_tree_model_and_authority(
+    actions: Actions, tmp_path: Path
+) -> None:
+    # the root mounted with a principal, so AUTHORITY (acts_for) can flow onto the swarm
+    root = await actions.create_or_find_object("Agent", _ROOT, _ROOT)
+    principal = await actions.create_or_find_object("Person", "principal:analyst:op", _ROOT)
+    await actions.create_link(root, principal, "acts_for", _ROOT, NOW, 0.9,
+                              evidence_class="self_declared")
+
+    counts = await register_swarm(actions, _write_swarm(tmp_path))
+    assert counts["agents"] == 2 and counts["spawned_by"] == 2
+
+    # each sub-agent individuated with its TRUE model, graded as an OBSERVATION (not a guess)
+    gc = await actions.pool.fetchrow(
+        "SELECT (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='source_model') AS model, "
+        " (SELECT evidence_class FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='source_model') AS ec, "
+        " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='spawn_depth') AS depth "
+        "FROM objects o WHERE o.canonical='agent:gc000002'")
+    assert gc["model"] == "claude-haiku-4-5-20251001"
+    assert gc["ec"] == EvidenceClass.DIRECT_OBSERVATION.value
+    assert gc["depth"] == "2"
+
+    async def _target(canon: str, ltype: str) -> str | None:
+        return await actions.pool.fetchval(
+            "SELECT p.canonical FROM links l JOIN objects c ON c.id=l.from_id "
+            "JOIN objects p ON p.id=l.to_id WHERE c.canonical=$1 AND l.type=$2", canon, ltype)
+
+    # DELEGATION: grandchild → child → root (the fractal tree, from the path/tool_use links)
+    assert await _target("agent:gc000002", "spawned_by") == "agent:child01"
+    assert await _target("agent:child01", "spawned_by") == _ROOT
+    # AUTHORITY (a DISTINCT edge): each sub-agent acts_for the root principal
+    assert await _target("agent:gc000002", "acts_for") == "principal:analyst:op"
+
+
+async def test_register_swarm_is_idempotent(actions: Actions, tmp_path: Path) -> None:
+    session = _write_swarm(tmp_path)
+    r1 = await register_swarm(actions, session)
+    r2 = await register_swarm(actions, session)
+    # re-scan re-processes both agents; but the second run creates NO new edges (idempotent) —
+    # the invariant is the graph state, not the per-run counts (which report what CHANGED).
+    assert r1["agents"] == r2["agents"] == 2
+    assert r1["spawned_by"] == 2 and r2["spawned_by"] == 0
+    # the two sub-agents don't duplicate across runs (root stub is minted once as the parent)
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' "
+        "AND canonical IN ('agent:child01','agent:gc000002')") == 2
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE type='spawned_by'") == 2
+
+
+async def test_sense_swarms_walks_every_session(actions: Actions, tmp_path: Path) -> None:
+    _write_swarm(tmp_path)  # one session with a subagents/ tree under the projects root
+    counts = await sense_swarms(actions, tmp_path)
+    assert counts["agents"] == 2
+    # empty on a second pass? no — idempotent re-registration still reports what it saw
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' AND canonical LIKE 'agent:gc%'") == 1

@@ -524,23 +524,54 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
 
 @mcp.tool()
 async def fleet() -> dict[str, Any]:
-    """The roster — every agent registered in the shared graph, its model + project, most
-    recent first, plus how many are connected right now. This is the fleet made visible:
-    'a man and all his imaginary friends.' Use it to see who else is working where."""
+    """The roster AS A TREE — mounted roots and the sub-agent swarms they spawned (spawned_by
+    = delegation), each carrying its OWN model. A sub-agent inherits the parent's job_dir, so
+    it can't self-register (it would collapse into the parent); the miner reconstructs the tree
+    from disk instead. 'A man and all his imaginary friends' — now the friends' friends too,
+    fractally. `tree` is the glanceable render; `registered` the flat rows (depth + parent)."""
     pool = await _pool_get()
     rows = await pool.fetch(
         "SELECT o.canonical, "
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
         "  AND a.name='source_model') AS model, "
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='project') AS project "
-        "FROM objects o WHERE o.type='Agent' AND o.status='active' ORDER BY o.id DESC"
+        "  AND a.name='project') AS project, "
+        " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='spawn_depth') AS depth, "
+        " (SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
+        "  WHERE l.from_id=o.id AND l.type='spawned_by' LIMIT 1) AS parent "
+        "FROM objects o WHERE o.type='Agent' AND o.status='active' ORDER BY o.canonical"
     )
+    nodes: dict[str, dict[str, Any]] = {str(r["canonical"]): dict(r) for r in rows}
+    children: dict[str | None, list[str]] = {}
+    for canon, n in nodes.items():
+        children.setdefault(n["parent"], []).append(canon)
+    # a root = a mounted agent (no spawned_by), or one whose parent isn't itself an Agent node
+    roots = sorted(c for c, n in nodes.items() if not n["parent"] or n["parent"] not in nodes)
+    lines: list[str] = []
+
+    def render(canon: str, indent: int, seen: set[str]) -> None:
+        if canon in seen:  # guard against any accidental cycle
+            return
+        seen.add(canon)
+        n = nodes[canon]
+        prefix = "    " * indent + ("└─ " if indent else "")
+        lines.append(f"{prefix}{canon}  {n['model'] or '?'}  {n['project'] or ''}".rstrip())
+        for ch in sorted(children.get(canon, [])):
+            render(ch, indent + 1, seen)
+
+    seen: set[str] = set()
+    for r in roots:
+        render(r, 0, seen)
     return {
         "connected_now": len(_agents),
+        "count": len(nodes),
+        "swarm": sum(1 for n in nodes.values() if n["parent"]),
+        "tree": "\n".join(lines),
         "registered": [
-            {"agent": r["canonical"], "model": r["model"], "project": r["project"]}
-            for r in rows
+            {"agent": c, "model": n["model"], "project": n["project"],
+             "depth": int(n["depth"]) if n["depth"] else 0, "parent": n["parent"]}
+            for c, n in nodes.items()
         ],
     }
 

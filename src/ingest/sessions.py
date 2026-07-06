@@ -665,6 +665,7 @@ async def sense_sessions_tick(
 
     files = [only] if only is not None else await asyncio.to_thread(_list_transcripts, root)
 
+    touched_sessions: set[Path] = set()  # sessions with fresh activity → rescan their swarm
     for path in files:
         if report["chunks"] >= max_chunks:
             break
@@ -716,6 +717,18 @@ async def sense_sessions_tick(
                 report[k] += v
         if touched:
             report["files"] += 1
+            touched_sessions.add(path.with_suffix(""))  # its subagents/ tree may have grown
+
+    # Swarm lineage: for each session touched this tick, reconstruct its sub-agent tree from
+    # disk (pure FS→graph, no LLM). Sub-agents don't mount — they collapse into the parent — so
+    # the miner is the only reliable capture: keyed on agent-<id>, model from each OWN transcript,
+    # spawned_by/acts_for from the meta. Bounded to touched sessions (the LLM budget already caps
+    # those); a full sweep is `sessions swarm`. Lazy import breaks the sessions↔lineage cycle.
+    from src.orchestrator.lineage import register_swarm
+
+    for sdir in touched_sessions:
+        for k, v in (await register_swarm(actions, sdir)).items():
+            report[f"swarm_{k}"] = report.get(f"swarm_{k}", 0) + v
 
     # Backfill that YIELDS: fold this miner's DERIVED thread-echoes into the deliberate
     # captures they shadow, so orient doesn't accrete a reworded copy every tick. THREADS
