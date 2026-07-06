@@ -180,3 +180,35 @@ async def test_tension_surfaces_in_the_scoped_briefing(actions: Actions) -> None
     items = (await run_composition(actions.pool, "project-briefing", proj))["items"]
     assert "tensions" in items
     assert ("speed", "safety") in [(r["pole_a"], r["pole_b"]) for r in items["tensions"]]
+
+
+async def test_orient_explicit_project_overrides_the_mount(actions: Actions) -> None:
+    """Heinrich's verified bug: orient(project=X) silently returned the MOUNT's briefing instead
+    of X's — a silent wrong-scope (the confound class the fleet exists to catch). An explicit
+    project must OVERRIDE the mount."""
+    from src.mcp_server import _agents, _conn_key, orient
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.compositions import seed_default_compositions
+
+    now = datetime.now(UTC)
+    dec = await actions.create_or_find_object("SoftwareProject", "repo:decepticons", "session")
+    await actions.assert_property(dec, "name", "decepticons", "session", now, 0.9)
+    th = await actions.create_or_find_object("Thread", "thread:dec-scope", "session")
+    await actions.assert_property(th, "summary", "the decepticons-only thread", "session", now, 0.9)
+    await actions.assert_property(th, "status", "open", "session", now, 0.9)
+    await actions.create_link(th, dec, "in_repo", "session", now, 0.9)
+    await seed_default_compositions(actions.pool)
+
+    class _Ctx:  # minimal fake connection ctx — _conn_key reads id(request_context.session)
+        class request_context:  # noqa: N801
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(   # mounted as heinrich...
+        agent_id="agent:heinX", session="heinX", project="heinrich", model=None, cwd=None)
+    try:
+        res = await orient(project="decepticons", ctx=ctx)   # ...but explicitly asks decepticons
+    finally:
+        _agents.pop(_conn_key(ctx), None)
+    assert res["project"] == "decepticons"                   # honored the explicit scope
+    assert "the decepticons-only thread" in [r["summary"] for r in res["open_threads"]]

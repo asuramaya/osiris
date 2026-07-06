@@ -425,16 +425,20 @@ async def list_functions() -> list[str]:
 
 
 @mcp.tool()
-async def consult_canon(query: str = "") -> dict[str, Any]:
-    """Consult the design canon — Palantir's Object Set / Ontology / Action models + Notion's
-    databases / relations-rollups / UI-UX, plus Osiris's own docs, all ingested as References.
-    'Cite, don't re-derive': given a topic, a module path, or a design word, returns the
-    matching canon SECTIONS (the source + the module each grounds). Call this BEFORE
-    re-deriving a problem these companies already solved — the closed op set & "no generic
-    join", aggregation caps, the kinetic write path, the renderer's view rules, calm UI.
-    Empty query → the whole canon index."""
+async def consult_canon(query: str = "", ctx: Context | None = None) -> dict[str, Any]:
+    """Consult the CANON — the shared DESIGN canon (Palantir's Object Set / Ontology / Action
+    models + Notion's databases / relations-rollups / UI-UX + Osiris's own docs) AND, when
+    you're mounted, YOUR project's migrated HISTORY (ref:<project>-*, ingested by bootstrap).
+    This is the migration's RECALL path: 'cite, don't re-derive' for design, 'recall, don't
+    re-load' for your own history — your build log is a bounded QUERY here, not cargo re-read
+    into every context. Given a topic, module path, design word, or a bag of KEYWORDS, returns
+    the matching SECTIONS ranked by keyword hits (multi-word queries work). Empty query → your
+    scoped index. Another project's unvendored history is never returned to you."""
     pool = await _pool_get()
-    spec = {"op": "function", "name": "canon", "args": {"q": query}}
+    key = _conn_key(ctx)
+    ident = _agents.get(key) if key is not None else None
+    spec = {"op": "function", "name": "canon",
+            "args": {"q": query, "project": (ident.project if ident else "") or ""}}
     return await comp.run_spec(pool, spec, None, name="design-canon")
 
 
@@ -488,15 +492,15 @@ async def _project_briefing(pool: asyncpg.Pool, project: str) -> dict[str, Any] 
 
 @mcp.tool()
 async def orient(project: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
-    """Get your bearings — the mount ritual as one call. If you're mounted (or pass a
-    `project`), returns a SCOPED briefing: YOUR project's open threads + recent decisions,
-    plus a count of fleet-wide threads not shown. Un-mounted with no project falls back to
-    the whole-fleet briefing. Call after mount(), and again after any compaction, to inherit
-    instead of starting blind."""
+    """Get your bearings — the mount ritual as one call. Returns a SCOPED briefing: open
+    threads + recent decisions for a project, plus a count of fleet-wide threads not shown.
+    An explicit `project` OVERRIDES your mount (so you can peek at another repo's briefing);
+    otherwise it's your mounted project; un-mounted with neither → the whole-fleet briefing.
+    Call after mount(), and again after any compaction, to inherit instead of starting blind."""
     pool = await _pool_get()
     key = _conn_key(ctx)
     ident = _agents.get(key) if key is not None else None
-    proj = ident.project if ident else project
+    proj = project or (ident.project if ident else None)  # explicit scope overrides the mount
     who = ident.agent_id if ident else "session (un-mounted — call mount(cwd) first)"
     unread = await unread_count(pool, proj) if proj else 0
     mail = f"{unread} unread — inbox()" if unread else "none"

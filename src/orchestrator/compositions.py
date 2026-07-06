@@ -137,8 +137,9 @@ async def _fn_canon(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[st
     problem Palantir/Notion already solved (the closed op set, aggregation caps, the kinetic
     write path, the renderer's view rules)."""
     q = str(args.get("q", "")).strip().lower()
+    scope = str(args.get("project", "") or "").strip().lower()
     refs = await pool.fetch(
-        "SELECT "
+        "SELECT o.canonical AS canonical, "
         " (SELECT value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='name') AS title, "
         " (SELECT value #>> '{}' FROM current_assertions a "
@@ -153,6 +154,12 @@ async def _fn_canon(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[st
         "  WHERE a.object_id=o.id AND a.name='body') AS body "
         "FROM objects o WHERE o.type='Reference' AND o.status='active'"
     )
+    # scope: the shared design canon (vendor-tagged) is visible to everyone; UNVENDORED project
+    # history (ref:<project>-*) is visible only to its OWN project — a caller never bleeds another
+    # repo's memory. Unscoped (no project) searches everything, as before.
+    if scope:
+        pref = f"ref:{scope}-"
+        refs = [r for r in refs if r["vendor"] or (r["canonical"] or "").startswith(pref)]
     if not q:  # the index — one overview row per reference, ordered by vendor then title
         index = []
         for r in sorted(refs, key=lambda x: (x["vendor"] or "", x["title"] or "")):
@@ -161,14 +168,20 @@ async def _fn_canon(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[st
                           "grounds": r["grounds"], "source": r["source"],
                           "text": _trim(secs[0][1]) if secs else ""})
         return {"Design canon — Palantir · Notion · own docs": index}
+    # rank by how many QUERY TERMS hit (meta > heading > body), NOT a whole-string match — a
+    # natural multi-word query (e.g. migrated project history recall) matched nothing contiguously
+    # and returned empty, silently breaking the migration's promised bounded-query recall path.
+    terms = [t for t in re.split(r"[^a-z0-9_]+", q) if len(t) >= 3] or [q]
     hits: list[tuple[int, dict[str, Any]]] = []
     for r in refs:
         meta = " ".join(
             filter(None, [r["title"], r["topic"], r["vendor"], r["grounds"]])).lower()
-        meta_score = 3 if q in meta else 0      # the whole reference is about this
         for heading, text in _canon_sections(r["body"] or ""):
-            score = (meta_score + (2 if q in heading.lower() else 0)
-                     + (1 if q in text.lower() else 0))
+            head, txt = heading.lower(), text.lower()
+            score = sum((3 if t in meta else 0) + (2 if t in head else 0)
+                        + (1 if t in txt else 0) for t in terms)
+            if q in head or q in txt:  # exact contiguous phrase is a strong precision signal
+                score += 4
             if score <= 0:
                 continue
             hits.append((score, {

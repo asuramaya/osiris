@@ -246,6 +246,40 @@ async def test_canon_retrieves_ranked_sections(actions: Actions) -> None:
     assert len(idxhits) == 2 and {h["reference"] for h in idxhits} == {"Object Sets", "Calm UI"}
 
 
+async def test_canon_recall_is_keyword_ranked_and_project_scoped(actions: Actions) -> None:
+    """Bug #1 (Heinrich's first session): the migration's RECALL path. bootstrap ingests project
+    history as ref:<project>-* Reference nodes and promises consult_canon retrieves it — but
+    _fn_canon matched the query as a CONTIGUOUS substring, so a natural multi-keyword query
+    returned EMPTY, silently breaking 'history becomes a bounded query'. Now it is keyword-ranked
+    and scoped to the caller's history + the shared design canon (no cross-project bleed)."""
+    src = "ref:heinrich"
+    h = await actions.create_or_find_object("Reference", "ref:heinrich-history-homing", src)
+    for name, val in (("name", "Homing instinct study"), ("topic", "heinrich-history"),
+                      ("body", "## Findings\nthe homing displacement held above baseline across "
+                               "seeds.")):
+        await actions.assert_property(h, name, val, src, NOW, 0.9)
+    # a shared design-canon ref (vendor-tagged → visible to everyone)
+    await _ref(actions, "ref:palantir-os", "Object Sets", "palantir", "src/x.py",
+               "# Object Sets\n\nthe closed op set, never a generic join.")
+    # ANOTHER project's unvendored history — must be scoped OUT for a heinrich caller
+    o = await actions.create_or_find_object("Reference", "ref:osiris-history-base", "ref:osiris")
+    for name, val in (("name", "Osiris baseline"),
+                      ("body", "## note\nthe osiris baseline displacement metric.")):
+        await actions.assert_property(o, name, val, "ref:osiris", NOW, 0.9)
+
+    # the multi-keyword query that used to return EMPTY now recalls the project history
+    res = await run_spec(actions.pool, {"op": "function", "name": "canon", "args":
+                         {"q": "frozen homing displacement baseline", "project": "heinrich"}}, None)
+    refs = {r["reference"] for r in next(iter(res["items"].values()))}
+    assert "Homing instinct study" in refs        # keyword recall works (was empty before)
+    assert "Osiris baseline" not in refs          # another project's history is scoped OUT
+
+    # the shared design canon stays reachable under a project scope
+    canon = await run_spec(actions.pool, {"op": "function", "name": "canon", "args":
+                           {"q": "generic join", "project": "heinrich"}}, None)
+    assert "Object Sets" in {r["reference"] for r in next(iter(canon["items"].values()))}
+
+
 async def test_canon_is_subject_free_and_seeded(actions: Actions) -> None:
     """`canon` is registered + subject-free (a design question, not an entity), and the
     `design-canon` view is a default composition the operator can switch to."""
