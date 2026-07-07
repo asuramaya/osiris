@@ -187,7 +187,7 @@ async def test_register_stamps_intent_and_the_swap(actions: Actions, tmp_path: P
         " (SELECT evidence_class FROM current_assertions x WHERE x.object_id=$1 "
         "  AND x.name='model_swapped') AS swap_ec", a)
     assert row["intent"] == "claude-fable-5"
-    assert row["swapped"] == "claude-fable-5 → claude-opus-4-8"
+    assert row["swapped"] == "claude-fable-5 ↔ claude-opus-4-8 (now claude-opus-4-8)"
     assert row["swap_ec"] == EvidenceClass.DIRECT_OBSERVATION.value
 
 

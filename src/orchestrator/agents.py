@@ -33,7 +33,7 @@ from src.ingest.sessions import (
     latest_model,
     locate_transcript_by_cwd,
 )
-from src.orchestrator.swaps import classify_swap
+from src.orchestrator.swaps import classify_swap, swap_marker
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -180,8 +180,7 @@ async def register_agent(
                                       evidence_class=_EC)
         if verdict.swapped:
             do = EvidenceClass.DIRECT_OBSERVATION
-            marker = f"{verdict.from_model} → {verdict.to_model}"
-            await actions.assert_property(a, "model_swapped", marker, src, now,
+            await actions.assert_property(a, "model_swapped", swap_marker(verdict), src, now,
                                           confidence_for(do), evidence_class=do.value)
     if identity.project:
         await actions.assert_property(a, "project", identity.project, src, now, _CONF,

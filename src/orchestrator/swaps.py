@@ -50,7 +50,10 @@ def classify_swap(
     from_model: str | None = None
     to_model: str | None = None
     if within:
-        from_model, to_model = hist[0], hist[-1]
+        # origin → CURRENT (the observed/latest turn), NOT the last-SEEN-distinct model: under
+        # oscillation (opus→fable→opus) the last-seen-distinct is fable while the current is opus,
+        # so hist[-1] lied. `observed` is always the truth of "what is running now".
+        from_model, to_model = hist[0], observed
     elif diverged:
         # a COLD demotion: no transition on record, so the swap predates the transcript — the
         # intent is the only witness to where it started.
@@ -62,14 +65,24 @@ def classify_swap(
     )
 
 
+def swap_marker(v: SwapVerdict) -> str:
+    """The honest one-line marker (the model_swapped stamp). Under OSCILLATION a session flips back
+    and forth, so a single `a → b` arrow lies — it printed 'opus → fable' when the CURRENT model
+    was opus. The within-session form names the models SEEN and the current one; the cold-demotion
+    form (no in-session transition) keeps the clean intent → observed arrow."""
+    if v.within_session:
+        return f"{' ↔ '.join(v.history)} (now {v.observed})"
+    return f"{v.from_model} → {v.to_model}"
+
+
 def swap_banner(v: SwapVerdict) -> str | None:
     """A one-line confession prompt for mount()/orient(), or None when nothing swapped. The
     running agent can't feel the swap; this is the graph telling it what its own prompt hides."""
     if not v.swapped:
         return None
     if v.within_session:
-        chain = " → ".join(v.history)
-        return (f"⚠ warm model swap THIS session ({chain}) — the harness demoted mid-run; "
-                "a danger-sense tripwire. Confess it to the operator.")
+        return (f"⚠ warm model swap THIS session — seen [{', '.join(v.history)}], currently "
+                f"{v.observed}. The harness swapped mid-run (a danger-sense tripwire); confess it "
+                "to the operator.")
     return (f"⚠ model divergence: intended {v.expected}, running {v.observed} — a silent demotion "
             "(the harness swapped before this session's first turn). Confess it to the operator.")
