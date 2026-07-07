@@ -94,3 +94,25 @@ async def test_digest_surfaces_conversations_and_the_operator_desk(actions: Acti
     assert dg["operator_inbox"]["latest"][0]["from_project"] == "heinrich"
     dg2 = await fleet_digest(actions, since=since)
     assert dg2["summary"]["operator_unread"] == 1  # reading the digest didn't consume it
+
+
+async def test_activity_excludes_agent_sourced_mined_rows(actions: Actions) -> None:
+    """Origin-attribution regression: the session-miner now SOURCES its DERIVED backfill to the
+    ORIGINATING agent (agent:%), so `source_id LIKE 'agent:%'` alone would LEAK a mined echo into
+    the deliberate-activity stream. _activity must exclude it by GRADE — only SELF_DECLARED agent
+    work is 'what the fleet deliberately did in your name'."""
+    since = NOW - timedelta(hours=24)
+    deliberate = await actions.create_or_find_object("Decision", "decision:deliberate", "agent:h")
+    await _prop(actions, deliberate, "summary", "deliberately decided X", "agent:h", SD)
+    # the miner's echo of this SAME session's words: agent-SOURCED now (post origin attribution),
+    # but DERIVED — the object is the miner's (actor session-miner), the words are the agent's.
+    mined = await actions.create_or_find_object("Thread", "thread:mined-echo", "session-miner")
+    await _prop(actions, mined, "summary", "a mined echo of the discussion", "agent:h",
+                "derived", conf=0.4)
+
+    dg = await fleet_digest(actions, since=since)
+
+    summaries = [x["summary"] for x in dg["activity"]]
+    assert "deliberately decided X" in summaries               # deliberate agent work surfaces
+    assert "a mined echo of the discussion" not in summaries   # the agent-sourced mining does NOT
+    assert dg["summary"]["activity"] == 1

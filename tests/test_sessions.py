@@ -206,12 +206,25 @@ async def test_first_sight_plants_cursor_then_senses_only_forward(
     assert "OPERATOR:" in llm.prompts[0] and "ownership boundary" in llm.prompts[0]
     assert llm.prompts[0].startswith("<transcript>")  # dialogue rides as fenced DATA
     row = await actions.pool.fetchrow(
-        "SELECT source_id, evidence_class, confidence FROM current_assertions "
+        "SELECT object_id, source_id, evidence_class, confidence FROM current_assertions "
         "WHERE name='summary' AND value #>> '{}' = 'the session transcript is a sensed source'"
     )
     assert row is not None
-    assert row["source_id"] == "session-miner"
+    # origin attribution: the extraction is SOURCED to the originating agent (agent:<sid>, from
+    # the transcript stem 'session1'), so the credence clamp can reach it — not the old
+    # 'session-miner' bucket that laundered it. The grade stays DERIVED (a mined reading).
+    assert row["source_id"] == "agent:session1"
     assert row["evidence_class"] == "derived"  # an LLM reading is an inference, never more
+    # ...but the MINER stays the ACTOR (audit_log) — a mined row is still tellable from a declared
+    # one two ways: the DERIVED grade AND the miner-vs-agent actor. Provenance preserved.
+    assert await actions.pool.fetchval(
+        "SELECT actor FROM audit_log WHERE action='assert_property' "
+        "AND payload->>'object_id' = $1::text ORDER BY id LIMIT 1", str(row["object_id"])
+    ) == "session-miner"
+    # the object's create event is likewise the miner's, not the agent's
+    assert await actions.pool.fetchval(
+        "SELECT actor FROM object_events WHERE object_id=$1 AND event_type='create'",
+        row["object_id"]) == "session-miner"
     # filed under the repo the transcript's own cwd names — no slug decoding
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM links l JOIN objects p ON p.id=l.to_id "
@@ -440,6 +453,74 @@ async def test_source_model_stamped_on_emitted_yield(actions: Actions) -> None:
             "SELECT value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
             "WHERE o.type=$1 AND a.name='source_model' LIMIT 1", typ)
         assert sm == "claude-opus-4-8"  # which Claude wrote it, on every write
+
+
+# --- origin attribution: mined words are the agent's, the miner is only the actor -------
+
+async def test_origin_attribution_sources_to_agent_but_actor_stays_miner(
+    actions: Actions,
+) -> None:
+    """Succession follow-up #1: a mined extraction is SOURCED to the ORIGINATING agent (so the
+    credence clamp can reach it — the miner stops laundering the agent's words under its own
+    identity), while `session-miner` stays the ACTOR. The mined-vs-declared tell survives two
+    ways: the DERIVED grade AND the miner actor."""
+    y = SessionYield(
+        decisions=[{"summary": "route mined memory to the originating agent, not the miner",
+                    "kind": "ruling", "rationale": "the words are the agent's, relayed"}],
+        threads_opened=["wire the credence clamp onto the mined write path"],
+    )
+    counts = await emit_yield(actions, y, repo=None, origin="agent:heinrich")
+    assert counts["decisions"] == 1 and counts["threads"] == 1
+    rows = await actions.pool.fetch(
+        "SELECT a.source_id AS src, a.evidence_class AS ec FROM current_assertions a "
+        "JOIN objects o ON o.id=a.object_id WHERE a.name='summary'")
+    assert rows and all(r["src"] == "agent:heinrich" for r in rows)  # sourced to the agent
+    assert all(r["ec"] == "derived" for r in rows)                   # still graded a mining
+    # not one assertion carries the miner as its SOURCE — the laundering channel is gone
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE source_id='session-miner'") == 0
+    # yet EVERY write's actor is the miner (audit_log + object_events) — auditability preserved
+    write_actors = await actions.pool.fetch(
+        "SELECT DISTINCT actor FROM audit_log "
+        "WHERE action IN ('assert_property','create_object')")
+    assert {r["actor"] for r in write_actors} == {"session-miner"}
+    assert await actions.pool.fetchval(
+        "SELECT count(DISTINCT actor) FROM object_events WHERE event_type='create'") == 1
+    assert await actions.pool.fetchval(
+        "SELECT DISTINCT actor FROM object_events WHERE event_type='create'") == "session-miner"
+
+
+async def test_miner_skips_extractions_the_session_already_declared(actions: Actions) -> None:
+    """Miner over-read dedup (thread f34c572c / Heinrich grief #4): when the ORIGINATING agent
+    already recorded something deliberately (SELF_DECLARED), a fresh extraction that merely
+    REWORDS it — same modulo case/punctuation and a prefix/suffix — is skipped, never re-minted
+    as a DERIVED near-duplicate. Exact-hash dups are the ownership boundary's job; this catches
+    the normalized near-dups the hash misses. A genuinely-new extraction still lands."""
+    agent = "agent:heinrich"
+    await record_decision(
+        actions, "The membrane must never close the loop silently", kind="ruling", source=agent)
+    await open_thread(
+        actions, "wire the composed watcher into SOURCE_TICKS with a live key", source=agent)
+    y = SessionYield(
+        decisions=[
+            # a reworded copy of the deliberate ruling (lowercased + trailing clause) → skip
+            {"summary": "the membrane must never close the loop silently, per the ruling",
+             "kind": "ruling", "rationale": ""},
+            # genuinely new → mint
+            {"summary": "the satellite poller advances its cursor forward only",
+             "kind": "choice", "rationale": ""},
+        ],
+        # a reworded copy of the deliberate thread (capitalized + trailing period) → skip
+        threads_opened=["Wire the composed watcher into SOURCE_TICKS with a live key."],
+    )
+    counts = await emit_yield(actions, y, repo=None, origin=agent)
+    assert counts["skipped_dup"] == 2                            # the reworded decision + thread
+    assert counts["decisions"] == 1 and counts["threads"] == 0  # only the new decision landed
+    # the deliberate record is untouched — no DERIVED echo of it was minted alongside it
+    grades = await actions.pool.fetch(
+        "SELECT DISTINCT a.evidence_class AS ec FROM current_assertions a JOIN objects o "
+        "ON o.id=a.object_id WHERE a.name='summary' AND a.value #>> '{}' ILIKE '%loop silently%'")
+    assert [r["ec"] for r in grades] == ["self_declared"]       # only the capture; no echo
 
 
 async def test_tick_detects_a_warm_swap_and_raises_an_obligation(

@@ -10,11 +10,17 @@ and the judged yield (decisions / threads / obligations) lands in the graph DERI
 
 The two-tier trust structure commits already have carries over exactly:
 
-  * deliberate `record_decision`/`open_thread` (source `session`, SELF_DECLARED) stays
-    the high-trust path — the ritual is unchanged;
-  * this miner (source `session-miner`, DERIVED) is the BACKFILL that makes compaction
-    structurally unable to matter: what the session forgot to write back is sensed out
-    of the transcript on the next tick.
+  * deliberate `record_decision`/`open_thread` (source `session` / `agent:<id>`,
+    SELF_DECLARED) stays the high-trust path — the ritual is unchanged;
+  * this miner is the BACKFILL that makes compaction structurally unable to matter: what
+    the session forgot to write back is sensed out of the transcript on the next tick. An
+    extraction is graded DERIVED (an LLM reading of prose is an inference) and SOURCED to
+    the ORIGINATING agent (`agent:<session>`) — the words are the AGENT's, so the credence
+    clamp (orchestrator/credence.py) can reach them and the miner stops being an accidental
+    laundering channel (re-reporting an agent's words under its OWN source identity, which
+    dodged the clamp on the dominant write path). `session-miner` stays the ACTOR
+    (audit_log / object_events), so a mined row is still tellable from a declared one two
+    ways: the DERIVED-vs-SELF_DECLARED grade, and the miner-vs-agent actor.
 
 Guards, all from the loop-pathology class (ruling 4ba0414a — a process reading AND
 writing the graph at different levels needs explicit ownership boundaries at design time):
@@ -45,6 +51,7 @@ import asyncio
 import hashlib
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -481,38 +488,83 @@ def _canon(prefix: str, text: str) -> str:
     return f"{prefix}:{hashlib.sha1(text.encode()).hexdigest()[:12]}"
 
 
-async def _foreign_owned(pool: asyncpg.Pool, canonical: str) -> bool:
-    """True when an object with this canonical exists and some OTHER source authored its
-    defining (`summary`) assertion — deliberate capture or the git miner owns it, and the
-    session-miner must not write onto it (the prosthesis boundary, commit 5b2b5fe)."""
+def _agent_of(path: Path) -> str:
+    """The ORIGINATING agent's source id for a transcript — `agent:<leading session-uuid
+    segment>`, the SAME scheme resolve_identity (agents.py) and _root_agent_id (lineage.py)
+    mint at mount and swarm-scan. This is WHO the mined words belong to: the miner sources its
+    extractions here (DERIVED), staying itself the actor."""
+    return f"agent:{path.stem.split('-')[0]}"
+
+
+def _normalized(s: str) -> str:
+    """Case/punctuation/whitespace-flattened form, for near-exact (not fuzzy) comparison."""
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", s.lower()).split())
+
+
+def _near_same(a: str, b: str, *, floor: int = 24, coverage: float = 0.6) -> bool:
+    """True when two summaries are the SAME modulo case/punctuation and a prefix or suffix —
+    the conservative 'exact-ish normalized-prefix' bar (pg_trgm is not installed, so there is no
+    trigram similarity to lean on). One normalized string must CONTAIN the other, the contained
+    one must be >= `floor` chars (a short shared phrase can't trip it) and cover >= `coverage`
+    of the longer (a genuinely longer, more-specific summary isn't swallowed by a short one).
+    Deliberately strict: a miss is cheap (consolidate_memory folds token-level near-dups later);
+    a false hit would erase a genuinely-new extraction."""
+    na, nb = _normalized(a), _normalized(b)
+    short, lng = (na, nb) if len(na) <= len(nb) else (nb, na)
+    if len(short) < floor:
+        return False
+    return short in lng and len(short) >= coverage * len(lng)
+
+
+def _dup_of_deliberate(summary: str, prior: Iterable[str]) -> bool:
+    """True when `summary` restates something THIS session already captured deliberately — the
+    write-time guard against the miner re-minting a reworded copy of the agent's own
+    SELF_DECLARED record (the miner over-read, thread f34c572c / Heinrich grief #4)."""
+    return any(_near_same(summary, s) for s in prior)
+
+
+async def _foreign_owned(pool: asyncpg.Pool, canonical: str, writer: str) -> bool:
+    """True when an object with this canonical exists and a FOREIGN party authored its defining
+    (`summary`) assertion — the session-miner must not write onto it (the prosthesis boundary,
+    commit 5b2b5fe). 'Foreign' = any source OTHER than `writer` (another agent, a deliberate
+    `session` capture, or the git miner), OR any SELF_DECLARED summary even from `writer` itself
+    (the originating agent deliberately captured this — the miner defers to its own author).
+    The miner's OWN prior DERIVED echo for this session (source `writer`, derived) is NOT
+    foreign, so a re-mine stays idempotent. Post origin-attribution (source_id is now the agent),
+    the deliberate-vs-mined line is the evidence class, not the source string."""
     return bool(await pool.fetchval(
         "SELECT 1 FROM objects o WHERE o.canonical=$1 AND EXISTS ("
-        "  SELECT 1 FROM assertions a WHERE a.object_id=o.id "
-        "  AND a.name='summary' AND a.source_id <> $2) LIMIT 1",
-        canonical, _SOURCE,
+        "  SELECT 1 FROM assertions a WHERE a.object_id=o.id AND a.name='summary' "
+        "  AND (a.source_id <> $2 OR a.evidence_class = 'self_declared')) LIMIT 1",
+        canonical, writer,
     ))
 
 
 async def _emit_thread(
     actions: Actions, summary: str, *, repo: str | None,
     observed: datetime, kind: str | None = None, source_model: str | None = None,
+    writer: str = _SOURCE,
 ) -> Any | None:
-    """Returns the thread id, or None when the ownership boundary skipped the write."""
+    """Returns the thread id, or None when the ownership boundary skipped the write. `writer` is
+    the SOURCE the assertions carry — the ORIGINATING agent for a mined yield (so credence can
+    reach it), or `session-miner` for the miner's OWN observations (e.g. a warm-swap flag, which
+    the agent literally cannot assert). The miner is always the ACTOR (audit/event provenance),
+    so a mined row stays distinguishable from a declared one."""
     canon = _canon("thread", summary)
-    if await _foreign_owned(actions.pool, canon):
+    if await _foreign_owned(actions.pool, canon, writer):
         return None
     t = await actions.create_or_find_object("Thread", canon, _SOURCE)
-    await actions.assert_property(t, "summary", summary, _SOURCE, observed, _CONF,
-                                  evidence_class=_EC)
-    await actions.assert_property(t, "status", "open", _SOURCE, observed, _CONF,
-                                  evidence_class=_EC)
+    await actions.assert_property(t, "summary", summary, writer, observed, _CONF,
+                                  evidence_class=_EC, actor=_SOURCE)
+    await actions.assert_property(t, "status", "open", writer, observed, _CONF,
+                                  evidence_class=_EC, actor=_SOURCE)
     if kind:
-        await actions.assert_property(t, "kind", kind, _SOURCE, observed, _CONF,
-                                      evidence_class=_EC)
+        await actions.assert_property(t, "kind", kind, writer, observed, _CONF,
+                                      evidence_class=_EC, actor=_SOURCE)
     if source_model:  # provenance: which Claude authored the turn this was mined from
-        await actions.assert_property(t, "source_model", source_model, _SOURCE, observed,
-                                      _CONF, evidence_class=_EC)
-    if repo:
+        await actions.assert_property(t, "source_model", source_model, writer, observed,
+                                      _CONF, evidence_class=_EC, actor=_SOURCE)
+    if repo:  # the repo home is the miner's OWN structural inference (cwd->project)
         await link_repo(actions, t, repo, observed,
                         source=_SOURCE, evidence_class=_EC, confidence=_CONF)
     return t
@@ -543,12 +595,15 @@ async def _record_swap(
 
 async def _resolve_own_threads(
     actions: Actions, resolved: list[str], observed: datetime,
-    *, exclude: set[Any] | None = None,
+    *, exclude: set[Any] | None = None, writer: str = _SOURCE,
 ) -> int:
     """Close open threads the miner ITSELF opened when the yield says they finished.
     Owned-only (defining-assertion ownership) — a session's or the git miner's thread is
     never this miner's to close — and conservative: ≥2 shared distinctive tokens, best
     overlap wins (the same bar `threads.resolve_threads` uses, behind the same boundary).
+    `writer` is the miner's source for THIS session (the originating agent), so 'own' means a
+    thread ONLY this session's DERIVED echo authored — never a deliberate (SELF_DECLARED)
+    thread, even the same agent's, and never another source's (the negation of _foreign_owned).
     `exclude` = threads opened in THIS SAME emit: a thread must survive its own excerpt
     before it can be resolved (live run: the model opened a *planned* task and resolved
     it in the same breath — a plan discussed is not work completed)."""
@@ -558,9 +613,9 @@ async def _resolve_own_threads(
         "FROM objects o WHERE o.type='Thread' AND o.status='active' "
         "AND EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
         "  AND s.name='status' AND s.value #>> '{}' = 'open') "
-        "AND NOT EXISTS (SELECT 1 FROM assertions f WHERE f.object_id=o.id "
-        "  AND f.name='summary' AND f.source_id <> $1)",
-        _SOURCE,
+        "AND NOT EXISTS (SELECT 1 FROM assertions f WHERE f.object_id=o.id AND f.name='summary' "
+        "  AND (f.source_id <> $1 OR f.evidence_class = 'self_declared'))",
+        writer,
     )
     count = 0
     for text in resolved:
@@ -575,12 +630,14 @@ async def _resolve_own_threads(
         if best is None:
             continue
         tid = best[1]["id"]
-        await actions.assert_property(tid, "status", "resolved", _SOURCE, observed, _CONF,
-                                      evidence_class=_EC)
-        await actions.assert_property(tid, "resolved_in", "session-miner", _SOURCE,
-                                      observed, _CONF, evidence_class=_EC)
-        await actions.assert_property(tid, "resolved_because", text[:300], _SOURCE,
-                                      observed, _CONF, evidence_class=_EC)
+        # source = the originating agent (the closure is a mined reading of ITS session);
+        # value 'session-miner' records the MINER as the resolver; actor keeps the audit honest.
+        await actions.assert_property(tid, "status", "resolved", writer, observed, _CONF,
+                                      evidence_class=_EC, actor=_SOURCE)
+        await actions.assert_property(tid, "resolved_in", "session-miner", writer,
+                                      observed, _CONF, evidence_class=_EC, actor=_SOURCE)
+        await actions.assert_property(tid, "resolved_because", text[:300], writer,
+                                      observed, _CONF, evidence_class=_EC, actor=_SOURCE)
         count += 1
     return count
 
@@ -626,59 +683,100 @@ async def _is_self_documenting(pool: asyncpg.Pool, agent_id: str, *, floor: int 
     return bool(n and n >= floor)
 
 
+async def _deliberate_summaries(pool: asyncpg.Pool, origin: str) -> dict[str, list[str]]:
+    """The SELF_DECLARED Decision/Thread summaries THIS session (agent `origin`) already
+    captured deliberately — the set a fresh extraction must not re-mint a reworded copy of
+    (the miner over-read). Keyed by object type; fetched once per yield, compared in memory."""
+    rows = await pool.fetch(
+        "SELECT o.type AS type, a.value #>> '{}' AS summary "
+        "FROM current_assertions a JOIN objects o ON o.id = a.object_id "
+        "WHERE o.type IN ('Decision','Thread') AND a.name = 'summary' "
+        "  AND a.source_id = $1 AND a.evidence_class = 'self_declared'",
+        origin,
+    )
+    out: dict[str, list[str]] = {"Decision": [], "Thread": []}
+    for r in rows:
+        if r["summary"]:
+            out[r["type"]].append(r["summary"])
+    return out
+
+
 async def emit_yield(
     actions: Actions, y: SessionYield, *, repo: str | None,
     observed: datetime | None = None, source_model: str | None = None,
+    origin: str | None = None,
 ) -> dict[str, int]:
     """Write a parsed yield into the graph, DERIVED, behind the ownership boundary.
     Returns counts; `skipped_foreign` is the boundary doing its job (already captured at
     higher trust), never an error. `source_model` = which Claude authored the mined turns
-    (read off the transcript), stamped on each object as the missing provenance dimension."""
+    (read off the transcript), stamped on each object as the missing provenance dimension.
+
+    `origin` = the ORIGINATING agent (`agent:<session>`): the mined words are ITS words, so
+    each assertion is SOURCED to it (DERIVED grade), with `session-miner` the ACTOR — the
+    credence clamp can now reach a mined fact, and the miner stops laundering an agent's words
+    under its own identity. When `origin` is None (an unattributed sweep) writes fall back to
+    `session-miner`. `skipped_dup` counts extractions dropped because THIS session already
+    captured the same thing deliberately (SELF_DECLARED) — the read-side of the over-read fix."""
     observed = observed or datetime.now(UTC)
+    writer = origin or _SOURCE
     counts = {"decisions": 0, "threads": 0, "obligations": 0, "resolved": 0,
-              "skipped_foreign": 0}
+              "skipped_foreign": 0, "skipped_dup": 0}
+    # this session's OWN deliberate captures — a fresh extraction must not re-mint a reworded
+    # copy of what the agent already recorded at SELF_DECLARED (the miner over-read, f34c572c).
+    prior = await _deliberate_summaries(actions.pool, origin) if origin else {}
     # re-home each item to the project it NAMES, not the session's cwd (the provenance fix).
     known = await _known_projects(actions.pool, repo) if repo else {}
     for d in y.decisions:
         canon = _canon("decision", d["summary"])
-        if await _foreign_owned(actions.pool, canon):
+        if await _foreign_owned(actions.pool, canon, writer):
             counts["skipped_foreign"] += 1
             continue
+        if _dup_of_deliberate(d["summary"], prior.get("Decision", ())):
+            counts["skipped_dup"] += 1
+            continue
         oid = await actions.create_or_find_object("Decision", canon, _SOURCE)
-        await actions.assert_property(oid, "summary", d["summary"], _SOURCE, observed,
-                                      _CONF, evidence_class=_EC)
-        await actions.assert_property(oid, "kind", d["kind"], _SOURCE, observed, _CONF,
-                                      evidence_class=_EC)
+        await actions.assert_property(oid, "summary", d["summary"], writer, observed,
+                                      _CONF, evidence_class=_EC, actor=_SOURCE)
+        await actions.assert_property(oid, "kind", d["kind"], writer, observed, _CONF,
+                                      evidence_class=_EC, actor=_SOURCE)
         if d["rationale"]:
-            await actions.assert_property(oid, "rationale", d["rationale"], _SOURCE,
-                                          observed, _CONF, evidence_class=_EC)
+            await actions.assert_property(oid, "rationale", d["rationale"], writer,
+                                          observed, _CONF, evidence_class=_EC, actor=_SOURCE)
         if source_model:
-            await actions.assert_property(oid, "source_model", source_model, _SOURCE,
-                                          observed, _CONF, evidence_class=_EC)
-        if repo:
+            await actions.assert_property(oid, "source_model", source_model, writer,
+                                          observed, _CONF, evidence_class=_EC, actor=_SOURCE)
+        if repo:  # the repo home is the miner's OWN structural inference (cwd->project)
             await link_repo(actions, oid, _home_repo(known, d["summary"], repo), observed,
                             source=_SOURCE, evidence_class=_EC, confidence=_CONF)
         counts["decisions"] += 1
     opened_now: set[Any] = set()
     for text in y.threads_opened:
+        if _dup_of_deliberate(text, prior.get("Thread", ())):
+            counts["skipped_dup"] += 1
+            continue
         tid = await _emit_thread(actions, text, observed=observed, source_model=source_model,
-                                 repo=_home_repo(known, text, repo) if repo else repo)
+                                 repo=_home_repo(known, text, repo) if repo else repo,
+                                 writer=writer)
         if tid is not None:
             counts["threads"] += 1
             opened_now.add(tid)
         else:
             counts["skipped_foreign"] += 1
     for text in y.obligations:
+        if _dup_of_deliberate(text, prior.get("Thread", ())):
+            counts["skipped_dup"] += 1
+            continue
         tid = await _emit_thread(actions, text, kind="obligation", observed=observed,
                                  source_model=source_model,
-                                 repo=_home_repo(known, text, repo) if repo else repo)
+                                 repo=_home_repo(known, text, repo) if repo else repo,
+                                 writer=writer)
         if tid is not None:
             counts["obligations"] += 1
             opened_now.add(tid)
         else:
             counts["skipped_foreign"] += 1
     counts["resolved"] = await _resolve_own_threads(actions, y.threads_resolved, observed,
-                                                    exclude=opened_now)
+                                                    exclude=opened_now, writer=writer)
     return counts
 
 
@@ -710,7 +808,7 @@ async def sense_sessions_tick(
     model = model or get_settings().osiris_extract_model
     pool = actions.pool
     report = {"files": 0, "chunks": 0, "decisions": 0, "threads": 0, "obligations": 0,
-              "resolved": 0, "skipped_foreign": 0, "planted": 0, "swaps": 0}
+              "resolved": 0, "skipped_foreign": 0, "skipped_dup": 0, "planted": 0, "swaps": 0}
 
     files = [only] if only is not None else await asyncio.to_thread(_list_transcripts, root)
 
@@ -731,7 +829,8 @@ async def sense_sessions_tick(
         # Idempotent: canonical find-or-create + the byte-dup assertion skip absorb re-runs.
         offset = 0 if backfill else int(cur if cur is not None else 0)
         # ownership boundary: a session that captures its own memory is not re-mined (see below)
-        self_doc = await _is_self_documenting(pool, f"agent:{path.stem.split('-')[0]}")
+        agent_source = _agent_of(path)  # WHO the mined words belong to (credence + over-read dedup)
+        self_doc = await _is_self_documenting(pool, agent_source)
         scanned = 0
         touched = False
         while report["chunks"] < max_chunks and scanned < _MAX_SCAN_BYTES:
@@ -762,6 +861,7 @@ async def sense_sessions_tick(
             counts = await emit_yield(
                 actions, parse_session_yield(raw), repo=repo,
                 source_model=chunk_models[-1] if chunk_models else None,
+                origin=agent_source,
             )
             if len(chunk_models) > 1:  # a warm rug-pull inside one session — flag it
                 report["swaps"] += await _record_swap(actions, path, chunk_models, repo, lines)

@@ -29,11 +29,13 @@ A pure function (`resolve_credence`, trivially unit-testable) over a thin IO lay
 among its sources resolves IDENTICALLY to winning_props (grade DESC, recency DESC) — this is a
 strict refinement that bites ONLY when a relay would otherwise out-rank its origin.
 
-SCOPE (v1): the clamp acts among AGENT sources (`agent:*`) related by spawned_by. session-miner —
-the universal re-teller that today swallows a sub-agent's origin identity — is not yet in the
-tree, so its extractions aren't clamped here; routing miner extractions back to their originating
-agent (so this subsumes the miner over-read, f34c572c) is the tracked feeder that makes it bite
-at scale.
+SCOPE (v1): the clamp acts among AGENT sources (`agent:*`) related by spawned_by. The
+session-miner now SOURCES each extraction to the ORIGINATING agent (`agent:<session>`, DERIVED,
+with `session-miner` as the actor — see ingest/sessions.emit_yield), so a mined fact carries the
+agent's own identity and sits IN this tree: the clamp reaches it, and the miner is no longer the
+universal re-teller that laundered a sub-agent's words under its own source. (This closes the
+feeder tracked as the miner over-read, f34c572c; the read-side write-time dedup lives with the
+miner.)
 """
 from __future__ import annotations
 
