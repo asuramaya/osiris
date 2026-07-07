@@ -25,3 +25,4 @@ get-docker.sh
 # Session scratch / generated briefs
 scratchpad/
 *.pdf
+.claude/worktrees/
