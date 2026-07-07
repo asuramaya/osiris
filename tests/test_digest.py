@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 from src.actions.core import Actions
 from src.orchestrator.digest import fleet_digest
+from src.orchestrator.mailbox import OPERATOR_ADDR, send_message
 from src.parsers.base import EvidenceClass
 
 NOW = datetime(2026, 7, 7, tzinfo=UTC)
@@ -64,3 +65,32 @@ async def test_fleet_digest_surfaces_the_four_streams(actions: Actions) -> None:
     assert dg["summary"]["laundering"] == 1
     assert "agent:aaa" in dg["laundering"][0]["laundering_sources"]
     assert dg["laundering"][0]["value"] == "observed"  # origin won, relay clamped
+
+
+async def test_digest_surfaces_conversations_and_the_operator_desk(actions: Actions) -> None:
+    """The upward lane's compliance-free half: lateral threads and the operator's inbox are
+    read straight off fleet_messages — an agent that shirks its report-up duty is still seen."""
+    p = actions.pool
+    since = NOW - timedelta(hours=24)
+    # a lateral request→reply thread between two projects
+    ask = await send_message(p, from_agent="agent:aaa", from_project="decepticons",
+                             to_project="heinrich", body="run the ablation?")
+    await send_message(p, from_agent="agent:bbb", from_project="heinrich",
+                       body="done — organ delta reproduces", reply_to=ask["id"])
+    # a report-up brief on the operator's desk
+    await send_message(p, from_agent="agent:bbb", from_project="heinrich",
+                       to_project=OPERATOR_ADDR, body="FINDING: organ delta is real; "
+                       "two witnesses agree. Details in decision log.")
+
+    dg = await fleet_digest(actions, since=since)
+
+    assert dg["summary"]["conversations"] >= 1
+    lateral = next(c for c in dg["conversations"] if c["thread"] == ask["id"])
+    assert set(lateral["between"]) >= {"decepticons", "heinrich"}
+    assert lateral["msgs"] == 2
+    assert lateral["last"]["body"].startswith("done — organ delta")
+    # the desk: counted and previewed, newest first, NOT leased by the digest (a peek)
+    assert dg["summary"]["operator_unread"] == 1
+    assert dg["operator_inbox"]["latest"][0]["from_project"] == "heinrich"
+    dg2 = await fleet_digest(actions, since=since)
+    assert dg2["summary"]["operator_unread"] == 1  # reading the digest didn't consume it

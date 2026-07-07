@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     osiris_trigger_enabled: bool = False
     osiris_trigger_rate_cap: int = 5
     osiris_trigger_window_secs: int = 3600
+    # Mail delivery LEASE (at-least-once, decision 56f6a0d6): inbox() leases a message rather
+    # than consuming it; if no ack (or reply) settles it within this window, it REDELIVERS —
+    # a response severed by a server bounce costs a duplicate, never a silent loss.
+    osiris_mail_lease_secs: int = 900
     # The operator's STANDING model choice (the intent). The fable harness silently demotes
     # fable→opus when it senses danger (ruling f2ae6346); the swap-detector flags an observed
     # model that diverges from this — the confession backstop the cold-boot ritual can't be.

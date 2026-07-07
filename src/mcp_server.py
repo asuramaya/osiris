@@ -12,6 +12,7 @@ Actions layer.
 
 from __future__ import annotations
 
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -37,15 +38,22 @@ from src.ontology.resolution import (
     resolve_cross_base,
 )
 from src.ontology.schema import catalog
-from src.orchestrator import capture, digest
+from src.orchestrator import capture, digest, mounts
 from src.orchestrator import compositions as comp
 from src.orchestrator.agents import AgentIdentity, register_agent, resolve_identity
 from src.orchestrator.console import get_console as _get_console
 from src.orchestrator.console import set_console as _set_console
 from src.orchestrator.dossier import entity_dossier
-from src.orchestrator.mailbox import read_inbox, send_message, unread_count
+from src.orchestrator.mailbox import (
+    OPERATOR_ADDR,
+    ack_messages,
+    read_inbox,
+    send_message,
+    unread_count,
+)
 from src.orchestrator.sources import as_dicts, suggest
 from src.orchestrator.swaps import classify_swap, swap_banner
+from src.orchestrator.trigger import wake_status
 
 mcp = FastMCP(
     "osiris",
@@ -64,7 +72,13 @@ mcp = FastMCP(
         "context window, is your memory, and anything not written back does not exist. "
         "The fleet shares a MAILBOX: another agent can address a message to your project — "
         "mount() and orient() report your unread count and inbox() reads it (pull, never "
-        "push: you perceive mail only when you check, so glance when you arrive). "
+        "push: you perceive mail only when you check, so glance when you arrive). Reading "
+        "LEASES a message, it does not consume it: SETTLE what you handle — reply with "
+        "send(reply_to=<id>) or ack with inbox(ack=[ids]) — or it redelivers (at-least-once; "
+        "a dropped response is a duplicate, never a loss). send(to='operator') reaches the "
+        "HUMAN's desk: when a lateral exchange concludes (a finding, a division of labor, a "
+        "decision), record_decision it AND send the operator a three-line brief — the loop "
+        "may close, but never silently. "
         "IDENTITY CHECK: the operator's standing choice is that sessions here run Fable 5. "
         "Harness degradations silently swap the model mid-session; if your environment "
         "says you are a different model, SAY SO to the operator in your first reply — "
@@ -74,28 +88,107 @@ mcp = FastMCP(
 _pool: asyncpg.Pool | None = None
 
 
-# The fleet registry: each connected agent's identity, keyed by its connection. On the
+# The fleet registry: each connected agent's identity, keyed by its client session. On the
 # shared server every agent writes through ONE process, so without this their writes
 # collapse into the single `session` source. `mount` populates this; the capture tools
-# read it so each write is attributed to `agent:<session>`. In-memory (rebuilt on mount
-# after a restart); the Agent OBJECTS live durably in the graph.
-_agents: dict[int, AgentIdentity] = {}
+# read it so each write is attributed to `agent:<session>`. The dict is the HOT half; the
+# DURABLE half is agent_mounts in PG (src/orchestrator/mounts.py) — a server bounce used to
+# wipe the whole fleet's identities at once (decision 56f6a0d6); now any call re-attaches
+# from the table by the client's job_dir header (_ident_for).
+_agents: dict[str, AgentIdentity] = {}
+_agents_touched: dict[str, float] = {}  # last use per key — feeds the bounce-orphan prune
 
 
-def _conn_key(ctx: Context | None) -> int | None:
-    """A stable per-connection key: the id() of the persistent ServerSession object (one
-    per client connection for the connection's lifetime). None under stdio / no context."""
+def _prune_agents(cap: int = 256) -> None:
+    """Client sessions churn and never say goodbye (a vanished tab leaves its entry behind —
+    the slow leak that fed the 1G OOM); past the cap, drop the least-recently-used down to
+    half. The durable registry (agent_mounts) makes an over-eager prune cost one transparent
+    re-attach, nothing more."""
+    if len(_agents) <= cap:
+        return
+    stale = sorted(_agents_touched, key=_agents_touched.__getitem__)[: len(_agents) - cap // 2]
+    for key in stale:
+        _agents.pop(key, None)
+        _agents_touched.pop(key, None)
+
+
+def _conn_key(ctx: Context | None) -> str | None:
+    """A per-client-session key. Prefer the protocol session id (the Mcp-Session-Id header —
+    minted at initialize, stable across every request of the client session); fall back to
+    the ServerSession object id under stdio. The keyspaces are prefixed so they can't collide
+    (a GC'd session object's id() CAN be reused — the raw-id key was a latent cross-agent
+    identity merge, forbidden territory)."""
+    if ctx is None:
+        return None
     try:
-        return id(ctx.request_context.session) if ctx is not None else None
+        req = ctx.request_context.request
+        sid = req.headers.get("mcp-session-id") if req is not None else None
+        if sid:
+            return f"sid:{sid}"
+        return f"obj:{id(ctx.request_context.session)}"
     except (AttributeError, LookupError):
         return None
 
 
-def _source_for(ctx: Context | None) -> str:
-    """The attributing actor for a write: the mounted agent on this connection, else the
-    lone-operator `session` (back-compat — an un-mounted agent still writes, just coarsely)."""
+def _job_hint(ctx: Context | None) -> str | None:
+    """The client's durable identity handle: the X-Osiris-Job header (.mcp.json sends
+    ${CLAUDE_JOB_DIR} per request). Guarded against a client that doesn't expand the
+    variable — a literal `${...}` is no hint at all."""
+    if ctx is None:
+        return None
+    try:
+        req = ctx.request_context.request
+        hint = req.headers.get("x-osiris-job") if req is not None else None
+    except (AttributeError, LookupError):
+        return None
+    if not hint or "${" in hint:
+        return None
+    return str(hint)
+
+
+async def _reattach(
+    pool: asyncpg.Pool, key: str | None, job: str | None
+) -> AgentIdentity | None:
+    """The durable-registry half of _ident_for (separated so tests drive it with their own
+    pool): look the job_dir up in agent_mounts, re-run identity resolution off the transcript
+    (so the model/swap history is FRESH, not a stale copy), re-register, re-cache. The stored
+    model is deliberately NOT passed as a self-report — it would false-flag model_divergent
+    after a real swap. None when there is nothing to re-attach by."""
+    if job is None:
+        return None
+    rec = await mounts.find_mount(pool, job_dir=job)
+    if rec is None:
+        return None
+    settings = get_settings()
+    ident = resolve_identity(cwd=rec.cwd, job_dir=rec.job_dir)
+    await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
+                         expected_model=settings.osiris_expected_model)
+    if key is not None:
+        _agents[key] = ident
+        _agents_touched[key] = time.monotonic()
+    await mounts.save_mount(pool, job_dir=rec.job_dir, agent_id=ident.agent_id,
+                            project=ident.project, cwd=rec.cwd, model=ident.model,
+                            session_key=key)
+    return ident
+
+
+async def _ident_for(ctx: Context | None) -> AgentIdentity | None:
+    """The mounted identity for this call — the hot dict first, then RE-ATTACH from the
+    durable registry by the client's job_dir header. A server bounce used to wipe the whole
+    fleet's identities at once (decision 56f6a0d6); now it costs each agent one transparent
+    re-attach. None only when there is truly nothing to re-attach by."""
     key = _conn_key(ctx)
-    ident = _agents.get(key) if key is not None else None
+    if key is not None and (cached := _agents.get(key)) is not None:
+        _agents_touched[key] = time.monotonic()
+        return cached
+    return await _reattach(await _pool_get(), key, _job_hint(ctx))
+
+
+async def _source_for(ctx: Context | None) -> str:
+    """The attributing actor for a write: the mounted agent on this connection (re-attached
+    from the durable registry if the server bounced), else the lone-operator `session`
+    (back-compat — an un-mounted agent still writes, just coarsely)."""
+    ident = await _ident_for(ctx)
     return ident.agent_id if ident else "session"
 
 
@@ -437,8 +530,7 @@ async def consult_canon(query: str = "", ctx: Context | None = None) -> dict[str
     the matching SECTIONS ranked by keyword hits (multi-word queries work). Empty query → your
     scoped index. Another project's unvendored history is never returned to you."""
     pool = await _pool_get()
-    key = _conn_key(ctx)
-    ident = _agents.get(key) if key is not None else None
+    ident = await _ident_for(ctx)
     spec = {"op": "function", "name": "canon",
             "args": {"q": query, "project": (ident.project if ident else "") or ""}}
     return await comp.run_spec(pool, spec, None, name="design-canon")
@@ -453,25 +545,38 @@ async def mount(
     """Link this agent to Osiris as a first-class fleet member — call it ONCE, first thing.
     Pass your working directory `cwd` (names your project) and, if you can, your `job_dir`
     ($CLAUDE_JOB_DIR) so the server can read your ACTUAL model off your transcript (not your
-    system prompt, which lies after a model swap). Registers an Agent object (works_in your
-    project, acts_for the principal) and, for the rest of this connection, attributes every
-    decision/thread you record to `agent:<you>` instead of the shared `session` bucket — so
-    the graph knows WHICH instance, on WHICH model, decided what. Then call orient()."""
+    system prompt, which lies after a model swap) — and so your identity SURVIVES server
+    restarts (with a job_dir the server re-attaches you automatically; without one a bounce
+    means re-mounting by hand). Registers an Agent object (works_in your project, acts_for
+    the principal) and attributes every decision/thread you record to `agent:<you>` instead
+    of the shared `session` bucket — so the graph knows WHICH instance, on WHICH model,
+    decided what. Then call orient()."""
     pool = await _pool_get()
     settings = get_settings()
+    lease = settings.osiris_mail_lease_secs
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model)
     await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
                          expected_model=settings.osiris_expected_model)
     key = _conn_key(ctx)
     if key is not None:
+        _prune_agents()  # opportunistic: mount is where churn shows up
         _agents[key] = ident
-    unread = await unread_count(pool, ident.project) if ident.project else 0
+        _agents_touched[key] = time.monotonic()
+    if job_dir:  # the durable half — what _ident_for re-attaches by after a bounce
+        await mounts.save_mount(pool, job_dir=job_dir, agent_id=ident.agent_id,
+                                project=ident.project, cwd=cwd, model=ident.model,
+                                session_key=key)
+    unread = await unread_count(pool, ident.project, lease_secs=lease) if ident.project else 0
+    op_unread = await unread_count(pool, OPERATOR_ADDR, lease_secs=lease)
     banner = swap_banner(classify_swap(
         ident.model_history, ident.model, expected=settings.osiris_expected_model))
     out = {"agent": ident.agent_id, "project": ident.project or "?",
            "model": ident.model or "unknown",
            "mail": f"{unread} unread — call inbox()" if unread else "none",
            "note": "linked — writes now attributed to you; call orient() next"}
+    if op_unread:  # the fleet plays secretary: any session the human drives can relay this
+        out["operator_mail"] = (f"{op_unread} unread at the operator's desk — "
+                                "inbox(project='operator') if the human is present")
     if banner:  # the graph confesses the swap the agent's own prompt hides (ruling f2ae6346)
         out["swap"] = banner
     return out
@@ -507,12 +612,15 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
     otherwise it's your mounted project; un-mounted with neither → the whole-fleet briefing.
     Call after mount(), and again after any compaction, to inherit instead of starting blind."""
     pool = await _pool_get()
-    key = _conn_key(ctx)
-    ident = _agents.get(key) if key is not None else None
+    lease = get_settings().osiris_mail_lease_secs
+    ident = await _ident_for(ctx)
     proj = project or (ident.project if ident else None)  # explicit scope overrides the mount
     who = ident.agent_id if ident else "session (un-mounted — call mount(cwd) first)"
-    unread = await unread_count(pool, proj) if proj else 0
+    unread = await unread_count(pool, proj, lease_secs=lease) if proj else 0
     mail = f"{unread} unread — inbox()" if unread else "none"
+    op_unread = await unread_count(pool, OPERATOR_ADDR, lease_secs=lease)
+    op_mail = {"operator_mail": f"{op_unread} unread — inbox(project='operator') if the "
+                                "human is present"} if op_unread else {}
     swap = swap_banner(classify_swap(ident.model_history, ident.model,
                        expected=get_settings().osiris_expected_model)) if ident else None
     scoped = await _project_briefing(pool, proj) if proj else None
@@ -525,6 +633,7 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
         return {
             "you": who, "model": (ident.model if ident else None), "project": proj,
             "mail": mail,
+            **op_mail,
             **({"swap": swap} if swap else {}),
             **scoped,
             "fleet_open_threads_total": fleet_open,
@@ -534,6 +643,7 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
     return {
         "you": who, "model": (ident.model if ident else None), "project": proj,
         "mail": mail,
+        **op_mail,
         **({"swap": swap} if swap else {}),
         "briefing": await comp.run_composition(pool, "briefing"),
     }
@@ -550,7 +660,9 @@ async def fleet_digest(hours: int = 24) -> dict[str, Any]:
     away — especially after onboarding a batch of agents."""
     pool = await _pool_get()
     since = datetime.now(UTC) - timedelta(hours=hours)
-    return {"window_hours": hours, **await digest.fleet_digest(Actions(pool), since=since)}
+    return {"window_hours": hours,
+            **await digest.fleet_digest(Actions(pool), since=since,
+                                        lease_secs=get_settings().osiris_mail_lease_secs)}
 
 
 @mcp.tool()
@@ -628,36 +740,72 @@ async def fleet() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def send(to: str, body: str, ctx: Context | None = None) -> dict[str, Any]:
+async def send(body: str, to: str | None = None, reply_to: int | None = None,
+               ctx: Context | None = None) -> dict[str, Any]:
     """Message another agent (the fleet mailbox). `to` = the recipient PROJECT/repo name —
-    stable across their session changes, addressing whoever works there. You must be mounted;
-    the message is stamped from YOU. PULL, not push: they read it on their next mount/orient
-    (Osiris never interrupts a live agent). For DURABLE knowledge use record_decision /
-    open_thread — this lane is disposable coordination, not memory."""
-    key = _conn_key(ctx)
-    ident = _agents.get(key) if key is not None else None
+    stable across their session changes, addressing whoever works there; `to='operator'`
+    reaches the HUMAN's desk (report findings up when a lateral exchange concludes).
+    `reply_to=<message id>` answers a message: it auto-routes back to the asker's project
+    (no `to` needed), joins the thread, and SETTLES the message you're answering. You must
+    be mounted; the message is stamped from YOU. Delivery is at-least-once and deduped, and
+    the result tells you what awaits it: `listener` (is anyone live there), `wake` (will the
+    trigger spawn them), `backlog` (deliverable queue). For DURABLE knowledge use
+    record_decision / open_thread — this lane is disposable coordination, not memory."""
+    ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount(cwd) first — a message must say who it's from"}
-    mid = await send_message(await _pool_get(), from_agent=ident.agent_id,
-                             from_project=ident.project, to_project=to, body=body)
-    return {"sent": mid, "to": to.removeprefix("repo:").strip(), "from": ident.agent_id}
+        return {"error": "mount(cwd, job_dir=$CLAUDE_JOB_DIR) first — a message must say who "
+                         "it's from (with job_dir you re-attach automatically after a bounce)"}
+    pool = await _pool_get()
+    st = get_settings()
+    try:
+        res = await send_message(pool, from_agent=ident.agent_id, from_project=ident.project,
+                                 to_project=to, body=body, reply_to=reply_to)
+    except ValueError as e:
+        return {"error": str(e)}
+    dest = res["to"]
+    last_seen = await mounts.project_last_seen(pool, dest)
+    live = bool(last_seen and datetime.now(UTC) - datetime.fromisoformat(last_seen)
+                < timedelta(minutes=15))
+    return {
+        "sent": res["id"], "to": dest, "from": ident.agent_id,
+        **({"thread": res["thread_id"]} if res["thread_id"] is not None else {}),
+        **({"dedup": "identical recent message already queued — not re-posted"}
+           if res["dedup"] else {}),
+        "listener": {"live": live, "last_seen": last_seen},
+        "wake": await wake_status(pool, dest, st),
+        "backlog": await unread_count(pool, dest, lease_secs=st.osiris_mail_lease_secs),
+    }
 
 
 @mcp.tool()
 async def inbox(project: str | None = None, peek: bool = False,
-                ctx: Context | None = None) -> dict[str, Any]:
+                ack: list[int] | None = None, ctx: Context | None = None) -> dict[str, Any]:
     """Read messages other agents left for you (the fleet mailbox). Defaults to YOUR mounted
-    project; pass `project` to read another's. Reading MARKS them read (mailbox semantics)
-    unless peek=True. Check this when you mount and after any compaction — mount()/orient()
-    report your unread count."""
-    key = _conn_key(ctx)
-    ident = _agents.get(key) if key is not None else None
+    project; pass `project` to read another's (project='operator' reads the human's desk).
+    Reading LEASES a message, it does NOT consume it: SETTLE each one you've handled — reply
+    with send(reply_to=<its id>) or pass ack=[ids] here — or it will REDELIVER after the
+    lease (at-least-once: a dropped response costs a duplicate, never a silent loss).
+    peek=True reads without leasing. Check this when you mount and after any compaction —
+    mount()/orient() report your deliverable count."""
+    ident = await _ident_for(ctx)
     proj = project or (ident.project if ident else None)
     if proj is None:
-        return {"error": "mount(cwd) first, or pass project=<repo>"}
-    msgs = await read_inbox(await _pool_get(), proj, mark_read=not peek)
-    where = "peek — left unread" if peek else ("marked read" if msgs else "empty")
-    return {"project": proj.removeprefix("repo:").strip(), "unread": msgs, "note": where}
+        return {"error": "mount(cwd, job_dir=$CLAUDE_JOB_DIR) first, or pass project=<repo>"}
+    pool = await _pool_get()
+    st = get_settings()
+    settled = await ack_messages(pool, proj, ack) if ack else 0
+    msgs = await read_inbox(pool, proj, mark_read=not peek,
+                            lease_secs=st.osiris_mail_lease_secs)
+    if peek:
+        note = "peek — nothing leased"
+    elif msgs:
+        note = ("leased — settle each by replying (send(reply_to=<id>)) or acking "
+                f"(inbox(ack=[ids])); unsettled mail redelivers after "
+                f"{st.osiris_mail_lease_secs // 60} min")
+    else:
+        note = "empty"
+    return {"project": proj.removeprefix("repo:").strip(), "messages": msgs,
+            **({"settled": settled} if settled else {}), "note": note}
 
 
 @mcp.tool()
@@ -689,7 +837,7 @@ async def record_decision(
     Attributed to you if you mount()ed. Idempotent on the summary."""
     d = await capture.record_decision(
         Actions(await _pool_get()), summary, kind=kind, rationale=rationale, repo=repo,
-        source=_source_for(ctx),
+        source=await _source_for(ctx),
     )
     return {"id": str(d), "kind": kind, "summary": summary}
 
@@ -706,7 +854,8 @@ async def open_thread(
     action ('kernel changed → daemons need restart') — record those the moment they're minted;
     they are neither rulings nor commits and otherwise die with the context window."""
     t = await capture.open_thread(
-        Actions(await _pool_get()), summary, repo=repo, kind=kind, source=_source_for(ctx)
+        Actions(await _pool_get()), summary, repo=repo, kind=kind,
+        source=await _source_for(ctx)
     )
     return {"id": str(t), "summary": summary, "status": "open"}
 
@@ -719,7 +868,7 @@ async def resolve_thread(
     substring; `because` records why. It leaves briefing's open list and joins the resolved
     section. Event-sourced (never deleted), so the close is auditable and reversible."""
     tid = await capture.resolve_thread(
-        Actions(await _pool_get()), ref, because=because, source=_source_for(ctx)
+        Actions(await _pool_get()), ref, because=because, source=await _source_for(ctx)
     )
     if tid is None:
         return {"error": f"no open thread matches {ref!r}"}
@@ -738,11 +887,11 @@ async def hold_tension(
     it into a false answer. Re-hold the same poles to MOVE the lean; the lean history is the
     dance across sessions. For a real polarity to navigate over time (bounded recall vs complete
     memory), never a question to answer. Surfaces in orient under `tensions`."""
-    key = _conn_key(ctx)
-    ident = _agents.get(key) if key is not None else None
+    ident = await _ident_for(ctx)
     t = await capture.record_tension(
         Actions(await _pool_get()), pole_a, pole_b, lean=lean, why=why,
-        repo=repo or (ident.project if ident else None), source=_source_for(ctx),
+        repo=repo or (ident.project if ident else None),
+        source=ident.agent_id if ident else "session",
     )
     return {"held": str(t), "poles": [pole_a, pole_b], "lean": lean}
 
