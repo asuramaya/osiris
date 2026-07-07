@@ -39,14 +39,20 @@ class SwapVerdict:
 
 
 def classify_swap(
-    history: Sequence[str], observed: str | None, *, expected: str
+    history: Sequence[str], observed: str | None, *, expected: str, anchored: bool = True
 ) -> SwapVerdict:
     """Read both swap signals off a session's model history + its current (observed) model,
     against the operator's `expected` standing choice. Pure — the IO (probing the transcript for
-    `history`/`observed`) happens upstream in resolve_identity / the miner."""
+    `history`/`observed`) happens upstream in resolve_identity / the miner.
+
+    `anchored` = whether `observed`/`history` were read off THIS session's OWN transcript (a
+    job_dir-anchored probe). An UNANCHORED reading (the cwd / box-wide fallback may grab a
+    CO-TENANT's transcript) cannot witness a swap: asserting one off a neighbor's model is the
+    cry-wolf that told a verified fable session it was 'demoted to haiku' (bonus bug, agent
+    e71b408f). So an unanchored observation informs `model` upstream but fires NO swap here."""
     hist = tuple(history)
-    within = len(hist) > 1
-    diverged = observed is not None and observed != expected
+    within = anchored and len(hist) > 1
+    diverged = anchored and observed is not None and observed != expected
     from_model: str | None = None
     to_model: str | None = None
     if within:

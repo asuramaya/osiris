@@ -71,3 +71,17 @@ def test_unknown_observed_is_not_a_false_swap() -> None:
     # nothing observed (no transcript) → we cannot claim a swap
     v = classify_swap([], None, expected=FABLE)
     assert v.swapped is False and swap_banner(v) is None
+
+
+def test_unanchored_observation_never_swaps() -> None:
+    # the cry-wolf (bonus bug, agent e71b408f): the cwd/box-wide fallback may read a CO-TENANT's
+    # transcript. An UNANCHORED observation — even one that diverges from intent, even a >1-model
+    # history — must NOT assert a swap (a verified fable session was falsely 'demoted to haiku').
+    diverging = classify_swap([], OPUS, expected=FABLE, anchored=False)  # opus != fable, unanchored
+    assert diverging.diverged_from_intent is False and diverging.swapped is False
+    assert swap_banner(diverging) is None
+    neighbor_history = classify_swap([FABLE, OPUS], OPUS, expected=FABLE, anchored=False)
+    assert neighbor_history.within_session is False and neighbor_history.swapped is False
+    assert swap_banner(neighbor_history) is None
+    # anchored (the default) is unchanged — a true job_dir read still confesses the divergence
+    assert classify_swap([], OPUS, expected=FABLE, anchored=True).swapped is True

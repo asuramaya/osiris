@@ -569,7 +569,8 @@ async def mount(
     unread = await unread_count(pool, ident.project, lease_secs=lease) if ident.project else 0
     op_unread = await unread_count(pool, OPERATOR_ADDR, lease_secs=lease)
     banner = swap_banner(classify_swap(
-        ident.model_history, ident.model, expected=settings.osiris_expected_model))
+        ident.model_history, ident.model, expected=settings.osiris_expected_model,
+        anchored=ident.model_method == "job_dir"))  # only a true anchor confesses a swap
     out = {"agent": ident.agent_id, "project": ident.project or "?",
            "model": ident.model or "unknown",
            "mail": f"{unread} unread — call inbox()" if unread else "none",
@@ -622,7 +623,8 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
     op_mail = {"operator_mail": f"{op_unread} unread — inbox(project='operator') if the "
                                 "human is present"} if op_unread else {}
     swap = swap_banner(classify_swap(ident.model_history, ident.model,
-                       expected=get_settings().osiris_expected_model)) if ident else None
+                       expected=get_settings().osiris_expected_model,
+                       anchored=ident.model_method == "job_dir")) if ident else None
     scoped = await _project_briefing(pool, proj) if proj else None
     if scoped is not None:
         fleet_open = await pool.fetchval(

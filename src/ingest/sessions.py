@@ -254,11 +254,18 @@ def locate_transcript_by_cwd(cwd: str, root: Path | None = None) -> Path | None:
     return max(files, key=lambda p: p.stat().st_mtime) if files else None
 
 
-def locate_current_transcript(root: Path, job_dir: str | None) -> Path | None:
+def locate_current_transcript(
+    root: Path, job_dir: str | None, *, anchored_only: bool = False
+) -> Path | None:
     """This session's own transcript, anchored on the job id (the multi-session box runs a
     FLEET — newest-mtime alone grabs whatever parallel session is hottest, proven live).
     Falls back to newest only when the anchor finds nothing. This is how a running agent
-    finds the file that records what model it actually is."""
+    finds the file that records what model it actually is.
+
+    `anchored_only` (the IDENTITY path) suppresses the box-wide-hottest fallback: when the job
+    id matches no transcript (a synthesized wake dir, a malformed anchor, an absent id) it
+    returns None rather than a CO-TENANT's file. Reading a neighbor's model as your own is the
+    cry-wolf swap — a verified fable session 'demoted to haiku' off the box's hottest session."""
     files = [p for p in root.expanduser().glob("*/*.jsonl") if p.is_file()]
     if not files:
         return None
@@ -267,21 +274,24 @@ def locate_current_transcript(root: Path, job_dir: str | None) -> Path | None:
         anchored = [p for p in files if p.stem.startswith(jid)]
         if anchored:
             return max(anchored, key=lambda p: p.stat().st_mtime)
+    if anchored_only:  # no true anchor → confess 'unknown', never guess a neighbor's transcript
+        return None
     return max(files, key=lambda p: p.stat().st_mtime)
 
 
 def current_model(
-    root: Path | None = None, job_dir: str | None = None
+    root: Path | None = None, job_dir: str | None = None, *, anchored_only: bool = False
 ) -> tuple[str | None, list[str], Path | None]:
     """Probe THIS session's actual model from its transcript. Returns
     (current_model, swap_history, transcript_path). `swap_history` with >1 entry means the
     session was warm-swapped. Reads the tail for the current model, the whole file for the
-    history (a session file is large but a one-shot probe can afford it)."""
+    history (a session file is large but a one-shot probe can afford it). `anchored_only` refuses
+    the box-wide-hottest fallback (identity path — a neighbor's model must never read as ours)."""
     import os
 
     root = root or (Path.home() / ".claude/projects")
     job_dir = job_dir or os.environ.get("CLAUDE_JOB_DIR")
-    path = locate_current_transcript(root, job_dir)
+    path = locate_current_transcript(root, job_dir, anchored_only=anchored_only)
     if path is None:
         return None, [], None
     cur = latest_model(_tail_lines(path))

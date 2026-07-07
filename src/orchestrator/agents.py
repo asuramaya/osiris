@@ -86,7 +86,11 @@ def resolve_identity(
     method: str | None = None
     history: list[str] = []  # the transcript's model sequence — the swap history (job_dir path)
     if job_dir:
-        observed, history, _ = current_model(root=root, job_dir=job_dir)  # the harness's record
+        # anchored_only: a job_dir that does NOT match a real transcript (a synthesized wake dir,
+        # a malformed anchor) must yield NOTHING, never the box-wide-hottest neighbor — else the
+        # read grades 'job_dir' off a co-tenant's model and fires a false swap (cry-wolf).
+        observed, history, _ = current_model(  # the harness's record — anchored to THIS session
+            root=root, job_dir=job_dir, anchored_only=True)
         if observed is not None:
             method = "job_dir"
     if sid is None and cwd:  # no job dir → find the session (and, if unseen, the model) by cwd
@@ -179,7 +183,10 @@ async def register_agent(
         # the swap-detector (ruling f2ae6346): stamp the INTENT, and when the observed model
         # diverges from it — the fable harness's silent danger-demotion — record the swap as a
         # first-class OBSERVED event (not the agent's self-report; it can't feel its own swap).
-        verdict = classify_swap(identity.model_history, identity.model, expected=expected_model)
+        # gate the swap on a job_dir ANCHOR: a cwd/self-report model may be a neighbor's, and a
+        # divergence asserted off it is the cry-wolf — the true positive is the anchored read.
+        verdict = classify_swap(identity.model_history, identity.model, expected=expected_model,
+                                anchored=identity.model_method == "job_dir")
         await actions.assert_property(a, "model_intent", expected_model, src, now, _CONF,
                                       evidence_class=_EC)
         if verdict.swapped:

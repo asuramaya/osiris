@@ -217,3 +217,45 @@ def test_cwd_located_identity_is_not_marked_resolved(tmp_path: Path) -> None:
     assert ident.model == "claude-opus-4-8"  # still reads a best-guess model (stays functional)
     assert ident.project == "osiris"
     assert ident.resolved is False           # but flagged NOT confident — the digest can see it
+
+
+def test_cwd_fallback_neighbor_swap_does_not_cry_wolf(tmp_path: Path) -> None:
+    """The live cry-wolf (bonus bug, agent e71b408f): with no job_dir anchor, resolve_identity
+    reads the project dir's HOTTEST transcript — which may be a CONCURRENT NEIGHBOR's. If that
+    neighbor was warm-swapped (fable→haiku), a cwd-grade read must inform `model` but NEVER fire a
+    swap confession — a verified fable session was falsely told it had been 'demoted to haiku'."""
+    from src.orchestrator.swaps import classify_swap, swap_banner
+
+    proj = tmp_path / "-home-x-code-osiris"
+    proj.mkdir()
+    _transcript_lines(proj, "claude-fable-5", "claude-haiku-4-5-20251001")  # a neighbor's swap
+    ident = resolve_identity(cwd="/home/x/code/osiris", root=tmp_path)  # no job_dir → cwd guess
+    assert ident.model_method == "cwd"                       # a GUESS, not an anchor
+    assert ident.model == "claude-haiku-4-5-20251001"   # informs model (best-effort)...
+    assert ident.model_history == ()                    # ...but no swap history from a cwd read
+    assert ident.resolved is False
+    # the confession is GATED on a job_dir anchor → the neighbor's demotion is NOT confessed as ours
+    banner = swap_banner(classify_swap(ident.model_history, ident.model,
+                                       expected="claude-fable-5",
+                                       anchored=ident.model_method == "job_dir"))
+    assert banner is None
+
+
+async def test_register_does_not_stamp_swap_off_a_cwd_guess(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """The stamp path mirrors the banner: a cwd-grade identity diverging from the intent must NOT
+    stamp model_swapped on the Agent (register_agent gates it on the job_dir anchor too)."""
+    proj = tmp_path / "-home-x-code-osiris"
+    proj.mkdir()
+    _transcript_lines(proj, "claude-fable-5", "claude-haiku-4-5-20251001")
+    ident = resolve_identity(cwd="/home/x/code/osiris", root=tmp_path)  # cwd guess (haiku neighbor)
+    a = await register_agent(actions, ident, actor="analyst:operator",
+                             expected_model="claude-fable-5")
+    swapped = await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions "
+        "WHERE object_id=$1 AND name='model_swapped'", a)
+    assert swapped is None  # no cry-wolf stamp off a neighbor's transcript
+    intent = await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='model_intent'", a)
+    assert intent == "claude-fable-5"  # the intent is still stamped (the honest half)
