@@ -21,7 +21,7 @@ import re
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from src.actions.core import Actions
+from src.api.membrane import render_membrane
 from src.config.settings import get_settings
 from src.connectors.leases import LeaseStore
 from src.connectors.osint4all import suggest_manifests
@@ -61,6 +62,7 @@ from src.orchestrator.compositions import (
     save_watch,
 )
 from src.orchestrator.console import get_console, set_console
+from src.orchestrator.digest import fleet_digest
 from src.orchestrator.dossier import entity_dossier
 from src.orchestrator.federation import federated_query, promote, to_preview
 from src.orchestrator.handoff import abandon, open_handoff, post_back
@@ -871,6 +873,21 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         ingested = await tick(Actions(p), "harris_county_clerk", watcher)
         fired = await evaluate_watches(p)  # also raise alerts (the bell), prospectively
         return {"ingested": ingested, "alerts_fired": fired, "watch_id": str(watch_id)}
+
+    @app.get("/membrane")
+    async def membrane(
+        hours: int = 24, p: asyncpg.Pool = Depends(get_pool)
+    ) -> Response:
+        """The upward lane as a page — the statusline's click-through (read-only lens over
+        fleet_digest + the wake ledger; anchored sections #desk #conversations #fleet #wakes).
+        Deliberately NOT the composer (held, ruling 450caf7b) — the smallest walkable membrane."""
+        since = datetime.now(UTC) - timedelta(hours=hours)
+        dg = await fleet_digest(
+            Actions(p), since=since, lease_secs=get_settings().osiris_mail_lease_secs)
+        wakes = [dict(r) for r in await p.fetch(
+            "SELECT to_project, from_agent, message_id, woke_at FROM agent_wakes "
+            "ORDER BY woke_at DESC LIMIT 20")]
+        return Response(render_membrane(dg, wakes), media_type="text/html")
 
     if _UI_DIR.is_dir():
         app.mount("/ui", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")

@@ -20,6 +20,8 @@ from pathlib import Path
 
 DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/osiris")
 EXPECTED = os.environ.get("OSIRIS_EXPECTED_MODEL", "claude-fable-5")
+CONSOLE = os.environ.get("OSIRIS_CONSOLE_URL", "http://127.0.0.1:8011")
+LINKS = os.environ.get("OSIRIS_STATUSLINE_LINKS", "1") != "0"  # kill switch if a terminal balks
 LEASE_SECS = 900  # mirror osiris_mail_lease_secs — deliverable = unsettled + no live lease
 
 DIM = "\033[2m"
@@ -30,6 +32,14 @@ RESET = "\033[0m"
 
 def _short(model_id: str) -> str:
     return model_id.removeprefix("claude-")
+
+
+def _link(text: str, anchor: str) -> str:
+    """OSC 8 hyperlink into the /membrane lens — the statusline's click-through. Terminals
+    without OSC 8 support render the plain text; the escapes are invisible either way."""
+    if not LINKS:
+        return text
+    return f"\033]8;;{CONSOLE}/membrane#{anchor}\033\\{text}\033]8;;\033\\"
 
 
 async def _counts(project: str) -> tuple[int, int, int, int]:
@@ -69,7 +79,13 @@ def main() -> None:
         desk, mail, live, wakes = asyncio.run(asyncio.wait_for(_counts(project), timeout=1.5))
         desk_s = f"{RED}desk {desk}{RESET}" if desk else f"{DIM}desk 0{RESET}"
         mail_s = f"mail {mail}" if mail else f"{DIM}mail 0{RESET}"
-        parts = [f"◈ {project}", desk_s, mail_s, f"fleet {live}●", f"wakes {wakes}/h"]
+        parts = [
+            _link(f"◈ {project}", "desk"),
+            _link(desk_s, "desk"),
+            _link(mail_s, "conversations"),
+            _link(f"fleet {live}●", "fleet"),
+            _link(f"wakes {wakes}/h", "wakes"),
+        ]
     except Exception:  # noqa: BLE001 — the graph being down is information, not an error
         parts = [f"◈ {project}", f"{DIM}graph unreachable{RESET}"]
 
