@@ -28,16 +28,23 @@ from src.orchestrator.credence import credence_props
 async def _roster(actions: Actions) -> list[dict[str, Any]]:
     """Every Agent with its model/project and the two health signals — identity_resolved (did the
     onboarding get a clean id?) and model_swapped (was it silently demoted?)."""
+    # each scalar subquery takes the grade-then-recency WINNER (ORDER BY … LIMIT 1) — a bare
+    # subquery assumes ≤1 row per (agent, property) and 500s the whole digest the moment any Agent
+    # property lands from two sources.
     rows = await actions.pool.fetch(
         "SELECT o.canonical AS agent, "
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='project') AS project, "
+        "   AND a.name='project' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1"
+        " ) AS project, "
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='source_model') AS model, "
+        "   AND a.name='source_model' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1"
+        " ) AS model, "
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='identity_resolved') AS resolved, "
+        "   AND a.name='identity_resolved' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1"
+        " ) AS resolved, "
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='model_swapped') AS swapped "
+        "   AND a.name='model_swapped' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1"
+        " ) AS swapped "
         "FROM objects o WHERE o.type='Agent' ORDER BY project NULLS FIRST, o.canonical")
     return [
         {"agent": r["agent"], "project": r["project"], "model": r["model"],
@@ -68,13 +75,16 @@ async def _laundering(actions: Actions, since: datetime) -> list[dict[str, Any]]
     """credence_props run LIVE over objects >1 agent co-asserted in the window — surfacing any
     relay that carried a fact above its origin grade. Empty while co-assertion is nascent; this is
     the wire that makes credence bite as the fleet grows."""
+    # candidates = objects an agent touched IN the window whose (object,name) ALSO carries another
+    # agent source ALL-TIME. The archetypal laundering re-reports an OLDER origin (origin before the
+    # window, relay inside it) — requiring both sources inside the window would miss exactly that.
     oids = [
         r["object_id"] for r in await actions.pool.fetch(
-            "SELECT object_id FROM ("
-            "  SELECT object_id, name FROM current_assertions "
-            "  WHERE source_id LIKE 'agent:%' AND observed_at >= $1 "
-            "  GROUP BY object_id, name HAVING count(DISTINCT source_id) > 1) t "
-            "GROUP BY object_id", since)
+            "SELECT DISTINCT ca.object_id FROM current_assertions ca "
+            "WHERE ca.source_id LIKE 'agent:%' AND ca.observed_at >= $1 "
+            "  AND EXISTS (SELECT 1 FROM current_assertions c2 "
+            "    WHERE c2.object_id = ca.object_id AND c2.name = ca.name "
+            "      AND c2.source_id LIKE 'agent:%' AND c2.source_id <> ca.source_id)", since)
     ]
     if not oids:
         return []

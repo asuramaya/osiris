@@ -204,3 +204,16 @@ def test_unresolved_identities_do_not_conflate(tmp_path: Path) -> None:
     c = resolve_identity(cwd="/w/x", job_dir="/weird/box-42", root=tmp_path)
     d = resolve_identity(cwd="/w/x", job_dir="/weird/box-99", root=tmp_path)
     assert c.agent_id != d.agent_id and c.agent_id.startswith("agent:j")
+
+
+def test_cwd_located_identity_is_not_marked_resolved(tmp_path: Path) -> None:
+    """#HIGH (audit): without a session/job_dir ANCHOR, resolve_identity GUESSES the session from
+    the hottest cwd transcript — which concurrent same-project sessions would all grab, silently
+    merging. Mark it unresolved so the fleet digest SURFACES the ambiguity, not a false green."""
+    proj = tmp_path / "-home-x-code-osiris"
+    proj.mkdir()
+    _transcript(proj, "claude-opus-4-8")
+    ident = resolve_identity(cwd="/home/x/code/osiris", root=tmp_path)  # no anchor → cwd guess
+    assert ident.model == "claude-opus-4-8"  # still reads a best-guess model (stays functional)
+    assert ident.project == "osiris"
+    assert ident.resolved is False           # but flagged NOT confident — the digest can see it

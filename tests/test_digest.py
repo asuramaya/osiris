@@ -63,4 +63,4 @@ async def test_fleet_digest_surfaces_the_four_streams(actions: Actions) -> None:
     # laundering: the parent relayed the child's observation inflated → flagged, origin wins
     assert dg["summary"]["laundering"] == 1
     assert "agent:aaa" in dg["laundering"][0]["laundering_sources"]
-    assert dg["laundering"][0]["value"] == "observed"
+    assert dg["laundering"][0]["value"] == "observed"  # origin won, relay clamped

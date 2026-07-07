@@ -80,6 +80,7 @@ def resolve_identity(
     the transcript search dir (tests inject a tmp root; production reads ~/.claude/projects)."""
     project = Path(cwd).name if cwd else None
     sid = session or _job_id(job_dir)
+    confident = sid is not None  # a session/job_dir ANCHOR; the cwd-locate below is only a GUESS
     declared = model  # the agent's SELF-REPORT of its model (may be None) — the WEAK signal
     observed: str | None = None
     method: str | None = None
@@ -103,7 +104,10 @@ def resolve_identity(
         model = declared
         method = "self_report" if declared else None
         divergent = False
-    resolved = sid is not None
+    # A cwd-located id is the HOTTEST transcript's — concurrent same-project sessions would all
+    # grab it and silently MERGE, so only a session/job_dir anchor counts as resolved. Marking the
+    # guess unresolved makes the fleet-digest health signal SEE it instead of showing false-green.
+    resolved = confident
     if sid is None:
         # Last resort: NEVER collapse distinct sessions into one bucket — that is an accidental
         # identity merge (forbidden for Person; lossy to undo). Anchor on whatever unique signal

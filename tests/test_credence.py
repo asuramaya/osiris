@@ -30,7 +30,7 @@ def test_no_ancestry_reduces_to_grade_then_recency() -> None:
     ]
     (w,) = resolve_credence(claims, parent_of={}, looked={})
     assert w.value == "x-hi" and w.source_id == "agent:a"
-    assert w.clamped is False and w.laundering == ()
+    assert w.laundering == ()
 
 
 def test_relay_ancestor_is_clamped_to_origin() -> None:
@@ -43,7 +43,7 @@ def test_relay_ancestor_is_clamped_to_origin() -> None:
     (w,) = resolve_credence(claims, parent_of={"agent:b": "agent:a"}, looked={})
     assert w.value == "observed" and w.source_id == "agent:b"
     assert w.confidence == 0.6
-    assert w.clamped is True and "agent:a" in w.laundering
+    assert "agent:a" in w.laundering
 
 
 def test_verification_rebuttal_survives_the_clamp() -> None:
@@ -57,7 +57,7 @@ def test_verification_rebuttal_survives_the_clamp() -> None:
         claims, parent_of={"agent:b": "agent:a"}, looked={"agent:a": True})
     assert w.value == "verified" and w.source_id == "agent:a"
     assert w.confidence == 0.9
-    assert w.clamped is False and w.laundering == ()
+    assert w.laundering == ()
 
 
 def test_independent_corroboration_is_not_clamped() -> None:
@@ -69,7 +69,7 @@ def test_independent_corroboration_is_not_clamped() -> None:
     ]
     parent_of = {"agent:a": "agent:root", "agent:b": "agent:root"}
     (w,) = resolve_credence(claims, parent_of, looked={})
-    assert w.clamped is False and w.laundering == ()
+    assert w.laundering == ()
 
 
 def test_deepest_first_prevents_inflation_leak() -> None:
@@ -91,7 +91,7 @@ def test_deepest_first_prevents_inflation_leak() -> None:
 def test_single_source_is_identity() -> None:
     claims = [_c("o1", "s", "v", "agent:a", 0.6)]
     (w,) = resolve_credence(claims, parent_of={"agent:a": "agent:x"}, looked={})
-    assert w.value == "v" and w.clamped is False and w.laundering == ()
+    assert w.value == "v" and w.laundering == ()
 
 
 async def test_credence_props_clamps_a_relay_over_the_graph(actions: Actions) -> None:
@@ -110,5 +110,4 @@ async def test_credence_props_clamps_a_relay_over_the_graph(actions: Actions) ->
                                   evidence_class=EvidenceClass.DIRECT_OBSERVATION.value)
     winners = {w.name: w for w in await credence_props(actions, [o])}
     assert winners["status"].value == "B-observed"      # the origin, not the louder relay
-    assert winners["status"].clamped is True
-    assert "agent:aaa" in winners["status"].laundering
+    assert "agent:aaa" in winners["status"].laundering  # the relay flagged (non-empty = clamp)

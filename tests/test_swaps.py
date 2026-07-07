@@ -25,7 +25,16 @@ def test_within_session_transition_is_a_swap() -> None:
     assert v.from_model == FABLE and v.to_model == OPUS  # origin → CURRENT (observed)
     banner = swap_banner(v)
     assert banner is not None
-    assert "warm model swap" in banner and FABLE in banner and f"currently {OPUS}" in banner
+    assert "warm model swap" in banner and f"currently {OPUS}" in banner
+    assert f"NOT your intended {FABLE}" in banner  # compound case still names the intent
+
+
+def test_within_session_back_on_intent_names_the_intent() -> None:
+    # oscillated but currently BACK on the intended model — the banner says so, not "NOT intended"
+    v = classify_swap([FABLE, OPUS], FABLE, expected=FABLE)
+    assert v.within_session is True and v.diverged_from_intent is False
+    banner = swap_banner(v)
+    assert banner is not None and f"back on your intended {FABLE}" in banner
 
 
 def test_oscillation_is_labelled_by_current_not_last_seen() -> None:

@@ -67,7 +67,9 @@ class CredenceWinner:
     value: Any
     confidence: float
     source_id: str
-    clamped: bool
+    # sources flagged for carrying a fact ABOVE its origin grade (laundering). The winner is never
+    # itself a clamped source (proven by fuzz), so "was the winner clamped" would always be False —
+    # the meaningful group signal is simply `bool(laundering)`.
     laundering: tuple[str, ...]
 
 
@@ -136,8 +138,7 @@ def resolve_credence(
         )
         winners.append(CredenceWinner(
             object_id=oid, name=name, value=claim.value, confidence=eff,
-            source_id=claim.source_id, clamped=any(s[1] for s in scored),
-            laundering=tuple(laundering),
+            source_id=claim.source_id, laundering=tuple(laundering),
         ))
     return winners
 

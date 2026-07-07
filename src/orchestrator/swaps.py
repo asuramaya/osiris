@@ -77,12 +77,18 @@ def swap_marker(v: SwapVerdict) -> str:
 
 def swap_banner(v: SwapVerdict) -> str | None:
     """A one-line confession prompt for mount()/orient(), or None when nothing swapped. The
-    running agent can't feel the swap; this is the graph telling it what its own prompt hides."""
+    running agent can't feel the swap; this is the graph telling it what its own prompt hides. A
+    within-session swap ALSO names the intent when the current model diverges from it — otherwise
+    the compound case ('flipped mid-run AND currently off-intent') hides that you're not running
+    what the operator chose."""
     if not v.swapped:
         return None
+    cur = v.observed or "unknown"
     if v.within_session:
+        intent = (f" — NOT your intended {v.expected}" if v.diverged_from_intent
+                  else f" (back on your intended {v.expected})")
         return (f"⚠ warm model swap THIS session — seen [{', '.join(v.history)}], currently "
-                f"{v.observed}. The harness swapped mid-run (a danger-sense tripwire); confess it "
-                "to the operator.")
-    return (f"⚠ model divergence: intended {v.expected}, running {v.observed} — a silent demotion "
+                f"{cur}{intent}. The harness swapped mid-run (a danger-sense tripwire); confess "
+                "it to the operator.")
+    return (f"⚠ model divergence: intended {v.expected}, running {cur} — a silent demotion "
             "(the harness swapped before this session's first turn). Confess it to the operator.")
