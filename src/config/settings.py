@@ -92,6 +92,12 @@ class Settings(BaseSettings):
     osiris_trigger_enabled: bool = False
     osiris_trigger_rate_cap: int = 5
     osiris_trigger_window_secs: int = 3600
+    # Wake-GRACE (the double-wake guard, obligation c45bb2e3): the cron ticks (60s) faster than a
+    # woken agent can spawn, mount, and lease its inbox (~100s+). In that gap the mail is still
+    # deliverable, so a naive re-tick wakes a SECOND agent for the SAME message. A project woken
+    # within osiris_trigger_grace_secs is skipped as 'wake-grace' (recently woken, still
+    # processing) — distinct from 'rate-capped' (the loop bound); grace/lease expiry re-arm it.
+    osiris_trigger_grace_secs: int = 300
     # Mail delivery LEASE (at-least-once, decision 56f6a0d6): inbox() leases a message rather
     # than consuming it; if no ack (or reply) settles it within this window, it REDELIVERS —
     # a response severed by a server bounce costs a duplicate, never a silent loss.

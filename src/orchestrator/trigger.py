@@ -17,6 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import tempfile
+from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -26,6 +29,13 @@ from src.config.settings import Settings, get_settings
 from src.orchestrator.mailbox import OPERATOR_ADDR
 
 _log = logging.getLogger("osiris.trigger")
+
+# Where a spawned wake's synthesized CLAUDE_JOB_DIR lives. A triggered `claude -p` inherits no
+# job dir from any harness, so the woken agent has no durable identity anchor and mounts by
+# GUESSING off the box's hottest transcript (a co-tenant's). We hand it one: `<base>/jobs/wake-<id>`
+# — the literal 'jobs' segment is what _job_id parses, so mount(job_dir=$CLAUDE_JOB_DIR) resolves a
+# stable, distinct agent:wake-<id> instead. Under the system temp: ephemeral, no cleanup owed.
+_WAKE_JOB_ROOT = Path(tempfile.gettempdir()) / "osiris-wakes"
 
 _WAKE_PROMPT = (
     'You have unread Osiris mail. Call mount(cwd="{repo}", job_dir=$CLAUDE_JOB_DIR), then '
@@ -39,13 +49,20 @@ _WAKE_PROMPT = (
 )
 
 
-def should_wake(*, enabled: bool, recent_wakes: int, rate_cap: int) -> str | None:
+def should_wake(
+    *, enabled: bool, recent_wakes: int, rate_cap: int, within_grace: bool = False
+) -> str | None:
     """The bounded decision (pure). Returns a SKIP REASON, or None to WAKE. The kill switch and
-    the per-project rate cap are the whole safety story — a ping-pong hits the cap and halts."""
+    the per-project rate cap are the safety — a ping-pong hits the cap and halts. `within_grace`
+    is the double-wake guard: a project woken moments ago is still spawning/mounting (~100s+),
+    so its mail only LOOKS unhandled — skip as 'wake-grace', distinct from the 'rate-capped' bound
+    (the cap wins when both apply — the harder signal). grace expiry re-arms the wake."""
     if not enabled:
         return "disabled"
     if recent_wakes >= rate_cap:
         return "rate-capped"
+    if within_grace:
+        return "wake-grace"
     return None
 
 
@@ -70,6 +87,27 @@ async def _recent_wakes(pool: asyncpg.Pool, project: str, window_secs: int) -> i
         "AND woke_at > now() - make_interval(secs => $2)", project, window_secs)
 
 
+async def _woken_within(pool: asyncpg.Pool, project: str, grace_secs: int) -> bool:
+    """True if this project was woken within the last `grace_secs` — a wake still in flight (the
+    agent is spawning/mounting/leasing, ~100s+). grace_secs<=0 disables the grace (only the rate
+    cap bounds then). Reads the same ledger as the cap, on a shorter, per-message-latency window."""
+    if grace_secs <= 0:
+        return False
+    return bool(await pool.fetchval(
+        "SELECT 1 FROM agent_wakes WHERE to_project=$1 "
+        "AND woke_at > now() - make_interval(secs => $2) LIMIT 1", project, grace_secs))
+
+
+def _wake_job_dir(wake_id: int) -> str:
+    """A durable per-wake CLAUDE_JOB_DIR (a real created dir). The token 'wake-<row id>' is stable
+    and unique — derived from the ledger row just inserted, never Date-random, so the woken agent
+    resolves to the same agent:wake-<id> across a re-attach and tests stay deterministic. The
+    literal 'jobs' segment is exactly what _job_id parses to that token."""
+    d = _WAKE_JOB_ROOT / "jobs" / f"wake-{wake_id}"
+    d.mkdir(parents=True, exist_ok=True)
+    return str(d)
+
+
 async def wake_status(pool: asyncpg.Pool, project: str, st: Settings) -> str:
     """What the trigger would do for this project right now — the sender-visible signal
     (send() surfaces it so 'busy listener' is distinguishable from 'feature off'). The
@@ -79,7 +117,8 @@ async def wake_status(pool: asyncpg.Pool, project: str, st: Settings) -> str:
     reason = should_wake(
         enabled=st.osiris_trigger_enabled,
         recent_wakes=await _recent_wakes(pool, project, st.osiris_trigger_window_secs),
-        rate_cap=st.osiris_trigger_rate_cap)
+        rate_cap=st.osiris_trigger_rate_cap,
+        within_grace=await _woken_within(pool, project, st.osiris_trigger_grace_secs))
     return reason if reason is not None else "armed"
 
 
@@ -94,14 +133,18 @@ async def _repo_path(pool: asyncpg.Pool, project: str) -> str | None:
         "ORDER BY cw.observed_at DESC LIMIT 1", project)
 
 
-async def _spawn_claude(repo: str, prompt: str) -> None:
+async def _spawn_claude(repo: str, prompt: str, job_dir: str) -> None:
     """Wake an agent: a detached `claude -p` in the repo (the same CLI the extractor uses). The
-    worker rings the bell; Claude decides. Fire-and-forget — the woken agent runs on its own."""
+    worker rings the bell; Claude decides. The child inherits our environment PLUS a synthesized
+    CLAUDE_JOB_DIR — the durable identity anchor a triggered `claude -p` gets from no harness — so
+    the woken agent mounts as a distinct agent:wake-<id>, not a guess off a co-tenant's transcript.
+    Fire-and-forget — the woken agent runs on its own."""
+    env = {**os.environ, "CLAUDE_JOB_DIR": job_dir}
     proc = await asyncio.create_subprocess_exec(
-        "claude", "-p", prompt, cwd=repo,
+        "claude", "-p", prompt, cwd=repo, env=env,
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
     )
-    _log.info("trigger: woke an agent in %s (pid %s)", repo, proc.pid)
+    _log.info("trigger: woke an agent in %s (pid %s, job_dir %s)", repo, proc.pid, job_dir)
 
 
 async def trigger_mail_tick(
@@ -115,17 +158,19 @@ async def trigger_mail_tick(
     report = {"woke": 0, "skipped": 0}
     for project, msg_id, sender in await _projects_with_unread(pool, st.osiris_mail_lease_secs):
         recent = await _recent_wakes(pool, project, st.osiris_trigger_window_secs)
+        within_grace = await _woken_within(pool, project, st.osiris_trigger_grace_secs)
         if should_wake(enabled=st.osiris_trigger_enabled, recent_wakes=recent,
-                       rate_cap=st.osiris_trigger_rate_cap) is not None:
+                       rate_cap=st.osiris_trigger_rate_cap,
+                       within_grace=within_grace) is not None:
             report["skipped"] += 1
             continue
         repo = await _repo_path(pool, project)
         if repo is None:  # no known repo → can't spawn; the mail stays pull-only
             report["skipped"] += 1
             continue
-        await pool.execute(
-            "INSERT INTO agent_wakes (to_project, from_agent, message_id) VALUES ($1,$2,$3)",
-            project, sender, msg_id)
-        await spawn(repo, _WAKE_PROMPT.format(repo=repo))
+        wake_id = await pool.fetchval(
+            "INSERT INTO agent_wakes (to_project, from_agent, message_id) VALUES ($1,$2,$3) "
+            "RETURNING id", project, sender, msg_id)
+        await spawn(repo, _WAKE_PROMPT.format(repo=repo), _wake_job_dir(wake_id))
         report["woke"] += 1
     return report
