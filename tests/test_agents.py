@@ -189,3 +189,18 @@ async def test_register_stamps_intent_and_the_swap(actions: Actions, tmp_path: P
     assert row["intent"] == "claude-fable-5"
     assert row["swapped"] == "claude-fable-5 → claude-opus-4-8"
     assert row["swap_ec"] == EvidenceClass.DIRECT_OBSERVATION.value
+
+
+def test_unresolved_identities_do_not_conflate(tmp_path: Path) -> None:
+    """Hardening: two agents that can't resolve a session id must NOT collapse into one shared
+    agent:unknown sink (an accidental identity merge). Distinct anchors → distinct ids."""
+    # no job_dir, no findable transcript → project-scoped fallback, distinct per project
+    a = resolve_identity(cwd="/w/heinrich", root=tmp_path)
+    b = resolve_identity(cwd="/w/decepticons", root=tmp_path)
+    assert a.agent_id == "agent:unknown-heinrich" and b.agent_id == "agent:unknown-decepticons"
+    assert a.agent_id != b.agent_id                        # never the same sink
+    assert a.resolved is False and b.resolved is False
+    # a job_dir is a per-session anchor even when its id won't parse (no 'jobs' path segment)
+    c = resolve_identity(cwd="/w/x", job_dir="/weird/box-42", root=tmp_path)
+    d = resolve_identity(cwd="/w/x", job_dir="/weird/box-99", root=tmp_path)
+    assert c.agent_id != d.agent_id and c.agent_id.startswith("agent:j")

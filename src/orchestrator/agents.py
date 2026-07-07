@@ -19,6 +19,7 @@ instance, which model, decided what — and (b) keeps the miner's ownership boun
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -59,6 +60,10 @@ class AgentIdentity:
     # the distinct models across this session's transcript, first-seen order — the swap history
     # (>1 = a within-session demotion). Feeds the swap-detector (ruling f2ae6346).
     model_history: tuple[str, ...] = ()
+    # False when identity fell back to a best-effort id (no session/job-id/transcript anchor). The
+    # fallback is now DISTINCT per session — never the old shared `agent:unknown` sink — so distinct
+    # actors can't merge; the flag lets the fleet digest surface an unresolved onboarding.
+    resolved: bool = True
 
 
 def resolve_identity(
@@ -98,10 +103,22 @@ def resolve_identity(
         model = declared
         method = "self_report" if declared else None
         divergent = False
-    sid = sid or "unknown"
+    resolved = sid is not None
+    if sid is None:
+        # Last resort: NEVER collapse distinct sessions into one bucket — that is an accidental
+        # identity merge (forbidden for Person; lossy to undo). Anchor on whatever unique signal
+        # survives: the job_dir string is per-session even when its id won't parse; else project-
+        # scope so cross-repo actors can't merge. The old shared `agent:unknown` sink was the
+        # conflation bug the fable-fight surfaced (a demotion scrambles session-id resolution).
+        if job_dir:
+            sid = "j" + hashlib.sha1(job_dir.encode(), usedforsecurity=False).hexdigest()[:8]
+        elif project:
+            sid = f"unknown-{project}"
+        else:
+            sid = "unknown"
     return AgentIdentity(agent_id=f"agent:{sid}", session=sid, project=project, model=model,
                          cwd=cwd, model_method=method, model_declared=declared,
-                         model_divergent=divergent, model_history=tuple(history))
+                         model_divergent=divergent, model_history=tuple(history), resolved=resolved)
 
 
 async def _link_once(
@@ -141,6 +158,8 @@ async def register_agent(
     label = f"{identity.model or 'claude'} in {identity.project or '?'}"
     await actions.assert_property(a, "name", label, src, now, _CONF, evidence_class=_EC)
     await actions.assert_property(a, "session", identity.session, src, now, _CONF,
+                                  evidence_class=_EC)
+    await actions.assert_property(a, "identity_resolved", identity.resolved, src, now, _CONF,
                                   evidence_class=_EC)
     if identity.model:
         ec = _MODEL_EC.get(identity.model_method or "", EvidenceClass.CO_OCCURRENCE)
