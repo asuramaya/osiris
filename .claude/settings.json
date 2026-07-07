@@ -1,0 +1,7 @@
+{
+  "statusLine": {
+    "type": "command",
+    "command": "/home/asuramaya/code/osiris/.venv/bin/python /home/asuramaya/code/osiris/scripts/osiris_statusline.py",
+    "padding": 0
+  }
+}
