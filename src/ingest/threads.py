@@ -140,6 +140,11 @@ async def resolve_threads(
     # did: a `session` thread got a `git-memory` 'resolved' off two generic shared tokens,
     # which then made reconcile_mined treat it as mined and archive it). The miner's reach
     # stops at the source boundary.
+    #
+    # "Open" is the WINNING status (winning_props, migration 0015: grade DESC, then recency),
+    # not a bare EXISTS(status='open'). A thread another source already RESOLVED at a higher
+    # grade, still carrying this miner's stale DERIVED 'open', must read as resolved — the
+    # existence test would re-process it and re-attribute a spurious resolved_in.
     open_threads = await pool.fetch(
         "SELECT o.id, "
         " (SELECT value #>> '{}' FROM current_assertions a "
@@ -148,9 +153,9 @@ async def resolve_threads(
         "  ON l.to_id=a.object_id "
         "  WHERE l.from_id=o.id AND l.type='noted_in' AND a.name='authored_date' "
         "  LIMIT 1) AS origin_date "
-        "FROM objects o WHERE o.type='Thread' AND EXISTS ("
-        "  SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
-        "  AND s.name='status' AND s.value #>> '{}' = 'open') "
+        "FROM objects o WHERE o.type='Thread' "
+        "AND (SELECT value #>> '{}' FROM winning_props(ARRAY[o.id]::uuid[]) "
+        "     WHERE name='status') = 'open' "
         "AND EXISTS (SELECT 1 FROM assertions own WHERE own.object_id=o.id "
         "  AND own.name='summary' AND own.source_id=$1)",
         source_id,

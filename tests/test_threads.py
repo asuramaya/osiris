@@ -6,6 +6,8 @@ from typing import Any
 
 from src.actions.core import Actions
 from src.ingest.threads import extract_threads, mine_threads, resolve_threads
+from src.parsers.base import EvidenceClass
+from src.parsers.evidence import confidence_for
 
 NOW = datetime(2026, 6, 28, tzinfo=UTC)
 
@@ -103,3 +105,36 @@ async def test_resolve_threads_self_heals_addressed_threads(actions: Actions) ->
     # idempotent: a second pass closes nothing new
     again = await resolve_threads(actions)
     assert again["resolved"] == 0
+
+
+async def test_resolve_threads_skips_a_thread_with_a_resolved_winner(actions: Actions) -> None:
+    """The winning-status fix: a thread another source already RESOLVED at a higher grade,
+    still carrying the miner's stale DERIVED 'open', must NOT read as open — the self-heal
+    leaves it alone instead of re-attributing a spurious resolved_in. winning_props (grade
+    DESC, then recency) is the single winner definition; a bare EXISTS(status='open') would
+    re-process it off the buried assertion (the stuck-open-threads bug, from the other side)."""
+    p = actions.pool
+    # a git-mined thread: summary + status='open', both DERIVED, owned by git-memory
+    t = await actions.create_or_find_object("Thread", "thread:winner", "git-memory")
+    await actions.assert_property(t, "summary", "wire the generic renderer for compositions",
+                                  "git-memory", NOW, confidence_for(EvidenceClass.DERIVED),
+                                  evidence_class=EvidenceClass.DERIVED.value)
+    await actions.assert_property(t, "status", "open", "git-memory", NOW,
+                                  confidence_for(EvidenceClass.DERIVED),
+                                  evidence_class=EvidenceClass.DERIVED.value)
+    # a session later RESOLVED it (SELF_DECLARED) — the grade-winning status is 'resolved',
+    # but the miner's own 'open' is still its latest assertion (different source, coexists)
+    await actions.assert_property(t, "status", "resolved", "agent:someone",
+                                  datetime(2026, 6, 29, tzinfo=UTC),
+                                  confidence_for(EvidenceClass.SELF_DECLARED),
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    # a later commit that WOULD match on >=2 distinctive tokens (generic, renderer)
+    await _commit(actions, "commit:closer", "2026-06-30T00:00:00+00:00",
+                  summary="implement the generic renderer", scope="renderer")
+
+    res = await resolve_threads(actions)
+    assert res["resolved"] == 0            # the resolved winner is invisible to the self-heal
+    resolved_in = await p.fetchval(        # and no spurious resolved_in was attributed
+        "SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='resolved_in'", t)
+    assert resolved_in is None

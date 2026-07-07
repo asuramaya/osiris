@@ -24,6 +24,8 @@ from src.ingest.sessions import (
 )
 from src.orchestrator.capture import open_thread, record_decision
 from src.orchestrator.compositions import run_composition, seed_default_compositions
+from src.parsers.base import EvidenceClass
+from src.parsers.evidence import confidence_for
 
 _CWD = "/home/someone/code/testrepo"
 
@@ -317,6 +319,36 @@ async def test_same_excerpt_open_and_resolve_does_not_close(actions: Actions) ->
     # the NEXT excerpt showing completion may close it
     later = SessionYield(threads_resolved=["ingested the design essays as canon nodes"])
     assert (await emit_yield(actions, later, repo=None))["resolved"] == 1
+
+
+async def test_resolve_own_threads_skips_a_thread_with_a_resolved_winner(
+    actions: Actions,
+) -> None:
+    """The winning-status fix (mirror of the git miner): a thread already resolved at a higher
+    grade, still carrying the session-miner's stale DERIVED 'open', must read as resolved. A
+    bare EXISTS(status='open') would let the miner re-resolve an already-closed thread off the
+    buried assertion; winning_props (grade DESC, then recency) is the single winner definition."""
+    now = datetime.now(UTC)
+    summary = "prune the internal-URL spread in url_fetch to profile-shaped only"
+    # the session-miner opened this thread (summary + status='open', DERIVED, its own source)
+    t = await actions.create_or_find_object("Thread", "thread:sm-winner", "session-miner")
+    await actions.assert_property(t, "summary", summary, "session-miner", now,
+                                  confidence_for(EvidenceClass.DERIVED),
+                                  evidence_class=EvidenceClass.DERIVED.value)
+    await actions.assert_property(t, "status", "open", "session-miner", now,
+                                  confidence_for(EvidenceClass.DERIVED),
+                                  evidence_class=EvidenceClass.DERIVED.value)
+    # a session resolved it at a higher grade, asserting only status — so the miner still
+    # solely owns the summary; the grade-winner is 'resolved', the miner's 'open' is buried
+    await actions.assert_property(t, "status", "resolved", "agent:someone", now,
+                                  confidence_for(EvidenceClass.SELF_DECLARED),
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+
+    # the miner senses a later excerpt reporting the same work done — it must NOT re-resolve
+    done = SessionYield(threads_resolved=[
+        "pruned the internal-URL spread in url_fetch to profile-shaped only"])
+    counts = await emit_yield(actions, done, repo=None)
+    assert counts["resolved"] == 0
 
 
 def test_extractor_instrument_transcripts_are_excluded(tmp_path: Path) -> None:

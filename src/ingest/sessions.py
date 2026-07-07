@@ -607,12 +607,15 @@ async def _resolve_own_threads(
     `exclude` = threads opened in THIS SAME emit: a thread must survive its own excerpt
     before it can be resolved (live run: the model opened a *planned* task and resolved
     it in the same breath — a plan discussed is not work completed)."""
+    # "Open" is the WINNING status (winning_props, migration 0015: grade DESC, then recency),
+    # not a bare EXISTS(status='open') — a thread already resolved at a higher grade, still
+    # carrying this miner's stale DERIVED 'open', must read as resolved and be left alone.
     own = await actions.pool.fetch(
         "SELECT o.id, (SELECT value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='summary') AS summary "
         "FROM objects o WHERE o.type='Thread' AND o.status='active' "
-        "AND EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
-        "  AND s.name='status' AND s.value #>> '{}' = 'open') "
+        "AND (SELECT value #>> '{}' FROM winning_props(ARRAY[o.id]::uuid[]) "
+        "     WHERE name='status') = 'open' "
         "AND NOT EXISTS (SELECT 1 FROM assertions f WHERE f.object_id=o.id AND f.name='summary' "
         "  AND (f.source_id <> $1 OR f.evidence_class = 'self_declared'))",
         writer,
