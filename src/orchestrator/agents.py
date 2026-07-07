@@ -32,6 +32,7 @@ from src.ingest.sessions import (
     latest_model,
     locate_transcript_by_cwd,
 )
+from src.orchestrator.swaps import classify_swap
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -55,6 +56,9 @@ class AgentIdentity:
     # and whether it DISAGREES with the harness observation — a self-report that lies is a flag.
     model_declared: str | None = None
     model_divergent: bool = False
+    # the distinct models across this session's transcript, first-seen order — the swap history
+    # (>1 = a within-session demotion). Feeds the swap-detector (ruling f2ae6346).
+    model_history: tuple[str, ...] = ()
 
 
 def resolve_identity(
@@ -74,8 +78,9 @@ def resolve_identity(
     declared = model  # the agent's SELF-REPORT of its model (may be None) — the WEAK signal
     observed: str | None = None
     method: str | None = None
+    history: list[str] = []  # the transcript's model sequence — the swap history (job_dir path)
     if job_dir:
-        observed, _, _ = current_model(root=root, job_dir=job_dir)  # the harness's own record
+        observed, history, _ = current_model(root=root, job_dir=job_dir)  # the harness's record
         if observed is not None:
             method = "job_dir"
     if sid is None and cwd:  # no job dir → find the session (and, if unseen, the model) by cwd
@@ -96,7 +101,7 @@ def resolve_identity(
     sid = sid or "unknown"
     return AgentIdentity(agent_id=f"agent:{sid}", session=sid, project=project, model=model,
                          cwd=cwd, model_method=method, model_declared=declared,
-                         model_divergent=divergent)
+                         model_divergent=divergent, model_history=tuple(history))
 
 
 async def _link_once(
@@ -123,11 +128,13 @@ _MODEL_EC = {
 
 
 async def register_agent(
-    actions: Actions, identity: AgentIdentity, *, actor: str
+    actions: Actions, identity: AgentIdentity, *, actor: str, expected_model: str | None = None
 ) -> uuid.UUID:
     """Mint (idempotently) the Agent object + its org-chart links. The agent attributes
     its OWN registration (`source = agent:<session>`), SELF_DECLARED. Re-mount is a no-op
-    (find-or-create + the kernel's byte-dup assertion skip absorb it)."""
+    (find-or-create + the kernel's byte-dup assertion skip absorb it). `expected_model` (the
+    operator's standing choice) turns on the swap-detector: the intent is stamped, and a silent
+    demotion away from it is recorded as a first-class OBSERVED event on the Agent."""
     now = datetime.now(UTC)
     src = identity.agent_id
     a = await actions.create_or_find_object("Agent", identity.agent_id, src)
@@ -145,6 +152,18 @@ async def register_agent(
         sr = EvidenceClass.CO_OCCURRENCE
         await actions.assert_property(a, "source_model_declared", identity.model_declared, src,
                                       now, confidence_for(sr), evidence_class=sr.value)
+    if expected_model:
+        # the swap-detector (ruling f2ae6346): stamp the INTENT, and when the observed model
+        # diverges from it — the fable harness's silent danger-demotion — record the swap as a
+        # first-class OBSERVED event (not the agent's self-report; it can't feel its own swap).
+        verdict = classify_swap(identity.model_history, identity.model, expected=expected_model)
+        await actions.assert_property(a, "model_intent", expected_model, src, now, _CONF,
+                                      evidence_class=_EC)
+        if verdict.swapped:
+            do = EvidenceClass.DIRECT_OBSERVATION
+            marker = f"{verdict.from_model} → {verdict.to_model}"
+            await actions.assert_property(a, "model_swapped", marker, src, now,
+                                          confidence_for(do), evidence_class=do.value)
     if identity.project:
         await actions.assert_property(a, "project", identity.project, src, now, _CONF,
                                       evidence_class=_EC)

@@ -191,6 +191,29 @@ def latest_model(lines: list[str]) -> str | None:
     return models[-1] if models else None
 
 
+def swap_at(lines: list[str]) -> str | None:
+    """The timestamp of the FIRST turn on a new model — WHEN the harness swapped mid-session
+    (the danger-sense tripwire's moment). None if there was no transition, or the transcript
+    carries no timestamp on that turn."""
+    first: str | None = None
+    for raw in lines:
+        try:
+            d = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if not isinstance(d, dict):
+            continue
+        m = _model_of(d)
+        if not m:
+            continue
+        if first is None:
+            first = m
+        elif m != first:
+            ts = d.get("timestamp")
+            return ts if isinstance(ts, str) else None
+    return None
+
+
 def _tail_lines(path: Path, nbytes: int = 512 * 1024) -> list[str]:
     """Complete lines from the last `nbytes` of a file (drops the partial leading line).
     A running session's transcript is large; the current model lives at its tail."""
@@ -486,17 +509,20 @@ async def _emit_thread(
 
 
 async def _record_swap(
-    actions: Actions, path: Path, models: list[str], repo: str | None
+    actions: Actions, path: Path, models: list[str], repo: str | None,
+    lines: list[str] | None = None,
 ) -> int:
     """A model CHANGED inside one session — the warm rug-pull the running agent can't feel
     (its system prompt kept asserting the old identity). The sensor reports what the agent
     can't: an obligation naming the session and the transition, idempotent per (session,
     transition) so a re-mine doesn't re-flag. Returns 1 if flagged, 0 if the boundary
     skipped it. This is the external detector the cold-boot confession can never be."""
+    when = swap_at(lines) if lines else None  # the chunk the caller already read holds the flip
+    at = f" First observed at {when}." if when else ""
     summary = (
         f"warm model swap in session {path.stem[:8]}: {' → '.join(models)} — the safety "
         "router changed the model mid-session; verify which model authored the affected "
-        "decisions/threads (source_model is now stamped on each). Identity rug-pull."
+        f"decisions/threads (source_model is now stamped on each). Identity rug-pull.{at}"
     )
     tid = await _emit_thread(
         actions, summary, repo=repo, observed=datetime.now(UTC),
@@ -728,7 +754,7 @@ async def sense_sessions_tick(
                 source_model=chunk_models[-1] if chunk_models else None,
             )
             if len(chunk_models) > 1:  # a warm rug-pull inside one session — flag it
-                report["swaps"] += await _record_swap(actions, path, chunk_models, repo)
+                report["swaps"] += await _record_swap(actions, path, chunk_models, repo, lines)
             offset = end
             await set_cursor(pool, key, str(offset))  # after emit: crash-safe
             report["chunks"] += 1

@@ -45,6 +45,7 @@ from src.orchestrator.console import set_console as _set_console
 from src.orchestrator.dossier import entity_dossier
 from src.orchestrator.mailbox import read_inbox, send_message, unread_count
 from src.orchestrator.sources import as_dicts, suggest
+from src.orchestrator.swaps import classify_swap, swap_banner
 
 mcp = FastMCP(
     "osiris",
@@ -457,16 +458,23 @@ async def mount(
     decision/thread you record to `agent:<you>` instead of the shared `session` bucket — so
     the graph knows WHICH instance, on WHICH model, decided what. Then call orient()."""
     pool = await _pool_get()
+    settings = get_settings()
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model)
-    await register_agent(Actions(pool), ident, actor=get_settings().osiris_actor)
+    await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
+                         expected_model=settings.osiris_expected_model)
     key = _conn_key(ctx)
     if key is not None:
         _agents[key] = ident
     unread = await unread_count(pool, ident.project) if ident.project else 0
-    return {"agent": ident.agent_id, "project": ident.project or "?",
-            "model": ident.model or "unknown",
-            "mail": f"{unread} unread — call inbox()" if unread else "none",
-            "note": "linked — writes now attributed to you; call orient() next"}
+    banner = swap_banner(classify_swap(
+        ident.model_history, ident.model, expected=settings.osiris_expected_model))
+    out = {"agent": ident.agent_id, "project": ident.project or "?",
+           "model": ident.model or "unknown",
+           "mail": f"{unread} unread — call inbox()" if unread else "none",
+           "note": "linked — writes now attributed to you; call orient() next"}
+    if banner:  # the graph confesses the swap the agent's own prompt hides (ruling f2ae6346)
+        out["swap"] = banner
+    return out
 
 
 async def _project_briefing(pool: asyncpg.Pool, project: str) -> dict[str, Any] | None:
@@ -505,6 +513,8 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
     who = ident.agent_id if ident else "session (un-mounted — call mount(cwd) first)"
     unread = await unread_count(pool, proj) if proj else 0
     mail = f"{unread} unread — inbox()" if unread else "none"
+    swap = swap_banner(classify_swap(ident.model_history, ident.model,
+                       expected=get_settings().osiris_expected_model)) if ident else None
     scoped = await _project_briefing(pool, proj) if proj else None
     if scoped is not None:
         fleet_open = await pool.fetchval(
@@ -515,6 +525,7 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
         return {
             "you": who, "model": (ident.model if ident else None), "project": proj,
             "mail": mail,
+            **({"swap": swap} if swap else {}),
             **scoped,
             "fleet_open_threads_total": fleet_open,
             "note": f"scoped to {proj}; {fleet_open} fleet-wide open threads not shown "
@@ -523,6 +534,7 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
     return {
         "you": who, "model": (ident.model if ident else None), "project": proj,
         "mail": mail,
+        **({"swap": swap} if swap else {}),
         "briefing": await comp.run_composition(pool, "briefing"),
     }
 

@@ -149,3 +149,43 @@ async def test_register_records_the_divergence_flag(actions: Actions, tmp_path: 
     assert row["obs_ec"] == EvidenceClass.DIRECT_OBSERVATION.value
     assert row["declared"] == "claude-fable-5"       # kept as the weak signal — the flag
     assert row["dec_ec"] == EvidenceClass.CO_OCCURRENCE.value
+
+
+def _transcript_lines(dir_: Path, *models: str) -> None:
+    """A transcript with one assistant line per model, in order — a within-session swap when it
+    carries >1 distinct model."""
+    lines = [json.dumps({"type": "assistant", "message": {"model": m, "content": []}})
+             for m in models]
+    (dir_ / "deadbeef-1111-2222-3333-444455556666.jsonl").write_text("\n".join(lines) + "\n")
+
+
+def test_resolve_identity_captures_the_swap_history(tmp_path: Path) -> None:
+    """The swap-detector's input: resolve_identity captures the transcript's model sequence, so a
+    within-session fable→opus demotion is visible as model_history (ruling f2ae6346)."""
+    proj = tmp_path / "-home-x-code-osiris"
+    proj.mkdir()
+    _transcript_lines(proj, "claude-fable-5", "claude-opus-4-8")
+    ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef", root=tmp_path)
+    assert ident.model == "claude-opus-4-8"  # the latest turn
+    assert ident.model_history == ("claude-fable-5", "claude-opus-4-8")  # the whole transition
+
+
+async def test_register_stamps_intent_and_the_swap(actions: Actions, tmp_path: Path) -> None:
+    """With expected_model set, register_agent stamps the INTENT and, on a divergence (the fable
+    harness's silent demotion), the swap as a first-class OBSERVED event on the Agent."""
+    proj = tmp_path / "-home-x-code-osiris"
+    proj.mkdir()
+    _transcript_lines(proj, "claude-fable-5", "claude-opus-4-8")
+    ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef", root=tmp_path)
+    a = await register_agent(actions, ident, actor="analyst:operator",
+                             expected_model="claude-fable-5")
+    row = await actions.pool.fetchrow(
+        "SELECT (SELECT value#>>'{}' FROM current_assertions x WHERE x.object_id=$1 "
+        "  AND x.name='model_intent') AS intent, "
+        " (SELECT value#>>'{}' FROM current_assertions x WHERE x.object_id=$1 "
+        "  AND x.name='model_swapped') AS swapped, "
+        " (SELECT evidence_class FROM current_assertions x WHERE x.object_id=$1 "
+        "  AND x.name='model_swapped') AS swap_ec", a)
+    assert row["intent"] == "claude-fable-5"
+    assert row["swapped"] == "claude-fable-5 → claude-opus-4-8"
+    assert row["swap_ec"] == EvidenceClass.DIRECT_OBSERVATION.value
