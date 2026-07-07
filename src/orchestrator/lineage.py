@@ -33,7 +33,8 @@ from pathlib import Path
 from typing import Any
 
 from src.actions.core import Actions
-from src.ingest.sessions import _tail_lines, latest_model
+from src.ingest.sessions import latest_model, models_in
+from src.orchestrator.swaps import classify_swap, swap_marker
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -57,6 +58,7 @@ class SubAgent:
     session: str           # the ROOT session uuid (shared by the whole tree)
     project: str | None
     model: str | None      # read from THIS sub-agent's OWN transcript (not the parent's)
+    model_history: tuple[str, ...]  # distinct models seen; >1 = a within-run swap on the child
     spawn_depth: int
     agent_type: str
     description: str
@@ -99,14 +101,17 @@ def scan_subagents(session_dir: Path) -> list[SubAgent]:
             continue
         handle = meta_path.name[len("agent-"):-len(".meta.json")]
         model: str | None = None
-        try:
-            model = latest_model(_tail_lines(transcript))
+        history: list[str] = []
+        try:  # read the whole (bounded) sub-agent transcript once: current model + swap history
+            lines = transcript.read_text("utf-8", errors="replace").splitlines()
+            history = models_in(lines)
+            model = latest_model(lines)
         except OSError:
             pass
         last_active = datetime.fromtimestamp(transcript.stat().st_mtime, UTC)
         out.append(SubAgent(
             agent_id=f"agent:{handle}", handle=handle, session=session_uuid, project=project,
-            model=model, spawn_depth=int(meta.get("spawnDepth", 1)),
+            model=model, model_history=tuple(history), spawn_depth=int(meta.get("spawnDepth", 1)),
             agent_type=str(meta.get("agentType", "")),
             description=str(meta.get("description", "")),
             tool_use_id=str(meta.get("toolUseId", "")), transcript=transcript,
@@ -247,6 +252,13 @@ async def register_swarm(
             await prop("description", s.description)
         if s.model:
             await prop("source_model", s.model)
+        if len(s.model_history) > 1:
+            # a within-session swap on a SUB-agent (demoted mid-run) — the warm rug-pull the
+            # mounted root gets flagged for, but a sub-agent never mounts, so this reconstruction
+            # is its only confession. ONLY the transition matters: a swarm node has no operator
+            # standing-choice to diverge from, so expected = its own current model (no divergence).
+            v = classify_swap(s.model_history, s.model, expected=s.model or s.model_history[-1])
+            await prop("model_swapped", swap_marker(v))  # DIRECT_OBSERVATION, like source_model
         if s.project:
             await prop("project", s.project)
             proj = await actions.create_or_find_object(

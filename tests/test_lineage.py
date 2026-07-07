@@ -59,6 +59,9 @@ def test_scan_reads_each_subagents_OWN_model(tmp_path: Path) -> None:
     assert by["child01"].spawn_depth == 1 and by["gc000002"].spawn_depth == 2
     assert by["gc000002"].description == "the grandchild probe"
     assert by["child01"].project == "demo"  # from the -home-x-code-demo dir name
+    # each child ran ONE model → a single-entry history (no within-run swap)
+    assert by["child01"].model_history == ("claude-sonnet-5",)
+    assert by["gc000002"].model_history == ("claude-haiku-4-5-20251001",)
 
 
 def test_resolve_parents_is_deterministic_from_tooluseid(tmp_path: Path) -> None:
@@ -143,6 +146,48 @@ async def test_register_swarm_records_last_active_for_lifecycle(
         "WHERE o.canonical='agent:child01' AND a.name='last_active'")
     assert la is not None
     datetime.fromisoformat(la)  # a parseable ISO timestamp (raises if not)
+
+
+async def test_register_swarm_flags_within_session_subagent_swap(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """Task 4: a sub-agent demoted mid-run (>1 model in its OWN transcript) showed no swap when
+    only the LATEST model was stamped. register_swarm now detects the transition and stamps
+    model_swapped — within-session only (a swarm node has no operator-intent to diverge from)."""
+    session = tmp_path / "-home-x-code-demo" / "abc12345-9999-491e-9ac2-af94587b18ab"
+    subs = session / "subagents"
+    subs.mkdir(parents=True)
+    (subs / "agent-swap0001.meta.json").write_text(json.dumps(
+        {"agentType": "general-purpose", "description": "the demoted probe",
+         "toolUseId": "tu-s", "spawnDepth": 1}))
+    # sonnet → opus mid-run: two assistant turns, distinct models (a warm rug-pull on the child)
+    (subs / "agent-swap0001.jsonl").write_text(
+        _assistant("claude-sonnet-5") + "\n" + _assistant("claude-opus-4-8") + "\n")
+
+    await register_swarm(actions, session)
+
+    row = await actions.pool.fetchrow(
+        "SELECT (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='model_swapped') AS swapped, "
+        " (SELECT evidence_class FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='model_swapped') AS ec, "
+        " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='source_model') AS model "
+        "FROM objects o WHERE o.canonical='agent:swap0001'")
+    assert row["model"] == "claude-opus-4-8"  # the current (latest) turn
+    assert row["swapped"] == "claude-sonnet-5 ↔ claude-opus-4-8 (now claude-opus-4-8)"
+    assert row["ec"] == EvidenceClass.DIRECT_OBSERVATION.value  # read off the child's transcript
+
+
+async def test_register_swarm_no_false_swap_on_single_model(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """A sub-agent that ran ONE model gets NO model_swapped — no cry-wolf on the swarm."""
+    await register_swarm(actions, _write_swarm(tmp_path))  # child01 + gc, each a single model
+    swapped = await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE a.name='model_swapped' AND o.canonical IN ('agent:child01','agent:gc000002')")
+    assert swapped == 0
 
 
 def _assistant_tool(model: str, tool_name: str) -> str:
