@@ -280,6 +280,31 @@ async def test_canon_recall_is_keyword_ranked_and_project_scoped(actions: Action
     assert "Object Sets" in {r["reference"] for r in next(iter(canon["items"].values()))}
 
 
+async def test_canon_ranks_reordered_and_partial_multiword_queries(actions: Actions) -> None:
+    """The tokenizer's core guarantee: scoring sums INDEPENDENT per-token hits, so a query
+    matches regardless of token ORDER and with no contiguous phrase — the exact failure (a
+    whole-string match) that returned empty for natural queries. A reordered query and a
+    strict-subset query both recall the section; single-token ranking is unchanged."""
+    await _ref(actions, "ref:palantir-object-sets", "Object Sets", "palantir", "src/x.py",
+               "# Object Sets\n\n## Traversal\nfilter then traverse the object set to a "
+               "neighboring set; relating two sets is set algebra.")
+
+    # tokens in a DIFFERENT order than the document, none contiguous with the doc phrasing
+    reordered = await run_spec(actions.pool, {"op": "function", "name": "canon",
+                               "args": {"q": "traverse filter algebra"}}, None)
+    assert "Object Sets" in {r["reference"] for r in next(iter(reordered["items"].values()))}
+
+    # a strict subset of the tokens still matches — scoring is additive, not all-or-none
+    partial = await run_spec(actions.pool, {"op": "function", "name": "canon",
+                             "args": {"q": "algebra traverse"}}, None)
+    assert "Object Sets" in {r["reference"] for r in next(iter(partial["items"].values()))}
+
+    # single-token behavior is unchanged (the pre-tokenization contract still holds)
+    single = await run_spec(actions.pool, {"op": "function", "name": "canon",
+                            "args": {"q": "algebra"}}, None)
+    assert "Object Sets" in {r["reference"] for r in next(iter(single["items"].values()))}
+
+
 async def test_canon_is_subject_free_and_seeded(actions: Actions) -> None:
     """`canon` is registered + subject-free (a design question, not an entity), and the
     `design-canon` view is a default composition the operator can switch to."""
