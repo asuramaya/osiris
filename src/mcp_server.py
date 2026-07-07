@@ -37,7 +37,7 @@ from src.ontology.resolution import (
     resolve_cross_base,
 )
 from src.ontology.schema import catalog
-from src.orchestrator import capture
+from src.orchestrator import capture, digest
 from src.orchestrator import compositions as comp
 from src.orchestrator.agents import AgentIdentity, register_agent, resolve_identity
 from src.orchestrator.console import get_console as _get_console
@@ -537,6 +537,20 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
         **({"swap": swap} if swap else {}),
         "briefing": await comp.run_composition(pool, "briefing"),
     }
+
+
+@mcp.tool()
+async def fleet_digest(hours: int = 24) -> dict[str, Any]:
+    """The MEMBRANE — the operator's window into the autonomous fleet over the last `hours`
+    (default 24). Read-only, stateless rolling window. The return path made visible: results and
+    accountability flowing back UP. Surfaces ROSTER + health (which identities resolved cleanly),
+    ACTIVITY (what agents decided/opened in your name — not the miner's backfill), the DANGER map
+    (model swaps — the harness's silent demotions), and LAUNDERING (credence flags where a relay
+    carried a fact above its origin grade). Glance here to see what the fleet did while you were
+    away — especially after onboarding a batch of agents."""
+    pool = await _pool_get()
+    since = datetime.now(UTC) - timedelta(hours=hours)
+    return {"window_hours": hours, **await digest.fleet_digest(Actions(pool), since=since)}
 
 
 @mcp.tool()
