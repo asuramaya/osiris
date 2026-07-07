@@ -143,3 +143,29 @@ async def test_register_swarm_records_last_active_for_lifecycle(
         "WHERE o.canonical='agent:child01' AND a.name='last_active'")
     assert la is not None
     datetime.fromisoformat(la)  # a parseable ISO timestamp (raises if not)
+
+
+def _assistant_tool(model: str, tool_name: str) -> str:
+    """An assistant line emitting one NON-spawn tool_use (an own act, e.g. Bash) plus text."""
+    content = [{"type": "tool_use", "id": "t1", "name": tool_name, "input": {}},
+               {"type": "text", "text": "ok"}]
+    return json.dumps({"type": "assistant", "message": {"model": model, "content": content}})
+
+
+def test_backed_by_observation_distinguishes_look_from_hearsay(tmp_path: Path) -> None:
+    """Tier-1 act-detection (ruling 108ff2e8): an agent that ran its OWN tool looked; one whose
+    only tool_use is an Agent spawn merely heard a child. The credence rebuttal reads this."""
+    session = tmp_path / "-home-x-code-demo" / "abc12345-2222-491e-9ac2-af94587b18ab"
+    subs = session / "subagents"
+    subs.mkdir(parents=True)
+    # a LOOKER — ran its own Bash (an own-observation act)
+    (subs / "agent-looker01.meta.json").write_text(json.dumps(
+        {"agentType": "x", "description": "d", "toolUseId": "tl", "spawnDepth": 1}))
+    (subs / "agent-looker01.jsonl").write_text(_assistant_tool("claude-sonnet-5", "Bash") + "\n")
+    # a HEARSAY agent — its only tool_use is an Agent spawn; it never looked, only heard a child
+    (subs / "agent-hears002.meta.json").write_text(json.dumps(
+        {"agentType": "x", "description": "d", "toolUseId": "th", "spawnDepth": 1}))
+    (subs / "agent-hears002.jsonl").write_text(_assistant("claude-opus-4-8", "tu-x") + "\n")
+    by = {s.handle: s for s in scan_subagents(session)}
+    assert by["looker01"].backed_by_observation is True
+    assert by["hears002"].backed_by_observation is False

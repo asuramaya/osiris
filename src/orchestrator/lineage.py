@@ -63,6 +63,7 @@ class SubAgent:
     tool_use_id: str       # the spawn tool-call that created this agent → resolves the parent
     transcript: Path
     last_active: datetime  # the transcript's mtime — the agent's last sign of life (lifecycle)
+    backed_by_observation: bool  # Tier-1 act-detection: did it LOOK at all, or only HEAR children?
 
 
 def _root_agent_id(session_uuid: str) -> str:
@@ -109,7 +110,7 @@ def scan_subagents(session_dir: Path) -> list[SubAgent]:
             agent_type=str(meta.get("agentType", "")),
             description=str(meta.get("description", "")),
             tool_use_id=str(meta.get("toolUseId", "")), transcript=transcript,
-            last_active=last_active,
+            last_active=last_active, backed_by_observation=_has_own_observation(transcript),
         ))
     out.sort(key=lambda s: (s.spawn_depth, s.handle))
     return out
@@ -144,6 +145,36 @@ def _emitted_tool_use_ids(transcript: Path) -> set[str]:
             if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id"):
                 ids.add(str(block["id"]))
     return ids
+
+
+# The tool names that carry a CHILD's result back to a parent (the "heard" conduit). Every other
+# tool_use is the agent acting on the world ITSELF (a read, query, or edit).
+_HEARD_CONDUITS = frozenset({"Agent", "Task"})
+
+
+def _has_own_observation(transcript: Path) -> bool:
+    """Tier-1 of the act-detection ladder (ruling 108ff2e8): did this agent perform ANY act of its
+    own, or is everything it knows hearsay? An agent whose ONLY tool_uses are Agent/Task returns
+    cannot have looked — it merely heard its children. Any other tool_use is the agent observing or
+    acting itself. Structural and airtight; the finer 'did it observe THIS fact' (Tiers 2-3) is
+    deferred, and this coarse floor is the conservative signal the credence rebuttal reads (we only
+    clamp an ancestor that provably never looked, so a genuine verification is never deflated)."""
+    try:
+        text = transcript.read_text("utf-8", errors="replace")
+    except OSError:
+        return False
+    for line in text.splitlines():
+        if '"tool_use"' not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        for block in _content_blocks(rec):
+            if (isinstance(block, dict) and block.get("type") == "tool_use"
+                    and str(block.get("name", "")) not in _HEARD_CONDUITS):
+                return True
+    return False
 
 
 def resolve_parents(subs: list[SubAgent]) -> dict[str, str]:
@@ -209,6 +240,7 @@ async def register_swarm(
         await prop("spawn_depth", s.spawn_depth)
         await prop("is_sidechain", True)
         await prop("last_active", s.last_active.isoformat())  # lifecycle: live vs historical
+        await prop("backed_by_observation", s.backed_by_observation)  # credence rebuttal signal
         if s.agent_type:
             await prop("agent_type", s.agent_type)
         if s.description:
