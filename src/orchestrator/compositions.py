@@ -1120,8 +1120,13 @@ DECISION_LOG: dict[str, Any] = {
 PROJECT_BRIEFING: dict[str, Any] = {
     "op": "sections",
     "sections": [
+        # open_threads: the project's unresolved set, recency-desc. The pure op-tree can't
+        # express "obligations first" (single-key order, no computed priority), so orient's
+        # assembly layer (mcp_server._project_briefing) RE-RANKS this — obligations float above
+        # ordinary threads — and display-caps at 25. The `take` here is only a safety ceiling on
+        # the set the ranker sees; a standalone fork still gets the recency-ordered lens.
         {"title": "open_threads", "body": {
-            "op": "take", "n": 40, "from": {
+            "op": "take", "n": 100, "from": {
                 "op": "table", "columns": [{"property": "summary"}, {"property": "kind"}],
                 "from": {"op": "order", "by": "recency", "dir": "desc", "from": {
                     "op": "intersect", "sets": [

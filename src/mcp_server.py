@@ -583,13 +583,31 @@ async def mount(
     return out
 
 
+# orient's open-thread wall is a bounded query, not a scroll: the assembly layer ranks the
+# composition's recency-ordered set (obligations first) and shows at most this many, noting
+# the remainder. Ranking + cap only — no GC, no auto-resolve (those need operator input).
+_ORIENT_OPEN_THREADS = 25
+
+
+def _rank_open_threads(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Rank the project's open threads for orient and cap the display. Obligations — DUTIES an
+    action minted (kind='obligation') — float above ordinary threads; the composition's
+    recency-desc order breaks ties WITHIN each group (Python's sort is stable). Returns the
+    capped list + how many more exist beyond it. Pure — the ordering is trivially testable."""
+    summ = [r for r in rows if r.get("summary")]
+    ranked = sorted(summ, key=lambda r: r.get("kind") != "obligation")  # obligations (False) first
+    shown = ranked[:_ORIENT_OPEN_THREADS]
+    return shown, len(ranked) - len(shown)
+
+
 async def _project_briefing(pool: asyncpg.Pool, project: str) -> dict[str, Any] | None:
     """A working agent's SCOPED bearings — its OWN project's open threads + recent decisions,
     not the whole fleet's (decepticons surfaced that orient's flood costs more context than it
     saves). NOW A PURE COMPOSITION (#20): orient runs the `project-briefing` op-tree with the
     project as subject — the fleet briefing's selects intersected with the project's in_repo
     neighbourhood, recency-ordered. The bespoke SQL is gone; orient dogfoods the composer on
-    its own need, and the view is forkable like any lens."""
+    its own need, and the view is forkable like any lens. The composer can't express
+    obligations-first ranking (single-key order), so the wall is RANKED + capped here."""
     proj = await pool.fetchval(
         "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1", f"repo:{project}")
     if proj is None:
@@ -598,11 +616,17 @@ async def _project_briefing(pool: asyncpg.Pool, project: str) -> dict[str, Any] 
     items = res.get("items") if isinstance(res, dict) else None
     if not isinstance(items, dict):  # unseeded / error — never crash orient, just show empty
         return {"open_threads": [], "recent_decisions": []}
-    return {
-        "open_threads": [r for r in (items.get("open_threads") or []) if r.get("summary")],
+    shown, more = _rank_open_threads(items.get("open_threads") or [])
+    out: dict[str, Any] = {
+        "open_threads": shown,
         "recent_decisions": [r for r in (items.get("recent_decisions") or []) if r.get("summary")],
         "tensions": [r for r in (items.get("tensions") or []) if r.get("pole_a")],
     }
+    if more > 0:  # trailing count so a capped wall never hides work silently (membrane, #6)
+        out["open_threads_note"] = (
+            f"showing {len(shown)} of {len(shown) + more} open threads (obligations first, "
+            f"then recency); {more} more not shown")
+    return out
 
 
 @mcp.tool()

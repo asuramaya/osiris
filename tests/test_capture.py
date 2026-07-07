@@ -212,3 +212,74 @@ async def test_orient_explicit_project_overrides_the_mount(actions: Actions) -> 
         _agents.pop(_conn_key(ctx), None)
     assert res["project"] == "decepticons"                   # honored the explicit scope
     assert "the decepticons-only thread" in [r["summary"] for r in res["open_threads"]]
+
+
+def test_rank_open_threads_orders_obligations_first_and_caps() -> None:
+    """The pure ranker (orient's wall → a bounded query): obligations float above ordinary
+    threads, the composition's recency order is preserved WITHIN each group (stable sort),
+    summary-less rows drop, and the display caps with an accurate remainder count."""
+    from src.mcp_server import _ORIENT_OPEN_THREADS, _rank_open_threads
+
+    # input arrives recency-desc from the composition; obligations are interleaved
+    rows = [
+        {"summary": "ordinary-A", "kind": None},
+        {"summary": "obligation-A", "kind": "obligation"},
+        {"summary": "ordinary-B", "kind": None},
+        {"summary": "obligation-B", "kind": "obligation"},
+        {"summary": "", "kind": None},                          # no summary → dropped
+        {"summary": "ordinary-C", "kind": None},
+    ]
+    shown, more = _rank_open_threads(rows)
+    assert [r["summary"] for r in shown] == [
+        "obligation-A", "obligation-B",              # duties first, input (recency) order kept
+        "ordinary-A", "ordinary-B", "ordinary-C",    # then the rest, input order kept
+    ]
+    assert more == 0
+
+    # capping: more rows than the display limit → the cap is shown, the remainder counted
+    many = [{"summary": f"t{i:02d}", "kind": None} for i in range(_ORIENT_OPEN_THREADS + 5)]
+    shown, more = _rank_open_threads(many)
+    assert len(shown) == _ORIENT_OPEN_THREADS and more == 5
+    assert [r["summary"] for r in shown] == [f"t{i:02d}" for i in range(_ORIENT_OPEN_THREADS)]
+
+
+async def test_orient_briefing_ranks_obligations_first_and_caps(actions: Actions) -> None:
+    """End to end through the real composition: orient's open_threads floats a DUTY above
+    ordinary threads even when it is the LEAST recent, caps the wall at the display limit, and
+    notes the remainder — a bounded, ranked query, not a 500-line scroll. Ranking only."""
+    import uuid
+
+    from src.mcp_server import _ORIENT_OPEN_THREADS, _project_briefing
+
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:ranktest", "session")
+    await actions.assert_property(proj, "name", "ranktest", "session", now, 0.9)
+
+    async def _thread(canon: str, summary: str, *, kind: str | None = None) -> uuid.UUID:
+        t = await actions.create_or_find_object("Thread", canon, "session")
+        await actions.assert_property(t, "summary", summary, "session", now, 0.9)
+        await actions.assert_property(t, "status", "open", "session", now, 0.9)
+        if kind:
+            await actions.assert_property(t, "kind", kind, "session", now, 0.9)
+        await actions.create_link(t, proj, "in_repo", "session", now, 0.9)
+        return t
+
+    duty = await _thread("thread:duty", "restart the daemons after the kernel change",
+                         kind="obligation")
+    # force the obligation to be the LEAST recent — only ranking can float it to the top
+    await actions.pool.execute(
+        "UPDATE objects SET created_at = now() - interval '400 days' WHERE id=$1", duty)
+    for i in range(_ORIENT_OPEN_THREADS + 5):  # comfortably over the display cap
+        await _thread(f"thread:ord-{i:02d}", f"ordinary next-step number {i:02d}")
+
+    await seed_default_compositions(actions.pool)  # orient runs the project-briefing composition
+    scoped = await _project_briefing(actions.pool, "ranktest")
+    assert scoped is not None
+    open_threads = scoped["open_threads"]
+
+    assert len(open_threads) == _ORIENT_OPEN_THREADS               # display-capped
+    assert open_threads[0]["kind"] == "obligation"                # the duty leads despite age
+    assert open_threads[0]["summary"] == "restart the daemons after the kernel change"
+    assert all(r.get("kind") != "obligation" for r in open_threads[1:])  # only the one obligation
+    # 1 duty + (cap + 5) ordinary = cap + 6 total; cap shown → 6 more, surfaced in the note
+    assert scoped["open_threads_note"] and "6 more" in scoped["open_threads_note"]
