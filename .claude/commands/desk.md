@@ -1,0 +1,1 @@
+Read the operator's desk and render it. Call the osiris MCP tool `inbox` with project='operator' and peek=true (a glance must NEVER lease or settle the operator's mail). Render newest-first, compact: one block per brief — sender project + agent, age, then the body. If empty, say "desk clear". Do not add commentary beyond the briefs themselves.
