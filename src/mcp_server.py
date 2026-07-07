@@ -44,6 +44,7 @@ from src.orchestrator.agents import AgentIdentity, register_agent, resolve_ident
 from src.orchestrator.console import get_console as _get_console
 from src.orchestrator.console import set_console as _set_console
 from src.orchestrator.dossier import entity_dossier
+from src.orchestrator.fleetview import render_fleet_tree
 from src.orchestrator.mailbox import (
     OPERATOR_ADDR,
     ack_messages,
@@ -692,13 +693,14 @@ async def fleet_digest(hours: int = 24) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def fleet() -> dict[str, Any]:
-    """The roster AS A TREE — mounted roots and the sub-agent swarms they spawned (spawned_by
-    = delegation), each carrying its OWN model and LIFECYCLE (● live vs ○ historical, from its
-    last sign of life). A sub-agent inherits the parent's job_dir, so it can't self-register (it
-    would collapse into the parent); the miner reconstructs the tree from disk. 'A man and all
-    his imaginary friends' — now the friends' friends too, fractally. `tree` is the glanceable
-    render; `registered` the flat rows (depth + parent + last_active)."""
+async def fleet(full: bool = False) -> dict[str, Any]:
+    """The roster, GROUPED BY PROJECT — live agents expanded, retired sessions collapsed into
+    a counted line (the roster is event-sourced: every retired session stays a root forever,
+    so the flat wall was lineage noise, never duplicates to merge). ● live / ○ historical;
+    liveness = the freshest of the miner's last_active stamp and the durable mount registry's
+    last_seen (an agent that just mounted is live even before the miner's next sweep).
+    `full=True` expands everything (the old wall, grouped). `tree` is the glanceable render;
+    `registered` the flat rows."""
     pool = await _pool_get()
     rows = await pool.fetch(
         "SELECT o.canonical, "
@@ -710,56 +712,45 @@ async def fleet() -> dict[str, Any]:
         "  AND a.name='spawn_depth') AS depth, "
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
         "  AND a.name='last_active') AS last_active, "
+        " (SELECT max(m.last_seen) FROM agent_mounts m WHERE m.agent_id=o.canonical) "
+        "  AS mount_seen, "
         " (SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
         "  WHERE l.from_id=o.id AND l.type='spawned_by' LIMIT 1) AS parent "
         "FROM objects o WHERE o.type='Agent' AND o.status='active' ORDER BY o.canonical"
     )
     now = datetime.now(UTC)
 
-    def _live(last_active: str | None) -> bool:
-        # live = a sign of life within the last 15 min (its transcript was written), else historical
-        if not last_active:
-            return False
-        try:
-            return now - datetime.fromisoformat(last_active) < timedelta(minutes=15)
-        except ValueError:
-            return False
+    def _ts(r: Any) -> datetime | None:
+        # freshest sign of life: the miner's transcript stamp OR the durable mount registry
+        stamps = []
+        if r["mount_seen"] is not None:
+            stamps.append(r["mount_seen"])
+        if r["last_active"]:
+            try:
+                stamps.append(datetime.fromisoformat(r["last_active"]))
+            except ValueError:
+                pass
+        return max(stamps) if stamps else None
 
-    nodes: dict[str, dict[str, Any]] = {str(r["canonical"]): dict(r) for r in rows}
-    for n in nodes.values():
-        n["live"] = _live(n["last_active"])
-    children: dict[str | None, list[str]] = {}
-    for canon, n in nodes.items():
-        children.setdefault(n["parent"], []).append(canon)
-    # a root = a mounted agent (no spawned_by), or one whose parent isn't itself an Agent node
-    roots = sorted(c for c, n in nodes.items() if not n["parent"] or n["parent"] not in nodes)
-    lines: list[str] = []
-
-    def render(canon: str, indent: int, seen: set[str]) -> None:
-        if canon in seen:  # guard against any accidental cycle
-            return
-        seen.add(canon)
-        n = nodes[canon]
-        prefix = "    " * indent + ("└─ " if indent else "")
-        mark = "●" if n["live"] else "○"   # live vs historical, at a glance
-        lines.append(
-            f"{prefix}{mark} {canon}  {n['model'] or '?'}  {n['project'] or ''}".rstrip())
-        for ch in sorted(children.get(canon, [])):
-            render(ch, indent + 1, seen)
-
-    seen: set[str] = set()
-    for r in roots:
-        render(r, 0, seen)
+    nodes: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        ts = _ts(r)
+        nodes[str(r["canonical"])] = {
+            "model": r["model"], "project": r["project"], "parent": r["parent"],
+            "depth": int(r["depth"]) if r["depth"] else 0,
+            "last_active": r["last_active"], "ts": ts,
+            "live": ts is not None and now - ts < timedelta(minutes=15),
+        }
     return {
         "connected_now": len(_agents),
         "count": len(nodes),
         "live": sum(1 for n in nodes.values() if n["live"]),
         "swarm": sum(1 for n in nodes.values() if n["parent"]),
-        "tree": "\n".join(lines),
+        "tree": render_fleet_tree(nodes, full=full),
         "registered": [
-            {"agent": c, "model": n["model"], "project": n["project"],
-             "depth": int(n["depth"]) if n["depth"] else 0, "parent": n["parent"],
-             "live": n["live"], "last_active": n["last_active"]}
+            {"agent": c, "model": n["model"], "project": n["project"], "depth": n["depth"],
+             "parent": n["parent"], "live": n["live"],
+             "last_seen": n["ts"].isoformat() if n["ts"] else None}
             for c, n in nodes.items()
         ],
     }
@@ -812,7 +803,10 @@ async def inbox(project: str | None = None, peek: bool = False,
     with send(reply_to=<its id>) or pass ack=[ids] here — or it will REDELIVER after the
     lease (at-least-once: a dropped response costs a duplicate, never a silent loss).
     peek=True reads without leasing. Check this when you mount and after any compaction —
-    mount()/orient() report your deliverable count."""
+    mount()/orient() report your deliverable count. THE OPERATOR'S DESK IS DIFFERENT: glance
+    at project='operator' ONLY with peek; settle it ONLY at the human's explicit word (the
+    desk count means "briefs the operator hasn't dismissed" — an agent consuming it silently
+    would blind the one lane that exists for the human)."""
     ident = await _ident_for(ctx)
     proj = project or (ident.project if ident else None)
     if proj is None:
