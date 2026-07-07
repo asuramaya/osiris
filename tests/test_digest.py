@@ -116,3 +116,26 @@ async def test_activity_excludes_agent_sourced_mined_rows(actions: Actions) -> N
     assert "deliberately decided X" in summaries               # deliberate agent work surfaces
     assert "a mined echo of the discussion" not in summaries   # the agent-sourced mining does NOT
     assert dg["summary"]["activity"] == 1
+
+
+async def test_activity_dedups_a_co_asserted_summary_to_one_row(actions: Actions) -> None:
+    """A Decision/Thread co-asserted by several agents carries one summary row PER source (the
+    multi-source set), so _activity would list the SAME activity twice. Dedup by object, keeping
+    the highest-grade (then most-recent) row — one line per decision, not one per asserter."""
+    since = NOW - timedelta(hours=24)
+    # two agents deliberately assert the SAME summary → same canonical → ONE object, two sources
+    d = await actions.create_or_find_object("Decision", "decision:coassert", "agent:a")
+    await _prop(actions, d, "summary", "we shipped the credence clamp", "agent:a", SD,
+                when=NOW - timedelta(hours=2))
+    await _prop(actions, d, "summary", "we shipped the credence clamp", "agent:b", SD, when=NOW)
+    # the object really does carry two current summary assertions (the multi-source set)
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE object_id=$1 AND name='summary'", d) == 2
+
+    dg = await fleet_digest(actions, since=since)
+
+    matches = [x for x in dg["activity"] if x["summary"] == "we shipped the credence clamp"]
+    assert len(matches) == 1                    # deduped to a single activity line
+    assert dg["summary"]["activity"] == 1
+    assert matches[0]["at"] == NOW.isoformat()  # kept the most-recent asserter's row
+    assert matches[0]["agent"] == "agent:b"

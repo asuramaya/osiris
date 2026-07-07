@@ -63,17 +63,23 @@ async def _roster(actions: Actions) -> list[dict[str, Any]]:
 
 async def _activity(actions: Actions, since: datetime, limit: int = 50) -> list[dict[str, Any]]:
     """What the fleet DELIBERATELY did in your name since the window opened — agent-authored,
-    SELF_DECLARED Decisions/Threads. The miner's DERIVED backfill is now SOURCED to the
-    originating agent too (origin attribution), so `agent:%` alone no longer separates it from
-    deliberate work — the EVIDENCE CLASS does: a mined echo is `derived`, a deliberate capture
-    `self_declared`. Filtering on the grade keeps this stream deliberate-only."""
+    SELF_DECLARED Decisions/Threads. Two exclusions keep this the deliberate-work stream:
+      * the miner's DERIVED backfill is now SOURCED to the originating agent too (origin
+        attribution), so `agent:%` alone no longer separates it — the GRADE does: only
+        `self_declared` summaries count (a mined echo is `derived`);
+      * one object co-asserted by several sources carries one summary row PER source (the
+        multi-source set), so a co-assertion would list the same activity twice; DISTINCT ON
+        the object keeps the highest-grade (then most-recent) row — one line per decision.
+    """
     rows = await actions.pool.fetch(
-        "SELECT o.type AS type, a.source_id AS agent, a.value#>>'{}' AS summary, "
-        "       a.observed_at AS at "
-        "FROM objects o JOIN current_assertions a ON a.object_id=o.id AND a.name='summary' "
-        "WHERE o.type IN ('Decision','Thread') AND a.source_id LIKE 'agent:%' "
-        "  AND a.evidence_class = 'self_declared' AND a.observed_at >= $1 "
-        "ORDER BY a.observed_at DESC LIMIT $2", since, limit)
+        "SELECT type, agent, summary, at FROM ("
+        "  SELECT DISTINCT ON (o.id) o.type AS type, a.source_id AS agent, "
+        "         a.value#>>'{}' AS summary, a.observed_at AS at "
+        "  FROM objects o JOIN current_assertions a ON a.object_id=o.id AND a.name='summary' "
+        "  WHERE o.type IN ('Decision','Thread') AND a.source_id LIKE 'agent:%' "
+        "    AND a.evidence_class = 'self_declared' AND a.observed_at >= $1 "
+        "  ORDER BY o.id, a.confidence DESC, a.observed_at DESC"
+        ") sub ORDER BY at DESC LIMIT $2", since, limit)
     return [
         {"type": r["type"], "agent": r["agent"],
          "summary": (r["summary"] or "")[:200], "at": r["at"].isoformat()}
