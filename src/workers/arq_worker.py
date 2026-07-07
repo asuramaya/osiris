@@ -29,6 +29,7 @@ from src.orchestrator.manifests import load_manifests
 from src.orchestrator.monitor import Puller, evaluate_watches, tick, write_heartbeat
 from src.orchestrator.ratelimit import RateLimiter
 from src.orchestrator.runner import reap_stale_runs
+from src.orchestrator.trigger import trigger_mail_tick
 from src.orchestrator.watchers import make_form_d_watcher
 
 _HELPERS_DIR = Path(__file__).resolve().parent.parent.parent / "helpers"
@@ -131,6 +132,21 @@ async def sense_sessions(ctx: dict[str, Any]) -> int:
     return report["chunks"]
 
 
+async def trigger_mail(ctx: dict[str, Any]) -> int:
+    """The mailbox alarm clock: wake an agent in a project that has unread mail (bounded by a
+    per-project rate cap; OFF unless osiris_trigger_enabled — the kill switch). A spawn failure
+    logs, never sinks the cron. Worker-as-tripwire (rule #2); Osiris itself still has no hands."""
+    actions: Actions = ctx["cascade"].actions
+    try:
+        report = await trigger_mail_tick(actions)
+    except Exception as exc:  # a spawn/DB hiccup must not kill the cron
+        _log.warning("mail trigger failed: %r", exc)
+        return 0
+    if report["woke"]:
+        _log.info("mail trigger: %s", report)
+    return report["woke"]
+
+
 class WorkerSettings:
     # enqueueable jobs (the API hands heavy work here instead of running it inline)
     functions: list[Any] = [expand_case_job]
@@ -146,6 +162,9 @@ class WorkerSettings:
         cron(heartbeat, second={0, 30}, run_at_startup=True),
         # session-sensing every 10 min (a few LLM calls max per tick; no-op when unset).
         cron(sense_sessions, minute=set(range(0, 60, 10)), second={30}),
+        # the mailbox alarm clock: wake an agent for a project with unread mail — bounded by a
+        # per-project rate cap, and a no-op unless osiris_trigger_enabled (the kill switch).
+        cron(trigger_mail, minute=set(range(0, 60)), second={45}),
     ]
     on_startup = startup
     on_shutdown = shutdown

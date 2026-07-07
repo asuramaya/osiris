@@ -82,6 +82,16 @@ class Settings(BaseSettings):
     # session forgot to write back. Empty => off. Forward-only: an unseen transcript starts
     # at its current end; history is `python -m src.ingest.sessions backfill`'s explicit job.
     osiris_sense_sessions: str = ""
+    # The fleet TRIGGER-hook (mailbox → wake) — OFF by default. When on, the worker (the alarm
+    # clock; never Osiris's own hands) spawns `claude -p` in a recipient project's repo when it
+    # has unread mail, so an agent processes coordination without the operator hand-triggering it.
+    # Recursion (the A↔B ping-pong) is bounded by a per-project rate cap: at most
+    # osiris_trigger_rate_cap wakes per project per osiris_trigger_window_secs — each side of a
+    # loop hits its own cap and halts. The agent_wakes ledger makes the chain visible; the enabled
+    # flag is the kill switch (membrane #6: never silent, never irreversible).
+    osiris_trigger_enabled: bool = False
+    osiris_trigger_rate_cap: int = 5
+    osiris_trigger_window_secs: int = 3600
 
 
 def get_settings() -> Settings:

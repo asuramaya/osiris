@@ -153,6 +153,8 @@ async def register_agent(
         await actions.assert_property(proj, "name", identity.project, src, now, _CONF,
                                       evidence_class=_EC)
         await _link_once(actions, a, proj, "works_in", src, now)
+    if identity.cwd:  # the repo path — lets the trigger-hook resolve a project → where to wake
+        await actions.assert_property(a, "cwd", identity.cwd, src, now, _CONF, evidence_class=_EC)
     principal = await actions.create_or_find_object("Person", f"principal:{actor}", src)
     await actions.assert_property(principal, "name", actor, src, now, _CONF, evidence_class=_EC)
     await _link_once(actions, a, principal, "acts_for", src, now)
