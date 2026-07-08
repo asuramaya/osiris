@@ -151,3 +151,28 @@ async def test_activity_dedups_a_co_asserted_summary_to_one_row(actions: Actions
     assert dg["summary"]["activity"] == 1
     assert matches[0]["at"] == NOW.isoformat()  # kept the most-recent asserter's row
     assert matches[0]["agent"] == "agent:b"
+
+
+async def test_watermark_mode_advances_only_on_mark_seen(actions: Actions) -> None:
+    """The desk norm applied to the digest: glancing is a peek — only the DELIBERATE act
+    (mark_seen) advances the stored operator watermark; an explicit `since` never touches it."""
+    # no watermark yet → 24h fallback, reported honestly
+    dg = await fleet_digest(actions)
+    assert dg["watermark"]["mode"] == "watermark" and dg["watermark"]["value"] is None
+    assert dg["watermark"]["marked"] is False
+    # a plain read did NOT set one (peek changed nothing)
+    dg2 = await fleet_digest(actions)
+    assert dg2["watermark"]["value"] is None
+    # the deliberate act advances it…
+    dg3 = await fleet_digest(actions, mark_seen=True)
+    assert dg3["watermark"]["marked"] is True and dg3["watermark"]["advanced_to"]
+    # …and the next glance opens exactly there
+    dg4 = await fleet_digest(actions)
+    assert dg4["watermark"]["mode"] == "watermark"
+    assert dg4["watermark"]["value"] == dg3["watermark"]["advanced_to"]
+    assert dg4["since"] == dg4["watermark"]["value"]
+    # an explicit window is explicit — and leaves the watermark alone
+    dg5 = await fleet_digest(actions, since=NOW - timedelta(hours=1))
+    assert dg5["watermark"]["mode"] == "explicit"
+    dg6 = await fleet_digest(actions)
+    assert dg6["watermark"]["value"] == dg3["watermark"]["advanced_to"]

@@ -876,14 +876,19 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
     @app.get("/membrane")
     async def membrane(
-        hours: int = 24, p: asyncpg.Pool = Depends(get_pool)
+        hours: int | None = None, p: asyncpg.Pool = Depends(get_pool)
     ) -> Response:
         """The upward lane as a page — the statusline's click-through (read-only lens over
         fleet_digest + the wake ledger; anchored sections #desk #conversations #fleet #wakes).
-        Deliberately NOT the composer (held, ruling 450caf7b) — the smallest walkable membrane."""
-        since = datetime.now(UTC) - timedelta(hours=hours)
+        Deliberately NOT the composer (held, ruling 450caf7b) — the smallest walkable membrane.
+
+        Defaults to WATERMARK MODE ('new since you last looked'); `?hours=N` forces a rolling
+        window. The PAGE never advances the watermark — glancing at the lens must not move it
+        (that is a deliberate act, reserved for the fleet_digest MCP tool's mark_seen)."""
+        since = (datetime.now(UTC) - timedelta(hours=hours)) if hours is not None else None
         dg = await fleet_digest(
-            Actions(p), since=since, lease_secs=get_settings().osiris_mail_lease_secs)
+            Actions(p), since=since, mark_seen=False,
+            lease_secs=get_settings().osiris_mail_lease_secs)
         wakes = [dict(r) for r in await p.fetch(
             "SELECT to_project, from_agent, message_id, woke_at FROM agent_wakes "
             "ORDER BY woke_at DESC LIMIT 20")]

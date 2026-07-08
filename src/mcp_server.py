@@ -682,18 +682,23 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
 
 
 @mcp.tool()
-async def fleet_digest(hours: int = 24) -> dict[str, Any]:
-    """The MEMBRANE — the operator's window into the autonomous fleet over the last `hours`
-    (default 24). Read-only, stateless rolling window. The return path made visible: results and
-    accountability flowing back UP. Surfaces ROSTER + health (which identities resolved cleanly),
-    ACTIVITY (what agents decided/opened in your name — not the miner's backfill), the DANGER map
-    (model swaps — the harness's silent demotions), and LAUNDERING (credence flags where a relay
-    carried a fact above its origin grade). Glance here to see what the fleet did while you were
-    away — especially after onboarding a batch of agents."""
+async def fleet_digest(hours: int | None = None, mark_seen: bool = False) -> dict[str, Any]:
+    """The MEMBRANE — the operator's window into the autonomous fleet. The return path made
+    visible: results and accountability flowing back UP. Surfaces ROSTER + health (which
+    identities resolved cleanly), ACTIVITY (what agents decided/opened in your name — not the
+    miner's backfill), the DANGER map (model swaps — the harness's silent demotions), LAUNDERING
+    (credence flags where a relay carried a fact above its origin grade), and SPEND (what the
+    inference seam burned — metered honestly).
+
+    `hours` given → an ad-hoc rolling window (last N hours). `hours=None` (the default) → WATERMARK
+    MODE: 'what's new since I last looked', from the stored operator watermark (24h fallback the
+    first time). Glancing is a PEEK — it never moves the watermark. Pass `mark_seen=True` when you
+    are done reading to advance it to now, so the next glance starts here. Ideal after onboarding a
+    batch of agents: read (peek), act, then mark_seen to draw the line."""
     pool = await _pool_get()
-    since = datetime.now(UTC) - timedelta(hours=hours)
+    since = (datetime.now(UTC) - timedelta(hours=hours)) if hours is not None else None
     return {"window_hours": hours,
-            **await digest.fleet_digest(Actions(pool), since=since,
+            **await digest.fleet_digest(Actions(pool), since=since, mark_seen=mark_seen,
                                         lease_secs=get_settings().osiris_mail_lease_secs)}
 
 

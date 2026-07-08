@@ -21,18 +21,30 @@ new writes:
     visible, because the membrane reads the substrate, not the self-reports.
   * OPERATOR INBOX — mail addressed to the operator's desk (send(to='operator')): the count and
     the freshest briefs, so the human sees what the fleet initiated upward.
+  * COST — what the inference seam spent in the window (llm_usage): a `spend` head + a `costs`
+    stream (per purpose/model/day). Rendered HONESTLY: only the session-miner's extract path is
+    metered today, so a `coverage` note names exactly what is (and isn't) counted.
 
-Read-side only; the window is a rolling `since` (no stored watermark — that is a v2). This is
-where credence_props finally meets a live surface.
+Read-side by default; the window is either an explicit rolling `since` OR the stored OPERATOR
+WATERMARK ("what's new since I last looked"). Reading NEVER advances the watermark — advancing is
+a deliberate `mark_seen` act (a peek must not change state). This is where credence_props finally
+meets a live surface.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from src.actions.core import Actions
 from src.orchestrator.credence import credence_props
 from src.orchestrator.mailbox import OPERATOR_ADDR, read_inbox, unread_count
+from src.orchestrator.monitor import set_cursor
+
+# The operator's digest watermark lives in the generic cursor store (watermarks table, migration
+# 0006) — its (key, cursor, updated_at) shape fits exactly: `cursor` holds the last-seen instant
+# as ISO text, `updated_at` gives the watermark's own age. One row, keyed here. No new migration.
+OPERATOR_WATERMARK_KEY = "operator:digest"
+_DEFAULT_WINDOW = timedelta(hours=24)  # the fallback when no watermark has ever been set
 
 
 async def _roster(actions: Actions) -> list[dict[str, Any]]:
@@ -172,20 +184,66 @@ async def _operator_inbox(actions: Actions, *, lease_secs: int) -> dict[str, Any
     }
 
 
+async def _read_watermark(actions: Actions) -> tuple[datetime | None, float | None]:
+    """The stored operator-watermark instant and its age in seconds, or (None, None) when none
+    has been set (or its stored text is unparseable). One round trip — cursor AND freshness."""
+    row = await actions.pool.fetchrow(
+        "SELECT cursor, extract(epoch FROM (now() - updated_at)) AS age "
+        "FROM watermarks WHERE key=$1", OPERATOR_WATERMARK_KEY)
+    if row is None:
+        return None, None
+    try:
+        wm = datetime.fromisoformat(row["cursor"])
+    except (ValueError, TypeError):
+        return None, None
+    return wm, (float(row["age"]) if row["age"] is not None else None)
+
+
+async def _resolve_since(
+    actions: Actions, since: datetime | None
+) -> tuple[datetime, dict[str, Any]]:
+    """Resolve the window's lower bound plus a `watermark` block describing HOW it was chosen.
+
+    An explicit `since` is an ad-hoc rolling window (mode='explicit') — the watermark is untouched
+    and unread. `since=None` is WATERMARK MODE: the lower bound is the stored operator watermark
+    ('what's new since I last looked'), or a 24h fallback when none has ever been set."""
+    if since is not None:
+        return since, {"mode": "explicit", "value": None, "age_secs": None}
+    wm, age = await _read_watermark(actions)
+    if wm is not None:
+        return wm, {"mode": "watermark", "value": wm.isoformat(), "age_secs": age}
+    return datetime.now(UTC) - _DEFAULT_WINDOW, {"mode": "watermark", "value": None,
+                                                 "age_secs": None}
+
+
 async def fleet_digest(
-    actions: Actions, *, since: datetime, lease_secs: int = 900
+    actions: Actions, *, since: datetime | None = None, mark_seen: bool = False,
+    lease_secs: int = 900,
 ) -> dict[str, Any]:
-    """The membrane: the upward streams over the window since `since`, with a summary head.
-    Read-only — nothing here writes to the graph (the operator-inbox read is a peek)."""
+    """The membrane: the upward streams over the window, with a summary head.
+
+    `since` given → an ad-hoc rolling window. `since=None` → WATERMARK MODE: the window opens at
+    the stored operator watermark (24h fallback). Reading is a peek — it NEVER advances the
+    watermark. `mark_seen=True` is the DELIBERATE act that does: after computing, it stamps the
+    watermark to now, so the next glance is 'since this one'. Nothing else here writes to the
+    graph (the operator-inbox read is a peek; spend reads telemetry, not the graph)."""
+    effective_since, watermark = await _resolve_since(actions, since)
     roster = await _roster(actions)
-    activity = await _activity(actions, since)
-    laundering, disputes = await _credence_streams(actions, since)
-    conversations = await _conversations(actions, since)
+    activity = await _activity(actions, effective_since)
+    laundering, disputes = await _credence_streams(actions, effective_since)
+    conversations = await _conversations(actions, effective_since)
     operator_inbox = await _operator_inbox(actions, lease_secs=lease_secs)
     danger = [r for r in roster if r["swapped"]]
     unresolved = [r for r in roster if not r["resolved"]]
+    if mark_seen:  # the deliberate advance — the ONLY state change a digest can make
+        marked_at = datetime.now(UTC)
+        await set_cursor(actions.pool, OPERATOR_WATERMARK_KEY, marked_at.isoformat())
+        watermark = {**watermark, "marked": True, "advanced_to": marked_at.isoformat()}
+    else:
+        watermark = {**watermark, "marked": False}
     return {
-        "since": since.isoformat(),
+        "since": effective_since.isoformat(),
+        "watermark": watermark,
         "summary": {
             "agents": len(roster), "unresolved": len(unresolved),
             "swapped": len(danger), "activity": len(activity), "laundering": len(laundering),

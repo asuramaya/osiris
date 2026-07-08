@@ -39,6 +39,37 @@ def _row(*cells: str) -> str:
     return "<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
 
 
+def _age(secs: float | None) -> str:
+    """A coarse human age for the watermark's own freshness ('3h', '2d', 'just now')."""
+    if secs is None:
+        return "unknown"
+    secs = int(secs)
+    if secs < 90:
+        return "just now"
+    if secs < 5400:
+        return f"{round(secs / 60)}m"
+    if secs < 172800:
+        return f"{round(secs / 3600)}h"
+    return f"{round(secs / 86400)}d"
+
+
+def _footer(dg: dict[str, Any]) -> str:
+    """The window line: 'new since <watermark> (age)' in watermark mode, else a plain window.
+    Tolerant of a digest with no watermark block (an older shape)."""
+    wm = dg.get("watermark") or {}
+    since = _e(dg["since"][:16])
+    if wm.get("mode") == "watermark":
+        if wm.get("value"):
+            lead = (f'new since <b>{_e(wm["value"][:16])}</b> '
+                    f'<span class="dim">· watermark {_e(_age(wm.get("age_secs")))} old</span>')
+        else:
+            lead = 'new in the <b>last 24h</b> <span class="dim">· no watermark set yet</span>'
+    else:
+        lead = f"window {since} → now"
+    return (f'<p class="dim">read-only lens · auto-refreshes 30s · {lead} '
+            '<span class="dim">· the page never advances the watermark</span></p>')
+
+
 def render_membrane(dg: dict[str, Any], wakes: list[dict[str, Any]]) -> str:
     """The whole page from a fleet_digest dict + the wake-ledger tail. Pure — tests feed it
     fixtures; the route feeds it the live graph."""
@@ -112,6 +143,5 @@ def render_membrane(dg: dict[str, Any], wakes: list[dict[str, Any]]) -> str:
         f'<h2 id="wakes">wake ledger</h2><table>{wake_rows}</table>'
         f"{laund}"
         f'<h2 id="activity">activity</h2><table>{act_rows}</table>'
-        f'<p class="dim">read-only lens · auto-refreshes 30s · window {_e(dg["since"][:16])} →'
-        " now</p>"
+        f"{_footer(dg)}"
     )
