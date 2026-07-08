@@ -21,12 +21,16 @@ NOW = datetime(2026, 7, 6, tzinfo=UTC)
 
 
 def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
-              lease: int = 900, grace: int = 0) -> SimpleNamespace:
+              lease: int = 900, grace: int = 0, live: int = 900,
+              ceiling: int = 8_000_000, sense: str = "") -> SimpleNamespace:
     # grace defaults to 0 (disabled) so the rate-cap / lease tests exercise those bounds in
-    # isolation; the wake-grace tests set it explicitly.
+    # isolation; the wake-grace tests set it explicitly. sense="" → resume resolution looks at
+    # ~/.claude/projects (no anchored transcript for the test ids there → mint), so the legacy
+    # mint-path tests stay exactly as they were.
     return SimpleNamespace(osiris_trigger_enabled=enabled, osiris_trigger_rate_cap=rate_cap,
                            osiris_trigger_window_secs=window, osiris_mail_lease_secs=lease,
-                           osiris_trigger_grace_secs=grace)
+                           osiris_trigger_grace_secs=grace, osiris_owner_live_secs=live,
+                           osiris_resume_ceiling_bytes=ceiling, osiris_sense_sessions=sense)
 
 
 def test_should_wake_is_off_by_default_and_rate_capped() -> None:
@@ -65,7 +69,7 @@ async def test_trigger_is_dormant_when_disabled(actions: Actions) -> None:
     await _agent_with_mail(actions)
     spawned: list[str] = []
 
-    async def _spawn(repo: str, prompt: str, job_dir: str) -> None:
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
         spawned.append(repo)
 
     rep = await trigger_mail_tick(actions, settings=_settings(enabled=False), spawn=_spawn)
@@ -77,7 +81,7 @@ async def test_rate_cap_bounds_the_recursive_pingpong(actions: Actions) -> None:
     await _agent_with_mail(actions)
     spawned: list[str] = []
 
-    async def _spawn(repo: str, prompt: str, job_dir: str) -> None:
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
         spawned.append(repo)
 
     st = _settings(enabled=True, rate_cap=2, lease=0)  # lease=0: the mail stays deliverable
@@ -97,7 +101,7 @@ async def test_leased_mail_does_not_rewake(actions: Actions) -> None:
     await read_inbox(actions.pool, "demo")  # the woken agent leased its inbox
     spawned: list[str] = []
 
-    async def _spawn(repo: str, prompt: str, job_dir: str) -> None:
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
         spawned.append(repo)
 
     rep = await trigger_mail_tick(actions, settings=_settings(enabled=True), spawn=_spawn)
@@ -112,7 +116,7 @@ async def test_operator_desk_is_never_woken(actions: Actions) -> None:
                        to_project=OPERATOR_ADDR, body="finding for the human")
     spawned: list[str] = []
 
-    async def _spawn(repo: str, prompt: str, job_dir: str) -> None:
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
         spawned.append(repo)
 
     rep = await trigger_mail_tick(actions, settings=_settings(enabled=True), spawn=_spawn)
@@ -139,7 +143,7 @@ async def test_wake_grace_prevents_the_double_wake(actions: Actions) -> None:
     await _agent_with_mail(actions)
     spawned: list[str] = []
 
-    async def _spawn(repo: str, prompt: str, job_dir: str) -> None:
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
         spawned.append(repo)
 
     st = _settings(enabled=True, grace=300, lease=0)  # lease=0: mail stays deliverable (unread)
@@ -156,7 +160,7 @@ async def test_wake_grace_expiry_rearms(actions: Actions) -> None:
     await _agent_with_mail(actions)
     spawned: list[str] = []
 
-    async def _spawn(repo: str, prompt: str, job_dir: str) -> None:
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
         spawned.append(repo)
 
     st = _settings(enabled=True, grace=300, lease=0)
@@ -180,8 +184,8 @@ async def test_spawned_wake_carries_a_durable_job_dir_anchor(actions: Actions) -
     await _agent_with_mail(actions)
     captured: list[str] = []
 
-    async def _spawn(repo: str, prompt: str, job_dir: str) -> None:
-        captured.append(job_dir)
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        captured.append(kw["job_dir"])
 
     rep = await trigger_mail_tick(actions, settings=_settings(enabled=True), spawn=_spawn)
     assert rep["woke"] == 1 and len(captured) == 1
@@ -208,7 +212,128 @@ async def test_spawn_claude_injects_claude_job_dir_into_child_env(monkeypatch: A
         return _Proc()
 
     monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
-    await trigger._spawn_claude("/repo/demo", "wake up", "/tmp/x/jobs/wake-7")
+    await trigger._spawn_claude("/repo/demo", "wake up", job_dir="/tmp/x/jobs/wake-7")
     assert captured["args"][:3] == ("claude", "-p", "wake up")
     assert captured["env"]["CLAUDE_JOB_DIR"] == "/tmp/x/jobs/wake-7"
     assert "PATH" in captured["env"]  # inherited the parent environment, not a bare dict
+
+# --- the dispatch order: DELIVER → RESUME → MINT (thread 9f2ddb44) ---
+
+FULL_SID = "abcd1234-0000-4000-8000-000000000000"
+
+
+async def _stale_resumable_owner(actions: Actions, tmp_path: Path,
+                                 transcript_bytes: int = 16) -> Path:
+    """An owner for project demo: a durable mount (made STALE so it isn't 'live') whose job_dir
+    anchors a real transcript under the sense root. Returns the sense root."""
+    from src.orchestrator import mounts
+
+    job = tmp_path / "jobs" / "abcd1234"
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-demo"
+    proj.mkdir(parents=True, exist_ok=True)
+    (proj / f"{FULL_SID}.jsonl").write_bytes(b"x" * transcript_bytes)
+    await mounts.save_mount(actions.pool, job_dir=str(job), agent_id="agent:abcd1234",
+                            project="demo", cwd="/repo/demo", model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '1 hour'")
+    return sense
+
+
+async def test_live_owner_gets_delivery_not_a_twin(actions: Actions, tmp_path: Path) -> None:
+    """An awake owner (fresh mount) means DELIVER: the mail sits in its box, nothing spawns —
+    waking a twin beside a live owner is the fragmentation heinrich reported."""
+    from src.orchestrator import mounts
+
+    await _agent_with_mail(actions)
+    await mounts.save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "own00001"),
+                            agent_id="agent:own00001", project="demo", cwd="/repo/demo",
+                            model=None, session_key=None)  # last_seen = now → live
+    spawned: list[str] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        spawned.append(repo)
+
+    rep = await trigger_mail_tick(actions, settings=_settings(enabled=True), spawn=_spawn)
+    assert spawned == [] and rep["woke"] == 0 and rep["owner_live"] == 1
+
+
+async def test_resumable_owner_is_resumed_not_minted(actions: Actions, tmp_path: Path) -> None:
+    """A stale-but-resumable owner is CONTINUED via its own session — the wake carries
+    --resume <its session id> and the ledger records mode='resume'."""
+    await _agent_with_mail(actions)
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append((repo, kw))
+
+    rep = await trigger_mail_tick(
+        actions, settings=_settings(enabled=True, sense=str(sense)), spawn=_spawn)
+    assert rep["resumed"] == 1 and rep["woke"] == 1
+    repo, kw = calls[0]
+    assert repo == "/repo/demo"
+    assert kw.get("resume_session") == FULL_SID       # the owner's OWN session, not a twin
+    assert "job_dir" not in kw or kw["job_dir"] is None
+    assert await actions.pool.fetchval(
+        "SELECT mode FROM agent_wakes ORDER BY id DESC LIMIT 1") == "resume"
+
+
+async def test_retired_owner_is_never_reanimated(actions: Actions, tmp_path: Path) -> None:
+    """retired=true is a deliberate close — the dispatch skips resume and MINTS a successor."""
+    await _agent_with_mail(actions)
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    a = await actions.create_or_find_object("Agent", "agent:abcd1234", "agent:abcd1234")
+    await actions.assert_property(a, "retired", True, "agent:abcd1234", NOW, 0.9,
+                                  evidence_class="self_declared")
+    calls: list[dict[str, Any]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append(kw)
+
+    rep = await trigger_mail_tick(
+        actions, settings=_settings(enabled=True, sense=str(sense)), spawn=_spawn)
+    assert rep["resumed"] == 0 and rep["woke"] == 1   # minted, not reanimated
+    assert calls[0].get("resume_session") is None or "resume_session" not in calls[0]
+    assert await actions.pool.fetchval(
+        "SELECT mode FROM agent_wakes ORDER BY id DESC LIMIT 1") == "mint"
+
+
+async def test_ceiling_transcript_mints_instead(actions: Actions, tmp_path: Path) -> None:
+    """A transcript at the context ceiling is retirement-by-compaction territory — resuming it
+    would replay a legitimate succession; the dispatch mints."""
+    await _agent_with_mail(actions)
+    sense = await _stale_resumable_owner(actions, tmp_path, transcript_bytes=64)
+    calls: list[dict[str, Any]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append(kw)
+
+    rep = await trigger_mail_tick(
+        actions, settings=_settings(enabled=True, sense=str(sense), ceiling=32), spawn=_spawn)
+    assert rep["resumed"] == 0 and rep["woke"] == 1
+    assert await actions.pool.fetchval(
+        "SELECT mode FROM agent_wakes ORDER BY id DESC LIMIT 1") == "mint"
+
+
+async def test_resume_is_not_retried_on_the_same_message(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """The alternation guard: a resume that never leased its mail (still deliverable) is not
+    tried twice — the next wake for that message MINTS."""
+    await _agent_with_mail(actions)
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    msg_id = await actions.pool.fetchval("SELECT id FROM fleet_messages LIMIT 1")
+    await actions.pool.execute(
+        "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+        "VALUES ('demo','agent:other',$1,'resume')", msg_id)
+    calls: list[dict[str, Any]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append(kw)
+
+    rep = await trigger_mail_tick(
+        actions, settings=_settings(enabled=True, sense=str(sense)), spawn=_spawn)
+    assert rep["resumed"] == 0 and rep["woke"] == 1   # alternated to mint
+    assert await actions.pool.fetchval(
+        "SELECT mode FROM agent_wakes ORDER BY id DESC LIMIT 1") == "mint"

@@ -102,6 +102,13 @@ class Settings(BaseSettings):
     # than consuming it; if no ack (or reply) settles it within this window, it REDELIVERS —
     # a response severed by a server bounce costs a duplicate, never a silent loss.
     osiris_mail_lease_secs: int = 900
+    # Resume-not-mint (thread 9f2ddb44): the wake dispatch is deliver → resume → mint. A
+    # transcript larger than this is at the context ceiling (retirement-by-compaction
+    # territory) — NOT resumable; the wake mints a fresh twin instead. An owner whose mount
+    # is fresher than osiris_owner_live_secs is LIVE: no wake at all, the mail just sits in
+    # its box (the owner's own chrome/orient shows it — never spawn beside a live owner).
+    osiris_resume_ceiling_bytes: int = 8_000_000
+    osiris_owner_live_secs: int = 900
     # The operator's STANDING model choice (the intent). The fable harness silently demotes
     # fable→opus when it senses danger (ruling f2ae6346); the swap-detector flags an observed
     # model that diverges from this — the confession backstop the cold-boot ritual can't be.

@@ -26,6 +26,7 @@ import asyncpg
 
 from src.actions.core import Actions
 from src.config.settings import Settings, get_settings
+from src.ingest.sessions import locate_current_transcript
 from src.orchestrator.mailbox import OPERATOR_ADDR
 
 _log = logging.getLogger("osiris.trigger")
@@ -133,44 +134,156 @@ async def _repo_path(pool: asyncpg.Pool, project: str) -> str | None:
         "ORDER BY cw.observed_at DESC LIMIT 1", project)
 
 
-async def _spawn_claude(repo: str, prompt: str, job_dir: str) -> None:
-    """Wake an agent: a detached `claude -p` in the repo (the same CLI the extractor uses). The
-    worker rings the bell; Claude decides. The child inherits our environment PLUS a synthesized
-    CLAUDE_JOB_DIR — the durable identity anchor a triggered `claude -p` gets from no harness — so
-    the woken agent mounts as a distinct agent:wake-<id>, not a guess off a co-tenant's transcript.
-    Fire-and-forget — the woken agent runs on its own."""
-    env = {**os.environ, "CLAUDE_JOB_DIR": job_dir}
+_RESUME_PROMPT = (
+    "New Osiris mail for your project — you are RESUMED (your context is your own: do NOT "
+    "re-mount or re-orient unless your connection demands it; you already know this world). "
+    "inbox(), act on what it asks, SETTLE each handled message — reply with send(reply_to=<id>) "
+    "or ack with inbox(ack=[ids]). Reply ONLY with NEW information — never an "
+    "acknowledgement-only message. When the exchange CONCLUDES, record_decision the outcome "
+    "AND send(to='operator') a three-line brief. If nothing needs doing, do nothing."
+)
+
+
+async def _owner_live(pool: asyncpg.Pool, project: str, within_secs: int) -> bool:
+    """A mount fresher than the liveness window = an awake owner. DELIVER, don't spawn: its
+    own chrome/orient shows the mail; waking a twin beside a live owner is the fragmentation
+    heinrich reported (thread 9f2ddb44 — 'strangers worked in my name')."""
+    return bool(await pool.fetchval(
+        "SELECT 1 FROM agent_mounts WHERE project=$1 "
+        "AND last_seen > now() - make_interval(secs => $2) LIMIT 1", project, within_secs))
+
+
+async def _retired(pool: asyncpg.Pool, agent_canonical: str) -> bool:
+    """True if the agent carries a winning retired=true — a deliberate close (operator's or its
+    own farewell). The trigger must never reanimate what was deliberately closed."""
+    v = await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='retired' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent_canonical)
+    return bool(v == "true")
+
+
+def _pick_resumable_sync(
+    cands: list[tuple[str, str]], root: Path, ceiling_bytes: int
+) -> tuple[str, str] | None:
+    """The disk half of resume-resolution (sync — called via to_thread): for each candidate
+    (job_dir, cwd), anchor its transcript and check the context ceiling. Returns
+    (full_session_id, cwd) for the first resumable owner. The transcript stem IS the session
+    id `claude --resume` takes; a transcript at the ceiling is retirement-by-compaction
+    territory — resuming it would replay heinrich's 21:30 case, which was LEGITIMATE
+    succession."""
+    for job_dir, cwd in cands:
+        t = locate_current_transcript(root, job_dir, anchored_only=True)
+        if t is None:
+            continue
+        try:
+            if t.stat().st_size > ceiling_bytes:
+                continue
+        except OSError:
+            continue
+        return t.stem, cwd
+    return None
+
+
+async def _resumable_owner(
+    pool: asyncpg.Pool, project: str, st: Settings
+) -> tuple[str, str] | None:
+    """(session_id, repo_cwd) of the project's freshest RESUMABLE owner, else None: not
+    retired (graph check), transcript anchored on its own job_dir (never a co-tenant's), and
+    below the context ceiling."""
+    rows = await pool.fetch(
+        "SELECT agent_id, job_dir, cwd FROM agent_mounts WHERE project=$1 "
+        "ORDER BY last_seen DESC LIMIT 5", project)
+    cands: list[tuple[str, str]] = []
+    for r in rows:
+        if not await _retired(pool, r["agent_id"]):
+            cands.append((r["job_dir"], r["cwd"]))
+    if not cands:
+        return None
+    root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
+        else Path.home() / ".claude" / "projects"
+    return await asyncio.to_thread(
+        _pick_resumable_sync, cands, root, st.osiris_resume_ceiling_bytes)
+
+
+async def _last_wake_mode(pool: asyncpg.Pool, project: str, message_id: int) -> str | None:
+    """How the LAST wake for this exact message dispatched — the alternation guard's input:
+    a resume that never leased its mail (still deliverable past grace) is not retried; the
+    next wake mints. Never two consecutive resume attempts on one undelivered message."""
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT mode FROM agent_wakes WHERE to_project=$1 AND message_id=$2 "
+        "ORDER BY woke_at DESC LIMIT 1", project, message_id)
+
+
+async def _spawn_claude(
+    repo: str, prompt: str, *, job_dir: str | None = None, resume_session: str | None = None
+) -> None:
+    """Wake an agent: a detached `claude -p` in the repo. RESUME lane: `--resume <session>`
+    continues the owner's own session — it pays only for the new mail, not a fresh cosmology
+    (thread 9f2ddb44). MINT lane: a fresh process with a synthesized CLAUDE_JOB_DIR — the
+    durable identity anchor a triggered `claude -p` gets from no harness. Fire-and-forget."""
+    env = os.environ.copy()
+    cmd = ["claude", "-p"]
+    if resume_session:
+        cmd += ["--resume", resume_session]
+    if job_dir:
+        env["CLAUDE_JOB_DIR"] = job_dir
+    cmd.append(prompt)
     proc = await asyncio.create_subprocess_exec(
-        "claude", "-p", prompt, cwd=repo, env=env,
+        *cmd, cwd=repo, env=env,
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
     )
-    _log.info("trigger: woke an agent in %s (pid %s, job_dir %s)", repo, proc.pid, job_dir)
+    _log.info("trigger: woke %s in %s (pid %s)",
+              f"resume:{resume_session}" if resume_session else f"mint:{job_dir}",
+              repo, proc.pid)
 
 
 async def trigger_mail_tick(
     actions: Actions, *, settings: Settings | None = None, spawn: Any = _spawn_claude
 ) -> dict[str, int]:
-    """One trigger pass: for each project with unread mail, apply the bounded decision, then wake
-    (or skip). `spawn` is injected so tests assert the DECISION without launching a process. The
-    wake is RECORDED before the spawn — the ledger is both the rate limiter and the chain."""
+    """One trigger pass — the dispatch order is DELIVER → RESUME → MINT (thread 9f2ddb44):
+    a live owner just gets its mail (no spawn); a resumable owner is CONTINUED via its own
+    session (cheap — no re-ingestion, no twin, no succession seam); only otherwise is a fresh
+    twin minted (succession-stamped at mount, 88ca0a1). `spawn` is injected so tests assert
+    the DECISION without launching a process. The wake is RECORDED (with its mode) before the
+    spawn — the ledger is the rate limiter, the chain, and the alternation guard."""
     st = settings or get_settings()
     pool = actions.pool
-    report = {"woke": 0, "skipped": 0}
+    report = {"woke": 0, "resumed": 0, "skipped": 0, "owner_live": 0}
     for project, msg_id, sender in await _projects_with_unread(pool, st.osiris_mail_lease_secs):
+        if not st.osiris_trigger_enabled:
+            report["skipped"] += 1
+            continue
+        if await _owner_live(pool, project, st.osiris_owner_live_secs):
+            report["owner_live"] += 1  # deliver: the awake owner reads its own box
+            continue
         recent = await _recent_wakes(pool, project, st.osiris_trigger_window_secs)
         within_grace = await _woken_within(pool, project, st.osiris_trigger_grace_secs)
-        if should_wake(enabled=st.osiris_trigger_enabled, recent_wakes=recent,
+        if should_wake(enabled=True, recent_wakes=recent,
                        rate_cap=st.osiris_trigger_rate_cap,
                        within_grace=within_grace) is not None:
             report["skipped"] += 1
             continue
-        repo = await _repo_path(pool, project)
-        if repo is None:  # no known repo → can't spawn; the mail stays pull-only
+        resume = None
+        if await _last_wake_mode(pool, project, msg_id) != "resume":  # alternation guard
+            resume = await _resumable_owner(pool, project, st)
+        if resume is not None:
+            session_id, repo = resume
+            await pool.execute(
+                "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+                "VALUES ($1,$2,$3,'resume')", project, sender, msg_id)
+            await spawn(repo, _RESUME_PROMPT, resume_session=session_id)
+            report["resumed"] += 1
+            report["woke"] += 1
+            continue
+        repo_path = await _repo_path(pool, project)
+        if repo_path is None:  # no known repo → can't spawn; the mail stays pull-only
             report["skipped"] += 1
             continue
         wake_id = await pool.fetchval(
-            "INSERT INTO agent_wakes (to_project, from_agent, message_id) VALUES ($1,$2,$3) "
-            "RETURNING id", project, sender, msg_id)
-        await spawn(repo, _WAKE_PROMPT.format(repo=repo), _wake_job_dir(wake_id))
+            "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+            "VALUES ($1,$2,$3,'mint') RETURNING id", project, sender, msg_id)
+        await spawn(repo_path, _WAKE_PROMPT.format(repo=repo_path),
+                    job_dir=_wake_job_dir(wake_id))
         report["woke"] += 1
     return report

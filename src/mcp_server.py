@@ -589,6 +589,36 @@ async def mount(
     return out
 
 
+@mcp.tool()
+async def retire(reason: str = "", ctx: Context | None = None) -> dict[str, str]:
+    """Mark THIS mounted session RETIRED — a deliberate close the trigger must never
+    reanimate (resume-not-mint dispatch, thread 9f2ddb44). Call it at a real farewell: the
+    operator closing you out, or a context-ceiling handoff after your succession thread is
+    written. Stamps retired=true on your Agent (SELF_DECLARED — your own act, on the record)
+    and detaches your hot mount. Future mail for your project resumes a LIVING session or
+    mints a stamped successor — never you."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — only a mounted session can retire itself"}
+    pool = await _pool_get()
+    a = Actions(pool)
+    oid = await a.create_or_find_object("Agent", ident.agent_id, ident.agent_id)
+    await a.assert_property(
+        oid, "retired", True, ident.agent_id, datetime.now(UTC), 0.9,
+        evidence_class="self_declared")
+    if reason:
+        await a.assert_property(
+            oid, "retired_reason", reason[:500], ident.agent_id, datetime.now(UTC), 0.9,
+            evidence_class="self_declared")
+    key = _conn_key(ctx)
+    if key is not None:
+        _agents.pop(key, None)
+        _agents_touched.pop(key, None)
+    return {"retired": ident.agent_id,
+            "note": "farewell recorded — the trigger will not reanimate this session; "
+                    "write your succession thread BEFORE you go dark"}
+
+
 # orient's open-thread wall is a bounded query, not a scroll: the assembly layer ranks the
 # composition's recency-ordered set (obligations first) and shows at most this many, noting
 # the remainder. Ranking + cap only — no GC, no auto-resolve (those need operator input).
