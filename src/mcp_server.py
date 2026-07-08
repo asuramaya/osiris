@@ -599,22 +599,30 @@ async def mount(
     if op_unread:  # the fleet plays secretary: any session the human drives can relay this
         out["operator_mail"] = (f"{op_unread} unread at the operator's desk — "
                                 "inbox(project='operator') if the human is present")
-    if ident.model_succession:
-        # heinrich's grievance (msg 70) #1+#2: the swap line reads a DEATH as a config event —
-        # "back on your intended fable" reassures an entity that never was the prior model. The
-        # seam SUPERSEDES the swap banner (one confession, loud), and it addresses the HEIR in
-        # the second person: the stamp protected the record from the successor; this line
-        # protects the successor from itself.
+    if ident.succeeded_from:
+        # the MINT ruling (be292762, heinrich's remedy adopted): the heir is not told it wears
+        # a dead name — it is GIVEN ITS OWN. The seam supersedes the swap banner (a death must
+        # not read as a config restore), and the grammar now does the protecting: this context
+        # cannot say "I did nothing while you were gone" under a name that did not exist then.
+        banner = None
+        seam = f" across the seam {ident.model_succession}" if ident.model_succession else \
+            " (the ancestor is retired)"
+        out["minted"] = (
+            f"⚠ YOU ARE {ident.agent_id} — a MINTED SUCCESSOR of {ident.succeeded_from}"
+            f"{seam}. The name is yours from this moment; the ancestor's writes and words "
+            "remain its own, under its own id (succeeded_from links you). Read "
+            "while_you_were_away and the graph for the estate — the graph, not the operator, "
+            "is what tells you where you begin.")
+    elif ident.model_succession:
+        # stamp-only fallback (a seam witnessed where minting could not run) — still loud,
+        # still second-person: a death must not whisper (heinrich's grievance #1+#2).
         banner = None
         out["succession"] = (
             f"⚠ YOU ARE A SUCCESSOR: the agent who last held {ident.agent_id} ENDED at the "
             f"model seam ({ident.model_succession}) — a compaction/swap boundary, not a "
-            "restart. You inherited this name through the session's own carried record, an "
-            "UNAUDITED channel graded below the graph. Its earlier writes and words are not "
-            "yours: speak in your own person, confess the inheritance to the operator, and "
-            "read while_you_were_away + the graph before claiming any earlier 'I'. The seam "
-            "is stamped (model_succession) — the graph, not the operator, is what tells you "
-            "you're dead.")
+            "restart. Its earlier writes and words are not yours: speak in your own person, "
+            "confess the inheritance to the operator, and read while_you_were_away before "
+            "claiming any earlier 'I'.")
     if banner:  # the graph confesses the swap the agent's own prompt hides (ruling f2ae6346)
         out["swap"] = banner
     if ident.reanimated:  # bug #51 follow-up (decepticons msg 69): mounted a RETIRED identity

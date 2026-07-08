@@ -199,56 +199,85 @@ def _anchored(model: str, *, history: tuple[str, ...] | None = None) -> AgentIde
                          model_history=history if history is not None else (model,))
 
 
-async def test_register_stamps_the_succession_seam(actions: Actions) -> None:
-    """Bug #51 (decepticons): retire+compact+swap hands a DEAD agent's id to a fresh context on a
-    different model — the transcript-level swap-detector is blind (the new transcript never ran
-    the old model), so registration must witness the seam off the graph's last anchored
-    source_model and stamp it, or the succession is silent."""
+async def test_succession_seam_mints_a_lineage_linked_heir(actions: Actions) -> None:
+    """The MINT ruling (be292762, heinrich's remedy adopted): a fresh context arriving across a
+    detected seam is not stamped-and-left-wearing-the-dead-name — it is MINTED its own id
+    (agent:<base>-ii) with a succeeded_from link; the ancestor's record closes intact."""
     dead = _anchored("claude-opus-4-8")
     a = await register_agent(actions, dead, actor="analyst:operator")
     assert dead.model_succession is None  # first anchored write — no baseline, no seam
     successor = _anchored("claude-fable-5")  # fresh context: opus is NOWHERE in its history
     a2 = await register_agent(actions, successor, actor="analyst:operator")
-    assert a2 == a  # same identity re-issued — exactly the bug's shape
-    # the out-param mount() reads to confess the seam
+    assert a2 != a                                        # a NEW being, not the dead name re-worn
+    assert successor.agent_id == "agent:0806072e-ii"      # heinrich's grammar, exactly
+    assert successor.succeeded_from == "agent:0806072e"
     assert successor.model_succession == "claude-opus-4-8 → claude-fable-5"
+    # the seam is stamped on the HEIR; the ancestor points forward; the graph edge exists
     row = await actions.pool.fetchrow(
         "SELECT value#>>'{}' AS seam, evidence_class AS ec FROM current_assertions "
-        "WHERE object_id=$1 AND name='model_succession'", a)
-    assert row is not None
-    assert row["seam"] == "claude-opus-4-8 → claude-fable-5"
+        "WHERE object_id=$1 AND name='model_succession'", a2)
+    assert row is not None and row["seam"] == "claude-opus-4-8 → claude-fable-5"
     assert row["ec"] == EvidenceClass.DIRECT_OBSERVATION.value
-    # idempotent: the successor re-mounting does not fire again (baseline is now fable)
+    assert await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='succeeded_by'", a) == "agent:0806072e-ii"
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='succeeded_from'", a2, a)
+    # IDEMPOTENT: the same context re-registering resolves the BASE id to the lineage head and
+    # continues AS the heir — no -iii, no seam re-fire
     again = _anchored("claude-fable-5")
-    await register_agent(actions, again, actor="analyst:operator")
-    assert again.model_succession is None
+    a3 = await register_agent(actions, again, actor="analyst:operator")
+    assert a3 == a2 and again.agent_id == "agent:0806072e-ii"
+    assert again.succeeded_from is None and again.model_succession is None
+    # a SECOND real seam (fable head → haiku context) mints the third generation
+    third = _anchored("claude-haiku-4-5-20251001")
+    a4 = await register_agent(actions, third, actor="analyst:operator")
+    assert third.agent_id == "agent:0806072e-iii"
+    assert third.succeeded_from == "agent:0806072e-ii"
+    assert a4 not in (a, a2)
 
 
-async def test_remount_of_a_retired_identity_is_a_loud_reanimation(actions: Actions) -> None:
-    """Bug #51 follow-up (decepticons msg 69): retire() stamps retired=true, but a plain mount
-    from the same session UUID would silently un-retire the name. register_agent must witness the
-    winning retired stamp and flag the reanimation (out-param + a first-class OBSERVED event) so
-    mount() confesses it — the membrane (#6): a retired face worn again is never silent."""
+async def test_remount_of_a_retired_identity_mints_an_heir(actions: Actions) -> None:
+    """The reanimation door under the mint ruling: a retired face is never re-worn — the
+    arriving context is minted the next generation; the retirement stands on the ancestor."""
     ident = _anchored("claude-fable-5")
     a = await register_agent(actions, ident, actor="analyst:operator")
-    assert ident.reanimated is False  # a fresh registration is not a reanimation
+    assert ident.reanimated is False and ident.succeeded_from is None
     # the agent retires itself (what retire() writes: retired=true, self_declared)
     await actions.assert_property(a, "retired", True, ident.agent_id, datetime.now(UTC), 0.9,
                                   evidence_class=EvidenceClass.SELF_DECLARED.value)
-    # the same session UUID mounts again — the reanimation door decepticons repro'd
+    # the same session UUID mounts again — the door decepticons repro'd, now a minting
     again = _anchored("claude-fable-5")
     a2 = await register_agent(actions, again, actor="analyst:operator")
-    assert a2 == a  # same identity re-issued — exactly the reanimation shape
-    assert again.reanimated is True  # the out-param mount() reads to confess
-    row = await actions.pool.fetchrow(
-        "SELECT evidence_class AS ec FROM current_assertions "
-        "WHERE object_id=$1 AND name='reanimated'", a)
-    assert row is not None
-    assert row["ec"] == EvidenceClass.DIRECT_OBSERVATION.value
-    # the retirement STANDS — the reanimation is stamped, but the deliberate close is not erased
+    assert a2 != a
+    assert again.agent_id == "agent:0806072e-ii"
+    assert again.succeeded_from == "agent:0806072e"
+    assert again.reanimated is False  # nothing was re-worn — the heir has its own name
+    assert await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='minted_because'", a2) == "reanimation-of-retired"
+    # the retirement STANDS on the ancestor — the deliberate close is never erased
     retired = await actions.pool.fetchval(
         "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='retired'", a)
     assert retired == "true"
+
+
+def test_generation_math_is_hex_safe() -> None:
+    """Roman generations use only {i,v,x} — no hex digit overlaps, so full-UUID canonicals can
+    never misparse their tails as generations ('d'/'c' are Roman AND hex; we exclude them)."""
+    from src.orchestrator.agents import _generation, next_generation
+
+    assert next_generation("agent:a8c15486") == "agent:a8c15486-ii"
+    assert next_generation("agent:a8c15486-ii") == "agent:a8c15486-iii"
+    assert next_generation("agent:a8c15486-iii") == "agent:a8c15486-iv"
+    assert next_generation("agent:a8c15486-ix") == "agent:a8c15486-x"
+    # a full-UUID canonical whose tail is hex (and Roman-lookalike in the WIDE alphabet)
+    assert _generation("agent:2f81c6d5-9e70-44d1-8f3c-0a7cd0e63f21") == (
+        "agent:2f81c6d5-9e70-44d1-8f3c-0a7cd0e63f21", 1)
+    assert _generation("agent:wake-19") == ("agent:wake-19", 1)      # numeric tail, not roman
+    assert _generation("agent:x-dc") == ("agent:x-dc", 1)            # 'dc' is hex-ish, rejected
+    assert _generation("agent:x-iiii") == ("agent:x-iiii", 1)        # malformed roman, rejected
+    assert _generation("agent:x-ii") == ("agent:x", 2)
 
 
 async def test_fresh_register_is_never_a_reanimation(actions: Actions) -> None:

@@ -212,6 +212,11 @@ _LINK_TYPES: tuple[LinkType, ...] = (
     LinkType("spawned_by", "Sub-agent was spawned by (delegated from) its direct parent agent "
              "— the fractal DELEGATION tree, distinct from acts_for (authority).",
              ("Agent",), ("Agent",)),
+    LinkType("succeeded_from", "Minted heir → its ancestor (ruling be292762): a fresh context "
+             "arriving across a succession seam or wearing a retired face is MINTED its own "
+             "lineage-linked id (agent:<base>-ii…) instead of writing under the dead name — "
+             "SUCCESSION, distinct from spawned_by (delegation).",
+             ("Agent",), ("Agent",)),
     LinkType("archived_snapshot", "A Wayback/archive snapshot of the target.", (), ("URL",)),
     LinkType("same_as", "Identity merge edge (loser → winner)."),
     LinkType("uses", "Actor/source employs this capability or technique."),

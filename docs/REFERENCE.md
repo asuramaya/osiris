@@ -140,6 +140,7 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `acts_for` | Agent → Person | Agent acts on behalf of the principal (AUTHORITY). |
 | `works_in` | Agent → SoftwareProject | Agent operates in the target project. |
 | `spawned_by` | Agent → Agent | Sub-agent was spawned by (delegated from) its direct parent agent — the fractal DELEGATION tree, distinct from acts_for (authority). |
+| `succeeded_from` | Agent → Agent | Minted heir → its ancestor (ruling be292762): a fresh context arriving across a succession seam or wearing a retired face is MINTED its own lineage-linked id (agent:<base>-ii…) instead of writing under the dead name — SUCCESSION, distinct from spawned_by (delegation). |
 | `archived_snapshot` | * → URL | A Wayback/archive snapshot of the target. |
 | `same_as` | — | Identity merge edge (loser → winner). |
 | `uses` | — | Actor/source employs this capability or technique. |
