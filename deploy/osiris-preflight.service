@@ -1,0 +1,10 @@
+# Weekly survival audit (failure-class 6: perfect operation conceals rigging). Checks units,
+# restart policies, named volumes, backup freshness + a restore DRILL, default-port traps,
+# vault age. Silent when green; a regression lands on the operator's desk via the mailbox.
+[Unit]
+Description=Osiris preflight — the audit that can't be forgotten
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/asuramaya/code/osiris
+ExecStart=/home/asuramaya/code/osiris/.venv/bin/python scripts/osiris_preflight.py --drill
