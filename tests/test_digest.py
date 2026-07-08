@@ -176,3 +176,22 @@ async def test_watermark_mode_advances_only_on_mark_seen(actions: Actions) -> No
     assert dg5["watermark"]["mode"] == "explicit"
     dg6 = await fleet_digest(actions)
     assert dg6["watermark"]["value"] == dg3["watermark"]["advanced_to"]
+
+
+async def test_costs_stream_meters_the_window_honestly(actions: Actions) -> None:
+    """The operator's 'where are the tokens burnt', metered — grouped by burner, biggest
+    first, and NEVER without its coverage note (a spend figure that overclaims is worse
+    than none: wakes and interactive tabs are unmetered today)."""
+    p = actions.pool
+    await p.execute(
+        "INSERT INTO llm_usage (purpose, model, input_tokens, output_tokens, cost_usd) VALUES "
+        "('session-extract','claude-haiku-4-5-20251001', 30000, 2000, 0.05),"
+        "('session-extract','claude-haiku-4-5-20251001', 20000, 1000, 0.03),"
+        "('doc-extract','claude-haiku-4-5-20251001', 5000, 500, 0.01)")
+    dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
+    assert dg["summary"]["spend_tokens"] == 58_500
+    assert dg["summary"]["spend_usd"] == 0.09
+    top = dg["costs"]["by"][0]
+    assert top["purpose"] == "session-extract" and top["calls"] == 2
+    assert top["tokens"] == 53_000
+    assert "unmetered" in dg["costs"]["coverage"]  # the honesty clause is part of the stream

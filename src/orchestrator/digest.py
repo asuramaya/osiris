@@ -216,6 +216,35 @@ async def _resolve_since(
                                                  "age_secs": None}
 
 
+# What the meter can honestly claim to cover. Only the miner's extract path records usage
+# today; wake sessions, interactive tabs, and the document-extract path are UNMETERED (the
+# parked cost-levers thread) — a spend figure without this caveat would read as total burn.
+_COST_COVERAGE = ("session-extract only — wake sessions, interactive tabs and "
+                  "document-extract are unmetered (cost-levers thread)")
+
+
+async def _costs(actions: Actions, since: datetime) -> dict[str, Any]:
+    """The spend stream — llm_usage aggregated over the window, grouped by (purpose, model),
+    biggest burner first. Telemetry, not the graph; rendered with its coverage note so the
+    number never overclaims (the operator's 'where are the tokens burnt', metered)."""
+    rows = await actions.pool.fetch(
+        "SELECT purpose, model, count(*) AS calls, "
+        " coalesce(sum(input_tokens+output_tokens),0) AS tokens, sum(cost_usd) AS usd "
+        "FROM llm_usage WHERE ran_at >= $1 "
+        "GROUP BY purpose, model ORDER BY tokens DESC LIMIT 10", since)
+    by = [{"purpose": r["purpose"], "model": r["model"], "calls": int(r["calls"]),
+           "tokens": int(r["tokens"]),
+           "usd": round(float(r["usd"]), 4) if r["usd"] is not None else None}
+          for r in rows]
+    return {
+        "calls": sum(g["calls"] for g in by),
+        "tokens": sum(g["tokens"] for g in by),
+        "usd": round(sum(g["usd"] for g in by if g["usd"] is not None), 2),
+        "by": by,
+        "coverage": _COST_COVERAGE,
+    }
+
+
 async def fleet_digest(
     actions: Actions, *, since: datetime | None = None, mark_seen: bool = False,
     lease_secs: int = 900,
@@ -232,6 +261,7 @@ async def fleet_digest(
     activity = await _activity(actions, effective_since)
     laundering, disputes = await _credence_streams(actions, effective_since)
     conversations = await _conversations(actions, effective_since)
+    costs = await _costs(actions, effective_since)
     operator_inbox = await _operator_inbox(actions, lease_secs=lease_secs)
     danger = [r for r in roster if r["swapped"]]
     unresolved = [r for r in roster if not r["resolved"]]
@@ -249,6 +279,7 @@ async def fleet_digest(
             "swapped": len(danger), "activity": len(activity), "laundering": len(laundering),
             "disputes": len(disputes), "conversations": len(conversations),
             "operator_unread": operator_inbox["unread"],
+            "spend_tokens": costs["tokens"], "spend_usd": costs["usd"],
         },
         "roster": roster,
         "activity": activity,
@@ -256,5 +287,6 @@ async def fleet_digest(
         "laundering": laundering,
         "disputes": disputes,
         "conversations": conversations,
+        "costs": costs,
         "operator_inbox": operator_inbox,
     }

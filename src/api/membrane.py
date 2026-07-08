@@ -85,7 +85,11 @@ def render_membrane(dg: dict[str, Any], wakes: list[dict[str, Any]]) -> str:
         f'<span><a href="#wakes"><b>wakes {len(wakes)}</b></a></span>'
         f'<span><a href="#activity"><b>activity {s["activity"]}</b></a></span>'
         f'<span class="{"red" if s["laundering"] else "dim"}">laundering {s["laundering"]}</span>'
-        f"</div>"
+        + (f'<span><a href="#costs"><b>spend {_e(s.get("spend_tokens", 0))} tok</b></a>'
+           + (f' <span class="dim">(${_e(s["spend_usd"])})</span>'
+              if s.get("spend_usd") else "") + "</span>"
+           if "spend_tokens" in s else "")
+        + "</div>"
     )
     desk_rows = "".join(
         _row(f'<span class="dim">{_e(m["when"][:16])}</span>',
@@ -126,6 +130,17 @@ def render_membrane(dg: dict[str, Any], wakes: list[dict[str, Any]]) -> str:
              f'<div class="body">{_e(a["summary"])}</div>')
         for a in dg["activity"]
     )
+    costs_html = ""
+    costs = dg.get("costs")
+    if costs:  # tolerant of older digest shapes — the section renders only when metered
+        cost_rows = "".join(
+            _row(_e(g["purpose"]), _e((g["model"] or "?").removeprefix("claude-")),
+                 f'{g["calls"]} calls', f'{g["tokens"]:,} tok',
+                 f'${g["usd"]}' if g.get("usd") is not None else "")
+            for g in costs["by"]
+        ) or _row('<span class="dim">nothing metered in window</span>', "", "", "", "")
+        costs_html = (f'<h2 id="costs">spend</h2><table>{cost_rows}</table>'
+                      f'<p class="dim">coverage: {_e(costs["coverage"])}</p>')
     laund = ""
     if dg["laundering"]:
         laund_rows = "".join(
@@ -142,6 +157,7 @@ def render_membrane(dg: dict[str, Any], wakes: list[dict[str, Any]]) -> str:
         f'<h2 id="fleet">fleet</h2><table>{roster_rows}</table>'
         f'<h2 id="wakes">wake ledger</h2><table>{wake_rows}</table>'
         f"{laund}"
+        f"{costs_html}"
         f'<h2 id="activity">activity</h2><table>{act_rows}</table>'
         f"{_footer(dg)}"
     )
