@@ -39,13 +39,19 @@ async def test_fleet_digest_surfaces_the_four_streams(actions: Actions) -> None:
     await _prop(actions, old, "summary", "ancient", "agent:aaa", SD, when=NOW - timedelta(days=3))
     m = await actions.create_or_find_object("Decision", "decision:mined", "session-miner")
     await _prop(actions, m, "summary", "mined noise", "session-miner", "derived", conf=0.4)
-    # --- laundering: agent:bbb (child) observed; agent:aaa (parent) relayed it inflated ---
+    # --- laundering: agent:bbb (child) observed; agent:aaa (parent) RELAYED the same claim
+    #     (reworded) at an inflated grade → clamp + flag ---
     b = await actions.create_or_find_object("Agent", "agent:bbb", "fleet-observer")
     await actions.create_link(b, a, "spawned_by", "fleet-observer", NOW, 0.6, evidence_class=DO)
     await _prop(actions, a, "backed_by_observation", False, "fleet-observer", DO, conf=0.6)
     o = await actions.create_or_find_object("SoftwareProject", "repo:x", "test")
-    await _prop(actions, o, "status", "relayed", "agent:aaa", SD)
-    await _prop(actions, o, "status", "observed", "agent:bbb", DO, conf=0.6)
+    await _prop(actions, o, "status", "The deploy FAILED.", "agent:aaa", SD)
+    await _prop(actions, o, "status", "deploy failed", "agent:bbb", DO, conf=0.6)
+    # --- disputes: on a DIFFERENT fact the parent MATERIALLY DISAGREES with the child → Tier-2
+    #     reads it as a dispute, not a relay: surfaced (both poles), never clamped or flagged ---
+    o2 = await actions.create_or_find_object("SoftwareProject", "repo:x2", "test")
+    await _prop(actions, o2, "verdict", "rollback is required", "agent:aaa", SD)
+    await _prop(actions, o2, "verdict", "no rollback needed", "agent:bbb", DO, conf=0.6)
 
     dg = await fleet_digest(actions, since=since)
 
@@ -64,7 +70,13 @@ async def test_fleet_digest_surfaces_the_four_streams(actions: Actions) -> None:
     # laundering: the parent relayed the child's observation inflated → flagged, origin wins
     assert dg["summary"]["laundering"] == 1
     assert "agent:aaa" in dg["laundering"][0]["laundering_sources"]
-    assert dg["laundering"][0]["value"] == "observed"  # origin won, relay clamped
+    assert dg["laundering"][0]["value"] == "deploy failed"  # origin won, relay clamped
+    # disputes: the genuine disagreement is surfaced with both poles, never buried as laundering
+    assert dg["summary"]["disputes"] == 1
+    disp = dg["disputes"][0]
+    assert disp["name"] == "verdict"
+    assert {p["source"] for p in disp["positions"]} == {"agent:aaa", "agent:bbb"}
+    assert {p["value"] for p in disp["positions"]} == {"rollback is required", "no rollback needed"}
 
 
 async def test_digest_surfaces_conversations_and_the_operator_desk(actions: Actions) -> None:

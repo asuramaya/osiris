@@ -12,6 +12,9 @@ new writes:
     f2ae6346), i.e. where the harness got nervous.
   * LAUNDERING — credence_props run LIVE over objects several agents co-asserted: a relay that
     carried a fact ABOVE its origin grade (the citogenesis the credence floor exists to catch).
+  * DISPUTES — the same live pass, its OTHER half: an ancestor whose value MATERIALLY DIFFERS
+    from its subtree's origin is DISAGREEING, not relaying (Tier-2). The value-blind clamp would
+    bury it as false laundering; the membrane shows the disagreement instead of flattening it.
   * CONVERSATIONS — the lateral mail threads, reconstructed straight from fleet_messages: who
     talked to whom, how much, how recently, and whether it settled. This is the COMPLIANCE-FREE
     half of the upward lane (membrane #6): an agent that shirks its report-up duty is still
@@ -87,10 +90,13 @@ async def _activity(actions: Actions, since: datetime, limit: int = 50) -> list[
     ]
 
 
-async def _laundering(actions: Actions, since: datetime) -> list[dict[str, Any]]:
-    """credence_props run LIVE over objects >1 agent co-asserted in the window — surfacing any
-    relay that carried a fact above its origin grade. Empty while co-assertion is nascent; this is
-    the wire that makes credence bite as the fleet grows."""
+async def _credence_streams(
+    actions: Actions, since: datetime
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """ONE credence_props pass over objects >1 agent co-asserted in the window, split into its two
+    upward streams — LAUNDERING (a relay carrying a fact above its origin grade) and DISPUTES (an
+    ancestor whose value genuinely differs from its subtree's origin). Both empty while
+    co-assertion is nascent; this is the wire that makes credence bite as the fleet grows."""
     # candidates = objects an agent touched IN the window whose (object,name) ALSO carries another
     # agent source ALL-TIME. The archetypal laundering re-reports an OLDER origin (origin before the
     # window, relay inside it) — requiring both sources inside the window would miss exactly that.
@@ -103,13 +109,19 @@ async def _laundering(actions: Actions, since: datetime) -> list[dict[str, Any]]
             "      AND c2.source_id LIKE 'agent:%' AND c2.source_id <> ca.source_id)", since)
     ]
     if not oids:
-        return []
-    winners = await credence_props(actions, oids)
-    return [
+        return [], []
+    result = await credence_props(actions, oids)
+    laundering = [
         {"object_id": str(w.object_id), "name": w.name, "value": w.value,
          "laundering_sources": list(w.laundering)}
-        for w in winners if w.laundering
+        for w in result.winners if w.laundering
     ]
+    disputes = [
+        {"object_id": str(d.object_id), "name": d.name,
+         "positions": [{"source": s, "value": v, "grade": g} for s, v, g in d.positions]}
+        for d in result.disputes
+    ]
+    return laundering, disputes
 
 
 async def _conversations(
@@ -163,11 +175,11 @@ async def _operator_inbox(actions: Actions, *, lease_secs: int) -> dict[str, Any
 async def fleet_digest(
     actions: Actions, *, since: datetime, lease_secs: int = 900
 ) -> dict[str, Any]:
-    """The membrane: the six upward streams over the window since `since`, with a summary head.
+    """The membrane: the upward streams over the window since `since`, with a summary head.
     Read-only — nothing here writes to the graph (the operator-inbox read is a peek)."""
     roster = await _roster(actions)
     activity = await _activity(actions, since)
-    laundering = await _laundering(actions, since)
+    laundering, disputes = await _credence_streams(actions, since)
     conversations = await _conversations(actions, since)
     operator_inbox = await _operator_inbox(actions, lease_secs=lease_secs)
     danger = [r for r in roster if r["swapped"]]
@@ -177,12 +189,14 @@ async def fleet_digest(
         "summary": {
             "agents": len(roster), "unresolved": len(unresolved),
             "swapped": len(danger), "activity": len(activity), "laundering": len(laundering),
-            "conversations": len(conversations), "operator_unread": operator_inbox["unread"],
+            "disputes": len(disputes), "conversations": len(conversations),
+            "operator_unread": operator_inbox["unread"],
         },
         "roster": roster,
         "activity": activity,
         "danger": danger,
         "laundering": laundering,
+        "disputes": disputes,
         "conversations": conversations,
         "operator_inbox": operator_inbox,
     }

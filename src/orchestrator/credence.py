@@ -9,25 +9,33 @@ that may stand). Naive grade-then-recency can't tell them apart, so a swarm coul
 confidence by echo (spawn N children, feed them one leaf's guess, harvest N "independent"
 agreements = citogenesis).
 
-The resolution, per fact, keyed on STRUCTURE not value (so a paraphrased relay dissolves — you
-never compare the reworded string):
+The resolution, per fact, keyed on STRUCTURE (the ancestry) — with a Tier-2 value check applied
+ONLY once structure has singled out an ancestor, to tell a relay from a dispute:
 
-  * CLAMP    — an ANCESTOR that only re-reported (pure hearsay: it never looked) has its
-               confidence for that fact capped at what its subtree actually established; it can't
-               win on an inflated grade. Processed DEEPEST-FIRST, so an inner relay's inflation
-               can't leak past its own clamp on the way up.
+  * CLAMP    — an ANCESTOR that re-reported the SAME claim (Tier-2: its value matches its
+               subtree's origin after normalization, so a paraphrase dissolves) and never looked
+               is pure hearsay: its confidence for that fact is capped at what its subtree
+               established, so it can't win on an inflated grade. Processed DEEPEST-FIRST, so an
+               inner relay's inflation can't leak past its own clamp on the way up.
+  * DISPUTE  — an ancestor whose value MATERIALLY DIFFERS from its subtree's origin (Tier-2) is
+               not relaying, it is DISAGREEING. The value-blind clamp would falsely accuse it of
+               laundering and silently bury a real disagreement; instead we DON'T clamp, DON'T
+               flag, and surface the disagreeing (source, value, grade) tuples as a `disputes`
+               output — the membrane shows the tension instead of flattening it (rule #6).
   * REBUTTAL — an ancestor that performed its OWN observation act (`backed_by_observation`, the
-               Tier-1 floor of the act-detection ladder, captured in lineage.py) is NOT clamped:
-               it may have verified, and verification is corroboration, not relay. Conservative —
-               we only clamp agents that provably never looked, so a genuine double-check is never
-               deflated (the failure the ladder exists to avoid).
-  * FLAG     — a pure-hearsay ancestor carrying a fact ABOVE its origin's grade is LAUNDERING
-               ("claimed you looked, only heard") — surfaced, never silently (membrane, rule #6).
+               Tier-1 floor of the act-detection ladder, captured in lineage.py) is neither
+               clamped NOR disputed: it may have verified, and verification is corroboration, not
+               relay. Conservative — we only touch agents that provably never looked, so a
+               genuine double-check is never deflated (the failure the ladder exists to avoid).
+  * FLAG     — a pure-hearsay ancestor carrying the SAME claim ABOVE its origin's grade is
+               LAUNDERING ("claimed you looked, only heard") — surfaced, never silently (rule #6).
 
 A pure function (`resolve_credence`, trivially unit-testable) over a thin IO layer
-(`credence_props`, fetching current_assertions + the spawned_by forest). A fact with NO ancestry
-among its sources resolves IDENTICALLY to winning_props (grade DESC, recency DESC) — this is a
-strict refinement that bites ONLY when a relay would otherwise out-rank its origin.
+(`credence_props`, fetching current_assertions + the spawned_by forest). It returns a
+`CredenceResult` — the effective winners AND the disputes. A fact with NO ancestry among its
+sources resolves IDENTICALLY to winning_props (grade DESC, recency DESC) — this is a strict
+refinement that bites ONLY when a relay would otherwise out-rank its origin, or when an ancestor
+genuinely disagrees.
 
 SCOPE (v1): the clamp acts among AGENT sources (`agent:*`) related by spawned_by. The
 session-miner now SOURCES each extraction to the ORIGINATING agent (`agent:<session>`, DERIVED,
@@ -39,6 +47,7 @@ miner.)
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -75,9 +84,56 @@ class CredenceWinner:
     laundering: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class Dispute:
+    """A genuine disagreement on one (object, name): an ancestor's value materially differs from
+    its subtree's origin (Tier-2), so it is DISPUTING, not relaying. `positions` are the
+    disagreeing (source_id, value, confidence) tuples — the poles the membrane must show rather
+    than clamp into a false certainty winner."""
+
+    object_id: str
+    name: str
+    positions: tuple[tuple[str, Any, float], ...]
+
+
+@dataclass(frozen=True)
+class CredenceResult:
+    """The whole lineage resolution: the effective `winners` (post-clamp) AND the `disputes` —
+    genuine disagreements that the value-blind clamp would have buried as false laundering."""
+
+    winners: list[CredenceWinner]
+    disputes: list[Dispute]
+
+
 def _is_agent(source_id: str) -> bool:
     """Only agent sources sit in the spawned_by tree; everything else resolves by raw grade."""
     return source_id.startswith("agent:")
+
+
+_PUNCT = re.compile(r"[^\w\s]|_")
+
+
+def _normalize(value: Any) -> str:
+    """A value's comparison form: lowercased, punctuation dropped, whitespace collapsed. Cheap and
+    deterministic — no embedding, no model (that would be a Tier-3 hook)."""
+    return " ".join(_PUNCT.sub(" ", str(value).lower()).split())
+
+
+def _same_claim(a: Any, b: Any, *, overlap: float = 0.7) -> bool:
+    """Tier-2: do two values assert the SAME claim (a relay) or materially differ (a dispute)?
+    SAME on equality after normalization (a paraphrase — case/punctuation), token containment (one
+    is a subset — a fuller re-statement), or high token overlap (Jaccard ≥ `overlap`); otherwise a
+    genuine disagreement. Conservative toward RELAY: the clamp is the status quo, so only a clearly
+    different value is promoted to a dispute (a near-match stays a relay and is still clamped)."""
+    na, nb = _normalize(a), _normalize(b)
+    if na == nb:
+        return True
+    ta, tb = set(na.split()), set(nb.split())
+    if not ta or not tb:
+        return na == nb  # an empty value is its own claim — never a subset-match of a real one
+    if ta <= tb or tb <= ta:
+        return True
+    return len(ta & tb) / len(ta | tb) >= overlap
 
 
 def _ancestors(src: str, parent_of: Mapping[str, str]) -> set[str]:
@@ -99,21 +155,24 @@ def resolve_credence(
     claims: Sequence[Claim],
     parent_of: Mapping[str, str],
     looked: Mapping[str, bool],
-) -> list[CredenceWinner]:
-    """Resolve each (object, name) to its lineage-aware winner. `parent_of` is the spawned_by
-    child→parent map; `looked` is backed_by_observation per agent source (default False = the
-    conservative "never looked", which is the only state we clamp)."""
+) -> CredenceResult:
+    """Resolve each (object, name) to its lineage-aware winner AND surface genuine disputes.
+    `parent_of` is the spawned_by child→parent map; `looked` is backed_by_observation per agent
+    source (default False = the conservative "never looked", the only state we clamp/dispute)."""
     groups: dict[tuple[str, str], list[Claim]] = {}
     for c in claims:
         groups.setdefault((c.object_id, c.name), []).append(c)
 
     winners: list[CredenceWinner] = []
+    disputes: list[Dispute] = []
     for (oid, name), group in groups.items():
         # Deepest-first: a node's descendants are scored before it, so its cap reads their
         # ALREADY-CLAMPED effective confidence — an inner relay's inflation can't leak upward.
         order = sorted(group, key=lambda r: _depth(r.source_id, parent_of), reverse=True)
         eff_by_src: dict[str, float] = {}
         laundering: list[str] = []
+        # source_id -> (value, confidence): the disagreeing positions on this fact, if any.
+        positions: dict[str, tuple[Any, float]] = {}
         scored: list[tuple[float, bool, Claim]] = []
         for r in order:
             eff = r.confidence
@@ -124,12 +183,20 @@ def resolve_credence(
                     if d.source_id != r.source_id and _is_agent(d.source_id)
                     and r.source_id in _ancestors(d.source_id, parent_of)
                 ]
-                if descs:  # r is an ancestor-relay of its asserting subtree
-                    origin_conf = max(eff_by_src.get(d.source_id, d.confidence) for d in descs)
-                    if r.confidence > origin_conf:  # inflated past what the subtree established
-                        eff = origin_conf
-                        clamped = True
-                        laundering.append(r.source_id)
+                if descs:  # r is an ancestor of an asserting subtree — a relay OR a disputant
+                    origin = max(descs, key=lambda d: eff_by_src.get(d.source_id, d.confidence))
+                    origin_conf = eff_by_src.get(origin.source_id, origin.confidence)
+                    if _same_claim(r.value, origin.value):
+                        # RELAY — the same claim reworded: clamp an inflated grade to the origin.
+                        if r.confidence > origin_conf:  # inflated past what the subtree established
+                            eff = origin_conf
+                            clamped = True
+                            laundering.append(r.source_id)
+                    else:
+                        # DISPUTE — a materially different value up the line is a real
+                        # disagreement, not a relay: don't clamp, don't flag; surface both poles.
+                        positions[r.source_id] = (r.value, r.confidence)
+                        positions.setdefault(origin.source_id, (origin.value, origin_conf))
             eff_by_src[r.source_id] = eff
             scored.append((eff, clamped, r))
 
@@ -142,7 +209,12 @@ def resolve_credence(
             object_id=oid, name=name, value=claim.value, confidence=eff,
             source_id=claim.source_id, laundering=tuple(laundering),
         ))
-    return winners
+        if positions:
+            disputes.append(Dispute(
+                object_id=oid, name=name,
+                positions=tuple((s, v, c) for s, (v, c) in positions.items()),
+            ))
+    return CredenceResult(winners=winners, disputes=disputes)
 
 
 async def _parent_forest(actions: Actions) -> dict[str, str]:
@@ -166,10 +238,10 @@ async def _looked_map(actions: Actions, srcs: set[str]) -> dict[str, bool]:
     return {r["src"]: bool(r["looked"]) for r in rows}
 
 
-async def credence_props(actions: Actions, oids: Sequence[Any]) -> list[CredenceWinner]:
-    """The lineage-aware winner per (object, name) over `oids` — winning_props with the upstream
-    credence discipline layered on. Fetches the latest per-source assertions, the spawned_by
-    forest, and the observation-rebuttal signal, then resolves purely."""
+async def credence_props(actions: Actions, oids: Sequence[Any]) -> CredenceResult:
+    """The lineage-aware resolution over `oids` — winning_props with the upstream credence
+    discipline layered on. Fetches the latest per-source assertions, the spawned_by forest, and
+    the observation-rebuttal signal, then resolves purely into winners AND disputes."""
     rows = await actions.pool.fetch(
         "SELECT object_id, name, value, source_id, confidence, observed_at "
         "FROM current_assertions WHERE object_id = ANY($1::uuid[])", list(oids))
