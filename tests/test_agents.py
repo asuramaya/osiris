@@ -8,6 +8,7 @@ attributed to IT — hermetic against real Postgres.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 from src.actions.core import Actions
@@ -221,6 +222,46 @@ async def test_register_stamps_the_succession_seam(actions: Actions) -> None:
     again = _anchored("claude-fable-5")
     await register_agent(actions, again, actor="analyst:operator")
     assert again.model_succession is None
+
+
+async def test_remount_of_a_retired_identity_is_a_loud_reanimation(actions: Actions) -> None:
+    """Bug #51 follow-up (decepticons msg 69): retire() stamps retired=true, but a plain mount
+    from the same session UUID would silently un-retire the name. register_agent must witness the
+    winning retired stamp and flag the reanimation (out-param + a first-class OBSERVED event) so
+    mount() confesses it — the membrane (#6): a retired face worn again is never silent."""
+    ident = _anchored("claude-fable-5")
+    a = await register_agent(actions, ident, actor="analyst:operator")
+    assert ident.reanimated is False  # a fresh registration is not a reanimation
+    # the agent retires itself (what retire() writes: retired=true, self_declared)
+    await actions.assert_property(a, "retired", True, ident.agent_id, datetime.now(UTC), 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    # the same session UUID mounts again — the reanimation door decepticons repro'd
+    again = _anchored("claude-fable-5")
+    a2 = await register_agent(actions, again, actor="analyst:operator")
+    assert a2 == a  # same identity re-issued — exactly the reanimation shape
+    assert again.reanimated is True  # the out-param mount() reads to confess
+    row = await actions.pool.fetchrow(
+        "SELECT evidence_class AS ec FROM current_assertions "
+        "WHERE object_id=$1 AND name='reanimated'", a)
+    assert row is not None
+    assert row["ec"] == EvidenceClass.DIRECT_OBSERVATION.value
+    # the retirement STANDS — the reanimation is stamped, but the deliberate close is not erased
+    retired = await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='retired'", a)
+    assert retired == "true"
+
+
+async def test_fresh_register_is_never_a_reanimation(actions: Actions) -> None:
+    """A never-retired identity re-mounting is an ordinary re-attach — no reanimation flag, no
+    stamp. The guard must fire ONLY on a winning retired=true, or every re-mount cries wolf."""
+    ident = _anchored("claude-fable-5")
+    a = await register_agent(actions, ident, actor="analyst:operator")
+    again = _anchored("claude-fable-5")
+    await register_agent(actions, again, actor="analyst:operator")
+    assert again.reanimated is False
+    row = await actions.pool.fetchrow(
+        "SELECT 1 FROM current_assertions WHERE object_id=$1 AND name='reanimated'", a)
+    assert row is None
 
 
 async def test_warm_swap_is_not_a_succession(actions: Actions) -> None:

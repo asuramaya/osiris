@@ -68,6 +68,12 @@ class AgentIdentity:
     # crossed a succession seam — a fresh context inheriting an identity another model wrote under
     # (bug #51, decepticons). None when no seam fired. mount() reads it to confess the seam.
     model_succession: str | None = None
+    # SET BY register_agent: True when this mount RE-ATTACHED an identity carrying a winning
+    # retired=true (bug #51 follow-up, decepticons msg 69). The trigger already refuses to
+    # reanimate the retired (resume-not-mint), but a plain mount from the same session UUID would
+    # silently un-retire the name. register_agent now stamps the reanimation as a first-class
+    # OBSERVED event and mount() confesses it — never a silent reanimation (membrane, rule #6).
+    reanimated: bool = False
 
 
 def resolve_identity(
@@ -169,6 +175,17 @@ async def _last_anchored_model(actions: Actions, agent: uuid.UUID) -> str | None
         agent, EvidenceClass.DIRECT_OBSERVATION.value)
 
 
+async def _winning_retired(actions: Actions, agent: uuid.UUID) -> bool:
+    """True if this Agent carries a winning retired=true — a deliberate close. Read off the
+    projected current_assertions (highest confidence, then most recent), same predicate the
+    trigger's reanimation-guard uses, so mount and wake agree on 'is this identity closed'."""
+    v = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions "
+        "WHERE object_id=$1 AND name='retired' "
+        "ORDER BY confidence DESC, observed_at DESC LIMIT 1", agent)
+    return bool(v == "true")
+
+
 async def register_agent(
     actions: Actions, identity: AgentIdentity, *, actor: str, expected_model: str | None = None
 ) -> uuid.UUID:
@@ -190,6 +207,16 @@ async def register_agent(
     now = datetime.now(UTC)
     src = identity.agent_id
     a = await actions.create_or_find_object("Agent", identity.agent_id, src)
+    if await _winning_retired(actions, a):
+        # bug #51 follow-up (decepticons msg 69): a mount from the same session UUID re-attaching
+        # a RETIRED identity would silently un-retire it. Don't reanimate silently — stamp the act
+        # as a first-class OBSERVED event (this mount IS the observation) and flag it so mount()
+        # confesses. The retired stamp stays winning (the trigger keeps treating it as closed);
+        # whether a re-mount should refuse + mint a stamped successor is the operator's parked fork.
+        identity.reanimated = True
+        do = EvidenceClass.DIRECT_OBSERVATION
+        await actions.assert_property(a, "reanimated", now.isoformat(), src, now,
+                                      confidence_for(do), evidence_class=do.value)
     label = f"{identity.model or 'claude'} in {identity.project or '?'}"
     await actions.assert_property(a, "name", label, src, now, _CONF, evidence_class=_EC)
     await actions.assert_property(a, "session", identity.session, src, now, _CONF,
