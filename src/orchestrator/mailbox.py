@@ -57,7 +57,16 @@ async def send_message(
             reply_to)
         if ref is None:
             raise ValueError(f"reply_to message {reply_to} does not exist")
-    to = _norm(to_project) if to_project else (ref["from_project"] if ref else None)
+    if to_project:
+        to = _norm(to_project)
+    elif ref is not None:
+        # replying to SOMEONE ELSE's message routes back to its sender; replying to YOUR OWN
+        # routes onward to its recipient — the supersession lane (an agent updating its prior
+        # desk brief must reach the desk again, never mail itself)
+        own = from_project and _norm(ref["from_project"] or "") == _norm(from_project)
+        to = ref["to_project"] if own else ref["from_project"]
+    else:
+        to = None
     if not to:
         raise ValueError("no recipient: pass to=<project>, or reply_to a message whose sender "
                          "has a project")

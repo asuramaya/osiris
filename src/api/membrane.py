@@ -94,7 +94,10 @@ def render_membrane(dg: dict[str, Any], wakes: list[dict[str, Any]]) -> str:
     desk_rows = "".join(
         _row(f'<span class="dim">{_e(m["when"][:16])}</span>',
              f'{_e(m["from_project"] or "?")} <span class="dim">{_e(m["from"])}</span>',
-             f'<div class="body">{_e(m["body"])}</div>')
+             f'<div class="body">{_e(m["body"])}</div>'
+             + (f'<div class="dim">↳ supersedes {m["supersedes"]} earlier '
+                f'brief{"s" if m["supersedes"] != 1 else ""} in this thread</div>'
+                if m.get("supersedes") else ""))
         for m in desk["latest"]
     ) or _row('<span class="dim">nothing waiting</span>', "", "")
     conv_rows = "".join(

@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 from src.actions.core import Actions
 from src.orchestrator.digest import fleet_digest
-from src.orchestrator.mailbox import OPERATOR_ADDR, send_message
+from src.orchestrator.mailbox import OPERATOR_ADDR, send_message, unread_count
 from src.parsers.base import EvidenceClass
 
 NOW = datetime(2026, 7, 7, tzinfo=UTC)
@@ -195,3 +195,45 @@ async def test_costs_stream_meters_the_window_honestly(actions: Actions) -> None
     assert top["purpose"] == "session-extract" and top["calls"] == 2
     assert top["tokens"] == 53_000
     assert "unmetered" in dg["costs"]["coverage"]  # the honesty clause is part of the stream
+
+
+async def test_desk_folds_superseded_briefs_under_the_newest_head(actions: Actions) -> None:
+    """Task #50: an agent updating its prior brief (reply_to its OWN message — the threading
+    duty) stacks the thread; the desk shows ONE head per thread with the older briefs counted
+    under it. The system folds; only the human settles — the superseded rows stay unread."""
+    p = actions.pool
+    first = await send_message(p, from_agent="agent:h", from_project="heinrich",
+                               to_project=OPERATOR_ADDR, body="BRIEF: run 1 started")
+    # the self-reply routes ONWARD to the desk (not back to the sender) and joins the thread
+    second = await send_message(p, from_agent="agent:h", from_project="heinrich",
+                                body="BRIEF v2: run 1 done — organ delta reproduces",
+                                reply_to=first["id"])
+    assert second["to"] == OPERATOR_ADDR and second["thread_id"] == first["id"]
+    # an unrelated brief from another project is its own head
+    await send_message(p, from_agent="agent:c", from_project="chronohorn",
+                       to_project=OPERATOR_ADDR, body="BRIEF: memory audit queued")
+
+    dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
+    desk = dg["operator_inbox"]
+
+    assert desk["unread"] == 2       # active HEADS — the number that nags
+    assert desk["unread_raw"] == 3   # the honest backlog underneath
+    heads = {m["body"]: m for m in desk["latest"]}
+    assert "BRIEF v2: run 1 done — organ delta reproduces" in heads   # newest head shown
+    assert "BRIEF: run 1 started" not in heads                        # superseded — folded
+    assert heads["BRIEF v2: run 1 done — organ delta reproduces"]["supersedes"] == 1
+    assert heads["BRIEF: memory audit queued"]["supersedes"] == 0
+    # NOTHING was settled by the fold: the superseded brief is still the operator's to clear
+    assert await unread_count(p, OPERATOR_ADDR, lease_secs=0) == 3
+
+
+async def test_replying_to_your_own_lateral_message_routes_onward(actions: Actions) -> None:
+    """The route fix behind the fold: reply_to your OWN message goes to its RECIPIENT (thread
+    continuation), never back to yourself."""
+    p = actions.pool
+    ask = await send_message(p, from_agent="agent:a", from_project="decepticons",
+                             to_project="heinrich", body="first volley")
+    follow = await send_message(p, from_agent="agent:a", from_project="decepticons",
+                                body="second volley, same thread", reply_to=ask["id"])
+    assert follow["to"] == "heinrich" and follow["thread_id"] == ask["id"]
+    assert await unread_count(p, "heinrich", lease_secs=0) == 2

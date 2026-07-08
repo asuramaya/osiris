@@ -46,7 +46,10 @@ _WAKE_PROMPT = (
     "it carries NEW information — never an acknowledgement-only message (that would just wake "
     "the sender again). REPORT UP (the operator must see the loop close): when this exchange "
     "CONCLUDES — a finding established, work divided, a decision made — record_decision the "
-    "outcome AND send(to='operator') a three-line brief. If nothing needs doing, do nothing. "
+    "outcome AND send(to='operator') a three-line brief — and if you have briefed the desk "
+    "on this SAME topic before, send(reply_to=<your prior brief id>) instead of a fresh "
+    "send: the desk folds superseded briefs under your newest one. If nothing needs doing, "
+    "do nothing. "
     "ECONOMY: you are a TRIAGE wake — if the mail demands real work (analysis, building, long "
     "reads), do NOT grind it here: open_thread(kind='obligation') describing it, reply with "
     "that pointer (which settles the mail), and let a full session take it."
@@ -143,7 +146,8 @@ _RESUME_PROMPT = (
     "inbox(), act on what it asks, SETTLE each handled message — reply with send(reply_to=<id>) "
     "or ack with inbox(ack=[ids]). Reply ONLY with NEW information — never an "
     "acknowledgement-only message. When the exchange CONCLUDES, record_decision the outcome "
-    "AND send(to='operator') a three-line brief. If nothing needs doing, do nothing."
+    "AND send(to='operator') a three-line brief (reply_to your prior brief on the same "
+    "topic — the desk folds supersessions). If nothing needs doing, do nothing."
 )
 
 

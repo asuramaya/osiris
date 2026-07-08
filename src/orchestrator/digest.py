@@ -37,7 +37,7 @@ from typing import Any
 
 from src.actions.core import Actions
 from src.orchestrator.credence import credence_props
-from src.orchestrator.mailbox import OPERATOR_ADDR, read_inbox, unread_count
+from src.orchestrator.mailbox import OPERATOR_ADDR, unread_count
 from src.orchestrator.monitor import set_cursor
 
 # The operator's digest watermark lives in the generic cursor store (watermarks table, migration
@@ -170,16 +170,31 @@ async def _conversations(
 
 
 async def _operator_inbox(actions: Actions, *, lease_secs: int) -> dict[str, Any]:
-    """The operator's desk: what the fleet initiated UPWARD. A peek, never a lease — reading
-    the digest must not settle the operator's mail nor delay its surfacing elsewhere."""
-    msgs = await read_inbox(actions.pool, OPERATOR_ADDR, mark_read=False, limit=5,
-                            lease_secs=lease_secs)
+    """The operator's desk, FOLDED: what the fleet initiated upward, one head per thread.
+
+    The supersession tension, resolved as presentation (task #50): an agent that updates its
+    prior brief (send(reply_to=<its own brief>) — the threading duty) stacks the thread; the
+    desk shows only the NEWEST unread brief per thread, with the older ones counted under it
+    (`supersedes`), and `unread` counts ACTIVE HEADS, not raw rows. The SYSTEM folds; only
+    the human settles — nothing here leases or acks (a peek), and the superseded briefs stay
+    unread underneath until the operator's explicit word clears the thread."""
+    heads = await actions.pool.fetch(
+        "SELECT DISTINCT ON (COALESCE(thread_id, id)) id, from_agent, from_project, "
+        " body, created_at, "
+        " (SELECT count(*) FROM fleet_messages s WHERE s.read_at IS NULL AND s.id <> m.id "
+        "   AND s.to_project=$1 "
+        "   AND COALESCE(s.thread_id, s.id) = COALESCE(m.thread_id, m.id)) AS supersedes "
+        "FROM fleet_messages m WHERE to_project=$1 AND read_at IS NULL "
+        "ORDER BY COALESCE(thread_id, id), created_at DESC", OPERATOR_ADDR)
+    ordered = sorted(heads, key=lambda r: r["created_at"], reverse=True)  # newest head first
     return {
-        "unread": await unread_count(actions.pool, OPERATOR_ADDR, lease_secs=lease_secs),
+        "unread": len(ordered),  # active heads — the number that should nag, not the backlog
+        "unread_raw": await unread_count(actions.pool, OPERATOR_ADDR, lease_secs=lease_secs),
         "latest": [
-            {"from": m["from"], "from_project": m["from_project"],
-             "body": m["body"][:300], "when": m["when"]}
-            for m in reversed(msgs)  # newest first at the desk
+            {"from": m["from_agent"], "from_project": m["from_project"],
+             "body": m["body"][:300], "when": m["created_at"].isoformat(),
+             "supersedes": int(m["supersedes"])}
+            for m in ordered[:5]
         ],
     }
 
