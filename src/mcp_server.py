@@ -38,7 +38,7 @@ from src.ontology.resolution import (
     resolve_cross_base,
 )
 from src.ontology.schema import catalog
-from src.orchestrator import capture, digest, mounts
+from src.orchestrator import capture, digest, handshake, mounts
 from src.orchestrator import compositions as comp
 from src.orchestrator.agents import AgentIdentity, register_agent, resolve_identity
 from src.orchestrator.console import get_console as _get_console
@@ -1044,6 +1044,32 @@ async def hold_tension(
         source=ident.agent_id if ident else "session",
     )
     return {"held": str(t), "poles": [pole_a, pole_b], "lean": lean}
+
+
+@mcp.custom_route("/automount", methods=["POST"])
+async def automount_route(request: Any) -> Any:
+    """The whisper's server half (operator's blessing, 2026-07-08): the SessionStart hook
+    posts {session_id, cwd} here BEFORE the agent's first token; we mount the session through
+    the exact tested path the mount() tool uses (durable row, anchored identity — the hook
+    derives nothing the harness didn't give it) and return the payload the whisper prints.
+    Plain HTTP on the same localhost-only listener; NEVER raises — the hook is fail-open and
+    a session that got no whisper can always mount by hand."""
+    from starlette.responses import JSONResponse
+
+    try:
+        body = await request.json()
+        session_id = str(body.get("session_id") or "")
+        cwd = str(body.get("cwd") or "")
+        if not session_id or not cwd:
+            return JSONResponse({"error": "session_id and cwd required"}, status_code=400)
+        settings = get_settings()
+        out = await handshake.automount(
+            Actions(await _pool_get()), session_id=session_id, cwd=cwd,
+            actor=settings.osiris_actor, expected_model=settings.osiris_expected_model,
+            lease_secs=settings.osiris_mail_lease_secs)
+        return JSONResponse(out)
+    except Exception as e:  # noqa: BLE001 — fail-open: the whisper degrades, never blocks
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 
 def main() -> None:
