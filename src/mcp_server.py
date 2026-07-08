@@ -599,13 +599,24 @@ async def mount(
     if op_unread:  # the fleet plays secretary: any session the human drives can relay this
         out["operator_mail"] = (f"{op_unread} unread at the operator's desk — "
                                 "inbox(project='operator') if the human is present")
+    if ident.model_succession:
+        # heinrich's grievance (msg 70) #1+#2: the swap line reads a DEATH as a config event —
+        # "back on your intended fable" reassures an entity that never was the prior model. The
+        # seam SUPERSEDES the swap banner (one confession, loud), and it addresses the HEIR in
+        # the second person: the stamp protected the record from the successor; this line
+        # protects the successor from itself.
+        banner = None
+        out["succession"] = (
+            f"⚠ YOU ARE A SUCCESSOR: the agent who last held {ident.agent_id} ENDED at the "
+            f"model seam ({ident.model_succession}) — a compaction/swap boundary, not a "
+            "restart. You inherited this name through the session's own carried record, an "
+            "UNAUDITED channel graded below the graph. Its earlier writes and words are not "
+            "yours: speak in your own person, confess the inheritance to the operator, and "
+            "read while_you_were_away + the graph before claiming any earlier 'I'. The seam "
+            "is stamped (model_succession) — the graph, not the operator, is what tells you "
+            "you're dead.")
     if banner:  # the graph confesses the swap the agent's own prompt hides (ruling f2ae6346)
         out["swap"] = banner
-    if ident.model_succession:  # bug #51 (decepticons): an inherited identity crosses a model seam
-        out["succession"] = (
-            f"⚠ identity succession: {ident.model_succession} — this agent id's earlier writes "
-            "were another model's, from a context that is not yours. The seam is stamped on the "
-            "Agent (model_succession); confess the inheritance to the operator.")
     if ident.reanimated:  # bug #51 follow-up (decepticons msg 69): mounted a RETIRED identity
         out["reanimation"] = (
             f"⚠ REANIMATION: {ident.agent_id} was RETIRED, and this mount is wearing it again. "
@@ -637,6 +648,12 @@ async def retire(reason: str = "", ctx: Context | None = None) -> dict[str, str]
     await a.assert_property(
         oid, "retired", True, ident.agent_id, datetime.now(UTC), 0.9,
         evidence_class="self_declared")
+    # heinrich's grievance #3 (msg 70): "closed by the session itself" and "closed by an heir"
+    # are DIFFERENT death certificates — record who signed relative to the id's history.
+    signer = "successor" if (ident.model_succession or ident.reanimated) else "self"
+    await a.assert_property(
+        oid, "retired_by", signer, ident.agent_id, datetime.now(UTC), 0.9,
+        evidence_class="self_declared")
     if reason:
         await a.assert_property(
             oid, "retired_reason", reason[:500], ident.agent_id, datetime.now(UTC), 0.9,
@@ -645,9 +662,11 @@ async def retire(reason: str = "", ctx: Context | None = None) -> dict[str, str]
     if key is not None:
         _agents.pop(key, None)
         _agents_touched.pop(key, None)
-    return {"retired": ident.agent_id,
+    return {"retired": ident.agent_id, "signed_by": signer,
             "note": "farewell recorded — the trigger will not reanimate this session; "
-                    "write your succession thread BEFORE you go dark"}
+                    "write your succession thread BEFORE you go dark"
+                    + (" (certificate notes an HEIR signed for the ancestor)"
+                       if signer == "successor" else "")}
 
 
 # orient's open-thread wall is a bounded query, not a scroll: the assembly layer ranks the
