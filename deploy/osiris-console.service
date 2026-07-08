@@ -1,0 +1,38 @@
+# Osiris console (the human LENS) — systemd USER unit.
+#
+# Serves the read-only membrane at http://127.0.0.1:8011/membrane and the console over the
+# operator's dev graph: the upward lane made walkable (the statusline's click-through), a place
+# to READ threads/wakes/decisions — never a write path. Writes go through the MCP Actions waist
+# (deploy/osiris-mcp.service), never here; this surface only reads and renders, so a crash or a
+# kill takes down a window, never the truth. Restart=always self-heals a dead lens.
+#
+# A USER unit like deploy/osiris-pulse.service (runs AS the operator, against the operator's own
+# dev instance — no /opt deploy, no system account), NOT the /opt system form of
+# deploy/osiris-api.service. Install it the same way (see osiris-pulse.service's header):
+#   cp deploy/osiris-console.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now osiris-console
+# Adjust WorkingDirectory / the venv path / the URLs to your box. systemd user units do NOT
+# inherit your shell PATH, so ExecStart and the venv must be absolute.
+[Unit]
+Description=Osiris console (read-only membrane lens + console; :8011)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/asuramaya/code/osiris
+# Point at the dev instance (PG :5601 / Redis :6396), inline so the repo's .env is untouched;
+# systemd Environment= overrides pydantic's .env.
+Environment=DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris
+Environment=REDIS_URL=redis://127.0.0.1:6396/0
+# --factory: uvicorn calls create_app() (which builds its OWN pool + lifespan), the self-standing
+# form of the app; the module-level `app` is the same surface for the /opt system unit.
+ExecStart=/home/asuramaya/code/osiris/.venv/bin/uvicorn --factory src.api.app:create_app --host 127.0.0.1 --port 8011
+Restart=always
+RestartSec=2
+# A read surface holds no truth; a modest cap contains a runaway render without starving the box.
+MemoryMax=512M
+
+[Install]
+WantedBy=default.target
