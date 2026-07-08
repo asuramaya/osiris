@@ -192,3 +192,16 @@ async def test_fresh_session_anchors_on_the_project_lineage(actions: Actions) ->
     # a lineage with no elders stays quiet (no false anchor)
     assert await mounts.project_prev_seen(p, "ghost-town", exclude_job_dir="/x/y") is None
     assert await mounts.project_prev_seen(p, None, exclude_job_dir="/x/y") is None
+
+
+def test_sane_job_dir_rejects_unexpanded_literals() -> None:
+    """A live agent passed the literal `$CLAUDE_JOB_DIR` and it became a registry PRIMARY
+    KEY — every agent making the same mistake would conflate into one row. Any `$` (braced
+    or not) or non-absolute value is no anchor at all."""
+    from src import mcp_server as srv
+
+    assert srv._sane_job_dir("/home/x/.claude/jobs/ad1a1cb0") == "/home/x/.claude/jobs/ad1a1cb0"
+    assert srv._sane_job_dir("$CLAUDE_JOB_DIR") is None          # the live poison, unbraced
+    assert srv._sane_job_dir("${CLAUDE_JOB_DIR}") is None        # braced literal
+    assert srv._sane_job_dir("relative/jobs/x") is None          # not a path
+    assert srv._sane_job_dir("") is None and srv._sane_job_dir(None) is None

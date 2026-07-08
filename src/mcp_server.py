@@ -136,10 +136,20 @@ def _conn_key(ctx: Context | None) -> str | None:
         return None
 
 
+def _sane_job_dir(value: str | None) -> str | None:
+    """A usable job_dir is an ABSOLUTE PATH. Anything carrying `$` is an unexpanded variable
+    (braced or not — a live agent passed the literal `$CLAUDE_JOB_DIR` and it became a
+    registry PRIMARY KEY, a conflation magnet: every agent making the same mistake would
+    collapse into one row). Reject → treat as absent, never store."""
+    if not value or "$" in value or not value.startswith("/"):
+        return None
+    return value
+
+
 def _job_hint(ctx: Context | None) -> str | None:
     """The client's durable identity handle: the X-Osiris-Job header (.mcp.json sends
-    ${CLAUDE_JOB_DIR} per request). Guarded against a client that doesn't expand the
-    variable — a literal `${...}` is no hint at all."""
+    ${CLAUDE_JOB_DIR} per request — expansion PROVEN live via the probe reattach). Guarded
+    against a client that doesn't expand the variable."""
     if ctx is None:
         return None
     try:
@@ -147,9 +157,7 @@ def _job_hint(ctx: Context | None) -> str | None:
         hint = req.headers.get("x-osiris-job") if req is not None else None
     except (AttributeError, LookupError):
         return None
-    if not hint or "${" in hint:
-        return None
-    return str(hint)
+    return _sane_job_dir(str(hint) if hint else None)
 
 
 async def _reattach(
@@ -563,6 +571,7 @@ async def mount(
     pool = await _pool_get()
     settings = get_settings()
     lease = settings.osiris_mail_lease_secs
+    job_dir = _sane_job_dir(job_dir)  # an unexpanded `$CLAUDE_JOB_DIR` literal is no anchor
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model)
     await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
                          expected_model=settings.osiris_expected_model)
@@ -597,6 +606,13 @@ async def mount(
             f"⚠ identity succession: {ident.model_succession} — this agent id's earlier writes "
             "were another model's, from a context that is not yours. The seam is stamped on the "
             "Agent (model_succession); confess the inheritance to the operator.")
+    if ident.reanimated:  # bug #51 follow-up (decepticons msg 69): mounted a RETIRED identity
+        out["reanimation"] = (
+            f"⚠ REANIMATION: {ident.agent_id} was RETIRED, and this mount is wearing it again. "
+            "The retirement stands (the trigger still treats you as closed); the reanimation is "
+            "stamped on the Agent. If you are a SUCCESSOR that inherited this session UUID, you "
+            "are not the agent who retired — confess it to the operator; if this is a deliberate "
+            "reanimation, say so. A retired face worn again is never silent.")
     away = await mounts.while_away(
         pool, ident.project, ident.agent_id, _prev_seen.get(ident.agent_id))
     if away:  # who wore your face + how your conversations moved, since your last sign of life
