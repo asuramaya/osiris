@@ -573,10 +573,15 @@ async def mount(
     settings = get_settings()
     lease = settings.osiris_mail_lease_secs
     job_dir = _sane_job_dir(job_dir)  # an unexpanded `$CLAUDE_JOB_DIR` literal is no anchor
-    ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model)
+    key = _conn_key(ctx)
+    claimed = None
+    if job_dir is None:  # the cwd-guess path — refuse sids a LIVE mount already holds
+        claimed = await mounts.live_claimed_sids(
+            pool, exclude_session_key=key, within_secs=settings.osiris_owner_live_secs)
+    ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model,
+                             claimed=claimed, fallback_seed=key)
     await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
                          expected_model=settings.osiris_expected_model)
-    key = _conn_key(ctx)
     if key is not None:
         _prune_agents()  # opportunistic: mount is where churn shows up
         _agents[key] = ident

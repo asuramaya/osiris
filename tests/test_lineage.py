@@ -214,3 +214,23 @@ def test_backed_by_observation_distinguishes_look_from_hearsay(tmp_path: Path) -
     by = {s.handle: s for s in scan_subagents(session)}
     assert by["looker01"].backed_by_observation is True
     assert by["hears002"].backed_by_observation is False
+
+
+async def test_sense_swarms_skips_unchanged_trees(actions: Actions, tmp_path: Path) -> None:
+    """The mtime watermark (crunch residual): an unchanged subagents/ tree is not re-read on
+    the next pass — real IO at fleet scale — and a touched tree re-registers."""
+    import os
+    import time as _t
+
+    session = _write_swarm(tmp_path)
+    first = await sense_swarms(actions, tmp_path)
+    assert first["agents"] > 0 and first["skipped_unchanged"] == 0
+    # second pass, nothing changed → the tree is skipped whole
+    second = await sense_swarms(actions, tmp_path)
+    assert second["skipped_unchanged"] == 1 and second["agents"] == 0
+    # a touched transcript re-arms the pass (idempotent re-register)
+    victim = next((session / "subagents").glob("agent-*.jsonl"))
+    later = _t.time() + 60
+    os.utime(victim, (later, later))
+    third = await sense_swarms(actions, tmp_path)
+    assert third["skipped_unchanged"] == 0 and third["agents"] > 0

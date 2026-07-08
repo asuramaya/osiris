@@ -34,6 +34,7 @@ from typing import Any
 
 from src.actions.core import Actions
 from src.ingest.sessions import latest_model, models_in
+from src.orchestrator.monitor import get_cursor, set_cursor
 from src.orchestrator.swaps import classify_swap, swap_marker
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
@@ -279,13 +280,37 @@ async def register_swarm(
 async def sense_swarms(actions: Actions, root: Path) -> dict[str, int]:
     """Register EVERY session's swarm under `root` (~/.claude/projects). The miner's swarm
     pass — pure filesystem→graph, no LLM, idempotent. A session dir is any `<project>/<uuid>/`
-    that has a `subagents/` child."""
-    total = {"agents": 0, "spawned_by": 0}
+    that has a `subagents/` child.
+
+    MTIME WATERMARK (crunch residual, fleet-scale IO): an unchanged subagents/ tree is
+    skipped without re-reading its transcripts — at 24 agents every 10 minutes the re-reads
+    were real IO. The watermark is the tree's newest mtime, stored durably (the watermarks
+    table, same infra the transcript cursors use); a touched tree re-registers (idempotent),
+    a fresh worker after restart re-reads once and re-plants."""
+    total = {"agents": 0, "spawned_by": 0, "skipped_unchanged": 0}
     session_dirs = await asyncio.to_thread(_session_dirs, root)
     for sdir in session_dirs:
+        newest = await asyncio.to_thread(_tree_mtime, sdir / "subagents")
+        key = f"swarm-mtime:{sdir}"
+        seen = await get_cursor(actions.pool, key)
+        if seen is not None and newest is not None and str(newest) == seen:
+            total["skipped_unchanged"] += 1
+            continue
         for k, v in (await register_swarm(actions, sdir)).items():
             total[k] = total.get(k, 0) + v
+        if newest is not None:
+            await set_cursor(actions.pool, key, str(newest))
     return total
+
+
+def _tree_mtime(subs_dir: Path) -> float | None:
+    """The newest mtime under a subagents/ tree (pure IO) — the change signal the watermark
+    stores. None when the tree is missing/unreadable (then we never skip)."""
+    try:
+        times = [p.stat().st_mtime for p in subs_dir.glob("agent-*")]
+        return max(times) if times else None
+    except OSError:
+        return None
 
 
 def _session_dirs(root: Path) -> list[Path]:

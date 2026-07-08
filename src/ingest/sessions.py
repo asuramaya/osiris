@@ -286,6 +286,15 @@ def locate_current_transcript(
     return max(files, key=lambda p: p.stat().st_mtime)
 
 
+def model_of_transcript(path: Path) -> tuple[str | None, list[str]]:
+    """(current model, distinct-model history) for ONE transcript: the tail gives the current
+    model (cheap on a large file), the whole file gives the swap history. The pure read behind
+    current_model — and how resolve_identity probes a SUB-AGENT's OWN transcript (agents.py)."""
+    cur = latest_model(_tail_lines(path))
+    history = models_in(path.read_text("utf-8", errors="replace").splitlines())
+    return cur, history
+
+
 def current_model(
     root: Path | None = None, job_dir: str | None = None, *, anchored_only: bool = False
 ) -> tuple[str | None, list[str], Path | None]:
@@ -301,9 +310,44 @@ def current_model(
     path = locate_current_transcript(root, job_dir, anchored_only=anchored_only)
     if path is None:
         return None, [], None
-    cur = latest_model(_tail_lines(path))
-    history = models_in(path.read_text("utf-8", errors="replace").splitlines())
+    cur, history = model_of_transcript(path)
     return cur, history, path
+
+
+def active_subagent(main: Path | None) -> tuple[str, Path] | None:
+    """Given a session's MAIN transcript, the SUB-AGENT actively writing under it — or None.
+
+    A sub-agent inherits the parent's CLAUDE_JOB_DIR (decision ca66dc33), so an anchored model
+    probe reads the PARENT's transcript and the child COLLAPSES into the parent. But the harness
+    records each sub-agent's own transcript at `<session>/subagents/agent-<agentId>.jsonl` (every
+    line flagged `isSidechain: true`), and while a child runs the parent is PAUSED in the Task
+    call — so the child whose transcript is HOTTER than the parent's main transcript is the live
+    caller of mount(). A colder sub-agent is a finished/paused one (the parent is the writer then).
+
+    Returns (child handle, its transcript). The handle is the raw harness agentId (the stem past
+    `agent-`) — the SAME `agent:<handle>` id lineage.py mints from the meta record, so a mounting
+    sub-agent converges onto its miner-minted identity instead of forking a second id for one
+    actor. The subagents/ path is the definitive marker; the isSidechain flag corroborates it."""
+    if main is None:
+        return None
+    subs_dir = main.with_suffix("") / "subagents"
+    if not subs_dir.is_dir():
+        return None
+    try:
+        main_mtime = main.stat().st_mtime
+    except OSError:
+        return None
+    hottest: tuple[float, str, Path] | None = None
+    for p in subs_dir.glob("agent-*.jsonl"):
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            continue
+        if mtime <= main_mtime:  # a paused/finished child — the parent is the active writer
+            continue
+        if hottest is None or mtime > hottest[0]:
+            hottest = (mtime, p.stem[len("agent-"):], p)
+    return (hottest[1], hottest[2]) if hottest is not None else None
 
 
 # --- the delta: complete new lines past the cursor, bounded ---------------------------

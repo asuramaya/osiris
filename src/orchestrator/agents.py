@@ -29,9 +29,11 @@ from src.actions.core import Actions
 from src.ingest.sessions import (
     _job_id,
     _tail_lines,
-    current_model,
+    active_subagent,
     latest_model,
+    locate_current_transcript,
     locate_transcript_by_cwd,
+    model_of_transcript,
 )
 from src.orchestrator.swaps import classify_swap, swap_marker
 from src.parsers.base import EvidenceClass
@@ -128,6 +130,7 @@ def next_generation(canonical: str) -> str:
 def resolve_identity(
     *, cwd: str | None = None, job_dir: str | None = None,
     session: str | None = None, model: str | None = None, root: Path | None = None,
+    claimed: set[str] | None = None, fallback_seed: str | None = None,
 ) -> AgentIdentity:
     """Resolve an agent's identity from what it can tell the server + what the harness RECORDS.
     The project comes from its cwd; the session + model are OBSERVED off its own transcript. Two
@@ -136,7 +139,14 @@ def resolve_identity(
     agent's self-report (the harness doesn't lie; a swap is below the agent's own horizon), so a
     passed `model` is used only when nothing can be observed, and a passed model that DISAGREES
     with the observation is kept as `model_declared` + flagged `model_divergent`. `root` overrides
-    the transcript search dir (tests inject a tmp root; production reads ~/.claude/projects)."""
+    the transcript search dir (tests inject a tmp root; production reads ~/.claude/projects).
+
+    THE CLAIMED-SID GUARD (crunch residual): the cwd-locate grabs the HOTTEST transcript's sid —
+    two concurrent same-project sessions without job_dirs would both grab the SAME one and merge.
+    `claimed` (from the durable registry: sids already held by a LIVE mount on another client
+    session) makes the guess REFUSE a taken sid; the refuser falls to a deterministic per-client
+    fallback keyed on `fallback_seed` (its MCP session key) — distinct, stable across re-calls
+    within the connection, and honestly resolved=False."""
     project = Path(cwd).name if cwd else None
     sid = session or _job_id(job_dir)
     confident = sid is not None  # a session/job_dir ANCHOR; the cwd-locate below is only a GUESS
@@ -148,18 +158,37 @@ def resolve_identity(
         # anchored_only: a job_dir that does NOT match a real transcript (a synthesized wake dir,
         # a malformed anchor) must yield NOTHING, never the box-wide-hottest neighbor — else the
         # read grades 'job_dir' off a co-tenant's model and fires a false swap (cry-wolf).
-        observed, history, _ = current_model(  # the harness's record — anchored to THIS session
-            root=root, job_dir=job_dir, anchored_only=True)
-        if observed is not None:
-            method = "job_dir"
+        base = root or (Path.home() / ".claude/projects")
+        main = locate_current_transcript(base, job_dir, anchored_only=True)
+        # A SUB-AGENT inherits the parent's CLAUDE_JOB_DIR (decision ca66dc33): the anchored probe
+        # above reads the PARENT's transcript, so keying on it collapses the child into the parent.
+        # When a child is ACTIVELY writing (its subagents/ transcript hotter than the paused
+        # parent's main), anchor on IT — the SAME agent:<handle> the miner mints (lineage.py),
+        # never a parent-scoped fork. Skipped when the caller passed an explicit session (a test;
+        # mount() never does), which is an authoritative override.
+        sub = active_subagent(main) if session is None else None
+        if sub is not None:
+            sid, tpath = sub
+            confident = True  # genuinely anchored to the CHILD's OWN transcript → resolved
+            observed, history = model_of_transcript(tpath)
+            if observed is not None:
+                method = "subagent"
+        elif main is not None:
+            observed, history = model_of_transcript(main)  # the harness's record — THIS session
+            if observed is not None:
+                method = "job_dir"
     if sid is None and cwd:  # no job dir → find the session (and, if unseen, the model) by cwd
         path = locate_transcript_by_cwd(cwd, root=root)
         if path is not None:
-            sid = path.stem.split("-")[0]  # the 8-char handle, matching the job-id scheme
-            if observed is None:
-                observed = latest_model(_tail_lines(path))
-                if observed is not None:
-                    method = "cwd"
+            guess = path.stem.split("-")[0]  # the 8-char handle, matching the job-id scheme
+            if claimed and guess in claimed:
+                pass  # a LIVE mount already holds this sid — refusing it beats merging into it
+            else:
+                sid = guess
+                if observed is None:
+                    observed = latest_model(_tail_lines(path))
+                    if observed is not None:
+                        method = "cwd"
     if observed is not None:                # the harness's word WINS over the agent's own
         model = observed
         divergent = bool(declared and declared != observed)  # self-report != observation = FLAG
@@ -179,6 +208,11 @@ def resolve_identity(
         # conflation bug the fable-fight surfaced (a demotion scrambles session-id resolution).
         if job_dir:
             sid = "j" + hashlib.sha1(job_dir.encode(), usedforsecurity=False).hexdigest()[:8]
+        elif fallback_seed:
+            # the claimed-sid refuser (or any anchorless client with a stable connection key):
+            # deterministic per client session — distinct from every live claim, stable across
+            # re-calls, never a shared bucket
+            sid = "s" + hashlib.sha1(fallback_seed.encode(), usedforsecurity=False).hexdigest()[:8]
         elif project:
             sid = f"unknown-{project}"
         else:
@@ -224,6 +258,11 @@ async def _lineage_head(actions: Actions, canonical: str) -> str:
 # it grades CO_OCCURRENCE, below both observations.
 _MODEL_EC = {
     "job_dir": EvidenceClass.DIRECT_OBSERVATION,
+    # a mounting SUB-AGENT read off its OWN subagents/ transcript (task 1) — as direct an
+    # observation as job_dir, and it converges with the grade lineage.py stamps for the same
+    # child. NOT "job_dir", so the operator swap-detector (gated on job_dir) stays quiet: a
+    # sub-agent legitimately runs a non-fable model — that is no rug-pull to confess.
+    "subagent": EvidenceClass.DIRECT_OBSERVATION,
     "cwd": EvidenceClass.DERIVED,
     "self_report": EvidenceClass.CO_OCCURRENCE,
 }

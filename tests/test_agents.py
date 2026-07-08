@@ -407,3 +407,62 @@ async def test_register_does_not_stamp_swap_off_a_cwd_guess(
     intent = await actions.pool.fetchval(
         "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='model_intent'", a)
     assert intent == "claude-fable-5"  # the intent is still stamped (the honest half)
+
+
+def _write_transcript(path: Path, model: str, *, cwd: str = "/w/demo") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps({"type": "assistant", "cwd": cwd,
+                       "message": {"model": model, "content": [{"type": "text", "text": "hi"}]}})
+    path.write_text(line + "\n")
+
+
+def test_mounting_subagent_resolves_to_its_own_handle(tmp_path: Path) -> None:
+    """A sub-agent inherits the parent's CLAUDE_JOB_DIR — the anchored probe reads the PARENT
+    and the child used to collapse into it. When the child's subagents/ transcript is HOTTER
+    than the paused parent's main (the parent blocks in the Task call), the child is the live
+    caller: it resolves to agent:<its handle> — the SAME id the miner mints — genuinely
+    anchored (resolved), graded 'subagent' so the operator swap-gate stays quiet."""
+    import os
+    import time as _t
+
+    root = tmp_path / "projects"
+    job = tmp_path / "jobs" / "ab12cd34"
+    main = root / "-w-demo" / "ab12cd34-0000-4000-8000-000000000000.jsonl"
+    _write_transcript(main, "claude-fable-5")
+    child = main.with_suffix("") / "subagents" / "agent-a7f00baby.jsonl"
+    _write_transcript(child, "claude-haiku-4-5-20251001")
+    old = _t.time() - 3600
+    os.utime(main, (old, old))  # the parent is PAUSED; the child is the active writer
+    ident = resolve_identity(cwd="/w/demo", job_dir=str(job), root=root)
+    assert ident.agent_id == "agent:a7f00baby"      # the miner's id, not a parent-scoped fork
+    assert ident.resolved is True                   # anchored to the child's OWN transcript
+    assert ident.model == "claude-haiku-4-5-20251001"
+    assert ident.model_method == "subagent"         # NOT job_dir: no operator swap-gate firing
+    # with the parent ACTIVE (main hotter), the parent resolves as itself — no false child
+    now = _t.time() + 60
+    os.utime(main, (now, now))
+    ident2 = resolve_identity(cwd="/w/demo", job_dir=str(job), root=root)
+    assert ident2.agent_id == "agent:ab12cd34" and ident2.model_method == "job_dir"
+
+
+def test_claimed_sid_is_refused_by_the_cwd_guess(tmp_path: Path) -> None:
+    """Two anchorless same-project sessions grab the same hottest transcript — the second must
+    REFUSE the claimed sid and fall to a deterministic per-client fallback, never merge."""
+    root = tmp_path / "projects"
+    _write_transcript(root / "-w-demo" / "cafe0001-0000-4000-8000-000000000000.jsonl",
+                      "claude-fable-5")
+    first = resolve_identity(cwd="/w/demo", root=root, fallback_seed="sid:alpha")
+    assert first.agent_id == "agent:cafe0001" and first.resolved is False  # the guess, flagged
+    second = resolve_identity(cwd="/w/demo", root=root,
+                              claimed={"cafe0001"}, fallback_seed="sid:beta")
+    assert second.agent_id != "agent:cafe0001"        # refused the taken sid
+    assert second.agent_id.startswith("agent:s")      # per-client deterministic fallback
+    assert second.resolved is False
+    # deterministic: the same client re-resolving gets the SAME fallback id
+    again = resolve_identity(cwd="/w/demo", root=root,
+                             claimed={"cafe0001"}, fallback_seed="sid:beta")
+    assert again.agent_id == second.agent_id
+    # distinct clients get distinct fallbacks — never a shared bucket
+    other = resolve_identity(cwd="/w/demo", root=root,
+                             claimed={"cafe0001"}, fallback_seed="sid:gamma")
+    assert other.agent_id != second.agent_id

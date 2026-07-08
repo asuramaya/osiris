@@ -84,6 +84,27 @@ async def project_prev_seen(
         project, exclude_job_dir)
 
 
+async def live_claimed_sids(
+    pool: asyncpg.Pool, *, exclude_session_key: str | None, within_secs: int = 900
+) -> set[str]:
+    """Session handles currently HELD by a live mount on a DIFFERENT client session — the
+    claimed-set the cwd-guess must refuse (two anchorless same-project sessions grabbing the
+    hottest transcript would otherwise merge). Lineage-aware: a minted heir (agent:x-ii)
+    claims its base handle x too."""
+    rows = await pool.fetch(
+        "SELECT agent_id, session_key FROM agent_mounts "
+        "WHERE last_seen > now() - make_interval(secs => $1)", within_secs)
+    from src.orchestrator.agents import _generation
+
+    out: set[str] = set()
+    for r in rows:
+        if exclude_session_key and r["session_key"] == exclude_session_key:
+            continue
+        root, _ = _generation(r["agent_id"])
+        out.add(root.removeprefix("agent:"))
+    return out
+
+
 async def while_away(
     pool: asyncpg.Pool, project: str | None, agent_id: str, since: datetime | None
 ) -> dict[str, Any] | None:
