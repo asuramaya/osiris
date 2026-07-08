@@ -1,8 +1,8 @@
 [Unit]
-Description=Nightly Osiris graph dump
+Description=Osiris graph dump + bundle + vault sync (6-hourly)
 
 [Timer]
-OnCalendar=*-*-* 04:30:00
+OnCalendar=*-*-* 04,10,16,22:30:00
 Persistent=true
 
 [Install]
