@@ -175,6 +175,8 @@ async def _reattach(
     prev = await mounts.save_mount(pool, job_dir=rec.job_dir, agent_id=ident.agent_id,
                                    project=ident.project, cwd=rec.cwd, model=ident.model,
                                    session_key=key)
+    if prev is None:  # fresh lineage member: anchor on the project's last sign of life
+        prev = await mounts.project_prev_seen(pool, ident.project, exclude_job_dir=rec.job_dir)
     _prev_seen.setdefault(ident.agent_id, prev)  # a re-attach is a re-entry: keep the anchor
     return ident
 
@@ -573,6 +575,8 @@ async def mount(
         prev = await mounts.save_mount(pool, job_dir=job_dir, agent_id=ident.agent_id,
                                        project=ident.project, cwd=cwd, model=ident.model,
                                        session_key=key)
+        if prev is None:  # a FRESH session has no own past — anchor on the project lineage's
+            prev = await mounts.project_prev_seen(pool, ident.project, exclude_job_dir=job_dir)
         _prev_seen[ident.agent_id] = prev  # this mount IS the re-entry: anchor the fold here
     unread = await unread_count(pool, ident.project, lease_secs=lease) if ident.project else 0
     op_unread = await unread_count(pool, OPERATOR_ADDR, lease_secs=lease)

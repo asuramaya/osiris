@@ -70,6 +70,20 @@ async def project_last_seen(pool: asyncpg.Pool, project: str) -> str | None:
     return v.isoformat() if v is not None else None
 
 
+async def project_prev_seen(
+    pool: asyncpg.Pool, project: str | None, *, exclude_job_dir: str
+) -> datetime | None:
+    """The LINEAGE's last sign of life, excluding the caller's own (just-upserted) row — the
+    while-you-were-away anchor for a FRESH session: a new session id has no past of its own,
+    but its project does, and that past is exactly what it must not wake blind to (heinrich's
+    tab re-opened as a new session and got NO fold while twins had settled its threads)."""
+    if not project:
+        return None
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT max(last_seen) FROM agent_mounts WHERE project=$1 AND job_dir <> $2",
+        project, exclude_job_dir)
+
+
 async def while_away(
     pool: asyncpg.Pool, project: str | None, agent_id: str, since: datetime | None
 ) -> dict[str, Any] | None:

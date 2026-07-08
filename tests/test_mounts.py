@@ -169,3 +169,26 @@ async def test_while_away_is_quiet_when_nothing_happened(actions: Actions) -> No
                                    datetime.now(UTC))
     assert away is None
     assert await mounts.while_away(actions.pool, "ghost-town", "agent:x", None) is None
+
+
+async def test_fresh_session_anchors_on_the_project_lineage(actions: Actions) -> None:
+    """A brand-new session id has no past of its own — exactly the case that must NOT wake
+    blind: the fold anchor falls back to the PROJECT lineage's last sign of life (heinrich's
+    tab reopened as a fresh session while twins had settled its threads, and got no fold)."""
+    p = actions.pool
+    # an elder of the lineage, seen a while ago
+    await mounts.save_mount(p, job_dir="/x/jobs/elder001", agent_id="agent:elder001",
+                            project="heinrich", cwd="/repo/heinrich", model=None,
+                            session_key=None)
+    # the fresh session mounts: own prev is None…
+    prev = await mounts.save_mount(p, job_dir="/x/jobs/fresh002", agent_id="agent:fresh002",
+                                   project="heinrich", cwd="/repo/heinrich", model=None,
+                                   session_key=None)
+    assert prev is None
+    # …but the lineage has a past, and the fallback finds it (excluding the fresh row itself)
+    lineage_prev = await mounts.project_prev_seen(p, "heinrich",
+                                                  exclude_job_dir="/x/jobs/fresh002")
+    assert lineage_prev is not None
+    # a lineage with no elders stays quiet (no false anchor)
+    assert await mounts.project_prev_seen(p, "ghost-town", exclude_job_dir="/x/y") is None
+    assert await mounts.project_prev_seen(p, None, exclude_job_dir="/x/y") is None
