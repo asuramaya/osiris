@@ -108,7 +108,7 @@ async def test_function_registry_is_listable(actions: Actions) -> None:
     # `briefing`/`decisions` are NOT here — they decomposed into op-trees (see the tests below).
     assert list_functions() == ["canon", "coinvest", "family",
                                 "family_drift", "portfolio", "project", "pulse",
-                                "screen_network", "subject_report"]
+                                "screen_network", "search", "subject_report"]
 
 
 async def test_briefing_is_a_sections_op_tree(actions: Actions) -> None:

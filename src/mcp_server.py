@@ -263,16 +263,23 @@ async def suggest_sources(object_ref: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def search(query: str, limit: int = 15) -> list[dict[str, Any]]:
-    """Find objects by name substring → their id, type, canonical."""
+async def search(
+    query: str, limit: int = 15, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Search the graph's KNOWLEDGE, not just its labels (v2): full-text over names, decision/
+    thread summaries, and rationales — words, phrases, or "quoted phrases" (websearch syntax).
+    Results are ranked by relevance × evidence grade × recency and each hit carries its
+    TESTIMONY: which field matched, who asserted it, at what grade, when, with a snippet — so
+    you can trust-weight what you find, not just find it. Ask it 'has anyone decided/learned
+    X?' BEFORE re-deriving X. Zero-hit queries are logged and watched (retrieval telemetry)."""
     pool = await _pool_get()
-    rows = await pool.fetch(
-        "SELECT DISTINCT o.id, o.type, o.canonical, a.value #>> '{}' AS name "
-        "FROM current_assertions a JOIN objects o ON o.id=a.object_id AND o.status='active' "
-        "WHERE a.name='name' AND a.value #>> '{}' ILIKE '%'||$1||'%' LIMIT $2",
-        query, limit,
-    )
-    return [{"id": str(r["id"]), "type": r["type"], "name": r["name"]} for r in rows]
+    ident = await _ident_for(ctx)
+    spec = {"op": "function", "name": "search",
+            "args": {"q": query, "limit": limit,
+                     "caller": (ident.agent_id if ident else None)}}
+    out = await comp.run_spec(pool, spec, None, name="search")
+    items: dict[str, Any] = out["items"]  # unwrap the composition envelope
+    return items
 
 
 @mcp.tool()

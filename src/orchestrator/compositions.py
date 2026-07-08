@@ -127,6 +127,58 @@ def _trim(text: str) -> str:
     return text[:_CANON_SNIPPET] + ("…" if len(text) > _CANON_SNIPPET else "")
 
 
+# evidence grades → rank weights for fn_search: search inherits the SAME epistemics as every
+# other read surface — a deliberate ruling outranks a mined echo at equal textual relevance.
+_GRADE_W = ("CASE a.evidence_class WHEN 'self_declared' THEN 1.0 "
+            "WHEN 'authoritative_api' THEN 0.95 WHEN 'corroborated' THEN 0.9 "
+            "WHEN 'direct_observation' THEN 0.8 WHEN 'derived' THEN 0.5 "
+            "ELSE 0.35 END")
+
+
+async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
+    """search v2 — ONE engine behind the tool, the console, and any op-tree (rung 1, thread
+    0deaec4f). Postgres FTS over the text-bearing assertion fields (name/summary/rationale —
+    the old search read only name: door plaques, not rooms), ranked
+    ts_rank × GRADE-WEIGHT × recency-decay (90-day half-scale), deduped one row per object
+    (best witness shown). Every hit carries TESTIMONY — field, source, grade, when, snippet —
+    a hit tells you WHY it surfaced. Every call lands in search_log: the zero-hit rate is the
+    objective tripwire for unparking embeddings; a memory system that doesn't measure its own
+    recall failures ends up mostly fart and certain it isn't."""
+    q = str(args.get("q", "")).strip()
+    limit = min(int(args.get("limit") or 15), 50)
+    caller = str(args.get("caller") or "") or None
+    if not q:
+        return {"hits": [], "note": "pass q — words, phrases, or \"quoted phrases\""}
+    rows = await pool.fetch(
+        "WITH tq AS (SELECT websearch_to_tsquery('english', $1) AS v) "
+        "SELECT * FROM ("
+        "  SELECT DISTINCT ON (o.id) o.id, o.type, o.canonical, a.name AS field, "
+        "   a.source_id, a.evidence_class, a.observed_at, "
+        "   ts_headline('english', a.value #>> '{}', tq.v, "
+        "               'MaxWords=20, MinWords=8, MaxFragments=1') AS snippet, "
+        "   (ts_rank(to_tsvector('english', a.value #>> '{}'), tq.v) * " + _GRADE_W + " * "
+        "    (1.0 / (1.0 + EXTRACT(epoch FROM (now() - a.observed_at)) / 7776000.0)))::real "
+        "     AS rank "
+        "  FROM current_assertions a JOIN objects o ON o.id = a.object_id "
+        "   AND o.status = 'active', tq "
+        "  WHERE a.name IN ('name','summary','rationale') "
+        "    AND to_tsvector('english', a.value #>> '{}') @@ tq.v "
+        "  ORDER BY o.id, rank DESC"
+        ") ranked ORDER BY rank DESC LIMIT $2", q, limit)
+    hits = [
+        {"id": str(r["id"]), "type": r["type"], "canonical": r["canonical"],
+         "field": r["field"], "snippet": r["snippet"], "source": r["source_id"],
+         "grade": r["evidence_class"], "when": r["observed_at"].isoformat(),
+         "rank": round(float(r["rank"]), 6)}
+        for r in rows
+    ]
+    await pool.execute(
+        "INSERT INTO search_log (query, caller, hits, top_rank) VALUES ($1,$2,$3,$4)",
+        q, caller, len(hits), (hits[0]["rank"] if hits else None))
+    return {"hits": hits, "q": q,
+            **({"note": "no hits — logged; the zero-hit rate is watched"} if not hits else {})}
+
+
 async def _fn_canon(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
     """Consult the design canon — Palantir/Notion's models + Osiris's own docs, ingested as
     `Reference` objects (src/ingest/reference.py). 'Cite, don't re-derive': given a query (a
@@ -519,6 +571,7 @@ _FUNCTIONS: dict[str, Function] = {
     "subject_report": _fn_subject_report,
     "screen_network": _fn_screen,
     "canon": _fn_canon,
+    "search": _fn_search,
     "family": _fn_family,
     "family_drift": _fn_family_drift,
     "portfolio": _fn_portfolio,
@@ -532,7 +585,7 @@ _FUNCTIONS: dict[str, Function] = {
 # NB: `projects`, `briefing`, `decisions` are GONE as Functions — they decomposed into pure
 # op-trees (a `table`, a `sections`, a `sections`+show-original — see DEFAULT_COMPOSITIONS):
 # opinion → primitives the user owns.
-_SUBJECT_FREE = {"canon", "family", "family_drift", "portfolio", "pulse", "project"}
+_SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "pulse", "project"}
 
 
 def list_functions() -> list[str]:

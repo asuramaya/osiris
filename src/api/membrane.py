@@ -66,7 +66,13 @@ def _footer(dg: dict[str, Any]) -> str:
             lead = 'new in the <b>last 24h</b> <span class="dim">· no watermark set yet</span>'
     else:
         lead = f"window {since} → now"
-    return (f'<p class="dim">read-only lens · auto-refreshes 30s · {lead} '
+    rt = dg.get("retrieval") or {}
+    rt_bit = ""
+    if rt.get("queries"):
+        z = rt.get("zero_hits", 0)
+        rt_bit = (f' · retrieval {rt["queries"]} queries, '
+                  f'<span class="{"amber" if z else "dim"}">{z} zero-hit</span>')
+    return (f'<p class="dim">read-only lens · auto-refreshes 30s · {lead}{rt_bit} '
             '<span class="dim">· the page never advances the watermark</span></p>')
 
 

@@ -260,6 +260,20 @@ async def _costs(actions: Actions, since: datetime) -> dict[str, Any]:
     }
 
 
+async def _retrieval(actions: Actions, since: datetime) -> dict[str, Any]:
+    """Retrieval telemetry off search_log — the embeddings tripwire made visible: how often
+    the fleet searched, how often it found NOTHING, and the queries that missed most. A memory
+    system that doesn't measure its own recall failures rots invisibly."""
+    row = await actions.pool.fetchrow(
+        "SELECT count(*) AS queries, count(*) FILTER (WHERE hits = 0) AS zero_hits "
+        "FROM search_log WHERE searched_at >= $1", since)
+    missed = await actions.pool.fetch(
+        "SELECT query, count(*) AS n FROM search_log "
+        "WHERE searched_at >= $1 AND hits = 0 GROUP BY query ORDER BY n DESC LIMIT 3", since)
+    return {"queries": int(row["queries"]), "zero_hits": int(row["zero_hits"]),
+            "top_missed": [{"query": m["query"], "times": int(m["n"])} for m in missed]}
+
+
 async def fleet_digest(
     actions: Actions, *, since: datetime | None = None, mark_seen: bool = False,
     lease_secs: int = 900,
@@ -277,6 +291,7 @@ async def fleet_digest(
     laundering, disputes = await _credence_streams(actions, effective_since)
     conversations = await _conversations(actions, effective_since)
     costs = await _costs(actions, effective_since)
+    retrieval = await _retrieval(actions, effective_since)
     operator_inbox = await _operator_inbox(actions, lease_secs=lease_secs)
     danger = [r for r in roster if r["swapped"]]
     unresolved = [r for r in roster if not r["resolved"]]
@@ -303,5 +318,6 @@ async def fleet_digest(
         "disputes": disputes,
         "conversations": conversations,
         "costs": costs,
+        "retrieval": retrieval,
         "operator_inbox": operator_inbox,
     }
