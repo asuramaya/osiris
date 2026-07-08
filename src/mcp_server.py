@@ -751,6 +751,10 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
                        anchored=ident.model_method == "job_dir")) if ident else None
     away = await mounts.while_away(
         pool, proj, ident.agent_id, _prev_seen.get(ident.agent_id)) if ident else None
+    try:  # one glance line — never let the pulse slow or crash orient
+        pulse: str | None = await mounts.fleet_pulse(pool, lease_secs=lease)
+    except Exception:  # noqa: BLE001
+        pulse = None
     scoped = await _project_briefing(pool, proj) if proj else None
     if scoped is not None:
         fleet_open = await pool.fetchval(
@@ -761,6 +765,7 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
         return {
             "you": who, "model": (ident.model if ident else None), "project": proj,
             "mail": mail,
+            **({"fleet_pulse": pulse} if pulse else {}),
             **op_mail,
             **({"swap": swap} if swap else {}),
             **({"while_you_were_away": away} if away else {}),
@@ -772,6 +777,7 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
     return {
         "you": who, "model": (ident.model if ident else None), "project": proj,
         "mail": mail,
+        **({"fleet_pulse": pulse} if pulse else {}),
         **op_mail,
         **({"swap": swap} if swap else {}),
         **({"while_you_were_away": away} if away else {}),

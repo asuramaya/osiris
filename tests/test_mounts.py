@@ -205,3 +205,32 @@ def test_sane_job_dir_rejects_unexpanded_literals() -> None:
     assert srv._sane_job_dir("${CLAUDE_JOB_DIR}") is None        # braced literal
     assert srv._sane_job_dir("relative/jobs/x") is None          # not a path
     assert srv._sane_job_dir("") is None and srv._sane_job_dir(None) is None
+
+
+async def test_fleet_pulse_is_one_honest_glance(actions: Actions) -> None:
+    """The orient fold: 'N live · desk M · wakes K/h' — the same numbers the statusline
+    shows, for agents whose chrome the operator can't see. One round trip."""
+    from src.orchestrator.mailbox import send_message
+
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/j/a", agent_id="agent:aaa", project="osiris",
+                     cwd="/w/osiris", model=None, session_key="sid:a")
+    await send_message(p, from_agent="agent:aaa", from_project="osiris",
+                       to_project="operator", body="brief for the human")
+    await p.execute("INSERT INTO agent_wakes (to_project, from_agent, message_id) "
+                    "VALUES ('demo','agent:aaa',NULL)")
+    assert await mounts.fleet_pulse(p) == "1 live · desk 1 · wakes 1/h"
+
+
+async def test_live_claimed_sids_sees_other_clients_lineage_aware(actions: Actions) -> None:
+    """The claimed-set the cwd-guess refuses: sids held by LIVE mounts on OTHER client
+    sessions; an heir (agent:x-ii) claims its base handle; the caller's own claim excluded."""
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/j/a", agent_id="agent:cafe0001", project="osiris",
+                     cwd="/w/osiris", model=None, session_key="sid:other")
+    await mounts.save_mount(p, job_dir="/j/b", agent_id="agent:beef0002-ii", project="osiris",
+                     cwd="/w/osiris", model=None, session_key="sid:heir")
+    await mounts.save_mount(p, job_dir="/j/c", agent_id="agent:feed0003", project="osiris",
+                     cwd="/w/osiris", model=None, session_key="sid:me")
+    got = await mounts.live_claimed_sids(p, exclude_session_key="sid:me")
+    assert got == {"cafe0001", "beef0002"}  # heir claims its base; my own claim excluded

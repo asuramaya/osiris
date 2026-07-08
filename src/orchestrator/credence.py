@@ -44,6 +44,30 @@ agent's own identity and sits IN this tree: the clamp reaches it, and the miner 
 universal re-teller that laundered a sub-agent's words under its own source. (This closes the
 feeder tracked as the miner over-read, f34c572c; the read-side write-time dedup lives with the
 miner.)
+
+CONSUMER AUDIT (the winning_props→credence convergence question, closed by classification):
+every remaining `winning_props` read was examined for whether agent sources can co-assert the
+fact it resolves — the only condition under which the plain grade-then-recency winner and the
+clamped winner can differ. All are ACCEPTED DIVERGENCES, each with a structural reason:
+
+  * ingest/sessions.py + ingest/threads.py (miner self-heal status reads) — ownership-bounded:
+    the miner may only heal threads IT authored, so a cross-agent relay of the status it reads
+    cannot enter the window; also a batch EXISTS filter inside the tick's hot loop, where a
+    per-object Python roundtrip is real cost for zero reachable divergence.
+  * ingest/backfill_source_model.py — resolves an agent's OWN `source_model`: self-facts are
+    never relayed up an ancestry tree (an ancestor asserting a descendant's model would be a
+    swap-detector event, not a credence event).
+  * orchestrator/compositions.py ×3 (object detail / watch read / batch briefing lists) —
+    render lenses over text, not confidence-bearing winner-picks; the one surface where a
+    clamped winner CHANGES what the operator concludes (laundering + disputes) already reads
+    through credence_props in the fleet digest, which is also where these lenses' consumers
+    are told a value is contested.
+
+The invariant this preserves: credence_props is mandatory wherever a winner's GRADE is the
+message; winning_props remains legitimate where the winner's TEXT is the message and the
+source tree is structurally single-voiced. A new read path that lets agents co-assert must
+route through credence_props or add itself here with its reason (loop-pathology discipline,
+rule #7).
 """
 from __future__ import annotations
 

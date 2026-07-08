@@ -105,6 +105,26 @@ async def live_claimed_sids(
     return out
 
 
+async def fleet_pulse(
+    pool: asyncpg.Pool, *, lease_secs: int = 900, live_secs: int = 900
+) -> str:
+    """One glance line for orient — 'N live · desk M · wakes K/h'. One round trip; the
+    caller omits the key on any failure (the pulse must never slow or crash orient). The
+    statusline shows the same numbers per-render; this is the same glance for agents whose
+    chrome the operator can't see."""
+    r = await pool.fetchrow(
+        "SELECT "
+        " (SELECT count(*) FROM agent_mounts "
+        "   WHERE last_seen > now() - make_interval(secs => $2)) AS live, "
+        " (SELECT count(*) FROM fleet_messages WHERE to_project='operator' "
+        "   AND read_at IS NULL AND (delivered_at IS NULL "
+        "   OR delivered_at < now() - make_interval(secs => $1))) AS desk, "
+        " (SELECT count(*) FROM agent_wakes "
+        "   WHERE woke_at > now() - interval '1 hour') AS wakes",
+        lease_secs, live_secs)
+    return f"{r['live']} live · desk {r['desk']} · wakes {r['wakes']}/h"
+
+
 async def while_away(
     pool: asyncpg.Pool, project: str | None, agent_id: str, since: datetime | None
 ) -> dict[str, Any] | None:
