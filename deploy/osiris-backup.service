@@ -1,0 +1,8 @@
+# Nightly graph dump — the record's record. The graph forgets nothing; the disk holding it
+# must be equally hard to lose. Paired with osiris-backup.timer (daily, persistent).
+[Unit]
+Description=Osiris graph nightly pg_dump (keep 14)
+
+[Service]
+Type=oneshot
+ExecStart=/home/asuramaya/code/osiris/scripts/osiris_backup.sh
