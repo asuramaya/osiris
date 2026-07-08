@@ -572,7 +572,14 @@ async def mount(
     pool = await _pool_get()
     settings = get_settings()
     lease = settings.osiris_mail_lease_secs
-    job_dir = _sane_job_dir(job_dir)  # an unexpanded `$CLAUDE_JOB_DIR` literal is no anchor
+    # An unexpanded `$CLAUDE_JOB_DIR` literal is no anchor — and it is the COMMON case for a
+    # fresh agent (MCP tool args never pass through a shell, so the docstring's advice arrives
+    # verbatim). The client's .mcp.json/user-scope entry sends the TRUE dir in the X-Osiris-Job
+    # header on this very request (expansion client-side, proven live) — fall back to it, so a
+    # by-the-book mount is durable + resolved instead of silently degrading to the cwd-guess
+    # (rotten-apple's first mount: unresolved identity, no registry row, invisible to the
+    # trigger's owner-liveness — the wake lane would have minted a twin over a LIVE tab).
+    job_dir = _sane_job_dir(job_dir) or _job_hint(ctx)
     key = _conn_key(ctx)
     claimed = None
     if job_dir is None:  # the cwd-guess path — refuse sids a LIVE mount already holds
