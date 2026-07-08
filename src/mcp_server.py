@@ -98,6 +98,11 @@ _pool: asyncpg.Pool | None = None
 # from the table by the client's job_dir header (_ident_for).
 _agents: dict[str, AgentIdentity] = {}
 _agents_touched: dict[str, float] = {}  # last use per key — feeds the bounce-orphan prune
+# The while-you-were-away anchor per agent: the lineage's last_seen BEFORE this session's
+# mount/reattach (captured from save_mount's RETURNING). mount() and orient() fold what
+# happened in the agent's name since — twins, wakes, thread movement — so a returning tab
+# never has to guess where it stands ("the agents have to know, or it falls apart").
+_prev_seen: dict[str, datetime | None] = {}
 
 
 def _prune_agents(cap: int = 256) -> None:
@@ -167,9 +172,10 @@ async def _reattach(
     if key is not None:
         _agents[key] = ident
         _agents_touched[key] = time.monotonic()
-    await mounts.save_mount(pool, job_dir=rec.job_dir, agent_id=ident.agent_id,
-                            project=ident.project, cwd=rec.cwd, model=ident.model,
-                            session_key=key)
+    prev = await mounts.save_mount(pool, job_dir=rec.job_dir, agent_id=ident.agent_id,
+                                   project=ident.project, cwd=rec.cwd, model=ident.model,
+                                   session_key=key)
+    _prev_seen.setdefault(ident.agent_id, prev)  # a re-attach is a re-entry: keep the anchor
     return ident
 
 
@@ -542,7 +548,7 @@ async def consult_canon(query: str = "", ctx: Context | None = None) -> dict[str
 @mcp.tool()
 async def mount(
     cwd: str, job_dir: str | None = None, model: str | None = None, ctx: Context | None = None
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Link this agent to Osiris as a first-class fleet member — call it ONCE, first thing.
     Pass your working directory `cwd` (names your project) and, if you can, your `job_dir`
     ($CLAUDE_JOB_DIR) so the server can read your ACTUAL model off your transcript (not your
@@ -564,15 +570,16 @@ async def mount(
         _agents[key] = ident
         _agents_touched[key] = time.monotonic()
     if job_dir:  # the durable half — what _ident_for re-attaches by after a bounce
-        await mounts.save_mount(pool, job_dir=job_dir, agent_id=ident.agent_id,
-                                project=ident.project, cwd=cwd, model=ident.model,
-                                session_key=key)
+        prev = await mounts.save_mount(pool, job_dir=job_dir, agent_id=ident.agent_id,
+                                       project=ident.project, cwd=cwd, model=ident.model,
+                                       session_key=key)
+        _prev_seen[ident.agent_id] = prev  # this mount IS the re-entry: anchor the fold here
     unread = await unread_count(pool, ident.project, lease_secs=lease) if ident.project else 0
     op_unread = await unread_count(pool, OPERATOR_ADDR, lease_secs=lease)
     banner = swap_banner(classify_swap(
         ident.model_history, ident.model, expected=settings.osiris_expected_model,
         anchored=ident.model_method == "job_dir"))  # only a true anchor confesses a swap
-    out = {"agent": ident.agent_id, "project": ident.project or "?",
+    out: dict[str, Any] = {"agent": ident.agent_id, "project": ident.project or "?",
            "model": ident.model or "unknown",
            "mail": f"{unread} unread — call inbox()" if unread else "none",
            "note": "linked — writes now attributed to you; call orient() next"}
@@ -586,6 +593,10 @@ async def mount(
             f"⚠ identity succession: {ident.model_succession} — this agent id's earlier writes "
             "were another model's, from a context that is not yours. The seam is stamped on the "
             "Agent (model_succession); confess the inheritance to the operator.")
+    away = await mounts.while_away(
+        pool, ident.project, ident.agent_id, _prev_seen.get(ident.agent_id))
+    if away:  # who wore your face + how your conversations moved, since your last sign of life
+        out["while_you_were_away"] = away
     return out
 
 
@@ -685,6 +696,8 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
     swap = swap_banner(classify_swap(ident.model_history, ident.model,
                        expected=get_settings().osiris_expected_model,
                        anchored=ident.model_method == "job_dir")) if ident else None
+    away = await mounts.while_away(
+        pool, proj, ident.agent_id, _prev_seen.get(ident.agent_id)) if ident else None
     scoped = await _project_briefing(pool, proj) if proj else None
     if scoped is not None:
         fleet_open = await pool.fetchval(
@@ -697,6 +710,7 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
             "mail": mail,
             **op_mail,
             **({"swap": swap} if swap else {}),
+            **({"while_you_were_away": away} if away else {}),
             **scoped,
             "fleet_open_threads_total": fleet_open,
             "note": f"scoped to {proj}; {fleet_open} fleet-wide open threads not shown "
@@ -707,6 +721,7 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
         "mail": mail,
         **op_mail,
         **({"swap": swap} if swap else {}),
+        **({"while_you_were_away": away} if away else {}),
         "briefing": await comp.run_composition(pool, "briefing"),
     }
 

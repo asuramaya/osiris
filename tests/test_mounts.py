@@ -8,6 +8,7 @@ FRESH transcript read (never a stale copy of the stored model).
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -111,3 +112,60 @@ def test_prune_agents_drops_the_least_recently_used() -> None:
         srv._agents.update(saved)
         srv._agents_touched.clear()
         srv._agents_touched.update(saved_touch)
+
+
+async def test_save_mount_returns_the_previous_last_seen(actions: Actions) -> None:
+    """The while-you-were-away anchor: first mount has no past (None); a re-mount returns the
+    lineage's prior sign of life."""
+    p = actions.pool
+    prev = await mounts.save_mount(p, job_dir="/x/jobs/cccc3333", agent_id="agent:cccc3333",
+                                   project="demo", cwd="/repo/demo", model=None,
+                                   session_key=None)
+    assert prev is None                       # first mount — no past
+    prev2 = await mounts.save_mount(p, job_dir="/x/jobs/cccc3333", agent_id="agent:cccc3333",
+                                    project="demo", cwd="/repo/demo", model=None,
+                                    session_key=None)
+    assert prev2 is not None                  # the re-entry sees the prior last_seen
+
+
+async def test_while_away_names_the_face_wearers(actions: Actions) -> None:
+    """A returning agent is told WHO acted in its project's name and how its threads moved —
+    'mail 0' must never silently mean 'a stranger settled your conversations'."""
+    from datetime import timedelta
+
+    from src.orchestrator.mailbox import read_inbox, send_message
+
+    p = actions.pool
+    anchor = datetime.now(UTC) - timedelta(hours=8)
+    # while the owner slept: a twin was woken (resume lane), SENT mail wearing the project's
+    # face, and the counterparty's ask got leased+settled
+    await p.execute("INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+                    "VALUES ('heinrich','agent:deceptor',NULL,'resume')")
+    ask = await send_message(p, from_agent="agent:deceptor", from_project="decepticons",
+                             to_project="heinrich", body="image the 50k pair?")
+    await read_inbox(p, "heinrich")  # the twin leased it…
+    await send_message(p, from_agent="agent:twin-99", from_project="heinrich",
+                       body="done — imaged, verdict recorded", reply_to=ask["id"])  # …and settled
+
+    away = await mounts.while_away(p, "heinrich", "agent:a8c15486", anchor)
+
+    assert away is not None
+    assert away["acted_in_your_name"] == ["agent:twin-99"]      # the face-wearer, named
+    assert away["wakes"] == {"resume": 1}
+    threads = {t["thread"]: t for t in away["threads"]}
+    # the thread's LAST WORD is the twin's reply, sent wearing your face; the counterparty
+    # hasn't read it yet — settled=False is the honest state ("answered for you, their side
+    # pending"), and last_from names the hand that did it
+    assert threads[ask["id"]]["last_from"] == "agent:twin-99"
+    assert threads[ask["id"]]["between"] == "heinrich → decepticons"
+    assert threads[ask["id"]]["settled"] is False
+    # the owner itself is never listed as its own face-wearer
+    away2 = await mounts.while_away(p, "heinrich", "agent:twin-99", anchor)
+    assert away2 is not None and away2["acted_in_your_name"] == []
+
+
+async def test_while_away_is_quiet_when_nothing_happened(actions: Actions) -> None:
+    away = await mounts.while_away(actions.pool, "ghost-town", "agent:x",
+                                   datetime.now(UTC))
+    assert away is None
+    assert await mounts.while_away(actions.pool, "ghost-town", "agent:x", None) is None
