@@ -19,8 +19,8 @@ model, SAY SO in your first reply. A rug-pull is confessed, never inherited blin
 - Dev instance: Postgres `127.0.0.1:5601` / Redis `:6396` (`.claude/settings.local.json`
   exports DATABASE_URL). Daemons: `systemctl --user status osiris-pulse osiris-worker`.
 - Orient: MCP `run_composition('briefing')` (socket in `.mcp.json`) — open threads,
-  obligations, recent decisions. Design/history/ops questions: `consult_canon(q)`
-  (try q="ops" for the runbook, q="strange loop", q="liveness").
+  obligations, recent decisions. Design/ops questions: `consult_canon(q)` (canon + essays;
+  try q="ops"). History: grep docs/HISTORY.md — `ref:history-*` is outside mounted canon scope.
 - Write back AS YOU GO: `record_decision` / `open_thread` (kind='obligation' for duties
   an action mints) / `resolve_thread`. A session can die at any instant; anything not
   written back does not exist. The session-miner backfills what you forget (DERIVED),
