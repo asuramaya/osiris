@@ -139,3 +139,22 @@ async def test_operator_is_an_ordinary_address(actions: Actions) -> None:
     assert await unread_count(p, OPERATOR_ADDR) == 1
     (m,) = await read_inbox(p, OPERATOR_ADDR, mark_read=False)
     assert m["from_project"] == "decepticons"
+
+
+async def test_lease_is_visible_to_the_owner(actions: Actions) -> None:
+    """msg-78 lesson: a twin leasing the owner's mail must be VISIBLE — 'mail 0' with a held
+    lease is not 'nothing happening'. The lease records its holder; in_flight names it."""
+    from src.orchestrator.mailbox import in_flight
+
+    p = actions.pool
+    await send_message(p, from_agent="agent:x", from_project="decepticons",
+                       to_project="heinrich", body="context brief before you MRI")
+    # a twin leases it, stamped as the lessee
+    await read_inbox(p, "heinrich", lessee="agent:dcfa2136")
+    (f,) = await in_flight(p, "heinrich")
+    assert f["leased_by"] == "agent:dcfa2136"
+    assert f["held_for_secs"] >= 0
+    # settled → no longer in flight
+    await send_message(p, from_agent="agent:dcfa2136", from_project="heinrich",
+                       body="brief received", reply_to=f["id"])
+    assert await in_flight(p, "heinrich") == []

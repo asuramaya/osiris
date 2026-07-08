@@ -22,7 +22,8 @@ NOW = datetime(2026, 7, 6, tzinfo=UTC)
 
 def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
               lease: int = 900, grace: int = 0, live: int = 900,
-              ceiling: int = 8_000_000, sense: str = "") -> SimpleNamespace:
+              ceiling: int = 8_000_000, sense: str = "",
+              wake_model: str = "") -> SimpleNamespace:
     # grace defaults to 0 (disabled) so the rate-cap / lease tests exercise those bounds in
     # isolation; the wake-grace tests set it explicitly. sense="" → resume resolution looks at
     # ~/.claude/projects (no anchored transcript for the test ids there → mint), so the legacy
@@ -30,7 +31,8 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
     return SimpleNamespace(osiris_trigger_enabled=enabled, osiris_trigger_rate_cap=rate_cap,
                            osiris_trigger_window_secs=window, osiris_mail_lease_secs=lease,
                            osiris_trigger_grace_secs=grace, osiris_owner_live_secs=live,
-                           osiris_resume_ceiling_bytes=ceiling, osiris_sense_sessions=sense)
+                           osiris_resume_ceiling_bytes=ceiling, osiris_sense_sessions=sense,
+                           osiris_wake_model=wake_model)
 
 
 def test_should_wake_is_off_by_default_and_rate_capped() -> None:
@@ -337,3 +339,20 @@ async def test_resume_is_not_retried_on_the_same_message(
     assert rep["resumed"] == 0 and rep["woke"] == 1   # alternated to mint
     assert await actions.pool.fetchval(
         "SELECT mode FROM agent_wakes ORDER BY id DESC LIMIT 1") == "mint"
+
+
+async def test_wake_model_pins_the_triage_lane(actions: Actions, tmp_path: Path) -> None:
+    """Wake economics: when osiris_wake_model is set, BOTH lanes spawn with it (the prompt
+    escalates real work back to a full session); empty setting passes no model at all."""
+    await _agent_with_mail(actions)
+    calls: list[dict[str, Any]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append(kw)
+
+    await trigger_mail_tick(
+        actions, settings=_settings(enabled=True, wake_model="claude-haiku-4-5-20251001"),
+        spawn=_spawn)
+    assert calls[0].get("model") == "claude-haiku-4-5-20251001"
+    # the prompt carries the escalation contract
+    assert "TRIAGE" in _WAKE_PROMPT and "open_thread(kind='obligation')" in _WAKE_PROMPT

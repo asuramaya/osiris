@@ -100,14 +100,34 @@ def _statusline_command(osiris_home: Path) -> str:
 
 
 def merge_settings(
-    existing: dict[str, Any] | None, osiris_home: Path
+    existing: dict[str, Any] | None, osiris_home: Path, *, hook: bool = False
 ) -> tuple[dict[str, Any], bool]:
-    """Merge the statusLine command into a .claude/settings.json WITHOUT dropping other keys
-    (permissions, env, worktree, …). Same shape as this repo's. Returns (result, changed)."""
+    """Merge the statusLine command (and, with hook=True, the Stop mail-drain hook) into a
+    .claude/settings.json WITHOUT dropping other keys (permissions, env, worktree, …). Same
+    shape as this repo's. Returns (result, changed)."""
     doc: dict[str, Any] = dict(existing) if existing else {}
     entry = {"type": "command", "command": _statusline_command(osiris_home), "padding": 0}
     changed = doc.get("statusLine") != entry
     doc["statusLine"] = entry
+    if hook:
+        # the Stop mail-drain (operator-installed, per repo): the visible tab settles its own
+        # mailbox at turn-ends instead of a twin doing it invisibly. Merge-idempotent: only
+        # our command is added/kept; foreign Stop hooks pass through untouched.
+        py = osiris_home / ".venv" / "bin" / "python"
+        script = osiris_home / "scripts" / "osiris_stophook.py"
+        cmd = {"type": "command", "command": f"{py} {script}", "timeout": 10}
+        hooks = dict(doc.get("hooks") or {})
+        stops: list[Any] = list(hooks.get("Stop") or [])
+        present = any(
+            h.get("command") == cmd["command"]
+            for grp in stops if isinstance(grp, dict)
+            for h in (grp.get("hooks") or []) if isinstance(h, dict)
+        )
+        if not present:
+            stops.append({"hooks": [cmd]})
+            hooks["Stop"] = stops
+            doc["hooks"] = hooks
+            changed = True
     return doc, changed
 
 
@@ -196,6 +216,7 @@ def onboard(
     repo: str | Path,
     *,
     statusline: bool = False,
+    hook: bool = False,
     dry_run: bool = False,
     user_scope: bool = False,
     osiris_home: str | Path | None = None,
@@ -213,11 +234,11 @@ def onboard(
         changes.append(Change("skipped", root / ".mcp.json"))  # print the one-liner instead
     else:
         changes.append(_apply(root / ".mcp.json", merge_mcp, dry_run=dry_run))
-    if statusline:
+    if statusline or hook:
         changes.append(
             _apply(
                 root / ".claude" / "settings.json",
-                lambda e: merge_settings(e, home),
+                lambda e: merge_settings(e, home, hook=hook),
                 dry_run=dry_run,
             )
         )
@@ -253,6 +274,12 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI glue
         "--statusline", action="store_true", help="also write .claude/settings.json statusline"
     )
     parser.add_argument(
+        "--hook",
+        action="store_true",
+        help="also install the Stop mail-drain hook (the visible tab settles its own mailbox "
+             "at turn-ends) — an OPERATOR consent switch: run this yourself, per repo",
+    )
+    parser.add_argument(
         "--user-scope",
         action="store_true",
         help="print the box-wide `claude mcp add --scope user` one-liner; write no .mcp.json",
@@ -267,6 +294,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI glue
         result = onboard(
             args.repo,
             statusline=args.statusline,
+            hook=args.hook,
             dry_run=args.dry_run,
             user_scope=args.user_scope,
         )

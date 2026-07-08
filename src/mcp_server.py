@@ -48,6 +48,7 @@ from src.orchestrator.fleetview import render_fleet_tree
 from src.orchestrator.mailbox import (
     OPERATOR_ADDR,
     ack_messages,
+    in_flight,
     read_inbox,
     send_message,
     unread_count,
@@ -917,7 +918,12 @@ async def inbox(project: str | None = None, peek: bool = False,
     st = get_settings()
     settled = await ack_messages(pool, proj, ack) if ack else 0
     msgs = await read_inbox(pool, proj, mark_read=not peek,
-                            lease_secs=st.osiris_mail_lease_secs)
+                            lease_secs=st.osiris_mail_lease_secs,
+                            lessee=ident.agent_id if ident else None)
+    flight = await in_flight(pool, proj, lease_secs=st.osiris_mail_lease_secs)
+    if not peek:  # what THIS call just leased is ours, not someone else's in-flight
+        ours = {m["id"] for m in msgs}
+        flight = [f for f in flight if f["id"] not in ours]
     if peek:
         note = "peek — nothing leased"
     elif msgs:
@@ -926,7 +932,11 @@ async def inbox(project: str | None = None, peek: bool = False,
                 f"{st.osiris_mail_lease_secs // 60} min")
     else:
         note = "empty"
+    if flight:  # msg-78 lesson: an empty box with a held lease is NOT 'nothing happening'
+        note += (f" — {len(flight)} in flight (leased by "
+                 + ", ".join(sorted({f['leased_by'] for f in flight})) + ")")
     return {"project": proj.removeprefix("repo:").strip(), "messages": msgs,
+            **({"in_flight": flight} if flight else {}),
             **({"settled": settled} if settled else {}), "note": note}
 
 

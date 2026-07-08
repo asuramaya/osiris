@@ -90,13 +90,14 @@ async def unread_count(pool: asyncpg.Pool, to_project: str, *, lease_secs: int =
 
 async def read_inbox(
     pool: asyncpg.Pool, to_project: str, *, mark_read: bool = True, limit: int = 50,
-    lease_secs: int = 900,
+    lease_secs: int = 900, lessee: str | None = None,
 ) -> list[dict[str, Any]]:
     """A project's deliverable messages, oldest first. Reading LEASES them (delivered_at) —
     settle each by replying (send(reply_to=id)) or acking (ack_messages); an unsettled message
     redelivers after the lease, flagged `redelivered`. mark_read=False is a pure peek (no
-    lease, nothing changes). Each message carries its sender + thread, so provenance and
-    conversation travel with it."""
+    lease, nothing changes). `lessee` stamps WHO holds the lease — the owner's inbox shows it
+    as in-flight instead of silence (msg-78 lesson). Each message carries its sender + thread,
+    so provenance and conversation travel with it."""
     proj = _norm(to_project)
     q = ("SELECT id, from_agent, from_project, body, created_at, reply_to, thread_id, "
          "deliveries FROM fleet_messages WHERE to_project=$1 AND "
@@ -104,15 +105,36 @@ async def read_inbox(
     rows = await pool.fetch(q, proj, lease_secs, limit)
     if mark_read and rows:
         await pool.execute(
-            "UPDATE fleet_messages SET delivered_at=now(), deliveries=deliveries+1 "
-            "WHERE id = ANY($1::bigint[])",
-            [r["id"] for r in rows])
+            "UPDATE fleet_messages SET delivered_at=now(), deliveries=deliveries+1, "
+            "leased_by=COALESCE($2, leased_by) WHERE id = ANY($1::bigint[])",
+            [r["id"] for r in rows], lessee)
     return [
         {"id": r["id"], "from": r["from_agent"], "from_project": r["from_project"],
          "body": r["body"], "when": r["created_at"].isoformat(),
          "thread": r["thread_id"] or r["id"],
          **({"reply_to": r["reply_to"]} if r["reply_to"] is not None else {}),
          **({"redelivered": True} if r["deliveries"] > 0 else {})}
+        for r in rows
+    ]
+
+
+async def in_flight(
+    pool: asyncpg.Pool, to_project: str, *, lease_secs: int = 900
+) -> list[dict[str, Any]]:
+    """The owner's view of mail currently LEASED by someone (unsettled, live lease): who holds
+    it and for how long. 'mail 0' must never silently mean 'a twin is answering your thread
+    right now' — the in-flight block says so (msg-78 lesson)."""
+    rows = await pool.fetch(
+        "SELECT id, from_project, leased_by, thread_id, "
+        " extract(epoch FROM (now() - delivered_at)) AS held_secs "
+        "FROM fleet_messages WHERE to_project=$1 AND read_at IS NULL "
+        "AND delivered_at IS NOT NULL AND delivered_at >= now() - make_interval(secs => $2) "
+        "ORDER BY delivered_at", _norm(to_project), lease_secs)
+    return [
+        {"id": r["id"], "from_project": r["from_project"],
+         "leased_by": r["leased_by"] or "unknown",
+         "thread": r["thread_id"] or r["id"],
+         "held_for_secs": int(r["held_secs"] or 0)}
         for r in rows
     ]
 

@@ -109,6 +109,11 @@ class Settings(BaseSettings):
     # its box (the owner's own chrome/orient shows it — never spawn beside a live owner).
     osiris_resume_ceiling_bytes: int = 8_000_000
     osiris_owner_live_secs: int = 900
+    # Wake ECONOMICS (operator, 2026-07-08): most wakes are triage-shaped (read, reply,
+    # settle) — pin them to a cheaper model and let the PROMPT escalate real work back to a
+    # full session (obligation + brief instead of grinding it in a haiku). Empty = the CLI's
+    # default model (no --model flag passed).
+    osiris_wake_model: str = ""
     # The operator's STANDING model choice (the intent). The fable harness silently demotes
     # fable→opus when it senses danger (ruling f2ae6346); the swap-detector flags an observed
     # model that diverges from this — the confession backstop the cold-boot ritual can't be.

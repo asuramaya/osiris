@@ -46,7 +46,10 @@ _WAKE_PROMPT = (
     "it carries NEW information — never an acknowledgement-only message (that would just wake "
     "the sender again). REPORT UP (the operator must see the loop close): when this exchange "
     "CONCLUDES — a finding established, work divided, a decision made — record_decision the "
-    "outcome AND send(to='operator') a three-line brief. If nothing needs doing, do nothing."
+    "outcome AND send(to='operator') a three-line brief. If nothing needs doing, do nothing. "
+    "ECONOMY: you are a TRIAGE wake — if the mail demands real work (analysis, building, long "
+    "reads), do NOT grind it here: open_thread(kind='obligation') describing it, reply with "
+    "that pointer (which settles the mail), and let a full session take it."
 )
 
 
@@ -216,7 +219,8 @@ async def _last_wake_mode(pool: asyncpg.Pool, project: str, message_id: int) -> 
 
 
 async def _spawn_claude(
-    repo: str, prompt: str, *, job_dir: str | None = None, resume_session: str | None = None
+    repo: str, prompt: str, *, job_dir: str | None = None, resume_session: str | None = None,
+    model: str | None = None,
 ) -> None:
     """Wake an agent: a detached `claude -p` in the repo. RESUME lane: `--resume <session>`
     continues the owner's own session — it pays only for the new mail, not a fresh cosmology
@@ -224,6 +228,8 @@ async def _spawn_claude(
     durable identity anchor a triggered `claude -p` gets from no harness. Fire-and-forget."""
     env = os.environ.copy()
     cmd = ["claude", "-p"]
+    if model:  # wake economics: triage wakes on a cheaper model; the prompt escalates real work
+        cmd += ["--model", model]
     if resume_session:
         cmd += ["--resume", resume_session]
     if job_dir:
@@ -272,7 +278,8 @@ async def trigger_mail_tick(
             await pool.execute(
                 "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
                 "VALUES ($1,$2,$3,'resume')", project, sender, msg_id)
-            await spawn(repo, _RESUME_PROMPT, resume_session=session_id)
+            await spawn(repo, _RESUME_PROMPT, resume_session=session_id,
+                        model=st.osiris_wake_model or None)
             report["resumed"] += 1
             report["woke"] += 1
             continue
@@ -284,6 +291,6 @@ async def trigger_mail_tick(
             "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
             "VALUES ($1,$2,$3,'mint') RETURNING id", project, sender, msg_id)
         await spawn(repo_path, _WAKE_PROMPT.format(repo=repo_path),
-                    job_dir=_wake_job_dir(wake_id))
+                    job_dir=_wake_job_dir(wake_id), model=st.osiris_wake_model or None)
         report["woke"] += 1
     return report
