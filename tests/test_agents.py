@@ -191,6 +191,84 @@ async def test_register_stamps_intent_and_the_swap(actions: Actions, tmp_path: P
     assert row["swap_ec"] == EvidenceClass.DIRECT_OBSERVATION.value
 
 
+def _anchored(model: str, *, history: tuple[str, ...] | None = None) -> AgentIdentity:
+    """A job_dir-anchored identity for agent:0806072e — the succession-seam fixture (bug #51)."""
+    return AgentIdentity(agent_id="agent:0806072e", session="0806072e", project="decepticons",
+                         model=model, cwd="/w/decepticons", model_method="job_dir",
+                         model_history=history if history is not None else (model,))
+
+
+async def test_register_stamps_the_succession_seam(actions: Actions) -> None:
+    """Bug #51 (decepticons): retire+compact+swap hands a DEAD agent's id to a fresh context on a
+    different model — the transcript-level swap-detector is blind (the new transcript never ran
+    the old model), so registration must witness the seam off the graph's last anchored
+    source_model and stamp it, or the succession is silent."""
+    dead = _anchored("claude-opus-4-8")
+    a = await register_agent(actions, dead, actor="analyst:operator")
+    assert dead.model_succession is None  # first anchored write — no baseline, no seam
+    successor = _anchored("claude-fable-5")  # fresh context: opus is NOWHERE in its history
+    a2 = await register_agent(actions, successor, actor="analyst:operator")
+    assert a2 == a  # same identity re-issued — exactly the bug's shape
+    # the out-param mount() reads to confess the seam
+    assert successor.model_succession == "claude-opus-4-8 → claude-fable-5"
+    row = await actions.pool.fetchrow(
+        "SELECT value#>>'{}' AS seam, evidence_class AS ec FROM current_assertions "
+        "WHERE object_id=$1 AND name='model_succession'", a)
+    assert row is not None
+    assert row["seam"] == "claude-opus-4-8 → claude-fable-5"
+    assert row["ec"] == EvidenceClass.DIRECT_OBSERVATION.value
+    # idempotent: the successor re-mounting does not fire again (baseline is now fable)
+    again = _anchored("claude-fable-5")
+    await register_agent(actions, again, actor="analyst:operator")
+    assert again.model_succession is None
+
+
+async def test_warm_swap_is_not_a_succession(actions: Actions) -> None:
+    """A transition the transcript DID witness is the warm-swap's (model_swapped) — same context,
+    different seam. The succession stamp must stay quiet or every mid-run swap double-fires."""
+    first = _anchored("claude-fable-5")
+    await register_agent(actions, first, actor="analyst:operator")
+    swapped = _anchored("claude-opus-4-8",
+                        history=("claude-fable-5", "claude-opus-4-8"))  # the prior IS in history
+    a = await register_agent(actions, swapped, actor="analyst:operator",
+                             expected_model="claude-fable-5")
+    assert swapped.model_succession is None
+    row = await actions.pool.fetchrow(
+        "SELECT (SELECT value#>>'{}' FROM current_assertions x WHERE x.object_id=$1 "
+        "  AND x.name='model_succession') AS seam, "
+        " (SELECT value#>>'{}' FROM current_assertions x WHERE x.object_id=$1 "
+        "  AND x.name='model_swapped') AS swapped", a)
+    assert row is not None
+    assert row["seam"] is None                  # not a succession...
+    assert row["swapped"] is not None           # ...it's the warm swap, already first-class
+
+
+async def test_succession_needs_anchored_observations_on_both_sides(actions: Actions) -> None:
+    """Only two ANCHORED observations disagreeing can witness a seam: a self-report on the new
+    side, or a cwd guess as the baseline, must fire nothing (the cry-wolf lesson, e71b408f)."""
+    await register_agent(actions, _anchored("claude-opus-4-8"), actor="analyst:operator")
+    self_rep = AgentIdentity(agent_id="agent:0806072e", session="0806072e", project="decepticons",
+                             model="claude-fable-5", cwd="/w/decepticons",
+                             model_method="self_report")
+    a = await register_agent(actions, self_rep, actor="analyst:operator")
+    assert self_rep.model_succession is None    # the new side is only the agent's word
+    # ...and a weak-grade baseline can't witness either: cwd guess first, anchored read second
+    guess = AgentIdentity(agent_id="agent:c0ffee00", session="c0ffee00", project="decepticons",
+                          model="claude-opus-4-8", cwd="/w/decepticons", model_method="cwd")
+    await register_agent(actions, guess, actor="analyst:operator")
+    anchored2 = AgentIdentity(agent_id="agent:c0ffee00", session="c0ffee00",
+                              project="decepticons", model="claude-fable-5",
+                              cwd="/w/decepticons", model_method="job_dir",
+                              model_history=("claude-fable-5",))
+    b = await register_agent(actions, anchored2, actor="analyst:operator")
+    assert anchored2.model_succession is None   # no anchored baseline → no seam
+    for obj in (a, b):
+        seam = await actions.pool.fetchval(
+            "SELECT value#>>'{}' FROM current_assertions "
+            "WHERE object_id=$1 AND name='model_succession'", obj)
+        assert seam is None
+
+
 def test_unresolved_identities_do_not_conflate(tmp_path: Path) -> None:
     """Hardening: two agents that can't resolve a session id must NOT collapse into one shared
     agent:unknown sink (an accidental identity merge). Distinct anchors → distinct ids."""

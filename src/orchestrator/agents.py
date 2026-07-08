@@ -64,6 +64,10 @@ class AgentIdentity:
     # fallback is now DISTINCT per session — never the old shared `agent:unknown` sink — so distinct
     # actors can't merge; the flag lets the fleet digest surface an unresolved onboarding.
     resolved: bool = True
+    # SET BY register_agent (the one out-param): "<prior> → <observed>" when this registration
+    # crossed a succession seam — a fresh context inheriting an identity another model wrote under
+    # (bug #51, decepticons). None when no seam fired. mount() reads it to confess the seam.
+    model_succession: str | None = None
 
 
 def resolve_identity(
@@ -152,6 +156,19 @@ _MODEL_EC = {
 }
 
 
+async def _last_anchored_model(actions: Actions, agent: uuid.UUID) -> str | None:
+    """The last ANCHORED source_model ever recorded for this Agent — direct_observation grade
+    only (a job_dir transcript probe), read off the raw assertions so a later weak-grade write
+    from the same source can't hide it behind supersession. This is the succession baseline:
+    only two anchored observations disagreeing can witness a seam; a cwd guess or self-report
+    on either side would be the cry-wolf (agent e71b408f's 'demoted to haiku')."""
+    return await actions.pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT value #>> '{}' FROM assertions "
+        "WHERE object_id=$1 AND name='source_model' AND evidence_class=$2 "
+        "ORDER BY observed_at DESC, created_at DESC LIMIT 1",
+        agent, EvidenceClass.DIRECT_OBSERVATION.value)
+
+
 async def register_agent(
     actions: Actions, identity: AgentIdentity, *, actor: str, expected_model: str | None = None
 ) -> uuid.UUID:
@@ -159,7 +176,17 @@ async def register_agent(
     its OWN registration (`source = agent:<session>`), SELF_DECLARED. Re-mount is a no-op
     (find-or-create + the kernel's byte-dup assertion skip absorb it). `expected_model` (the
     operator's standing choice) turns on the swap-detector: the intent is stamped, and a silent
-    demotion away from it is recorded as a first-class OBSERVED event on the Agent."""
+    demotion away from it is recorded as a first-class OBSERVED event on the Agent.
+
+    THE SUCCESSION SEAM (bug #51, decepticons): session-keyed identity means a retire+compact+
+    swap hands a DEAD agent's id to a fresh context — a different model then writes AS it, and
+    the transcript-level swap-detector is blind when the new transcript never ran the old model.
+    So registration also compares the fresh ANCHORED observation against the graph's last
+    anchored source_model: a disagreement the CURRENT transcript can't explain (the prior model
+    is nowhere in its history — this context never was that model) is stamped `model_succession`
+    ("<prior> → <observed>", DIRECT_OBSERVATION) and echoed on `identity.model_succession` so
+    mount() can confess it. A transition the transcript DID witness stays the warm-swap's
+    (`model_swapped`) — same context, different seam."""
     now = datetime.now(UTC)
     src = identity.agent_id
     a = await actions.create_or_find_object("Agent", identity.agent_id, src)
@@ -171,6 +198,15 @@ async def register_agent(
                                   evidence_class=_EC)
     if identity.model:
         ec = _MODEL_EC.get(identity.model_method or "", EvidenceClass.CO_OCCURRENCE)
+        if ec is EvidenceClass.DIRECT_OBSERVATION:
+            # the succession seam: read the baseline BEFORE the new observation supersedes it
+            prior = await _last_anchored_model(actions, a)
+            if (prior is not None and prior != identity.model
+                    and prior not in identity.model_history):
+                identity.model_succession = f"{prior} → {identity.model}"
+                await actions.assert_property(
+                    a, "model_succession", identity.model_succession, src, now,
+                    confidence_for(ec), evidence_class=ec.value)
         await actions.assert_property(a, "source_model", identity.model, src, now,
                                       confidence_for(ec), evidence_class=ec.value)
     if identity.model_divergent and identity.model_declared:

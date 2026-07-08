@@ -12,7 +12,6 @@ Pure — the MCP fleet() tool feeds it rows; tests feed it fixtures.
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime
 from typing import Any
 
 Node = dict[str, Any]  # canonical -> {model, project, parent, live, ts: datetime|None}

@@ -581,6 +581,11 @@ async def mount(
                                 "inbox(project='operator') if the human is present")
     if banner:  # the graph confesses the swap the agent's own prompt hides (ruling f2ae6346)
         out["swap"] = banner
+    if ident.model_succession:  # bug #51 (decepticons): an inherited identity crosses a model seam
+        out["succession"] = (
+            f"⚠ identity succession: {ident.model_succession} — this agent id's earlier writes "
+            "were another model's, from a context that is not yours. The seam is stamped on the "
+            "Agent (model_succession); confess the inheritance to the operator.")
     return out
 
 
