@@ -38,12 +38,14 @@ async def automount(
     actions: Actions, *, session_id: str, cwd: str, actor: str,
     expected_model: str | None = None, lease_secs: int = 900,
     root: Path | None = None, jobs_home: Path | None = None,
+    project_label: str | None = None,
 ) -> dict[str, Any]:
     """Mount a just-started session and return its whisper payload. Identical semantics to
     the mount() tool (same resolution, same registration, same durable row — idempotent on
-    re-fire), plus the glance the whisper prints: mail, desk, pulse, and the away fold."""
+    re-fire), plus the glance the whisper prints: mail, desk, pulse, the away fold, and the
+    agent's SEAT (its human name, or None if still anonymous — the whisper offers a claim)."""
     job_dir = _derive_job_dir(session_id, jobs_home=jobs_home)
-    ident = resolve_identity(cwd=cwd, job_dir=job_dir, root=root)
+    ident = resolve_identity(cwd=cwd, job_dir=job_dir, root=root, project_label=project_label)
     await register_agent(actions, ident, actor=actor, expected_model=expected_model)
     prev = None
     if job_dir:
@@ -79,4 +81,15 @@ async def automount(
         # (thread 883a24f4). Distinct per session, so co-located agents (monsterhouse cloud+engine
         # on one dir) never collide: each has its own session id → its own job_dir.
         "job_dir": job_dir,
+        # the SEAT: the agent's claimed human name + generation ('Thoth', 'Anna II'), or None
+        # if still anonymous — the whisper offers a claim in that case.
+        "seat": await _seat_of(actions, ident.agent_id),
     }
+
+
+async def _seat_of(actions: Actions, agent_id: str) -> str | None:
+    from src.orchestrator.agents import seat_label
+    handle = await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='handle'", agent_id)
+    return seat_label(agent_id, handle)

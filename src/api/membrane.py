@@ -118,7 +118,7 @@ def render_membrane(dg: dict[str, Any], wakes: list[dict[str, Any]]) -> str:
         for c in dg["conversations"]
     ) or _row('<span class="dim">no threads in window</span>', "", "", "", "")
     roster_rows = "".join(
-        _row(_e(r["agent"]),
+        _row(_e(r.get("seat") or r["agent"]),
              _e(r["project"] or "?"),
              _e((r["model"] or "?").removeprefix("claude-")),
              ('<span class="green">resolved</span>' if r["resolved"]

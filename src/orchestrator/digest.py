@@ -70,8 +70,11 @@ async def _roster(actions: Actions) -> list[dict[str, Any]]:
         # the LIVE model from the heartbeat (freshest mount by last_seen) — a mid-session swap
         # lands here via the statusline before it is ever re-stamped on the Agent object.
         " (SELECT m.model FROM agent_mounts m WHERE m.agent_id=o.canonical "
-        "   ORDER BY m.last_seen DESC LIMIT 1) AS live_model "
+        "   ORDER BY m.last_seen DESC LIMIT 1) AS live_model, "
+        " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='handle' LIMIT 1) AS handle "
         "FROM objects o WHERE o.type='Agent' ORDER BY project NULLS FIRST, o.canonical")
+    from src.orchestrator.agents import seat_label
     out = []
     for r in rows:
         # a divergence between the last STAMPED model and the LIVE heartbeat model is a swap
@@ -79,7 +82,8 @@ async def _roster(actions: Actions) -> list[dict[str, Any]]:
         # a mount-once agent silently runs the wrong model behind a stale-green roster.
         live_swap = (r["live_model"] and r["model"] and r["live_model"] != r["model"])
         out.append(
-            {"agent": r["agent"], "project": r["project"], "model": r["model"],
+            {"agent": r["agent"], "seat": seat_label(r["agent"], r["handle"]),
+             "project": r["project"], "model": r["model"],
              "resolved": r["resolved"] != "false",  # None/‘true’ → treated resolved
              "swapped": r["swapped"],
              "live_model": r["live_model"] if live_swap else None,

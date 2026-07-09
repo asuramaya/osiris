@@ -186,10 +186,33 @@ async def resolve_handle(actions: Actions, name: str) -> str | None:
         "ORDER BY m.last_seen DESC NULLS LAST LIMIT 1", name)
 
 
+def read_project_label(cwd: str | None) -> str | None:
+    """A project's DECLARED name, from a `.osiris` file (TOML: project = "..."), walking up to
+    the repo root. Decouples the project identity from the FOLDER name (the operator may rename
+    the dir; the label is a stable property of the repo — ruling 1e02e069). None → fall back to
+    the cwd basename."""
+    if not cwd:
+        return None
+    import tomllib
+    p = Path(cwd)
+    for d in (p, *p.parents):
+        f = d / ".osiris"
+        try:
+            if f.is_file():
+                label = tomllib.loads(f.read_text()).get("project")
+                return str(label).strip() if label else None
+        except (OSError, tomllib.TOMLDecodeError, ValueError):
+            return None
+        if (d / ".git").exists():  # the repo root — stop climbing
+            break
+    return None
+
+
 def resolve_identity(
     *, cwd: str | None = None, job_dir: str | None = None,
     session: str | None = None, model: str | None = None, root: Path | None = None,
     claimed: set[str] | None = None, fallback_seed: str | None = None,
+    project_label: str | None = None,
 ) -> AgentIdentity:
     """Resolve an agent's identity from what it can tell the server + what the harness RECORDS.
     The project comes from its cwd; the session + model are OBSERVED off its own transcript. Two
@@ -206,7 +229,8 @@ def resolve_identity(
     session) makes the guess REFUSE a taken sid; the refuser falls to a deterministic per-client
     fallback keyed on `fallback_seed` (its MCP session key) — distinct, stable across re-calls
     within the connection, and honestly resolved=False."""
-    project = Path(cwd).name if cwd else None
+    # the project LABEL: an explicit override (env) > the .osiris file > the folder basename
+    project = project_label or read_project_label(cwd) or (Path(cwd).name if cwd else None)
     sid = session or _job_id(job_dir)
     confident = sid is not None  # a session/job_dir ANCHOR; the cwd-locate below is only a GUESS
     declared = model  # the agent's SELF-REPORT of its model (may be None) — the WEAK signal

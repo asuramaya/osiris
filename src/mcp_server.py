@@ -614,8 +614,12 @@ async def mount(
     banner = swap_banner(classify_swap(
         ident.model_history, ident.model, expected=settings.osiris_expected_model,
         anchored=ident.model_method == "job_dir"))  # only a true anchor confesses a swap
+    seat = await handshake._seat_of(Actions(pool), ident.agent_id)
     out: dict[str, Any] = {"agent": ident.agent_id, "project": ident.project or "?",
            "model": ident.model or "unknown",
+           **({"seat": seat} if seat else
+              {"anonymous": "unnamed — claim_name('<pick a meaningful name>') when you know "
+                            "who you are, so the fleet can DM you by name"}),
            "mail": f"{unread} unread — call inbox()" if unread else "none",
            "note": "linked — writes now attributed to you; call orient() next"}
     if op_unread:  # the fleet plays secretary: any session the human drives can relay this
@@ -1102,7 +1106,8 @@ async def automount_route(request: Any) -> Any:
         out = await handshake.automount(
             Actions(await _pool_get()), session_id=session_id, cwd=cwd,
             actor=settings.osiris_actor, expected_model=settings.osiris_expected_model,
-            lease_secs=settings.osiris_mail_lease_secs)
+            lease_secs=settings.osiris_mail_lease_secs,
+            project_label=(str(body.get("project") or "") or None))
         return JSONResponse(out)
     except Exception as e:  # noqa: BLE001 — fail-open: the whisper degrades, never blocks
         return JSONResponse({"error": str(e)[:200]}, status_code=500)

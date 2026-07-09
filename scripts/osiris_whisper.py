@@ -15,6 +15,7 @@ slowed or broken by its own whisper. Timeout 3s total.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.request
 
@@ -30,9 +31,14 @@ def main() -> int:
     cwd = hook.get("cwd") or ""
     if not session_id or not cwd:
         return 0
+    # OSIRIS_PROJECT env overrides the folder name as the project label (the .osiris file is the
+    # durable form, read server-side; this is the per-launch override).
+    body: dict[str, str] = {"session_id": session_id, "cwd": cwd}
+    if os.environ.get("OSIRIS_PROJECT"):
+        body["project"] = os.environ["OSIRIS_PROJECT"]
     try:
         req = urllib.request.Request(
-            AUTOMOUNT, data=json.dumps({"session_id": session_id, "cwd": cwd}).encode(),
+            AUTOMOUNT, data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=3) as resp:
             out = json.load(resp)
@@ -68,6 +74,13 @@ def main() -> int:
                     + (f"{who} acted in your project's name; " if who else "")
                     + (f"{n} conversation{'s' if n != 1 else ''} moved; " if n else "")
                     + "orient() shows the fold.")
+    if out.get("seat"):  # already named — the fleet can DM you by this name
+        bits.append(f"You answer to the name {out['seat']} — the fleet can DM you as "
+                    f"send(to_agent='{out['seat'].split(' ')[0]}').")
+    else:  # anonymous — offer the claim
+        bits.append("You are ANONYMOUS (a hash). When you know who you are — your role, your "
+                    "work — name yourself with claim_name('<a meaningful name you pick>') so the "
+                    "fleet can address you by name; it's yours for good.")
     if out.get("pulse"):
         bits.append(f"Fleet pulse: {out['pulse']}.")
     if out.get("job_dir"):

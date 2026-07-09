@@ -98,3 +98,23 @@ async def test_resolve_handle_prefers_the_live_generation(actions: Actions) -> N
     await mounts.save_mount(actions.pool, job_dir="/j/base", agent_id="agent:base",
                             project="x", cwd="/x", model=None, session_key="k")
     assert await resolve_handle(actions, "ada") == "agent:base"  # case-insensitive, live
+
+
+def test_dot_osiris_label_decouples_from_the_folder(tmp_path: Path) -> None:
+    """The project label lives in .osiris, not the folder name — so a rename doesn't move the
+    project (ruling 1e02e069). Explicit override > .osiris > folder basename."""
+    from src.orchestrator.agents import read_project_label
+    repo = tmp_path / "xxit"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    assert read_project_label(str(repo)) is None            # no file → caller uses basename
+    (repo / ".osiris").write_text('project = "handlingtheloop"\n')
+    assert read_project_label(str(repo)) == "handlingtheloop"
+    # a subdir still finds the repo-root .osiris
+    sub = repo / "src" / "deep"
+    sub.mkdir(parents=True)
+    assert read_project_label(str(sub)) == "handlingtheloop"
+    # resolve_identity uses it; an explicit override still wins
+    from src.orchestrator.agents import resolve_identity
+    assert resolve_identity(cwd=str(repo)).project == "handlingtheloop"
+    assert resolve_identity(cwd=str(repo), project_label="override").project == "override"
