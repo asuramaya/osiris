@@ -224,6 +224,21 @@ def main() -> None:
         color = GREEN if pct < 60 else (AMBER if pct < 85 else RED)
         parts.append(f"{color}ctx {pct}%{RESET}")
 
+    # the operator's remaining budget, always in view (request 2026-07-09): the harness's own
+    # rate-limit state — 5-hour and 7-day windows, colored by whichever is worse.
+    rl = payload.get("rate_limits") or {}
+    if isinstance(rl, dict):
+        vals = []
+        for key, tag in (("five_hour", "5h"), ("seven_day", "7d")):
+            v = (rl.get(key) or {}).get("used_percentage") if isinstance(rl.get(key), dict) \
+                else None
+            if isinstance(v, (int, float)):
+                vals.append((tag, round(v)))
+        if vals:
+            worst = max(v for _, v in vals)
+            color = GREEN if worst < 60 else (AMBER if worst < 85 else RED)
+            parts.append(color + " · ".join(f"{t} {v}%" for t, v in vals) + RESET)
+
     if model_id and model_id != EXPECTED:  # the swap confession, ambient — every single turn
         parts.append(f"{RED}⚠ {_short(model_id)} (intent: {_short(EXPECTED)}){RESET}")
     elif model_id:
