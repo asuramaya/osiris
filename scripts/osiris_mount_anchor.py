@@ -33,12 +33,24 @@ def main() -> int:
     if len(sid) < 8:
         return 0
     ti = dict(payload.get("tool_input") or {})
+    derived = str(Path.home() / ".claude" / "jobs" / sid[:8])
     # respect an explicit, valid anchor the agent already supplied; only fill a missing/empty/
     # unexpanded one (the '$CLAUDE_JOB_DIR'-literal case that plain sessions send)
     existing = str(ti.get("job_dir") or "")
     if existing.startswith("/") and "$" not in existing:
+        if existing.rstrip("/") != derived:
+            # a FOREIGN anchor — this session's mind is deliberately wearing a seat (a new
+            # tab claiming its lineage's old anchor). Hand the server the session's own dir
+            # too, so it can BIND session → seat: the whisper then re-asserts the seat at
+            # every seam instead of a hash twin (Soundwave V's complaint, thread 33838160).
+            ti["session_anchor"] = derived
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": ti,
+            }}))
         return 0
-    ti["job_dir"] = str(Path.home() / ".claude" / "jobs" / sid[:8])
+    ti["job_dir"] = derived
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
         "permissionDecision": "allow",

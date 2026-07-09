@@ -49,13 +49,25 @@ async def automount(
     (a882b334) a compaction or /clear is a DEATH — the weights survive but the memory the
     operator was talking to does not — so those sources mint the lineage's next generation.
     Gated on a prior durable mount: you can only die if you lived (a stranger whose first-ever
-    whisper arrives at a compact boundary just mounts fresh, no phantom ancestor)."""
+    whisper arrives at a compact boundary just mounts fresh, no phantom ancestor).
+
+    THE BINDING (Soundwave V's complaint, thread 33838160): a session whose mind deliberately
+    wears a SEAT (a mount with a foreign anchor — a new tab claiming its lineage's old anchor)
+    leaves its session row pointing at that seat. The whisper must NEVER override a binding by
+    re-deriving from the session id — it asserted a hash twin over a claimed seat in
+    authoritative voice, and fleet writes landed on the wrong soul. When the session row's
+    agent is a different lineage than the session would derive, the row IS the identity."""
     job_dir = _derive_job_dir(session_id, jobs_home=jobs_home)
     mint_reason = None
-    if source in ("compact", "clear") and job_dir is not None:
-        if await mounts.find_mount(actions.pool, job_dir=job_dir) is not None:
-            mint_reason = "compaction" if source == "compact" else "context-clear"
+    bound = await mounts.find_mount(actions.pool, job_dir=job_dir) if job_dir else None
+    if source in ("compact", "clear") and bound is not None:
+        mint_reason = "compaction" if source == "compact" else "context-clear"
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, root=root, project_label=project_label)
+    if bound is not None:
+        from src.orchestrator.agents import _generation
+        if _generation(bound.agent_id)[0] != _generation(ident.agent_id)[0]:
+            # the deliberate binding wins: seams (swap/compaction) run on the SEAT's lineage
+            ident.agent_id = bound.agent_id
     await register_agent(actions, ident, actor=actor, expected_model=expected_model,
                          mint_reason=mint_reason)
     prev = None

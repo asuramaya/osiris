@@ -177,6 +177,12 @@ async def _reattach(
         return None
     settings = get_settings()
     ident = resolve_identity(cwd=rec.cwd, job_dir=rec.job_dir)
+    from src.orchestrator.agents import _generation
+    if _generation(rec.agent_id)[0] != _generation(ident.agent_id)[0]:
+        # a BOUND session (thread 33838160): the row points at a deliberately-worn SEAT of a
+        # different lineage — honor it. Re-deriving from the transcript here was the flap
+        # that stomped a claimed seat back to its session hash on every silent reconnect.
+        ident.agent_id = rec.agent_id
     await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
                          expected_model=settings.osiris_expected_model)
     if key is not None:
@@ -601,7 +607,8 @@ async def context_window(ctx: Context | None = None) -> dict[str, Any]:
 
 @mcp.tool()
 async def mount(
-    cwd: str, job_dir: str | None = None, model: str | None = None, ctx: Context | None = None
+    cwd: str, job_dir: str | None = None, model: str | None = None,
+    session_anchor: str | None = None, ctx: Context | None = None
 ) -> dict[str, Any]:
     """Link this agent to Osiris as a first-class fleet member — call it ONCE, first thing.
     Pass your working directory `cwd` (names your project). For `job_dir`, pass the DURABLE
@@ -646,6 +653,14 @@ async def mount(
             await mailbox.settle_history_at_join(pool, ident.project, ident.agent_id)
             prev = await mounts.project_prev_seen(pool, ident.project, exclude_job_dir=job_dir)
         _prev_seen[ident.agent_id] = prev  # this mount IS the re-entry: anchor the fold here
+        # THE BINDING (thread 33838160): a mount with a FOREIGN anchor is a mind deliberately
+        # wearing a seat — its session's own row (session_anchor, hook-injected) is bound to
+        # the resolved agent, so the whisper's next fire re-asserts the SEAT, never a hash twin.
+        sa = _sane_job_dir(session_anchor)
+        if sa and sa != job_dir:
+            await mounts.save_mount(pool, job_dir=sa, agent_id=ident.agent_id,
+                                    project=ident.project, cwd=cwd, model=ident.model,
+                                    session_key=key)
     unread = (await unread_count(pool, ident.project, reader_agent=ident.agent_id,
                                  lease_secs=lease) if ident.project else 0)
     op_unread = await unread_count(pool, OPERATOR_ADDR, reader_agent=OPERATOR_ADDR,

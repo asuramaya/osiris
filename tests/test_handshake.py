@@ -122,6 +122,44 @@ async def test_compaction_mints_the_next_mind(actions: Actions, tmp_path: Path) 
     assert resumed["agent"] == "agent:39fb22a2-iii"
 
 
+async def test_the_whisper_honors_a_bound_seat(actions: Actions, tmp_path: Path) -> None:
+    """Soundwave V's complaint (thread 33838160): a new tab deliberately wearing a seat (its
+    session row bound to a foreign lineage) must NEVER be re-asserted as its session hash by
+    the whisper — and a compaction seam mints on the SEAT's lineage, not a phantom twin's."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import claim_name
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/decepticons")
+    # the seat: an established lineage with a name
+    seat = await actions.create_or_find_object("Agent", "agent:0806072e", "agent:0806072e")
+    from src.parsers.base import EvidenceClass
+    await actions.assert_property(seat, "source_model", "claude-fable-5", "agent:0806072e",
+                                  __import__("datetime").datetime.now(
+                                      __import__("datetime").UTC), 0.85,
+                                  evidence_class=EvidenceClass.DIRECT_OBSERVATION.value)
+    await claim_name(actions, "agent:0806072e", "Soundwave", source="agent:0806072e")
+    # the new tab's session row is BOUND to the seat (what mount(session_anchor=...) writes)
+    session_row = str(tmp_path / "jobs" / SID[:8])
+    await mounts.save_mount(actions.pool, job_dir=session_row, agent_id="agent:0806072e",
+                            project="decepticons", cwd="/w/decepticons",
+                            model="claude-fable-5", session_key="k")
+    # the whisper re-fires on RESUME: it must assert the seat, not agent:39fb22a2
+    out = await automount(actions, session_id=SID, cwd="/w/decepticons",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
+                          source="resume")
+    assert out["agent"] == "agent:0806072e"
+    assert out["seat"] == "Soundwave"
+    # ...and a COMPACTION is a death of the SEAT's mind: the heir is Soundwave II, no twin
+    reborn = await automount(actions, session_id=SID, cwd="/w/decepticons",
+                             actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
+                             source="compact")
+    assert reborn["agent"] == "agent:0806072e-ii" and reborn["seat"] == "Soundwave II"
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' AND canonical LIKE 'agent:39fb22a2%'"
+    ) == 0  # the hash twin was never born
+
+
 async def test_a_stranger_compacting_at_birth_mints_nothing(actions: Actions,
                                                             tmp_path: Path) -> None:
     """You can only die if you lived: a session whose FIRST whisper arrives at a compact
