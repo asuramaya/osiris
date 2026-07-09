@@ -24,6 +24,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from src.actions.core import Actions
 from src.ingest.sessions import (
@@ -124,6 +125,65 @@ def _generation(canonical: str) -> tuple[str, int]:
 def next_generation(canonical: str) -> str:
     root, gen = _generation(canonical)
     return f"{root}-{_to_roman(gen + 1)}"
+
+
+# Full roman numerals for the human DISPLAY generation (Anna IV, Anna IX) — unlike the id
+# suffix (restricted to i/v/x for hex-safety), a display label parses nothing, so it can use
+# the whole numeral system.
+_ROMAN_FULL = [(1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
+               (50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")]
+
+
+def _roman_display(n: int) -> str:
+    out: list[str] = []
+    for val, sym in _ROMAN_FULL:
+        while n >= val:
+            out.append(sym)
+            n -= val
+    return "".join(out).upper()
+
+
+def seat_label(canonical: str, handle: str | None) -> str | None:
+    """The human display for an agent: 'Anna III' — the handle plus its lineage generation.
+    None when the agent is still anonymous (unclaimed). Generation 1 shows the bare name."""
+    if not handle:
+        return None
+    _, gen = _generation(canonical)
+    return handle if gen == 1 else f"{handle} {_roman_display(gen)}"
+
+
+async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str) -> dict[str, Any]:
+    """An agent names itself (ruling 1e02e069): the intelligence picks a meaningful name, the
+    substrate enforces uniqueness. Refuses a name held by a DIFFERENT lineage (permanent
+    exhaustion — a name belongs to one lineage forever; a successor inherits it automatically,
+    a stranger cannot take it). Global namespace → unambiguous addressing. Stamps `handle` on
+    the agent's Agent object (SELF_DECLARED)."""
+    name = (name or "").strip()
+    if not name or name.lower().startswith("agent:") or len(name) > 40:
+        return {"error": "pick a short human name (not an id)"}
+    root, _ = _generation(agent_id)
+    holder = await actions.pool.fetchrow(
+        "SELECT o.canonical FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+        "AND a.name='handle' WHERE o.type='Agent' AND lower(a.value#>>'{}')=lower($1) LIMIT 1",
+        name)
+    if holder is not None and _generation(holder["canonical"])[0] != root:
+        return {"error": f"'{name}' is taken by {holder['canonical']} — a name belongs to one "
+                         "lineage; pick another"}
+    a = await actions.create_or_find_object("Agent", agent_id, source)
+    await actions.assert_property(a, "handle", name, source, datetime.now(UTC), _CONF,
+                                  evidence_class=_EC)
+    return {"claimed": name, "seat": seat_label(agent_id, name), "agent": agent_id}
+
+
+async def resolve_handle(actions: Actions, name: str) -> str | None:
+    """A human name → the current holder's agent_id (the most-recently-active agent bearing it —
+    the live generation of the seat). None if no agent holds it. Used to route a DM by name."""
+    return await actions.pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT o.canonical FROM objects o "
+        "JOIN current_assertions a ON a.object_id=o.id AND a.name='handle' "
+        "LEFT JOIN agent_mounts m ON m.agent_id=o.canonical "
+        "WHERE o.type='Agent' AND lower(a.value#>>'{}')=lower($1) "
+        "ORDER BY m.last_seen DESC NULLS LAST LIMIT 1", name)
 
 
 def resolve_identity(
@@ -347,6 +407,14 @@ async def register_agent(
         await actions.assert_property(ancestor_oid, "succeeded_by", heir, src, now,
                                       confidence_for(do), evidence_class=do.value)
         await _link_once(actions, a, ancestor_oid, "succeeded_from", src, now)
+        # SEAT INHERITANCE (phase 2): the heir inherits the ancestor's human name — the seat
+        # passes down the lineage, the generation (roman) ticks up. 'Anna' → 'Anna II'.
+        inherited = await actions.pool.fetchval(
+            "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='handle'",
+            ancestor_oid)
+        if inherited:
+            await actions.assert_property(a, "handle", inherited, src, now, _CONF,
+                                          evidence_class=_EC)
     label = f"{identity.model or 'claude'} in {identity.project or '?'}"
     await actions.assert_property(a, "name", label, src, now, _CONF, evidence_class=_EC)
     await actions.assert_property(a, "session", identity.session, src, now, _CONF,

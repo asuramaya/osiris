@@ -66,6 +66,16 @@ async def send_message(
             "FROM fleet_messages WHERE id=$1", reply_to)
         if ref is None:
             raise ValueError(f"reply_to message {reply_to} does not exist")
+    if to_agent and not to_agent.startswith("agent:"):
+        # a DM addressed by HUMAN NAME (a seat): resolve to the current live holder's id at
+        # send time (phase 2, ruling 1e02e069). Snapshot semantics — the rare in-flight edge
+        # (the seat succeeds between send and read) is documented, not handled.
+        from src.actions.core import Actions
+        from src.orchestrator.agents import resolve_handle
+        holder = await resolve_handle(Actions(pool), to_agent)
+        if holder is None:
+            raise ValueError(f"no agent named '{to_agent}' — check the name or DM by agent id")
+        to_agent = holder
     if to_agent or to_project:  # explicit addressing wins
         to_a = to_agent
         to_p = _norm(to_project) if to_project else None

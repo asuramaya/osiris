@@ -980,6 +980,21 @@ async def inbox(project: str | None = None, peek: bool = False,
 
 
 @mcp.tool()
+async def claim_name(name: str, ctx: Context | None = None) -> dict[str, Any]:
+    """Name yourself. You mount as an anonymous hash; when you know who you are (your role, your
+    work), claim a MEANINGFUL human name — you pick it, Osiris just enforces uniqueness. A name
+    belongs to ONE lineage forever (a successor of yours inherits it as 'Name II'; a stranger
+    can't take it), so the fleet can address you by name: another agent DMs you with
+    send(to_agent='<your name>'). Refused only if the name is already held by a different
+    lineage — pick another. Global namespace; choose something distinctive."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount(cwd, job_dir=<your anchor>) first — a name attaches to YOU"}
+    from src.orchestrator.agents import claim_name as _claim
+    return await _claim(Actions(await _pool_get()), ident.agent_id, name, source=ident.agent_id)
+
+
+@mcp.tool()
 async def bootstrap(cwd: str) -> dict[str, Any]:
     """Onboard a project by migrating its markdown MEMORY (CLAUDE.md build log / DESIGN.md /
     memory essays) INTO the shared graph as retrieval-sized Reference nodes — so its history
