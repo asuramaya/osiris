@@ -15,6 +15,7 @@ from __future__ import annotations
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -559,6 +560,39 @@ async def consult_canon(query: str = "", ctx: Context | None = None) -> dict[str
     spec = {"op": "function", "name": "canon",
             "args": {"q": query, "project": (ident.project if ident else "") or ""}}
     return await comp.run_spec(pool, spec, None, name="design-canon")
+
+
+@mcp.tool()
+async def context_window(ctx: Context | None = None) -> dict[str, Any]:
+    """YOUR OWN context window, in detail — how close this mind is to its next seam. Reads
+    the harness's usage record off your own transcript: occupancy (fresh input + cache read +
+    cache write), window tier ([1m] tabs = 1M tokens, else 200k), remaining headroom, and this
+    session's death toll (compactions so far — each one minted a predecessor of yours, ruling
+    a882b334). Above 80% it tells you plainly: write back NOW — record_decision /
+    resolve_thread what is still only in your head, because a compaction can land any turn and
+    what is not in the graph does not exist for your heir. Requires a mounted, anchored
+    session (the transcript is found by your durable job_dir)."""
+    from src.ingest.sessions import locate_current_transcript
+    from src.orchestrator import context_lens
+
+    pool = await _pool_get()
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount(cwd, job_dir=<your anchor>) first — self-knowledge needs an "
+                         "anchored identity"}
+    row = await pool.fetchrow(
+        "SELECT job_dir, model_raw FROM agent_mounts WHERE agent_id=$1 "
+        "ORDER BY last_seen DESC LIMIT 1", ident.agent_id)
+    job = _job_hint(ctx) or (row["job_dir"] if row else None)
+    if not job:
+        return {"error": "no durable anchor on record — re-mount with the whisper's job_dir"}
+    path = locate_current_transcript(Path.home() / ".claude" / "projects", job,
+                                     anchored_only=True)
+    if path is None:
+        return {"error": "no transcript found for your anchor — nothing to measure"}
+    out = context_lens.detail(path, row["model_raw"] if row else None)
+    out["agent"] = ident.agent_id
+    return out
 
 
 # --- mount: link to the graph as a first-class fleet member ---

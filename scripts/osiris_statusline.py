@@ -36,6 +36,45 @@ def _short(model_id: str) -> str:
     return model_id.removeprefix("claude-")
 
 
+def _ctx_pct(transcript_path: str, model_id: str) -> int | None:
+    """Context occupancy % from the transcript's TAIL (the harness's own usage record) — the
+    operator's ambient answer to 'how close is this tab to a compaction death'. Window tier
+    from the display id ([1m] = 1M, else 200k). None = omit the segment, never lie. Mirrors
+    src/orchestrator/context_lens.py (inlined: this script imports nothing from the repo)."""
+    try:
+        p = Path(transcript_path)
+        size = p.stat().st_size
+        with p.open("rb") as fh:
+            fh.seek(max(0, size - 262_144))
+            tail = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in reversed(tail.splitlines()):
+        if '"usage"' not in line:
+            continue
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if e.get("type") != "assistant" or e.get("isSidechain"):
+            continue
+        u = (e.get("message") or {}).get("usage")
+        if not isinstance(u, dict) or "input_tokens" not in u:
+            continue
+        used = (int(u.get("input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0)
+                + int(u.get("cache_creation_input_tokens") or 0))
+        env = os.environ.get("OSIRIS_CONTEXT_WINDOW", "")
+        if env.isdigit():
+            window = int(env)
+        elif "[1m]" in model_id or used > 200_000:
+            # a bare-id tab past 200k and alive proves the default wrong (fable runs 1M here)
+            window = 1_000_000
+        else:
+            window = 200_000
+        return round(100 * used / window)
+    return None
+
+
 def _succession(session_id: str, model_id: str) -> str | None:
     """POST a live model seam to the server (ruling a882b334): the mind changed under this
     tab, so the seat passes NOW — the server mints the heir and moves the mount row. Returns
@@ -62,7 +101,7 @@ def _link(text: str, anchor: str) -> str:
 
 
 async def _counts(
-    project: str, session_id: str, model_id: str = ""
+    project: str, session_id: str, model_id: str = "", model_raw: str = ""
 ) -> tuple[int, int, int, int, int]:
     import asyncpg
 
@@ -77,15 +116,18 @@ async def _counts(
             # it (COALESCE fills a NULL only); any later divergence is a live model seam —
             # the mind changed under this tab — and the SERVER mints the heir and moves the
             # row, so the chrome never overwrites the one signal that witnesses the seam.
+            # NORMALIZED id: the payload decorates variants (claude-opus-4-8[1m] = the same
+            # weights at 1M context) that transcripts record bare — same mind, never a seam
+            bare = model_id.split("[", 1)[0].strip()
             row0 = await conn.fetchrow(
                 "UPDATE agent_mounts SET last_seen=now(), "
-                "model=COALESCE(model, NULLIF($2,'')) "
+                "model=COALESCE(model, NULLIF($2,'')), model_raw=NULLIF($3,'') "
                 "WHERE job_dir LIKE '%/jobs/' || $1 RETURNING agent_id, model",
-                session_id[:8], model_id)
+                session_id[:8], bare, model_raw)
             agent = row0["agent_id"] if row0 else None
             stored = row0["model"] if row0 else None
-            if agent and model_id and stored and stored != model_id:
-                agent = _succession(session_id, model_id) or agent
+            if agent and bare and stored and stored.split("[", 1)[0].strip() != bare:
+                agent = _succession(session_id, bare) or agent
         agent = agent or ""
         # counts are PER-RECIPIENT now (migration 0021): desk = operator's own unread, mail =
         # THIS agent's broadcasts+DMs unread, flight = a SIBLING's live lease on shared broadcasts.
@@ -126,12 +168,17 @@ def main() -> None:
     ws = payload.get("workspace") or {}
     cwd = ws.get("current_dir") or ws.get("project_dir") or os.getcwd()
     project = Path(cwd).name
-    model_id = str((payload.get("model") or {}).get("id") or "")
+    model_raw = str((payload.get("model") or {}).get("id") or "")
+    model_id = model_raw.split("[", 1)[0].strip()
     session_id = str(payload.get("session_id") or "")
+    transcript = str(payload.get("transcript_path") or "")
+    if not transcript and session_id:  # older payloads: derive by the harness's path scheme
+        transcript = str(Path.home() / ".claude" / "projects" / cwd.replace("/", "-")
+                         / f"{session_id}.jsonl")
 
     try:
         desk, mail, flight, live, wakes = asyncio.run(
-            asyncio.wait_for(_counts(project, session_id, model_id), timeout=1.5))
+            asyncio.wait_for(_counts(project, session_id, model_id, model_raw), timeout=1.5))
         desk_s = f"{RED}desk {desk}{RESET}" if desk else f"{DIM}desk 0{RESET}"
         # mail N(+M) — M = in flight: leased by another hand, thread moving (msg-78 lesson)
         flight_s = f"{AMBER}+{flight}{RESET}" if flight else ""
@@ -146,6 +193,12 @@ def main() -> None:
         ]
     except Exception:  # noqa: BLE001 — the graph being down is information, not an error
         parts = [f"◈ {project}", f"{DIM}graph unreachable{RESET}"]
+
+    if transcript:  # how close this tab is to a compaction death — ambient, every render
+        pct = _ctx_pct(transcript, model_raw)
+        if pct is not None:
+            color = GREEN if pct < 60 else (AMBER if pct < 85 else RED)
+            parts.append(f"{color}ctx {pct}%{RESET}")
 
     if model_id and model_id != EXPECTED:  # the swap confession, ambient — every single turn
         parts.append(f"{RED}⚠ {_short(model_id)} (intent: {_short(EXPECTED)}){RESET}")

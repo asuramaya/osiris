@@ -143,6 +143,17 @@ def _roman_display(n: int) -> str:
     return "".join(out).upper()
 
 
+def normalize_model(model: str | None) -> str | None:
+    """Canonical model id for MIND comparisons (the [1m] false-mint bug, 2026-07-09): the
+    harness decorates display ids with a bracketed variant suffix (claude-opus-4-8[1m] is the
+    1M-context tier of the SAME weights) while transcripts record the bare id. Same weights =
+    same mind — a variant suffix must never read as a death. Every seam comparator and every
+    stored model goes through this."""
+    if not model:
+        return model
+    return model.split("[", 1)[0].strip()
+
+
 def seat_label(canonical: str, handle: str | None) -> str | None:
     """The human display for an agent: 'Anna III' — the handle plus its lineage generation.
     None when the agent is still anonymous (unclaimed). Generation 1 shows the bare name."""
@@ -416,30 +427,34 @@ async def live_succession(
     from the next glance. Idempotent: an unchanged model or an unknown mount is a no-op; a row
     with no stored model gets a first stamp, not a funeral (you can only die if you lived)."""
     sid = (session_id or "").strip().lower()
-    if len(sid) < 8 or not observed_model:
+    observed = normalize_model(observed_model)
+    if len(sid) < 8 or not observed:
         return {"unchanged": True, "reason": "no anchor"}
     row = await actions.pool.fetchrow(
         "SELECT job_dir, agent_id, project, model FROM agent_mounts "
         "WHERE job_dir LIKE '%/jobs/' || $1 ORDER BY last_seen DESC LIMIT 1", sid[:8])
     if row is None:
         return {"unchanged": True, "reason": "no mount"}
-    old = row["model"]
-    if old == observed_model:
+    old = normalize_model(row["model"])
+    if old == observed:
+        if row["model"] != observed:  # converge a bracket-stamped row to the canonical form
+            await actions.pool.execute(
+                "UPDATE agent_mounts SET model=$2 WHERE job_dir=$1", row["job_dir"], observed)
         return {"unchanged": True}
     if old is None:
         await actions.pool.execute(
-            "UPDATE agent_mounts SET model=$2 WHERE job_dir=$1", row["job_dir"], observed_model)
+            "UPDATE agent_mounts SET model=$2 WHERE job_dir=$1", row["job_dir"], observed)
         return {"unchanged": True, "reason": "first stamp"}
     now = datetime.now(UTC)
     head = await _lineage_head(actions, row["agent_id"])
     ancestor_oid = await actions.create_or_find_object("Agent", head, head)
     heir, heir_oid = await mint_heir(actions, head, ancestor_oid, because="live-swap",
-                                     succession=f"{old} → {observed_model}", now=now)
+                                     succession=f"{old} → {observed}", now=now)
     # the heartbeat's model is the harness's own word about a session it is rendering — as
     # anchored as a job_dir transcript read, and the baseline the NEXT seam check runs against
     # (without it, a later re-mount would see no anchored model on the heir and stay quiet).
     do = EvidenceClass.DIRECT_OBSERVATION
-    await actions.assert_property(heir_oid, "source_model", observed_model, heir, now,
+    await actions.assert_property(heir_oid, "source_model", observed, heir, now,
                                   confidence_for(do), evidence_class=do.value)
     if row["project"]:
         await actions.assert_property(heir_oid, "project", row["project"], heir, now, _CONF,
@@ -449,11 +464,11 @@ async def live_succession(
                                   evidence_class=_EC)
     await actions.pool.execute(
         "UPDATE agent_mounts SET agent_id=$2, model=$3, last_seen=now() WHERE job_dir=$1",
-        row["job_dir"], heir, observed_model)
+        row["job_dir"], heir, observed)
     handle = await actions.pool.fetchval(
         "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='handle'",
         heir_oid)
-    return {"minted": heir, "from": head, "succession": f"{old} → {observed_model}",
+    return {"minted": heir, "from": head, "succession": f"{old} → {observed}",
             "seat": seat_label(heir, handle)}
 
 
@@ -509,10 +524,12 @@ async def register_agent(
     if anchored:
         # the succession seam: read the baseline BEFORE the new observation supersedes it.
         # No witnessed-transition exemption (ruling a882b334): oscillation mints every time —
-        # the returning model is a THIRD mind, not the first one back.
-        prior = await _last_anchored_model(actions, a)
-        if prior is not None and prior != identity.model:
-            identity.model_succession = f"{prior} → {identity.model}"
+        # the returning model is a THIRD mind, not the first one back. NORMALIZED comparison:
+        # a bracketed display variant of the same weights is the same mind, never a seam.
+        prior = normalize_model(await _last_anchored_model(actions, a))
+        obs = normalize_model(identity.model)
+        if prior is not None and prior != obs:
+            identity.model_succession = f"{prior} → {obs}"
             mint_because = mint_because or "model-succession"
     if mint_reason:
         # a harness-reported context death (compaction, /clear) with no model seam of its own

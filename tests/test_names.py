@@ -149,6 +149,50 @@ async def test_live_swap_passes_the_seat_mid_session(actions: Actions) -> None:
     assert third["minted"] == "agent:cafe0123-iii" and third["seat"] == "Morpheus III"
 
 
+async def test_a_display_variant_is_not_a_death(actions: Actions) -> None:
+    """The [1m] false-mint bug (field-found 2026-07-09, two phantom heirs in an hour): the
+    harness reports claude-opus-4-8[1m] for the 1M-context tier of the SAME weights the
+    transcript records as claude-opus-4-8. Same weights = same mind — every seam comparator
+    normalizes, and a bracket-stamped row converges to the canonical form instead of minting."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import live_succession, normalize_model
+
+    assert normalize_model("claude-opus-4-8[1m]") == "claude-opus-4-8"
+    assert normalize_model("claude-opus-4-8") == "claude-opus-4-8"
+    assert normalize_model(None) is None
+    await _agent(actions, "agent:beefbeef")
+    await mounts.save_mount(actions.pool, job_dir="/h/.claude/jobs/beefbeef",
+                            agent_id="agent:beefbeef", project="x", cwd="/x",
+                            model="claude-opus-4-8", session_key="k")
+    out = await live_succession(actions, session_id="beefbeef-0000-4000-8000-000000000000",
+                                observed_model="claude-opus-4-8[1m]")
+    assert out.get("unchanged") is True and "minted" not in out
+    # the reverse direction (bracket-stamped row, bare observation) converges, no funeral
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET model='claude-opus-4-8[1m]' "
+        "WHERE job_dir='/h/.claude/jobs/beefbeef'")
+    out2 = await live_succession(actions, session_id="beefbeef-0000-4000-8000-000000000000",
+                                 observed_model="claude-opus-4-8")
+    assert out2.get("unchanged") is True
+    assert await actions.pool.fetchval(
+        "SELECT model FROM agent_mounts WHERE job_dir='/h/.claude/jobs/beefbeef'"
+    ) == "claude-opus-4-8"
+    # and the mount-time comparator agrees: a bracketed anchored baseline is no seam either
+    from src.orchestrator.agents import register_agent, resolve_identity  # noqa: F401
+    from src.parsers.base import EvidenceClass
+    a = await actions.create_or_find_object("Agent", "agent:beefbeef", "agent:beefbeef")
+    await actions.assert_property(
+        a, "source_model", "claude-opus-4-8[1m]", "agent:beefbeef",
+        __import__("datetime").datetime.now(__import__("datetime").UTC), 0.85,
+        evidence_class=EvidenceClass.DIRECT_OBSERVATION.value)
+    from src.orchestrator.agents import AgentIdentity
+    ident = AgentIdentity(agent_id="agent:beefbeef", session="beefbeef", project="x",
+                          model="claude-opus-4-8", cwd="/x", model_method="job_dir",
+                          model_history=("claude-opus-4-8",))
+    await register_agent(actions, ident, actor="analyst:operator")
+    assert ident.agent_id == "agent:beefbeef" and ident.model_succession is None
+
+
 async def test_live_succession_needs_a_lived_life(actions: Actions) -> None:
     """No mount row → no funeral; a NULL stored model gets a first stamp, not a mint."""
     from src.orchestrator import mounts
