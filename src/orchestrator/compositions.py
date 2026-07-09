@@ -159,7 +159,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     # expensive part and a broad query can match thousands of candidates. ts_rank
     # normalization 1 divides by 1+log(doc length) so a long rationale can't outrank a
     # short summary on term frequency alone.
-    rows = await pool.fetch(
+    _SQL = (
         "WITH tq AS (SELECT websearch_to_tsquery('english', $1) AS v), "
         "cand AS ("
         "  SELECT DISTINCT ON (o.id) o.id, o.type, o.canonical, a.name AS field, "
@@ -175,7 +175,25 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         "top AS (SELECT * FROM cand ORDER BY rank DESC LIMIT $2) "
         "SELECT top.*, ts_headline('english', top.text, tq.v, "
         "         'MaxWords=20, MinWords=8, MaxFragments=1') AS snippet "
-        "FROM top, tq ORDER BY top.rank DESC", q, limit)
+        "FROM top, tq ORDER BY top.rank DESC")
+    rows = await pool.fetch(_SQL, q, limit)
+    relaxed = False
+    if not rows:
+        # PROGRESSIVE RELAXATION (field report, agent e46a657e-ii, msg 124): websearch
+        # semantics AND every term, so a keyword BAG ('Hector background skills experience
+        # projects') needs all of them in ONE document — zero by construction, and the
+        # docstring promises bags work. When strict-AND finds nothing and the query is a
+        # plain multi-word bag (no quotes/operators — those mean the asker knew the syntax),
+        # retry as ANY-term OR. Ranking still sorts the best-covered hits to the top.
+        words = [w for w in q.split() if w]
+        if (len(words) > 1 and '"' not in q and " or " not in q.lower()
+                and not any(w.startswith("-") for w in words)):  # a leading '-' is NOT syntax;
+            # an inner hyphen (hands-free, rotten-apple) is just a word
+            or_q = " OR ".join(words)
+            if await pool.fetchval(
+                    "SELECT websearch_to_tsquery('english', $1)::text", or_q):
+                rows = await pool.fetch(_SQL, or_q, limit)
+                relaxed = bool(rows)
     hits = [
         {"id": str(r["id"]), "type": r["type"], "canonical": r["canonical"],
          "field": r["field"], "snippet": r["snippet"], "source": r["source_id"],
@@ -190,6 +208,8 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     await pool.execute(
         "DELETE FROM search_log WHERE searched_at < now() - interval '90 days'")
     return {"hits": hits, "q": q,
+            **({"note": "strict match (ALL terms) found nothing — these hits match ANY term, "
+                        "best-covered first"} if relaxed else {}),
             **({"note": "no hits — logged; the zero-hit rate is watched"} if not hits else {})}
 
 

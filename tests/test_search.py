@@ -60,6 +60,30 @@ async def test_stemming_and_phrases_work(actions: Actions) -> None:
     assert (await _search(actions, '"lineage with minted"'))["hits"] == []  # order matters
 
 
+async def test_a_keyword_bag_relaxes_to_any_term(actions: Actions) -> None:
+    """The false-empty repro (agent e46a657e-ii, msg 124): websearch ANDs every term, so
+    'Hector background skills experience projects' needs all five words in ONE document —
+    zero by construction while the graph is full. A plain multi-word bag that strict-AND
+    can't satisfy relaxes to ANY-term, best-covered first; explicit syntax (quotes,
+    operators) is never second-guessed."""
+    await _decision(actions, "decision:ga", "the gestalt head-pointer ships",
+                    "agent:a", EvidenceClass.SELF_DECLARED.value)
+    await _decision(actions, "decision:tr", "training the reinforcement loop on pytorch",
+                    "agent:a", EvidenceClass.SELF_DECLARED.value)
+    # strict-AND would need one doc holding all of these — instead both docs surface
+    out = await _search(actions, "gestalt accessibility pointer hands-free training")
+    got = {h["canonical"] for h in out["hits"]}
+    assert {"decision:ga", "decision:tr"} <= got
+    assert "ANY term" in out["note"]
+    # a quoted phrase is the asker's own syntax — no relaxation behind their back
+    assert (await _search(actions, '"gestalt training loop"'))["hits"] == []
+    # the log records the ORIGINAL query with the relaxed outcome (telemetry stays honest)
+    row = await actions.pool.fetchrow(
+        "SELECT hits FROM search_log WHERE query='gestalt accessibility pointer hands-free "
+        "training'")
+    assert row is not None and row["hits"] >= 2
+
+
 async def test_the_misses_log_records_recall_failures(actions: Actions) -> None:
     """Every call logs; the zero-hit rate is the embeddings tripwire — measured, not vibed."""
     await _decision(actions, "decision:x", "the membrane holds",
