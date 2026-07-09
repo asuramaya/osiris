@@ -86,6 +86,13 @@ def main() -> int:
         bits.append("You are ANONYMOUS (a hash). When you know who you are — your role, your "
                     "work — name yourself with claim_name('<a meaningful name you pick>') so the "
                     "fleet can address you by name; it's yours for good.")
+    if out.get("thin"):
+        # the false-empty first impression (field report, msg 124): a young project's silent
+        # orient() must not read as an empty graph.
+        bits.append("YOUR PROJECT'S graph is young (no decisions/threads yet) — but the "
+                    "FLEET'S memory is not: search() and consult_canon() reach the operator's "
+                    "whole corpus across every project. An empty orient() here means a new "
+                    "project, never an empty graph.")
     if out.get("pulse"):
         bits.append(f"Fleet pulse: {out['pulse']}.")
     if out.get("job_dir"):

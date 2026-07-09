@@ -164,6 +164,7 @@ async def _conversations(
         "  array_agg(DISTINCT from_project) FILTER (WHERE from_project IS NOT NULL) AS senders, "
         "  array_agg(DISTINCT to_project) FILTER (WHERE to_project IS NOT NULL) AS recipients, "
         "  max(created_at) AS last_at, "
+        "  count(*) FILTER (WHERE to_agent IS NOT NULL) AS dms, "
         "  count(*) FILTER (WHERE NOT settled) AS unsettled "
         "FROM (SELECT fm.*, (fm.read_at IS NOT NULL OR EXISTS(SELECT 1 FROM message_recipients r "
         "        WHERE r.message_id=fm.id AND r.read_at IS NOT NULL)) AS settled "
@@ -182,7 +183,8 @@ async def _conversations(
     return [
         {"thread": r["thread"],
          "between": sorted(set(r["senders"] or []) | set(r["recipients"] or [])),
-         "msgs": r["msgs"], "unsettled": r["unsettled"], "last_at": r["last_at"].isoformat(),
+         "msgs": r["msgs"], "dms": r["dms"], "unsettled": r["unsettled"],
+         "last_at": r["last_at"].isoformat(),
          "last": {"from": last[r["thread"]][0], "body": last[r["thread"]][1][:200]}
          if r["thread"] in last else None}
         for r in rows

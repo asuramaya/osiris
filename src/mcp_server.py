@@ -1191,6 +1191,33 @@ async def succession_route(request: Any) -> Any:
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 
+_arq: Any = None
+
+
+@mcp.custom_route("/sweep", methods=["POST"])
+async def sweep_route(request: Any) -> Any:
+    """The death rite's doorbell (task #22): the PreCompact hook posts the dying session's
+    transcript; we ENQUEUE the miner's sweep on the worker (ownership boundary — the miner
+    mines, the server only rings). Fail-open, localhost-only, idempotent (the miner's cursor
+    and dedup absorb re-rings)."""
+    from arq import create_pool as arq_create_pool
+    from arq.connections import RedisSettings
+    from starlette.responses import JSONResponse
+
+    global _arq
+    try:
+        body = await request.json()
+        transcript = str(body.get("transcript_path") or "")
+        if not transcript.startswith("/"):
+            return JSONResponse({"error": "transcript_path required"}, status_code=400)
+        if _arq is None:
+            _arq = await arq_create_pool(RedisSettings.from_dsn(get_settings().redis_url))
+        await _arq.enqueue_job("sweep_session", transcript)
+        return JSONResponse({"enqueued": True})
+    except Exception as e:  # noqa: BLE001 — a missed sweep costs ≤10 min of miner lag, never a block
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
 def main() -> None:
     """Run the server. `OSIRIS_MCP_TRANSPORT=streamable-http` = the PERSISTENT fleet server
     (one always-on process on host:port, one shared pool); default `stdio` = one server for

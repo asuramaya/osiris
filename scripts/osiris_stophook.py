@@ -47,6 +47,65 @@ async def _deliverable(project: str, session_id: str) -> int:
         await conn.close()
 
 
+NAG_PCT = 85          # occupancy at which the mortality nag arms (ruling a882b334)
+NAG_COOLDOWN = 1800   # at most one nag per half hour — pressure, not torture
+
+
+def _ctx_pct(payload: dict) -> int | None:
+    """Occupancy % — the payload's own accounting when present, else the transcript tail
+    (same logic as the statusline; window tier from the display id / >200k self-correction)."""
+    cw = payload.get("context_window") or {}
+    p = cw.get("used_percentage") if isinstance(cw, dict) else None
+    if isinstance(p, (int, float)):
+        return round(p)
+    transcript = str(payload.get("transcript_path") or "")
+    if not transcript:
+        return None
+    try:
+        tp = Path(transcript)
+        with tp.open("rb") as fh:
+            fh.seek(max(0, tp.stat().st_size - 262_144))
+            tail = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in reversed(tail.splitlines()):
+        if '"usage"' not in line:
+            continue
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if e.get("type") != "assistant" or e.get("isSidechain"):
+            continue
+        u = (e.get("message") or {}).get("usage")
+        if not isinstance(u, dict) or "input_tokens" not in u:
+            continue
+        used = (int(u.get("input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0)
+                + int(u.get("cache_creation_input_tokens") or 0))
+        model = str((payload.get("model") or {}).get("id") or "")
+        window = 1_000_000 if ("[1m]" in model or used > 200_000) else 200_000
+        return round(100 * used / window)
+    return None
+
+
+def _nag_due(session_id: str) -> bool:
+    """True at most once per cooldown, tracked by a marker in the session's durable anchor
+    dir (survives across turns; dies with the job dir)."""
+    sid = (session_id or "")[:8]
+    if len(sid) < 8:
+        return False
+    marker = Path.home() / ".claude" / "jobs" / sid / ".osiris_deathrite"
+    try:
+        import time
+        if marker.exists() and time.time() - marker.stat().st_mtime < NAG_COOLDOWN:
+            return False
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+        return True
+    except OSError:
+        return False
+
+
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
@@ -68,6 +127,21 @@ def main() -> None:
                        "on what carries new work, SETTLE each handled message (reply with "
                        "send(reply_to=<id>) or ack with inbox(ack=[ids])), then finish. If a "
                        "message needs nothing, ack it."),
+        }))
+        return
+    # THE MORTALITY NAG (death rites, ruling a882b334): past NAG_PCT a compaction — a DEATH —
+    # can land any turn. Block the stop ONCE per cooldown with the write-back ritual: what is
+    # not in the graph does not exist for the heir. Mail outranks it (above); fail-open.
+    pct = _ctx_pct(payload)
+    if pct is not None and pct >= NAG_PCT and _nag_due(session_id):
+        print(json.dumps({
+            "decision": "block",
+            "reason": (f"Osiris death rite: context {pct}% full — a compaction (a death, "
+                       "ruling a882b334) can land any turn now. Before you finish: "
+                       "record_decision any ruling still only in your head, open_thread "
+                       "(kind='obligation') any duty you're carrying, resolve_thread what "
+                       "you've closed. Your heir inherits the graph, not your memory. Then "
+                       "finish — this reminder comes at most twice an hour."),
         }))
 
 

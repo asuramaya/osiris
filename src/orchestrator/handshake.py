@@ -90,6 +90,19 @@ async def automount(
         pulse: str | None = await mounts.fleet_pulse(actions.pool, lease_secs=lease_secs)
     except Exception:  # noqa: BLE001 — the pulse must never break the whisper
         pulse = None
+    # the THIN-PROJECT flag (field report msg 124): an agent auto-mounted to a young/empty
+    # project reads its own orient()'s silence as an empty GRAPH — a lie of omission. Cheap
+    # check: does the project have any recorded decisions/threads at all?
+    thin = False
+    if ident.project:
+        try:
+            thin = not bool(await actions.pool.fetchval(
+                "SELECT 1 FROM links l JOIN objects p ON p.id = l.to_id "
+                "JOIN objects s ON s.id = l.from_id "
+                "WHERE p.canonical = 'repo:' || $1 AND s.type IN ('Decision','Thread') "
+                "LIMIT 1", ident.project))
+        except Exception:  # noqa: BLE001 — the flag must never break the whisper
+            thin = False
     return {
         "agent": ident.agent_id,
         "project": ident.project,
@@ -110,6 +123,8 @@ async def automount(
         # the SEAT: the agent's claimed human name + generation ('Thoth', 'Anna II'), or None
         # if still anonymous — the whisper offers a claim in that case.
         "seat": await _seat_of(actions, ident.agent_id),
+        # thin=True → the whisper says plainly: YOUR project is young; the GRAPH is not.
+        "thin": thin,
     }
 
 

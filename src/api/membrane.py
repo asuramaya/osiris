@@ -110,6 +110,7 @@ def render_membrane(dg: dict[str, Any], wakes: list[dict[str, Any]]) -> str:
         _row(f'#{_e(c["thread"])}',
              _e(" ↔ ".join(c["between"])),
              f'{c["msgs"]} msg{"s" if c["msgs"] != 1 else ""}'
+             + (f' · ✉{c["dms"]} dm{"s" if c["dms"] != 1 else ""}' if c.get("dms") else "")
              + (f' · <span class="amber">{c["unsettled"]} unsettled</span>'
                 if c["unsettled"] else ""),
              f'<span class="dim">{_e(c["last_at"][:16])}</span>',

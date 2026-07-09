@@ -124,11 +124,12 @@ def _merge_hook(
 
 def merge_settings(
     existing: dict[str, Any] | None, osiris_home: Path, *, hook: bool = False,
-    whisper: bool = False, anchor: bool = False,
+    whisper: bool = False, anchor: bool = False, precompact: bool = False,
 ) -> tuple[dict[str, Any], bool]:
     """Merge the statusLine command and the requested hooks into a settings.json WITHOUT
     dropping other keys (permissions, env, worktree, …): hook=Stop mail-drain, whisper=
-    SessionStart auto-mount, anchor=PreToolUse durable-anchor force. Returns (result, changed)."""
+    SessionStart auto-mount, anchor=PreToolUse durable-anchor force, precompact=the death
+    rite's sweep ring. Returns (result, changed)."""
     doc: dict[str, Any] = dict(existing) if existing else {}
     entry = {"type": "command", "command": _statusline_command(osiris_home), "padding": 0}
     changed = doc.get("statusLine") != entry
@@ -158,6 +159,14 @@ def merge_settings(
             doc, "PreToolUse",
             {"type": "command", "command": f"python3 {ascript}", "timeout": 5},
             matcher="mcp__osiris__mount")
+    if precompact:
+        # the death rite (blessing 2026-07-09, ruling a882b334): at the compaction seam, ring
+        # the worker's sweep so the dying mind's unrecorded turns are mined around the seam —
+        # the heir's first orient() shows them. STDLIB-only, fail-open, never blocks a compact.
+        pscript = osiris_home / "scripts" / "osiris_precompact.py"
+        changed |= _merge_hook(
+            doc, "PreCompact",
+            {"type": "command", "command": f"python3 {pscript}", "timeout": 5})
     return doc, changed
 
 
@@ -249,6 +258,7 @@ def onboard(
     hook: bool = False,
     whisper: bool = False,
     anchor: bool = False,
+    precompact: bool = False,
     dry_run: bool = False,
     user_scope: bool = False,
     osiris_home: str | Path | None = None,
@@ -266,11 +276,12 @@ def onboard(
         changes.append(Change("skipped", root / ".mcp.json"))  # print the one-liner instead
     else:
         changes.append(_apply(root / ".mcp.json", merge_mcp, dry_run=dry_run))
-    if statusline or hook or whisper or anchor:
+    if statusline or hook or whisper or anchor or precompact:
         changes.append(
             _apply(
                 root / ".claude" / "settings.json",
-                lambda e: merge_settings(e, home, hook=hook, whisper=whisper, anchor=anchor),
+                lambda e: merge_settings(e, home, hook=hook, whisper=whisper, anchor=anchor,
+                                         precompact=precompact),
                 dry_run=dry_run,
             )
         )
@@ -325,6 +336,13 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI glue
              "an OPERATOR consent switch (blessing 2026-07-08)",
     )
     parser.add_argument(
+        "--precompact",
+        action="store_true",
+        help="also install the PreCompact death-rite hook (rings the worker's sweep at the "
+             "compaction seam so unrecorded turns are mined before the heir wakes) — an "
+             "OPERATOR consent switch (blessing 2026-07-09, ruling a882b334)",
+    )
+    parser.add_argument(
         "--user-scope",
         action="store_true",
         help="print the box-wide `claude mcp add --scope user` one-liner; write no .mcp.json",
@@ -342,6 +360,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI glue
             hook=args.hook,
             whisper=args.whisper,
             anchor=args.anchor,
+            precompact=args.precompact,
             dry_run=args.dry_run,
             user_scope=args.user_scope,
         )

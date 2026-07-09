@@ -132,6 +132,28 @@ async def sense_sessions(ctx: dict[str, Any]) -> int:
     return report["chunks"]
 
 
+async def sweep_session(ctx: dict[str, Any], transcript: str) -> int:
+    """The DEATH RITE's sweep half (task #22, ruling a882b334): a PreCompact hook posts the
+    dying session's transcript here and the miner senses it NOW — anything the mind forgot to
+    record deliberately is mined (DERIVED) around the seam instead of up to 10 minutes later,
+    so the heir's first orient() already shows it. Same miner, same ownership boundary, just
+    summoned to a deathbed instead of walking its rounds."""
+    import asyncio
+
+    root = get_settings().osiris_sense_sessions
+    path = Path(transcript)
+    if not root or not await asyncio.to_thread(path.is_file):
+        return 0
+    actions: Actions = ctx["cascade"].actions
+    try:
+        report = await sense_sessions_tick(actions, Path(root), only=path)
+    except Exception as exc:  # a deathbed hiccup must not kill the worker
+        _log.warning("precompact sweep failed for %s: %r", transcript, exc)
+        return 0
+    _log.info("precompact sweep %s: %s", path.name, report)
+    return report["chunks"]
+
+
 async def trigger_mail(ctx: dict[str, Any]) -> int:
     """The mailbox alarm clock: wake an agent in a project that has unread mail (bounded by a
     per-project rate cap; OFF unless osiris_trigger_enabled — the kill switch). A spawn failure
@@ -149,7 +171,7 @@ async def trigger_mail(ctx: dict[str, Any]) -> int:
 
 class WorkerSettings:
     # enqueueable jobs (the API hands heavy work here instead of running it inline)
-    functions: list[Any] = [expand_case_job]
+    functions: list[Any] = [expand_case_job, sweep_session]
     cron_jobs = [
         cron(drain_cascade, second=set(range(0, 60, 5)), run_at_startup=True),
         # the watch: evaluate subscriptions every 5s (offset from the cascade drain),

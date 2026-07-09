@@ -103,7 +103,7 @@ def _link(text: str, anchor: str) -> str:
 async def _counts(
     project: str, session_id: str, model_id: str = "", model_raw: str = "",
     window_size: int | None = None,
-) -> tuple[int, int, int, int, int]:
+) -> tuple[int, int, int, int, int, int]:
     import asyncpg
 
     conn = await asyncpg.connect(DSN, timeout=1.0)
@@ -160,6 +160,11 @@ async def _counts(
             "     AND r.agent_id='operator' AND r.delivered_at >= now() "
             "       - make_interval(secs => $2))) AS desk, "
             f" {mail_sub} AS mail, "
+            " (SELECT count(*) FROM fleet_messages m LEFT JOIN message_recipients r "
+            "   ON r.message_id=m.id AND r.agent_id=$3 "
+            "   WHERE m.to_agent=$3 AND m.to_agent <> '' AND m.read_at IS NULL "
+            "   AND r.read_at IS NULL AND (r.delivered_at IS NULL "
+            "     OR r.delivered_at < now() - make_interval(secs => $2))) AS dm, "
             " (SELECT count(*) FROM fleet_messages m JOIN message_recipients r "
             "   ON r.message_id=m.id WHERE m.to_project=$1 AND m.to_agent IS NULL "
             "   AND r.agent_id <> $3 AND r.read_at IS NULL AND r.delivered_at IS NOT NULL "
@@ -169,7 +174,8 @@ async def _counts(
             " (SELECT count(*) FROM agent_wakes "
             "   WHERE woke_at > now() - interval '1 hour') AS wakes",
             project, LEASE_SECS, agent)
-        return row["desk"], row["mail"], row["flight"], row["live"], row["wakes"]
+        return (row["desk"], row["mail"], row["dm"], row["flight"], row["live"],
+                row["wakes"])
     finally:
         await conn.close()
 
@@ -198,13 +204,15 @@ def main() -> None:
     window_size = int(window_size) if isinstance(window_size, (int, float)) else None
 
     try:
-        desk, mail, flight, live, wakes = asyncio.run(
+        desk, mail, dm, flight, live, wakes = asyncio.run(
             asyncio.wait_for(_counts(project, session_id, model_id, model_raw, window_size),
                              timeout=1.5))
         desk_s = f"{RED}desk {desk}{RESET}" if desk else f"{DIM}desk 0{RESET}"
-        # mail N(+M) — M = in flight: leased by another hand, thread moving (msg-78 lesson)
+        # mail N(+M) ✉D — M = in flight (a sibling's live lease); ✉D = DMs addressed to YOU
+        # specifically (phase 4: a private message outranks group traffic visually)
         flight_s = f"{AMBER}+{flight}{RESET}" if flight else ""
-        mail_s = (f"mail {mail}{flight_s}" if (mail or flight)
+        dm_s = f" {RED}✉{dm}{RESET}" if dm else ""
+        mail_s = (f"mail {mail}{flight_s}{dm_s}" if (mail or flight)
                   else f"{DIM}mail 0{RESET}")
         parts = [
             _link(f"◈ {project}", "desk"),
