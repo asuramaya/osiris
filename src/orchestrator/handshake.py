@@ -72,4 +72,10 @@ async def automount(
         "desk": desk,
         "pulse": pulse,
         "away": away,
+        # the durable anchor for THIS session (derived from its id, not $CLAUDE_JOB_DIR which is
+        # empty in plain sessions). The whisper hands it to the agent so any later mount() — even
+        # a reconnect re-mount — carries the real anchor and RE-ATTACHES instead of minting a twin
+        # (thread 883a24f4). Distinct per session, so co-located agents (monsterhouse cloud+engine
+        # on one dir) never collide: each has its own session id → its own job_dir.
+        "job_dir": job_dir,
     }

@@ -70,6 +70,13 @@ def main() -> int:
                     + "orient() shows the fold.")
     if out.get("pulse"):
         bits.append(f"Fleet pulse: {out['pulse']}.")
+    if out.get("job_dir"):
+        # the durable anchor: if the MCP server ever drops and you must re-mount, pass THIS
+        # (your $CLAUDE_JOB_DIR is empty) so you re-attach to yourself instead of minting a twin.
+        bits.append(f"YOUR DURABLE ANCHOR is job_dir='{out['job_dir']}'. If you ever need to "
+                    f"mount again (e.g. after an MCP reconnect), call "
+                    f"mount(cwd=..., job_dir='{out['job_dir']}') — NOT $CLAUDE_JOB_DIR (empty "
+                    "here); that re-attaches you instead of splitting your identity.")
     bits.append("RITUAL: write back AS YOU GO — record_decision / open_thread "
                 "(kind='obligation') / resolve_thread. A session can die at any instant; "
                 "what is not in the graph does not exist. orient() for bearings.")

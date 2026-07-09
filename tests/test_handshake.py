@@ -50,6 +50,41 @@ async def test_automount_is_a_durable_anchored_mount(actions: Actions, tmp_path:
         "SELECT count(*) FROM objects WHERE type='Agent' AND canonical='agent:39fb22a2'") == 1
 
 
+async def test_whisper_hands_back_the_durable_anchor_that_prevents_the_twin(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """The reconnect-twin fix (thread 883a24f4): the whisper returns the derived job_dir, and a
+    later mount carrying THAT anchor re-attaches to the same identity instead of minting a twin —
+    even though $CLAUDE_JOB_DIR is empty. Co-located sessions stay distinct (own session → own
+    anchor), so monsterhouse cloud+engine on one dir never collide."""
+    from src.orchestrator.agents import register_agent, resolve_identity
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/monsterhouse")
+    out = await automount(actions, session_id=SID, cwd="/w/monsterhouse",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+    anchor = out["job_dir"]
+    assert anchor and anchor.endswith(SID[:8])            # the real derived anchor, handed back
+    assert out["agent"] == "agent:39fb22a2"
+
+    # a RECONNECT re-mount carrying the whisper's anchor (not $CLAUDE_JOB_DIR) re-attaches
+    reident = resolve_identity(cwd="/w/monsterhouse", job_dir=anchor, root=root)
+    await register_agent(actions, reident, actor="analyst:operator")
+    assert reident.agent_id == out["agent"]               # SAME identity — no twin
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' AND canonical='agent:39fb22a2'") == 1
+
+    # a DIFFERENT co-located session (engine on the same dir) derives its OWN distinct anchor
+    other_sid = "beef1234-0000-4000-8000-000000000000"
+    (root / "-w-monsterhouse" / f"{other_sid}.jsonl").write_text(
+        __import__("json").dumps({"type": "assistant", "cwd": "/w/monsterhouse",
+                                  "message": {"model": "claude-fable-5",
+                                              "content": [{"type": "text", "text": "hi"}]}}) + "\n")
+    out2 = await automount(actions, session_id=other_sid, cwd="/w/monsterhouse",
+                           actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+    assert out2["agent"] == "agent:beef1234" and out2["job_dir"] != anchor  # distinct, no collision
+
+
 async def test_automount_survives_a_sessionless_stranger(actions: Actions,
                                                          tmp_path: Path) -> None:
     # no transcript, junk session id → still a valid (unresolved) mount, never a crash:

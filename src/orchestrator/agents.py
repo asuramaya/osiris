@@ -29,7 +29,6 @@ from src.actions.core import Actions
 from src.ingest.sessions import (
     _job_id,
     _tail_lines,
-    active_subagent,
     latest_model,
     locate_current_transcript,
     locate_transcript_by_cwd,
@@ -160,20 +159,16 @@ def resolve_identity(
         # read grades 'job_dir' off a co-tenant's model and fires a false swap (cry-wolf).
         base = root or (Path.home() / ".claude/projects")
         main = locate_current_transcript(base, job_dir, anchored_only=True)
-        # A SUB-AGENT inherits the parent's CLAUDE_JOB_DIR (decision ca66dc33): the anchored probe
-        # above reads the PARENT's transcript, so keying on it collapses the child into the parent.
-        # When a child is ACTIVELY writing (its subagents/ transcript hotter than the paused
-        # parent's main), anchor on IT — the SAME agent:<handle> the miner mints (lineage.py),
-        # never a parent-scoped fork. Skipped when the caller passed an explicit session (a test;
-        # mount() never does), which is an authoritative override.
-        sub = active_subagent(main) if session is None else None
-        if sub is not None:
-            sid, tpath = sub
-            confident = True  # genuinely anchored to the CHILD's OWN transcript → resolved
-            observed, history = model_of_transcript(tpath)
-            if observed is not None:
-                method = "subagent"
-        elif main is not None:
+        # NOTE: the old active_subagent() branch (be580da) anchored on a HOTTER subagents/
+        # transcript, meaning to catch a sub-agent that mounts under the parent's inherited
+        # CLAUDE_JOB_DIR. But it could not tell WHO was calling: a BACKGROUND sub-agent (the
+        # default now) runs concurrently while the PARENT keeps calling mount()/orient(), so
+        # the parent's own writes got attributed to its hot child (live repro: agent:ad1a1cb0
+        # → agent:<child>/haiku — thread 0344e536). That provenance theft (common) outweighs
+        # catching a sub-agent that mounts (rare — and the miner already registers sub-agents
+        # from disk with correct attribution, lineage.py). So we anchor ONLY on the parent's
+        # own transcript; a mounting sub-agent falls back to the miner's disk-side capture.
+        if main is not None:
             observed, history = model_of_transcript(main)  # the harness's record — THIS session
             if observed is not None:
                 method = "job_dir"

@@ -416,12 +416,12 @@ def _write_transcript(path: Path, model: str, *, cwd: str = "/w/demo") -> None:
     path.write_text(line + "\n")
 
 
-def test_mounting_subagent_resolves_to_its_own_handle(tmp_path: Path) -> None:
-    """A sub-agent inherits the parent's CLAUDE_JOB_DIR — the anchored probe reads the PARENT
-    and the child used to collapse into it. When the child's subagents/ transcript is HOTTER
-    than the paused parent's main (the parent blocks in the Task call), the child is the live
-    caller: it resolves to agent:<its handle> — the SAME id the miner mints — genuinely
-    anchored (resolved), graded 'subagent' so the operator swap-gate stays quiet."""
+def test_parent_mount_never_steals_a_hot_subagents_identity(tmp_path: Path) -> None:
+    """Reversal of the old active_subagent behavior (thread 0344e536): anchoring on a HOTTER
+    subagents/ transcript stole the PARENT's identity whenever a BACKGROUND sub-agent ran
+    concurrently (the parent keeps calling mount() while the child writes). resolve_identity now
+    anchors ONLY on the parent's own transcript — even with a hotter child, the mount resolves to
+    the PARENT. A sub-agent that mounts is captured by the miner from disk instead."""
     import os
     import time as _t
 
@@ -432,17 +432,10 @@ def test_mounting_subagent_resolves_to_its_own_handle(tmp_path: Path) -> None:
     child = main.with_suffix("") / "subagents" / "agent-a7f00baby.jsonl"
     _write_transcript(child, "claude-haiku-4-5-20251001")
     old = _t.time() - 3600
-    os.utime(main, (old, old))  # the parent is PAUSED; the child is the active writer
+    os.utime(main, (old, old))  # child hotter than parent — the theft condition
     ident = resolve_identity(cwd="/w/demo", job_dir=str(job), root=root)
-    assert ident.agent_id == "agent:a7f00baby"      # the miner's id, not a parent-scoped fork
-    assert ident.resolved is True                   # anchored to the child's OWN transcript
-    assert ident.model == "claude-haiku-4-5-20251001"
-    assert ident.model_method == "subagent"         # NOT job_dir: no operator swap-gate firing
-    # with the parent ACTIVE (main hotter), the parent resolves as itself — no false child
-    now = _t.time() + 60
-    os.utime(main, (now, now))
-    ident2 = resolve_identity(cwd="/w/demo", job_dir=str(job), root=root)
-    assert ident2.agent_id == "agent:ab12cd34" and ident2.model_method == "job_dir"
+    assert ident.agent_id == "agent:ab12cd34"   # the PARENT, never the hot child
+    assert ident.model == "claude-fable-5" and ident.model_method == "job_dir"
 
 
 def test_claimed_sid_is_refused_by_the_cwd_guess(tmp_path: Path) -> None:

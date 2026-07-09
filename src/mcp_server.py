@@ -568,14 +568,14 @@ async def mount(
     cwd: str, job_dir: str | None = None, model: str | None = None, ctx: Context | None = None
 ) -> dict[str, Any]:
     """Link this agent to Osiris as a first-class fleet member — call it ONCE, first thing.
-    Pass your working directory `cwd` (names your project) and, if you can, your `job_dir`
-    ($CLAUDE_JOB_DIR) so the server can read your ACTUAL model off your transcript (not your
-    system prompt, which lies after a model swap) — and so your identity SURVIVES server
-    restarts (with a job_dir the server re-attaches you automatically; without one a bounce
-    means re-mounting by hand). Registers an Agent object (works_in your project, acts_for
-    the principal) and attributes every decision/thread you record to `agent:<you>` instead
-    of the shared `session` bucket — so the graph knows WHICH instance, on WHICH model,
-    decided what. Then call orient()."""
+    Pass your working directory `cwd` (names your project). For `job_dir`, pass the DURABLE
+    ANCHOR the Osiris whisper gave you at session start (a real path like
+    ~/.claude/jobs/<id>) — NOT the literal `$CLAUDE_JOB_DIR`, which is empty in plain
+    sessions. The anchor lets the server read your ACTUAL model off your transcript and, if
+    the MCP server ever bounces, RE-ATTACH you to yourself instead of minting a twin. Without
+    it you still mount, but a reconnect splits your identity. Registers an Agent object
+    (works_in your project, acts_for the principal) and attributes every decision/thread you
+    record to `agent:<you>` instead of the shared `session` bucket. Then call orient()."""
     pool = await _pool_get()
     settings = get_settings()
     lease = settings.osiris_mail_lease_secs
