@@ -15,6 +15,8 @@ Embodies the resolved rulings:
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, cast
 
@@ -30,8 +32,40 @@ class ActionError(Exception):
 
 
 class Actions:
-    def __init__(self, pool: asyncpg.Pool) -> None:
+    def __init__(self, pool: asyncpg.Pool, conn: asyncpg.Connection | None = None) -> None:
         self.pool = pool
+        # When bound (via atomic()), every write JOINS this one connection's transaction so a
+        # multi-step capture is all-or-nothing — no orphan object husk from a process death
+        # between the create and its summary. None = the standalone default (each call its own).
+        self._conn = conn
+
+    @asynccontextmanager
+    async def _tx(self) -> AsyncIterator[asyncpg.Connection]:
+        """A transaction-scoped connection: the caller's (when bound — one flat txn, no nested
+        savepoint) or a freshly acquired one wrapped in its own transaction (the default)."""
+        if self._conn is not None:
+            yield self._conn
+        else:
+            async with self.pool.acquire() as conn, conn.transaction():
+                yield conn
+
+    @asynccontextmanager
+    async def _read(self) -> AsyncIterator[asyncpg.Connection]:
+        """Like _tx but for read helpers — bound connection or a plain acquire, no transaction."""
+        if self._conn is not None:
+            yield self._conn
+        else:
+            async with self.pool.acquire() as conn:
+                yield conn
+
+    @asynccontextmanager
+    async def atomic(self) -> AsyncIterator[Actions]:
+        """A transaction boundary spanning several Actions calls. `async with actions.atomic()
+        as a` yields an Actions bound to ONE connection+transaction: the create, its assertions,
+        and its links either all commit or all roll back. The fix for the non-atomic capture
+        path (record_decision was five sequential txns — a crash between them left an orphan)."""
+        async with self.pool.acquire() as conn, conn.transaction():
+            yield Actions(self.pool, conn=conn)
 
     # --- internal plumbing (run inside an already-open transaction) -------
 
@@ -75,7 +109,7 @@ class Actions:
         """Deterministic find-or-create on (type, canonical). Emits object_created
         only on genuine creation. Adds case membership (idempotent) when scoped."""
         check_object_type(type_)  # validate against the declared semantic layer
-        async with self.pool.acquire() as conn, conn.transaction():
+        async with self._tx() as conn:
             row = await conn.fetchrow(
                 "INSERT INTO objects (type, canonical) VALUES ($1,$2) "
                 "ON CONFLICT (type, canonical) DO NOTHING RETURNING id",
@@ -143,7 +177,7 @@ class Actions:
         sources' values coexist as the multi-source set. `evidence_class` records
         HOW the fact was obtained (see parsers/evidence.py)."""
         actor = actor or source_id
-        async with self.pool.acquire() as conn, conn.transaction():
+        async with self._tx() as conn:
             # Within-source supersession is a read-modify-write (find the non-superseded
             # prior, then INSERT pointing `supersedes` at it). Under a FLEET, the same source
             # can assert the same property concurrently — and without serialization every
@@ -236,7 +270,7 @@ class Actions:
         insert; edge consolidation/dedup and valid_until come with later phases.)"""
         actor = actor or source_id
         check_link_type(type_)  # validate against the declared semantic layer
-        async with self.pool.acquire() as conn, conn.transaction():
+        async with self._tx() as conn:
             new_id = cast(
                 int,
                 await conn.fetchval(
@@ -285,7 +319,7 @@ class Actions:
         case memberships. Assertions are never rewritten — provenance survives."""
         if winner_id == loser_id:
             raise ActionError("cannot merge an object into itself")
-        async with self.pool.acquire() as conn, conn.transaction():
+        async with self._tx() as conn:
             rows = await conn.fetch(
                 "SELECT id, status FROM objects WHERE id = ANY($1::uuid[])",
                 [winner_id, loser_id],
@@ -356,7 +390,7 @@ class Actions:
         the primitive present, audited, and reversible via the event log."""
         parts = partition_spec.get("parts", [])
         new_ids: list[uuid.UUID] = []
-        async with self.pool.acquire() as conn, conn.transaction():
+        async with self._tx() as conn:
             for part in parts:
                 new_id = cast(
                     uuid.UUID,
@@ -413,7 +447,7 @@ class Actions:
         """Transition an object's lifecycle status, recorded as an append-only
         object_event so snapshots replay correctly. Used by pattern hygiene to
         archive stale patterns (DESIGN §11)."""
-        async with self.pool.acquire() as conn, conn.transaction():
+        async with self._tx() as conn:
             event = "archive" if status == "archived" else "status_change"
             await conn.execute(
                 "INSERT INTO object_events (event_type, object_id, payload, actor, case_id) "
@@ -442,7 +476,7 @@ class Actions:
     ) -> int:
         """Tags are additive (no within-source supersede): stored as 'tag'
         assertions so they inherit provenance and audit for free."""
-        async with self.pool.acquire() as conn, conn.transaction():
+        async with self._tx() as conn:
             new_id = cast(
                 int,
                 await conn.fetchval(
@@ -471,7 +505,7 @@ class Actions:
 
     async def resolve_object_id(self, object_id: uuid.UUID) -> uuid.UUID:
         """Follow the merged_into chain to the current canonical (winner) id."""
-        async with self.pool.acquire() as conn:
+        async with self._read() as conn:
             current = object_id
             for _ in range(100):
                 nxt = await conn.fetchval("SELECT merged_into FROM objects WHERE id=$1", current)
@@ -482,7 +516,7 @@ class Actions:
 
     async def current_values(self, object_id: uuid.UUID, name: str) -> list[Json]:
         """Current value(s) of a property — the multi-source set, one per source."""
-        async with self.pool.acquire() as conn:
+        async with self._read() as conn:
             rows = await conn.fetch(
                 "SELECT value, source_id, confidence, observed_at FROM current_assertions "
                 "WHERE object_id=$1 AND name=$2 ORDER BY source_id",

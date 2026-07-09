@@ -104,16 +104,19 @@ async def record_decision(
     records WHICH instance decided (still SELF_DECLARED, still the high-trust channel).
     Idempotent on the summary hash. Returns the id."""
     observed = datetime.now(UTC)
-    d = await actions.create_or_find_object("Decision", _canon("decision", summary), source)
-    await actions.assert_property(d, "summary", summary, source, observed, _CONF,
-                                  evidence_class=_EC)
-    await actions.assert_property(d, "kind", kind, source, observed, _CONF,
-                                  evidence_class=_EC)
-    if rationale:
-        await actions.assert_property(d, "rationale", rationale, source, observed, _CONF,
-                                      evidence_class=_EC)
-    if repo:
-        await link_repo(actions, d, repo, observed, source=source, evidence_class=_EC)
+    # ONE transaction: the Decision, its summary/kind/rationale, and the repo link either all
+    # land or none do — a process death mid-sequence can no longer leave a summary-less husk.
+    async with actions.atomic() as a:
+        d = await a.create_or_find_object("Decision", _canon("decision", summary), source)
+        await a.assert_property(d, "summary", summary, source, observed, _CONF,
+                                evidence_class=_EC)
+        await a.assert_property(d, "kind", kind, source, observed, _CONF,
+                                evidence_class=_EC)
+        if rationale:
+            await a.assert_property(d, "rationale", rationale, source, observed, _CONF,
+                                    evidence_class=_EC)
+        if repo:
+            await link_repo(a, d, repo, observed, source=source, evidence_class=_EC)
     return d
 
 
@@ -131,16 +134,19 @@ async def open_thread(
     surfaces in briefing beside the rest; the kind stays as data for filtering. `source`
     attributes the opening actor (a fleet agent vs the lone `session`)."""
     observed = datetime.now(UTC)
-    t = await actions.create_or_find_object("Thread", _canon("thread", summary), source)
-    await actions.assert_property(t, "summary", summary, source, observed, _CONF,
-                                  evidence_class=_EC)
-    await actions.assert_property(t, "status", "open", source, observed, _CONF,
-                                  evidence_class=_EC)
-    if kind:
-        await actions.assert_property(t, "kind", kind, source, observed, _CONF,
-                                      evidence_class=_EC)
-    if repo:
-        await link_repo(actions, t, repo, observed, source=source, evidence_class=_EC)
+    # ONE transaction (see record_decision): Thread + summary + status(+kind)(+repo) atomic —
+    # never a status-less or summary-less thread husk from a mid-sequence death.
+    async with actions.atomic() as a:
+        t = await a.create_or_find_object("Thread", _canon("thread", summary), source)
+        await a.assert_property(t, "summary", summary, source, observed, _CONF,
+                                evidence_class=_EC)
+        await a.assert_property(t, "status", "open", source, observed, _CONF,
+                                evidence_class=_EC)
+        if kind:
+            await a.assert_property(t, "kind", kind, source, observed, _CONF,
+                                    evidence_class=_EC)
+        if repo:
+            await link_repo(a, t, repo, observed, source=source, evidence_class=_EC)
     return t
 
 

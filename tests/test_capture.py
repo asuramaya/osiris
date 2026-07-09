@@ -283,3 +283,42 @@ async def test_orient_briefing_ranks_obligations_first_and_caps(actions: Actions
     assert all(r.get("kind") != "obligation" for r in open_threads[1:])  # only the one obligation
     # 1 duty + (cap + 5) ordinary = cap + 6 total; cap shown → 6 more, surfaced in the note
     assert scoped["open_threads_note"] and "6 more" in scoped["open_threads_note"]
+
+
+async def test_record_decision_is_atomic_no_orphan_husk(actions: Actions) -> None:
+    """The write-integrity fix (rotten-apple audit): record_decision was five sequential
+    transactions — a process death between the create and its summary left an orphan Decision
+    with no body. Now it is ONE transaction: force a failure mid-sequence and prove NOTHING
+    persists — not even the object husk."""
+    import pytest
+    from src.orchestrator.capture import record_decision
+
+    # a rationale that isn't a string blows up assert_property's JSON path AFTER the object +
+    # summary would have been created — the exact mid-sequence crash the husk came from
+    class Boom:
+        pass
+
+    with pytest.raises(Exception):  # noqa: B017 — any failure; the point is the rollback
+        await record_decision(actions, "a decision that must not half-land",
+                              rationale=Boom())  # type: ignore[arg-type]
+    # the whole transaction rolled back: no Decision object, no husk, no summary
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Decision'") == 0
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions WHERE name='summary'") == 0
+
+
+async def test_atomic_context_shares_one_transaction(actions: Actions) -> None:
+    """atomic() binds one connection: a create + assert inside it are invisible until commit
+    and fully present after — the primitive record_decision/open_thread now stand on."""
+    async with actions.atomic() as a:
+        d = await a.create_or_find_object("Decision", "decision:atomic-probe", "agent:t")
+        await a.assert_property(d, "summary", "committed together", "agent:t",
+                                __import__("datetime").datetime.now(__import__("datetime").UTC),
+                                0.9, evidence_class="self_declared")
+    # after the block: both the object and its summary are present
+    row = await actions.pool.fetchrow(
+        "SELECT o.id, (SELECT value#>>'{}' FROM current_assertions a "
+        " WHERE a.object_id=o.id AND a.name='summary') AS summary "
+        "FROM objects o WHERE o.canonical='decision:atomic-probe'")
+    assert row is not None and row["summary"] == "committed together"
