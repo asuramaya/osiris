@@ -21,6 +21,7 @@ from pathlib import Path
 DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/osiris")
 EXPECTED = os.environ.get("OSIRIS_EXPECTED_MODEL", "claude-fable-5")
 CONSOLE = os.environ.get("OSIRIS_CONSOLE_URL", "http://127.0.0.1:8011")
+SUCCESSION = os.environ.get("OSIRIS_SUCCESSION_URL", "http://127.0.0.1:8790/succession")
 LINKS = os.environ.get("OSIRIS_STATUSLINE_LINKS", "1") != "0"  # kill switch if a terminal balks
 LEASE_SECS = 900  # mirror osiris_mail_lease_secs — deliverable = unsettled + no live lease
 
@@ -33,6 +34,23 @@ RESET = "\033[0m"
 
 def _short(model_id: str) -> str:
     return model_id.removeprefix("claude-")
+
+
+def _succession(session_id: str, model_id: str) -> str | None:
+    """POST a live model seam to the server (ruling a882b334): the mind changed under this
+    tab, so the seat passes NOW — the server mints the heir and moves the mount row. Returns
+    the heir's agent id, or None on any failure (fail-open: the row kept the OLD model, so
+    the very next render sees the same divergence and retries)."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            SUCCESSION, data=json.dumps({"session_id": session_id, "model": model_id}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=0.8) as resp:
+            out = json.load(resp)
+        return str(out["minted"]) if out.get("minted") else None
+    except Exception:  # noqa: BLE001 — the chrome never blocks on its own sensor
+        return None
 
 
 def _link(text: str, anchor: str) -> str:
@@ -50,25 +68,24 @@ async def _counts(
 
     conn = await asyncpg.connect(DSN, timeout=1.0)
     try:
+        agent = None
         if session_id:
             # THE HEARTBEAT: a tab rendering its chrome is ALIVE — bump its registry row so
             # the wake dispatch never mints a twin beside a tab the operator is actively
             # driving (msg-78 lesson: 'live' must mean the tab, not the last osiris call).
-            # It also carries the LIVE model: a mid-session classifier swap (opus for a
-            # security turn) is caught by the chrome but was invisible to the fleet-wide danger
-            # map until the next re-mount — a mount-once agent could run opus for an hour while
-            # the roster still showed fable. Writing model here (an existing write to the row
-            # this tab already owns — NOT a new graph-write surface) lets the digest flag the
-            # divergence live. NULLIF guards an empty payload from wiping the stored model.
-            await conn.execute(
+            # The row's model is now succession-owned (ruling a882b334): first render STAMPS
+            # it (COALESCE fills a NULL only); any later divergence is a live model seam —
+            # the mind changed under this tab — and the SERVER mints the heir and moves the
+            # row, so the chrome never overwrites the one signal that witnesses the seam.
+            row0 = await conn.fetchrow(
                 "UPDATE agent_mounts SET last_seen=now(), "
-                "model=COALESCE(NULLIF($2,''), model) "
-                "WHERE job_dir LIKE '%/jobs/' || $1 RETURNING agent_id",
+                "model=COALESCE(model, NULLIF($2,'')) "
+                "WHERE job_dir LIKE '%/jobs/' || $1 RETURNING agent_id, model",
                 session_id[:8], model_id)
-        # this session's agent id (for the reader-aware mail count) — the heartbeat row above
-        agent = await conn.fetchval(
-            "SELECT agent_id FROM agent_mounts WHERE job_dir LIKE '%/jobs/' || $1 "
-            "ORDER BY last_seen DESC LIMIT 1", session_id[:8]) if session_id else None
+            agent = row0["agent_id"] if row0 else None
+            stored = row0["model"] if row0 else None
+            if agent and model_id and stored and stored != model_id:
+                agent = _succession(session_id, model_id) or agent
         agent = agent or ""
         # counts are PER-RECIPIENT now (migration 0021): desk = operator's own unread, mail =
         # THIS agent's broadcasts+DMs unread, flight = a SIBLING's live lease on shared broadcasts.

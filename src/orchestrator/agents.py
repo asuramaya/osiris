@@ -360,6 +360,95 @@ async def _last_anchored_model(actions: Actions, agent: uuid.UUID) -> str | None
         agent, EvidenceClass.DIRECT_OBSERVATION.value)
 
 
+async def mint_heir(
+    actions: Actions, ancestor_id: str, ancestor_oid: uuid.UUID, *,
+    because: str, succession: str | None, now: datetime | None = None,
+) -> tuple[str, uuid.UUID]:
+    """Mint the next generation of a lineage — ruling a882b334: a new MIND gets a new numeral,
+    and the seams that count as a new mind include mid-session ones (live model swap,
+    compaction), not just session death. Stamps the succession chain on both sides, passes the
+    seat (handle) down, and re-addresses the ancestor's unread DMs to the heir — the mailbox is
+    part of the estate (a DM sent to the old mind must reach whoever now holds the seat, or
+    every compaction would orphan in-flight mail)."""
+    now = now or datetime.now(UTC)
+    heir = next_generation(ancestor_id)
+    a = await actions.create_or_find_object("Agent", heir, heir)
+    do = EvidenceClass.DIRECT_OBSERVATION
+    await actions.assert_property(a, "succeeded_from", ancestor_id, heir, now,
+                                  confidence_for(do), evidence_class=do.value)
+    await actions.assert_property(a, "minted_because", because, heir, now,
+                                  confidence_for(do), evidence_class=do.value)
+    if succession:
+        await actions.assert_property(a, "model_succession", succession, heir, now,
+                                      confidence_for(do), evidence_class=do.value)
+    # the forward pointer the head-walk follows, and the graph edge heirs are read by
+    await actions.assert_property(ancestor_oid, "succeeded_by", heir, heir, now,
+                                  confidence_for(do), evidence_class=do.value)
+    await _link_once(actions, a, ancestor_oid, "succeeded_from", heir, now)
+    # SEAT INHERITANCE (phase 2): the heir inherits the ancestor's human name — the seat
+    # passes down the lineage, the generation (roman) ticks up. 'Anna' → 'Anna II'.
+    inherited = await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='handle'",
+        ancestor_oid)
+    if inherited:
+        await actions.assert_property(a, "handle", inherited, heir, now, _CONF,
+                                      evidence_class=_EC)
+    await actions.pool.execute(
+        "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
+        heir, ancestor_id)
+    return heir, a
+
+
+async def live_succession(
+    actions: Actions, *, session_id: str, observed_model: str,
+) -> dict[str, Any]:
+    """A mid-session model change, sensed by the chrome heartbeat (ruling a882b334): the mind
+    changed under a LIVE tab, so the seat passes now — mint the heir, move the durable mount
+    row, and every per-render read (statusline, stop hook, digest) resolves to the new mind
+    from the next glance. Idempotent: an unchanged model or an unknown mount is a no-op; a row
+    with no stored model gets a first stamp, not a funeral (you can only die if you lived)."""
+    sid = (session_id or "").strip().lower()
+    if len(sid) < 8 or not observed_model:
+        return {"unchanged": True, "reason": "no anchor"}
+    row = await actions.pool.fetchrow(
+        "SELECT job_dir, agent_id, project, model FROM agent_mounts "
+        "WHERE job_dir LIKE '%/jobs/' || $1 ORDER BY last_seen DESC LIMIT 1", sid[:8])
+    if row is None:
+        return {"unchanged": True, "reason": "no mount"}
+    old = row["model"]
+    if old == observed_model:
+        return {"unchanged": True}
+    if old is None:
+        await actions.pool.execute(
+            "UPDATE agent_mounts SET model=$2 WHERE job_dir=$1", row["job_dir"], observed_model)
+        return {"unchanged": True, "reason": "first stamp"}
+    now = datetime.now(UTC)
+    head = await _lineage_head(actions, row["agent_id"])
+    ancestor_oid = await actions.create_or_find_object("Agent", head, head)
+    heir, heir_oid = await mint_heir(actions, head, ancestor_oid, because="live-swap",
+                                     succession=f"{old} → {observed_model}", now=now)
+    # the heartbeat's model is the harness's own word about a session it is rendering — as
+    # anchored as a job_dir transcript read, and the baseline the NEXT seam check runs against
+    # (without it, a later re-mount would see no anchored model on the heir and stay quiet).
+    do = EvidenceClass.DIRECT_OBSERVATION
+    await actions.assert_property(heir_oid, "source_model", observed_model, heir, now,
+                                  confidence_for(do), evidence_class=do.value)
+    if row["project"]:
+        await actions.assert_property(heir_oid, "project", row["project"], heir, now, _CONF,
+                                      evidence_class=_EC)
+    sid_prop = _job_id(row["job_dir"]) or sid[:8]
+    await actions.assert_property(heir_oid, "session", sid_prop, heir, now, _CONF,
+                                  evidence_class=_EC)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET agent_id=$2, model=$3, last_seen=now() WHERE job_dir=$1",
+        row["job_dir"], heir, observed_model)
+    handle = await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='handle'",
+        heir_oid)
+    return {"minted": heir, "from": head, "succession": f"{old} → {observed_model}",
+            "seat": seat_label(heir, handle)}
+
+
 async def _winning_retired(actions: Actions, agent: uuid.UUID) -> bool:
     """True if this Agent carries a winning retired=true — a deliberate close. Read off the
     projected current_assertions (highest confidence, then most recent), same predicate the
@@ -372,7 +461,8 @@ async def _winning_retired(actions: Actions, agent: uuid.UUID) -> bool:
 
 
 async def register_agent(
-    actions: Actions, identity: AgentIdentity, *, actor: str, expected_model: str | None = None
+    actions: Actions, identity: AgentIdentity, *, actor: str, expected_model: str | None = None,
+    mint_reason: str | None = None,
 ) -> uuid.UUID:
     """Mint (idempotently) the Agent object + its org-chart links. The agent attributes
     its OWN registration (`source = agent:<session>`), SELF_DECLARED. Re-mount is a no-op
@@ -384,11 +474,14 @@ async def register_agent(
     swap hands a DEAD agent's id to a fresh context — a different model then writes AS it, and
     the transcript-level swap-detector is blind when the new transcript never ran the old model.
     So registration also compares the fresh ANCHORED observation against the graph's last
-    anchored source_model: a disagreement the CURRENT transcript can't explain (the prior model
-    is nowhere in its history — this context never was that model) is stamped `model_succession`
-    ("<prior> → <observed>", DIRECT_OBSERVATION) and echoed on `identity.model_succession` so
-    mount() can confess it. A transition the transcript DID witness stays the warm-swap's
-    (`model_swapped`) — same context, different seam."""
+    anchored source_model: ANY disagreement is a succession seam under the mind ruling
+    (a882b334) — even one the transcript witnessed. The old exemption for witnessed transitions
+    ("same context, different seam") encoded tenure semantics: the operator overruled it — the
+    numeral tracks WHICH MIND, and a mind is one contiguous run of one model, so a witnessed
+    swap is a death like any other (the warm-swap `model_swapped` stamp still lands too — both
+    records are true). `mint_reason` forces a mint for a context-death the harness reported
+    with no model change at all (compaction, /clear): the weights survive but the memory the
+    operator was talking to does not."""
     now = datetime.now(UTC)
     # PHASE 0 — LINEAGE (ruling be292762): a session-keyed resolve lands on the BASE id; walk to
     # the lineage HEAD first — the head is who this name is now. Seam checks run against the head.
@@ -406,39 +499,22 @@ async def register_agent(
         mint_because = "reanimation-of-retired"
     anchored = bool(identity.model) and identity.model_method == "job_dir"
     if anchored:
-        # the succession seam: read the baseline BEFORE the new observation supersedes it
+        # the succession seam: read the baseline BEFORE the new observation supersedes it.
+        # No witnessed-transition exemption (ruling a882b334): oscillation mints every time —
+        # the returning model is a THIRD mind, not the first one back.
         prior = await _last_anchored_model(actions, a)
-        if (prior is not None and prior != identity.model
-                and prior not in identity.model_history):
+        if prior is not None and prior != identity.model:
             identity.model_succession = f"{prior} → {identity.model}"
             mint_because = mint_because or "model-succession"
+    if mint_reason:
+        # a harness-reported context death (compaction, /clear) with no model seam of its own
+        mint_because = mint_because or mint_reason
     if mint_because:
-        heir = next_generation(identity.agent_id)
-        ancestor_id, ancestor_oid = identity.agent_id, a
-        identity.succeeded_from = ancestor_id
+        identity.succeeded_from = identity.agent_id
+        heir, a = await mint_heir(actions, identity.agent_id, a, because=mint_because,
+                                  succession=identity.model_succession, now=now)
         identity.agent_id = heir
         src = heir
-        a = await actions.create_or_find_object("Agent", heir, src)
-        do = EvidenceClass.DIRECT_OBSERVATION
-        await actions.assert_property(a, "succeeded_from", ancestor_id, src, now,
-                                      confidence_for(do), evidence_class=do.value)
-        await actions.assert_property(a, "minted_because", mint_because, src, now,
-                                      confidence_for(do), evidence_class=do.value)
-        if identity.model_succession:
-            await actions.assert_property(a, "model_succession", identity.model_succession,
-                                          src, now, confidence_for(do), evidence_class=do.value)
-        # the forward pointer the head-walk follows, and the graph edge heirs are read by
-        await actions.assert_property(ancestor_oid, "succeeded_by", heir, src, now,
-                                      confidence_for(do), evidence_class=do.value)
-        await _link_once(actions, a, ancestor_oid, "succeeded_from", src, now)
-        # SEAT INHERITANCE (phase 2): the heir inherits the ancestor's human name — the seat
-        # passes down the lineage, the generation (roman) ticks up. 'Anna' → 'Anna II'.
-        inherited = await actions.pool.fetchval(
-            "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='handle'",
-            ancestor_oid)
-        if inherited:
-            await actions.assert_property(a, "handle", inherited, src, now, _CONF,
-                                          evidence_class=_EC)
     label = f"{identity.model or 'claude'} in {identity.project or '?'}"
     await actions.assert_property(a, "name", label, src, now, _CONF, evidence_class=_EC)
     await actions.assert_property(a, "session", identity.session, src, now, _CONF,

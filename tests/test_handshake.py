@@ -85,6 +85,56 @@ async def test_whisper_hands_back_the_durable_anchor_that_prevents_the_twin(
     assert out2["agent"] == "agent:beef1234" and out2["job_dir"] != anchor  # distinct, no collision
 
 
+async def test_compaction_mints_the_next_mind(actions: Actions, tmp_path: Path) -> None:
+    """Ruling a882b334, fork 2 (operator overruled the same-weights argument): a compaction is
+    a DEATH — the weights survive but the memory the operator was talking to does not. The
+    SessionStart source='compact' whisper mints the lineage's next generation, the seat passes,
+    and the durable row follows the heir."""
+    from src.orchestrator.agents import claim_name
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/osiris")
+    out = await automount(actions, session_id=SID, cwd="/w/osiris", actor="analyst:operator",
+                          root=root, jobs_home=tmp_path / "jobs", source="startup")
+    assert out["agent"] == "agent:39fb22a2"
+    await claim_name(actions, "agent:39fb22a2", "Thoth", source="agent:39fb22a2")
+
+    # the harness compacts the session — same sid, same transcript, same model: still a death
+    reborn = await automount(actions, session_id=SID, cwd="/w/osiris", actor="analyst:operator",
+                             root=root, jobs_home=tmp_path / "jobs", source="compact")
+    assert reborn["agent"] == "agent:39fb22a2-ii"
+    assert reborn["minted"] == "agent:39fb22a2"       # the whisper confesses the succession
+    assert reborn["seat"] == "Thoth II"               # the seat passed, the numeral ticked
+    assert await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='agent:39fb22a2-ii' AND a.name='minted_because'") == "compaction"
+    # the durable row moved with the seat — per-render reads resolve to the new mind
+    assert await actions.pool.fetchval(
+        "SELECT agent_id FROM agent_mounts WHERE job_dir LIKE '%/jobs/' || $1",
+        SID[:8]) == "agent:39fb22a2-ii"
+    # a SECOND compaction is a second death — the numeral keeps counting
+    third = await automount(actions, session_id=SID, cwd="/w/osiris", actor="analyst:operator",
+                            root=root, jobs_home=tmp_path / "jobs", source="compact")
+    assert third["agent"] == "agent:39fb22a2-iii" and third["seat"] == "Thoth III"
+    # ...but a plain resume between deaths is NOT one — same mind, same numeral
+    resumed = await automount(actions, session_id=SID, cwd="/w/osiris", actor="analyst:operator",
+                              root=root, jobs_home=tmp_path / "jobs", source="resume")
+    assert resumed["agent"] == "agent:39fb22a2-iii"
+
+
+async def test_a_stranger_compacting_at_birth_mints_nothing(actions: Actions,
+                                                            tmp_path: Path) -> None:
+    """You can only die if you lived: a session whose FIRST whisper arrives at a compact
+    boundary (hook installed mid-session, server was down at startup) mounts fresh — no
+    phantom ancestor, no -ii for a lineage with no I."""
+    root = tmp_path / "projects"
+    _transcript(root, "/w/fresh")
+    out = await automount(actions, session_id=SID, cwd="/w/fresh", actor="analyst:operator",
+                          root=root, jobs_home=tmp_path / "jobs", source="compact")
+    assert out["agent"] == "agent:39fb22a2"           # generation 1 — nothing preceded it
+    assert out["minted"] is None
+
+
 async def test_automount_survives_a_sessionless_stranger(actions: Actions,
                                                          tmp_path: Path) -> None:
     # no transcript, junk session id → still a valid (unresolved) mount, never a crash:

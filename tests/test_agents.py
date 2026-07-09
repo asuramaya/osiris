@@ -293,24 +293,50 @@ async def test_fresh_register_is_never_a_reanimation(actions: Actions) -> None:
     assert row is None
 
 
-async def test_warm_swap_is_not_a_succession(actions: Actions) -> None:
-    """A transition the transcript DID witness is the warm-swap's (model_swapped) — same context,
-    different seam. The succession stamp must stay quiet or every mid-run swap double-fires."""
+async def test_witnessed_swap_mints_under_the_mind_ruling(actions: Actions) -> None:
+    """Ruling a882b334 flips the old warm-swap exemption: a transition the transcript witnessed
+    is STILL a death — the numeral tracks which MIND, and a mind is one contiguous run of one
+    model. The witnessed swap mints the heir AND keeps the warm-swap stamp (both are true)."""
     first = _anchored("claude-fable-5")
     await register_agent(actions, first, actor="analyst:operator")
     swapped = _anchored("claude-opus-4-8",
                         history=("claude-fable-5", "claude-opus-4-8"))  # the prior IS in history
     a = await register_agent(actions, swapped, actor="analyst:operator",
                              expected_model="claude-fable-5")
-    assert swapped.model_succession is None
+    assert swapped.agent_id == "agent:0806072e-ii"      # witnessed or not, the mind changed
+    assert swapped.model_succession == "claude-fable-5 → claude-opus-4-8"
     row = await actions.pool.fetchrow(
         "SELECT (SELECT value#>>'{}' FROM current_assertions x WHERE x.object_id=$1 "
         "  AND x.name='model_succession') AS seam, "
         " (SELECT value#>>'{}' FROM current_assertions x WHERE x.object_id=$1 "
-        "  AND x.name='model_swapped') AS swapped", a)
+        "  AND x.name='model_swapped') AS swapped, "
+        " (SELECT value#>>'{}' FROM current_assertions x WHERE x.object_id=$1 "
+        "  AND x.name='minted_because') AS why", a)
     assert row is not None
-    assert row["seam"] is None                  # not a succession...
-    assert row["swapped"] is not None           # ...it's the warm swap, already first-class
+    assert row["seam"] == "claude-fable-5 → claude-opus-4-8"   # a succession...
+    assert row["swapped"] is not None                          # ...AND the warm swap record
+    assert row["why"] == "model-succession"
+
+
+async def test_oscillation_mints_every_time(actions: Actions) -> None:
+    """Fork 1 of the ruling: fable → opus → fable is THREE minds, not the first one back — the
+    returning model re-instantiates over an inherited context, which is what a successor is
+    everywhere else. No same-as-grandfather exception."""
+    await register_agent(actions, _anchored("claude-fable-5"), actor="analyst:operator")
+    swap1 = _anchored("claude-opus-4-8", history=("claude-fable-5", "claude-opus-4-8"))
+    await register_agent(actions, swap1, actor="analyst:operator")
+    assert swap1.agent_id == "agent:0806072e-ii"
+    back = _anchored("claude-fable-5",
+                     history=("claude-fable-5", "claude-opus-4-8", "claude-fable-5"))
+    a3 = await register_agent(actions, back, actor="analyst:operator")
+    assert back.agent_id == "agent:0806072e-iii"        # a THIRD mind, not I restored
+    assert back.succeeded_from == "agent:0806072e-ii"
+    assert back.model_succession == "claude-opus-4-8 → claude-fable-5"
+    # settled: same model re-registering on the head is the same mind — no -iv
+    still = _anchored("claude-fable-5",
+                      history=("claude-fable-5", "claude-opus-4-8", "claude-fable-5"))
+    assert await register_agent(actions, still, actor="analyst:operator") == a3
+    assert still.agent_id == "agent:0806072e-iii"
 
 
 async def test_succession_needs_anchored_observations_on_both_sides(actions: Actions) -> None:

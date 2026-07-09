@@ -100,6 +100,66 @@ async def test_resolve_handle_prefers_the_live_generation(actions: Actions) -> N
     assert await resolve_handle(actions, "ada") == "agent:base"  # case-insensitive, live
 
 
+async def test_live_swap_passes_the_seat_mid_session(actions: Actions) -> None:
+    """Ruling a882b334: the chrome heartbeat senses the model changing under a LIVE tab — the
+    mind changed, so the seat passes NOW. live_succession mints the heir, moves the durable
+    mount row, and the unread DMs follow the seat (the mailbox is part of the estate)."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import live_succession
+    from src.orchestrator.mailbox import send_message
+
+    await _agent(actions, "agent:cafe0123")
+    await claim_name(actions, "agent:cafe0123", "Morpheus", source="agent:cafe0123")
+    await mounts.save_mount(actions.pool, job_dir="/h/.claude/jobs/cafe0123",
+                            agent_id="agent:cafe0123", project="handlingtheloop", cwd="/x",
+                            model="claude-fable-5", session_key="k")
+    # a DM lands for the old mind, unread — then the harness swaps the model under the tab
+    await send_message(actions.pool, from_agent="agent:ux", from_project="handlingtheloop",
+                       to_agent="Morpheus", body="for whoever holds the seat")
+    out = await live_succession(actions, session_id="cafe0123-0000-4000-8000-000000000000",
+                                observed_model="claude-opus-4-8")
+    assert out["minted"] == "agent:cafe0123-ii"
+    assert out["succession"] == "claude-fable-5 → claude-opus-4-8"
+    assert out["seat"] == "Morpheus II"
+    # the durable row follows the heir — every per-render read now resolves to the new mind
+    row = await actions.pool.fetchrow(
+        "SELECT agent_id, model FROM agent_mounts WHERE job_dir='/h/.claude/jobs/cafe0123'")
+    assert row is not None
+    assert row["agent_id"] == "agent:cafe0123-ii" and row["model"] == "claude-opus-4-8"
+    # the estate: the ancestor's unread DM is deliverable to the heir, not orphaned
+    assert await unread_count(actions.pool, "handlingtheloop",
+                              reader_agent="agent:cafe0123-ii") == 1
+    (m,) = await read_inbox(actions.pool, "handlingtheloop", reader_agent="agent:cafe0123-ii")
+    assert m.get("dm") is True and "seat" in m["body"]
+    # idempotent: the next render's model matches the row — no second mint
+    again = await live_succession(actions, session_id="cafe0123-0000-4000-8000-000000000000",
+                                  observed_model="claude-opus-4-8")
+    assert again.get("unchanged") is True
+    # oscillation: the model flips BACK — a third mind, not the first restored (fork 1)
+    third = await live_succession(actions, session_id="cafe0123-0000-4000-8000-000000000000",
+                                  observed_model="claude-fable-5")
+    assert third["minted"] == "agent:cafe0123-iii" and third["seat"] == "Morpheus III"
+
+
+async def test_live_succession_needs_a_lived_life(actions: Actions) -> None:
+    """No mount row → no funeral; a NULL stored model gets a first stamp, not a mint."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import live_succession
+
+    out = await live_succession(actions, session_id="feed0000-0000-4000-8000-000000000000",
+                                observed_model="claude-opus-4-8")
+    assert out.get("unchanged") is True
+    await mounts.save_mount(actions.pool, job_dir="/h/.claude/jobs/feed0000",
+                            agent_id="agent:feed0000", project="x", cwd="/x",
+                            model=None, session_key="k")
+    first = await live_succession(actions, session_id="feed0000-0000-4000-8000-000000000000",
+                                  observed_model="claude-opus-4-8")
+    assert first.get("unchanged") is True and first.get("reason") == "first stamp"
+    assert await actions.pool.fetchval(
+        "SELECT model FROM agent_mounts WHERE job_dir='/h/.claude/jobs/feed0000'"
+    ) == "claude-opus-4-8"
+
+
 def test_dot_osiris_label_decouples_from_the_folder(tmp_path: Path) -> None:
     """The project label lives in .osiris, not the folder name — so a rename doesn't move the
     project (ruling 1e02e069). Explicit override > .osiris > folder basename."""

@@ -36,6 +36,11 @@ def main() -> int:
     body: dict[str, str] = {"session_id": session_id, "cwd": cwd}
     if os.environ.get("OSIRIS_PROJECT"):
         body["project"] = os.environ["OSIRIS_PROJECT"]
+    # the SessionStart trigger (startup|resume|clear|compact) — under the mind ruling a882b334
+    # a compact/clear source is a context death and the server mints the lineage's next
+    # generation from it, so the trigger must travel with the mount.
+    if hook.get("source"):
+        body["source"] = str(hook["source"])
     try:
         req = urllib.request.Request(
             AUTOMOUNT, data=json.dumps(body).encode(),

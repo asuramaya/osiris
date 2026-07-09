@@ -1107,9 +1107,33 @@ async def automount_route(request: Any) -> Any:
             Actions(await _pool_get()), session_id=session_id, cwd=cwd,
             actor=settings.osiris_actor, expected_model=settings.osiris_expected_model,
             lease_secs=settings.osiris_mail_lease_secs,
-            project_label=(str(body.get("project") or "") or None))
+            project_label=(str(body.get("project") or "") or None),
+            source=(str(body.get("source") or "") or None))
         return JSONResponse(out)
     except Exception as e:  # noqa: BLE001 — fail-open: the whisper degrades, never blocks
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
+@mcp.custom_route("/succession", methods=["POST"])
+async def succession_route(request: Any) -> Any:
+    """The heartbeat's server half (ruling a882b334): the statusline senses the model under a
+    LIVE tab differing from the mount row and posts {session_id, model} here — the mind changed
+    mid-session, so the seat passes now: mint the heir, move the durable row. Localhost-only,
+    idempotent (unchanged model = no-op), fail-open like the whisper."""
+    from starlette.responses import JSONResponse
+
+    from src.orchestrator.agents import live_succession
+
+    try:
+        body = await request.json()
+        session_id = str(body.get("session_id") or "")
+        model = str(body.get("model") or "")
+        if not session_id or not model:
+            return JSONResponse({"error": "session_id and model required"}, status_code=400)
+        out = await live_succession(Actions(await _pool_get()), session_id=session_id,
+                                    observed_model=model)
+        return JSONResponse(out)
+    except Exception as e:  # noqa: BLE001 — the chrome retries next render; never block it
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 

@@ -38,15 +38,26 @@ async def automount(
     actions: Actions, *, session_id: str, cwd: str, actor: str,
     expected_model: str | None = None, lease_secs: int = 900,
     root: Path | None = None, jobs_home: Path | None = None,
-    project_label: str | None = None,
+    project_label: str | None = None, source: str | None = None,
 ) -> dict[str, Any]:
     """Mount a just-started session and return its whisper payload. Identical semantics to
     the mount() tool (same resolution, same registration, same durable row — idempotent on
     re-fire), plus the glance the whisper prints: mail, desk, pulse, the away fold, and the
-    agent's SEAT (its human name, or None if still anonymous — the whisper offers a claim)."""
+    agent's SEAT (its human name, or None if still anonymous — the whisper offers a claim).
+
+    `source` is the SessionStart trigger (startup|resume|clear|compact). Under the mind ruling
+    (a882b334) a compaction or /clear is a DEATH — the weights survive but the memory the
+    operator was talking to does not — so those sources mint the lineage's next generation.
+    Gated on a prior durable mount: you can only die if you lived (a stranger whose first-ever
+    whisper arrives at a compact boundary just mounts fresh, no phantom ancestor)."""
     job_dir = _derive_job_dir(session_id, jobs_home=jobs_home)
+    mint_reason = None
+    if source in ("compact", "clear") and job_dir is not None:
+        if await mounts.find_mount(actions.pool, job_dir=job_dir) is not None:
+            mint_reason = "compaction" if source == "compact" else "context-clear"
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, root=root, project_label=project_label)
-    await register_agent(actions, ident, actor=actor, expected_model=expected_model)
+    await register_agent(actions, ident, actor=actor, expected_model=expected_model,
+                         mint_reason=mint_reason)
     prev = None
     if job_dir:
         prev = await mounts.save_mount(
