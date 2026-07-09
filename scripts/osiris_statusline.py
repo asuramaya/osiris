@@ -62,7 +62,7 @@ async def _counts(
             # divergence live. NULLIF guards an empty payload from wiping the stored model.
             await conn.execute(
                 "UPDATE agent_mounts SET last_seen=now(), "
-                "model=COALESCE(NULLIF($3,''), model) "
+                "model=COALESCE(NULLIF($2,''), model) "
                 "WHERE job_dir LIKE '%/jobs/' || $1", session_id[:8], model_id)
         row = await conn.fetchrow(
             "SELECT "
