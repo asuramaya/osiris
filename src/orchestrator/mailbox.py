@@ -47,6 +47,31 @@ def _norm(project: str) -> str:
     return project.removeprefix("repo:").strip()
 
 
+async def settle_history_at_join(
+    pool: asyncpg.Pool, project: str | None, agent_id: str
+) -> int:
+    """A JOINER inherits the project's collective settle-state (the zombie-count fix,
+    2026-07-09: a wake-minted osiris tab counted 5 broadcasts its sibling had already
+    settled). Joining a group chat does not make the room's handled history your unread:
+    any broadcast some OTHER reader already settled is stamped read for the newcomer at
+    join. Broadcasts NOBODY settled stay deliverable — mail-at-birth still greets a fresh
+    session and the wake pipeline still finds its cause. Live members are untouched: their
+    per-reader unread keeps working message by message. Returns rows stamped."""
+    if not project:
+        return 0
+    res = await pool.execute(
+        "INSERT INTO message_recipients (message_id, agent_id, delivered_at, read_at) "
+        "SELECT m.id, $2, now(), now() FROM fleet_messages m "
+        "WHERE m.to_project = $1 AND m.to_agent IS NULL "
+        "AND (m.read_at IS NOT NULL OR EXISTS (SELECT 1 FROM message_recipients r2 "
+        "  WHERE r2.message_id = m.id AND r2.read_at IS NOT NULL)) "
+        "ON CONFLICT (message_id, agent_id) DO NOTHING", _norm(project), agent_id)
+    try:
+        return int(res.split()[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
 async def send_message(
     pool: asyncpg.Pool, *, from_agent: str, from_project: str | None,
     to_project: str | None = None, to_agent: str | None = None, body: str,

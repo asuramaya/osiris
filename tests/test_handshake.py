@@ -135,6 +135,42 @@ async def test_a_stranger_compacting_at_birth_mints_nothing(actions: Actions,
     assert out["minted"] is None
 
 
+async def test_a_joiner_inherits_the_rooms_settle_state(actions: Actions,
+                                                        tmp_path: Path) -> None:
+    """The zombie-count fix (operator-observed, 2026-07-09): a wake-minted second session
+    counted 5 broadcasts its sibling had already settled. Joining the group chat does not
+    make handled history your unread — but mail NOBODY settled still greets you (the wake
+    pipeline's cause survives), and members who already joined keep their own unread."""
+    from src.orchestrator.mailbox import ack_messages, read_inbox, send_message, unread_count
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/osiris")
+    first = await automount(actions, session_id=SID, cwd="/w/osiris",
+                            actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+    # two broadcasts land; the incumbent settles ONE and leaves one open
+    a = await send_message(actions.pool, from_agent="agent:x", from_project="q",
+                           to_project="osiris", body="handled by the incumbent")
+    await send_message(actions.pool, from_agent="agent:x", from_project="q",
+                       to_project="osiris", body="still open work")
+    await read_inbox(actions.pool, "osiris", reader_agent=first["agent"])
+    await ack_messages(actions.pool, "osiris", [a["id"]], reader_agent=first["agent"])
+    # a SECOND session joins the project fresh
+    sid2 = "0abc1234-0000-4000-8000-000000000000"
+    (root / "-w-osiris" / f"{sid2}.jsonl").write_text(json.dumps(
+        {"type": "assistant", "cwd": "/w/osiris",
+         "message": {"model": "claude-fable-5", "content": []}}) + "\n")
+    joined = await automount(actions, session_id=sid2, cwd="/w/osiris",
+                             actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+    assert joined["mail"] == 1                       # the open one greets it; history doesn't
+    # the incumbent's own state is untouched: its unsettled message is still its unread
+    assert await unread_count(actions.pool, "osiris", reader_agent=first["agent"],
+                              lease_secs=0) == 1
+    # re-fire (resume) does not re-stamp anything — join-settle is a first-mount event
+    again = await automount(actions, session_id=sid2, cwd="/w/osiris",
+                            actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+    assert again["mail"] == 1
+
+
 async def test_automount_survives_a_sessionless_stranger(actions: Actions,
                                                          tmp_path: Path) -> None:
     # no transcript, junk session id → still a valid (unresolved) mount, never a crash:

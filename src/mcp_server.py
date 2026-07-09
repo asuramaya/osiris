@@ -186,6 +186,7 @@ async def _reattach(
                                    project=ident.project, cwd=rec.cwd, model=ident.model,
                                    session_key=key)
     if prev is None:  # fresh lineage member: anchor on the project's last sign of life
+        await mailbox.settle_history_at_join(pool, ident.project, ident.agent_id)
         prev = await mounts.project_prev_seen(pool, ident.project, exclude_job_dir=rec.job_dir)
     _prev_seen.setdefault(ident.agent_id, prev)  # a re-attach is a re-entry: keep the anchor
     return ident
@@ -639,6 +640,9 @@ async def mount(
                                        project=ident.project, cwd=cwd, model=ident.model,
                                        session_key=key)
         if prev is None:  # a FRESH session has no own past — anchor on the project lineage's
+            # ...and a joiner inherits the room's collective settle-state: sibling-settled
+            # broadcasts are not a newcomer's unread (the zombie-count fix, 2026-07-09)
+            await mailbox.settle_history_at_join(pool, ident.project, ident.agent_id)
             prev = await mounts.project_prev_seen(pool, ident.project, exclude_job_dir=job_dir)
         _prev_seen[ident.agent_id] = prev  # this mount IS the re-entry: anchor the fold here
     unread = (await unread_count(pool, ident.project, reader_agent=ident.agent_id,

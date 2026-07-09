@@ -22,7 +22,7 @@ from typing import Any
 from src.actions.core import Actions
 from src.orchestrator import mounts
 from src.orchestrator.agents import register_agent, resolve_identity
-from src.orchestrator.mailbox import OPERATOR_ADDR, unread_count
+from src.orchestrator.mailbox import OPERATOR_ADDR, settle_history_at_join, unread_count
 
 
 def _derive_job_dir(session_id: str, *, jobs_home: Path | None = None) -> str | None:
@@ -64,6 +64,9 @@ async def automount(
             actions.pool, job_dir=job_dir, agent_id=ident.agent_id, project=ident.project,
             cwd=cwd, model=ident.model, session_key=f"whisper:{session_id[:8]}")
         if prev is None:  # a fresh session: anchor the fold on the lineage's last life
+            # ...and a JOINER inherits the room's collective settle-state (sibling-settled
+            # broadcasts are not a newcomer's unread; truly-open mail still greets it)
+            await settle_history_at_join(actions.pool, ident.project, ident.agent_id)
             prev = await mounts.project_prev_seen(
                 actions.pool, ident.project, exclude_job_dir=job_dir)
     mail = await unread_count(actions.pool, ident.project, reader_agent=ident.agent_id,
