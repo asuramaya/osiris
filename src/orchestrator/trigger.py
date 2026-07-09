@@ -52,7 +52,10 @@ _WAKE_PROMPT = (
     "do nothing. "
     "ECONOMY: you are a TRIAGE wake — if the mail demands real work (analysis, building, long "
     "reads), do NOT grind it here: open_thread(kind='obligation') describing it, reply with "
-    "that pointer (which settles the mail), and let a full session take it."
+    "that pointer (which settles the mail), and let a full session take it. "
+    "ONE-SHOT (wake hygiene, thread fc2071f8): before your final word, call retire() — a "
+    "triage wake's face closes cleanly (no zombie card, no reanimation target); everything "
+    "you settled outlives you in the graph."
 )
 
 
@@ -154,6 +157,65 @@ _RESUME_PROMPT = (
     "AND send(to='operator') a three-line brief (reply_to your prior brief on the same "
     "topic — the desk folds supersessions). If nothing needs doing, do nothing."
 )
+
+
+_DM_RESUME_PROMPT = (
+    "A private Osiris DM is waiting for YOU — addressed to your seat; no sibling will read it "
+    "for you. You are RESUMED (your context is your own: do NOT re-mount or re-orient unless "
+    "your connection demands it). inbox(), act on what it asks, SETTLE it — reply with "
+    "send(reply_to=<id>) or ack with inbox(ack=[ids]). Reply ONLY with NEW information — "
+    "never an acknowledgement-only message. When the exchange CONCLUDES, record_decision the "
+    "outcome AND send(to='operator') a three-line brief (reply_to your prior brief on the "
+    "same topic — the desk folds supersessions). If nothing needs doing, ack and stop."
+)
+
+
+async def _dms_with_unread(
+    pool: asyncpg.Pool, lease_secs: int
+) -> list[tuple[str, int, str | None]]:
+    """(addressee, oldest deliverable DM id, sender) for every agent with unsettled DM mail —
+    fleet mail phase 3 (task #61). A DM's wake ladder is DELIVER → RESUME → NOTHING: a live
+    addressee reads its own box; a stale addressee is resumed via ITS OWN session; and there
+    is NO mint lane — a fresh twin is not the addressee, and a private message must never be
+    delivered to a stranger. Undeliverable DMs stay pull-only (and follow the seat at the
+    next mint — the estate)."""
+    rows = await pool.fetch(
+        "SELECT DISTINCT ON (m.to_agent) m.to_agent, m.id, m.from_agent FROM fleet_messages m "
+        "WHERE m.to_agent IS NOT NULL AND m.to_agent <> $1 AND m.read_at IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
+        "  AND r.agent_id=m.to_agent AND r.read_at IS NOT NULL) "
+        "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
+        "  AND r.agent_id=m.to_agent AND r.delivered_at >= now() - make_interval(secs => $2)) "
+        "ORDER BY m.to_agent, m.created_at", OPERATOR_ADDR, lease_secs)
+    return [(r["to_agent"], r["id"], r["from_agent"]) for r in rows]
+
+
+async def _agent_live(pool: asyncpg.Pool, agent_id: str, within_secs: int) -> bool:
+    """Is the ADDRESSEE itself awake (not just some project sibling)? Its chrome/stop-hook
+    already surface the DM — waking beside a live addressee would be noise."""
+    return bool(await pool.fetchval(
+        "SELECT 1 FROM agent_mounts WHERE agent_id=$1 "
+        "AND last_seen > now() - make_interval(secs => $2) LIMIT 1", agent_id, within_secs))
+
+
+async def _agent_resumable(
+    pool: asyncpg.Pool, agent_id: str, st: Settings
+) -> tuple[str, str] | None:
+    """(session_id, repo_cwd) to resume the ADDRESSEE's own session, else None — the same
+    checks as the project ladder (not retired, own anchored transcript, below the context
+    ceiling) scoped to one agent's mounts."""
+    if await _retired(pool, agent_id):
+        return None
+    rows = await pool.fetch(
+        "SELECT job_dir, cwd FROM agent_mounts WHERE agent_id=$1 "
+        "ORDER BY last_seen DESC LIMIT 5", agent_id)
+    cands = [(r["job_dir"], r["cwd"]) for r in rows]
+    if not cands:
+        return None
+    root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
+        else Path.home() / ".claude" / "projects"
+    return await asyncio.to_thread(
+        _pick_resumable_sync, cands, root, st.osiris_resume_ceiling_bytes)
 
 
 async def _owner_live(pool: asyncpg.Pool, project: str, within_secs: int) -> bool:
@@ -301,5 +363,47 @@ async def trigger_mail_tick(
             "VALUES ($1,$2,$3,'mint') RETURNING id", project, sender, msg_id)
         await spawn(repo_path, _WAKE_PROMPT.format(repo=repo_path),
                     job_dir=_wake_job_dir(wake_id), model=st.osiris_wake_model or None)
+        report["woke"] += 1
+
+    # THE DM LANE (fleet mail phase 3, task #61): DELIVER → RESUME → nothing. No mint, ever —
+    # a private message is never handed to a stranger; an unresumable addressee's DM stays
+    # pull-only and follows the seat at the next mint (the estate). One resume attempt per
+    # message (the alternation guard's DM half): a resume that didn't settle it is not looped.
+    for agent_id, msg_id, sender in await _dms_with_unread(pool, st.osiris_mail_lease_secs):
+        if not st.osiris_trigger_enabled:
+            report["skipped"] += 1
+            continue
+        if await _agent_live(pool, agent_id, st.osiris_owner_live_secs):
+            report["owner_live"] += 1  # the addressee is awake: its own chrome shows the DM
+            continue
+        row = await pool.fetchrow(
+            "SELECT project FROM agent_mounts WHERE agent_id=$1 "
+            "ORDER BY last_seen DESC LIMIT 1", agent_id)
+        dm_project: str | None = row["project"] if row else None
+        if not dm_project:  # an unmounted addressee has no session to resume: pull-only
+            report["skipped"] += 1
+            continue
+        project = dm_project
+        recent = await _recent_wakes(pool, project, st.osiris_trigger_window_secs)
+        within_grace = await _woken_within(pool, project, st.osiris_trigger_grace_secs)
+        if should_wake(enabled=True, recent_wakes=recent,
+                       rate_cap=st.osiris_trigger_rate_cap,
+                       within_grace=within_grace) is not None:
+            report["skipped"] += 1
+            continue
+        if await _last_wake_mode(pool, project, msg_id) == "dm-resume":
+            report["skipped"] += 1  # one attempt per DM — never a resume loop
+            continue
+        resume = await _agent_resumable(pool, agent_id, st)
+        if resume is None:
+            report["skipped"] += 1
+            continue
+        session_id, repo = resume
+        await pool.execute(
+            "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+            "VALUES ($1,$2,$3,'dm-resume')", project, sender, msg_id)
+        await spawn(repo, _DM_RESUME_PROMPT, resume_session=session_id,
+                    model=st.osiris_wake_model or None)
+        report["resumed"] += 1
         report["woke"] += 1
     return report

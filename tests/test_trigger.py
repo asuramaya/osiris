@@ -356,3 +356,91 @@ async def test_wake_model_pins_the_triage_lane(actions: Actions, tmp_path: Path)
     assert calls[0].get("model") == "claude-haiku-4-5-20251001"
     # the prompt carries the escalation contract
     assert "TRIAGE" in _WAKE_PROMPT and "open_thread(kind='obligation')" in _WAKE_PROMPT
+
+
+# --- the DM lane (fleet mail phase 3, #61): DELIVER → RESUME → nothing, never a mint ---
+
+async def _dm_to_owner(actions: Actions) -> int:
+    """A DM to agent:abcd1234 (the resumable-owner fixture's agent)."""
+    out = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                             to_agent="agent:abcd1234", body="for your eyes only")
+    return int(out["id"])
+
+
+async def test_a_dm_resumes_the_addressee_itself(actions: Actions, tmp_path: Path) -> None:
+    """The payoff: a DM to a stale-but-resumable agent wakes THAT agent via its own session
+    — mode 'dm-resume' in the ledger, the private prompt, never a twin."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    await _dm_to_owner(actions)
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append((repo, prompt, kw))
+
+    rep = await trigger_mail_tick(
+        actions, settings=_settings(enabled=True, sense=str(sense)), spawn=_spawn)
+    assert rep["resumed"] == 1 and rep["woke"] == 1
+    repo, prompt, kw = calls[0]
+    assert kw.get("resume_session") == FULL_SID       # the ADDRESSEE's own session
+    assert "private" in prompt and "seat" in prompt   # the DM prompt, not the broadcast one
+    assert await actions.pool.fetchval(
+        "SELECT mode FROM agent_wakes ORDER BY id DESC LIMIT 1") == "dm-resume"
+
+
+async def test_a_dm_never_mints_a_stranger(actions: Actions, tmp_path: Path) -> None:
+    """No mint lane for DMs: an addressee with no resumable session (transcript missing)
+    leaves the DM pull-only — a private message is never handed to a fresh twin."""
+    from src.orchestrator import mounts
+
+    await mounts.save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "abcd1234"),
+                            agent_id="agent:abcd1234", project="demo", cwd="/repo/demo",
+                            model=None, session_key=None)
+    await actions.pool.execute("UPDATE agent_mounts SET last_seen = now() - interval '1 hour'")
+    await _dm_to_owner(actions)
+    spawned: list[str] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        spawned.append(repo)
+
+    rep = await trigger_mail_tick(
+        actions, settings=_settings(enabled=True, sense=str(tmp_path / "nowhere")),
+        spawn=_spawn)
+    assert spawned == [] and rep["woke"] == 0         # nothing woken, nothing minted
+
+
+async def test_a_live_addressee_is_not_rewoken(actions: Actions, tmp_path: Path) -> None:
+    """The addressee's own tab is awake — its chrome/stop-hook surface the DM; a wake beside
+    it would be noise."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    await actions.pool.execute("UPDATE agent_mounts SET last_seen = now()")  # awake NOW
+    await _dm_to_owner(actions)
+    spawned: list[str] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        spawned.append(repo)
+
+    rep = await trigger_mail_tick(
+        actions, settings=_settings(enabled=True, sense=str(sense)), spawn=_spawn)
+    assert spawned == [] and rep["owner_live"] == 1
+
+
+async def test_a_dm_resume_is_never_looped(actions: Actions, tmp_path: Path) -> None:
+    """One attempt per message: a dm-resume that didn't settle its mail is not retried —
+    the DM falls back to pull (and the estate carries it across the next mint)."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    await _dm_to_owner(actions)
+    spawned: list[str] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        spawned.append(repo)
+
+    st = _settings(enabled=True, sense=str(sense))
+    await trigger_mail_tick(actions, settings=st, spawn=_spawn)
+    await trigger_mail_tick(actions, settings=st, spawn=_spawn)
+    assert len(spawned) == 1                          # the second tick declines
+
+
+async def test_the_mint_prompt_retires_its_face() -> None:
+    """Wake hygiene (thread fc2071f8): a triage wake is one-shot — the prompt itself carries
+    the retire() duty so no zombie card survives it."""
+    assert "retire()" in _WAKE_PROMPT and "ONE-SHOT" in _WAKE_PROMPT
