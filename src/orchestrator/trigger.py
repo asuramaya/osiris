@@ -84,7 +84,7 @@ async def _projects_with_unread(
     The operator desk is skipped — never woken."""
     rows = await pool.fetch(
         "SELECT DISTINCT ON (m.to_project) m.to_project, m.id, m.from_agent FROM fleet_messages m "
-        "WHERE m.to_project <> $1 AND m.to_agent IS NULL "
+        "WHERE m.to_project <> $1 AND m.to_agent IS NULL AND m.read_at IS NULL "
         "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
         "  AND r.read_at IS NOT NULL) "
         "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "

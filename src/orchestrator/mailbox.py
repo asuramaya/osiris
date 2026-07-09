@@ -31,8 +31,12 @@ OPERATOR_ADDR = "operator"
 
 # Deliverable TO A GIVEN READER: addressed to it (a DM to_agent=me, or a broadcast to my project),
 # not settled by me, and not under MY live lease. `r` is my message_recipients row (LEFT JOINed).
+# `m.read_at IS NULL` honors the LEGACY per-message settle: messages settled under the old
+# single-reader model (pre-0021) carry fleet_messages.read_at and are globally suppressed so
+# history doesn't resurface; new messages never set it (per-recipient state only).
 _DELIVERABLE_TO_READER = (
     "((m.to_agent = $agent) OR (m.to_project = $project AND m.to_agent IS NULL)) "
+    "AND m.read_at IS NULL "
     "AND r.read_at IS NULL "
     "AND (r.delivered_at IS NULL OR r.delivered_at < now() - make_interval(secs => $lease))"
 )
@@ -200,7 +204,7 @@ async def project_deliverable_count(
     signal.)"""
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT count(*) FROM fleet_messages m WHERE "
-        "(m.to_project=$1 AND m.to_agent IS NULL) "
+        "(m.to_project=$1 AND m.to_agent IS NULL) AND m.read_at IS NULL "
         "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
         "  AND r.read_at IS NOT NULL) "
         "AND (NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "

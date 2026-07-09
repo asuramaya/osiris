@@ -161,8 +161,8 @@ async def _conversations(
         "  array_agg(DISTINCT to_project) FILTER (WHERE to_project IS NOT NULL) AS recipients, "
         "  max(created_at) AS last_at, "
         "  count(*) FILTER (WHERE NOT settled) AS unsettled "
-        "FROM (SELECT fm.*, EXISTS(SELECT 1 FROM message_recipients r "
-        "        WHERE r.message_id=fm.id AND r.read_at IS NOT NULL) AS settled "
+        "FROM (SELECT fm.*, (fm.read_at IS NOT NULL OR EXISTS(SELECT 1 FROM message_recipients r "
+        "        WHERE r.message_id=fm.id AND r.read_at IS NOT NULL)) AS settled "
         "      FROM fleet_messages fm) fm "
         "GROUP BY 1 HAVING max(created_at) >= $1 "
         "ORDER BY max(created_at) DESC LIMIT $2", since, limit)
@@ -203,9 +203,10 @@ async def _operator_inbox(actions: Actions, *, lease_secs: int) -> dict[str, Any
         " body, created_at, "
         " (SELECT count(*) FROM fleet_messages s WHERE s.id <> m.id AND s.to_project=$1 "
         "   AND s.to_agent IS NULL AND " + unseen.format(m="s")
+        + "   AND s.read_at IS NULL "
         + "   AND COALESCE(s.thread_id, s.id) = COALESCE(m.thread_id, m.id)) AS supersedes "
-        "FROM fleet_messages m WHERE m.to_project=$1 AND m.to_agent IS NULL AND "
-        + unseen.format(m="m")
+        "FROM fleet_messages m WHERE m.to_project=$1 AND m.to_agent IS NULL AND m.read_at IS NULL "
+        "AND " + unseen.format(m="m")
         + " ORDER BY COALESCE(thread_id, id), created_at DESC", OPERATOR_ADDR)
     ordered = sorted(heads, key=lambda r: r["created_at"], reverse=True)  # newest head first
     return {
