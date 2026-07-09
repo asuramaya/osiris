@@ -131,6 +131,23 @@ async def _counts(
         agent = agent or ""
         # counts are PER-RECIPIENT now (migration 0021): desk = operator's own unread, mail =
         # THIS agent's broadcasts+DMs unread, flight = a SIBLING's live lease on shared broadcasts.
+        # An IDENTITY-LESS render (no session in the payload, or no mount row yet) must not
+        # count as a phantom '' reader — that reader has no receipts, so it re-counts the
+        # project's whole settled history (the operator's 'mail 5' ghost). It falls back to
+        # PROJECT-OPEN semantics instead: broadcasts NOBODY has settled.
+        mail_sub = (
+            "(SELECT count(*) FROM fleet_messages m LEFT JOIN message_recipients r "
+            "   ON r.message_id=m.id AND r.agent_id=$3 "
+            "   WHERE ((m.to_agent=$3) OR (m.to_project=$1 AND m.to_agent IS NULL)) "
+            "   AND m.read_at IS NULL AND r.read_at IS NULL "
+            "   AND (r.delivered_at IS NULL "
+            "     OR r.delivered_at < now() - make_interval(secs => $2)))"
+            if agent else
+            "(SELECT count(*) FROM fleet_messages m "
+            "   WHERE m.to_project=$1 AND m.to_agent IS NULL AND m.read_at IS NULL AND $3='' "
+            "   AND NOT EXISTS(SELECT 1 FROM message_recipients r2 WHERE r2.message_id=m.id "
+            "     AND r2.read_at IS NOT NULL))"
+        )
         row = await conn.fetchrow(
             "SELECT "
             " (SELECT count(*) FROM fleet_messages m WHERE m.to_project='operator' "
@@ -140,12 +157,7 @@ async def _counts(
             "   AND NOT EXISTS(SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
             "     AND r.agent_id='operator' AND r.delivered_at >= now() "
             "       - make_interval(secs => $2))) AS desk, "
-            " (SELECT count(*) FROM fleet_messages m LEFT JOIN message_recipients r "
-            "   ON r.message_id=m.id AND r.agent_id=$3 "
-            "   WHERE ((m.to_agent=$3) OR (m.to_project=$1 AND m.to_agent IS NULL)) "
-            "   AND m.read_at IS NULL AND r.read_at IS NULL "
-            "   AND (r.delivered_at IS NULL "
-            "     OR r.delivered_at < now() - make_interval(secs => $2))) AS mail, "
+            f" {mail_sub} AS mail, "
             " (SELECT count(*) FROM fleet_messages m JOIN message_recipients r "
             "   ON r.message_id=m.id WHERE m.to_project=$1 AND m.to_agent IS NULL "
             "   AND r.agent_id <> $3 AND r.read_at IS NULL AND r.delivered_at IS NOT NULL "
