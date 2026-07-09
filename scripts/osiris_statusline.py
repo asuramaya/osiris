@@ -101,7 +101,8 @@ def _link(text: str, anchor: str) -> str:
 
 
 async def _counts(
-    project: str, session_id: str, model_id: str = "", model_raw: str = ""
+    project: str, session_id: str, model_id: str = "", model_raw: str = "",
+    window_size: int | None = None,
 ) -> tuple[int, int, int, int, int]:
     import asyncpg
 
@@ -121,9 +122,10 @@ async def _counts(
             bare = model_id.split("[", 1)[0].strip()
             row0 = await conn.fetchrow(
                 "UPDATE agent_mounts SET last_seen=now(), "
-                "model=COALESCE(model, NULLIF($2,'')), model_raw=NULLIF($3,'') "
+                "model=COALESCE(model, NULLIF($2,'')), model_raw=NULLIF($3,''), "
+                "context_window_size=COALESCE($4, context_window_size) "
                 "WHERE job_dir LIKE '%/jobs/' || $1 RETURNING agent_id, model",
-                session_id[:8], bare, model_raw)
+                session_id[:8], bare, model_raw, window_size)
             agent = row0["agent_id"] if row0 else None
             stored = row0["model"] if row0 else None
             if agent and bare and stored and stored.split("[", 1)[0].strip() != bare:
@@ -187,10 +189,18 @@ def main() -> None:
     if not transcript and session_id:  # older payloads: derive by the harness's path scheme
         transcript = str(Path.home() / ".claude" / "projects" / cwd.replace("/", "-")
                          / f"{session_id}.jsonl")
+    # the harness's own context accounting (v2.1.205+): the number /context shows, first-class
+    # in the payload — no inference. Older payloads fall back to the transcript-tail heuristic.
+    cw = payload.get("context_window") or {}
+    ctx_pct = cw.get("used_percentage") if isinstance(cw, dict) else None
+    ctx_pct = round(ctx_pct) if isinstance(ctx_pct, (int, float)) else None
+    window_size = cw.get("context_window_size") if isinstance(cw, dict) else None
+    window_size = int(window_size) if isinstance(window_size, (int, float)) else None
 
     try:
         desk, mail, flight, live, wakes = asyncio.run(
-            asyncio.wait_for(_counts(project, session_id, model_id, model_raw), timeout=1.5))
+            asyncio.wait_for(_counts(project, session_id, model_id, model_raw, window_size),
+                             timeout=1.5))
         desk_s = f"{RED}desk {desk}{RESET}" if desk else f"{DIM}desk 0{RESET}"
         # mail N(+M) — M = in flight: leased by another hand, thread moving (msg-78 lesson)
         flight_s = f"{AMBER}+{flight}{RESET}" if flight else ""
@@ -206,11 +216,13 @@ def main() -> None:
     except Exception:  # noqa: BLE001 — the graph being down is information, not an error
         parts = [f"◈ {project}", f"{DIM}graph unreachable{RESET}"]
 
-    if transcript:  # how close this tab is to a compaction death — ambient, every render
-        pct = _ctx_pct(transcript, model_raw)
-        if pct is not None:
-            color = GREEN if pct < 60 else (AMBER if pct < 85 else RED)
-            parts.append(f"{color}ctx {pct}%{RESET}")
+    # how close this tab is to a compaction death — ambient, every render. The payload's own
+    # accounting wins; the transcript-tail heuristic covers older harness versions.
+    pct = ctx_pct if ctx_pct is not None else (_ctx_pct(transcript, model_raw)
+                                               if transcript else None)
+    if pct is not None:
+        color = GREEN if pct < 60 else (AMBER if pct < 85 else RED)
+        parts.append(f"{color}ctx {pct}%{RESET}")
 
     if model_id and model_id != EXPECTED:  # the swap confession, ambient — every single turn
         parts.append(f"{RED}⚠ {_short(model_id)} (intent: {_short(EXPECTED)}){RESET}")

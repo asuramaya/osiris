@@ -582,7 +582,7 @@ async def context_window(ctx: Context | None = None) -> dict[str, Any]:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — self-knowledge needs an "
                          "anchored identity"}
     row = await pool.fetchrow(
-        "SELECT job_dir, model_raw FROM agent_mounts WHERE agent_id=$1 "
+        "SELECT job_dir, model_raw, context_window_size FROM agent_mounts WHERE agent_id=$1 "
         "ORDER BY last_seen DESC LIMIT 1", ident.agent_id)
     job = _job_hint(ctx) or (row["job_dir"] if row else None)
     if not job:
@@ -591,7 +591,8 @@ async def context_window(ctx: Context | None = None) -> dict[str, Any]:
                                      anchored_only=True)
     if path is None:
         return {"error": "no transcript found for your anchor — nothing to measure"}
-    out = context_lens.detail(path, row["model_raw"] if row else None)
+    out = context_lens.detail(path, row["model_raw"] if row else None,
+                              window_hint=row["context_window_size"] if row else None)
     out["agent"] = ident.agent_id
     return out
 

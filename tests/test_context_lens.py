@@ -76,6 +76,11 @@ def test_detail_counts_the_deaths_and_sounds_the_alarm(tmp_path: Path) -> None:
     assert d["remaining"] == 26_000
     assert d["assistant_turns"] == 3
     assert "Write back NOW" in d["warning"]              # the ritual, tied to the numbers
+    # the harness's own window (stamped from the payload) beats every heuristic: same
+    # transcript, 1M hint → a calm 17%, no warning, nothing assumed
+    hinted = detail(t, "claude-opus-4-8", window_hint=1_000_000)
+    assert hinted["window"] == 1_000_000 and hinted["window_assumed"] is False
+    assert hinted["pct"] == 17 and "warning" not in hinted
     # a young transcript measures honestly
     young = tmp_path / "young.jsonl"
     young.write_text(json.dumps({"type": "user"}) + "\n")

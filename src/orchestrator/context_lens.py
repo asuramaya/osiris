@@ -101,10 +101,13 @@ def glance(path: Path, raw_model: str | None) -> dict[str, Any] | None:
             "assumed": assumed}
 
 
-def detail(path: Path, raw_model: str | None) -> dict[str, Any]:
+def detail(path: Path, raw_model: str | None,
+           window_hint: int | None = None) -> dict[str, Any]:
     """The agent's full self-knowledge: occupancy breakdown, window tier, headroom, and this
     session's death toll (compact boundaries — each one was a mind, ruling a882b334). One
-    full scan; an agent asks rarely, so the cost is honest."""
+    full scan; an agent asks rarely, so the cost is honest. `window_hint` is the harness's
+    own context_window_size (stamped on the mount row by the chrome heartbeat) — when
+    present it IS the window, no inference."""
     compactions = 0
     last_compaction_at: str | None = None
     last: dict[str, int] | None = None
@@ -135,7 +138,10 @@ def detail(path: Path, raw_model: str | None) -> dict[str, Any]:
     if last is None:
         return {"error": "no usage recorded yet — too young to measure"}
     used = occupancy(last)
-    window, assumed = window_for(raw_model, used)
+    if window_hint:
+        window, assumed = window_hint, False
+    else:
+        window, assumed = window_for(raw_model, used)
     pct = round(100 * used / window)
     out: dict[str, Any] = {
         "used": used, "window": window, "window_assumed": assumed, "pct": pct,
