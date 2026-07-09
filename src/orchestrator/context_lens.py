@@ -151,9 +151,14 @@ def detail(path: Path, raw_model: str | None,
         "compactions_this_session": compactions,
         "last_compaction_at": last_compaction_at,
     }
-    if pct >= ALARM_PCT:
+    if pct >= ALARM_PCT and not assumed:
+        # the alarm fires on a KNOWN window only (Anubis VII's false eulogy, msg 127): a
+        # death notice built on a guessed denominator erodes the trust the rite runs on.
         out["warning"] = (
             f"context {pct}% full — a compaction (a DEATH, ruling a882b334) can land any "
             "turn. Write back NOW: record_decision / resolve_thread anything still only in "
             "your head; what is not in the graph does not exist for your heir.")
+    elif assumed:
+        out["note"] = ("window is ASSUMED (no harness stamp) — pct is a guess; trust the "
+                       "chrome's ctx% or the operator's /context over this")
     return out

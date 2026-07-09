@@ -75,9 +75,13 @@ def test_detail_counts_the_deaths_and_sounds_the_alarm(tmp_path: Path) -> None:
     assert d["used"] == 174_000 and d["pct"] == 87 and d["window_assumed"] is True
     assert d["remaining"] == 26_000
     assert d["assistant_turns"] == 3
-    assert "Write back NOW" in d["warning"]              # the ritual, tied to the numbers
-    # the harness's own window (stamped from the payload) beats every heuristic: same
-    # transcript, 1M hint → a calm 17%, no warning, nothing assumed
+    # NO death talk on an ASSUMED window (Anubis VII's false eulogy, msg 127): the guess is
+    # flagged as a guess instead
+    assert "warning" not in d and "ASSUMED" in d["note"]
+    # a KNOWN window (harness-stamped hint) that reads 87% DOES sound the alarm...
+    known = detail(t, "claude-opus-4-8", window_hint=200_000)
+    assert known["window_assumed"] is False and "Write back NOW" in known["warning"]
+    # ...and the same transcript on a known 1M window is a calm 17%, no warning
     hinted = detail(t, "claude-opus-4-8", window_hint=1_000_000)
     assert hinted["window"] == 1_000_000 and hinted["window_assumed"] is False
     assert hinted["pct"] == 17 and "warning" not in hinted
