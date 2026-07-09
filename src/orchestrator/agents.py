@@ -396,6 +396,14 @@ async def mint_heir(
     await actions.pool.execute(
         "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
         heir, ancestor_id)
+    # ...and so does the READ STATE: the heir inherits the ancestor's recipient rows, or every
+    # mint (i.e. every compaction) would redeliver the project's whole settled broadcast
+    # history to the new mind. The heir literally remembers reading them — that memory is
+    # exactly what survived the seam.
+    await actions.pool.execute(
+        "INSERT INTO message_recipients (message_id, agent_id, delivered_at, read_at, deliveries)"
+        " SELECT message_id, $1, delivered_at, read_at, deliveries FROM message_recipients"
+        " WHERE agent_id=$2 ON CONFLICT (message_id, agent_id) DO NOTHING", heir, ancestor_id)
     return heir, a
 
 

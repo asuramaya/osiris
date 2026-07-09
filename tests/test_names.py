@@ -14,7 +14,7 @@ from src.orchestrator.agents import (
     resolve_identity,
     seat_label,
 )
-from src.orchestrator.mailbox import read_inbox, send_message, unread_count
+from src.orchestrator.mailbox import ack_messages, read_inbox, send_message, unread_count
 
 
 async def _agent(actions: Actions, canonical: str, project: str = "handlingtheloop") -> None:
@@ -113,6 +113,12 @@ async def test_live_swap_passes_the_seat_mid_session(actions: Actions) -> None:
     await mounts.save_mount(actions.pool, job_dir="/h/.claude/jobs/cafe0123",
                             agent_id="agent:cafe0123", project="handlingtheloop", cwd="/x",
                             model="claude-fable-5", session_key="k")
+    # a broadcast the old mind already READ — its settled state must survive the seam too
+    await send_message(actions.pool, from_agent="agent:ux", from_project="handlingtheloop",
+                       to_project="handlingtheloop", body="old news, already handled")
+    (old,) = await read_inbox(actions.pool, "handlingtheloop", reader_agent="agent:cafe0123")
+    await ack_messages(actions.pool, "handlingtheloop", [old["id"]],
+                       reader_agent="agent:cafe0123")
     # a DM lands for the old mind, unread — then the harness swaps the model under the tab
     await send_message(actions.pool, from_agent="agent:ux", from_project="handlingtheloop",
                        to_agent="Morpheus", body="for whoever holds the seat")
@@ -126,7 +132,9 @@ async def test_live_swap_passes_the_seat_mid_session(actions: Actions) -> None:
         "SELECT agent_id, model FROM agent_mounts WHERE job_dir='/h/.claude/jobs/cafe0123'")
     assert row is not None
     assert row["agent_id"] == "agent:cafe0123-ii" and row["model"] == "claude-opus-4-8"
-    # the estate: the ancestor's unread DM is deliverable to the heir, not orphaned
+    # the estate: the ancestor's unread DM is deliverable to the heir, not orphaned — and the
+    # ancestor's READ broadcast stays read (the heir inherits the read state, so a mint never
+    # redelivers the project's settled history): exactly 1 deliverable, the DM
     assert await unread_count(actions.pool, "handlingtheloop",
                               reader_agent="agent:cafe0123-ii") == 1
     (m,) = await read_inbox(actions.pool, "handlingtheloop", reader_agent="agent:cafe0123-ii")
