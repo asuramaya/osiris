@@ -66,14 +66,26 @@ async def _roster(actions: Actions) -> list[dict[str, Any]]:
         " ) AS resolved, "
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='model_swapped' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1"
-        " ) AS swapped "
+        " ) AS swapped, "
+        # the LIVE model from the heartbeat (freshest mount by last_seen) — a mid-session swap
+        # lands here via the statusline before it is ever re-stamped on the Agent object.
+        " (SELECT m.model FROM agent_mounts m WHERE m.agent_id=o.canonical "
+        "   ORDER BY m.last_seen DESC LIMIT 1) AS live_model "
         "FROM objects o WHERE o.type='Agent' ORDER BY project NULLS FIRST, o.canonical")
-    return [
-        {"agent": r["agent"], "project": r["project"], "model": r["model"],
-         "resolved": r["resolved"] != "false",  # None (pre-hardening) or 'true' → treated resolved
-         "swapped": r["swapped"]}
-        for r in rows
-    ]
+    out = []
+    for r in rows:
+        # a divergence between the last STAMPED model and the LIVE heartbeat model is a swap
+        # the graph hasn't recorded yet — the danger map must show it NOW, not at re-mount, or
+        # a mount-once agent silently runs the wrong model behind a stale-green roster.
+        live_swap = (r["live_model"] and r["model"] and r["live_model"] != r["model"])
+        out.append(
+            {"agent": r["agent"], "project": r["project"], "model": r["model"],
+             "resolved": r["resolved"] != "false",  # None/‘true’ → treated resolved
+             "swapped": r["swapped"],
+             "live_model": r["live_model"] if live_swap else None,
+             "live_swap": (f"{r['model']} → {r['live_model']} (unstamped)"
+                           if live_swap else None)})
+    return out
 
 
 async def _activity(actions: Actions, since: datetime, limit: int = 50) -> list[dict[str, Any]]:
@@ -293,7 +305,11 @@ async def fleet_digest(
     costs = await _costs(actions, effective_since)
     retrieval = await _retrieval(actions, effective_since)
     operator_inbox = await _operator_inbox(actions, lease_secs=lease_secs)
-    danger = [r for r in roster if r["swapped"]]
+    # the danger map: a STAMPED swap (durable, from the transcript at mount) OR a LIVE swap
+    # (the heartbeat caught the harness swapping the model since the last stamp — not yet in
+    # the graph, but real and current). Both are "the harness got nervous"; the operator must
+    # see either without waiting for a re-mount.
+    danger = [r for r in roster if r["swapped"] or r["live_swap"]]
     unresolved = [r for r in roster if not r["resolved"]]
     if mark_seen:  # the deliberate advance — the ONLY state change a digest can make
         marked_at = datetime.now(UTC)

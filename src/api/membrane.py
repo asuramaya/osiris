@@ -123,7 +123,9 @@ def render_membrane(dg: dict[str, Any], wakes: list[dict[str, Any]]) -> str:
              _e((r["model"] or "?").removeprefix("claude-")),
              ('<span class="green">resolved</span>' if r["resolved"]
               else '<span class="red">unresolved</span>'),
-             f'<span class="red">{_e(r["swapped"])}</span>' if r["swapped"] else "")
+             (f'<span class="red">{_e(r["swapped"])}</span>' if r["swapped"] else "")
+             + (f'<span class="amber"> ⚡ live: {_e(r["live_swap"])}</span>'
+                if r.get("live_swap") else ""))
         for r in dg["roster"]
     )
     wake_rows = "".join(

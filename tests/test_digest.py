@@ -237,3 +237,37 @@ async def test_replying_to_your_own_lateral_message_routes_onward(actions: Actio
                                 body="second volley, same thread", reply_to=ask["id"])
     assert follow["to"] == "heinrich" and follow["thread_id"] == ask["id"]
     assert await unread_count(p, "heinrich", lease_secs=0) == 2
+
+
+async def test_live_swap_surfaces_before_a_re_mount(actions: Actions) -> None:
+    """The rotten-apple audit's #2: a mid-session classifier swap lands in agent_mounts via
+    the heartbeat BEFORE the Agent object is re-stamped. The danger map must show it live —
+    a mount-once agent can't be left running opus behind a stale-green roster."""
+    a = await actions.create_or_find_object("Agent", "agent:ra", "fleet-observer")
+    await _prop(actions, a, "project", "rotten-apple", "fleet-observer", DO)
+    await _prop(actions, a, "source_model", "claude-fable-5", "fleet-observer", DO)
+    # the heartbeat wrote the LIVE model (opus) to the mount row; the Agent object still says fable
+    await actions.pool.execute(
+        "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, model, last_seen) "
+        "VALUES ('/j/ra','agent:ra','rotten-apple','/w/ra','claude-opus-4-8', now())")
+
+    dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
+    r = next(x for x in dg["roster"] if x["agent"] == "agent:ra")
+    assert r["live_model"] == "claude-opus-4-8"
+    assert "claude-fable-5 → claude-opus-4-8 (unstamped)" == r["live_swap"]
+    # and it counts in the danger map + swapped tally, without any re-mount
+    assert any(d["agent"] == "agent:ra" for d in dg["danger"])
+    assert dg["summary"]["swapped"] >= 1
+
+
+async def test_matching_live_model_is_not_a_swap(actions: Actions) -> None:
+    """The heartbeat model AGREEING with the stamp is the healthy case — no false alarm."""
+    a = await actions.create_or_find_object("Agent", "agent:ok", "fleet-observer")
+    await _prop(actions, a, "source_model", "claude-fable-5", "fleet-observer", DO)
+    await actions.pool.execute(
+        "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, model, last_seen) "
+        "VALUES ('/j/ok','agent:ok','osiris','/w/ok','claude-fable-5', now())")
+    dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
+    r = next(x for x in dg["roster"] if x["agent"] == "agent:ok")
+    assert r["live_swap"] is None and r["live_model"] is None
+    assert not any(d["agent"] == "agent:ok" for d in dg["danger"])

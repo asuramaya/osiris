@@ -43,7 +43,9 @@ def _link(text: str, anchor: str) -> str:
     return f"\033]8;;{CONSOLE}/membrane#{anchor}\033\\{text}\033]8;;\033\\"
 
 
-async def _counts(project: str, session_id: str) -> tuple[int, int, int, int, int]:
+async def _counts(
+    project: str, session_id: str, model_id: str = ""
+) -> tuple[int, int, int, int, int]:
     import asyncpg
 
     conn = await asyncpg.connect(DSN, timeout=1.0)
@@ -52,9 +54,16 @@ async def _counts(project: str, session_id: str) -> tuple[int, int, int, int, in
             # THE HEARTBEAT: a tab rendering its chrome is ALIVE — bump its registry row so
             # the wake dispatch never mints a twin beside a tab the operator is actively
             # driving (msg-78 lesson: 'live' must mean the tab, not the last osiris call).
+            # It also carries the LIVE model: a mid-session classifier swap (opus for a
+            # security turn) is caught by the chrome but was invisible to the fleet-wide danger
+            # map until the next re-mount — a mount-once agent could run opus for an hour while
+            # the roster still showed fable. Writing model here (an existing write to the row
+            # this tab already owns — NOT a new graph-write surface) lets the digest flag the
+            # divergence live. NULLIF guards an empty payload from wiping the stored model.
             await conn.execute(
-                "UPDATE agent_mounts SET last_seen=now() "
-                "WHERE job_dir LIKE '%/jobs/' || $1", session_id[:8])
+                "UPDATE agent_mounts SET last_seen=now(), "
+                "model=COALESCE(NULLIF($3,''), model) "
+                "WHERE job_dir LIKE '%/jobs/' || $1", session_id[:8], model_id)
         row = await conn.fetchrow(
             "SELECT "
             " (SELECT count(*) FROM fleet_messages WHERE to_project='operator' "
@@ -89,7 +98,7 @@ def main() -> None:
 
     try:
         desk, mail, flight, live, wakes = asyncio.run(
-            asyncio.wait_for(_counts(project, session_id), timeout=1.5))
+            asyncio.wait_for(_counts(project, session_id, model_id), timeout=1.5))
         desk_s = f"{RED}desk {desk}{RESET}" if desk else f"{DIM}desk 0{RESET}"
         # mail N(+M) — M = in flight: leased by another hand, thread moving (msg-78 lesson)
         flight_s = f"{AMBER}+{flight}{RESET}" if flight else ""
