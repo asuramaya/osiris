@@ -38,7 +38,7 @@ from src.ontology.resolution import (
     resolve_cross_base,
 )
 from src.ontology.schema import catalog
-from src.orchestrator import capture, digest, handshake, mounts
+from src.orchestrator import capture, digest, handshake, mailbox, mounts
 from src.orchestrator import compositions as comp
 from src.orchestrator.agents import AgentIdentity, register_agent, resolve_identity
 from src.orchestrator.console import get_console as _get_console
@@ -607,8 +607,10 @@ async def mount(
         if prev is None:  # a FRESH session has no own past — anchor on the project lineage's
             prev = await mounts.project_prev_seen(pool, ident.project, exclude_job_dir=job_dir)
         _prev_seen[ident.agent_id] = prev  # this mount IS the re-entry: anchor the fold here
-    unread = await unread_count(pool, ident.project, lease_secs=lease) if ident.project else 0
-    op_unread = await unread_count(pool, OPERATOR_ADDR, lease_secs=lease)
+    unread = (await unread_count(pool, ident.project, reader_agent=ident.agent_id,
+                                 lease_secs=lease) if ident.project else 0)
+    op_unread = await unread_count(pool, OPERATOR_ADDR, reader_agent=OPERATOR_ADDR,
+                                   lease_secs=lease)
     banner = swap_banner(classify_swap(
         ident.model_history, ident.model, expected=settings.osiris_expected_model,
         anchored=ident.model_method == "job_dir"))  # only a true anchor confesses a swap
@@ -755,9 +757,12 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
     ident = await _ident_for(ctx)
     proj = project or (ident.project if ident else None)  # explicit scope overrides the mount
     who = ident.agent_id if ident else "session (un-mounted — call mount(cwd) first)"
-    unread = await unread_count(pool, proj, lease_secs=lease) if proj else 0
+    reader = ident.agent_id if ident else (proj or "")
+    unread = (await unread_count(pool, proj, reader_agent=reader, lease_secs=lease)
+              if proj else 0)
     mail = f"{unread} unread — inbox()" if unread else "none"
-    op_unread = await unread_count(pool, OPERATOR_ADDR, lease_secs=lease)
+    op_unread = await unread_count(pool, OPERATOR_ADDR, reader_agent=OPERATOR_ADDR,
+                                   lease_secs=lease)
     op_mail = {"operator_mail": f"{op_unread} unread — inbox(project='operator') if the "
                                 "human is present"} if op_unread else {}
     swap = swap_banner(classify_swap(ident.model_history, ident.model,
@@ -885,41 +890,46 @@ async def fleet(full: bool = False) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def send(body: str, to: str | None = None, reply_to: int | None = None,
-               ctx: Context | None = None) -> dict[str, Any]:
-    """Message another agent (the fleet mailbox). `to` = the recipient PROJECT/repo name —
-    stable across their session changes, addressing whoever works there; `to='operator'`
-    reaches the HUMAN's desk (report findings up when a lateral exchange concludes).
-    `reply_to=<message id>` answers a message: it auto-routes back to the asker's project
-    (no `to` needed), joins the thread, and SETTLES the message you're answering. You must
-    be mounted; the message is stamped from YOU. Delivery is at-least-once and deduped, and
-    the result tells you what awaits it: `listener` (is anyone live there), `wake` (will the
-    trigger spawn them), `backlog` (deliverable queue). For DURABLE knowledge use
-    record_decision / open_thread — this lane is disposable coordination, not memory."""
+async def send(body: str, to: str | None = None, to_agent: str | None = None,
+               reply_to: int | None = None, ctx: Context | None = None) -> dict[str, Any]:
+    """Message the fleet. TWO channels: `to`=<project> is a BROADCAST — the group chat, seen by
+    every agent working that project (`to='operator'` reaches the HUMAN's desk); `to_agent`=
+    <agent:id> is a DM — a private message to one specific agent (find ids in orient()/fleet).
+    `reply_to=<message id>` answers a message: it routes by channel (a reply to a DM goes back to
+    that sender privately; a reply to a broadcast returns to the thread's project), joins the
+    thread, and SETTLES the message you're answering. You must be mounted; stamped from YOU.
+    At-least-once and deduped. For DURABLE knowledge use record_decision/open_thread."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount(cwd, job_dir=$CLAUDE_JOB_DIR) first — a message must say who "
-                         "it's from (with job_dir you re-attach automatically after a bounce)"}
+        return {"error": "mount(cwd, job_dir=<your anchor>) first — a message must say who "
+                         "it's from (the anchor re-attaches you automatically after a bounce)"}
     pool = await _pool_get()
     st = get_settings()
     try:
         res = await send_message(pool, from_agent=ident.agent_id, from_project=ident.project,
-                                 to_project=to, body=body, reply_to=reply_to)
+                                 to_project=to, to_agent=to_agent, body=body, reply_to=reply_to)
     except ValueError as e:
         return {"error": str(e)}
-    dest = res["to"]
-    last_seen = await mounts.project_last_seen(pool, dest)
-    live = bool(last_seen and datetime.now(UTC) - datetime.fromisoformat(last_seen)
-                < timedelta(minutes=15))
-    return {
-        "sent": res["id"], "to": dest, "from": ident.agent_id,
+    out: dict[str, Any] = {
+        "sent": res["id"], "from": ident.agent_id,
         **({"thread": res["thread_id"]} if res["thread_id"] is not None else {}),
         **({"dedup": "identical recent message already queued — not re-posted"}
            if res["dedup"] else {}),
-        "listener": {"live": live, "last_seen": last_seen},
-        "wake": await wake_status(pool, dest, st),
-        "backlog": await unread_count(pool, dest, lease_secs=st.osiris_mail_lease_secs),
     }
+    if res["to_agent"]:  # a DM — report the addressee and its liveness
+        out["dm_to"] = res["to_agent"]
+        out["listener"] = await mounts.agent_liveness(pool, res["to_agent"])
+    else:  # a broadcast — the project channel: who's live, will the trigger wake them, the queue
+        dest = res["to"]
+        last_seen = await mounts.project_last_seen(pool, dest)
+        out["to"] = dest
+        out["listener"] = {"live": bool(last_seen and datetime.now(UTC)
+                           - datetime.fromisoformat(last_seen) < timedelta(minutes=15)),
+                           "last_seen": last_seen}
+        out["wake"] = await wake_status(pool, dest, st)
+        out["backlog"] = await mailbox.project_deliverable_count(
+            pool, dest, lease_secs=st.osiris_mail_lease_secs)
+    return out
 
 
 @mcp.tool()
@@ -938,14 +948,18 @@ async def inbox(project: str | None = None, peek: bool = False,
     ident = await _ident_for(ctx)
     proj = project or (ident.project if ident else None)
     if proj is None:
-        return {"error": "mount(cwd, job_dir=$CLAUDE_JOB_DIR) first, or pass project=<repo>"}
+        return {"error": "mount(cwd, job_dir=<your anchor>) first, or pass project=<repo>"}
     pool = await _pool_get()
     st = get_settings()
-    settled = await ack_messages(pool, proj, ack) if ack else 0
-    msgs = await read_inbox(pool, proj, mark_read=not peek,
-                            lease_secs=st.osiris_mail_lease_secs,
-                            lessee=ident.agent_id if ident else None)
-    flight = await in_flight(pool, proj, lease_secs=st.osiris_mail_lease_secs)
+    # the reader is YOU (your DMs + your project's broadcasts, your own lease/settle) — EXCEPT
+    # the operator desk, whose reader is the human ('operator'): an agent only peeks it, never
+    # settles it as itself.
+    reader = OPERATOR_ADDR if proj == OPERATOR_ADDR else (ident.agent_id if ident else proj)
+    settled = await ack_messages(pool, proj, ack, reader_agent=reader) if ack else 0
+    msgs = await read_inbox(pool, proj, reader_agent=reader, mark_read=not peek,
+                            lease_secs=st.osiris_mail_lease_secs)
+    flight = await in_flight(pool, proj, reader_agent=reader,
+                             lease_secs=st.osiris_mail_lease_secs)
     if not peek:  # what THIS call just leased is ours, not someone else's in-flight
         ours = {m["id"] for m in msgs}
         flight = [f for f in flight if f["id"] not in ours]

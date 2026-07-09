@@ -53,9 +53,10 @@ async def automount(
         if prev is None:  # a fresh session: anchor the fold on the lineage's last life
             prev = await mounts.project_prev_seen(
                 actions.pool, ident.project, exclude_job_dir=job_dir)
-    mail = await unread_count(actions.pool, ident.project, lease_secs=lease_secs) \
-        if ident.project else 0
-    desk = await unread_count(actions.pool, OPERATOR_ADDR, lease_secs=lease_secs)
+    mail = await unread_count(actions.pool, ident.project, reader_agent=ident.agent_id,
+                              lease_secs=lease_secs) if ident.project else 0
+    desk = await unread_count(actions.pool, OPERATOR_ADDR, reader_agent=OPERATOR_ADDR,
+                              lease_secs=lease_secs)
     away = await mounts.while_away(actions.pool, ident.project, ident.agent_id, prev)
     try:
         pulse: str | None = await mounts.fleet_pulse(actions.pool, lease_secs=lease_secs)

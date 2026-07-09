@@ -63,6 +63,17 @@ async def find_mount(pool: asyncpg.Pool, *, job_dir: str) -> MountRecord | None:
                        cwd=r["cwd"], model=r["model"])
 
 
+async def agent_liveness(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
+    """Is a SPECIFIC agent live right now (for a DM's send receipt)? Freshest mount by agent_id;
+    live = seen within 15 min. Lineage-aware falls to phase 2 — a bare agent_id match for now."""
+    v = await pool.fetchval(
+        "SELECT max(last_seen) FROM agent_mounts WHERE agent_id=$1", agent_id)
+    iso = v.isoformat() if v is not None else None
+    from datetime import UTC, datetime, timedelta
+    live = bool(v and datetime.now(UTC) - v < timedelta(minutes=15))
+    return {"live": live, "last_seen": iso}
+
+
 async def project_last_seen(pool: asyncpg.Pool, project: str) -> str | None:
     """The freshest mount activity for a project (ISO), for the send() listener probe."""
     v = await pool.fetchval(
@@ -116,9 +127,12 @@ async def fleet_pulse(
         "SELECT "
         " (SELECT count(*) FROM agent_mounts "
         "   WHERE last_seen > now() - make_interval(secs => $2)) AS live, "
-        " (SELECT count(*) FROM fleet_messages WHERE to_project='operator' "
-        "   AND read_at IS NULL AND (delivered_at IS NULL "
-        "   OR delivered_at < now() - make_interval(secs => $1))) AS desk, "
+        " (SELECT count(*) FROM fleet_messages m WHERE m.to_project='operator' "
+        "   AND m.to_agent IS NULL AND NOT EXISTS (SELECT 1 FROM message_recipients r "
+        "     WHERE r.message_id=m.id AND r.agent_id='operator' AND r.read_at IS NOT NULL) "
+        "   AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
+        "     AND r.agent_id='operator' AND r.delivered_at >= now() "
+        "       - make_interval(secs => $1))) AS desk, "
         " (SELECT count(*) FROM agent_wakes "
         "   WHERE woke_at > now() - interval '1 hour') AS wakes",
         lease_secs, live_secs)

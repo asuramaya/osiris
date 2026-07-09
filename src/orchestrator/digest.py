@@ -154,13 +154,17 @@ async def _conversations(
     """Lateral mail threads active in the window, newest first — thread key, participants,
     volume, last line, and how much is still unsettled. Reconstructed from fleet_messages
     directly: visibility that requires NO agent cooperation."""
+    # 'settled' is now per-recipient: a message is settled once ANY recipient has read it.
     rows = await actions.pool.fetch(
         "SELECT COALESCE(thread_id, id) AS thread, count(*) AS msgs, "
         "  array_agg(DISTINCT from_project) FILTER (WHERE from_project IS NOT NULL) AS senders, "
-        "  array_agg(DISTINCT to_project) AS recipients, "
+        "  array_agg(DISTINCT to_project) FILTER (WHERE to_project IS NOT NULL) AS recipients, "
         "  max(created_at) AS last_at, "
-        "  count(*) FILTER (WHERE read_at IS NULL) AS unsettled "
-        "FROM fleet_messages GROUP BY 1 HAVING max(created_at) >= $1 "
+        "  count(*) FILTER (WHERE NOT settled) AS unsettled "
+        "FROM (SELECT fm.*, EXISTS(SELECT 1 FROM message_recipients r "
+        "        WHERE r.message_id=fm.id AND r.read_at IS NOT NULL) AS settled "
+        "      FROM fleet_messages fm) fm "
+        "GROUP BY 1 HAVING max(created_at) >= $1 "
         "ORDER BY max(created_at) DESC LIMIT $2", since, limit)
     if not rows:
         return []
@@ -190,18 +194,24 @@ async def _operator_inbox(actions: Actions, *, lease_secs: int) -> dict[str, Any
     (`supersedes`), and `unread` counts ACTIVE HEADS, not raw rows. The SYSTEM folds; only
     the human settles — nothing here leases or acks (a peek), and the superseded briefs stay
     unread underneath until the operator's explicit word clears the thread."""
+    # 'unread by the operator' is now a per-recipient fact: no message_recipients row for the
+    # 'operator' reader with read_at set (the human hasn't dismissed it).
+    unseen = ("NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id={m}.id "
+              "AND r.agent_id=$1 AND r.read_at IS NOT NULL)")
     heads = await actions.pool.fetch(
         "SELECT DISTINCT ON (COALESCE(thread_id, id)) id, from_agent, from_project, "
         " body, created_at, "
-        " (SELECT count(*) FROM fleet_messages s WHERE s.read_at IS NULL AND s.id <> m.id "
-        "   AND s.to_project=$1 "
-        "   AND COALESCE(s.thread_id, s.id) = COALESCE(m.thread_id, m.id)) AS supersedes "
-        "FROM fleet_messages m WHERE to_project=$1 AND read_at IS NULL "
-        "ORDER BY COALESCE(thread_id, id), created_at DESC", OPERATOR_ADDR)
+        " (SELECT count(*) FROM fleet_messages s WHERE s.id <> m.id AND s.to_project=$1 "
+        "   AND s.to_agent IS NULL AND " + unseen.format(m="s")
+        + "   AND COALESCE(s.thread_id, s.id) = COALESCE(m.thread_id, m.id)) AS supersedes "
+        "FROM fleet_messages m WHERE m.to_project=$1 AND m.to_agent IS NULL AND "
+        + unseen.format(m="m")
+        + " ORDER BY COALESCE(thread_id, id), created_at DESC", OPERATOR_ADDR)
     ordered = sorted(heads, key=lambda r: r["created_at"], reverse=True)  # newest head first
     return {
         "unread": len(ordered),  # active heads — the number that should nag, not the backlog
-        "unread_raw": await unread_count(actions.pool, OPERATOR_ADDR, lease_secs=lease_secs),
+        "unread_raw": await unread_count(actions.pool, OPERATOR_ADDR,
+                                         reader_agent=OPERATOR_ADDR, lease_secs=lease_secs),
         "latest": [
             {"from": m["from_agent"], "from_project": m["from_project"],
              "body": m["body"][:300], "when": m["created_at"].isoformat(),

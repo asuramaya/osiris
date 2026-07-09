@@ -100,7 +100,7 @@ async def test_leased_mail_does_not_rewake(actions: Actions) -> None:
     """Mail under a live lease is being processed RIGHT NOW — re-waking would double-spawn.
     Lease expiry re-arms the wake (the processing died; someone should look again)."""
     await _agent_with_mail(actions)
-    await read_inbox(actions.pool, "demo")  # the woken agent leased its inbox
+    await read_inbox(actions.pool, "demo", reader_agent="agent:demo")  # the woken agent leased
     spawned: list[str] = []
 
     async def _spawn(repo: str, prompt: str, **kw: Any) -> None:

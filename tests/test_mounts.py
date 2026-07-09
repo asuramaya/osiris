@@ -143,7 +143,7 @@ async def test_while_away_names_the_face_wearers(actions: Actions) -> None:
                     "VALUES ('heinrich','agent:deceptor',NULL,'resume')")
     ask = await send_message(p, from_agent="agent:deceptor", from_project="decepticons",
                              to_project="heinrich", body="image the 50k pair?")
-    await read_inbox(p, "heinrich")  # the twin leased it…
+    await read_inbox(p, "heinrich", reader_agent="agent:twin")  # the twin leased it…
     await send_message(p, from_agent="agent:twin-99", from_project="heinrich",
                        body="done — imaged, verdict recorded", reply_to=ask["id"])  # …and settled
 

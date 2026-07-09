@@ -77,14 +77,19 @@ async def _projects_with_unread(
     pool: asyncpg.Pool, lease_secs: int
 ) -> list[tuple[str, int, str | None]]:
     """(project, oldest_deliverable_message_id, its_sender) for every project with deliverable
-    mail. DELIVERABLE, not merely unsettled: mail under a live lease is being processed right
-    now — re-waking on it would double-spawn; if the processing died, lease expiry re-arms the
-    wake. The operator address is skipped — it is a desk, not a repo (never woken)."""
+    BROADCAST mail. DELIVERABLE = no recipient has settled it AND none holds a live lease (mail
+    being processed right now would double-spawn if re-woken; lease expiry re-arms). Broadcasts
+    only: the wake ensures SOMEONE in the project looks, and a broadcast read by one agent still
+    shows in the others' inboxes. DMs rely on pull until agent-precise waking (a later phase).
+    The operator desk is skipped — never woken."""
     rows = await pool.fetch(
-        "SELECT DISTINCT ON (to_project) to_project, id, from_agent FROM fleet_messages "
-        "WHERE to_project <> $1 AND read_at IS NULL AND (delivered_at IS NULL "
-        "OR delivered_at < now() - make_interval(secs => $2)) "
-        "ORDER BY to_project, created_at", OPERATOR_ADDR, lease_secs)
+        "SELECT DISTINCT ON (m.to_project) m.to_project, m.id, m.from_agent FROM fleet_messages m "
+        "WHERE m.to_project <> $1 AND m.to_agent IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
+        "  AND r.read_at IS NOT NULL) "
+        "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
+        "  AND r.delivered_at >= now() - make_interval(secs => $2)) "
+        "ORDER BY m.to_project, m.created_at", OPERATOR_ADDR, lease_secs)
     return [(r["to_project"], r["id"], r["from_agent"]) for r in rows]
 
 

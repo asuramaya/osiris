@@ -224,7 +224,7 @@ async def test_desk_folds_superseded_briefs_under_the_newest_head(actions: Actio
     assert heads["BRIEF v2: run 1 done — organ delta reproduces"]["supersedes"] == 1
     assert heads["BRIEF: memory audit queued"]["supersedes"] == 0
     # NOTHING was settled by the fold: the superseded brief is still the operator's to clear
-    assert await unread_count(p, OPERATOR_ADDR, lease_secs=0) == 3
+    assert await unread_count(p, OPERATOR_ADDR, reader_agent=OPERATOR_ADDR, lease_secs=0) == 3
 
 
 async def test_replying_to_your_own_lateral_message_routes_onward(actions: Actions) -> None:
@@ -236,7 +236,7 @@ async def test_replying_to_your_own_lateral_message_routes_onward(actions: Actio
     follow = await send_message(p, from_agent="agent:a", from_project="decepticons",
                                 body="second volley, same thread", reply_to=ask["id"])
     assert follow["to"] == "heinrich" and follow["thread_id"] == ask["id"]
-    assert await unread_count(p, "heinrich", lease_secs=0) == 2
+    assert await unread_count(p, "heinrich", reader_agent="agent:h", lease_secs=0) == 2
 
 
 async def test_live_swap_surfaces_before_a_re_mount(actions: Actions) -> None:
