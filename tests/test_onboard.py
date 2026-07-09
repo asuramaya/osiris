@@ -15,6 +15,7 @@ from src.orchestrator.onboard import (
     OSIRIS_MCP_URL,
     InvalidConfigError,
     merge_mcp,
+    merge_settings,
     onboard,
 )
 
@@ -96,6 +97,29 @@ def test_dry_run_writes_nothing(tmp_path: Path) -> None:
     assert not (repo / ".mcp.json").exists()
     assert not (repo / ".claude").exists()
     assert [c.status for c in result["changes"]] == ["would-create", "would-create"]
+
+
+def test_anchor_installs_the_pretooluse_mount_hook(tmp_path: Path) -> None:
+    """--anchor wires the PreToolUse durable-anchor hook, matched to mcp__osiris__mount, beside
+    the whisper — idempotent, and it does not clobber a foreign PreToolUse hook."""
+    repo = tmp_path / "fleet"
+    (repo / ".claude").mkdir(parents=True)
+    prior = {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+        {"type": "command", "command": "/foreign/guard.sh"}]}]}}
+    (repo / ".claude" / "settings.json").write_text(json.dumps(prior))
+
+    onboard(repo, whisper=True, anchor=True, osiris_home=tmp_path)
+    settings = _read(repo / ".claude" / "settings.json")
+
+    pre = settings["hooks"]["PreToolUse"]
+    # the foreign guard survives; ours is added with the mount matcher
+    assert any(g.get("matcher") == "Bash" for g in pre)
+    ours = next(g for g in pre if g.get("matcher") == "mcp__osiris__mount")
+    assert "osiris_mount_anchor.py" in ours["hooks"][0]["command"]
+    # the whisper landed too (SessionStart), and a re-run changes nothing
+    assert settings["hooks"]["SessionStart"]
+    _, changed = merge_settings(settings, tmp_path, whisper=True, anchor=True)
+    assert changed is False
 
 
 def test_settings_merge_preserves_other_keys(tmp_path: Path) -> None:
