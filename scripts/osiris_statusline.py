@@ -63,23 +63,39 @@ async def _counts(
             await conn.execute(
                 "UPDATE agent_mounts SET last_seen=now(), "
                 "model=COALESCE(NULLIF($2,''), model) "
-                "WHERE job_dir LIKE '%/jobs/' || $1", session_id[:8], model_id)
+                "WHERE job_dir LIKE '%/jobs/' || $1 RETURNING agent_id",
+                session_id[:8], model_id)
+        # this session's agent id (for the reader-aware mail count) — the heartbeat row above
+        agent = await conn.fetchval(
+            "SELECT agent_id FROM agent_mounts WHERE job_dir LIKE '%/jobs/' || $1 "
+            "ORDER BY last_seen DESC LIMIT 1", session_id[:8]) if session_id else None
+        agent = agent or ""
+        # counts are PER-RECIPIENT now (migration 0021): desk = operator's own unread, mail =
+        # THIS agent's broadcasts+DMs unread, flight = a SIBLING's live lease on shared broadcasts.
         row = await conn.fetchrow(
             "SELECT "
-            " (SELECT count(*) FROM fleet_messages WHERE to_project='operator' "
-            "   AND read_at IS NULL AND (delivered_at IS NULL "
-            "   OR delivered_at < now() - make_interval(secs => $2))) AS desk, "
-            " (SELECT count(*) FROM fleet_messages WHERE to_project=$1 "
-            "   AND read_at IS NULL AND (delivered_at IS NULL "
-            "   OR delivered_at < now() - make_interval(secs => $2))) AS mail, "
-            " (SELECT count(*) FROM fleet_messages WHERE to_project=$1 "
-            "   AND read_at IS NULL AND delivered_at IS NOT NULL "
-            "   AND delivered_at >= now() - make_interval(secs => $2)) AS flight, "
+            " (SELECT count(*) FROM fleet_messages m WHERE m.to_project='operator' "
+            "   AND m.to_agent IS NULL AND m.read_at IS NULL "
+            "   AND NOT EXISTS(SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
+            "     AND r.agent_id='operator' AND r.read_at IS NOT NULL) "
+            "   AND NOT EXISTS(SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
+            "     AND r.agent_id='operator' AND r.delivered_at >= now() "
+            "       - make_interval(secs => $2))) AS desk, "
+            " (SELECT count(*) FROM fleet_messages m LEFT JOIN message_recipients r "
+            "   ON r.message_id=m.id AND r.agent_id=$3 "
+            "   WHERE ((m.to_agent=$3) OR (m.to_project=$1 AND m.to_agent IS NULL)) "
+            "   AND m.read_at IS NULL AND r.read_at IS NULL "
+            "   AND (r.delivered_at IS NULL "
+            "     OR r.delivered_at < now() - make_interval(secs => $2))) AS mail, "
+            " (SELECT count(*) FROM fleet_messages m JOIN message_recipients r "
+            "   ON r.message_id=m.id WHERE m.to_project=$1 AND m.to_agent IS NULL "
+            "   AND r.agent_id <> $3 AND r.read_at IS NULL AND r.delivered_at IS NOT NULL "
+            "   AND r.delivered_at >= now() - make_interval(secs => $2)) AS flight, "
             " (SELECT count(*) FROM agent_mounts "
             "   WHERE last_seen > now() - interval '15 minutes') AS live, "
             " (SELECT count(*) FROM agent_wakes "
             "   WHERE woke_at > now() - interval '1 hour') AS wakes",
-            project, LEASE_SECS)
+            project, LEASE_SECS, agent)
         return row["desk"], row["mail"], row["flight"], row["live"], row["wakes"]
     finally:
         await conn.close()

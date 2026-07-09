@@ -22,15 +22,27 @@ DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/
 LEASE_SECS = 900  # mirror osiris_mail_lease_secs — deliverable = unsettled + no live lease
 
 
-async def _deliverable(project: str) -> int:
+async def _deliverable(project: str, session_id: str) -> int:
+    """Deliverable mail for THIS session's agent — mirrors mailbox.unread_count exactly (the
+    per-recipient model, migration 0021): broadcasts to its project + DMs to it, unsettled by
+    IT and not under ITS live lease, honoring the legacy per-message settle. The agent id is
+    resolved from the session (its durable mount row); an unmounted session has no inbox → 0."""
     import asyncpg
 
     conn = await asyncpg.connect(DSN, timeout=1.0)
     try:
+        agent = await conn.fetchval(
+            "SELECT agent_id FROM agent_mounts WHERE job_dir LIKE '%/jobs/' || $1 "
+            "ORDER BY last_seen DESC LIMIT 1", (session_id or "")[:8])
+        if not agent:
+            return 0
         return await conn.fetchval(  # type: ignore[no-any-return]
-            "SELECT count(*) FROM fleet_messages WHERE to_project=$1 AND read_at IS NULL "
-            "AND (delivered_at IS NULL OR delivered_at < now() - make_interval(secs => $2))",
-            project, LEASE_SECS)
+            "SELECT count(*) FROM fleet_messages m "
+            "LEFT JOIN message_recipients r ON r.message_id=m.id AND r.agent_id=$1 "
+            "WHERE ((m.to_agent=$1) OR (m.to_project=$2 AND m.to_agent IS NULL)) "
+            "AND m.read_at IS NULL AND r.read_at IS NULL "
+            "AND (r.delivered_at IS NULL OR r.delivered_at < now() - make_interval(secs => $3))",
+            agent, project, LEASE_SECS)
     finally:
         await conn.close()
 
@@ -44,8 +56,9 @@ def main() -> None:
         return  # we already continued once this turn — never loop on unsettleable mail
     cwd = payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     project = Path(cwd).name
+    session_id = payload.get("session_id") or ""
     try:
-        n = asyncio.run(asyncio.wait_for(_deliverable(project), timeout=1.5))
+        n = asyncio.run(asyncio.wait_for(_deliverable(project, session_id), timeout=1.5))
     except Exception:  # noqa: BLE001 — graph down = allow the stop; the chrome still shows it
         return
     if n:
