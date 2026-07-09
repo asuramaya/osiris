@@ -144,27 +144,38 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     a hit tells you WHY it surfaced. Every call lands in search_log: the zero-hit rate is the
     objective tripwire for unparking embeddings; a memory system that doesn't measure its own
     recall failures ends up mostly fart and certain it isn't."""
-    q = str(args.get("q", "")).strip()
-    limit = min(int(args.get("limit") or 15), 50)
+    q = str(args.get("q", "")).strip()[:300]  # a 50KB paste is not a query
+    limit = max(1, min(int(args.get("limit") or 15), 50))  # a negative limit is a PG error
     caller = str(args.get("caller") or "") or None
     if not q:
         return {"hits": [], "note": "pass q — words, phrases, or \"quoted phrases\""}
+    # stopword-only / punctuation-only queries parse to an EMPTY tsquery: zero hits by
+    # construction, not a recall failure — returning early keeps them OUT of the misses log
+    # (they would poison the exact telemetry the embeddings tripwire reads).
+    if not await pool.fetchval("SELECT websearch_to_tsquery('english', $1)::text", q):
+        return {"hits": [], "q": q,
+                "note": "query is all stopwords/punctuation — nothing to match (not logged)"}
+    # rank inside `cand`, headline ONLY the surviving rows (`top`): ts_headline is the
+    # expensive part and a broad query can match thousands of candidates. ts_rank
+    # normalization 1 divides by 1+log(doc length) so a long rationale can't outrank a
+    # short summary on term frequency alone.
     rows = await pool.fetch(
-        "WITH tq AS (SELECT websearch_to_tsquery('english', $1) AS v) "
-        "SELECT * FROM ("
+        "WITH tq AS (SELECT websearch_to_tsquery('english', $1) AS v), "
+        "cand AS ("
         "  SELECT DISTINCT ON (o.id) o.id, o.type, o.canonical, a.name AS field, "
-        "   a.source_id, a.evidence_class, a.observed_at, "
-        "   ts_headline('english', a.value #>> '{}', tq.v, "
-        "               'MaxWords=20, MinWords=8, MaxFragments=1') AS snippet, "
-        "   (ts_rank(to_tsvector('english', a.value #>> '{}'), tq.v) * " + _GRADE_W + " * "
+        "   a.value #>> '{}' AS text, a.source_id, a.evidence_class, a.observed_at, "
+        "   (ts_rank(to_tsvector('english', a.value #>> '{}'), tq.v, 1) * " + _GRADE_W + " * "
         "    (1.0 / (1.0 + EXTRACT(epoch FROM (now() - a.observed_at)) / 7776000.0)))::real "
         "     AS rank "
         "  FROM current_assertions a JOIN objects o ON o.id = a.object_id "
         "   AND o.status = 'active', tq "
         "  WHERE a.name IN ('name','summary','rationale') "
         "    AND to_tsvector('english', a.value #>> '{}') @@ tq.v "
-        "  ORDER BY o.id, rank DESC"
-        ") ranked ORDER BY rank DESC LIMIT $2", q, limit)
+        "  ORDER BY o.id, rank DESC), "
+        "top AS (SELECT * FROM cand ORDER BY rank DESC LIMIT $2) "
+        "SELECT top.*, ts_headline('english', top.text, tq.v, "
+        "         'MaxWords=20, MinWords=8, MaxFragments=1') AS snippet "
+        "FROM top, tq ORDER BY top.rank DESC", q, limit)
     hits = [
         {"id": str(r["id"]), "type": r["type"], "canonical": r["canonical"],
          "field": r["field"], "snippet": r["snippet"], "source": r["source_id"],
@@ -175,6 +186,9 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     await pool.execute(
         "INSERT INTO search_log (query, caller, hits, top_rank) VALUES ($1,$2,$3,$4)",
         q, caller, len(hits), (hits[0]["rank"] if hits else None))
+    # opportunistic retention: telemetry keeps 90 days (indexed delete, usually 0 rows)
+    await pool.execute(
+        "DELETE FROM search_log WHERE searched_at < now() - interval '90 days'")
     return {"hits": hits, "q": q,
             **({"note": "no hits — logged; the zero-hit rate is watched"} if not hits else {})}
 

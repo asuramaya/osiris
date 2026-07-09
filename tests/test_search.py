@@ -88,3 +88,38 @@ async def test_one_row_per_object_best_witness(actions: Actions) -> None:
     out = await _search(actions, "desk fold")
     assert len(out["hits"]) == 1
     assert out["hits"][0]["source"] == "agent:strong"
+
+
+async def test_hardening_stopwords_never_poison_the_misses_log(actions: Actions) -> None:
+    """'the of and' parses to an EMPTY tsquery — zero hits by construction, not a recall
+    failure. It must return a note and stay OUT of search_log (audit finding #4)."""
+    out = await _search(actions, "the of and")
+    assert out["hits"] == [] and "stopwords" in out["note"]
+    assert await actions.pool.fetchval("SELECT count(*) FROM search_log") == 0
+
+
+async def test_hardening_limit_and_length_clamps(actions: Actions) -> None:
+    """limit=-5 was a PG error; a 50KB paste is not a query (audit findings #2/#3)."""
+    await _decision(actions, "decision:c", "clamp the inputs",
+                    "agent:a", EvidenceClass.SELF_DECLARED.value)
+    spec = {"op": "function", "name": "search", "args": {"q": "clamp inputs", "limit": -5}}
+    out = (await run_spec(actions.pool, spec, None, name="search"))["items"]
+    assert len(out["hits"]) == 1  # clamped to >=1, no error
+    long_q = "clamp " * 200  # ~1.2KB → truncated to 300 chars, still searches
+    out2 = await _search(actions, long_q)
+    assert len(out2["hits"]) == 1
+    logged = await actions.pool.fetchval(
+        "SELECT max(length(query)) FROM search_log")
+    assert logged <= 300  # the log can't be ballooned by paste-bombs
+
+
+async def test_hardening_log_retention_prunes_ancient_rows(actions: Actions) -> None:
+    """search_log keeps 90 days — the telemetry must not grow forever (audit finding #5)."""
+    await actions.pool.execute(
+        "INSERT INTO search_log (query, hits, searched_at) "
+        "VALUES ('ancient', 0, now() - interval '200 days')")
+    await _decision(actions, "decision:r", "retention works",
+                    "agent:a", EvidenceClass.SELF_DECLARED.value)
+    await _search(actions, "retention")
+    rows = await actions.pool.fetch("SELECT query FROM search_log ORDER BY id")
+    assert [r["query"] for r in rows] == ["retention"]  # the ancient row is gone
