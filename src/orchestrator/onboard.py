@@ -139,7 +139,11 @@ def merge_settings(
     death rite's sweep ring, spawn=SubagentStart/Stop announcements. Returns (result,
     changed)."""
     doc: dict[str, Any] = dict(existing) if existing else {}
-    entry = {"type": "command", "command": _statusline_command(osiris_home), "padding": 0}
+    # refreshInterval re-runs the chrome for PARKED sessions too — without it the statusline
+    # only renders on turns, so a parked agent's mail badge reads stale until the operator
+    # takes a turn with it (the Anubis-has-mail-and-nobody-knows complaint, 2026-07-10).
+    entry = {"type": "command", "command": _statusline_command(osiris_home), "padding": 0,
+             "refreshInterval": 10}
     changed = doc.get("statusLine") != entry
     doc["statusLine"] = entry
     py = osiris_home / ".venv" / "bin" / "python"

@@ -335,3 +335,70 @@ async def test_atomic_context_shares_one_transaction(actions: Actions) -> None:
         " WHERE a.object_id=o.id AND a.name='summary') AS summary "
         "FROM objects o WHERE o.canonical='decision:atomic-probe'")
     assert row is not None and row["summary"] == "committed together"
+
+
+# --- references: the fleet can finally cite (obligation ecc8d58e, Soundwave VI) ----------
+
+async def test_ingest_reference_mints_a_citable_node_with_first_class_caveats(
+        actions: Actions) -> None:
+    """A read becomes a Reference node — caveats live in their OWN property, never folded
+    into body ('but only under X' buried in prose is a caveat lost)."""
+    from src.orchestrator.capture import ingest_reference
+
+    ref, canon = await ingest_reference(
+        actions, "Attention Is All You Need",
+        source_url="https://arxiv.org/abs/1706.03762", vendor="arxiv",
+        body="Transformer architecture: attention replaces recurrence entirely.",
+        caveats="Results are machine-translation only; scaling behavior unstated.",
+        source="agent:test-i")
+    assert canon == "ref:attention-is-all-you-need"
+    row = await actions.pool.fetchrow(
+        "SELECT type, canonical FROM objects WHERE id=$1", ref)
+    assert row["type"] == "Reference" and row["canonical"] == canon
+    props = await _props(actions.pool, ref)
+    assert props["caveats"].startswith("Results are machine-translation only")
+    assert "machine-translation" not in props["body"]  # separate, not folded
+
+    # idempotent on the title slug: a re-ingest ENRICHES the same node, no twin
+    ref2, _ = await ingest_reference(
+        actions, "Attention Is All You Need", vendor="arxiv", source="agent:test-i")
+    assert ref2 == ref
+
+
+async def test_record_decision_grounds_mint_grounded_by_edges_at_birth(
+        actions: Actions) -> None:
+    from src.orchestrator.capture import ingest_reference
+
+    ref, _ = await ingest_reference(actions, "The RFM theorem", vendor="arxiv",
+                                    caveats="holds only for stationary distributions",
+                                    source="agent:test-i")
+    d = await record_decision(actions, "Adopt RFM-based scoring", kind="choice",
+                              grounds=[ref], source="agent:test-i")
+    edges = await actions.pool.fetch(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='grounded_by'", d)
+    assert [e["to_id"] for e in edges] == [ref]
+    # idempotent re-capture: no duplicate citation edge
+    await record_decision(actions, "Adopt RFM-based scoring", kind="choice",
+                          grounds=[ref], source="agent:test-i")
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='grounded_by'", d)
+    assert n == 1
+
+
+async def test_ingest_reference_cites_wires_paper_lineage(actions: Actions) -> None:
+    """A literature TREE is walkable, not re-derived: cites edges between References."""
+    from src.orchestrator.capture import ingest_reference
+
+    root, _ = await ingest_reference(actions, "Attention Is All You Need",
+                                     vendor="arxiv", source="agent:test-i")
+    child, _ = await ingest_reference(actions, "Scaling Laws for Neural Language Models",
+                                      vendor="arxiv", cites=[root], source="agent:test-i")
+    edges = await actions.pool.fetch(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='cites'", child)
+    assert [e["to_id"] for e in edges] == [root]
+    # idempotent re-ingest: no duplicate edge
+    await ingest_reference(actions, "Scaling Laws for Neural Language Models",
+                           cites=[root], source="agent:test-i")
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='cites'", child)
+    assert n == 1

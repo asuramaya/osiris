@@ -64,7 +64,8 @@ async def coinvestment_ties(
         op_degree AS (  -- how many DISTINCT companies each operator is wired into
             SELECT s.op,
                    (SELECT value #>> '{}' FROM current_assertions a
-                    WHERE a.object_id = s.op AND a.name = 'name' LIMIT 1) AS opname,
+                    WHERE a.object_id = s.op AND a.name = 'name'
+                    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS opname,
                    count(DISTINCT rf2.to_id) AS deg
             FROM seed_ops s
             JOIN links ol2 ON ol2.to_id = s.op AND ol2.type IN ('officer', 'director')
@@ -77,11 +78,13 @@ async def coinvestment_ties(
         )
         SELECT tgt.id,
                (SELECT value #>> '{}' FROM current_assertions a
-                WHERE a.object_id = tgt.id AND a.name = 'name' LIMIT 1) AS company,
+                WHERE a.object_id = tgt.id AND a.name = 'name'
+                ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS company,
                count(DISTINCT ops.op) AS shared,
                array_agg(DISTINCT (
                    SELECT value #>> '{}' FROM current_assertions a
-                   WHERE a.object_id = ops.op AND a.name = 'name' LIMIT 1
+                   WHERE a.object_id = ops.op AND a.name = 'name'
+                   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1
                )) AS operators
         FROM ops
         JOIN links ol3 ON ol3.to_id = ops.op AND ol3.type IN ('officer', 'director')

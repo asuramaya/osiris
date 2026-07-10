@@ -34,7 +34,8 @@ async def entity_dossier(pool: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, 
 
     name = await pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions "
-        "WHERE object_id=$1 AND name='name' ORDER BY confidence DESC NULLS LAST LIMIT 1",
+        "WHERE object_id=$1 AND name='name' "
+        "ORDER BY confidence DESC NULLS LAST, observed_at DESC LIMIT 1",
         object_id,
     )
 
@@ -63,7 +64,7 @@ async def entity_dossier(pool: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, 
     _name = (
         "(SELECT value #>> '{}' FROM current_assertions a "
         " WHERE a.object_id=n.id AND a.name='name' "
-        " ORDER BY confidence DESC NULLS LAST LIMIT 1)"
+        " ORDER BY confidence DESC NULLS LAST, observed_at DESC LIMIT 1)"
     )
     seen: set[tuple[str, str, uuid.UUID]] = set()
     rels: list[dict[str, Any]] = []

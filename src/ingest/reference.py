@@ -278,14 +278,16 @@ async def mine_mentions(
     conf, now = confidence_for(ec), datetime.now(UTC)
     ents = await pool.fetch(
         "SELECT o.id, (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='name' LIMIT 1) AS name "
+        "  WHERE a.object_id=o.id AND a.name='name' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS name "
         "FROM objects o WHERE o.status='active' "
         "  AND o.type NOT IN ('Reference','Commit','Thread','SoftwareProject') "
         "  AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
         "    AND a.name='name' AND length(a.value #>> '{}') >= $1)", min_name_len)
     docs = await pool.fetch(
         "SELECT o.id, (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='body' LIMIT 1) AS body "
+        "  WHERE a.object_id=o.id AND a.name='body' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS body "
         "FROM objects o WHERE o.status='active' AND EXISTS (SELECT 1 FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='body')")
     named = [(e["id"], e["name"]) for e in ents if e["name"]]

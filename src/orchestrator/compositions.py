@@ -227,17 +227,23 @@ async def _fn_canon(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[st
     refs = await pool.fetch(
         "SELECT o.canonical AS canonical, "
         " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='name') AS title, "
+        "  WHERE a.object_id=o.id AND a.name='name' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS title, "
         " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='vendor') AS vendor, "
+        "  WHERE a.object_id=o.id AND a.name='vendor' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS vendor, "
         " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='topic') AS topic, "
+        "  WHERE a.object_id=o.id AND a.name='topic' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS topic, "
         " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='grounds') AS grounds, "
+        "  WHERE a.object_id=o.id AND a.name='grounds' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS grounds, "
         " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='source_url') AS source, "
+        "  WHERE a.object_id=o.id AND a.name='source_url' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS source, "
         " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='body') AS body "
+        "  WHERE a.object_id=o.id AND a.name='body' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS body "
         "FROM objects o WHERE o.type='Reference' AND o.status='active'"
     )
     # scope: the shared design canon (vendor-tagged) is visible to everyone; UNVENDORED project
@@ -297,7 +303,8 @@ async def _family_repos(pool: asyncpg.Pool, args: dict[str, Any]) -> dict[uuid.U
     want = {str(w).lower() for w in (args.get("repos") or [])}
     repos = await pool.fetch(
         "SELECT o.id, (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='name' LIMIT 1) AS name "
+        "  WHERE a.object_id=o.id AND a.name='name' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS name "
         "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active'")
     have_files = {r["repo"] for r in await pool.fetch(
         "SELECT DISTINCT l.to_id AS repo FROM links l "
@@ -354,11 +361,14 @@ async def _fn_family_drift(
     rows = await pool.fetch(
         "SELECT l.to_id AS repo, "
         " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=f.id AND a.name='role' LIMIT 1) AS role, "
+        "  WHERE a.object_id=f.id AND a.name='role' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS role, "
         " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=f.id AND a.name='content_hash' LIMIT 1) AS h, "
+        "  WHERE a.object_id=f.id AND a.name='content_hash' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS h, "
         " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=f.id AND a.name='license_type' LIMIT 1) AS lt "
+        "  WHERE a.object_id=f.id AND a.name='license_type' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS lt "
         "FROM links l JOIN objects f ON f.id=l.from_id AND f.type='File' "
         "WHERE l.type='in_repo' AND l.to_id = ANY($1::uuid[])", list(rmap))
     # role -> repo -> [hashes]; a repo may have several files of one role (e.g. CI workflows),
@@ -405,27 +415,33 @@ async def _fn_project(
     if repo is None:
         return {"Project": [{"note": "focus a repo, or pass args.repo = its name"}]}
     name = await pool.fetchval(
-        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='name' LIMIT 1",
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='name' "
+        "ORDER BY confidence DESC, observed_at DESC LIMIT 1",
         repo) or "(project)"
     commits = await pool.fetch(
         "SELECT (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=c.id "
-        "        AND a.name='summary' LIMIT 1) AS summary, "
+        "        AND a.name='summary' "
+        "        ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
         " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=c.id "
-        "        AND a.name='authored_date' LIMIT 1) AS date "
+        "        AND a.name='authored_date' "
+        "        ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS date "
         "FROM links l JOIN objects c ON c.id=l.from_id AND c.type='Commit' "
         "WHERE l.to_id=$1 AND l.type='in_repo' ORDER BY date DESC NULLS LAST LIMIT 15", repo)
     decisions = await pool.fetch(
         "SELECT DISTINCT ON (d.id) "
         " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=d.id "
-        "  AND a.name='summary' LIMIT 1) AS summary, "
+        "  AND a.name='summary' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
         " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=d.id "
-        "  AND a.name='kind' LIMIT 1) AS kind "
+        "  AND a.name='kind' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind "
         "FROM objects d JOIN links dl ON dl.from_id=d.id AND dl.type='decided_in' "
         "JOIN links rl ON rl.from_id=dl.to_id AND rl.type='in_repo' AND rl.to_id=$1 "
         "WHERE d.type='Decision' LIMIT 20", repo)
     roles = await pool.fetch(
         "SELECT DISTINCT (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=f.id "
-        "        AND a.name='role' LIMIT 1) AS role "
+        "        AND a.name='role' "
+        "        ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS role "
         "FROM links l JOIN objects f ON f.id=l.from_id AND f.type='File' "
         "WHERE l.to_id=$1 AND l.type='in_repo'", repo)
     role_list = sorted(r["role"] for r in roles if r["role"])
@@ -461,7 +477,8 @@ async def _fn_portfolio(
     want = {str(w).lower() for w in (args.get("repos") or [])}
     rmap = {r["id"]: r["name"] for r in await pool.fetch(
         "SELECT o.id, (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='name' LIMIT 1) AS name "
+        "  WHERE a.object_id=o.id AND a.name='name' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS name "
         "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active'")
         if r["name"] and (not want or r["name"].lower() in want)}
     if not rmap:
@@ -481,9 +498,11 @@ async def _fn_portfolio(
     for r in await pool.fetch(
         "SELECT l.to_id AS repo, "
         " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='summary' LIMIT 1) AS s, "
+        "  AND a.name='summary' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS s, "
         " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='rationale' LIMIT 1) AS r "
+        "  AND a.name='rationale' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS r "
         "FROM links l JOIN objects o ON o.id=l.from_id AND o.type='Commit' "
         "WHERE l.type='in_repo' AND l.to_id = ANY($1::uuid[])", list(rmap)):
         if r["repo"] not in tf:

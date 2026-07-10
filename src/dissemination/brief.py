@@ -22,7 +22,8 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 
 _PROP = (
     "(SELECT value #>> '{{}}' FROM current_assertions a "
-    " WHERE a.object_id = o.id AND a.name = '{name}' LIMIT 1)"
+    " WHERE a.object_id = o.id AND a.name = '{name}' "
+    " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)"
 )
 
 

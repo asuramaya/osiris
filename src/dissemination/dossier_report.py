@@ -56,7 +56,8 @@ async def _crypto_section(
     cps = await pool.fetch(
         "SELECT o.canonical, "
         "  (SELECT value #>> '{}' FROM current_assertions "
-        "   WHERE object_id=o.id AND name='contract_name' LIMIT 1) AS cname, "
+        "   WHERE object_id=o.id AND name='contract_name' "
+        "   ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS cname, "
         "  l.properties AS props "
         "FROM links l JOIN objects o ON o.id=l.to_id AND o.status='active' "
         "WHERE l.from_id = ANY($1::uuid[]) AND l.type='transacted_with' "
@@ -91,10 +92,14 @@ async def _crypto_section(
 
 
 def _sub(prop: str, ref: str) -> str:
-    """A correlated subselect for a property value (keeps the inline SQL readable)."""
+    """A correlated subselect for a property value (keeps the inline SQL readable).
+    Winner-ordered: multi-source properties return the GRADE winner, and never more
+    than one row (a bare scalar subquery is a CardinalityViolation the day a second
+    source describes the object — the onboarding-day outage class)."""
     return (
         f"(SELECT value #>> '{{}}' FROM current_assertions "
-        f"WHERE object_id={ref} AND name='{prop}')"
+        f"WHERE object_id={ref} AND name='{prop}' "
+        f"ORDER BY confidence DESC, observed_at DESC LIMIT 1)"
     )
 
 
@@ -104,7 +109,8 @@ async def build_dossier_report(pool: asyncpg.Pool, object_id: uuid.UUID) -> str:
     header = await pool.fetchrow(
         "SELECT type, canonical, "
         "  (SELECT value #>> '{}' FROM current_assertions a "
-        "   WHERE a.object_id = o.id AND a.name='name' ORDER BY confidence DESC LIMIT 1) AS name "
+        "   WHERE a.object_id = o.id AND a.name='name' "
+        "   ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS name "
         "FROM objects o WHERE o.id = ANY($1::uuid[]) AND o.status='active' "
         "ORDER BY (SELECT count(*) FROM current_assertions x WHERE x.object_id=o.id) DESC LIMIT 1",
         cluster,
@@ -151,7 +157,7 @@ async def build_dossier_report(pool: asyncpg.Pool, object_id: uuid.UUID) -> str:
         ") "
         "SELECT w.cur AS pid, w.role, w.source_id, "
         "  (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=w.cur "
-        "   AND a.name='name' ORDER BY confidence DESC LIMIT 1) AS nm "
+        "   AND a.name='name' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS nm "
         "FROM walk w JOIN objects p ON p.id=w.cur AND p.type='Person' AND p.status='active' "
         "WHERE NOT EXISTS "
         "  (SELECT 1 FROM objects o2 WHERE o2.id=w.cur AND o2.merged_into IS NOT NULL)",

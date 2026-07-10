@@ -155,7 +155,7 @@ async def resolve_threads(
         " (SELECT a.value #>> '{}' FROM current_assertions a JOIN links l "
         "  ON l.to_id=a.object_id "
         "  WHERE l.from_id=o.id AND l.type='noted_in' AND a.name='authored_date' "
-        "  LIMIT 1) AS origin_date "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS origin_date "
         "FROM objects o WHERE o.type='Thread' "
         "AND (SELECT value #>> '{}' FROM winning_props(ARRAY[o.id]::uuid[]) "
         "     WHERE name='status') = 'open' "

@@ -354,7 +354,7 @@ async def screen_against_sanctions(
         "SELECT DISTINCT n.id, n.is_subject, o.canonical, "
         "  (SELECT value #>> '{}' FROM current_assertions "
         "   WHERE object_id=n.id AND name='address' "
-        "   ORDER BY confidence DESC LIMIT 1) AS addr, "
+        "   ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS addr, "
         "  EXISTS (SELECT 1 FROM current_assertions s "
         "          WHERE s.object_id=n.id AND s.source_id='opensanctions') AS sanctioned "
         "FROM nodes n JOIN objects o ON o.id=n.id AND o.status='active'",
@@ -369,7 +369,8 @@ async def screen_against_sanctions(
             subject_sanctioned = True
         holders = await pool.fetch(
             "SELECT (SELECT value #>> '{}' FROM current_assertions "
-            "        WHERE object_id=l.to_id AND name='name' LIMIT 1) AS nm "
+            "        WHERE object_id=l.to_id AND name='name' "
+            "        ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS nm "
             "FROM links l WHERE l.from_id=$1 AND l.type='controlled_by'",
             r["id"],
         )

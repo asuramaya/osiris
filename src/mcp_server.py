@@ -1017,13 +1017,17 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     rows = await pool.fetch(
         "SELECT o.canonical, "
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='source_model') AS model, "
+        "  AND a.name='source_model' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS model, "
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='project') AS project, "
+        "  AND a.name='project' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS project, "
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='spawn_depth') AS depth, "
+        "  AND a.name='spawn_depth' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS depth, "
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='last_active') AS last_active, "
+        "  AND a.name='last_active' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS last_active, "
         " (SELECT max(m.last_seen) FROM agent_mounts m WHERE m.agent_id=o.canonical) "
         "  AS mount_seen, "
         " (SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
@@ -1217,21 +1221,77 @@ async def bootstrap(cwd: str) -> dict[str, Any]:
 @mcp.tool()
 async def record_decision(
     summary: str, kind: str = "ruling", rationale: str | None = None,
-    repo: str | None = None, subagent_id: str | None = None,
+    repo: str | None = None, grounds: list[str] | None = None,
+    subagent_id: str | None = None,
     subagent_type: str | None = None, ctx: Context | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Write back a DECISION you made this session — a ruling, an architecture pivot, a
     deliberate rejection — so the WHY becomes durable graph memory the next session inherits
     (don't leave it to be regex-mined out of some future commit; the epochal ones never land
     in a commit at all). `kind`: ruling|reset|override|rejection|choice|decision. `rationale`
-    = the reasoning; `repo` = a SoftwareProject name to file it under. Renders in the
-    `decision-log` composition beside mined decisions, graded SELF_DECLARED (higher trust).
-    Attributed to you if you mount()ed. Idempotent on the summary."""
+    = the reasoning; `repo` = a SoftwareProject name to file it under. `grounds` cites the
+    References the decision rests on (ids, ref:<slug> canonicals, or titles — ingest them
+    first with ingest_reference): grounded_by edges minted at birth, so the WHY carries its
+    citations. Renders in the `decision-log` composition beside mined decisions, graded
+    SELF_DECLARED (higher trust). Attributed to you if you mount()ed. Idempotent on the
+    summary."""
+    pool = await _pool_get()
+    gids: list[uuid.UUID] = []
+    missing: list[str] = []
+    for g in grounds or []:
+        rid = await _resolve(pool, g)
+        (gids.append(rid) if rid is not None else missing.append(g))
     d = await capture.record_decision(
-        Actions(await _pool_get()), summary, kind=kind, rationale=rationale, repo=repo,
+        Actions(pool), summary, kind=kind, rationale=rationale, repo=repo,
+        source=await _actor_for(ctx, subagent_id, subagent_type), grounds=gids,
+    )
+    out: dict[str, Any] = {"id": str(d), "kind": kind, "summary": summary}
+    if gids:
+        out["grounded_by"] = len(gids)
+    if missing:
+        out["unresolved_grounds"] = missing
+        out["note"] = ("unresolved grounds were SKIPPED — ingest_reference them first, "
+                       "then re-run record_decision (idempotent) to attach the edges")
+    return out
+
+
+@mcp.tool()
+async def ingest_reference(
+    title: str, source_url: str | None = None, vendor: str | None = None,
+    body: str | None = None, caveats: str | None = None, repo: str | None = None,
+    cites: list[str] | None = None,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Turn something you READ into a first-class Reference node — a paper, a vendor doc,
+    a spec — so it can be FOUND by search, cited by record_decision(grounds=[...]), and
+    inherited, instead of being narrated into free text and lost. `title` is the citation
+    key (idempotent on its slug — re-ingesting enriches the same node). `vendor` = who
+    wrote it (arxiv author, 'anthropic', 'palantir'…); `body` = what it claims, in your
+    words. `caveats` is FIRST-CLASS and separate from body: the 'but only under X' that
+    dies when buried in prose — if the source tightens rather than confirms, say it HERE.
+    `cites` wires paper-to-paper lineage (ids, ref:<slug> canonicals, or titles of already-
+    ingested References) so a literature tree is walkable instead of re-derived per session.
+    Graded SELF_DECLARED (your testimony of what you read). Returns the id + canonical
+    to cite."""
+    pool = await _pool_get()
+    cids: list[uuid.UUID] = []
+    missing: list[str] = []
+    for c in cites or []:
+        rid = await _resolve(pool, c)
+        (cids.append(rid) if rid is not None else missing.append(c))
+    ref, canon = await capture.ingest_reference(
+        Actions(pool), title, source_url=source_url, vendor=vendor,
+        body=body, caveats=caveats, repo=repo, cites=cids,
         source=await _actor_for(ctx, subagent_id, subagent_type),
     )
-    return {"id": str(d), "kind": kind, "summary": summary}
+    out: dict[str, Any] = {"id": str(ref), "canonical": canon,
+                           "note": "cite it: record_decision(..., grounds=['" + canon + "'])"}
+    if missing:
+        out["unresolved_cites"] = missing
+        out["cites_note"] = ("unresolved cites SKIPPED — ingest_reference each cited work "
+                             "first, then re-ingest this title (idempotent) to wire the edges")
+    return out
 
 
 @mcp.tool()

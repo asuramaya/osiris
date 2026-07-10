@@ -75,7 +75,8 @@ async def _roster(actions: Actions) -> list[dict[str, Any]]:
         " (SELECT m.model FROM agent_mounts m WHERE m.agent_id=o.canonical "
         "   ORDER BY m.last_seen DESC LIMIT 1) AS live_model, "
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='handle' LIMIT 1) AS handle "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1"
+        " ) AS handle "
         "FROM objects o WHERE o.type='Agent' ORDER BY project NULLS FIRST, o.canonical")
     from src.orchestrator.agents import seat_label
     out = []

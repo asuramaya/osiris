@@ -906,7 +906,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 _LABEL_PROPS = ("name", "title", "summary", "subject")
 _OBJ_LABEL = "COALESCE(" + ", ".join(
     f"(SELECT value #>> '{{}}' FROM current_assertions a "
-    f"WHERE a.object_id=o.id AND a.name='{_p}' LIMIT 1)" for _p in _LABEL_PROPS
+    f"WHERE a.object_id=o.id AND a.name='{_p}' "
+    f"ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)" for _p in _LABEL_PROPS
 ) + ", o.canonical)"
 
 

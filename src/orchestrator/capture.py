@@ -94,6 +94,7 @@ async def link_repo(
 async def record_decision(
     actions: Actions, summary: str, *, kind: str = "ruling",
     rationale: str | None = None, repo: str | None = None, source: str = _SOURCE,
+    grounds: list[uuid.UUID] | None = None,
 ) -> uuid.UUID:
     """Capture a decision at the moment it is made — the WHY, declared, not mined.
 
@@ -103,7 +104,9 @@ async def record_decision(
     decision under a SoftwareProject. `source` is the attributing actor — the static
     `session` for a lone operator, or `agent:<session>` for a fleet member so provenance
     records WHICH instance decided (still SELF_DECLARED, still the high-trust channel).
-    Idempotent on the summary hash. Returns the id."""
+    `grounds` cites the Reference objects the decision rests on — `grounded_by` edges
+    minted AT BIRTH, so the citation carries the decider's grade instead of being
+    reconstructed later from prose. Idempotent on the summary hash. Returns the id."""
     observed = datetime.now(UTC)
     # ONE transaction: the Decision, its summary/kind/rationale, and the repo link either all
     # land or none do — a process death mid-sequence can no longer leave a summary-less husk.
@@ -118,7 +121,61 @@ async def record_decision(
                                     evidence_class=_EC)
         if repo:
             await link_repo(a, d, repo, observed, source=source, evidence_class=_EC)
+        for ref in grounds or []:
+            exists = await a.pool.fetchval(
+                "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='grounded_by'",
+                d, ref)
+            if not exists:  # re-capture is a no-op, like link_repo
+                await a.create_link(d, ref, "grounded_by", source, observed, _CONF,
+                                    evidence_class=_EC)
     return d
+
+
+def _ref_slug(title: str) -> str:
+    """ref:<slug> — the SAME canonical scheme as the doc ingester (src/ingest/reference.py),
+    so an agent citing "Attention Is All You Need" and a later doc-ingest of the same title
+    find-or-create ONE node instead of twins."""
+    return "ref:" + re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+
+
+async def ingest_reference(
+    actions: Actions, title: str, *, source_url: str | None = None,
+    vendor: str | None = None, body: str | None = None, caveats: str | None = None,
+    repo: str | None = None, source: str = _SOURCE,
+    cites: list[uuid.UUID] | None = None,
+) -> tuple[uuid.UUID, str]:
+    """An agent turns something it READ into a first-class Reference node (Soundwave VI's
+    ask, obligation ecc8d58e): a paper, a vendor doc, a spec — findable by search, linkable
+    by `grounded_by`, instead of narrated into free text and lost.
+
+    `caveats` is deliberately its OWN property, never folded into `body`: "but only under
+    X" buried in prose is a caveat lost — a theorem that TIGHTENS rather than confirms must
+    survive as exactly that. `cites` wires paper→paper lineage (`cites` edges to other
+    Reference ids) so a literature tree is walkable, not re-derived. Graded SELF_DECLARED:
+    the agent testifying to what it read (the read is first-hand; the paper's CLAIMS keep
+    their own grade in `body`/`caveats` prose). Idempotent on the title slug. Returns
+    (id, canonical)."""
+    observed = datetime.now(UTC)
+    canon = _ref_slug(title)
+    async with actions.atomic() as a:
+        ref = await a.create_or_find_object("Reference", canon, source)
+        await a.assert_property(ref, "name", title, source, observed, _CONF,
+                                evidence_class=_EC)
+        for prop, value in (("source_url", source_url), ("vendor", vendor),
+                            ("body", body), ("caveats", caveats)):
+            if value:
+                await a.assert_property(ref, prop, value, source, observed, _CONF,
+                                        evidence_class=_EC)
+        if repo:
+            await link_repo(a, ref, repo, observed, source=source, evidence_class=_EC)
+        for cited in cites or []:
+            exists = await a.pool.fetchval(
+                "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='cites'",
+                ref, cited)
+            if not exists:
+                await a.create_link(ref, cited, "cites", source, observed, _CONF,
+                                    evidence_class=_EC)
+    return ref, canon
 
 
 async def open_thread(

@@ -158,7 +158,7 @@ async def find_person_merge_candidates(pool: asyncpg.Pool) -> int:
         "), plinks AS ("
         "  SELECT cwin.company, l.to_id AS person, "
         "    (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=l.to_id "
-        "     AND a.name='name' ORDER BY confidence DESC LIMIT 1) AS nm "
+        "     AND a.name='name' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS nm "
         "  FROM links l JOIN cwin ON cwin.raw=l.from_id "
         "  JOIN objects p ON p.id=l.to_id AND p.type='Person' AND p.status='active' "
         "  WHERE l.type IN ('officer','director','founded_by','manager')"
@@ -206,7 +206,7 @@ async def find_dev_identity_candidates(pool: asyncpg.Pool) -> int:
     rows = await pool.fetch(
         "SELECT o.id, "
         " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='name' ORDER BY confidence DESC LIMIT 1) AS name, "
+        "  AND a.name='name' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS name, "
         " array(SELECT DISTINCT value #>> '{}' FROM current_assertions a "
         "       WHERE a.object_id=o.id AND a.name='email') AS emails "
         "FROM objects o WHERE o.type='Person' AND o.status='active' AND o.canonical LIKE 'dev:%'")
@@ -454,7 +454,8 @@ async def resolve_cross_base(actions: Actions, *, min_len: int = 5) -> int:
         info = await pool.fetch(
             "SELECT o.id, o.canonical, o.status, "
             "  (SELECT value #>> '{}' FROM current_assertions a "
-            "   WHERE a.object_id=o.id AND a.name='name' LIMIT 1) AS nm, "
+            "   WHERE a.object_id=o.id AND a.name='name' "
+            "   ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS nm, "
             "  (SELECT count(*) FROM current_assertions a WHERE a.object_id=o.id) AS na "
             "FROM objects o WHERE o.id = ANY($1::uuid[])",
             list(members),
@@ -618,7 +619,8 @@ async def reclassify_mistyped_entities(actions: Actions, *, limit: int | None = 
     rows = await actions.pool.fetch(
         "SELECT o.id, "
         "  (SELECT value #>> '{}' FROM current_assertions a "
-        "   WHERE a.object_id=o.id AND a.name='name' ORDER BY confidence DESC LIMIT 1) AS nm "
+        "   WHERE a.object_id=o.id AND a.name='name' "
+        "   ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS nm "
         "FROM objects o WHERE o.type='Person' AND o.status='active'"
     )
     ts = datetime.now(UTC)
@@ -752,7 +754,7 @@ async def _network_identity(pool: asyncpg.Pool, object_id: uuid.UUID) -> list[uu
 async def _name_of(pool: asyncpg.Pool, oid: uuid.UUID) -> str | None:
     val: str | None = await pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='name' "
-        "ORDER BY confidence DESC LIMIT 1",
+        "ORDER BY confidence DESC, observed_at DESC LIMIT 1",
         oid,
     )
     return val
