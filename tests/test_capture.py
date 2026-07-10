@@ -115,6 +115,19 @@ async def test_resolve_thread_returns_none_when_nothing_matches(actions: Actions
     assert await resolve_thread(actions, "no such thread anywhere") is None
 
 
+async def test_short_id_ref_beats_a_summary_that_quotes_it(actions: Actions) -> None:
+    """The fleet quotes threads by short id INSIDE other summaries: resolving by '<short-id>'
+    must close the thread WITH that id, never the thread that mentions it (the 2026-07-10
+    mis-resolve: 'resolve 5c57f54d' closed the obligation whose summary cited 5c57f54d)."""
+    target = await open_thread(actions, "the campaign thread everyone refers to by id")
+    short = str(target)[:8]
+    quoter = await open_thread(
+        actions, f"a different duty that cites the campaign (thread {short}) in passing")
+    assert await resolve_thread(actions, short, because="done") == target
+    # the quoting thread is untouched — still resolvable by its own words
+    assert await resolve_thread(actions, "cites the campaign", because="also done") == quoter
+
+
 async def test_status_resolution_honors_grade_over_recency(actions: Actions) -> None:
     """A thread's status, on every read surface, is the WINNING assertion by evidence GRADE —
     not 'any source says open', not most-recent-wins. The miner opens a thread (DERIVED), a

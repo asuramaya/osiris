@@ -29,6 +29,7 @@ those render empty for a session decision — gracefully (verified in tests).
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
 from datetime import UTC, datetime
 
@@ -151,12 +152,22 @@ async def open_thread(
 
 
 async def _find_thread(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
-    """A Thread by UUID, or by summary substring (shortest summary wins — closest to the
-    query)."""
+    """A Thread by UUID, by short-id PREFIX, then by summary substring (shortest summary
+    wins — closest to the query). The prefix leg runs BEFORE summary text because the fleet
+    quotes threads by their 8-char short id INSIDE other summaries: '5c57f54d' must resolve
+    to thread 5c57f54d-…, never to whichever thread's summary happens to mention it (that
+    mis-resolve closed the wrong obligation on 2026-07-10)."""
     try:
         return uuid.UUID(ref)
     except (ValueError, AttributeError):
         pass
+    short = (ref or "").strip().lower()
+    if re.fullmatch(r"[0-9a-f]{8}[0-9a-f-]*", short):
+        tid = await pool.fetchval(
+            "SELECT id FROM objects WHERE type='Thread' AND status='active' "
+            "AND id::text LIKE $1 || '%' LIMIT 1", short)
+        if tid is not None:
+            return uuid.UUID(str(tid))
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT o.id FROM objects o JOIN current_assertions a ON a.object_id=o.id "
         "WHERE o.type='Thread' AND o.status='active' AND a.name='summary' "
