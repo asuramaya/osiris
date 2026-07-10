@@ -351,6 +351,32 @@ async def test_resolve_own_threads_skips_a_thread_with_a_resolved_winner(
     assert counts["resolved"] == 0
 
 
+async def test_multi_source_properties_do_not_kill_the_tick(actions: Actions) -> None:
+    """The onboarding-day outage (2026-07-10): a FLEET writes multi-source — a Thread whose
+    summary (or a SoftwareProject whose name) carries assertions from several sources made
+    the miner's bare scalar subqueries throw CardinalityViolation, killing EVERY sensing
+    tick for a day. Every per-(object,name) read takes the grade-then-recency winner now."""
+    now = datetime.now(UTC)
+    conf = confidence_for(EvidenceClass.SELF_DECLARED)
+    ec = EvidenceClass.SELF_DECLARED.value
+    t = await actions.create_or_find_object("Thread", "thread:many-voices", "agent:one")
+    for src in ("agent:one", "agent:two", "session-miner"):
+        await actions.assert_property(t, "summary", f"the shared duty (per {src})", src, now,
+                                      conf, evidence_class=ec)
+    await actions.assert_property(t, "status", "open", "agent:one", now, conf,
+                                  evidence_class=ec)
+    p = await actions.create_or_find_object("SoftwareProject", "repo:polyglot", "agent:one")
+    for src in ("agent:one", "agent:two"):
+        await actions.assert_property(p, "name", "polyglot", src, now, conf,
+                                      evidence_class=ec)
+    # both crashed before the fix; now they resolve winners and the tick lives
+    from src.ingest.sessions import _known_projects, _resolve_own_threads
+
+    assert "polyglot" in await _known_projects(actions.pool, exclude=None)
+    n = await _resolve_own_threads(actions, ["totally unrelated text"], now)
+    assert n == 0  # no match — the point is it RAN
+
+
 def test_extractor_instrument_transcripts_are_excluded(tmp_path: Path) -> None:
     """The miner must never mine its own instrument: each `claude -p` extraction call
     writes a transcript, and mining those would loop the extractor into itself forever."""

@@ -679,7 +679,8 @@ async def _resolve_own_threads(
     # carrying this miner's stale DERIVED 'open', must read as resolved and be left alone.
     own = await actions.pool.fetch(
         "SELECT o.id, (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='summary') AS summary "
+        "  WHERE a.object_id=o.id AND a.name='summary' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary "
         "FROM objects o WHERE o.type='Thread' AND o.status='active' "
         "AND (SELECT value #>> '{}' FROM winning_props(ARRAY[o.id]::uuid[]) "
         "     WHERE name='status') = 'open' "
@@ -717,7 +718,8 @@ async def _known_projects(pool: asyncpg.Pool, exclude: str | None) -> dict[str, 
     session's own repo. The candidate set for re-homing an item that names ANOTHER project."""
     rows = await pool.fetch(
         "SELECT (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "        AND a.name='name') AS name "
+        "        AND a.name='name' "
+        "        ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS name "
         "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active'")
     ex = (exclude or "").removeprefix("repo:").strip().lower()
     out: dict[str, str] = {}

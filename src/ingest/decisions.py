@@ -112,9 +112,11 @@ async def mine_decisions(
     rows = await pool.fetch(
         "SELECT o.id, "
         " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='rationale') AS body, "
+        "  WHERE a.object_id=o.id AND a.name='rationale' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS body, "
         " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='authored_date') AS date "
+        "  WHERE a.object_id=o.id AND a.name='authored_date' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS date "
         "FROM objects o WHERE o.type='Commit'"
     )
     # pass 1 — extract everything, then pick ONE keeper per dedup key: the EARLIEST commit's

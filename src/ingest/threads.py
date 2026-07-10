@@ -83,9 +83,11 @@ async def mine_threads(
     rows = await pool.fetch(
         "SELECT o.id, "
         " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='rationale') AS body, "
+        "  WHERE a.object_id=o.id AND a.name='rationale' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS body, "
         " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='authored_date') AS date "
+        "  WHERE a.object_id=o.id AND a.name='authored_date' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS date "
         "FROM objects o WHERE o.type='Commit'"
     )
     # create_link is a plain append — dedup the noted_in edge so a re-mine never inflates
@@ -148,7 +150,8 @@ async def resolve_threads(
     open_threads = await pool.fetch(
         "SELECT o.id, "
         " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='summary') AS summary, "
+        "  WHERE a.object_id=o.id AND a.name='summary' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
         " (SELECT a.value #>> '{}' FROM current_assertions a JOIN links l "
         "  ON l.to_id=a.object_id "
         "  WHERE l.from_id=o.id AND l.type='noted_in' AND a.name='authored_date' "
@@ -163,11 +166,14 @@ async def resolve_threads(
     commit_rows = await pool.fetch(
         "SELECT o.id, o.canonical, "
         " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='summary') AS summary, "
+        "  WHERE a.object_id=o.id AND a.name='summary' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
         " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='scope') AS scope, "
+        "  WHERE a.object_id=o.id AND a.name='scope' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS scope, "
         " (SELECT value #>> '{}' FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='authored_date') AS date "
+        "  WHERE a.object_id=o.id AND a.name='authored_date' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS date "
         "FROM objects o WHERE o.type='Commit'"
     )
     # oldest-first, so the first matching commit per thread is the one that actually closed it
