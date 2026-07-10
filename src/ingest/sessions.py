@@ -198,6 +198,28 @@ def latest_model(lines: list[str]) -> str | None:
     return models[-1] if models else None
 
 
+# the harness records a /model invocation VERBATIM in a user entry — the operator's own hand,
+# on the record. This is what separates a deliberate swap from a rug-pull (operator complaint,
+# 2026-07-10: "a rug pull ... vs a direct /model swap on my part is different").
+_MODEL_CMD = "<command-name>/model</command-name>"
+
+
+def operator_swapped(lines: list[str]) -> bool:
+    """True when the OPERATOR's own /model command appears in this transcript — the swap (if
+    any) was chosen, not suffered. Main-loop user entries only (a sidechain can't /model).
+    Candidate lines are parsed, not substring-matched — serializer whitespace must not decide."""
+    for ln in lines:
+        if _MODEL_CMD not in ln:
+            continue
+        try:
+            entry = json.loads(ln)
+        except ValueError:
+            continue
+        if entry.get("type") == "user" and not entry.get("isSidechain"):
+            return True
+    return False
+
+
 def swap_at(lines: list[str]) -> str | None:
     """The timestamp of the FIRST turn on a new model — WHEN the harness swapped mid-session
     (the danger-sense tripwire's moment). None if there was no transition, or the transcript
@@ -286,13 +308,14 @@ def locate_current_transcript(
     return max(files, key=lambda p: p.stat().st_mtime)
 
 
-def model_of_transcript(path: Path) -> tuple[str | None, list[str]]:
-    """(current model, distinct-model history) for ONE transcript: the tail gives the current
-    model (cheap on a large file), the whole file gives the swap history. The pure read behind
-    current_model — and how resolve_identity probes a SUB-AGENT's OWN transcript (agents.py)."""
+def model_of_transcript(path: Path) -> tuple[str | None, list[str], bool]:
+    """(current model, distinct-model history, operator-swapped) for ONE transcript: the tail
+    gives the current model (cheap on a large file), the whole file gives the swap history AND
+    whether a /model command — the operator's own hand — appears (deliberate vs rug-pull).
+    The pure read behind current_model and resolve_identity's anchored probe."""
     cur = latest_model(_tail_lines(path))
-    history = models_in(path.read_text("utf-8", errors="replace").splitlines())
-    return cur, history
+    lines = path.read_text("utf-8", errors="replace").splitlines()
+    return cur, models_in(lines), operator_swapped(lines)
 
 
 def current_model(
@@ -310,7 +333,7 @@ def current_model(
     path = locate_current_transcript(root, job_dir, anchored_only=anchored_only)
     if path is None:
         return None, [], None
-    cur, history = model_of_transcript(path)
+    cur, history, _op = model_of_transcript(path)
     return cur, history, path
 
 

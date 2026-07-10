@@ -62,6 +62,9 @@ class AgentIdentity:
     # the distinct models across this session's transcript, first-seen order — the swap history
     # (>1 = a within-session demotion). Feeds the swap-detector (ruling f2ae6346).
     model_history: tuple[str, ...] = ()
+    # the operator's own /model command is on this transcript's record — any within-session
+    # swap was CHOSEN, not suffered (a seam, never a sin; complaint 2026-07-10).
+    model_deliberate: bool = False
     # False when identity fell back to a best-effort id (no session/job-id/transcript anchor). The
     # fallback is now DISTINCT per session — never the old shared `agent:unknown` sink — so distinct
     # actors can't merge; the flag lets the fleet digest surface an unresolved onboarding.
@@ -197,11 +200,8 @@ async def resolve_handle(actions: Actions, name: str) -> str | None:
         "ORDER BY m.last_seen DESC NULLS LAST LIMIT 1", name)
 
 
-def read_project_label(cwd: str | None) -> str | None:
-    """A project's DECLARED name, from a `.osiris` file (TOML: project = "..."), walking up to
-    the repo root. Decouples the project identity from the FOLDER name (the operator may rename
-    the dir; the label is a stable property of the repo — ruling 1e02e069). None → fall back to
-    the cwd basename."""
+def _read_osiris_key(cwd: str | None, key: str) -> str | None:
+    """One key from the repo's `.osiris` file (TOML), walking up to the repo root."""
     if not cwd:
         return None
     import tomllib
@@ -210,13 +210,29 @@ def read_project_label(cwd: str | None) -> str | None:
         f = d / ".osiris"
         try:
             if f.is_file():
-                label = tomllib.loads(f.read_text()).get("project")
-                return str(label).strip() if label else None
+                value = tomllib.loads(f.read_text()).get(key)
+                return str(value).strip() if value else None
         except (OSError, tomllib.TOMLDecodeError, ValueError):
             return None
         if (d / ".git").exists():  # the repo root — stop climbing
             break
     return None
+
+
+def read_project_label(cwd: str | None) -> str | None:
+    """A project's DECLARED name, from a `.osiris` file (TOML: project = "..."), walking up to
+    the repo root. Decouples the project identity from the FOLDER name (the operator may rename
+    the dir; the label is a stable property of the repo — ruling 1e02e069). None → fall back to
+    the cwd basename."""
+    return _read_osiris_key(cwd, "project")
+
+
+def read_project_model(cwd: str | None) -> str | None:
+    """A repo's DECLARED model intent (TOML: model = "claude-haiku-4-5" in `.osiris`) — the
+    operator's PER-PROJECT standing choice. A fleet of onboarded repos does not all run the
+    box default: a deliberately-haiku repo confessing 'not fable' every turn framed the
+    operator's own choice as a sin (complaint, 2026-07-10). None → the box-wide default."""
+    return _read_osiris_key(cwd, "model")
 
 
 def resolve_identity(
@@ -248,6 +264,7 @@ def resolve_identity(
     observed: str | None = None
     method: str | None = None
     history: list[str] = []  # the transcript's model sequence — the swap history (job_dir path)
+    deliberate = False       # a /model on the record makes any swap the operator's own hand
     if job_dir:
         # anchored_only: a job_dir that does NOT match a real transcript (a synthesized wake dir,
         # a malformed anchor) must yield NOTHING, never the box-wide-hottest neighbor — else the
@@ -264,7 +281,9 @@ def resolve_identity(
         # from disk with correct attribution, lineage.py). So we anchor ONLY on the parent's
         # own transcript; a mounting sub-agent falls back to the miner's disk-side capture.
         if main is not None:
-            observed, history = model_of_transcript(main)  # the harness's record — THIS session
+            # the harness's record — THIS session's model, swap history, and whether the
+            # operator's own /model is on it (deliberate vs rug-pull)
+            observed, history, deliberate = model_of_transcript(main)
             if observed is not None:
                 method = "job_dir"
     if sid is None and cwd:  # no job dir → find the session (and, if unseen, the model) by cwd
@@ -309,7 +328,8 @@ def resolve_identity(
             sid = "unknown"
     return AgentIdentity(agent_id=f"agent:{sid}", session=sid, project=project, model=model,
                          cwd=cwd, model_method=method, model_declared=declared,
-                         model_divergent=divergent, model_history=tuple(history), resolved=resolved)
+                         model_divergent=divergent, model_history=tuple(history),
+                         model_deliberate=deliberate, resolved=resolved)
 
 
 async def _link_once(
@@ -446,10 +466,22 @@ async def live_succession(
             "UPDATE agent_mounts SET model=$2 WHERE job_dir=$1", row["job_dir"], observed)
         return {"unchanged": True, "reason": "first stamp"}
     now = datetime.now(UTC)
+    # whose hand moved the model? A /model on THIS session's own transcript makes the seam
+    # the OPERATOR's deliberate act — the mint still happens (a death is a death, ruling
+    # a882b334) but the seam string carries the hand, so no downstream surface preaches.
+    deliberate = False
+    try:
+        main = locate_current_transcript(
+            Path.home() / ".claude/projects", row["job_dir"], anchored_only=True)
+        if main is not None:
+            _cur, _hist, deliberate = model_of_transcript(main)
+    except OSError:
+        deliberate = False
     head = await _lineage_head(actions, row["agent_id"])
     ancestor_oid = await actions.create_or_find_object("Agent", head, head)
+    seam = f"{old} → {observed}" + (" [operator /model]" if deliberate else "")
     heir, heir_oid = await mint_heir(actions, head, ancestor_oid, because="live-swap",
-                                     succession=f"{old} → {observed}", now=now)
+                                     succession=seam, now=now)
     # the heartbeat's model is the harness's own word about a session it is rendering — as
     # anchored as a job_dir transcript read, and the baseline the NEXT seam check runs against
     # (without it, a later re-mount would see no anchored model on the heir and stay quiet).
@@ -468,7 +500,7 @@ async def live_succession(
     handle = await actions.pool.fetchval(
         "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='handle'",
         heir_oid)
-    return {"minted": heir, "from": head, "succession": f"{old} → {observed}",
+    return {"minted": heir, "from": head, "succession": seam,
             "seat": seat_label(heir, handle)}
 
 
@@ -562,8 +594,12 @@ async def register_agent(
         # first-class OBSERVED event (not the agent's self-report; it can't feel its own swap).
         # gate the swap on a job_dir ANCHOR: a cwd/self-report model may be a neighbor's, and a
         # divergence asserted off it is the cry-wolf — the true positive is the anchored read.
+        # The repo's OWN declared intent (.osiris model=) outranks the box default: a fleet of
+        # onboarded repos does not all run fable, and the operator's choice is never a sin.
+        expected_model = read_project_model(identity.cwd) or expected_model
         verdict = classify_swap(identity.model_history, identity.model, expected=expected_model,
-                                anchored=identity.model_method == "job_dir")
+                                anchored=identity.model_method == "job_dir",
+                                deliberate=identity.model_deliberate)
         await actions.assert_property(a, "model_intent", expected_model, src, now, _CONF,
                                       evidence_class=_EC)
         if verdict.swapped:

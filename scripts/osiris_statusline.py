@@ -36,6 +36,65 @@ def _short(model_id: str) -> str:
     return model_id.removeprefix("claude-")
 
 
+def _project_intent(cwd: str) -> str:
+    """The repo's DECLARED model intent (.osiris: model = "…"), walking up to the repo root —
+    the operator's per-project standing choice; the box default only as fallback. A fleet of
+    onboarded repos does not all run fable, and the chrome must not paint the operator's own
+    choice red every turn (complaint, 2026-07-10)."""
+    try:
+        import tomllib
+        p = Path(cwd)
+        for d in (p, *p.parents):
+            f = d / ".osiris"
+            if f.is_file():
+                v = tomllib.loads(f.read_text()).get("model")
+                return str(v).strip() if v else EXPECTED
+            if (d / ".git").exists():
+                break
+    except Exception:  # noqa: BLE001 — the chrome never breaks on a config file
+        pass
+    return EXPECTED
+
+
+def _operator_swap(transcript_path: str, session_id: str, model_id: str) -> bool:
+    """Was this divergence the OPERATOR's own /model? The harness records the command verbatim
+    in the transcript; a hit is remembered in the session's durable job dir (the command
+    scrolls out of the tail long before the session ends — the marker doesn't)."""
+    sid = (session_id or "")[:8]
+    marker = (Path.home() / ".claude" / "jobs" / sid / ".osiris_model_op") if len(sid) == 8 \
+        else None
+    try:
+        if marker is not None and marker.is_file() and marker.read_text().strip() == model_id:
+            return True
+    except OSError:
+        pass
+    try:
+        p = Path(transcript_path)
+        with p.open("rb") as fh:
+            fh.seek(max(0, p.stat().st_size - 262_144))
+            tail = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return False
+    hit = False
+    for ln in tail.splitlines():
+        if "<command-name>/model</command-name>" not in ln:
+            continue
+        try:
+            entry = json.loads(ln)
+        except ValueError:
+            continue
+        if entry.get("type") == "user" and not entry.get("isSidechain"):
+            hit = True
+            break
+    if hit and marker is not None:
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(model_id)
+        except OSError:
+            pass
+    return hit
+
+
 def _ctx_pct(transcript_path: str, model_id: str) -> int | None:
     """Context occupancy % from the transcript's TAIL (the harness's own usage record) — the
     operator's ambient answer to 'how close is this tab to a compaction death'. Window tier
@@ -247,10 +306,15 @@ def main() -> None:
             color = GREEN if worst < 60 else (AMBER if worst < 85 else RED)
             parts.append(color + " · ".join(f"{t} {v}%" for t, v in vals) + RESET)
 
-    if model_id and model_id != EXPECTED:  # the swap confession, ambient — every single turn
-        parts.append(f"{RED}⚠ {_short(model_id)} (intent: {_short(EXPECTED)}){RESET}")
-    elif model_id:
-        parts.append(f"{GREEN}{_short(model_id)}{RESET}")
+    if model_id:  # the ambient model-identity check — against the REPO's intent, not the box's
+        intent = _project_intent(cwd)
+        if model_id == intent:
+            parts.append(f"{GREEN}{_short(model_id)}{RESET}")
+        elif _operator_swap(transcript, session_id, model_id):
+            # the operator's own /model is on the record: a choice, acknowledged — never an error
+            parts.append(f"{AMBER}⇄ {_short(model_id)} (your /model){RESET}")
+        else:
+            parts.append(f"{RED}⚠ {_short(model_id)} (intent: {_short(intent)}){RESET}")
 
     print(f" {DIM}│{RESET} ".join(parts))
 

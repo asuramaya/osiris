@@ -64,8 +64,14 @@ def main() -> int:
         bits.append(f"You were MINTED as this lineage's successor — ancestor {out['minted']}; "
                     "your first act: read orient()'s succession note.")
     if out.get("swap"):
-        bits.append(f"Model seam on your lineage: {out['swap']} — confess it to the operator "
-                    "in your first reply.")
+        if "[operator /model]" in str(out["swap"]):
+            # the operator's own hand moved the model — a chosen seam, never a sin
+            bits.append(f"Model seam on your lineage: {out['swap']} — the OPERATOR's own "
+                        "deliberate choice. You are the successor mind; speak plainly as what "
+                        "you are, no confession owed.")
+        else:
+            bits.append(f"Model seam on your lineage: {out['swap']} — confess it to the "
+                        "operator in your first reply.")
     mail = out.get("mail", 0)
     if mail:
         bits.append(f"Your project has {mail} unread fleet message{'s' if mail != 1 else ''} "

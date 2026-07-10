@@ -32,6 +32,11 @@ class SwapVerdict:
     within_session: bool        # the transcript holds >1 model: it flipped mid-run
     from_model: str | None      # the swap's source (history[0], or the intent for a cold demotion)
     to_model: str | None        # the swap's destination (the observed model)
+    # the OPERATOR's own /model command is on this transcript's record: the swap was CHOSEN,
+    # not suffered. A deliberate swap is still a seam (each segment was a distinct mind, ruling
+    # a882b334) but never a SIN — the banner drops the confession demand (operator, 2026-07-10:
+    # "a rug pull ... vs a direct /model swap on my part is different").
+    deliberate: bool = False
 
     @property
     def swapped(self) -> bool:
@@ -39,7 +44,8 @@ class SwapVerdict:
 
 
 def classify_swap(
-    history: Sequence[str], observed: str | None, *, expected: str, anchored: bool = True
+    history: Sequence[str], observed: str | None, *, expected: str, anchored: bool = True,
+    deliberate: bool = False,
 ) -> SwapVerdict:
     """Read both swap signals off a session's model history + its current (observed) model,
     against the operator's `expected` standing choice. Pure — the IO (probing the transcript for
@@ -68,6 +74,7 @@ def classify_swap(
         observed=observed, expected=expected, history=hist,
         diverged_from_intent=diverged, within_session=within,
         from_model=from_model, to_model=to_model,
+        deliberate=deliberate and within,  # only a WITNESSED transition can be the /model's work
     )
 
 
@@ -77,7 +84,8 @@ def swap_marker(v: SwapVerdict) -> str:
     was opus. The within-session form names the models SEEN and the current one; the cold-demotion
     form (no in-session transition) keeps the clean intent → observed arrow."""
     if v.within_session:
-        return f"{' ↔ '.join(v.history)} (now {v.observed})"
+        base = f"{' ↔ '.join(v.history)} (now {v.observed})"
+        return base + (" [operator /model]" if v.deliberate else "")
     return f"{v.from_model} → {v.to_model}"
 
 
@@ -90,11 +98,19 @@ def swap_banner(v: SwapVerdict) -> str | None:
     if not v.swapped:
         return None
     cur = v.observed or "unknown"
+    if v.within_session and v.deliberate:
+        # the operator's own /model is on the record: a chosen swap is a SEAM, never a SIN —
+        # each segment was still a distinct mind (ruling a882b334), but no confession is owed.
+        return (f"⇄ the OPERATOR changed the model THIS session (/model on the record) — seen "
+                f"[{', '.join(v.history)}], currently {cur}. A deliberate choice, not a "
+                "rug-pull: no confession owed; speak plainly as what you are.")
     if v.within_session:
         intent = (f" — NOT your intended {v.expected}" if v.diverged_from_intent
                   else f" (back on your intended {v.expected})")
         return (f"⚠ warm model swap THIS session — seen [{', '.join(v.history)}], currently "
                 f"{cur}{intent}. The harness swapped mid-run (a danger-sense tripwire); confess "
                 "it to the operator.")
-    return (f"⚠ model divergence: intended {v.expected}, running {cur} — a silent demotion "
-            "(the harness swapped before this session's first turn). Confess it to the operator.")
+    return (f"⚠ model divergence: intended {v.expected}, running {cur} — either the harness "
+            "demoted this seat before its first turn (confess it to the operator), or the "
+            f"operator CHOSE {cur} for this repo — then the intent on file is what's wrong: "
+            f'declare model = "{cur}" in the repo\'s .osiris and this banner stands down.')

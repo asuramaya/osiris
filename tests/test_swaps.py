@@ -58,7 +58,26 @@ def test_cold_demotion_diverges_from_intent_without_a_transition() -> None:
     assert v.from_model == FABLE and v.to_model == OPUS  # intent is the only witness to the source
     banner = swap_banner(v)
     assert banner is not None
-    assert "divergence" in banner and "silent demotion" in banner
+    # birth-divergence is AMBIGUOUS (demotion or the operator's own repo choice): the banner
+    # names both readings and the .osiris remedy instead of preaching a sin (2026-07-10)
+    assert "divergence" in banner and "demoted" in banner and ".osiris" in banner
+
+
+def test_deliberate_swap_is_a_seam_never_a_sin() -> None:
+    """The operator's own /model on the record: the swap is CHOSEN — the verdict still says
+    swapped (a seam is a seam, ruling a882b334) but the banner drops the confession demand
+    and the marker names the hand (operator complaint, 2026-07-10)."""
+    v = classify_swap([FABLE, OPUS], OPUS, expected=FABLE, deliberate=True)
+    assert v.swapped is True and v.deliberate is True     # still a seam — heirs still mint
+    banner = swap_banner(v)
+    assert banner is not None and banner.startswith("⇄")
+    assert "OPERATOR" in banner and "no confession owed" in banner
+    assert "rug-pull" in banner and "confess it" not in banner
+    assert "[operator /model]" in swap_marker(v)
+    # deliberateness needs a WITNESSED transition: a /model in the transcript cannot explain
+    # a divergence with no in-session swap (the command would have left a transition)
+    cold = classify_swap([OPUS], OPUS, expected=FABLE, deliberate=True)
+    assert cold.deliberate is False
 
 
 def test_no_history_still_flags_divergence() -> None:

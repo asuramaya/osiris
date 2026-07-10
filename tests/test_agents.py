@@ -169,6 +169,39 @@ def test_resolve_identity_captures_the_swap_history(tmp_path: Path) -> None:
     ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef", root=tmp_path)
     assert ident.model == "claude-opus-4-8"  # the latest turn
     assert ident.model_history == ("claude-fable-5", "claude-opus-4-8")  # the whole transition
+    assert ident.model_deliberate is False   # no /model on the record → a rug-pull if swapped
+
+
+def test_resolve_identity_sees_the_operators_own_model_command(tmp_path: Path) -> None:
+    """A /model command in the transcript is the OPERATOR's hand on the record: the swap was
+    chosen, not suffered — downstream banners drop the sin framing (complaint, 2026-07-10)."""
+    proj = tmp_path / "-home-x-code-osiris"
+    proj.mkdir()
+    lines = [
+        json.dumps({"type": "assistant", "message": {"model": "claude-fable-5", "content": []}}),
+        json.dumps({"type": "user", "message": {
+            "role": "user", "content": "<command-name>/model</command-name>\n"
+                                       "<command-message>model</command-message>"}}),
+        json.dumps({"type": "assistant",
+                    "message": {"model": "claude-haiku-4-5", "content": []}}),
+    ]
+    (proj / "deadbeef-1111-2222-3333-444455556666.jsonl").write_text("\n".join(lines) + "\n")
+    ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef", root=tmp_path)
+    assert ident.model_history == ("claude-fable-5", "claude-haiku-4-5")
+    assert ident.model_deliberate is True
+
+
+def test_read_project_model_declares_the_repo_intent(tmp_path: Path) -> None:
+    """.osiris `model = "…"` is the repo's OWN standing choice — a deliberately-haiku repo
+    must not confess 'not fable' at every mount against the box default."""
+    from src.orchestrator.agents import read_project_model
+
+    repo = tmp_path / "hollow"
+    (repo / "src").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / ".osiris").write_text('project = "hollow-pit"\nmodel = "claude-haiku-4-5"\n')
+    assert read_project_model(str(repo / "src")) == "claude-haiku-4-5"  # walks up
+    assert read_project_model(str(tmp_path)) is None                    # undeclared → default
 
 
 async def test_register_stamps_intent_and_the_swap(actions: Actions, tmp_path: Path) -> None:

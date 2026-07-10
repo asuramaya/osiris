@@ -41,7 +41,12 @@ from src.ontology.resolution import (
 from src.ontology.schema import catalog
 from src.orchestrator import capture, digest, handshake, mailbox, mounts
 from src.orchestrator import compositions as comp
-from src.orchestrator.agents import AgentIdentity, register_agent, resolve_identity
+from src.orchestrator.agents import (
+    AgentIdentity,
+    read_project_model,
+    register_agent,
+    resolve_identity,
+)
 from src.orchestrator.console import get_console as _get_console
 from src.orchestrator.console import set_console as _set_console
 from src.orchestrator.dossier import entity_dossier
@@ -769,8 +774,10 @@ async def mount(
     op_unread = await unread_count(pool, OPERATOR_ADDR, reader_agent=OPERATOR_ADDR,
                                    lease_secs=lease)
     banner = swap_banner(classify_swap(
-        ident.model_history, ident.model, expected=settings.osiris_expected_model,
-        anchored=ident.model_method == "job_dir"))  # only a true anchor confesses a swap
+        ident.model_history, ident.model,
+        expected=read_project_model(cwd) or settings.osiris_expected_model,  # repo intent wins
+        anchored=ident.model_method == "job_dir",   # only a true anchor confesses a swap
+        deliberate=ident.model_deliberate))         # a /model on the record is never a sin
     seat = await handshake._seat_of(Actions(pool), ident.agent_id)
     out: dict[str, Any] = {"agent": ident.agent_id, "project": ident.project or "?",
            "model": ident.model or "unknown",
@@ -933,9 +940,11 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
                                    lease_secs=lease)
     op_mail = {"operator_mail": f"{op_unread} unread — inbox(project='operator') if the "
                                 "human is present"} if op_unread else {}
-    swap = swap_banner(classify_swap(ident.model_history, ident.model,
-                       expected=get_settings().osiris_expected_model,
-                       anchored=ident.model_method == "job_dir")) if ident else None
+    swap = swap_banner(classify_swap(
+        ident.model_history, ident.model,
+        expected=read_project_model(ident.cwd) or get_settings().osiris_expected_model,
+        anchored=ident.model_method == "job_dir",
+        deliberate=ident.model_deliberate)) if ident else None
     if spawn is not None:
         swap = None  # the seat's swap history is the PARENT's confession duty, not the child's
     away = await mounts.while_away(
