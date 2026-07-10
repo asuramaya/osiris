@@ -35,6 +35,7 @@ VAULT_DIR = Path("/home/asuramaya/osiris-vault")
 REPO = Path("/home/asuramaya/code/osiris")
 BACKUP_MAX_AGE_H = 48
 VAULT_MAX_AGE_D = 8
+MINER_MAX_SILENCE_MIN = 35  # 3 missed 10-min ticks = sensing is down, whatever the heartbeat says
 DEFAULT_PORTS = ["5432", "6379"]  # the shadow-trap band: settings' fallback DSN aims here
 
 
@@ -81,7 +82,38 @@ def collect() -> dict:
     pushed = _run(["git", "-C", str(REPO), "rev-list", "--count", "--remotes"])
     if count:
         m["unpushed"] = int(count) - int(pushed or 0)
+    m["miner"] = None  # filled async in main() — DB unreachable degrades to None, judged green
     return m
+
+
+async def collect_miner() -> dict | None:
+    """The sensing-tick vital signs off miner:ticks (failure-class 7, decision 3191e0df:
+    a fail-open cron was down a DAY behind a green heartbeat). Returns None when the
+    telemetry doesn't exist yet — a young instrument is not a failure."""
+    import asyncpg
+    from src.orchestrator.monitor import miner_health
+
+    pool = await asyncpg.create_pool(DSN, min_size=1, max_size=1)
+    try:
+        blob = await miner_health(pool)
+    finally:
+        await pool.close()
+    if not blob["starts"]:
+        return None
+    ok = [t for t in blob["ticks"] if not t.get("error")]
+    recent = blob["ticks"][-6:]
+    return {
+        "last_ok_age_min": (
+            (time.time() - _iso_epoch(ok[-1]["at"])) / 60 if ok else None),
+        "recent_errors": sum(1 for t in recent if t.get("error")),
+        "recent": len(recent),
+    }
+
+
+def _iso_epoch(iso: str) -> float:
+    from datetime import datetime
+
+    return datetime.fromisoformat(iso).timestamp()
 
 
 def evaluate(m: dict) -> list[str]:
@@ -117,6 +149,16 @@ def evaluate(m: dict) -> list[str]:
         fails.append("vault is empty or missing")
     elif m["vault_age_d"] > VAULT_MAX_AGE_D:
         fails.append(f"vault untouched for {m['vault_age_d']:.0f}d (max {VAULT_MAX_AGE_D}d)")
+    miner = m.get("miner")
+    if miner:  # None = telemetry absent (young instrument / DB down — those fail elsewhere)
+        age = miner.get("last_ok_age_min")
+        if age is None or age > MINER_MAX_SILENCE_MIN:
+            shown = "never" if age is None else f"{age:.0f}m ago"
+            fails.append(f"miner tick last SUCCEEDED {shown} (max {MINER_MAX_SILENCE_MIN}m) "
+                         "— sensing is down behind a green heartbeat, the onboarding-day class")
+        if miner.get("recent_errors", 0) >= 3:
+            fails.append(f"miner tick errored {miner['recent_errors']} of the last "
+                         f"{miner['recent']} runs — the cron is failing open")
     return fails
 
 
@@ -170,6 +212,10 @@ async def brief_operator(fails: list[str]) -> None:
 
 def main() -> int:
     m = collect()
+    try:
+        m["miner"] = asyncio.run(collect_miner())
+    except Exception:  # noqa: BLE001 — DB unreachable is already a unit/container failure
+        m["miner"] = None
     fails = evaluate(m)
     if "--drill" in sys.argv and m.get("newest_dump"):
         d = drill(m["newest_dump"])

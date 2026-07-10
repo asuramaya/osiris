@@ -271,3 +271,52 @@ async def test_matching_live_model_is_not_a_swap(actions: Actions) -> None:
     r = next(x for x in dg["roster"] if x["agent"] == "agent:ok")
     assert r["live_swap"] is None and r["live_model"] is None
     assert not any(d["agent"] == "agent:ok" for d in dg["danger"])
+
+
+# --- miner tick telemetry: the onboarding-day instrument (decision 3191e0df) ------------
+
+async def test_miner_telemetry_records_and_digest_surfaces_it(actions: Actions) -> None:
+    """A tick's whole life lands in miner:ticks — start, outcome, saturation, error — and
+    the digest reads it back as vital signs. The heartbeat says the worker breathes; THIS
+    says the sensing tick actually finishes (the outage ran a day behind a green beat)."""
+    from src.orchestrator.monitor import miner_health, miner_tick_ended, miner_tick_started
+
+    pool = actions.pool
+    # two clean saturated ticks, one error tick, one start that never confessed (timeout
+    # cancel that outran the shield)
+    for _ in range(2):
+        await miner_tick_started(pool)
+        await miner_tick_ended(pool, secs=190.0, budget=3,
+                               report={"chunks": 3, "decisions": 2, "threads": 1})
+    await miner_tick_started(pool)
+    await miner_tick_ended(pool, secs=301.2, budget=3, error="timeout")
+    await miner_tick_started(pool)  # dies unconfessed
+
+    blob = await miner_health(pool)
+    assert blob["starts"] == 4 and blob["completions"] == 3
+    assert [t.get("error") for t in blob["ticks"]] == [None, None, "timeout"]
+    assert blob["ticks"][0]["yield"] == 3  # decisions+threads folded into one number
+
+    dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
+    m = dg["miner"]
+    assert m["ticks"] == 3 and m["errors"] == 1 and m["saturated"] == 2
+    assert m["unaccounted"] == 1
+    assert m["max_secs"] == 301.2
+    assert m["last_ok"] is not None
+    assert dg["summary"]["miner_errors"] == 1
+
+
+async def test_miner_telemetry_is_bounded_and_absent_is_quiet(actions: Actions) -> None:
+    """The blob keeps a bounded tail (~8h of ticks), and a fleet with no telemetry yet
+    digests to zeros instead of an error — a young instrument is not a failure."""
+    from src.orchestrator.monitor import _MINER_KEEP, miner_health, miner_tick_ended
+
+    dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
+    assert dg["miner"]["ticks"] == 0 and dg["miner"]["unaccounted"] == 0
+
+    for i in range(_MINER_KEEP + 5):
+        await miner_tick_ended(actions.pool, secs=float(i), budget=3,
+                               report={"chunks": 1})
+    blob = await miner_health(actions.pool)
+    assert len(blob["ticks"]) == _MINER_KEEP
+    assert blob["ticks"][-1]["secs"] == float(_MINER_KEEP + 4)  # newest kept, oldest dropped

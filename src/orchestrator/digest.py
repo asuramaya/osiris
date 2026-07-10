@@ -32,13 +32,16 @@ meets a live surface.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from src.actions.core import Actions
+from src.config.settings import get_settings
 from src.orchestrator.credence import credence_props
 from src.orchestrator.mailbox import OPERATOR_ADDR, unread_count
-from src.orchestrator.monitor import set_cursor
+from src.orchestrator.monitor import miner_health, set_cursor
 
 # The operator's digest watermark lives in the generic cursor store (watermarks table, migration
 # 0006) — its (key, cursor, updated_at) shape fits exactly: `cursor` holds the last-seen instant
@@ -303,6 +306,58 @@ async def _retrieval(actions: Actions, since: datetime) -> dict[str, Any]:
             "top_missed": [{"query": m["query"], "times": int(m["n"])} for m in missed]}
 
 
+def _backlog_bytes(root: str, cursors: dict[str, int]) -> tuple[int, int]:
+    """Sync (runs via to_thread): total un-mined bytes past the watermark cursors, and how
+    many files carry them. Unplanted files (no cursor yet) don't count — forward-only
+    sensing will plant them at their end, mining nothing."""
+    from src.ingest.sessions import _list_transcripts, _watermark_key
+
+    total = files = 0
+    for p in _list_transcripts(Path(root).expanduser()):
+        cur = cursors.get(_watermark_key(p))
+        if cur is None:
+            continue
+        try:
+            lag = p.stat().st_size - cur
+        except OSError:
+            continue
+        if lag > 0:
+            total += lag
+            files += 1
+    return total, files
+
+
+async def _miner(actions: Actions, since: datetime) -> dict[str, Any]:
+    """Sensing-tick health off miner:ticks telemetry — the instrument the onboarding-day
+    outage demanded (decision 3191e0df): a fail-open cron died for a DAY behind a green
+    heartbeat. Shows whether ticks FINISH, how long they run, how saturated the LLM budget
+    is, and how far behind the fleet's transcripts the miner sits."""
+    blob = await miner_health(actions.pool)
+    window = [t for t in blob["ticks"] if t.get("at", "") >= since.isoformat()]
+    errors = [t for t in window if t.get("error")]
+    saturated = [t for t in window if t.get("chunks", 0) >= t.get("budget", 1)]
+    ok = [t for t in blob["ticks"] if not t.get("error")]
+    out: dict[str, Any] = {
+        "configured": bool(get_settings().osiris_sense_sessions),
+        "ticks": len(window), "errors": len(errors), "saturated": len(saturated),
+        "max_secs": max((t.get("secs", 0.0) for t in window), default=0.0),
+        "last_ok": ok[-1]["at"] if ok else None,
+        # starts that never confessed a completion — timeout cancels that outran the
+        # shield (at most one is legitimately in flight right now)
+        "unaccounted": blob["starts"] - blob["completions"],
+        "last_errors": [t["error"] for t in errors[-3:]],
+    }
+    root = get_settings().osiris_sense_sessions
+    if root:
+        rows = await actions.pool.fetch(
+            "SELECT key, cursor FROM watermarks WHERE key LIKE 'session:%'")
+        cursors = {r["key"]: int(r["cursor"]) for r in rows if str(r["cursor"]).isdigit()}
+        lag, behind = await asyncio.to_thread(_backlog_bytes, root, cursors)
+        out["backlog_mb"] = round(lag / 1e6, 1)
+        out["files_behind"] = behind
+    return out
+
+
 async def fleet_digest(
     actions: Actions, *, since: datetime | None = None, mark_seen: bool = False,
     lease_secs: int = 900,
@@ -321,6 +376,7 @@ async def fleet_digest(
     conversations = await _conversations(actions, effective_since)
     costs = await _costs(actions, effective_since)
     retrieval = await _retrieval(actions, effective_since)
+    miner = await _miner(actions, effective_since)
     operator_inbox = await _operator_inbox(actions, lease_secs=lease_secs)
     # the danger map: a STAMPED swap (durable, from the transcript at mount) OR a LIVE swap
     # (the heartbeat caught the harness swapping the model since the last stamp — not yet in
@@ -343,6 +399,7 @@ async def fleet_digest(
             "disputes": len(disputes), "conversations": len(conversations),
             "operator_unread": operator_inbox["unread"],
             "spend_tokens": costs["tokens"], "spend_usd": costs["usd"],
+            "miner_errors": miner["errors"],
         },
         "roster": roster,
         "activity": activity,
@@ -352,5 +409,6 @@ async def fleet_digest(
         "conversations": conversations,
         "costs": costs,
         "retrieval": retrieval,
+        "miner": miner,
         "operator_inbox": operator_inbox,
     }

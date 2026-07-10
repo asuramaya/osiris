@@ -416,6 +416,18 @@ def test_worker_registers_the_sensing_cron() -> None:
     assert "sense_sessions" in names
 
 
+def test_sensing_cron_timeout_is_explicit_and_under_the_cadence() -> None:
+    """A saturated tick is ~3 extract calls at 50-90s each: arq's default 300s was one
+    slow call from death (the 2026-07-10 timeout). The timeout must be CHOSEN, and it
+    must stay under the 600s cadence so two ticks never mine the same cursors at once."""
+    from src.workers.arq_worker import WorkerSettings
+
+    sense = next(c for c in WorkerSettings.cron_jobs
+                 if c.coroutine.__name__ == "sense_sessions")
+    assert sense.timeout_s is not None, "the tick must not ride arq's default timeout"
+    assert 300 < sense.timeout_s < 600
+
+
 # --- source model as provenance (the probe) --------------------------------------------
 
 def _amodel(text: str, model: str) -> str:

@@ -25,6 +25,7 @@ yesterday's (each outbox row is evaluated exactly once) — "tell me when X happ
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
@@ -80,6 +81,62 @@ async def heartbeat_age_secs(pool: asyncpg.Pool) -> float | None:
         WORKER_HEARTBEAT_KEY,
     )
     return age
+
+
+# --- miner tick telemetry: the onboarding-day lesson (decision 3191e0df) --------
+# A fail-open cron was down a DAY behind a green heartbeat. The heartbeat says the worker
+# breathes; THIS says whether the sensing tick actually finishes, how long it runs, and
+# whether it is saturated. One writer by design — the sense_sessions cron (unique=True);
+# the digest and preflight only read.
+MINER_TICKS_KEY = "miner:ticks"
+_MINER_KEEP = 48  # ~8h of 10-min ticks
+
+
+async def _miner_blob(pool: asyncpg.Pool) -> dict[str, Any]:
+    raw = await get_cursor(pool, MINER_TICKS_KEY)
+    if not raw:
+        return {"starts": 0, "completions": 0, "ticks": []}
+    try:
+        blob: dict[str, Any] = json.loads(raw)
+    except json.JSONDecodeError:  # a corrupt blob is telemetry lost, never a crash
+        return {"starts": 0, "completions": 0, "ticks": []}
+    blob.setdefault("starts", 0)
+    blob.setdefault("completions", 0)
+    blob.setdefault("ticks", [])
+    return blob
+
+
+async def miner_tick_started(pool: asyncpg.Pool) -> None:
+    """Stamp a tick's beginning. A start with no matching completion is a death the
+    coroutine could not confess itself (a timeout cancel that outran the shield)."""
+    blob = await _miner_blob(pool)
+    blob["starts"] += 1
+    blob["last_start"] = datetime.now(UTC).isoformat()
+    await set_cursor(pool, MINER_TICKS_KEY, json.dumps(blob))
+
+
+async def miner_tick_ended(
+    pool: asyncpg.Pool, *, secs: float, budget: int,
+    report: dict[str, int] | None = None, error: str | None = None,
+) -> None:
+    """Record a tick's outcome — duration, chunk spend vs budget, yield, or the error."""
+    blob = await _miner_blob(pool)
+    blob["completions"] += 1
+    rec: dict[str, Any] = {"at": datetime.now(UTC).isoformat(),
+                           "secs": round(secs, 1), "budget": budget}
+    if report is not None:
+        rec["chunks"] = report.get("chunks", 0)
+        rec["yield"] = sum(report.get(k, 0) for k in
+                           ("decisions", "threads", "obligations", "resolved"))
+    if error is not None:
+        rec["error"] = error[:200]
+    blob["ticks"] = ([*blob["ticks"], rec])[-_MINER_KEEP:]
+    await set_cursor(pool, MINER_TICKS_KEY, json.dumps(blob))
+
+
+async def miner_health(pool: asyncpg.Pool) -> dict[str, Any]:
+    """The read side: counters + the retained tick records (newest last)."""
+    return await _miner_blob(pool)
 
 
 # --- tick: a source-agnostic scheduled pull ---------------------------------

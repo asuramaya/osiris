@@ -9,7 +9,10 @@ startup and drains the outbox on a short cron. Run with:
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -26,7 +29,14 @@ from src.ingest.sessions import sense_sessions_tick
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, expand_case, run_cascade
 from src.orchestrator.manifests import load_manifests
-from src.orchestrator.monitor import Puller, evaluate_watches, tick, write_heartbeat
+from src.orchestrator.monitor import (
+    Puller,
+    evaluate_watches,
+    miner_tick_ended,
+    miner_tick_started,
+    tick,
+    write_heartbeat,
+)
 from src.orchestrator.ratelimit import RateLimiter
 from src.orchestrator.runner import reap_stale_runs
 from src.orchestrator.trigger import trigger_mail_tick
@@ -113,20 +123,41 @@ async def heartbeat(ctx: dict[str, Any]) -> int:
     return 1
 
 
+_SENSE_BUDGET = 3  # LLM extract calls per tick — the tick's wall-clock is ~this many calls
+
+
 async def sense_sessions(ctx: dict[str, Any]) -> int:
     """Sense the session transcripts — the last unsensed source. Distill new dialogue,
     redact, extract, land the yield DERIVED. Off unless OSIRIS_SENSE_SESSIONS names the
     projects root; a failed pass logs and waits for the next tick (cursors only advance
-    past what was actually emitted)."""
+    past what was actually emitted). Every outcome — success, error, even the timeout
+    cancel — lands in the miner:ticks telemetry: the heartbeat says the worker breathes,
+    this says the tick actually finishes (the onboarding-day outage ran a full day
+    behind a green heartbeat, decision 3191e0df)."""
     root = get_settings().osiris_sense_sessions
     if not root:
         return 0
     actions: Actions = ctx["cascade"].actions
+    pool = actions.pool
+    await miner_tick_started(pool)
+    t0 = time.monotonic()
     try:
-        report = await sense_sessions_tick(actions, Path(root))  # ~ expanded at listing
+        report = await sense_sessions_tick(
+            actions, Path(root), max_chunks=_SENSE_BUDGET)  # ~ expanded at listing
+    except asyncio.CancelledError:
+        # arq's timeout cancel: confess the death to telemetry before dying. Shielded —
+        # a second cancel must not silence the confession mid-write.
+        with contextlib.suppress(Exception):
+            await asyncio.shield(miner_tick_ended(
+                pool, secs=time.monotonic() - t0, budget=_SENSE_BUDGET, error="timeout"))
+        raise
     except Exception as exc:  # a bad transcript/LLM hiccup must not kill the cron
         _log.warning("session sensing failed: %r", exc)
+        await miner_tick_ended(pool, secs=time.monotonic() - t0,
+                               budget=_SENSE_BUDGET, error=repr(exc))
         return 0
+    await miner_tick_ended(pool, secs=time.monotonic() - t0,
+                           budget=_SENSE_BUDGET, report=report)
     if report["chunks"] or report["planted"]:
         _log.info("session sensing: %s", report)
     return report["chunks"]
@@ -183,7 +214,10 @@ class WorkerSettings:
         # liveness heartbeat every 30s (the dead-man's-switch /health/worker reads).
         cron(heartbeat, second={0, 30}, run_at_startup=True),
         # session-sensing every 10 min (a few LLM calls max per tick; no-op when unset).
-        cron(sense_sessions, minute=set(range(0, 60, 10)), second={30}),
+        # timeout is EXPLICIT and under the cadence: a saturated tick is 3 extract calls
+        # at ~50-90s each — arq's default 300s was one slow call from death, and 540 < 600
+        # structurally forbids two ticks mining the same cursors concurrently.
+        cron(sense_sessions, minute=set(range(0, 60, 10)), second={30}, timeout=540),
         # the mailbox alarm clock: wake an agent for a project with unread mail — bounded by a
         # per-project rate cap, and a no-op unless osiris_trigger_enabled (the kill switch).
         cron(trigger_mail, minute=set(range(0, 60)), second={45}),

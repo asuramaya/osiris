@@ -42,3 +42,38 @@ def test_missing_everything_is_loud() -> None:
     m["vault_age_d"] = None
     fails = "\n".join(evaluate(m))
     assert "not running" in fails and "NO backups exist" in fails and "vault is empty" in fails
+
+
+# --- failure-class 7: the miner tick (down a day behind a green heartbeat) --------------
+
+def _healthy_miner() -> dict:
+    return {"last_ok_age_min": 4.0, "recent_errors": 0, "recent": 6}
+
+
+def test_healthy_miner_is_green() -> None:
+    m = _green()
+    m["miner"] = _healthy_miner()
+    assert evaluate(m) == []
+
+
+def test_absent_miner_telemetry_is_quiet() -> None:
+    """None = the instrument is young or the DB is down — the latter fails elsewhere."""
+    m = _green()
+    m["miner"] = None
+    assert evaluate(m) == []
+
+
+def test_silent_miner_is_named() -> None:
+    """Three missed ticks = sensing is down, whatever the heartbeat says."""
+    m = _green()
+    m["miner"] = {**_healthy_miner(), "last_ok_age_min": 240.0}
+    fails = "\n".join(evaluate(m))
+    assert "miner tick last SUCCEEDED 240m ago" in fails
+    m["miner"] = {**_healthy_miner(), "last_ok_age_min": None}
+    assert "miner tick last SUCCEEDED never" in "\n".join(evaluate(m))
+
+
+def test_failing_open_miner_is_named() -> None:
+    m = _green()
+    m["miner"] = {**_healthy_miner(), "recent_errors": 3}
+    assert "errored 3 of the last 6 runs" in "\n".join(evaluate(m))
