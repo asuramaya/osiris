@@ -49,6 +49,8 @@ ROOM_COMPOSITIONS: dict[str, tuple[str, ...]] = {
         "family-drift", "portfolio", "pulse-digest", "projects", "project", "fleet",
         # rungs 2+3 (campaign 5c57f54d): the graph auditing itself + the provenance lens.
         "graph-lint", "lap",
+        # the collapsed-echo pile, listable (ruling 758ded94) — the triage queue's lens.
+        "echoes",
     ),
     "analyst": (
         "who-is-this", "operational-vs-disclosed-geography", "co-investment-ties",

@@ -402,3 +402,99 @@ async def test_ingest_reference_cites_wires_paper_lineage(actions: Actions) -> N
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE from_id=$1 AND type='cites'", child)
     assert n == 1
+
+
+# --- triage: testimony, never fabricated resolution (ruling 758ded94) --------------------
+
+async def test_reclassify_thread_changes_kind_never_status(actions: Actions) -> None:
+    """'Untouched does not mean solved' — triage judges what a thread IS; the status is
+    sacred until real testimony resolves it."""
+    from src.orchestrator.capture import reclassify_thread
+
+    t = await open_thread(actions, "should the composer support live collaborative editing",
+                          source="session-miner")
+    got = await reclassify_thread(actions, str(t), kind="question",
+                                  because="a question Priya asked once; nobody owes it",
+                                  source="agent:triager")
+    assert got == t
+    props = await _props(actions.pool, t)
+    assert props["kind"] == "question"
+    assert props["status"] == "open"  # NEVER touched by a reclassify
+    # adoption is the same verb, upward
+    await reclassify_thread(actions, str(t)[:8], kind="obligation", source="agent:triager")
+    assert (await _props(actions.pool, t))["kind"] == "obligation"
+
+    import pytest
+    with pytest.raises(ValueError):
+        await reclassify_thread(actions, str(t), kind="resolved")  # not a triage verb
+    assert await reclassify_thread(actions, "zz-never-matches-zz", kind="question") is None
+
+
+async def test_orient_wall_collapses_echoes_and_deals_a_triage_card(actions: Actions) -> None:
+    """The lens split: never-touched DERIVED threads older than the window (and judged
+    questions) leave the wall for a counted line + a 3-card triage hand; agent threads and
+    fresh miner threads still ride. The record keeps every one OPEN."""
+    from src.ingest.sessions import (
+        SessionYield,
+        emit_yield,  # the miner's own write path
+    )
+
+    await seed_default_compositions(actions.pool)
+    # an agent's deliberate thread (self_declared) — rides the wall however old
+    agent_t = await open_thread(actions, "off-box backup target still undecided",
+                                repo="testrepo", source="agent:xviii")
+    # miner echoes: two old (collapse), one fresh (rides)
+    y = SessionYield(threads_opened=[
+        {"summary": "old echo the fleet never read, first of two", "class": "commitment"},
+        {"summary": "old echo the fleet never read, second of two", "class": "commitment"},
+        {"summary": "fresh miner commitment from this week", "class": "commitment"},
+    ])
+    await emit_yield(actions, y, repo="testrepo", origin="agent:someone")
+    await actions.pool.execute(
+        "UPDATE objects SET created_at = now() - interval '30 days' "
+        "WHERE type='Thread' AND id IN (SELECT object_id FROM current_assertions "
+        " WHERE name='summary' AND value #>> '{}' ILIKE 'old echo the fleet%')")
+    await actions.pool.execute(  # the agent thread is old too — but touched, so it rides
+        "UPDATE objects SET created_at = now() - interval '30 days' WHERE id=$1", agent_t)
+
+    from src.mcp_server import _project_briefing
+    out = await _project_briefing(actions.pool, "testrepo")
+    assert out is not None
+    wall = [r["summary"] for r in out["open_threads"]]
+    assert "off-box backup target still undecided" in wall
+    assert "fresh miner commitment from this week" in wall
+    assert not any(s.startswith("old echo") for s in wall)
+    ech = out["unread_echoes"]
+    assert ech["count"] == 2
+    assert all(len(c["id"]) == 8 for c in ech["triage"])  # short ids, directly triageable
+    assert "reclassify_thread" in ech["verbs"] and "never resolve" in ech["verbs"]
+    # every echo is STILL open in the record
+    n_open = await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions a WHERE a.name='status' "
+        "AND a.value #>> '{}' = 'open' AND a.object_id IN "
+        "(SELECT object_id FROM current_assertions WHERE name='summary' "
+        " AND value #>> '{}' ILIKE 'old echo the fleet%')")
+    assert n_open == 2
+
+
+async def test_echoes_composition_lists_the_collapsed_pile(actions: Actions) -> None:
+    from src.ingest.sessions import SessionYield, emit_yield
+
+    await seed_default_compositions(actions.pool)
+    y = SessionYield(threads_opened=[
+        {"summary": "an ancient miner echo for the echoes lens", "class": "commitment"},
+        {"summary": "a question the miner remembered without promoting", "class": "question"},
+    ])
+    await emit_yield(actions, y, repo="testrepo", origin="agent:someone")
+    await actions.pool.execute(
+        "UPDATE objects SET created_at = now() - interval '30 days' "
+        "WHERE type='Thread' AND id IN (SELECT object_id FROM current_assertions "
+        " WHERE name='summary' AND value #>> '{}' ILIKE 'an ancient miner echo%')")
+    res = await run_composition(actions.pool, "echoes")
+    items = res["items"]
+    summaries = [e["summary"] for e in items["echoes"]]
+    assert any(s.startswith("an ancient miner echo") for s in summaries)
+    # the question collapses IMMEDIATELY — no freshness window for judged non-work
+    assert any(s.startswith("a question the miner remembered") for s in summaries)
+    assert items["count"] >= 2
+    assert "reclassify_thread" in items["verbs"]

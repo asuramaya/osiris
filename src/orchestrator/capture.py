@@ -233,6 +233,36 @@ async def _find_thread(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
     )
 
 
+# the triage verbs' kinds (ruling 758ded94): adopt = obligation (owed work, testimony),
+# question = remembered but unowned (ranked out of the work wall), task = ordinary thread.
+_TRIAGE_KINDS = ("obligation", "question", "task")
+
+
+async def reclassify_thread(
+    actions: Actions, ref: str, *, kind: str, because: str | None = None,
+    source: str = _SOURCE,
+) -> uuid.UUID | None:
+    """Triage a thread WITHOUT lying about its state (ruling 758ded94: untouched ≠ resolved).
+    Reclassification is TESTIMONY — a mind read the thread and judged what it IS: adopt a
+    miner echo as real work (kind='obligation'), demote a promoted question back to a
+    question (kind='question'), or mark it an ordinary task. The status is untouched: a
+    question stays OPEN in the record; the LENS ranks it out of the work wall. SELF_DECLARED
+    (outranks the miner's DERIVED kind), event-sourced, reversible. Returns the thread id,
+    or None if `ref` matched nothing."""
+    if kind not in _TRIAGE_KINDS:
+        raise ValueError(f"kind must be one of {_TRIAGE_KINDS}")
+    tid = await _find_thread(actions.pool, ref)
+    if tid is None:
+        return None
+    observed = datetime.now(UTC)
+    await actions.assert_property(tid, "kind", kind, source, observed, _CONF,
+                                  evidence_class=_EC)
+    if because:
+        await actions.assert_property(tid, "reclassified_because", because, source, observed,
+                                      _CONF, evidence_class=_EC)
+    return tid
+
+
 async def resolve_thread(
     actions: Actions, ref: str, *, because: str | None = None, source: str = _SOURCE
 ) -> uuid.UUID | None:

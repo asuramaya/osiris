@@ -202,8 +202,9 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         for r in rows
     ]
     await pool.execute(
-        "INSERT INTO search_log (query, caller, hits, top_rank) VALUES ($1,$2,$3,$4)",
-        q, caller, len(hits), (hits[0]["rank"] if hits else None))
+        "INSERT INTO search_log (query, caller, hits, top_rank, relaxed) "
+        "VALUES ($1,$2,$3,$4,$5)",
+        q, caller, len(hits), (hits[0]["rank"] if hits else None), relaxed)
     # opportunistic retention: telemetry keeps 90 days (indexed delete, usually 0 rows)
     await pool.execute(
         "DELETE FROM search_log WHERE searched_at < now() - interval '90 days'")
@@ -729,6 +730,59 @@ async def _fn_lap(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str,
     }
 
 
+_ECHO_FRESH_DAYS = 7  # keep in step with mcp_server's wall split
+
+
+async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
+    """The collapsed pile, listable (ruling 758ded94): open threads the LENS ranks off the
+    wall — miner echoes no mind has ever touched (not one self_declared assertion, older
+    than the freshness window) plus judged questions (kind='question'). Their status is OPEN
+    and stays open: untouched is a fact about readers, never a resolution. Oldest first —
+    triage drains from the bottom. `args.repo` scopes to one project; report-only."""
+    repo = str(args.get("repo") or "").strip()
+    limit = max(1, min(int(args.get("limit") or 100), 500))
+    rows = await pool.fetch(
+        "SELECT o.id, o.created_at, "
+        " (SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
+        "   WHERE l.from_id=o.id AND l.type='in_repo' LIMIT 1) AS project, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='summary' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='kind' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
+        " NOT EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
+        "   AND sa.evidence_class='self_declared') AS untouched "
+        "FROM objects o "
+        "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
+        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "   WHERE a.object_id=o.id AND a.name='status' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "ORDER BY o.created_at ASC LIMIT 3000")
+    cutoff = datetime.now(UTC) - timedelta(days=_ECHO_FRESH_DAYS)
+    echoes = []
+    for r in rows:
+        if not r["summary"]:
+            continue
+        if repo and (r["project"] or "").removeprefix("repo:") != repo.removeprefix("repo:"):
+            continue
+        # obligations are exempt — a duty must never hide, untouched or not (7336c5fc)
+        if r["kind"] == "question" or (bool(r["untouched"]) and r["kind"] != "obligation"
+                                       and r["created_at"] < cutoff):
+            echoes.append({
+                "id": str(r["id"])[:8], "born": r["created_at"].date().isoformat(),
+                "project": (r["project"] or "").removeprefix("repo:") or None,
+                "kind": r["kind"], "summary": r["summary"][:200]})
+    return {
+        "echoes": echoes[:limit],
+        "count": len(echoes),
+        **({"note": f"showing oldest {limit} of {len(echoes)}"} if len(echoes) > limit else {}),
+        "verbs": ("triage with testimony, never bulk writes: reclassify_thread(id, "
+                  "kind='obligation') to adopt · resolve_thread(id, because=…) when done/moot "
+                  "· reclassify_thread(id, kind='question') for a question that is not work"),
+    }
+
+
 _LINT_CAP = 50  # findings LISTED per check; totals are always reported — no silent caps
 _ROMAN_HEIR = re.compile(r"-[ivxlcdm]+$")
 _SEVERITY_RANK = {"error": 0, "warn": 1, "info": 2}
@@ -993,6 +1047,7 @@ _FUNCTIONS: dict[str, Function] = {
     "project": _fn_project,
     "lap": _fn_lap,
     "lint": _fn_lint,
+    "echoes": _fn_echoes,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
@@ -1003,7 +1058,7 @@ _FUNCTIONS: dict[str, Function] = {
 # opinion → primitives the user owns.
 # `lap` anchors on args.ref OR the subject; `lint` audits the whole graph, no anchor at all.
 _SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "pulse", "project",
-                 "lap", "lint"}
+                 "lap", "lint", "echoes"}
 
 
 def list_functions() -> list[str]:
@@ -1690,6 +1745,7 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "lap": {"op": "function", "name": "lap"},
     # rung 2: the graph auditing itself — report-only findings, testimony not verdicts.
     "graph-lint": {"op": "function", "name": "lint"},
+    "echoes": {"op": "function", "name": "echoes"},
 }
 
 

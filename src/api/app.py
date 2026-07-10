@@ -258,6 +258,23 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         )
         return {"id": str(rid), "name": body.name}
 
+    @app.get("/search")
+    async def knowledge_search(
+        q: str, limit: int = Query(12, le=50),
+        p: asyncpg.Pool = Depends(get_pool),
+    ) -> dict[str, Any]:
+        """ONE ENGINE (thread 0deaec4f rung 1, closed): the console search bar rides the
+        SAME fn_search as the MCP tool — grade × recency ranking, testimony per hit, and
+        the search lands in search_log so console searches feed the retrieval telemetry
+        instead of being invisible to it. /objects?q= below remains the object BROWSER's
+        typed filter (a different job: enumerate by type, not rank knowledge)."""
+        out = await run_spec(
+            p, {"op": "function", "name": "search",
+                "args": {"q": q, "limit": limit, "caller": "console"}},
+            None, name="search")
+        items: dict[str, Any] = out["items"]
+        return items
+
     @app.get("/objects")
     async def list_objects(
         p: asyncpg.Pool = Depends(get_pool),

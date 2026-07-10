@@ -166,8 +166,27 @@ def test_parse_session_yield_tolerates_garbage_and_gates() -> None:
     )
     assert [d["summary"] for d in y.decisions] == ["we sense transcripts on a cron"]
     assert y.decisions[0]["kind"] == "ruling"  # unknown kind normalized
-    assert y.threads_opened == ["wire the PreCompact hook"]
+    # legacy bare-string threads read as their era's semantics: commitments
+    assert y.threads_opened == [{"summary": "wire the PreCompact hook", "class": "commitment"}]
     assert y.obligations == ["restart the worker after kernel changes"]
+
+
+def test_parse_session_yield_promotion_bar() -> None:
+    """The v2 thread shape (ruling 758ded94): commitments are owed work, questions are
+    remembered but never promoted to the work wall; unknown class reads as QUESTION —
+    a question can be promoted later, a fake commitment pollutes the fleet's list."""
+    y = parse_session_yield(json.dumps({
+        "decisions": [],
+        "threads_opened": [
+            {"summary": "off-box backup target still undecided for nineteen projects",
+             "class": "commitment"},
+            {"summary": "should the composer support live collaborative editing",
+             "class": "question"},
+            {"summary": "what is the meaning of the graph, really, one wonders",
+             "class": "philosophical"},
+        ],
+        "threads_resolved": [], "obligations": []}))
+    assert [t["class"] for t in y.threads_opened] == ["commitment", "question", "question"]
 
 
 # --- the tick: forward-only cursor, crash-safe advance ----------------------------------
@@ -593,11 +612,14 @@ async def test_miner_skips_extractions_the_session_already_declared(actions: Act
     assert [r["ec"] for r in grades] == ["self_declared"]       # only the capture; no echo
 
 
-async def test_tick_detects_a_warm_swap_and_raises_an_obligation(
+async def test_tick_detects_a_warm_swap_and_stamps_the_danger_map(
     actions: Actions, tmp_path: Path
 ) -> None:
     """A model change inside one session is the warm rug-pull the running agent can't feel;
-    the sensor reports what the agent can't."""
+    the sensor stamps model_swapped on the session's AGENT — the digest danger map's exact
+    read path — and mints NO thread (a swap is a fact about an agent, never work for the
+    fleet; the per-sighting 'verify' threads were the overminting forensics' biggest class,
+    ruling 84be6cbe)."""
     proj = tmp_path / "-home-x-code-osiris"
     proj.mkdir()
     t = proj / "s.jsonl"
@@ -613,15 +635,19 @@ async def test_tick_detects_a_warm_swap_and_raises_an_obligation(
     assert rep["swaps"] == 1
     swap = await actions.pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
-        "WHERE o.type='Thread' AND a.name='summary' AND a.value #>> '{}' ILIKE '%warm model swap%'")
-    assert swap is not None
-    assert "claude-fable-5 → claude-opus-4-8" in swap
-    kind = await actions.pool.fetchval(
-        "SELECT value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
-        "WHERE o.type='Thread' AND a.name='kind' AND a.object_id IN "
-        "(SELECT object_id FROM current_assertions WHERE name='summary' "
-        " AND value #>> '{}' ILIKE '%warm model swap%')")
-    assert kind == "obligation"
+        "WHERE o.type='Agent' AND o.canonical='agent:s' AND a.name='model_swapped'")
+    assert swap == "claude-fable-5 → claude-opus-4-8"
+    # and NO thread was minted for it
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.type='Thread' AND a.name='summary' AND a.value #>> '{}' ILIKE '%model swap%'")
+    assert n == 0
+    # the digest's danger map sees it without any mount ever happening
+    from datetime import timedelta
+
+    from src.orchestrator.digest import fleet_digest
+    dg = await fleet_digest(actions, since=datetime.now(UTC) - timedelta(hours=1))
+    assert any(d["agent"] == "agent:s" and d["swapped"] for d in dg["danger"])
 
 
 async def test_miner_defers_to_a_self_documenting_session(
@@ -657,3 +683,25 @@ async def test_miner_defers_to_a_self_documenting_session(
     assert rep2.get("deferred", 0) >= 1   # the boundary fired
     assert llm2.prompts == []             # decisive: the extractor was NEVER called
     assert rep2.get("threads", 0) == 0 and after == before  # nothing new mined
+
+
+async def test_emit_yield_questions_land_with_question_kind(actions: Actions) -> None:
+    """The promotion bar's emit half: a mined question is remembered at kind='question' —
+    searchable, open, and ranked OFF the work wall — while a commitment stays a plain
+    thread. Nobody's work list grows because someone wondered aloud."""
+    y = SessionYield(threads_opened=[
+        {"summary": "should the renderer support live theming, someone wondered",
+         "class": "question"},
+        {"summary": "the exporter is left broken pending the schema fix",
+         "class": "commitment"},
+    ])
+    await emit_yield(actions, y, repo="testrepo")
+    rows = await actions.pool.fetch(
+        "SELECT (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "        AND a.name='summary') AS s, "
+        " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='kind') AS k "
+        "FROM objects o WHERE o.type='Thread'")
+    kinds = {r["s"]: r["k"] for r in rows}
+    assert kinds["should the renderer support live theming, someone wondered"] == "question"
+    assert kinds["the exporter is left broken pending the schema fix"] is None

@@ -298,12 +298,17 @@ async def _retrieval(actions: Actions, since: datetime) -> dict[str, Any]:
     the fleet searched, how often it found NOTHING, and the queries that missed most. A memory
     system that doesn't measure its own recall failures rots invisibly."""
     row = await actions.pool.fetchrow(
-        "SELECT count(*) AS queries, count(*) FILTER (WHERE hits = 0) AS zero_hits "
+        "SELECT count(*) AS queries, count(*) FILTER (WHERE hits = 0) AS zero_hits, "
+        "count(*) FILTER (WHERE relaxed) AS relaxed "
         "FROM search_log WHERE searched_at >= $1", since)
     missed = await actions.pool.fetch(
         "SELECT query, count(*) AS n FROM search_log "
         "WHERE searched_at >= $1 AND hits = 0 GROUP BY query ORDER BY n DESC LIMIT 3", since)
+    # relaxed = searches that only survived on the ANY-term fallback — the quality question
+    # (relaxed-hit relevance) is the next honest embeddings trigger now that zero-hits
+    # retired (ruling 40e68cb1).
     return {"queries": int(row["queries"]), "zero_hits": int(row["zero_hits"]),
+            "relaxed": int(row["relaxed"]),
             "top_missed": [{"query": m["query"], "times": int(m["n"])} for m in missed]}
 
 

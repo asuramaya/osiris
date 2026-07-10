@@ -147,3 +147,24 @@ async def test_hardening_log_retention_prunes_ancient_rows(actions: Actions) -> 
     await _search(actions, "retention")
     rows = await actions.pool.fetch("SELECT query FROM search_log ORDER BY id")
     assert [r["query"] for r in rows] == ["retention"]  # the ancient row is gone
+
+
+async def test_relaxed_flag_lands_in_the_telemetry(actions: Actions) -> None:
+    """Zero-hits retired as the embeddings tripwire (ruling 40e68cb1); the next honest
+    trigger is relaxed-hit QUALITY — so the log must remember which searches only
+    survived on the ANY-term fallback."""
+    now = datetime.now(UTC)
+    d = await actions.create_or_find_object("Decision", "decision:relaxtest", "session")
+    await actions.assert_property(d, "summary", "the wake economics ruling landed",
+                                  "session", now, 0.9, evidence_class="self_declared")
+    from src.orchestrator.compositions import _fn_search
+
+    # strict: all terms present in one doc
+    await _fn_search(actions.pool, None, {"q": "wake economics", "caller": "t"})
+    # bag: no single doc holds all terms -> survives only relaxed
+    await _fn_search(actions.pool, None,
+                     {"q": "wake zzeconomics haiku triage nonexistent", "caller": "t"})
+    rows = await actions.pool.fetch(
+        "SELECT query, hits, relaxed FROM search_log ORDER BY id")
+    assert [bool(r["relaxed"]) for r in rows] == [False, True]
+    assert rows[1]["hits"] > 0  # it did survive — on relaxation

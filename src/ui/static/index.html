@@ -727,14 +727,18 @@ function debouncedSearch(){ clearTimeout(st); st=setTimeout(globalSearch,180); }
 async function globalSearch(){
   const q=$('search').value.trim(); closePop();
   if(q.length<2) return;
-  const res=await fetch(`/objects?q=${encodeURIComponent(q)}&limit=12`).then(r=>r.json());
+  // one engine (rung 1): the bar searches KNOWLEDGE via fn_search — grade x recency ranked,
+  // snippet = the matched testimony — and the query lands in the retrieval telemetry.
+  const res=await fetch(`/search?q=${encodeURIComponent(q)}&limit=12`).then(r=>r.json());
+  const hits=(res&&res.hits)||[];
   const pop=document.createElement('div'); pop.className='pop'; pop.id='searchpop';
   const r=$('search').getBoundingClientRect(); pop.style.left=r.left+'px'; pop.style.top=(r.bottom+5)+'px';
   pop.style.width=r.width+'px'; pop.style.maxHeight='340px'; pop.style.overflowY='auto';
-  pop.innerHTML = res.length ? res.map(o=>`
+  pop.innerHTML = hits.length ? hits.map(o=>`
     <div class="item" onmousedown="pick('${o.id}')">
       <span class="dot" style="background:${ty(o.type).c}"></span>
-      <span class="lab">${esc(o.name||o.canonical)}</span><span class="ty">${o.type}</span>
+      <span class="lab">${esc(o.snippet ? o.snippet.replace(/<\/?b>/g,'') : o.canonical)}</span>
+      <span class="ty">${o.type}</span>
     </div>`).join('') : '<div class="o-empty">No matches.</div>';
   document.body.appendChild(pop);
 }

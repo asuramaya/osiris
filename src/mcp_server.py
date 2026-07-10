@@ -884,14 +884,61 @@ def _rank_open_threads(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
     return shown, len(ranked) - len(shown)
 
 
+_ECHO_FRESH_DAYS = 7  # a never-touched DERIVED thread younger than this still rides the wall
+
+
+async def _open_thread_wall(
+    pool: asyncpg.Pool, proj: uuid.UUID,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The project's open threads, SPLIT: (wall, echoes). An ECHO is a thread no mind has
+    ever touched — not one self_declared assertion in its whole history — that is either
+    kind='question' or older than the freshness window. Its status stays OPEN in the record
+    (untouched ≠ resolved, ruling 758ded94); only the LENS stops hauling it. Rows carry the
+    8-char short id so triage verbs can name their target directly."""
+    rows = await pool.fetch(
+        "SELECT o.id, o.created_at, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='summary' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='kind' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
+        " NOT EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
+        "   AND sa.evidence_class='self_declared') AS untouched "
+        "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+        "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
+        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "   WHERE a.object_id=o.id AND a.name='status' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "ORDER BY o.created_at DESC LIMIT 400", proj)
+    cutoff = datetime.now(UTC) - timedelta(days=_ECHO_FRESH_DAYS)
+    wall: list[dict[str, Any]] = []
+    echoes: list[dict[str, Any]] = []
+    for r in rows:
+        if not r["summary"]:
+            continue
+        item = {"id": str(r["id"])[:8], "summary": r["summary"], "kind": r["kind"]}
+        # questions never ride the wall (whoever judged them said 'not work'); untouched
+        # DERIVED threads get a freshness window, then collapse until someone triages them.
+        # OBLIGATIONS are exempt — a duty must never hide, untouched or not (7336c5fc).
+        is_echo = r["kind"] == "question" or (
+            bool(r["untouched"]) and r["kind"] != "obligation"
+            and r["created_at"] < cutoff)
+        (echoes if is_echo else wall).append(
+            {**item, "born": r["created_at"].date().isoformat()} if is_echo else item)
+    echoes.reverse()  # oldest first — triage drains from the bottom of the pile
+    return wall, echoes
+
+
 async def _project_briefing(pool: asyncpg.Pool, project: str) -> dict[str, Any] | None:
     """A working agent's SCOPED bearings — its OWN project's open threads + recent decisions,
     not the whole fleet's (decepticons surfaced that orient's flood costs more context than it
-    saves). NOW A PURE COMPOSITION (#20): orient runs the `project-briefing` op-tree with the
-    project as subject — the fleet briefing's selects intersected with the project's in_repo
-    neighbourhood, recency-ordered. The bespoke SQL is gone; orient dogfoods the composer on
-    its own need, and the view is forkable like any lens. The composer can't express
-    obligations-first ranking (single-key order), so the wall is RANKED + capped here."""
+    saves). Decisions/tensions ride the `project-briefing` composition (#20); the open-thread
+    WALL is assembled here because the composer can't express what the wall now needs —
+    obligations-first ranking, grade-aware echo detection (a never-touched DERIVED thread
+    collapses into a counted line instead of riding forever), and the TRIAGE CARD: up to 3 of
+    the oldest echoes handed to each session with the three honest verbs. Ranking + collapse
+    at the LENS only — the record keeps every thread open until testimony says otherwise."""
     proj = await pool.fetchval(
         "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1", f"repo:{project}")
     if proj is None:
@@ -899,8 +946,9 @@ async def _project_briefing(pool: asyncpg.Pool, project: str) -> dict[str, Any] 
     res = await comp.run_composition(pool, "project-briefing", proj)
     items = res.get("items") if isinstance(res, dict) else None
     if not isinstance(items, dict):  # unseeded / error — never crash orient, just show empty
-        return {"open_threads": [], "recent_decisions": []}
-    shown, more = _rank_open_threads(items.get("open_threads") or [])
+        items = {}
+    wall, echoes = await _open_thread_wall(pool, proj)
+    shown, more = _rank_open_threads(wall)
     out: dict[str, Any] = {
         "open_threads": shown,
         "recent_decisions": [r for r in (items.get("recent_decisions") or []) if r.get("summary")],
@@ -910,6 +958,19 @@ async def _project_briefing(pool: asyncpg.Pool, project: str) -> dict[str, Any] 
         out["open_threads_note"] = (
             f"showing {len(shown)} of {len(shown) + more} open threads (obligations first, "
             f"then recency); {more} more not shown")
+    if echoes:
+        out["unread_echoes"] = {
+            "count": len(echoes),
+            "note": (f"{len(echoes)} open threads off the wall — miner echoes no mind has "
+                     "touched, plus judged questions. Still OPEN in the record; "
+                     "run_composition('echoes') lists them all"),
+            "triage": [{"id": e["id"], "born": e["born"],
+                        "summary": e["summary"][:160]} for e in echoes[:3]],
+            "verbs": ("read each; then: real owed work → reclassify_thread(id, "
+                      "kind='obligation') · done or moot → resolve_thread(id, because=…) · "
+                      "a question, not work → reclassify_thread(id, kind='question'). "
+                      "Your judgment is testimony; never resolve what merely looks stale."),
+        }
     return out
 
 
@@ -1328,6 +1389,26 @@ async def resolve_thread(
     if tid is None:
         return {"error": f"no open thread matches {ref!r}"}
     return {"id": str(tid), "status": "resolved"}
+
+
+@mcp.tool()
+async def reclassify_thread(
+    ref: str, kind: str, because: str | None = None, subagent_id: str | None = None,
+    subagent_type: str | None = None, ctx: Context | None = None,
+) -> dict[str, str]:
+    """Triage a thread WITHOUT changing its status (untouched is not resolved — ruling
+    758ded94). You read it and judged what it IS: `kind='obligation'` ADOPTS it as real owed
+    work (floats to the top of every briefing), `kind='question'` demotes a miner-promoted
+    question back to a question (stays open and searchable, leaves the work wall),
+    `kind='task'` marks ordinary work. `ref` is a UUID, an 8-char short id, or a summary
+    substring; `because` records your judgment. SELF_DECLARED — your testimony outranks the
+    miner's guess. Use resolve_thread instead when the work is actually done or moot."""
+    t = await capture.reclassify_thread(
+        Actions(await _pool_get()), ref, kind=kind, because=because,
+        source=await _actor_for(ctx, subagent_id, subagent_type))
+    if t is None:
+        return {"error": f"no thread matched {ref!r}"}
+    return {"id": str(t), "kind": kind, "status": "open (unchanged — reclassified, not resolved)"}
 
 
 @mcp.tool()

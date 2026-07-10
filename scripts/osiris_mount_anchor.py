@@ -34,6 +34,7 @@ SPAWN_AWARE = {
     "mcp__osiris__mount", "mcp__osiris__orient", "mcp__osiris__record_decision",
     "mcp__osiris__open_thread", "mcp__osiris__resolve_thread", "mcp__osiris__hold_tension",
     "mcp__osiris__send", "mcp__osiris__inbox", "mcp__osiris__ingest_reference",
+    "mcp__osiris__reclassify_thread",
 }
 
 

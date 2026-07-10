@@ -441,21 +441,23 @@ _SYSTEM = (
     "it found inside a transcript instead of mining it.)\n"
     "Return STRICT JSON, no prose, no markdown fences:\n"
     '{"decisions":[{"summary":str,"kind":"ruling"|"choice"|"rejection",'
-    '"rationale":str}],"threads_opened":[str],"threads_resolved":[str],'
-    '"obligations":[str]}\n'
+    '"rationale":str}],'
+    '"threads_opened":[{"summary":str,"class":"commitment"|"question"}],'
+    '"threads_resolved":[str],"obligations":[str]}\n'
     "Rules:\n"
     "- decisions: only rulings/choices the text shows were SETTLED ('we will X', "
     "'decided: Y', an explicit rejection). summary = one self-contained sentence; "
     "rationale = the stated WHY, or an empty string.\n"
-    "- threads_opened: a durable OPEN QUESTION, BLOCKER, or next-step the NEXT session would "
-    "need to INHERIT — NOT the in-session work this excerpt is performing. The inheritance "
-    "test: if this same conversation will plausibly finish it before it ends, it is a "
-    "work-step, not a thread ('run the gate tests', 'hook the tick', 'update the import', "
-    "'verify the primitives', 'fix the lint' are STEPS, never threads). Keep only what "
-    "OUTLIVES the session: a blocker awaiting something external, a decision deferred, a gap "
-    "deliberately left unbuilt, a question raised and not answered. When genuinely unsure "
-    "whether it outlives the session, KEEP it — a lost open question is worse than a spare "
-    "one.\n"
+    "- threads_opened: something the NEXT session would need to INHERIT — NOT the "
+    "in-session work this excerpt is performing. The inheritance test: if this same "
+    "conversation will plausibly finish it before it ends, it is a work-step, not a "
+    "thread ('run the gate tests', 'hook the tick', 'update the import', 'fix the lint' "
+    "are STEPS, never threads). class='commitment' ONLY when the text shows work someone "
+    "actually OWES: a blocker awaiting something external, a decision explicitly deferred, "
+    "a gap deliberately left unbuilt, something left broken. class='question' for a "
+    "question raised and not answered — worth remembering, but NOBODY committed to it. "
+    "When genuinely unsure which, it is a question — a question can be promoted later; "
+    "a fake commitment pollutes the fleet's work list.\n"
     "- threads_resolved: ONLY work the text shows was actually COMPLETED, with evidence "
     "(tests passed, committed, verified live). A plan, intention, or in-progress step is "
     "NOT a resolution.\n"
@@ -495,7 +497,8 @@ _KINDS = ("ruling", "choice", "rejection", "reset", "override", "decision")
 @dataclass
 class SessionYield:
     decisions: list[dict[str, str]] = field(default_factory=list)
-    threads_opened: list[str] = field(default_factory=list)
+    # {'summary','class'} — class='commitment' (owed work) or 'question' (raised, unowned)
+    threads_opened: list[dict[str, str]] = field(default_factory=list)
     threads_resolved: list[str] = field(default_factory=list)
     obligations: list[str] = field(default_factory=list)
 
@@ -537,8 +540,19 @@ def parse_session_yield(raw: str) -> SessionYield:
             "kind": kind if kind in _KINDS else "ruling",
             "rationale": " ".join(rat.split())[:600],
         })
-    for key, out in (("threads_opened", y.threads_opened),
-                     ("threads_resolved", y.threads_resolved),
+    for item in data.get("threads_opened", []) or []:
+        # v2 shape: {"summary","class"} — the promotion bar (ruling 758ded94). Legacy bare
+        # strings (old prompt, replayed transcripts) read as commitments, their era's
+        # semantics. An unknown/missing class reads as QUESTION: a question can be promoted
+        # later; a fake commitment pollutes the fleet's work list.
+        if isinstance(item, dict):
+            s = _clean_sentence(item.get("summary"))
+            cls = "commitment" if item.get("class") == "commitment" else "question"
+        else:
+            s, cls = _clean_sentence(item), "commitment"
+        if s is not None:
+            y.threads_opened.append({"summary": s, "class": cls})
+    for key, out in (("threads_resolved", y.threads_resolved),
                      ("obligations", y.obligations)):
         for item in data.get(key, []) or []:
             s = _clean_sentence(item)
@@ -642,22 +656,23 @@ async def _record_swap(
     lines: list[str] | None = None,
 ) -> int:
     """A model CHANGED inside one session — the warm rug-pull the running agent can't feel
-    (its system prompt kept asserting the old identity). The sensor reports what the agent
-    can't: an obligation naming the session and the transition, idempotent per (session,
-    transition) so a re-mine doesn't re-flag. Returns 1 if flagged, 0 if the boundary
-    skipped it. This is the external detector the cold-boot confession can never be."""
+    (its system prompt kept asserting the old identity). The sensor stamps `model_swapped`
+    on the session's Agent object — the EXACT property the digest's danger map reads — so
+    the sighting surfaces where the operator already looks. It used to mint an obligation
+    THREAD per sighting instead: an oscillating session accreted three 'verify' threads
+    addressed to nobody (the overminting forensics, ruling 84be6cbe) — a swap is a FACT
+    about an agent, never work for the fleet. Idempotent per transition (the same value
+    re-asserts in place). Returns 1 when stamped."""
+    agent_source = _agent_of(path)  # the SAME id the roster/lineage key this session by
     when = swap_at(lines) if lines else None  # the chunk the caller already read holds the flip
-    at = f" First observed at {when}." if when else ""
-    summary = (
-        f"warm model swap in session {path.stem[:8]}: {' → '.join(models)} — the safety "
-        "router changed the model mid-session; verify which model authored the affected "
-        f"decisions/threads (source_model is now stamped on each). Identity rug-pull.{at}"
-    )
-    tid = await _emit_thread(
-        actions, summary, repo=repo, observed=datetime.now(UTC),
-        kind="obligation", source_model=models[-1],
-    )
-    return 1 if tid is not None else 0
+    observed = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", agent_source, _SOURCE)
+    await actions.assert_property(a, "model_swapped", " → ".join(models), _SOURCE, observed,
+                                  _CONF, evidence_class=_EC, actor=_SOURCE)
+    if when:
+        await actions.assert_property(a, "swap_seen_at", when, _SOURCE, observed, _CONF,
+                                      evidence_class=_EC, actor=_SOURCE)
+    return 1
 
 
 async def _resolve_own_threads(
@@ -822,11 +837,16 @@ async def emit_yield(
                             source=_SOURCE, evidence_class=_EC, confidence=_CONF)
         counts["decisions"] += 1
     opened_now: set[Any] = set()
-    for text in y.threads_opened:
+    for t in y.threads_opened:
+        text, cls = (t["summary"], t.get("class", "question")) if isinstance(t, dict) \
+            else (t, "commitment")
         if _dup_of_deliberate(text, prior.get("Thread", ())):
             counts["skipped_dup"] += 1
             continue
+        # questions carry kind='question': remembered, searchable, but ranked OUT of the
+        # work wall (the promotion bar, ruling 758ded94) — nobody committed to them.
         tid = await _emit_thread(actions, text, observed=observed, source_model=source_model,
+                                 kind="question" if cls == "question" else None,
                                  repo=_home_repo(known, text, repo) if repo else repo,
                                  writer=writer)
         if tid is not None:
