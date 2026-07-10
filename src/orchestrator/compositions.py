@@ -719,14 +719,18 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     """rung 2 — GRAPH LINT (campaign 5c57f54d): the knowledge layer's immune system. Audits
     the graph ITSELF — report-only, pure SQL + credence, no LLM, and NO WRITES (rule #7: a
     lint that healed would be a loop pathology; findings are testimony for a mind to judge).
-    Six checks, each born from a lived bug: CONTRADICTION (near-tie multi-source winners on
-    one fact — surfaced, never resolved), LAUNDERING (an agent carrying a fact above its
-    origin grade — via credence_props, the mandated read path for grade-is-the-message),
-    LINEAGE (succeeded_by cycles / dangling heir pointers / heirs without ancestry /
-    retired-yet-live agents / healed false mints), ORPHAN-LINK (live links into merged or
-    retired objects), STALE-OBLIGATION (open duties older than `stale_days` — duties rot
-    silently), ATTRIBUTION (writes from agent ids the graph never registered — the
-    impersonation class, made a standing tripwire)."""
+    Seven checks, each born from a lived bug: CONTRADICTION (near-tie multi-source winners
+    on one NON-lifecycle fact — surfaced, never resolved), STATUS-REGRESSION (an 'open'
+    newer than another source's 'resolved' — a deliberate close overridden by recency; the
+    lifecycle property's one real failure mode, its normal transitions never flagged),
+    LAUNDERING (an agent carrying a fact above its origin grade — via credence_props, the
+    mandated read path for grade-is-the-message), LINEAGE (succeeded_by cycles / dangling
+    heir pointers / heirs without ancestry / retired-yet-live agents / healed false mints),
+    ORPHAN-LINK (info-grade: historical edges on non-active objects — expected under
+    resolve-on-read, metered as consolidation debt, merge markers excluded),
+    STALE-OBLIGATION (open duties older than `stale_days` — duties rot silently),
+    ATTRIBUTION (writes from agent ids the graph never registered — the impersonation
+    class, made a standing tripwire)."""
     stale_days = max(1, min(int(args.get("stale_days") or 14), 365))
     eps = float(args.get("eps") or 0.05)          # "near-tie" on the confidence axis
     live_secs = int(args.get("live_secs") or 900)  # a mount seen this recently is LIVE
@@ -741,8 +745,12 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     # CONTRADICTION — same (object, field), different values from different sources, the top
     # two winners within eps of each other: the grade-then-recency resolver is deciding this
     # fact on a coin flip. Surface the tie; resolving it is a mind's job (tension audit).
+    # `status` is EXCLUDED: it is a lifecycle property — open→resolved from another hand is
+    # the state machine working, not a war (the first live lint flagged 23 of these; zero
+    # were real). Its one true failure mode gets its own check below (status-regression).
     con = await pool.fetch(
         "WITH multi AS (SELECT object_id, name FROM current_assertions "
+        "  WHERE name <> 'status' "
         "  GROUP BY object_id, name HAVING count(DISTINCT source_id) > 1), "
         "ranked AS (SELECT ca.object_id, ca.name, ca.value #>> '{}' AS v, ca.source_id, "
         "  ca.confidence, row_number() OVER (PARTITION BY ca.object_id, ca.name "
@@ -764,6 +772,31 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                    f"'{_cell(r['rival'])}' ({r['rival_source']}, "
                    f"{round(float(r['rival_conf']), 3)}) by ≤{eps} — a coin-flip winner"}
         for r in con])
+
+    # STATUS-REGRESSION — the lifecycle property's ONE real failure mode: an 'open' NEWER
+    # than a different source's 'resolved' at comparable confidence means a deliberate close
+    # is being overridden by recency (the miner-re-opens-what-a-session-resolved class). A
+    # normal transition (resolved newer than open) is never flagged.
+    reg = await pool.fetch(
+        "WITH s AS (SELECT ca.object_id, ca.value #>> '{}' AS v, ca.source_id, "
+        "  ca.confidence, ca.observed_at "
+        "  FROM current_assertions ca JOIN objects o ON o.id=ca.object_id "
+        "  WHERE ca.name='status' AND o.type='Thread' AND o.status='active') "
+        "SELECT o.canonical, op.source_id AS reopener, op.observed_at AS reopened_at, "
+        "  re.source_id AS resolver, "
+        "  (SELECT value #>> '{}' FROM current_assertions WHERE object_id=op.object_id "
+        "    AND name='summary' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS summary "
+        "FROM s op JOIN s re ON re.object_id=op.object_id "
+        "JOIN objects o ON o.id=op.object_id "
+        "WHERE op.v='open' AND re.v='resolved' AND op.observed_at > re.observed_at "
+        "  AND op.source_id <> re.source_id AND op.confidence >= re.confidence - $1 "
+        "ORDER BY op.observed_at", eps)
+    land("status-regression", "error", [
+        {"subject": r["canonical"],
+         "detail": f"re-opened by {r['reopener']} AFTER {r['resolver']} resolved it "
+                   f"({str(r['reopened_at'])[:19]}) — a deliberate close is being overridden "
+                   f"by recency: {_cell(r['summary'])}"}
+        for r in reg])
 
     # LAUNDERING — through credence_props, the module whose own invariant demands every
     # grade-is-the-message read path route through it. Candidates: only co-asserted objects
@@ -849,26 +882,30 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                                  "be retired; listed so the healing stays visible"}
         for c in sorted(canons) if props.get(c, {}).get("false_mint") == "true"])
 
-    # ORPHAN-LINK — FKs make truly dangling links impossible; the live failure mode is a
-    # still-valid link whose endpoint was merged or retired and never re-pointed.
-    orphan_total = await pool.fetchval(
-        "SELECT count(*) FROM links l JOIN objects fo ON fo.id=l.from_id "
-        "JOIN objects t ON t.id=l.to_id "
-        "WHERE (l.valid_until IS NULL OR l.valid_until > now()) "
-        "  AND (fo.status <> 'active' OR t.status <> 'active')")
-    orphans = await pool.fetch(
-        "SELECT l.type, fo.canonical AS from_c, fo.status AS from_s, "
-        "  t.canonical AS to_c, t.status AS to_s "
+    # ORPHAN-LINK — FKs make truly dangling links impossible, and the kernel's merge is
+    # resolve-on-read BY DESIGN (assertions and links are never rewritten — provenance
+    # survives; the loser's same_as → winner IS the merge marker). So edges on non-active
+    # objects are HISTORY, not errors: this check is an INFO-grade consolidation-debt meter
+    # (rung 4's queue), with the merge markers themselves excluded — flagging the merge
+    # mechanism as damage taught the first live run to cry wolf 159 times.
+    _ORPHAN_WHERE = (
         "FROM links l JOIN objects fo ON fo.id=l.from_id JOIN objects t ON t.id=l.to_id "
         "WHERE (l.valid_until IS NULL OR l.valid_until > now()) "
         "  AND (fo.status <> 'active' OR t.status <> 'active') "
+        "  AND NOT (l.type = 'same_as' AND fo.merged_into IS NOT DISTINCT FROM l.to_id)")
+    orphan_total = await pool.fetchval(f"SELECT count(*) {_ORPHAN_WHERE}")
+    orphans = await pool.fetch(
+        "SELECT l.type, fo.canonical AS from_c, fo.status AS from_s, "
+        f" t.canonical AS to_c, t.status AS to_s {_ORPHAN_WHERE} "
         "ORDER BY l.last_seen DESC LIMIT $1", _LINT_CAP)
-    land("orphan-link", "warn", [
+    land("orphan-link", "info", [
         {"subject": f"{r['from_c']} -{r['type']}-> {r['to_c']}",
-         "detail": "live link into a non-active object ("
+         "detail": "historical edge on a non-active object ("
                    + ", ".join(f"{c} is {s}" for c, s in
                                ((r["from_c"], r["from_s"]), (r["to_c"], r["to_s"]))
-                               if s != "active") + ")"}
+                               if s != "active")
+                   + ") — expected under resolve-on-read; the count meters consolidation "
+                     "debt, not damage"}
         for r in orphans])
     counts["orphan-link"] = int(orphan_total)
 

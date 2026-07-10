@@ -151,6 +151,43 @@ async def test_lint_surfaces_coin_flip_winners(actions: Actions) -> None:
     assert _by_check(out2, "contradiction") == []
 
 
+async def test_lint_status_lifecycle_is_not_a_war(actions: Actions) -> None:
+    """The first live run's lesson (23 findings, zero real): open→resolved from another
+    hand is the state machine WORKING — never a contradiction. The one true failure mode —
+    an 'open' NEWER than a different source's 'resolved' — is its own error check."""
+    t = "agent:teller"
+    ok = await actions.create_or_find_object("Thread", "thread:lifecycle", t)
+    await actions.assert_property(ok, "status", "open", "agent:opener", NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(ok, "status", "resolved", "agent:closer",
+                                  NOW + timedelta(hours=1), 0.9, evidence_class=_SD)
+    out = await _fn(actions, "lint", {})
+    assert _by_check(out, "contradiction") == []        # a transition, not a tie
+    assert _by_check(out, "status-regression") == []
+    # ...but a REGRESSION — re-opened by recency over a deliberate close — is an error
+    bad = await actions.create_or_find_object("Thread", "thread:regressed", t)
+    await actions.assert_property(bad, "summary", "the overridden close", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(bad, "status", "resolved", "agent:closer", NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(bad, "status", "open", "agent:necromancer",
+                                  NOW + timedelta(hours=2), 0.9, evidence_class=_SD)
+    out2 = await _fn(actions, "lint", {})
+    reg = _by_check(out2, "status-regression")
+    assert len(reg) == 1 and reg[0]["subject"] == "thread:regressed"
+    assert reg[0]["severity"] == "error"
+    assert "agent:necromancer" in reg[0]["detail"] and "agent:closer" in reg[0]["detail"]
+    # re-resolving heals the finding, and a LOW-confidence re-open (the miner's DERIVED
+    # echo, newer still) does NOT re-flag: it lacks the confidence to override the close
+    await actions.assert_property(bad, "status", "resolved", "agent:closer",
+                                  NOW + timedelta(hours=3), 0.9, evidence_class=_SD)
+    await actions.assert_property(bad, "status", "open", "session-miner",
+                                  NOW + timedelta(hours=4), 0.4, evidence_class="derived")
+    out3 = await _fn(actions, "lint", {})
+    assert all(f["subject"] != "thread:regressed"
+               for f in _by_check(out3, "status-regression"))
+
+
 async def test_lint_orphan_links_stale_duties_and_ghosts(actions: Actions) -> None:
     t = "agent:teller"
     # a live link into a retired corpse
@@ -167,10 +204,20 @@ async def test_lint_orphan_links_stale_duties_and_ghosts(actions: Actions) -> No
                                   evidence_class=_SD)
     await actions.pool.execute(
         "UPDATE objects SET created_at = now() - interval '30 days' WHERE id=$1", th)
+    # ...and a MERGE: the loser's old edge stays visible as consolidation debt, but the
+    # merge's own same_as marker is the mechanism, never a finding
+    winner = await actions.create_or_find_object("Organization", "org:winner", t)
+    loser = await actions.create_or_find_object("Organization", "org:loser", t)
+    await actions.create_link(alive, loser, "member_of", t, NOW, 0.9, evidence_class=_SD)
+    await actions.merge_objects(winner, loser, "same org, two filings", t)
     out = await _fn(actions, "lint", {"stale_days": 14})
     orphan = _by_check(out, "orphan-link")
-    assert len(orphan) == 1 and "org:corpse" in orphan[0]["subject"]
-    assert "retired" in orphan[0]["detail"]
+    subjects = [f["subject"] for f in orphan]
+    assert any("org:corpse" in s for s in subjects)
+    assert any("org:loser" in s and "member_of" in s for s in subjects)  # the debt, metered
+    assert not any("same_as" in s for s in subjects)                     # the marker, excluded
+    assert all(f["severity"] == "info" for f in orphan)                  # history, not damage
+    assert "resolve-on-read" in orphan[0]["detail"]
     stale = _by_check(out, "stale-obligation")
     assert len(stale) == 1 and stale[0]["age_days"] >= 29
     assert "rotting duty" in stale[0]["detail"]
@@ -194,6 +241,7 @@ async def test_lint_is_report_only_and_a_clean_graph_says_so(actions: Actions) -
     await _fn(actions, "lint", {})
     assert await actions.pool.fetchval("SELECT count(*) FROM object_events") == events
     assert out["findings"] == []
-    assert set(out["clean"]) >= {"contradiction", "laundering", "lineage-cycle",
-                                 "orphan-link", "stale-obligation", "attribution"}
+    assert set(out["clean"]) >= {"contradiction", "status-regression", "laundering",
+                                 "lineage-cycle", "orphan-link", "stale-obligation",
+                                 "attribution"}
     assert "report-only" in out["discipline"]

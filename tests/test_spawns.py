@@ -133,6 +133,73 @@ async def test_mount_by_a_spawn_never_takes_the_seat(actions: Actions, tmp_path:
         srv._spawns_seen.clear()
 
 
+async def test_spawn_inbox_is_peek_only(actions: Actions, tmp_path: Path) -> None:
+    """A spawn reading its parent's mailbox must never LEASE (a dying child's lease blocks
+    redelivery) nor SETTLE (that is the seat's duty) — peek is FORCED, ack dropped."""
+    from types import SimpleNamespace
+
+    from src import mcp_server as srv
+    from src.orchestrator.mailbox import send_message
+
+    job_dir = str(tmp_path / "jobs" / "feed0007")
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:feed0007",
+                            project="demo", cwd=str(tmp_path), model=None,
+                            session_key="sid:spawnbox")
+    await mounts.save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "cafe0008"),
+                            agent_id="agent:cafe0008", project="demo", cwd=str(tmp_path),
+                            model=None, session_key="sid:other")
+    msg = await send_message(actions.pool, from_agent="agent:cafe0008", from_project="demo",
+                             to_project="demo", body="work for the seat")
+    ctx = SimpleNamespace(request_context=SimpleNamespace(
+        request=SimpleNamespace(headers={"mcp-session-id": "spawnbox",
+                                         "x-osiris-job": job_dir}), session=object()))
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.inbox(peek=False, ack=[int(msg["id"])],
+                              subagent_id="agent-kid00006", ctx=ctx)
+        assert "spawn read" in out["note"] and "peek FORCED" in out["note"]
+        assert "settled" not in out                       # the ack was dropped, not honored
+        leased = await actions.pool.fetchval(
+            "SELECT count(*) FROM message_recipients WHERE message_id=$1 "
+            "AND delivered_at IS NOT NULL", int(msg["id"]))
+        assert leased == 0                                # nothing leased by the peek
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop("sid:spawnbox", None)
+        srv._spawns_seen.clear()
+
+
+async def test_dm_to_a_spawn_warns_of_the_dead_letter(actions: Actions, tmp_path: Path) -> None:
+    """A DM addressed to an ephemeral spawn may never be read — send() says so at send time
+    and points at the parent seat."""
+    from types import SimpleNamespace
+
+    from src import mcp_server as srv
+
+    await register_spawn(Actions(actions.pool), "kid00007", agent_type="Explore",
+                         parent_agent="agent:beef0009", project="demo")
+    job_dir = str(tmp_path / "jobs" / "beef0009")
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:beef0009",
+                            project="demo", cwd=str(tmp_path), model=None,
+                            session_key="sid:dmspawn")
+    ctx = SimpleNamespace(request_context=SimpleNamespace(
+        request=SimpleNamespace(headers={"mcp-session-id": "dmspawn",
+                                         "x-osiris-job": job_dir}), session=object()))
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.send("are you there?", to_agent="agent:kid00007", ctx=ctx)
+        assert out.get("sent") and "SPAWN" in out.get("warning", "")
+        # a DM to a real (non-spawn) agent stays warning-free
+        out2 = await srv.send("hello seat", to_agent="agent:beef0009", ctx=ctx)
+        assert out2.get("sent") and "warning" not in out2
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop("sid:dmspawn", None)
+        srv._spawns_seen.clear()
+
+
 async def test_while_away_names_your_spawns(actions: Actions) -> None:
     """The surprise kill: a returning parent's away-fold lists the children its lineage
     spawned since its last sign of life — type, model, when."""

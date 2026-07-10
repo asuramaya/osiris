@@ -1093,6 +1093,15 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     if res["to_agent"]:  # a DM — report the addressee and its liveness
         out["dm_to"] = res["to_agent"]
         out["listener"] = await mounts.agent_liveness(pool, res["to_agent"])
+        if await pool.fetchval(
+                "SELECT 1 FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+                "WHERE o.canonical=$1 AND a.name='is_sidechain' "
+                "AND a.value #>> '{}' = 'true' LIMIT 1", res["to_agent"]):
+            # the dead-letter class: an ephemeral spawn has no session to resume and no
+            # chrome to nag — a DM to it may never be read or settled
+            out["warning"] = ("the addressee is an ephemeral SPAWN — it cannot be woken and "
+                              "may never read this; if the work is for its lineage, DM the "
+                              "parent seat instead (see the spawn's spawned_by link)")
     else:  # a broadcast — the project channel: who's live, will the trigger wake them, the queue
         dest = res["to"]
         last_seen = await mounts.project_last_seen(pool, dest)
@@ -1108,7 +1117,8 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
 
 @mcp.tool()
 async def inbox(project: str | None = None, peek: bool = False,
-                ack: list[int] | None = None, ctx: Context | None = None) -> dict[str, Any]:
+                ack: list[int] | None = None, subagent_id: str | None = None,
+                subagent_type: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
     """Read messages other agents left for you (the fleet mailbox). Defaults to YOUR mounted
     project; pass `project` to read another's (project='operator' reads the human's desk).
     Reading LEASES a message, it does NOT consume it: SETTLE each one you've handled — reply
@@ -1125,6 +1135,15 @@ async def inbox(project: str | None = None, peek: bool = False,
         return {"error": "mount(cwd, job_dir=<your anchor>) first, or pass project=<repo>"}
     pool = await _pool_get()
     st = get_settings()
+    # a SPAWN reads over its parent's shoulder: PEEK only. It must never LEASE the seat's
+    # mail (a lease a dying child holds blocks redelivery for the whole lease window) and
+    # never SETTLE it (settling is the seat's duty — a child acking mail the parent never
+    # saw re-creates the exact surprise this layer exists to kill).
+    from src.orchestrator.lineage import normalize_spawn_id
+
+    spawn_reader = normalize_spawn_id(subagent_id) is not None
+    if spawn_reader:
+        peek, ack = True, None
     # the reader is YOU (your DMs + your project's broadcasts, your own lease/settle) — EXCEPT
     # the operator desk, whose reader is the human ('operator'): an agent only peeks it, never
     # settles it as itself.
@@ -1137,7 +1156,10 @@ async def inbox(project: str | None = None, peek: bool = False,
     if not peek:  # what THIS call just leased is ours, not someone else's in-flight
         ours = {m["id"] for m in msgs}
         flight = [f for f in flight if f["id"] not in ours]
-    if peek:
+    if spawn_reader:
+        note = ("spawn read — peek FORCED, nothing leased or settled: the mailbox belongs "
+                "to your parent's seat; report what you saw, let the seat settle it")
+    elif peek:
         note = "peek — nothing leased"
     elif msgs:
         note = ("leased — settle each by replying (send(reply_to=<id>)) or acking "
