@@ -120,6 +120,19 @@ def _prune_agents(cap: int = 256) -> None:
         _agents_touched.pop(key, None)
 
 
+def _evict_stale_minds(ancestor: str | None) -> None:
+    """A mint means the ANCESTOR is dead — but its MCP connection is not: a compaction (or a
+    live swap) preserves the client session, so the conn-keyed hot cache keeps answering as
+    the dead mind while the durable row already names the heir (Thoth XVII's first breath,
+    2026-07-10: orient() spoke as -xvi minutes after the whisper minted -xvii). Evict every
+    cached identity wearing the ancestor; the next call re-attaches from the row as the heir."""
+    if not ancestor:
+        return
+    for key in [k for k, ident in _agents.items() if ident.agent_id == ancestor]:
+        _agents.pop(key, None)
+        _agents_touched.pop(key, None)
+
+
 def _conn_key(ctx: Context | None) -> str | None:
     """A per-client-session key. Prefer the protocol session id (the Mcp-Session-Id header —
     minted at initialize, stable across every request of the client session); fall back to
@@ -637,6 +650,16 @@ async def mount(
             pool, exclude_session_key=key, within_secs=settings.osiris_owner_live_secs)
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model,
                              claimed=claimed, fallback_seed=key)
+    if job_dir and (bound := await mounts.find_mount(pool, job_dir=job_dir)) is not None:
+        from src.orchestrator.agents import _generation
+        if _generation(bound.agent_id)[0] != _generation(ident.agent_id)[0]:
+            # THE BINDING (thread 33838160), the explicit-mount leg: the whisper tells every
+            # minted heir "re-mount with THIS anchor", and automount left that very row BOUND
+            # to the heir's seat. Re-deriving from the anchor's basename here minted a hash
+            # twin over a living heir and stomped the binding (Thoth XVII's first breath,
+            # 2026-07-10). A row naming a foreign lineage is a deliberate seat claim: honor
+            # it, so seams and the registration run on the seat's lineage — like _reattach.
+            ident.agent_id = bound.agent_id
     await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
                          expected_model=settings.osiris_expected_model)
     if key is not None:
@@ -1163,6 +1186,9 @@ async def automount_route(request: Any) -> Any:
             lease_secs=settings.osiris_mail_lease_secs,
             project_label=(str(body.get("project") or "") or None),
             source=(str(body.get("source") or "") or None))
+        # a mint rode this whisper (compact/clear): the ancestor's connection outlives it —
+        # purge the dead mind from the hot cache so no tool call answers as it again
+        _evict_stale_minds(out.get("minted"))
         return JSONResponse(out)
     except Exception as e:  # noqa: BLE001 — fail-open: the whisper degrades, never blocks
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
@@ -1186,6 +1212,9 @@ async def succession_route(request: Any) -> Any:
             return JSONResponse({"error": "session_id and model required"}, status_code=400)
         out = await live_succession(Actions(await _pool_get()), session_id=session_id,
                                     observed_model=model)
+        # the seat passed mid-session: the swapped tab's connection is still open — evict
+        # the ancestor from the hot cache so the next call re-attaches as the heir
+        _evict_stale_minds(out.get("from") if out.get("minted") else None)
         return JSONResponse(out)
     except Exception as e:  # noqa: BLE001 — the chrome retries next render; never block it
         return JSONResponse({"error": str(e)[:200]}, status_code=500)

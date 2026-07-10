@@ -84,6 +84,53 @@ async def test_reattach_honors_a_bound_seat(actions: Actions, tmp_path: Path) ->
     srv._agents.pop("sid:re", None)
 
 
+async def test_mount_tool_honors_a_bound_seat(actions: Actions, tmp_path: Path) -> None:
+    """The explicit-mount leg of the binding (thread 33838160): the whisper tells a minted
+    heir 're-mount with THIS anchor' — and automount left that very row BOUND to the heir's
+    seat. mount() re-derived from the anchor's basename, minted a hash twin over the living
+    heir, and stomped the binding (Thoth XVII's first breath, 2026-07-10)."""
+    from src import mcp_server as srv
+
+    job_dir = str(tmp_path / "jobs" / "c7540517")  # the session's own anchor...
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:ad1a1cb0-xvii",
+                            project="osiris", cwd=str(tmp_path / "o"), model=None,
+                            session_key="whisper:c7540517")  # ...bound to the SEAT at a mint
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(tmp_path / "o"), job_dir=job_dir)
+        assert out["agent"] == "agent:ad1a1cb0-xvii"  # the heir, never a hash twin
+        rec = await mounts.find_mount(actions.pool, job_dir=job_dir)
+        assert rec is not None and rec.agent_id == "agent:ad1a1cb0-xvii"  # binding survives
+    finally:
+        srv._pool = saved_pool
+
+
+def test_evict_stale_minds_purges_the_dead_ancestor() -> None:
+    """A compaction kills the mind but not the MCP connection: the conn-keyed hot cache kept
+    answering as the dead ancestor minutes after the whisper minted the heir. A mint evicts
+    every cached identity wearing the ancestor; bystanders stay."""
+    from src import mcp_server as srv
+
+    saved, saved_touch = dict(srv._agents), dict(srv._agents_touched)
+    try:
+        srv._agents.clear()
+        srv._agents_touched.clear()
+        srv._agents["sid:live"] = SimpleNamespace(agent_id="agent:x-xvi")  # type: ignore
+        srv._agents["sid:other"] = SimpleNamespace(agent_id="agent:y")  # type: ignore
+        srv._agents_touched.update({"sid:live": 1.0, "sid:other": 2.0})
+        srv._evict_stale_minds("agent:x-xvi")
+        assert "sid:live" not in srv._agents and "sid:live" not in srv._agents_touched
+        assert "sid:other" in srv._agents  # bystanders untouched
+        srv._evict_stale_minds(None)  # no mint rode the whisper → no-op
+        assert "sid:other" in srv._agents
+    finally:
+        srv._agents.clear()
+        srv._agents.update(saved)
+        srv._agents_touched.clear()
+        srv._agents_touched.update(saved_touch)
+
+
 async def test_reattach_without_a_hint_stays_none(actions: Actions) -> None:
     from src import mcp_server as srv
 
