@@ -1,0 +1,199 @@
+"""rungs 2+3 — the lap lens and the graph lint (campaign 5c57f54d).
+
+lap: ONE object's provenance timeline — assertions with their supersession fate, links in
+both directions, kernel events, and the current winning view: how the graph came to
+believe a thing. lint: the graph auditing ITSELF — report-only findings, each check born
+from a lived bug (the impersonation class, coin-flip winners, rotting duties).
+"""
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from src.actions.core import Actions
+from src.orchestrator import mounts
+from src.orchestrator.compositions import resolve_ref, run_spec
+from src.parsers.base import EvidenceClass
+
+NOW = datetime(2026, 7, 9, tzinfo=UTC)
+_SD = EvidenceClass.SELF_DECLARED.value
+
+
+async def _fn(actions: Actions, name: str, args: dict[str, Any]) -> dict[str, Any]:
+    out = await run_spec(actions.pool, {"op": "function", "name": name, "args": args},
+                         None, name=name)
+    items: dict[str, Any] = out["items"]  # the composition envelope wraps the return
+    return items
+
+
+def _by_check(out: dict[str, Any], check: str) -> list[dict[str, Any]]:
+    return [f for f in out["findings"] if f["check"] == check]
+
+
+# --- lap ---------------------------------------------------------------------
+
+
+async def test_lap_shows_how_the_graph_came_to_believe(actions: Actions) -> None:
+    """The whole lens in one object: a superseded assertion keeps its place in the timeline
+    (marked), the winner lands in `believes`, links carry their direction, and the entries
+    read in observed order."""
+    t = "agent:teller"
+    a = await actions.create_or_find_object("Person", "person:probe", t)
+    b = await actions.create_or_find_object("Organization", "org:probe", t)
+    await actions.assert_property(a, "name", "Probe One", t, NOW, 0.9, evidence_class=_SD)
+    await actions.assert_property(a, "name", "Probe Prime", t, NOW + timedelta(hours=1),
+                                  0.9, evidence_class=_SD)  # within-source supersession
+    await actions.create_link(a, b, "member_of", t, NOW, 0.9, evidence_class=_SD)
+    out = await _fn(actions, "lap", {"ref": "person:probe"})
+    assert out["object"]["canonical"] == "person:probe" and out["object"]["type"] == "Person"
+    assert out["believes"]["name"] == "Probe Prime"
+    names = [e for e in out["timeline"] if e.get("field") == "name"]
+    assert names[0]["value"] == "Probe One" and names[0]["superseded"] is True
+    assert names[1]["value"] == "Probe Prime" and "superseded" not in names[1]
+    assert names[0]["source"] == t and names[0]["grade"] == "self_declared"
+    link = next(e for e in out["timeline"] if e["kind"] == "link-out")
+    assert link["link"] == "member_of" and link["other"] == "org:probe"
+    ats = [str(e["at"]) for e in out["timeline"]]
+    assert ats == sorted(ats)  # observed order — a timeline, not a bag
+    assert out["counts"]["superseded"] == 1
+    # the other end sees the same edge, inbound
+    other = await _fn(actions, "lap", {"ref": "org:probe"})
+    assert any(e["kind"] == "link-in" and e["other"] == "person:probe"
+               for e in other["timeline"])
+
+
+async def test_lap_resolves_names_and_reports_absence(actions: Actions) -> None:
+    t = "agent:teller"
+    a = await actions.create_or_find_object("Person", "person:named", t)
+    await actions.assert_property(a, "name", "Hannah Arendt", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    assert await resolve_ref(actions.pool, "Hannah Arendt") == a  # exact name
+    assert await resolve_ref(actions.pool, "person:named") == a  # canonical
+    out = await _fn(actions, "lap", {"ref": "Arendt"})  # substring
+    assert out["object"]["canonical"] == "person:named"
+    assert "nothing matches" in (await _fn(actions, "lap", {"ref": "zz-never-zz"}))["note"]
+    assert "ONE object" in (await _fn(actions, "lap", {}))["note"]  # no ref, no subject
+
+
+async def test_lap_caps_honestly(actions: Actions) -> None:
+    """A trimmed timeline SAYS it trimmed — counts hold the true totals (no silent caps)."""
+    t = "agent:teller"
+    a = await actions.create_or_find_object("Person", "person:busy", t)
+    for i in range(6):
+        await actions.assert_property(a, f"p{i}", f"v{i}", t, NOW + timedelta(minutes=i),
+                                      0.9, evidence_class=_SD)
+    out = await _fn(actions, "lap", {"ref": "person:busy", "limit": 2})
+    assert len(out["timeline"]) == 2
+    assert out["counts"]["assertions"] == 6
+    assert "dropped" in out["note"]
+    # the newest survive the trim — the shown tail IS the untrimmed timeline's tail
+    full = await _fn(actions, "lap", {"ref": "person:busy", "limit": 1000})
+    assert "note" not in full and out["timeline"] == full["timeline"][-2:]
+
+
+# --- lint --------------------------------------------------------------------
+
+
+async def test_lint_catches_the_lineage_sins(actions: Actions) -> None:
+    """Cycles, dangling heir pointers, heirs without ancestry, retired-yet-live, and the
+    healed false mints — the succession invariants of ruling a882b334, as tripwires."""
+    t = "agent:teller"
+    x = await actions.create_or_find_object("Agent", "agent:aaaa0001", t)
+    y = await actions.create_or_find_object("Agent", "agent:bbbb0002", t)
+    await actions.assert_property(x, "succeeded_by", "agent:bbbb0002", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(y, "succeeded_by", "agent:aaaa0001", t, NOW, 0.9,
+                                  evidence_class=_SD)  # a ring of heirs
+    z = await actions.create_or_find_object("Agent", "agent:cccc0003", t)
+    await actions.assert_property(z, "succeeded_by", "agent:dddd0404", t, NOW, 0.9,
+                                  evidence_class=_SD)  # points into the void
+    await actions.create_or_find_object("Agent", "agent:eeee0005-ii", t)  # no succeeded_from
+    r = await actions.create_or_find_object("Agent", "agent:ffff0006", t)
+    await actions.assert_property(r, "retired", True, t, NOW, 0.9, evidence_class=_SD)
+    await mounts.save_mount(actions.pool, job_dir="/x/jobs/ffff0006",
+                            agent_id="agent:ffff0006", project="p", cwd="/w",
+                            model=None, session_key=None)  # ...yet freshly seen
+    fm = await actions.create_or_find_object("Agent", "agent:0000dead", t)
+    await actions.assert_property(fm, "false_mint", True, t, NOW, 0.9, evidence_class=_SD)
+    out = await _fn(actions, "lint", {})
+    cycle = _by_check(out, "lineage-cycle")
+    assert len(cycle) == 1 and "agent:aaaa0001" in cycle[0]["detail"]
+    dangle = _by_check(out, "lineage-dangling")
+    assert len(dangle) == 1 and dangle[0]["subject"] == "agent:cccc0003"
+    assert [f["subject"] for f in _by_check(out, "orphan-heir")] == ["agent:eeee0005-ii"]
+    retired = _by_check(out, "retired-live")
+    assert len(retired) == 1 and retired[0]["subject"] == "agent:ffff0006"
+    assert retired[0]["severity"] == "error"
+    assert [f["subject"] for f in _by_check(out, "false-mint")] == ["agent:0000dead"]
+
+
+async def test_lint_surfaces_coin_flip_winners(actions: Actions) -> None:
+    """Two sources, same fact, different values, near-tie confidence: the resolver is
+    deciding on recency alone — surfaced as a contradiction, never resolved."""
+    t = "agent:teller"
+    c = await actions.create_or_find_object("Organization", "org:tie", t)
+    await actions.assert_property(c, "hq", "Berlin", "agent:one", NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(c, "hq", "Munich", "agent:two",
+                                  NOW + timedelta(minutes=1), 0.9, evidence_class=_SD)
+    await actions.assert_property(c, "hq", "Berlin", "agent:one",
+                                  NOW + timedelta(minutes=2), 0.9,
+                                  evidence_class=_SD)  # re-affirmed; still a tie
+    out = await _fn(actions, "lint", {})
+    con = _by_check(out, "contradiction")
+    assert len(con) == 1
+    assert con[0]["subject"] == "org:tie" and con[0]["field"] == "hq"
+    assert "Berlin" in con[0]["detail"] and "Munich" in con[0]["detail"]
+    # a decisive gap is NOT a contradiction
+    await actions.assert_property(c, "hq", "Berlin", "agent:one",
+                                  NOW + timedelta(minutes=3), 0.99, evidence_class=_SD)
+    out2 = await _fn(actions, "lint", {})
+    assert _by_check(out2, "contradiction") == []
+
+
+async def test_lint_orphan_links_stale_duties_and_ghosts(actions: Actions) -> None:
+    t = "agent:teller"
+    # a live link into a retired corpse
+    alive = await actions.create_or_find_object("Person", "person:alive", t)
+    corpse = await actions.create_or_find_object("Organization", "org:corpse", t)
+    await actions.create_link(alive, corpse, "member_of", t, NOW, 0.9, evidence_class=_SD)
+    await actions.pool.execute(
+        "UPDATE objects SET status='retired' WHERE id=$1", corpse)
+    # an obligation left open past its patience
+    th = await actions.create_or_find_object("Thread", "thread:old-duty", t)
+    await actions.assert_property(th, "status", "open", t, NOW, 0.9, evidence_class=_SD)
+    await actions.assert_property(th, "kind", "obligation", t, NOW, 0.9, evidence_class=_SD)
+    await actions.assert_property(th, "summary", "rotting duty", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.pool.execute(
+        "UPDATE objects SET created_at = now() - interval '30 days' WHERE id=$1", th)
+    out = await _fn(actions, "lint", {"stale_days": 14})
+    orphan = _by_check(out, "orphan-link")
+    assert len(orphan) == 1 and "org:corpse" in orphan[0]["subject"]
+    assert "retired" in orphan[0]["detail"]
+    stale = _by_check(out, "stale-obligation")
+    assert len(stale) == 1 and stale[0]["age_days"] >= 29
+    assert "rotting duty" in stale[0]["detail"]
+    # every write above was stamped by unregistered agent sources — the ghosts show up
+    ghosts = {f["subject"] for f in _by_check(out, "attribution")}
+    assert "agent:teller" in ghosts
+    # ...and registering the face clears it
+    await actions.create_or_find_object("Agent", "agent:teller", t)
+    out2 = await _fn(actions, "lint", {})
+    assert "agent:teller" not in {f["subject"] for f in _by_check(out2, "attribution")}
+
+
+async def test_lint_is_report_only_and_a_clean_graph_says_so(actions: Actions) -> None:
+    """Rule #7 in test form: the lint must not write a single row — a linter that healed
+    would be a loop pathology. And silence must be legible: clean checks are NAMED."""
+    before = await actions.pool.fetchval("SELECT count(*) FROM assertions")
+    out = await _fn(actions, "lint", {})
+    after = await actions.pool.fetchval("SELECT count(*) FROM assertions")
+    assert before == after
+    events = await actions.pool.fetchval("SELECT count(*) FROM object_events")
+    await _fn(actions, "lint", {})
+    assert await actions.pool.fetchval("SELECT count(*) FROM object_events") == events
+    assert out["findings"] == []
+    assert set(out["clean"]) >= {"contradiction", "laundering", "lineage-cycle",
+                                 "orphan-link", "stale-obligation", "attribution"}
+    assert "report-only" in out["discipline"]

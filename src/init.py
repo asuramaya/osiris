@@ -47,6 +47,8 @@ ROOM_COMPOSITIONS: dict[str, tuple[str, ...]] = {
     "engineer": (
         "briefing", "project-briefing", "decision-log", "design-canon", "family-consistency",
         "family-drift", "portfolio", "pulse-digest", "projects", "project", "fleet",
+        # rungs 2+3 (campaign 5c57f54d): the graph auditing itself + the provenance lens.
+        "graph-lint", "lap",
     ),
     "analyst": (
         "who-is-this", "operational-vs-disclosed-geography", "co-investment-ties",

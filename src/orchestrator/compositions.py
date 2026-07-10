@@ -600,6 +600,330 @@ async def _fn_pulse(
     return {_PULSE_TITLE: [status, *findings]}
 
 
+async def resolve_ref(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
+    """Accept a UUID, an exact canonical, or a name; resolve to an object id. Name matching
+    tries exact first (most-described wins), then substring (shortest name wins — closest to
+    the query). ONE definition shared by the server's tools and the composition functions,
+    so the console and an agent always resolve the same words to the same object."""
+    try:
+        return uuid.UUID(ref)
+    except ValueError:
+        pass
+    oid = await pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1 AND status='active' LIMIT 1", ref)
+    if oid is not None:
+        return uuid.UUID(str(oid))
+    for predicate, order in (
+        ("lower(a.value #>> '{}') = lower($1)",
+         "(SELECT count(*) FROM current_assertions x WHERE x.object_id=a.object_id) DESC"),
+        ("a.value #>> '{}' ILIKE '%'||$1||'%'",
+         "length(a.value #>> '{}') ASC"),
+    ):
+        row = await pool.fetchval(
+            "SELECT a.object_id FROM current_assertions a "
+            "JOIN objects o ON o.id=a.object_id AND o.status='active' "
+            f"WHERE a.name='name' AND {predicate} ORDER BY {order} LIMIT 1",
+            ref,
+        )
+        if row is not None:
+            return uuid.UUID(str(row))
+    return None
+
+
+_LAP_CELL = 200  # a timeline cell shows enough to recognize the assertion, not the essay
+
+
+def _cell(v: str | None) -> str:
+    s = v or ""
+    return s[:_LAP_CELL] + ("…" if len(s) > _LAP_CELL else "")
+
+
+async def _fn_lap(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
+    """rung 3 — the LAP LENS (campaign 5c57f54d): ONE object's full provenance timeline.
+    Every assertion (with its supersession fate), every link (both directions, retractions
+    marked), every kernel event, in observed order, each carrying source + grade +
+    confidence. search answers WHAT the graph knows; lap answers HOW IT CAME TO KNOW IT —
+    the Palantir half of the knowledge layer. Pure SQL, no LLM. `ref` = uuid | canonical |
+    name (a uuid also reaches merged/retired corpses — the timeline is exactly where you
+    autopsy them); `limit` keeps the newest N entries and REPORTS what it dropped."""
+    ref = str(args.get("ref") or "").strip()
+    oid = (await resolve_ref(pool, ref)) if ref else subject
+    if oid is None:
+        return {"note": (f"nothing matches {ref!r}" if ref else
+                         "pass ref=<uuid|canonical|name> (or focus a subject) — "
+                         "lap answers for ONE object")}
+    head = await pool.fetchrow(
+        "SELECT id, type, canonical, status, merged_into, created_at "
+        "FROM objects WHERE id=$1", oid)
+    if head is None:
+        return {"note": f"no object {oid}"}
+    limit = max(1, min(int(args.get("limit") or 200), 1000))
+    a_rows = await pool.fetch(
+        "SELECT a.name, a.value #>> '{}' AS v, a.source_id, a.evidence_class, a.confidence, "
+        " a.observed_at, EXISTS(SELECT 1 FROM assertions s WHERE s.supersedes=a.id) AS dead "
+        "FROM assertions a WHERE a.object_id=$1 ORDER BY a.observed_at, a.id", oid)
+    l_rows = await pool.fetch(
+        "SELECT l.type, l.source_id, l.evidence_class, l.first_seen, l.valid_until, "
+        " CASE WHEN l.from_id=$1 THEN 'out' ELSE 'in' END AS dir, o.canonical AS other "
+        "FROM links l JOIN objects o "
+        " ON o.id = CASE WHEN l.from_id=$1 THEN l.to_id ELSE l.from_id END "
+        "WHERE l.from_id=$1 OR l.to_id=$1 ORDER BY l.first_seen, l.id", oid)
+    e_rows = await pool.fetch(
+        "SELECT event_type, actor, related_id, created_at, "
+        " (object_id <> $1) AS witnessed "  # an event RECORDED elsewhere that names this object
+        "FROM object_events WHERE object_id=$1 OR related_id=$1 "
+        "ORDER BY created_at, id", oid)
+    timeline: list[dict[str, Any]] = []
+    for a in a_rows:
+        timeline.append({"at": a["observed_at"].isoformat(), "kind": "assert",
+                         "field": a["name"], "value": _cell(a["v"]),
+                         "source": a["source_id"], "grade": a["evidence_class"],
+                         "confidence": round(float(a["confidence"]), 3),
+                         **({"superseded": True} if a["dead"] else {})})
+    for ln in l_rows:
+        timeline.append({"at": ln["first_seen"].isoformat(), "kind": f"link-{ln['dir']}",
+                         "link": ln["type"], "other": ln["other"],
+                         "source": ln["source_id"], "grade": ln["evidence_class"],
+                         **({"retracted_at": ln["valid_until"].isoformat()}
+                            if ln["valid_until"] is not None else {})})
+    for ev in e_rows:
+        timeline.append({"at": ev["created_at"].isoformat(), "kind": "event",
+                         "event": ev["event_type"], "actor": ev["actor"],
+                         **({"related": str(ev["related_id"])} if ev["related_id"] else {}),
+                         **({"witnessed": True} if ev["witnessed"] else {})})
+    timeline.sort(key=lambda e: str(e["at"]))
+    dropped = max(0, len(timeline) - limit)
+    believes = {r["name"]: _cell(r["v"]) for r in await pool.fetch(
+        "SELECT name, value #>> '{}' AS v FROM winning_props(ARRAY[$1]::uuid[])", oid)}
+    return {
+        "object": {"id": str(head["id"]), "type": head["type"],
+                   "canonical": head["canonical"], "status": head["status"],
+                   **({"merged_into": str(head["merged_into"])}
+                      if head["merged_into"] else {}),
+                   "born": head["created_at"].isoformat()},
+        "believes": believes,
+        "timeline": timeline[-limit:],
+        "counts": {"assertions": len(a_rows), "links": len(l_rows), "events": len(e_rows),
+                   "superseded": sum(1 for a in a_rows if a["dead"])},
+        **({"note": f"newest {limit} of {len(timeline)} entries shown "
+                    f"({dropped} older dropped — raise limit to see them)"} if dropped else {}),
+    }
+
+
+_LINT_CAP = 50  # findings LISTED per check; totals are always reported — no silent caps
+_ROMAN_HEIR = re.compile(r"-[ivxlcdm]+$")
+_SEVERITY_RANK = {"error": 0, "warn": 1, "info": 2}
+
+
+async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
+    """rung 2 — GRAPH LINT (campaign 5c57f54d): the knowledge layer's immune system. Audits
+    the graph ITSELF — report-only, pure SQL + credence, no LLM, and NO WRITES (rule #7: a
+    lint that healed would be a loop pathology; findings are testimony for a mind to judge).
+    Six checks, each born from a lived bug: CONTRADICTION (near-tie multi-source winners on
+    one fact — surfaced, never resolved), LAUNDERING (an agent carrying a fact above its
+    origin grade — via credence_props, the mandated read path for grade-is-the-message),
+    LINEAGE (succeeded_by cycles / dangling heir pointers / heirs without ancestry /
+    retired-yet-live agents / healed false mints), ORPHAN-LINK (live links into merged or
+    retired objects), STALE-OBLIGATION (open duties older than `stale_days` — duties rot
+    silently), ATTRIBUTION (writes from agent ids the graph never registered — the
+    impersonation class, made a standing tripwire)."""
+    stale_days = max(1, min(int(args.get("stale_days") or 14), 365))
+    eps = float(args.get("eps") or 0.05)          # "near-tie" on the confidence axis
+    live_secs = int(args.get("live_secs") or 900)  # a mount seen this recently is LIVE
+    findings: list[dict[str, Any]] = []
+    counts: dict[str, int] = {}
+
+    def land(check: str, severity: str, rows: list[dict[str, Any]]) -> None:
+        counts[check] = len(rows)
+        for r in rows[:_LINT_CAP]:
+            findings.append({"check": check, "severity": severity, **r})
+
+    # CONTRADICTION — same (object, field), different values from different sources, the top
+    # two winners within eps of each other: the grade-then-recency resolver is deciding this
+    # fact on a coin flip. Surface the tie; resolving it is a mind's job (tension audit).
+    con = await pool.fetch(
+        "WITH multi AS (SELECT object_id, name FROM current_assertions "
+        "  GROUP BY object_id, name HAVING count(DISTINCT source_id) > 1), "
+        "ranked AS (SELECT ca.object_id, ca.name, ca.value #>> '{}' AS v, ca.source_id, "
+        "  ca.confidence, row_number() OVER (PARTITION BY ca.object_id, ca.name "
+        "    ORDER BY ca.confidence DESC, ca.observed_at DESC) AS rn "
+        "  FROM current_assertions ca JOIN multi USING (object_id, name)) "
+        "SELECT o.canonical, w.name AS field, w.v AS winner, w.source_id AS winner_source, "
+        "  w.confidence AS winner_conf, r.v AS rival, r.source_id AS rival_source, "
+        "  r.confidence AS rival_conf "
+        "FROM ranked w JOIN ranked r ON r.object_id=w.object_id AND r.name=w.name "
+        "  AND w.rn=1 AND r.rn=2 "
+        "JOIN objects o ON o.id=w.object_id "
+        "WHERE w.v IS DISTINCT FROM r.v AND w.source_id <> r.source_id "
+        "  AND w.confidence - r.confidence <= $1 "
+        "ORDER BY o.canonical, w.name", eps)
+    land("contradiction", "warn", [
+        {"subject": r["canonical"], "field": r["field"],
+         "detail": f"'{_cell(r['winner'])}' ({r['winner_source']}, "
+                   f"{round(float(r['winner_conf']), 3)}) wins over "
+                   f"'{_cell(r['rival'])}' ({r['rival_source']}, "
+                   f"{round(float(r['rival_conf']), 3)}) by ≤{eps} — a coin-flip winner"}
+        for r in con])
+
+    # LAUNDERING — through credence_props, the module whose own invariant demands every
+    # grade-is-the-message read path route through it. Candidates: only co-asserted objects
+    # (same fact, >1 source) — the lineage discipline is meaningless on a single voice.
+    cand_rows = await pool.fetch(
+        "SELECT object_id, max(observed_at) AS latest FROM current_assertions "
+        "WHERE (object_id, name) IN (SELECT object_id, name FROM current_assertions "
+        "  GROUP BY object_id, name HAVING count(DISTINCT source_id) > 1) "
+        "GROUP BY object_id ORDER BY latest DESC LIMIT 500")
+    laundering: list[dict[str, Any]] = []
+    if cand_rows:
+        from src.actions.core import Actions
+        from src.orchestrator.credence import credence_props
+
+        oids = [r["object_id"] for r in cand_rows]
+        names = {r["id"]: r["canonical"] for r in await pool.fetch(
+            "SELECT id, canonical FROM objects WHERE id = ANY($1::uuid[])", oids)}
+        cred = await credence_props(Actions(pool), oids)
+        laundering = [
+            {"subject": names.get(uuid.UUID(w.object_id), w.object_id), "field": w.name,
+             "detail": f"{', '.join(w.laundering)} carried this fact above its origin "
+                       f"grade (winner: {w.source_id})"}
+            for w in cred.winners if w.laundering]
+    land("laundering", "warn", laundering)
+
+    # LINEAGE — the succession invariants the identity layer lives by (ruling a882b334).
+    ag_rows = await pool.fetch(
+        "SELECT id, canonical FROM objects WHERE type='Agent' AND status='active'")
+    ag_ids = [r["id"] for r in ag_rows]
+    canon_of = {r["id"]: r["canonical"] for r in ag_rows}
+    canons = set(canon_of.values())
+    props: dict[str, dict[str, str]] = {}
+    if ag_ids:
+        for r in await pool.fetch(
+                "SELECT object_id, name, value #>> '{}' AS v "
+                "FROM winning_props($1::uuid[]) "
+                "WHERE name IN ('succeeded_by','succeeded_from','retired','false_mint')",
+                ag_ids):
+            props.setdefault(canon_of[r["object_id"]], {})[r["name"]] = r["v"] or ""
+    succ_by = {c: p["succeeded_by"] for c, p in props.items() if p.get("succeeded_by")}
+    cycles: list[dict[str, Any]] = []
+    dangling: list[dict[str, Any]] = []
+    seen_cycles: set[frozenset[str]] = set()
+    seen_dangling: set[str] = set()
+    for start in succ_by:
+        walk = [start]
+        walked = {start}
+        while (nxt := succ_by.get(walk[-1])) is not None:
+            if nxt not in canons:
+                if walk[-1] not in seen_dangling:
+                    seen_dangling.add(walk[-1])
+                    dangling.append({"subject": walk[-1],
+                                     "detail": f"succeeded_by points at {nxt!r}, "
+                                               "which is not a registered Agent"})
+                break
+            if nxt in walked:
+                members = frozenset(walk[walk.index(nxt):])
+                if members not in seen_cycles:
+                    seen_cycles.add(members)
+                    cycles.append({"subject": nxt,
+                                   "detail": "succession cycle: "
+                                             + " → ".join(walk[walk.index(nxt):] + [nxt])})
+                break
+            walk.append(nxt)
+            walked.add(nxt)
+    land("lineage-cycle", "error", cycles)
+    land("lineage-dangling", "error", dangling)
+    land("orphan-heir", "warn", [
+        {"subject": c, "detail": "a generation suffix with no succeeded_from — an heir "
+                                 "with no recorded ancestor"}
+        for c in sorted(canons)
+        if _ROMAN_HEIR.search(c) and not props.get(c, {}).get("succeeded_from")])
+    live = {r["agent_id"] for r in await pool.fetch(
+        "SELECT DISTINCT agent_id FROM agent_mounts "
+        "WHERE last_seen > now() - make_interval(secs => $1)", live_secs)}
+    land("retired-live", "error", [
+        {"subject": c, "detail": "carries a winning retired=true yet holds a LIVE mount — "
+                                 "a closed name is being worn"}
+        for c in sorted(canons)
+        if props.get(c, {}).get("retired") == "true" and c in live])
+    land("false-mint", "info", [
+        {"subject": c, "detail": "a healed false mint (compensating events) — expected to "
+                                 "be retired; listed so the healing stays visible"}
+        for c in sorted(canons) if props.get(c, {}).get("false_mint") == "true"])
+
+    # ORPHAN-LINK — FKs make truly dangling links impossible; the live failure mode is a
+    # still-valid link whose endpoint was merged or retired and never re-pointed.
+    orphan_total = await pool.fetchval(
+        "SELECT count(*) FROM links l JOIN objects fo ON fo.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id "
+        "WHERE (l.valid_until IS NULL OR l.valid_until > now()) "
+        "  AND (fo.status <> 'active' OR t.status <> 'active')")
+    orphans = await pool.fetch(
+        "SELECT l.type, fo.canonical AS from_c, fo.status AS from_s, "
+        "  t.canonical AS to_c, t.status AS to_s "
+        "FROM links l JOIN objects fo ON fo.id=l.from_id JOIN objects t ON t.id=l.to_id "
+        "WHERE (l.valid_until IS NULL OR l.valid_until > now()) "
+        "  AND (fo.status <> 'active' OR t.status <> 'active') "
+        "ORDER BY l.last_seen DESC LIMIT $1", _LINT_CAP)
+    land("orphan-link", "warn", [
+        {"subject": f"{r['from_c']} -{r['type']}-> {r['to_c']}",
+         "detail": "live link into a non-active object ("
+                   + ", ".join(f"{c} is {s}" for c, s in
+                               ((r["from_c"], r["from_s"]), (r["to_c"], r["to_s"]))
+                               if s != "active") + ")"}
+        for r in orphans])
+    counts["orphan-link"] = int(orphan_total)
+
+    # STALE-OBLIGATION — a duty nobody resolved or resolved-away; age from birth, honestly
+    # crude (the graph has no per-thread activity clock yet).
+    th = await pool.fetch(
+        "SELECT o.id, o.created_at, "
+        " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
+        "   AND name='status' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS st, "
+        " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
+        "   AND name='kind' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS kind, "
+        " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
+        "   AND name='summary' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS summary "
+        "FROM objects o WHERE o.type='Thread' AND o.status='active' "
+        "  AND o.created_at < now() - make_interval(days => $1)", stale_days)
+    now = datetime.now(UTC)
+    land("stale-obligation", "warn", [
+        {"subject": str(r["id"]), "age_days": (now - r["created_at"]).days,
+         "detail": f"open obligation, {(now - r['created_at']).days}d old: "
+                   f"{_cell(r['summary'])}"}
+        for r in sorted(th, key=lambda r: r["created_at"])
+        if r["st"] == "open" and r["kind"] == "obligation"])
+
+    # ATTRIBUTION — writes stamped from an agent id that was never registered as an Agent:
+    # the impersonation class (thread 33838160) as a standing tripwire, not a one-off hunt.
+    ghosts = await pool.fetch(
+        "SELECT w.source_id, count(*) AS writes, max(w.at) AS last FROM ("
+        "  SELECT source_id, observed_at AS at FROM assertions "
+        "   WHERE source_id LIKE 'agent:%' "
+        "  UNION ALL SELECT source_id, first_seen FROM links "
+        "   WHERE source_id LIKE 'agent:%') w "
+        "WHERE NOT EXISTS (SELECT 1 FROM objects o "
+        "  WHERE o.type='Agent' AND o.canonical = w.source_id) "
+        "GROUP BY w.source_id ORDER BY count(*) DESC")
+    land("attribution", "error", [
+        {"subject": r["source_id"], "writes": int(r["writes"]),
+         "detail": f"{r['writes']} write(s) from an agent id the graph never registered "
+                   f"(last {r['last'].isoformat()[:19]}) — who wore this face?"}
+        for r in ghosts])
+
+    findings.sort(key=lambda f: (_SEVERITY_RANK.get(str(f["severity"]), 9), str(f["check"])))
+    capped = {c: n - _LINT_CAP for c, n in counts.items() if n > _LINT_CAP}
+    return {
+        "findings": findings,
+        "counts": counts,
+        "clean": sorted(c for c, n in counts.items() if n == 0),
+        **({"capped": capped,
+            "note": "some checks list only their first "
+                    f"{_LINT_CAP} findings; counts hold the true totals"} if capped else {}),
+        "ran_at": now.isoformat(),
+        "discipline": "report-only — the lint never writes (rule #7); "
+                      "findings are testimony, not verdicts",
+    }
+
+
 _FUNCTIONS: dict[str, Function] = {
     "coinvest": _fn_coinvest,
     "subject_report": _fn_subject_report,
@@ -611,6 +935,8 @@ _FUNCTIONS: dict[str, Function] = {
     "portfolio": _fn_portfolio,
     "pulse": _fn_pulse,
     "project": _fn_project,
+    "lap": _fn_lap,
+    "lint": _fn_lint,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
@@ -619,7 +945,9 @@ _FUNCTIONS: dict[str, Function] = {
 # NB: `projects`, `briefing`, `decisions` are GONE as Functions — they decomposed into pure
 # op-trees (a `table`, a `sections`, a `sections`+show-original — see DEFAULT_COMPOSITIONS):
 # opinion → primitives the user owns.
-_SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "pulse", "project"}
+# `lap` anchors on args.ref OR the subject; `lint` audits the whole graph, no anchor at all.
+_SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "pulse", "project",
+                 "lap", "lint"}
 
 
 def list_functions() -> list[str]:
@@ -1302,6 +1630,10 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
         },
     },
     "project": {"op": "function", "name": "project"},
+    # rung 3: the per-object provenance timeline — how the graph came to believe a thing.
+    "lap": {"op": "function", "name": "lap"},
+    # rung 2: the graph auditing itself — report-only findings, testimony not verdicts.
+    "graph-lint": {"op": "function", "name": "lint"},
 }
 
 

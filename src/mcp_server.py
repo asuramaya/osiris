@@ -244,29 +244,10 @@ async def _pool_get() -> asyncpg.Pool:
 
 
 async def _resolve(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
-    """Accept a UUID or a name; resolve to an active object id. Tries exact name, then
-    substring — and among matches prefers the most-described (the merged canonical)."""
-    try:
-        return uuid.UUID(ref)
-    except ValueError:
-        pass
-    # exact name (most-described wins), then substring (shortest name wins — closest to
-    # the query, so 'Neuralink' picks 'Neuralink Corp.' over 'Neuralink Jun 2025 …').
-    for predicate, order in (
-        ("lower(a.value #>> '{}') = lower($1)",
-         "(SELECT count(*) FROM current_assertions x WHERE x.object_id=a.object_id) DESC"),
-        ("a.value #>> '{}' ILIKE '%'||$1||'%'",
-         "length(a.value #>> '{}') ASC"),
-    ):
-        row = await pool.fetchval(
-            "SELECT a.object_id FROM current_assertions a "
-            "JOIN objects o ON o.id=a.object_id AND o.status='active' "
-            f"WHERE a.name='name' AND {predicate} ORDER BY {order} LIMIT 1",
-            ref,
-        )
-        if row is not None:
-            return uuid.UUID(str(row))
-    return None
+    """Accept a UUID, canonical, or name; resolve to an object id. ONE definition — the
+    shared resolver in compositions (resolve_ref), so tools and composition functions
+    always resolve the same words to the same object."""
+    return await comp.resolve_ref(pool, ref)
 
 
 # --- orientation ------------------------------------------------------------
@@ -300,6 +281,40 @@ async def search(
                      "caller": (ident.agent_id if ident else None)}}
     out = await comp.run_spec(pool, spec, None, name="search")
     items: dict[str, Any] = out["items"]  # unwrap the composition envelope
+    return items
+
+
+@mcp.tool()
+async def lap(ref: str, limit: int = 200) -> dict[str, Any]:
+    """ONE object's full provenance timeline — how the graph came to believe what it
+    believes about it. Every assertion (with supersession fate), every link (both
+    directions, retractions marked), every kernel event, in observed order, each carrying
+    source + evidence grade + confidence; `believes` holds the current winning view.
+    search finds the WHAT; lap shows the HOW-WE-KNOW — run it before trusting a surprising
+    fact, before merging/healing an object, or to autopsy a corpse (a uuid ref reaches
+    merged/retired objects too). `ref` = uuid | canonical (e.g. 'agent:ad1a1cb0') | name."""
+    pool = await _pool_get()
+    spec = {"op": "function", "name": "lap", "args": {"ref": ref, "limit": limit}}
+    out = await comp.run_spec(pool, spec, None, name="lap")
+    items: dict[str, Any] = out["items"]
+    return items
+
+
+@mcp.tool()
+async def graph_lint(stale_days: int = 14) -> dict[str, Any]:
+    """The graph audits ITSELF — report-only, never writes. Six checks, each a lived bug
+    made a standing tripwire: contradiction (near-tie multi-source winners — the resolver
+    is coin-flipping a fact), laundering (an agent carrying a fact above its origin grade),
+    lineage integrity (succession cycles, dangling heir pointers, heirs without ancestry,
+    retired-yet-live agents, healed false mints), orphan links (live links into merged/
+    retired objects), stale obligations (open duties older than `stale_days`), attribution
+    anomalies (writes from agent ids the graph never registered — the impersonation class).
+    Findings are TESTIMONY for a mind to judge, not verdicts to auto-apply; heal with
+    compensating events, never DELETE (constitution 3)."""
+    pool = await _pool_get()
+    spec = {"op": "function", "name": "lint", "args": {"stale_days": stale_days}}
+    out = await comp.run_spec(pool, spec, None, name="graph-lint")
+    items: dict[str, Any] = out["items"]
     return items
 
 
