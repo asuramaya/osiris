@@ -164,7 +164,22 @@ async def while_away(
         " read_at IS NOT NULL AS settled "
         "FROM fleet_messages WHERE (to_project=$1 OR from_project=$1) AND created_at > $2 "
         "ORDER BY COALESCE(thread_id, id), created_at DESC LIMIT 8", project, since)
-    if not wakes and not wearers and not threads:
+    # YOUR SPAWNS — children your lineage delegated to (spawned_by → any generation of your
+    # base) since your last sign of life: the parent is TOLD, never surprised (the operator's
+    # spawn-provenance complaint, 2026-07-10). Registered live by the spawn hooks, or by the
+    # miner's disk round — same keying, so they show here either way.
+    from src.orchestrator.agents import _generation
+    base = _generation(agent_id)[0]  # generation-aware: agent:x-xvii → agent:x; uuids intact
+    spawns = await pool.fetch(
+        "SELECT c.canonical, l.first_seen, "
+        " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=c.id "
+        "   AND name='agent_type' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS kind, "
+        " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=c.id "
+        "   AND name='source_model' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS model "
+        "FROM links l JOIN objects c ON c.id=l.from_id JOIN objects p ON p.id=l.to_id "
+        "WHERE l.type='spawned_by' AND (p.canonical = $1 OR p.canonical LIKE $1 || '-%') "
+        "  AND l.first_seen > $2 ORDER BY l.first_seen DESC LIMIT 8", base, since)
+    if not wakes and not wearers and not threads and not spawns:
         return None
     return {
         "since": since.isoformat(),
@@ -175,6 +190,10 @@ async def while_away(
              "between": f"{t['from_project']} → {t['to_project']}",
              "settled": t["settled"], "at": t["created_at"].isoformat(), "last": t["body"]}
             for t in threads],
+        **({"spawns": [
+            {"agent": s["canonical"], "type": s["kind"], "model": s["model"],
+             "at": s["first_seen"].isoformat()}
+            for s in spawns]} if spawns else {}),
         "note": "another hand may have worn your face here — read this before assuming you "
                 "know where you stand; the graph, not your memory, records these turns",
     }

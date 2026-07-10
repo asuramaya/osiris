@@ -100,8 +100,8 @@ def test_dry_run_writes_nothing(tmp_path: Path) -> None:
 
 
 def test_anchor_installs_the_pretooluse_mount_hook(tmp_path: Path) -> None:
-    """--anchor wires the PreToolUse durable-anchor hook, matched to mcp__osiris__mount, beside
-    the whisper — idempotent, and it does not clobber a foreign PreToolUse hook."""
+    """--anchor wires the PreToolUse anchor+spawn-stamp hook, matched to every osiris tool,
+    beside the whisper — idempotent, and it does not clobber a foreign PreToolUse hook."""
     repo = tmp_path / "fleet"
     (repo / ".claude").mkdir(parents=True)
     prior = {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
@@ -112,13 +112,44 @@ def test_anchor_installs_the_pretooluse_mount_hook(tmp_path: Path) -> None:
     settings = _read(repo / ".claude" / "settings.json")
 
     pre = settings["hooks"]["PreToolUse"]
-    # the foreign guard survives; ours is added with the mount matcher
+    # the foreign guard survives; ours is added with the osiris-wide matcher
     assert any(g.get("matcher") == "Bash" for g in pre)
-    ours = next(g for g in pre if g.get("matcher") == "mcp__osiris__mount")
+    ours = next(g for g in pre if g.get("matcher") == "mcp__osiris__.*")
     assert "osiris_mount_anchor.py" in ours["hooks"][0]["command"]
     # the whisper landed too (SessionStart), and a re-run changes nothing
     assert settings["hooks"]["SessionStart"]
     _, changed = merge_settings(settings, tmp_path, whisper=True, anchor=True)
+    assert changed is False
+
+
+def test_anchor_retargets_a_stale_matcher_in_place(tmp_path: Path) -> None:
+    """The matcher widened (mount → mcp__osiris__.*): a settings.json carrying the OLD
+    matcher gets retargeted in place — appending a second group would double-fire the hook
+    on every mount."""
+    hook_cmd = f"python3 {tmp_path / 'scripts' / 'osiris_mount_anchor.py'}"
+    doc = {"hooks": {"PreToolUse": [{"matcher": "mcp__osiris__mount", "hooks": [
+        {"type": "command", "command": hook_cmd, "timeout": 5}]}]}}
+    out, changed = merge_settings(doc, tmp_path, anchor=True)
+    assert changed is True
+    groups = [g for g in out["hooks"]["PreToolUse"]
+              if any("osiris_mount_anchor" in h.get("command", "") for h in g["hooks"])]
+    assert len(groups) == 1                                # retargeted, never duplicated
+    assert groups[0]["matcher"] == "mcp__osiris__.*"
+    _, again = merge_settings(out, tmp_path, anchor=True)  # now stable
+    assert again is False
+
+
+def test_spawn_installs_the_subagent_announcements(tmp_path: Path) -> None:
+    """--spawn wires SubagentStart + SubagentStop to the spawn announcement script —
+    the parent is told, never surprised (blessing 2026-07-10)."""
+    repo = tmp_path / "fleet"
+    (repo / ".claude").mkdir(parents=True)
+    onboard(repo, spawn=True, osiris_home=tmp_path)
+    settings = _read(repo / ".claude" / "settings.json")
+    for event in ("SubagentStart", "SubagentStop"):
+        cmds = [h["command"] for g in settings["hooks"][event] for h in g["hooks"]]
+        assert any("osiris_spawn.py" in c for c in cmds)
+    _, changed = merge_settings(settings, tmp_path, spawn=True)
     assert changed is False
 
 

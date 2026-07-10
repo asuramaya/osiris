@@ -277,6 +277,72 @@ async def register_swarm(
     return counts
 
 
+def normalize_spawn_id(raw: str | None) -> str | None:
+    """The harness's subagent id → this module's keying. Hook payloads say `agent-a932dd…`,
+    transcript filenames say `agent-a932dd….jsonl`, and scan_subagents keys the bare handle —
+    normalize so a LIVE-registered spawn and the miner's later disk reconstruction are the
+    SAME Agent object (find-or-create convergence, never a twin)."""
+    rid = (raw or "").strip().removeprefix("agent-")
+    return rid or None
+
+
+async def register_spawn(
+    actions: Actions, raw_id: str, *,
+    agent_type: str | None = None, parent_agent: str | None = None,
+    project: str | None = None, session: str | None = None,
+    transcript: Path | None = None, done: bool = False,
+) -> str | None:
+    """Register ONE spawn the moment a hook sees it (the PreToolUse write-stamp, or
+    SubagentStart/SubagentStop) — the LIVE half of register_swarm, so a spawn exists in the
+    graph while it is still running instead of after the miner's next round. Same keying,
+    same edges: `spawned_by` → the mounted parent as far as the live signal knows (the miner's
+    full-tree pass later refines a sibling-spawned child's true parent — find-or-create means
+    it converges on this object, never twins it), `acts_for` → the parent's principal.
+    `transcript` (SubagentStop hands the child's own file) adds the OBSERVED model; `done`
+    stamps last_active. Returns the child's agent id, or None on an unusable raw id."""
+    rid = normalize_spawn_id(raw_id)
+    if rid is None:
+        return None
+    child = f"agent:{rid}"
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", child, _SOURCE)
+
+    async def prop(name: str, value: Any) -> None:
+        await actions.assert_property(a, name, value, _SOURCE, now, _CONF,
+                                      evidence_class=_EC.value)
+
+    await prop("is_sidechain", True)
+    if agent_type:
+        await prop("agent_type", agent_type)
+        await prop("name", f"{agent_type} spawn"[:120])
+    if session:
+        await prop("session", session)
+    if project:
+        await prop("project", project)
+        proj = await actions.create_or_find_object("SoftwareProject", f"repo:{project}", _SOURCE)
+        await _link_once(actions, a, proj, "works_in", now)
+    model: str | None = None
+    if transcript is not None:
+        def _read_model(path: Path = transcript) -> str | None:
+            try:
+                return latest_model(path.read_text("utf-8", errors="replace").splitlines())
+            except OSError:
+                return None
+        model = await asyncio.to_thread(_read_model)
+        if model:
+            await prop("source_model", model)
+    if done:
+        await prop("last_active", now.isoformat())
+    if parent_agent:
+        p = await actions.create_or_find_object("Agent", parent_agent, _SOURCE)
+        await _link_once(actions, a, p, "spawned_by", now)
+        principal = await _root_principal(actions, parent_agent)
+        if principal:
+            person = await actions.create_or_find_object("Person", principal, _SOURCE)
+            await _link_once(actions, a, person, "acts_for", now)
+    return child
+
+
 async def sense_swarms(actions: Actions, root: Path) -> dict[str, int]:
     """Register EVERY session's swarm under `root` (~/.claude/projects). The miner's swarm
     pass — pure filesystem→graph, no LLM, idempotent. A session dir is any `<project>/<uuid>/`

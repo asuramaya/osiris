@@ -231,6 +231,42 @@ async def _source_for(ctx: Context | None) -> str:
     return ident.agent_id if ident else "session"
 
 
+_spawns_seen: dict[str, float] = {}  # child agent id → last registration (skip re-registering)
+_SPAWN_TTL = 600.0
+
+
+async def _actor_for(
+    ctx: Context | None, subagent_id: str | None, subagent_type: str | None = None
+) -> str:
+    """The attributing actor for a write: the SPAWN itself when the anchor hook stamped this
+    call as a sidechain's, else the connection's mounted identity. A sub-agent shares its
+    parent's MCP connection AND its $CLAUDE_JOB_DIR, so without the stamp every spawn write
+    landed on the PARENT — a child was told 'you are Thoth XVII, writes attributed to you'
+    (live repro, 2026-07-10). The stamp is harness truth (payload agent_id, present only
+    inside a sidechain; the hook strips it from main-session calls, so nobody masquerades
+    DOWN either). First touch registers the child — spawned_by the mounted parent, acts_for
+    its principal — under the same keying the swarm miner uses, so disk reconstruction
+    converges on the same object."""
+    from src.orchestrator import lineage
+
+    rid = lineage.normalize_spawn_id(subagent_id)
+    if rid is None:
+        return await _source_for(ctx)
+    child = f"agent:{rid}"
+    if time.monotonic() - _spawns_seen.get(child, 0.0) > _SPAWN_TTL:
+        ident = await _ident_for(ctx)
+        await lineage.register_spawn(
+            Actions(await _pool_get()), rid, agent_type=subagent_type,
+            parent_agent=ident.agent_id if ident else None,
+            project=ident.project if ident else None,
+            session=ident.session if ident else None)
+        _spawns_seen[child] = time.monotonic()
+        if len(_spawns_seen) > 512:  # spawns churn; keep the skip-cache bounded
+            for k in sorted(_spawns_seen, key=_spawns_seen.__getitem__)[:256]:
+                _spawns_seen.pop(k, None)
+    return child
+
+
 async def _pool_get() -> asyncpg.Pool:
     global _pool
     if _pool is None:
@@ -636,7 +672,9 @@ async def context_window(ctx: Context | None = None) -> dict[str, Any]:
 @mcp.tool()
 async def mount(
     cwd: str, job_dir: str | None = None, model: str | None = None,
-    session_anchor: str | None = None, ctx: Context | None = None
+    session_anchor: str | None = None, subagent_id: str | None = None,
+    subagent_type: str | None = None, subagent_transcript: str | None = None,
+    ctx: Context | None = None
 ) -> dict[str, Any]:
     """Link this agent to Osiris as a first-class fleet member — call it ONCE, first thing.
     Pass your working directory `cwd` (names your project). For `job_dir`, pass the DURABLE
@@ -650,6 +688,33 @@ async def mount(
     pool = await _pool_get()
     settings = get_settings()
     lease = settings.osiris_mail_lease_secs
+    # A SPAWN mounting (the anchor hook stamped this call as a sidechain's): the child
+    # inherits its parent's $CLAUDE_JOB_DIR and MCP connection, so the normal path would
+    # seat it as the PARENT — the live repro greeted a probe child with 'you are Thoth
+    # XVII, writes attributed to you' (2026-07-10). Register it as ITSELF instead:
+    # spawned_by the mounted parent, no seat, no durable row, and NEVER a hot-cache write
+    # (the connection belongs to the parent).
+    from src.orchestrator import lineage as _lineage
+
+    if _lineage.normalize_spawn_id(subagent_id) is not None:
+        parent_ident = await _ident_for(ctx)
+        rid = _lineage.normalize_spawn_id(subagent_id)
+        tpath = Path(subagent_transcript) if subagent_transcript else None
+        child = await _lineage.register_spawn(
+            Actions(pool), rid or "", agent_type=subagent_type,
+            parent_agent=parent_ident.agent_id if parent_ident else None,
+            project=parent_ident.project if parent_ident else None,
+            session=parent_ident.session if parent_ident else None,
+            transcript=tpath)
+        _spawns_seen[str(child)] = time.monotonic()
+        return {
+            "agent": child, "project": parent_ident.project if parent_ident else "?",
+            "spawn_of": parent_ident.agent_id if parent_ident else "unknown (parent unmounted)",
+            "note": ("you are a SPAWN — a sub-agent registered in your own name, "
+                     "spawned_by your parent. Your writes are attributed to YOU, never to "
+                     "the seat that spawned you; the seat, its mail, and its succession "
+                     "belong to your parent. Do the job, return your result to the parent."),
+        }
     # An unexpanded `$CLAUDE_JOB_DIR` literal is no anchor — and it is the COMMON case for a
     # fresh agent (MCP tool args never pass through a shell, so the docstring's advice arrives
     # verbatim). The client's .mcp.json/user-scope entry sends the TRUE dir in the X-Osiris-Job
@@ -842,7 +907,8 @@ async def _project_briefing(pool: asyncpg.Pool, project: str) -> dict[str, Any] 
 
 
 @mcp.tool()
-async def orient(project: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
+async def orient(project: str | None = None, subagent_id: str | None = None,
+                 subagent_type: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
     """Get your bearings — the mount ritual as one call. Returns a SCOPED briefing: open
     threads + recent decisions for a project, plus a count of fleet-wide threads not shown.
     An explicit `project` OVERRIDES your mount (so you can peek at another repo's briefing);
@@ -854,6 +920,12 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
     proj = project or (ident.project if ident else None)  # explicit scope overrides the mount
     who = ident.agent_id if ident else "session (un-mounted — call mount(cwd) first)"
     reader = ident.agent_id if ident else (proj or "")
+    # a SPAWN asking for bearings must not be told it IS the seat: 'you' is the child, the
+    # seat's swap confession is the parent's duty, and the parent's mailbox stays the parent's
+    spawn = await _actor_for(ctx, subagent_id, subagent_type) if subagent_id else None
+    if spawn is not None and spawn != (ident.agent_id if ident else None):
+        who = f"{spawn} — a SPAWN of {ident.agent_id if ident else 'an unmounted parent'}; " \
+              "your writes are your own, the seat and its mail are your parent's"
     unread = (await unread_count(pool, proj, reader_agent=reader, lease_secs=lease)
               if proj else 0)
     mail = f"{unread} unread — inbox()" if unread else "none"
@@ -864,6 +936,8 @@ async def orient(project: str | None = None, ctx: Context | None = None) -> dict
     swap = swap_banner(classify_swap(ident.model_history, ident.model,
                        expected=get_settings().osiris_expected_model,
                        anchored=ident.model_method == "job_dir")) if ident else None
+    if spawn is not None:
+        swap = None  # the seat's swap history is the PARENT's confession duty, not the child's
     away = await mounts.while_away(
         pool, proj, ident.agent_id, _prev_seen.get(ident.agent_id)) if ident else None
     try:  # one glance line — never let the pulse slow or crash orient
@@ -987,7 +1061,8 @@ async def fleet(full: bool = False) -> dict[str, Any]:
 
 @mcp.tool()
 async def send(body: str, to: str | None = None, to_agent: str | None = None,
-               reply_to: int | None = None, ctx: Context | None = None) -> dict[str, Any]:
+               reply_to: int | None = None, subagent_id: str | None = None,
+               subagent_type: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
     """Message the fleet. TWO channels: `to`=<project> is a BROADCAST — the group chat, seen by
     every agent working that project (`to='operator'` reaches the HUMAN's desk); `to_agent`=
     <agent:id> is a DM — a private message to one specific agent (find ids in orient()/fleet).
@@ -1001,13 +1076,16 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
                          "it's from (the anchor re-attaches you automatically after a bounce)"}
     pool = await _pool_get()
     st = get_settings()
+    # a SPAWN's mail goes out under its OWN name (the hook-stamped sidechain identity),
+    # from the parent's project — the fleet must never mistake a child's word for the seat's
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
     try:
-        res = await send_message(pool, from_agent=ident.agent_id, from_project=ident.project,
+        res = await send_message(pool, from_agent=actor, from_project=ident.project,
                                  to_project=to, to_agent=to_agent, body=body, reply_to=reply_to)
     except ValueError as e:
         return {"error": str(e)}
     out: dict[str, Any] = {
-        "sent": res["id"], "from": ident.agent_id,
+        "sent": res["id"], "from": actor,
         **({"thread": res["thread_id"]} if res["thread_id"] is not None else {}),
         **({"dedup": "identical recent message already queued — not re-posted"}
            if res["dedup"] else {}),
@@ -1108,7 +1186,8 @@ async def bootstrap(cwd: str) -> dict[str, Any]:
 @mcp.tool()
 async def record_decision(
     summary: str, kind: str = "ruling", rationale: str | None = None,
-    repo: str | None = None, ctx: Context | None = None,
+    repo: str | None = None, subagent_id: str | None = None,
+    subagent_type: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
     """Write back a DECISION you made this session — a ruling, an architecture pivot, a
     deliberate rejection — so the WHY becomes durable graph memory the next session inherits
@@ -1119,7 +1198,7 @@ async def record_decision(
     Attributed to you if you mount()ed. Idempotent on the summary."""
     d = await capture.record_decision(
         Actions(await _pool_get()), summary, kind=kind, rationale=rationale, repo=repo,
-        source=await _source_for(ctx),
+        source=await _actor_for(ctx, subagent_id, subagent_type),
     )
     return {"id": str(d), "kind": kind, "summary": summary}
 
@@ -1127,6 +1206,7 @@ async def record_decision(
 @mcp.tool()
 async def open_thread(
     summary: str, repo: str | None = None, kind: str | None = None,
+    subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, str]:
     """Open a THREAD — an unresolved question or next-step you want the next session to pick
@@ -1137,20 +1217,22 @@ async def open_thread(
     they are neither rulings nor commits and otherwise die with the context window."""
     t = await capture.open_thread(
         Actions(await _pool_get()), summary, repo=repo, kind=kind,
-        source=await _source_for(ctx)
+        source=await _actor_for(ctx, subagent_id, subagent_type)
     )
     return {"id": str(t), "summary": summary, "status": "open"}
 
 
 @mcp.tool()
 async def resolve_thread(
-    ref: str, because: str | None = None, ctx: Context | None = None
+    ref: str, because: str | None = None, subagent_id: str | None = None,
+    subagent_type: str | None = None, ctx: Context | None = None
 ) -> dict[str, str]:
     """Close a THREAD you (or an earlier session) resolved — `ref` is its UUID or a summary
     substring; `because` records why. It leaves briefing's open list and joins the resolved
     section. Event-sourced (never deleted), so the close is auditable and reversible."""
     tid = await capture.resolve_thread(
-        Actions(await _pool_get()), ref, because=because, source=await _source_for(ctx)
+        Actions(await _pool_get()), ref, because=because,
+        source=await _actor_for(ctx, subagent_id, subagent_type)
     )
     if tid is None:
         return {"error": f"no open thread matches {ref!r}"}
@@ -1160,7 +1242,8 @@ async def resolve_thread(
 @mcp.tool()
 async def hold_tension(
     pole_a: str, pole_b: str, lean: str | None = None, why: str | None = None,
-    repo: str | None = None, ctx: Context | None = None,
+    repo: str | None = None, subagent_id: str | None = None,
+    subagent_type: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Record a live TENSION — two positions held in productive tension, neither settled.
     Unlike record_decision (which SETTLES) or open_thread (which CLOSES), a tension is HELD:
@@ -1173,7 +1256,7 @@ async def hold_tension(
     t = await capture.record_tension(
         Actions(await _pool_get()), pole_a, pole_b, lean=lean, why=why,
         repo=repo or (ident.project if ident else None),
-        source=ident.agent_id if ident else "session",
+        source=await _actor_for(ctx, subagent_id, subagent_type),
     )
     return {"held": str(t), "poles": [pole_a, pole_b], "lean": lean}
 
@@ -1232,6 +1315,48 @@ async def succession_route(request: Any) -> Any:
         _evict_stale_minds(out.get("from") if out.get("minted") else None)
         return JSONResponse(out)
     except Exception as e:  # noqa: BLE001 — the chrome retries next render; never block it
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
+@mcp.custom_route("/spawn", methods=["POST"])
+async def spawn_route(request: Any) -> Any:
+    """SubagentStart/SubagentStop's server half: the harness announces a spawn the moment it
+    happens, so the child exists in the graph — spawned_by the session's mounted seat — while
+    it is still running, instead of after the miner's next 10-minute round (the operator's
+    'caught by surprise' complaint, 2026-07-10). Stop refreshes the same object with the
+    child's OBSERVED model (its own transcript) and a last_active stamp; the miner's
+    full-tree pass converges on the same keying. Localhost-only, fail-open, idempotent."""
+    from starlette.responses import JSONResponse
+
+    from src.orchestrator import lineage
+
+    try:
+        body = await request.json()
+        raw_id = str(body.get("agent_id") or "")
+        session_id = str(body.get("session_id") or "")
+        if not raw_id:
+            return JSONResponse({"error": "agent_id required"}, status_code=400)
+        pool = await _pool_get()
+        parent = None
+        project = None
+        if len(session_id) >= 8:
+            row = await mounts.find_mount(
+                pool, job_dir=str(Path.home() / ".claude" / "jobs" / session_id[:8]))
+            if row is not None:
+                parent, project = row.agent_id, row.project
+        tp = str(body.get("agent_transcript_path") or "")
+        child = await lineage.register_spawn(
+            Actions(pool), raw_id,
+            agent_type=(str(body.get("agent_type") or "") or None),
+            parent_agent=parent, project=project,
+            session=(session_id[:8] or None),
+            transcript=(Path(tp.replace("~", str(Path.home()), 1) if tp.startswith("~")
+                             else tp) if tp else None),
+            done=(str(body.get("phase") or "") == "stop"))
+        if child:
+            _spawns_seen[child] = time.monotonic()
+        return JSONResponse({"spawn": child, "of": parent})
+    except Exception as e:  # noqa: BLE001 — a spawn announcement must never block the harness
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 

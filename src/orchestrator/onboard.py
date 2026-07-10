@@ -103,18 +103,24 @@ def _merge_hook(
     doc: dict[str, Any], event: str, cmd: dict[str, Any], *, matcher: str | None = None
 ) -> bool:
     """Idempotently add ONE command hook under `event` (optionally in a `matcher` group);
-    foreign hooks pass untouched. Returns True when the doc changed."""
+    foreign hooks pass untouched. A hook already present under a STALE matcher is retargeted
+    in place (the anchor hook's matcher widened mount→mcp__osiris__.* — appending a second
+    group would double-fire it). Returns True when the doc changed."""
     hooks = dict(doc.get("hooks") or {})
     groups: list[Any] = list(hooks.get(event) or [])
-    present = any(
-        h.get("command") == cmd["command"]
-        for grp in groups if isinstance(grp, dict)
-        for h in (grp.get("hooks") or []) if isinstance(h, dict)
-    )
-    if present:
-        return False
+    for grp in groups:
+        if not isinstance(grp, dict):
+            continue
+        if any(isinstance(h, dict) and h.get("command") == cmd["command"]
+               for h in (grp.get("hooks") or [])):
+            if matcher is not None and grp.get("matcher") != matcher:
+                grp["matcher"] = matcher
+                hooks[event] = groups
+                doc["hooks"] = hooks
+                return True
+            return False
     group: dict[str, Any] = {"hooks": [cmd]}
-    if matcher is not None:  # PreToolUse targets a specific tool (mcp__osiris__mount)
+    if matcher is not None:  # PreToolUse targets specific tools (mcp__osiris__.*)
         group["matcher"] = matcher
     groups.append(group)
     hooks[event] = groups
@@ -125,11 +131,13 @@ def _merge_hook(
 def merge_settings(
     existing: dict[str, Any] | None, osiris_home: Path, *, hook: bool = False,
     whisper: bool = False, anchor: bool = False, precompact: bool = False,
+    spawn: bool = False,
 ) -> tuple[dict[str, Any], bool]:
     """Merge the statusLine command and the requested hooks into a settings.json WITHOUT
     dropping other keys (permissions, env, worktree, …): hook=Stop mail-drain, whisper=
-    SessionStart auto-mount, anchor=PreToolUse durable-anchor force, precompact=the death
-    rite's sweep ring. Returns (result, changed)."""
+    SessionStart auto-mount, anchor=PreToolUse anchor-force + spawn-stamp, precompact=the
+    death rite's sweep ring, spawn=SubagentStart/Stop announcements. Returns (result,
+    changed)."""
     doc: dict[str, Any] = dict(existing) if existing else {}
     entry = {"type": "command", "command": _statusline_command(osiris_home), "padding": 0}
     changed = doc.get("statusLine") != entry
@@ -150,15 +158,25 @@ def merge_settings(
             doc, "SessionStart",
             {"type": "command", "command": f"python3 {wscript}", "timeout": 10})
     if anchor:
-        # the PreToolUse durable-anchor (blessing 2026-07-08): force the derived job_dir into
-        # every mount() so identity survives a reconnect and co-located agents stay distinct,
-        # with no reliance on the agent passing it. STDLIB-only, fail-open. Matches the mount
-        # tool exactly. Runs before permission/classifier gates (never rejected).
+        # the PreToolUse anchor-force + SPAWN STAMP (blessings 2026-07-08 / 2026-07-10):
+        # force the derived job_dir into every mount() (identity survives reconnects,
+        # co-located agents stay distinct) AND stamp sidechain calls with the harness's own
+        # agent_id so a spawn's writes land on the CHILD, never the seat that spawned it.
+        # STDLIB-only, fail-open, matches every osiris tool (the script self-filters).
         ascript = osiris_home / "scripts" / "osiris_mount_anchor.py"
         changed |= _merge_hook(
             doc, "PreToolUse",
             {"type": "command", "command": f"python3 {ascript}", "timeout": 5},
-            matcher="mcp__osiris__mount")
+            matcher="mcp__osiris__.*")
+    if spawn:
+        # the spawn announcements (blessing 2026-07-10): SubagentStart/Stop post the child
+        # to /spawn the moment it exists — the parent (and the operator) is told, never
+        # surprised; the miner's disk round remains the convergence backstop.
+        sscript = osiris_home / "scripts" / "osiris_spawn.py"
+        for event in ("SubagentStart", "SubagentStop"):
+            changed |= _merge_hook(
+                doc, event,
+                {"type": "command", "command": f"python3 {sscript}", "timeout": 5})
     if precompact:
         # the death rite (blessing 2026-07-09, ruling a882b334): at the compaction seam, ring
         # the worker's sweep so the dying mind's unrecorded turns are mined around the seam —
@@ -259,6 +277,7 @@ def onboard(
     whisper: bool = False,
     anchor: bool = False,
     precompact: bool = False,
+    spawn: bool = False,
     dry_run: bool = False,
     user_scope: bool = False,
     osiris_home: str | Path | None = None,
@@ -276,12 +295,12 @@ def onboard(
         changes.append(Change("skipped", root / ".mcp.json"))  # print the one-liner instead
     else:
         changes.append(_apply(root / ".mcp.json", merge_mcp, dry_run=dry_run))
-    if statusline or hook or whisper or anchor or precompact:
+    if statusline or hook or whisper or anchor or precompact or spawn:
         changes.append(
             _apply(
                 root / ".claude" / "settings.json",
                 lambda e: merge_settings(e, home, hook=hook, whisper=whisper, anchor=anchor,
-                                         precompact=precompact),
+                                         precompact=precompact, spawn=spawn),
                 dry_run=dry_run,
             )
         )
@@ -343,6 +362,13 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI glue
              "OPERATOR consent switch (blessing 2026-07-09, ruling a882b334)",
     )
     parser.add_argument(
+        "--spawn",
+        action="store_true",
+        help="also install the SubagentStart/Stop spawn announcements (a sub-agent exists in "
+             "the graph, spawned_by its parent, the moment it starts — the parent is told, "
+             "never surprised) — an OPERATOR consent switch (blessing 2026-07-10)",
+    )
+    parser.add_argument(
         "--user-scope",
         action="store_true",
         help="print the box-wide `claude mcp add --scope user` one-liner; write no .mcp.json",
@@ -361,6 +387,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI glue
             whisper=args.whisper,
             anchor=args.anchor,
             precompact=args.precompact,
+            spawn=args.spawn,
             dry_run=args.dry_run,
             user_scope=args.user_scope,
         )
