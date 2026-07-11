@@ -275,6 +275,18 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     sem_hits = await _semantic_hits(pool, q, limit)
     hits = _fuse_ranked(lex_hits, sem_hits, limit)
     semantic = any(h["via"] in ("semantic", "both") for h in hits)
+    # a superseded decision must not read as live testimony (the supersedes verb,
+    # dd04d7dd): one batched lookup marks such hits — still findable, honestly flagged
+    if hits:
+        buried = {str(r["object_id"]): r["v"] for r in await pool.fetch(
+            "SELECT DISTINCT ON (object_id) object_id, value #>> '{}' AS v "
+            "FROM current_assertions WHERE name='superseded_by' "
+            "AND object_id = ANY($1::uuid[]) "
+            "ORDER BY object_id, confidence DESC, observed_at DESC",
+            [h["id"] for h in hits]) if (r["v"] or "").strip()}
+        for h in hits:
+            if h["id"] in buried:
+                h["superseded"] = f"by decision {buried[h['id']][:8]} — read the successor"
     await pool.execute(
         "INSERT INTO search_log (query, caller, hits, top_rank, relaxed, fuzzy, semantic) "
         "VALUES ($1,$2,$3,$4,$5,$6,$7)",
@@ -1832,6 +1844,10 @@ DECISION_LOG: dict[str, Any] = {
                            "columns": [
                                {"name": "decision", "property": "summary"},
                                {"name": "kind", "property": "kind"},
+                               # the gray: a value here means this entry is DEAD — its
+                               # successor's short id + summary ride along (ruling dd04d7dd),
+                               # so the log skims honestly without hiding the history
+                               {"name": "superseded", "property": "superseded_because"},
                                {"name": "in", "rollup": {"direction": "out",
                                     "link_type": "decided_in", "of": "first",
                                     "property": "canonical"}},
@@ -1862,12 +1878,16 @@ PROJECT_BRIEFING: dict[str, Any] = {
                             {"property": "status", "op": "eq", "value": "open"}]},
                         {"op": "traverse", "from": {"op": "subject"}, "direction": "in",
                          "link_type": "in_repo", "hops": 1}]}}}}},
+        # superseded decisions leave the RECENT lens (the supersedes verb, ruling dd04d7dd):
+        # a corrected hypothesis must not brief the next session as if it still stood. The
+        # record keeps it; the decision-log (audit view) still lists it under its successor.
         {"title": "recent_decisions", "body": {
             "op": "take", "n": 15, "from": {
                 "op": "table", "columns": [{"property": "summary"}, {"property": "kind"}],
                 "from": {"op": "order", "by": "recency", "dir": "desc", "from": {
                     "op": "intersect", "sets": [
-                        {"op": "select", "object_type": "Decision"},
+                        {"op": "select", "object_type": "Decision", "where": [
+                            {"property": "superseded_by", "op": "absent"}]},
                         {"op": "traverse", "from": {"op": "subject"}, "direction": "in",
                          "link_type": "in_repo", "hops": 1}]}}}}},
         # the live tensions — held polarities the session inherits (not a verdict). A Tension

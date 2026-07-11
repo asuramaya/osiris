@@ -95,6 +95,7 @@ async def record_decision(
     actions: Actions, summary: str, *, kind: str = "ruling",
     rationale: str | None = None, repo: str | None = None, source: str = _SOURCE,
     grounds: list[uuid.UUID] | None = None, protocol: str | None = None,
+    supersedes: str | None = None,
 ) -> uuid.UUID:
     """Capture a decision at the moment it is made — the WHY, declared, not mined.
 
@@ -106,8 +107,23 @@ async def record_decision(
     records WHICH instance decided (still SELF_DECLARED, still the high-trust channel).
     `grounds` cites the Reference objects the decision rests on — `grounded_by` edges
     minted AT BIRTH, so the citation carries the decider's grade instead of being
-    reconstructed later from prose. Idempotent on the summary hash. Returns the id."""
+    reconstructed later from prose. Idempotent on the summary hash. Returns the id.
+
+    `supersedes` BURIES an earlier decision under this one (the operator's ruling
+    dd04d7dd, Tjmax III's ask): the old decision is stamped superseded_by/-because —
+    property assertions, event-sourced, unwindable by re-asserting "" — and this one is
+    stamped supersedes, so the correction navigates both ways. The lens does the graying:
+    superseded decisions leave orient's recent list; the decision-log renders them with
+    their successor. NEVER a delete — the wrong hypothesis stays readable under its
+    correction. Raises ValueError when the ref matches nothing (the new decision is NOT
+    recorded — a correction that can't name its target is not yet a correction)."""
     observed = datetime.now(UTC)
+    old: uuid.UUID | None = None
+    if supersedes:
+        old = await _find_decision(actions.pool, supersedes)
+        if old is None:
+            raise ValueError(f"supersedes matched no decision: {supersedes!r} — quote its "
+                             "UUID, 8-char short id, or a summary substring")
     # ONE transaction: the Decision, its summary/kind/rationale, and the repo link either all
     # land or none do — a process death mid-sequence can no longer leave a summary-less husk.
     async with actions.atomic() as a:
@@ -135,7 +151,39 @@ async def record_decision(
             if not exists:  # re-capture is a no-op, like link_repo
                 await a.create_link(d, ref, "grounded_by", source, observed, _CONF,
                                     evidence_class=_EC)
+        if old is not None and old != d:  # a decision never buries itself (idempotent re-record)
+            await a.assert_property(old, "superseded_by", str(d), source, observed, _CONF,
+                                    evidence_class=_EC)
+            await a.assert_property(old, "superseded_because",
+                                    f"superseded by {str(d)[:8]}: {summary[:200]}",
+                                    source, observed, _CONF, evidence_class=_EC)
+            await a.assert_property(d, "supersedes", str(old), source, observed, _CONF,
+                                    evidence_class=_EC)
     return d
+
+
+async def _find_decision(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
+    """A Decision by UUID, by short-id PREFIX, then by summary substring (shortest summary
+    wins) — the same resolution ladder as _find_thread, and for the same reason: the fleet
+    quotes decisions by 8-char short id inside other summaries, so the prefix leg must run
+    before the text leg."""
+    try:
+        return uuid.UUID(ref)
+    except (ValueError, AttributeError):
+        pass
+    short = (ref or "").strip().lower()
+    if re.fullmatch(r"[0-9a-f]{8}[0-9a-f-]*", short):
+        did = await pool.fetchval(
+            "SELECT id FROM objects WHERE type='Decision' AND status='active' "
+            "AND id::text LIKE $1 || '%' LIMIT 1", short)
+        if did is not None:
+            return uuid.UUID(str(did))
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT o.id FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+        "WHERE o.type='Decision' AND o.status='active' AND a.name='summary' "
+        "AND a.value #>> '{}' ILIKE '%'||$1||'%' ORDER BY length(a.value #>> '{}') ASC LIMIT 1",
+        ref,
+    )
 
 
 def _ref_slug(title: str) -> str:

@@ -1195,6 +1195,9 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         "  AND s.name='summary' ORDER BY s.confidence DESC, s.observed_at DESC LIMIT 1) "
         "  AS summary "
         "FROM objects o WHERE o.type='Decision' AND o.status='active' "
+        "AND COALESCE((SELECT s.value #>> '{}' FROM current_assertions s "
+        "  WHERE s.object_id=o.id AND s.name='superseded_by' "
+        "  ORDER BY s.confidence DESC, s.observed_at DESC LIMIT 1),'')='' "
         "ORDER BY o.created_at DESC LIMIT 5") if r["summary"]]
     return {
         "you": who, "model": (ident.model if ident else None), "project": proj,
@@ -1470,7 +1473,7 @@ async def bootstrap(cwd: str) -> dict[str, Any]:
 async def record_decision(
     summary: str, kind: str = "ruling", rationale: str | None = None,
     repo: str | None = None, grounds: list[str] | None = None,
-    protocol: str | None = None,
+    protocol: str | None = None, supersedes: str | None = None,
     subagent_id: str | None = None,
     subagent_type: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -1484,7 +1487,10 @@ async def record_decision(
     citations. `protocol` = the INVOCATION that produced the finding — the exact command
     line, seeds, thresholds, bucket edges — so a successor RERUNS instead of re-deriving
     (a ruling that only states the conclusion is heinrich's biggest re-derivation class).
-    Renders in the `decision-log` composition beside mined decisions, graded
+    `supersedes` = an earlier decision this one CORRECTS (UUID, 8-char short id, or a
+    summary substring): the old entry is buried under this one — it leaves orient's
+    recent list and the decision-log grays it with its successor; never deleted, always
+    unwindable. Renders in the `decision-log` composition beside mined decisions, graded
     SELF_DECLARED (higher trust). Attributed to you if you mount()ed. Idempotent on the
     summary."""
     pool = await _pool_get()
@@ -1493,12 +1499,23 @@ async def record_decision(
     for g in grounds or []:
         rid = await _resolve(pool, g)
         (gids.append(rid) if rid is not None else missing.append(g))
+    old: uuid.UUID | None = None
+    if supersedes:  # resolve BEFORE recording — a correction that can't name its target
+        old = await capture._find_decision(pool, supersedes)  # records NOTHING
+        if old is None:
+            return {"error": f"supersedes matched no decision: {supersedes!r} — quote its "
+                             "UUID, 8-char short id, or a summary substring"}
     d = await capture.record_decision(
         Actions(pool), summary, kind=kind, rationale=rationale, repo=repo,
         source=await _actor_for(ctx, subagent_id, subagent_type), grounds=gids,
-        protocol=protocol,
+        protocol=protocol, supersedes=str(old) if old else None,
     )
     out: dict[str, Any] = {"id": str(d), "kind": kind, "summary": summary}
+    if old is not None:
+        out["superseded"] = (
+            "self (identical summary re-recorded) — nothing buried" if old == d else
+            f"{str(old)[:8]} is buried under this decision: it leaves orient's recent "
+            "list, the decision-log grays it (unwind: re-assert superseded_by='' on it)")
     if gids:
         out["grounded_by"] = len(gids)
     if missing:

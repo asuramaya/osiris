@@ -117,6 +117,23 @@ async def test_the_misses_log_records_recall_failures(actions: Actions) -> None:
     assert dg["retrieval"]["top_missed"][0]["query"] == "quantum bagels"
 
 
+async def test_a_superseded_decision_is_flagged_never_hidden(actions: Actions) -> None:
+    """The supersedes verb reaches search (dd04d7dd): a buried ruling still surfaces (the
+    record forgets nothing) but carries a superseded flag naming its successor — a skimmer
+    is never handed a corrected hypothesis as live testimony."""
+    from src.orchestrator.capture import record_decision
+
+    old = await record_decision(actions, "the flaky test is a timezone bug",
+                                kind="ruling", source="agent:a")
+    await record_decision(actions, "the flaky test is a race in the fixture, not timezones",
+                          kind="ruling", source="agent:a", supersedes=str(old))
+    out = await _search(actions, "flaky test")
+    flags = {h["canonical"]: h.get("superseded") for h in out["hits"]}
+    assert len(out["hits"]) == 2
+    buried = [v for v in flags.values() if v]
+    assert len(buried) == 1 and "read the successor" in buried[0]
+
+
 async def test_one_row_per_object_best_witness(actions: Actions) -> None:
     """Two sources co-asserting one decision's summary → ONE hit (the multi-source set must
     not double-list), carrying the better witness."""

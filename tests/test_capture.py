@@ -540,6 +540,77 @@ async def test_orient_briefing_ranks_obligations_first_and_caps(actions: Actions
     assert scoped["open_threads_note"] and "6 more" in scoped["open_threads_note"]
 
 
+async def test_supersede_buries_the_old_decision_both_ways(actions: Actions) -> None:
+    """The supersedes verb (operator ruling dd04d7dd, Tjmax III's ask): record_decision
+    (supersedes=<ref>) stamps the OLD decision superseded_by/-because and the NEW one
+    supersedes — the correction navigates both directions, event-sourced, no delete."""
+    old = await record_decision(actions, "the cache misses come from TTL expiry",
+                                kind="ruling", repo="osiris", source="agent:me")
+    new = await record_decision(
+        actions, "the cache misses come from key collisions, not TTL",
+        kind="ruling", repo="osiris", source="agent:me", supersedes=str(old)[:8])
+    facts_old = await _props(actions.pool, old)
+    facts_new = await _props(actions.pool, new)
+    assert facts_old["superseded_by"] == str(new)
+    assert str(new)[:8] in facts_old["superseded_because"]
+    assert "key collisions" in facts_old["superseded_because"]
+    assert facts_new["supersedes"] == str(old)
+
+
+async def test_supersede_lens_recent_drops_it_log_grays_it(actions: Actions) -> None:
+    """The graying (dd04d7dd): a superseded decision leaves the project-briefing's
+    recent_decisions (a corrected hypothesis must not brief the next session as live) but
+    STAYS in the decision-log with its successor riding the superseded column — the log
+    skims honestly without hiding history."""
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:suptest", "session")
+    await actions.assert_property(proj, "name", "suptest", "session", now, 0.9)
+    old = await record_decision(actions, "ship the parser as a regex pile",
+                                kind="choice", repo="suptest", source="agent:me")
+    await record_decision(actions, "ship the parser on a real grammar — the regex "
+                          "pile misparses nested quotes", kind="choice", repo="suptest",
+                          source="agent:me", supersedes=str(old))
+    await seed_default_compositions(actions.pool)
+    from src.mcp_server import _project_briefing
+    scoped = await _project_briefing(actions.pool, "suptest")
+    assert scoped is not None
+    recents = [r["summary"] for r in scoped["recent_decisions"]]
+    assert any("real grammar" in s for s in recents)
+    assert not any(s == "ship the parser as a regex pile" for s in recents)
+    # the audit view keeps the buried entry, grayed by its successor
+    log = await run_composition(actions.pool, "decision-log")
+    rows = next(iter(log["items"].values()))
+    buried = [r for r in rows if r.get("decision") == "ship the parser as a regex pile"]
+    assert buried and "real grammar" in (buried[0].get("superseded") or "")
+    live = [r for r in rows if "real grammar" in (r.get("decision") or "")]
+    assert live and not (live[0].get("superseded") or "")
+
+
+async def test_supersede_that_names_nothing_records_nothing(actions: Actions) -> None:
+    """A correction that can't name its target is not yet a correction: the ValueError
+    fires BEFORE the new decision exists — no husk, no half-burial."""
+    import pytest
+
+    with pytest.raises(ValueError, match="matched no decision"):
+        await record_decision(actions, "this correction points at a ghost",
+                              source="agent:me", supersedes="deadbeef")
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+        "WHERE o.type='Decision' AND a.name='summary' "
+        "AND a.value #>> '{}' LIKE '%points at a ghost%'") == 0
+
+
+async def test_supersede_self_is_a_noop_not_a_burial(actions: Actions) -> None:
+    """Idempotent re-record whose supersedes resolves to ITSELF (same summary hash):
+    a decision never buries itself — no superseded_by stamp lands."""
+    d = await record_decision(actions, "the one true parser ruling", source="agent:me")
+    d2 = await record_decision(actions, "the one true parser ruling", source="agent:me",
+                               supersedes=str(d))
+    assert d2 == d
+    facts = await _props(actions.pool, d)
+    assert "superseded_by" not in facts and "supersedes" not in facts
+
+
 async def test_record_decision_is_atomic_no_orphan_husk(actions: Actions) -> None:
     """The write-integrity fix (rotten-apple audit): record_decision was five sequential
     transactions — a process death between the create and its summary left an orphan Decision
