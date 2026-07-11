@@ -90,6 +90,7 @@ async def send_message(
     pool: asyncpg.Pool, *, from_agent: str, from_project: str | None,
     to_project: str | None = None, to_agent: str | None = None, body: str,
     reply_to: int | None = None, dedup_window_secs: int = 600,
+    desk_kind: str | None = None,
 ) -> dict[str, Any]:
     """Post a BROADCAST (to_project) or a DM (to_agent). With `reply_to` and no explicit address,
     it routes by channel: a reply to a DM goes back to that sender as a DM; a reply to a broadcast
@@ -97,7 +98,10 @@ async def send_message(
     its recipient — the desk supersession lane), joining the thread and settling the referenced
     message for the replier (replying proves perception). An identical (sender, recipient, body)
     within the dedup window returns the EXISTING id. Raises ValueError on an unknown reply_to or
-    an unroutable message."""
+    an unroutable message. `desk_kind` is the sender's own triage of an operator brief
+    ('decision' | 'hands' | 'fyi') — which band of the desk it belongs to."""
+    if desk_kind is not None and desk_kind not in DESK_KINDS:
+        raise ValueError(f"desk_kind must be one of {DESK_KINDS}")
     ref = None
     if reply_to is not None:
         ref = await pool.fetchrow(
@@ -151,8 +155,8 @@ async def send_message(
                 "thread_id": dup["thread_id"], "dedup": True}
     mid = await pool.fetchval(
         "INSERT INTO fleet_messages (from_agent, from_project, to_project, to_agent, body, "
-        "reply_to, thread_id) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
-        from_agent, from_project, to_p, to_a, body, reply_to, thread)
+        "reply_to, thread_id, desk_kind) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
+        from_agent, from_project, to_p, to_a, body, reply_to, thread, desk_kind)
     return {"id": mid, "to": to_p, "to_agent": to_a, "thread_id": thread, "dedup": False}
 
 
@@ -267,3 +271,179 @@ async def project_deliverable_count(
         "  AND r.delivered_at >= now() - make_interval(secs => $3) "
         "  AND lm.last_seen > now() - make_interval(secs => $2))",
         _norm(project), lease_secs, _HOLD_GRACE_SECS)
+
+
+# ── THE DESK (operator direction, 2026-07-11: "my desk is full — fix it") ────────────────
+# The desk drowned in SHAPE, not volume: one fleet-wide condition reported five times, moot
+# alarms lingering because only the human may dismiss, CRITICAL interleaved with FYI, and
+# blockers re-stated in prose that the thread wall already carries. Four organs answer it:
+# BANDS (sender-declared desk_kind, heuristic fallback) · THREAD+SAME-STORY FOLDS (newest
+# per thread; pg_trgm clusters near-duplicates within a band) · DIM (an agent may annotate
+# a brief moot with a reason — never settle; the membrane holds) · YOUR-QUEUE (derived live
+# from owner='operator' threads — the graph is the record, the desk stops double-billing).
+
+DESK_KINDS = ("decision", "hands", "fyi")
+
+# same-story threshold: pg_trgm similarity between two briefs describing one fleet-wide
+# condition (measured on the 2026-07-11 model-divergence five: pairwise 0.28–0.5) vs
+# unrelated desk briefs (< 0.15). 0.25 folds the storm without folding strangers.
+_SAME_STORY_SIM = 0.25
+
+
+def classify_brief(body: str, desk_kind: str | None) -> str:
+    """The band a brief belongs to. The SENDER's declaration wins; unclassified (legacy)
+    briefs are banded by heuristic — biased UPWARD (a CRITICAL misfiled under fyi costs
+    more than an FYI misfiled under decision)."""
+    if desk_kind in DESK_KINDS:
+        return desk_kind
+    low = (body or "").lower()
+    if any(t in low for t in ("🚨", "critical", "needs your decision", "judgment call",
+                              "decide", "ruling needed", "your call")):
+        return "decision"
+    if any(t in low for t in ("needs your hands", "blocked on you", "physically",
+                              "authorization", "authorize", "refill", "your word")):
+        return "hands"
+    return "fyi"
+
+
+async def dim_brief(
+    pool: asyncpg.Pool, message_id: int, *, because: str, by: str,
+) -> dict[str, Any]:
+    """DIM an operator-desk brief: annotate it moot-with-a-reason so the desk renders it
+    collapsed under the note. NEVER a settle — dismissing stays exclusively the human's
+    (the membrane); a dim is an agent saving the human the archaeology ("true when sent,
+    moot now: root cause fixed in <commit>"). Stamped who + when — an annotation is
+    testimony. Re-dimming overwrites (last honest word wins; the row keeps one note)."""
+    row = await pool.fetchrow(
+        "UPDATE fleet_messages SET moot_note=$2, moot_by=$3, moot_at=now() "
+        "WHERE id=$1 AND to_project=$4 RETURNING id", message_id, because, by, OPERATOR_ADDR)
+    if row is None:
+        raise ValueError(f"message {message_id} is not an operator-desk brief — dim only "
+                         "applies to the human's desk")
+    return {"dimmed": message_id, "because": because, "by": by,
+            "note": "annotated, NOT settled — the brief stays the operator's to dismiss"}
+
+
+async def _same_story_clusters(
+    pool: asyncpg.Pool, cards: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Greedy trigram clustering WITHIN one band: five agents reporting one fleet-wide
+    condition become one card carrying the newest telling + who else said it. One SQL
+    round-trip for all pairs; tiny N (a desk, not a corpus)."""
+    if len(cards) < 2:
+        return cards
+    ids = [c["id"] for c in cards]
+    bodies = [c["body"] for c in cards]
+    pairs = await pool.fetch(
+        "WITH b AS (SELECT unnest($1::bigint[]) AS id, unnest($2::text[]) AS body) "
+        "SELECT a.id AS ida, c.id AS idb FROM b a JOIN b c ON a.id < c.id "
+        "WHERE similarity(a.body, c.body) > $3", ids, bodies, _SAME_STORY_SIM)
+    parent: dict[int, int] = {i: i for i in ids}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for p in pairs:
+        ra, rb = find(p["ida"]), find(p["idb"])
+        if ra != rb:
+            parent[rb] = ra
+    groups: dict[int, list[dict[str, Any]]] = {}
+    for c in cards:
+        groups.setdefault(find(c["id"]), []).append(c)
+    out = []
+    for members in groups.values():
+        members.sort(key=lambda c: c["when"], reverse=True)  # newest telling leads
+        lead = members[0]
+        if len(members) > 1:
+            lead = {**lead, "same_story": {
+                "count": len(members),
+                "also": [{"id": m["id"], "from": m["from"], "project": m["from_project"]}
+                         for m in members[1:]],
+                "note": "near-identical briefs folded — one condition, several witnesses; "
+                        "the ids above settle with this one"}}
+        out.append(lead)
+    out.sort(key=lambda c: c["when"], reverse=True)
+    return out
+
+
+async def _operator_queue(pool: asyncpg.Pool, limit: int = 10) -> list[dict[str, Any]]:
+    """The standing YOUR-QUEUE: open threads whose owner is the human (owner='operator' —
+    the tags shipped 90b2832). Derived LIVE from the graph, so briefs can point at a thread
+    instead of re-stating the blocker in prose that instantly goes stale."""
+    rows = await pool.fetch(
+        "SELECT o.id, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS s, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS k "
+        "FROM objects o "
+        "WHERE o.type='Thread' AND o.status='active' "
+        "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  = 'operator' "
+        "AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='status' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "ORDER BY (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  IS DISTINCT FROM 'obligation', o.created_at DESC LIMIT $1", limit)
+    return [{"id": str(r["id"])[:8], "summary": (r["s"] or "")[:200],
+             **({"kind": r["k"]} if r["k"] else {})} for r in rows if r["s"]]
+
+
+async def read_desk(pool: asyncpg.Pool, *, limit: int = 100) -> dict[str, Any]:
+    """The ORGANIZED desk — always a peek (reading the human's desk never leases; settling
+    is only ever the human's explicit word via ack). Bands ordered by what the human must
+    see first; within a band: thread-folded (newest per thread — the supersession lane the
+    wake prompt teaches), then same-story clustered. Dimmed briefs collapse to one line
+    each at the bottom — annotated moot by an agent, still the human's to dismiss."""
+    rows = await pool.fetch(
+        "SELECT m.id, m.from_agent, m.from_project, m.body, m.created_at, m.thread_id, "
+        " m.desk_kind, m.moot_note, m.moot_by "
+        "FROM fleet_messages m WHERE m.to_project=$1 AND m.read_at IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
+        "  AND r.agent_id=$1 AND r.read_at IS NOT NULL) "
+        "ORDER BY m.created_at DESC LIMIT $2", OPERATOR_ADDR, limit)
+    # thread-fold: the newest brief in a thread speaks for it; earlier ones ride under it
+    by_thread: dict[int, list[Any]] = {}
+    for r in rows:  # rows arrive newest-first
+        by_thread.setdefault(r["thread_id"] or r["id"], []).append(r)
+    cards, dimmed = [], []
+    for members in by_thread.values():
+        lead, earlier = members[0], members[1:]
+        card: dict[str, Any] = {
+            "id": lead["id"], "from": lead["from_agent"], "from_project": lead["from_project"],
+            "body": lead["body"], "when": lead["created_at"].isoformat()}
+        if earlier:
+            card["thread_folded"] = {
+                "count": len(earlier), "ids": [e["id"] for e in earlier],
+                "note": "earlier briefs in this thread — superseded by the one above"}
+        if lead["moot_note"]:
+            dimmed.append({"id": card["id"], "from": card["from"],
+                           "project": card["from_project"],
+                           "headline": (lead["body"] or "")[:100],
+                           "moot": lead["moot_note"], "by": lead["moot_by"]})
+            continue
+        card["band"] = classify_brief(lead["body"], lead["desk_kind"])
+        cards.append(card)
+    bands: dict[str, list[dict[str, Any]]] = {k: [] for k in DESK_KINDS}
+    for c in cards:
+        bands[c.pop("band")].append(c)
+    for k in DESK_KINDS:  # same-story folding never crosses a band
+        bands[k] = await _same_story_clusters(pool, bands[k])
+    queue = await _operator_queue(pool)
+    return {
+        "needs_decision": bands["decision"],
+        "needs_hands": bands["hands"],
+        "fyi": bands["fyi"],
+        **({"dimmed": dimmed} if dimmed else {}),
+        **({"your_queue": {
+            "threads": queue,
+            "note": "open threads owned by YOU (owner='operator') — derived live from the "
+                    "graph; the canonical waiting-on-your-hands list"}} if queue else {}),
+        "note": "peek — nothing leased; settle only at your word (inbox(project='operator', "
+                "ack=[ids])). Folded ids settle with their lead card.",
+    }

@@ -79,7 +79,8 @@ def test_wake_prompt_carries_the_upward_duty() -> None:
     # the operator must see it (membrane #6); acks-only replies stay forbidden (ping-pong).
     p = _WAKE_PROMPT.format(repo="/repo/demo")
     assert "send(reply_to=" in p and "ack" in p          # the settle ritual
-    assert "send(to='operator')" in p and "record_decision" in p  # the report-up duty
+    assert "send(to='operator'" in p and "record_decision" in p  # the report-up duty
+    assert "desk=" in p and "'fyi'" in p                 # the desk bands ride the brief
     assert "never an acknowledgement-only" in p
 
 

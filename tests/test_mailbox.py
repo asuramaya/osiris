@@ -260,3 +260,125 @@ async def test_lease_is_visible_to_the_group(actions: Actions) -> None:
     await read_inbox(p, "handlingtheloop", reader_agent="agent:ux")  # ux leases it
     flight = await in_flight(p, "handlingtheloop", reader_agent="agent:engine")
     assert len(flight) == 1 and flight[0]["leased_by"] == "agent:ux"
+
+
+# ── THE ORGANIZED DESK (operator direction, 2026-07-11: "my desk is full — fix it") ──────
+
+
+async def test_desk_bands_by_sender_triage_and_heuristic(actions: Actions) -> None:
+    """Sender-declared desk_kind wins; unclassified briefs band by heuristic, biased upward
+    (a CRITICAL never files under fyi). Render order: decision, hands, fyi."""
+    from src.orchestrator.mailbox import read_desk
+
+    p = actions.pool
+    await send_message(p, from_agent="agent:a", from_project="coldspot",
+                       to_project=OPERATOR_ADDR, body="pick a signing strategy",
+                       desk_kind="decision")
+    await send_message(p, from_agent="agent:b", from_project="monsterhouse",
+                       to_project=OPERATOR_ADDR, body="need the gemini key refilled",
+                       desk_kind="hands")
+    await send_message(p, from_agent="agent:c", from_project="osiris",
+                       to_project=OPERATOR_ADDR, body="loop closed, all green",
+                       desk_kind="fyi")
+    # legacy/unclassified: the heuristic reads the body
+    await send_message(p, from_agent="agent:d", from_project="coldspot",
+                       to_project=OPERATOR_ADDR, body="🚨 CRITICAL: root escalation path")
+    desk = await read_desk(p)
+    assert [c["body"] for c in desk["needs_decision"]] == [
+        "🚨 CRITICAL: root escalation path", "pick a signing strategy"]
+    assert desk["needs_hands"][0]["body"] == "need the gemini key refilled"
+    assert desk["fyi"][0]["body"] == "loop closed, all green"
+    assert "nothing leased" in desk["note"]
+    # a declared kind must be a real band
+    with pytest.raises(ValueError, match="desk_kind"):
+        await send_message(p, from_agent="agent:e", from_project="osiris",
+                           to_project=OPERATOR_ADDR, body="x", desk_kind="urgent")
+
+
+async def test_desk_folds_same_story_across_senders(actions: Actions) -> None:
+    """Five agents reporting ONE fleet-wide condition become one card: newest telling leads,
+    the other witnesses ride under it with their ids. Unrelated briefs never fold."""
+    from src.orchestrator.mailbox import read_desk
+
+    p = actions.pool
+    story = ("Model divergence at mount: intended claude-fable-5, running claude-haiku-4-5. "
+             "Either the harness demoted the seat or .osiris needs updating — {}")
+    for i, proj in enumerate(("rotten-apple", "Like-Us", "neo")):
+        await send_message(p, from_agent=f"agent:w{i}", from_project=proj,
+                           to_project=OPERATOR_ADDR, body=story.format(proj),
+                           desk_kind="fyi")
+    await send_message(p, from_agent="agent:z", from_project="tony",
+                       to_project=OPERATOR_ADDR,
+                       body="launchpad implementation complete, awaiting audit",
+                       desk_kind="fyi")
+    desk = await read_desk(p)
+    assert len(desk["fyi"]) == 2  # 3 tellings folded to 1 + the unrelated brief
+    folded = [c for c in desk["fyi"] if "same_story" in c][0]
+    assert folded["same_story"]["count"] == 3
+    assert {m["project"] for m in folded["same_story"]["also"]} == {"rotten-apple", "Like-Us"}
+    assert "neo" in folded["body"]  # newest telling leads
+
+
+async def test_desk_thread_fold_newest_brief_speaks_for_the_thread(actions: Actions) -> None:
+    """The supersession lane made real: an agent's reply_to its own earlier brief folds the
+    old one under the new — the desk shows one card per thread, earlier ids listed."""
+    from src.orchestrator.mailbox import read_desk
+
+    p = actions.pool
+    first = await send_message(p, from_agent="agent:a", from_project="osiris",
+                               to_project=OPERATOR_ADDR, body="storm diagnosed, fix building",
+                               desk_kind="fyi")
+    await send_message(p, from_agent="agent:a", from_project="osiris",
+                       to_project=OPERATOR_ADDR, reply_to=first["id"],
+                       body="storm fixed and witnessed; sweep done", desk_kind="fyi")
+    desk = await read_desk(p)
+    assert len(desk["fyi"]) == 1
+    card = desk["fyi"][0]
+    assert "witnessed" in card["body"]
+    assert card["thread_folded"]["ids"] == [first["id"]]
+
+
+async def test_dim_annotates_never_settles(actions: Actions) -> None:
+    """An agent may DIM a desk brief (moot + why + who); the brief leaves the bands, renders
+    collapsed, and STAYS unsettled — dismissing remains the human's word alone. Dim refuses
+    non-desk mail."""
+    from src.orchestrator.mailbox import dim_brief, read_desk
+
+    p = actions.pool
+    res = await send_message(p, from_agent="agent:w", from_project="neo",
+                             to_project=OPERATOR_ADDR, body="⚠ model divergence detected",
+                             desk_kind="decision")
+    out = await dim_brief(p, res["id"], because="root cause fixed in bcbdeab",
+                          by="agent:fixer")
+    assert "NOT settled" in out["note"]
+    desk = await read_desk(p)
+    assert desk["needs_decision"] == []                      # left the band
+    assert desk["dimmed"][0]["id"] == res["id"]
+    assert desk["dimmed"][0]["by"] == "agent:fixer"
+    assert "bcbdeab" in desk["dimmed"][0]["moot"]
+    # unsettled: the operator's count still includes it
+    assert await unread_count(p, OPERATOR_ADDR, reader_agent=OPERATOR_ADDR) == 1
+    # ...and only desk mail can be dimmed
+    other = await send_message(p, from_agent="agent:w", from_project="neo",
+                               to_project="osiris", body="hello project")
+    with pytest.raises(ValueError, match="not an operator-desk brief"):
+        await dim_brief(p, other["id"], because="x", by="agent:fixer")
+
+
+async def test_desk_your_queue_derives_from_operator_owned_threads(actions: Actions) -> None:
+    """The standing YOUR-QUEUE: owner='operator' open threads render on the desk, obligations
+    first — the graph is the canonical waiting-on-your-hands list, not re-stated prose."""
+    from src.orchestrator.capture import open_thread
+    from src.orchestrator.mailbox import read_desk
+
+    await open_thread(actions, "refill the gemini key for #37", kind="obligation",
+                      owner="operator", source="agent:a")
+    await open_thread(actions, "someday: pick a desk color", owner="operator",
+                      source="agent:a")
+    await open_thread(actions, "not yours — engine refactor", kind="obligation",
+                      owner="agent:a", source="agent:a")
+    desk = await read_desk(actions.pool)
+    q = desk["your_queue"]["threads"]
+    assert [t["summary"] for t in q] == [
+        "refill the gemini key for #37", "someday: pick a desk color"]
+    assert q[0]["kind"] == "obligation"

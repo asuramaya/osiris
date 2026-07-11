@@ -55,9 +55,13 @@ from src.orchestrator.mailbox import (
     OPERATOR_ADDR,
     ack_messages,
     in_flight,
+    read_desk,
     read_inbox,
     send_message,
     unread_count,
+)
+from src.orchestrator.mailbox import (
+    dim_brief as mailbox_dim,
 )
 from src.orchestrator.sources import as_dicts, suggest
 from src.orchestrator.swaps import classify_swap, swap_banner
@@ -1308,7 +1312,8 @@ async def fleet(full: bool = False) -> dict[str, Any]:
 
 @mcp.tool()
 async def send(body: str, to: str | None = None, to_agent: str | None = None,
-               reply_to: int | None = None, subagent_id: str | None = None,
+               reply_to: int | None = None, desk: str | None = None,
+               subagent_id: str | None = None,
                subagent_type: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
     """Message the fleet. TWO channels: `to`=<project> is a BROADCAST — the group chat, seen by
     every agent working that project (`to='operator'` reaches the HUMAN's desk); `to_agent`=
@@ -1316,7 +1321,12 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     `reply_to=<message id>` answers a message: it routes by channel (a reply to a DM goes back to
     that sender privately; a reply to a broadcast returns to the thread's project), joins the
     thread, and SETTLES the message you're answering. You must be mounted; stamped from YOU.
-    At-least-once and deduped. For DURABLE knowledge use record_decision/open_thread."""
+    At-least-once and deduped. For DURABLE knowledge use record_decision/open_thread.
+    OPERATOR BRIEFS: pass `desk` — your own triage of what you're handing the human:
+    'decision' (a call only they can make) | 'hands' (blocked on their physical/authorization
+    act) | 'fyi' (loop-closed status). The desk renders in those bands; an unclassified brief
+    gets a heuristic guess. Same topic as an earlier brief of yours → reply_to it (the desk
+    thread-folds superseded briefs under your newest)."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a message must say who "
@@ -1328,7 +1338,8 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     try:
         res = await send_message(pool, from_agent=actor, from_project=ident.project,
-                                 to_project=to, to_agent=to_agent, body=body, reply_to=reply_to)
+                                 to_project=to, to_agent=to_agent, body=body, reply_to=reply_to,
+                                 desk_kind=desk)
     except ValueError as e:
         return {"error": str(e)}
     out: dict[str, Any] = {
@@ -1413,6 +1424,13 @@ async def inbox(project: str | None = None, peek: bool = False,
     # settles it as itself.
     reader = OPERATOR_ADDR if proj == OPERATOR_ADDR else (ident.agent_id if ident else proj)
     settled = await ack_messages(pool, proj, ack, reader_agent=reader) if ack else 0
+    if proj == OPERATOR_ADDR:
+        # THE ORGANIZED DESK (operator direction 2026-07-11): always peek-shaped — reading
+        # the human's desk never leases; bands (needs_decision / needs_hands / fyi) ·
+        # thread + same-story folds · dimmed moot annotations · the derived your_queue.
+        desk = await read_desk(pool)
+        return {"project": OPERATOR_ADDR, **desk,
+                **({"settled": settled} if settled else {})}
     msgs = await read_inbox(pool, proj, reader_agent=reader, mark_read=not peek,
                             lease_secs=st.osiris_mail_lease_secs)
     flight = await in_flight(pool, proj, reader_agent=reader,
@@ -1437,6 +1455,24 @@ async def inbox(project: str | None = None, peek: bool = False,
     return {"project": proj.removeprefix("repo:").strip(), "messages": msgs,
             **({"in_flight": flight} if flight else {}),
             **({"settled": settled} if settled else {}), "note": note}
+
+
+@mcp.tool()
+async def dim(message_id: int, because: str, ctx: Context | None = None) -> dict[str, Any]:
+    """DIM an operator-desk brief — annotate it moot-with-a-reason ('true when sent; root
+    cause fixed in <commit>') so the desk renders it collapsed under your note instead of
+    shouting a dead alarm. NEVER a settle: dismissing stays exclusively the human's word
+    (the membrane); a dim is you saving them the archaeology, stamped with your name.
+    Only works on briefs addressed to the operator's desk. Requires mount."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount(cwd, job_dir=<your anchor>) first — an annotation must say "
+                         "whose testimony it is"}
+    try:
+        return await mailbox_dim(await _pool_get(), message_id,
+                                 because=because, by=ident.agent_id)
+    except ValueError as e:
+        return {"error": str(e)}
 
 
 @mcp.tool()
