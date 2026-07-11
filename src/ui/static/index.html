@@ -292,13 +292,24 @@ function showBoard(){ $('stage').classList.remove('panel'); }
 function showPanel(){ $('stage').classList.add('panel'); }
 
 // ---- compositions (lenses + watches — one primitive) -----------------------
+// THE SHELF (ruling 923c380f): lenses grouped by PURPOSE, each saying when to open it —
+// the end of 19 flat chips in builder-dialect. engine/casework shelves fold by default.
+const SHELVES=[['arrive','ARRIVE'],['wall','THE WALL'],['memory','MEMORY'],['fleet','FLEET'],
+               ['casework','CASEWORK'],['engine','ENGINE'],['_more','MORE']];
 async function loadComps(){
   COMPS = await fetch('/compositions'+roomQ()).then(r=>r.json());
-  $('comps').innerHTML = COMPS.length ? COMPS.map(c=>`
-    <div class="comp${ACTIVE===c.name?' sel':''}" onclick="runComp('${esc(c.name)}')" title="${esc(JSON.stringify(c.spec))}">
-      <span class="cn">${esc(c.name)}</span>
-      <span class="kindb ${c.kind==='watch'?'watch':'lens'}">${c.kind}</span>
-    </div>`).join('') : '<div class="o-empty">No compositions yet. ＋ to author one.</div>';
+  const bySec={}; COMPS.forEach(c=>{ (bySec[c.section||'_more'] ||= []).push(c); });
+  $('comps').innerHTML = COMPS.length ? SHELVES.map(([key,label])=>{
+    const list=bySec[key]||[]; if(!list.length) return '';
+    const open = key!=='engine' && key!=='casework' && key!=='_more';
+    return `<details class="shelf"${open?' open':''}><summary>${label} <span class="o-faint">${list.length}</span></summary>${
+      list.map(c=>`
+      <div class="comp${ACTIVE===c.name?' sel':''}" onclick="runComp('${esc(c.name)}')" title="${esc(c.description||JSON.stringify(c.spec))}">
+        <span class="cn">${esc(c.name)}</span>
+        <span class="kindb ${c.kind==='watch'?'watch':'lens'}">${c.kind}</span>
+        ${c.description?`<div class="cdesc">${esc(c.description)}</div>`:''}
+      </div>`).join('')}</details>`;
+  }).join('') : '<div class="o-empty">No compositions yet. ＋ to author one.</div>';
 }
 // W1: a composition yields a SET; the center is a switchable VIEW of that set. The result
 // is its own thing — running a composition shows it CLEANLY, never merged into the
@@ -391,8 +402,68 @@ function syncPanesToResult(){
     RESULT&&RESULT.kind==='objects' ? 'Click a row to inspect an object.'
       : 'A lens over the graph — no single object to inspect.'}</div>`;
 }
+// TRIAGE (ruling 923c380f): deliberate clicks write through the Actions waist as
+// analyst:operator — the console's read-only constitution amended by the operator's word.
+async function triage(ids, verb){
+  const because = ($('triage-why')&&$('triage-why').value) || '';
+  if(verb==='resolve' && !because && !confirm(`resolve ${ids.length} thread(s) with no reason?`)) return;
+  const r = await fetch('/threads/triage',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({ids, verb, because})}).then(r=>r.json());
+  setStatus(`triage ${verb}: ${r.acted} acted${r.missed?`, ${r.missed} missed`:''} · signed analyst:operator`);
+  if(ACTIVE) runComp(ACTIVE);   // re-run the lens — the pile shrinks before your eyes
+}
+function triageSelected(verb){
+  const ids=[...document.querySelectorAll('.tri-pick:checked')].map(x=>x.value);
+  if(ids.length) triage(ids, verb);
+}
+const pill=(t,cls)=>t?`<span class="wpill ${cls||''}">${esc(t)}</span>`:'';
+function threadRow(t, withPick){
+  return `<div class="wrow">${withPick?`<input type="checkbox" class="tri-pick" value="${esc(t.id)}">`:''}
+    <span class="o-faint">${esc(t.id||'')}</span> ${esc(t.summary)}
+    ${pill(t.kind, t.kind==='obligation'?'ob':'')}${pill(t.owner&&('@'+t.owner),'own')}${pill(t.born,'')}
+    <span class="wacts">
+      <a onclick="triage(['${esc(t.id)}'],'resolve')" title="done or moot — closes it">resolve</a>
+      <a onclick="triage(['${esc(t.id)}'],'obligation')" title="adopt as real owed work">adopt</a>
+      <a onclick="triage(['${esc(t.id)}'],'question')" title="remembered, not work — leaves the wall">question</a>
+    </span></div>`;
+}
+const triageBar = `<div class="triagebar"><input id="triage-why" placeholder="because… (rides every act below)">
+    <button onclick="triageSelected('resolve')">resolve selected</button>
+    <button onclick="triageSelected('obligation')">adopt selected</button>
+    <button onclick="triageSelected('question')">question selected</button></div>`;
+// shape-detected custom views: the-wall (project + fleet) and the echoes pile
+function renderWallView(res){
+  const it=res.items;
+  if(!it || typeof it!=='object' || Array.isArray(it)) return null;
+  if(Array.isArray(it.wall) && it.echo_pile){
+    return `<div class="wallview"><h3>the wall <span class="o-faint">${it.wall.length}${it.more_on_wall?` +${it.more_on_wall} more`:''}</span></h3>
+      ${it.wall.map(t=>threadRow(t,false)).join('')||'<div class="o-empty">clear.</div>'}
+      <h3>the echo pile <span class="o-faint">${it.echo_pile.count}</span></h3>
+      <div class="o-empty">${esc(it.echo_pile.note||'')} — open the <b>echoes</b> lens to triage.</div></div>`;
+  }
+  if(it.totals && Array.isArray(it.top_of_wall)){
+    return `<div class="wallview">
+      <div class="wtotals">open <b>${it.totals.open}</b> · obligations <b>${it.totals.obligations}</b> · echo pile <b>${it.totals.pile}</b></div>
+      <h3>top of the wall <span class="o-faint">${it.top_of_wall.length}${it.more_on_wall?` +${it.more_on_wall} more`:''}</span></h3>
+      ${it.top_of_wall.map(t=>threadRow(t,false)).join('')}
+      <h3>per project</h3>
+      <table class="r-table"><thead><tr><th>project</th><th>open</th><th>obligations</th><th>touched</th><th>echo pile</th></tr></thead>
+      <tbody>${it.projects.map(p=>`<tr><td>${esc(p.project)}</td><td>${p.open}</td><td>${p.obligations}</td><td>${p.touched}</td><td>${p.pile}</td></tr>`).join('')}</tbody></table>
+      <div class="o-empty">${esc(it.note||'')}</div></div>`;
+  }
+  if(Array.isArray(it.echoes)){
+    return `<div class="wallview"><h3>the echo pile <span class="o-faint">${it.count}</span></h3>${triageBar}
+      ${it.echoes.map(t=>threadRow(t,true)).join('')||'<div class="o-empty">the pile is empty.</div>'}
+      <div class="o-empty">${esc(it.note||'untouched miner echoes, oldest first — your judgment is testimony; never resolve what merely looks stale.')}</div></div>`;
+  }
+  return null;
+}
 async function renderCurrent(){
   if(!RESULT) return;
+  const custom = renderWallView(RESULT);
+  if(custom){ showPanel(); $('result').innerHTML=custom;
+    $('boardtitle').textContent = `${RESULT.name} · ${RESULT.kind}`;
+    setStatus(`${RESULT.name} — graded.`); syncPanesToResult(); renderComposerBar(); return; }
   if(VIEW==='graph') showBoard();  // reveal BEFORE placeObjects lays out, so #cy is measurable
   const mode = await renderResult(RESULT, {board, panel:$('result')}, VIEW, inspectOnly, drillInto,
     (id, type, ev)=> showActionMenu(ev.clientX, ev.clientY, id, type));  // right-click on result rows

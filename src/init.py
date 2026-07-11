@@ -51,6 +51,8 @@ ROOM_COMPOSITIONS: dict[str, tuple[str, ...]] = {
         "graph-lint", "lap",
         # the collapsed-echo pile, listable (ruling 758ded94) — the triage queue's lens.
         "echoes",
+        # the ONE WALL LAW (ruling 923c380f): the graded unresolved view, operator-eyed.
+        "the-wall",
     ),
     "analyst": (
         "who-is-this", "operational-vs-disclosed-geography", "co-investment-ties",

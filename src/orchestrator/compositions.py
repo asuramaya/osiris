@@ -882,7 +882,6 @@ async def _fn_lap(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str,
     }
 
 
-_ECHO_FRESH_DAYS = 7  # keep in step with mcp_server's wall split
 
 
 async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
@@ -911,7 +910,7 @@ async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         "   WHERE a.object_id=o.id AND a.name='status' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
         "ORDER BY o.created_at ASC LIMIT 3000")
-    cutoff = datetime.now(UTC) - timedelta(days=_ECHO_FRESH_DAYS)
+    cutoff = datetime.now(UTC) - timedelta(days=ECHO_FRESH_DAYS)
     echoes = []
     for r in rows:
         if not r["summary"]:
@@ -1248,6 +1247,181 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     }
 
 
+# ── THE ONE WALL LAW (operator ruling 923c380f, 2026-07-11) ─────────────────────────────
+# The console's briefing rendered the RAW open-thread select — 919 rows, 92% of them miner
+# echoes no mind ever touched — while orient() had the graded law all along. The law now
+# lives HERE, and mcp_server imports it: one wall, every lens.
+
+ORIENT_OPEN_THREADS = 25
+ECHO_FRESH_DAYS = 7  # a never-touched DERIVED thread younger than this still rides the wall
+
+
+def rank_open_threads(
+    rows: list[dict[str, Any]], me: frozenset[str] = frozenset(),
+) -> tuple[list[dict[str, Any]], int]:
+    """Rank open threads for display and cap. Obligations — DUTIES an action minted — float
+    above ordinary threads. WITHIN each kind group, ownership orders for the READER (`me` =
+    the caller's agent id + project; the console passes {'operator'}): MINE TO ACT first,
+    another mind's claims next, 'waiting on the human' last. Input (recency) order breaks
+    remaining ties — Python's sort is stable. Pure."""
+    def whose_move(r: dict[str, Any]) -> int:
+        owner = (r.get("owner") or "").strip()
+        if not owner or owner in me:
+            return 0  # mine to act (unowned = anyone who reads it may act)
+        return 2 if owner == "operator" else 1
+    summ = [r for r in rows if r.get("summary")]
+    ranked = sorted(summ, key=lambda r: (r.get("kind") != "obligation", whose_move(r)))
+    shown = ranked[:ORIENT_OPEN_THREADS]
+    return shown, len(ranked) - len(shown)
+
+
+async def open_thread_wall(
+    pool: asyncpg.Pool, proj: uuid.UUID,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """One project's open threads, SPLIT: (wall, echoes). An ECHO is a thread no mind has
+    ever touched — not one self_declared assertion in its whole history — that is either
+    kind='question' or older than the freshness window. Its status stays OPEN in the record
+    (untouched ≠ resolved, ruling 758ded94); only the LENS stops hauling it. Rows carry the
+    8-char short id so triage verbs can name their target directly."""
+    rows = await pool.fetch(
+        "SELECT o.id, o.created_at, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='summary' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='kind' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='owner' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS owner, "
+        " NOT EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
+        "   AND sa.evidence_class='self_declared') AS untouched "
+        "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+        "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
+        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "   WHERE a.object_id=o.id AND a.name='status' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "ORDER BY o.created_at DESC LIMIT 400", proj)
+    cutoff = datetime.now(UTC) - timedelta(days=ECHO_FRESH_DAYS)
+    wall: list[dict[str, Any]] = []
+    echoes: list[dict[str, Any]] = []
+    for r in rows:
+        if not r["summary"]:
+            continue
+        # kind/owner render only when DECLARED (no null-key noise): an absent kind means no
+        # mind — and no mechanical rule — ever said what this is (Fulcrum III's verdict,
+        # answered at the lens).
+        item = {"id": str(r["id"])[:8], "summary": r["summary"]}
+        if r["kind"]:
+            item["kind"] = r["kind"]
+        if r["owner"]:  # whose move it is — absent means anyone's
+            item["owner"] = r["owner"]
+        # questions never ride the wall (whoever judged them said 'not work'); untouched
+        # DERIVED threads get a freshness window, then collapse until someone triages them.
+        # OBLIGATIONS are exempt — a duty must never hide, untouched or not (7336c5fc).
+        is_echo = r["kind"] == "question" or (
+            bool(r["untouched"]) and r["kind"] != "obligation"
+            and r["created_at"] < cutoff)
+        (echoes if is_echo else wall).append(
+            {**item, "born": r["created_at"].date().isoformat()} if is_echo else item)
+    echoes.reverse()  # oldest first — triage drains from the bottom of the pile
+    return wall, echoes
+
+
+async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
+    """THE WALL as a composition: what is GENUINELY unresolved, graded. With a subject
+    (a SoftwareProject) — that project's wall exactly as orient renders it: obligations
+    first, owner-banded, echo pile counted, capped. WITHOUT a subject — the fleet ROLLUP:
+    per-project counts + the top obligations across the whole graph, never 900 raw rows
+    (the 2026-07-11 console showed 919 'unresolved'; 850 were untouched miner echoes)."""
+    me_arg = args.get("me")
+    me = frozenset(me_arg) if isinstance(me_arg, list | tuple | set) else frozenset()
+    if subject is not None:
+        wall, echoes = await open_thread_wall(pool, subject)
+        shown, more = rank_open_threads(wall, me)
+        return {"wall": shown, "more_on_wall": more,
+                "echo_pile": {"count": len(echoes),
+                              "note": "untouched miner echoes + judged questions — the "
+                                      "record keeps them open; triage them in the echoes "
+                                      "lens (adopt / question / resolve)"},
+                "note": "the graded wall — one law with orient(): obligations first, "
+                        "yours-to-act before others' claims before waiting-on-the-human"}
+    projects = [dict(r) for r in await pool.fetch(
+        "SELECT p.canonical AS project, count(*) AS open, "
+        " count(*) FILTER (WHERE (SELECT a.value #>> '{}' FROM current_assertions a "
+        "   WHERE a.object_id=o.id AND a.name='kind' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = 'obligation') "
+        "   AS obligations, "
+        " count(*) FILTER (WHERE EXISTS (SELECT 1 FROM assertions sa "
+        "   WHERE sa.object_id=o.id AND sa.evidence_class='self_declared')) AS touched, "
+        " count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM assertions sa "
+        "   WHERE sa.object_id=o.id AND sa.evidence_class='self_declared') "
+        "   AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "     WHERE a.object_id=o.id AND a.name='kind' "
+        "     ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'') <> 'obligation') "
+        "   AS pile "
+        "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' AND p.status='active' "
+        "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
+        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "   WHERE a.object_id=o.id AND a.name='status' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "GROUP BY p.canonical ORDER BY count(*) DESC LIMIT 30")]
+    # the fleet's TOP OF WALL: obligations (a duty never hides) plus any thread a mind
+    # actually TOUCHED — never the untouched echo mass; repo-less threads included (a
+    # deliberate open_thread with no repo must still surface where it was promised to)
+    top_rows = [dict(r) for r in await pool.fetch(
+        "SELECT str_id AS id, summary, kind, owner, project FROM ("
+        " SELECT substr(o.id::text, 1, 8) AS str_id, o.created_at, "
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "    AND a.name='summary' "
+        "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "    AND a.name='kind' "
+        "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "    AND a.name='owner' "
+        "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS owner, "
+        "  (SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
+        "    WHERE l.from_id=o.id AND l.type='in_repo' LIMIT 1) AS project, "
+        "  EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
+        "    AND sa.evidence_class='self_declared') AS touched "
+        " FROM objects o "
+        " WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
+        "   AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "    WHERE a.object_id=o.id AND a.name='status' "
+        "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        " ORDER BY o.created_at DESC LIMIT 400) t "
+        "WHERE t.summary IS NOT NULL AND (t.kind='obligation' OR t.touched)")]
+    shown, more = rank_open_threads(top_rows, me)
+    # totals over the WHOLE record — a repo-less thread must count even though the
+    # per-project breakdown can't file it
+    trow = await pool.fetchrow(
+        "SELECT count(*) AS open, "
+        " count(*) FILTER (WHERE (SELECT a.value #>> '{}' FROM current_assertions a "
+        "   WHERE a.object_id=o.id AND a.name='kind' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = 'obligation') "
+        "   AS obligations, "
+        " count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM assertions sa "
+        "   WHERE sa.object_id=o.id AND sa.evidence_class='self_declared') "
+        "   AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "     WHERE a.object_id=o.id AND a.name='kind' "
+        "     ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'') <> 'obligation') "
+        "   AS pile "
+        "FROM objects o "
+        "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
+        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "   WHERE a.object_id=o.id AND a.name='status' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open'")
+    totals = {"open": trow["open"], "obligations": trow["obligations"], "pile": trow["pile"]}
+    return {"totals": totals, "projects": projects,
+            "top_of_wall": shown, "more_on_wall": more,
+            "note": "the fleet wall — the graded top (obligations + threads a mind "
+                    "touched), never the raw scroll: `pile` is untouched miner echoes "
+                    "(no mind has read them; triage per-project in the echoes lens); "
+                    "focus a project to see its full graded wall"}
+
+
 _FUNCTIONS: dict[str, Function] = {
     "coinvest": _fn_coinvest,
     "subject_report": _fn_subject_report,
@@ -1262,6 +1436,7 @@ _FUNCTIONS: dict[str, Function] = {
     "lap": _fn_lap,
     "lint": _fn_lint,
     "echoes": _fn_echoes,
+    "wall": _fn_wall,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
@@ -1272,7 +1447,7 @@ _FUNCTIONS: dict[str, Function] = {
 # opinion → primitives the user owns.
 # `lap` anchors on args.ref OR the subject; `lint` audits the whole graph, no anchor at all.
 _SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "pulse", "project",
-                 "lap", "lint", "echoes"}
+                 "lap", "lint", "echoes", "wall"}
 
 
 def list_functions() -> list[str]:
@@ -1642,17 +1817,24 @@ async def _order(
 async def save_composition(
     pool: asyncpg.Pool, name: str, spec: dict[str, Any], kind: str = "lens",
     *, webhook_url: str | None = None, active: bool = True, room_id: uuid.UUID | None = None,
+    description: str | None = None, section: str | None = None,
 ) -> uuid.UUID:
     """Save (or update) a composition by name. Fork = save under a new name. `webhook_url`
     and `active` are a watch's execution metadata (a lens ignores them). `room_id` scopes it
-    to a stance (NULL = unassigned; a re-save without a room keeps the existing one)."""
+    to a stance (NULL = unassigned; a re-save without a room keeps the existing one).
+    `description` = one line of 'when to open this'; `section` = which shelf of the composer
+    sidebar (arrive | wall | memory | fleet | engine | casework) — both keep their prior
+    value when omitted on a re-save."""
     return await pool.fetchval(  # type: ignore[no-any-return]
-        "INSERT INTO compositions (name, kind, spec, webhook_url, active, room_id) "
-        "VALUES ($1,$2,$3,$4,$5,$6) "
+        "INSERT INTO compositions (name, kind, spec, webhook_url, active, room_id, "
+        " description, section) "
+        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8) "
         "ON CONFLICT (name) DO UPDATE SET spec=EXCLUDED.spec, kind=EXCLUDED.kind, "
         "  webhook_url=EXCLUDED.webhook_url, active=EXCLUDED.active, "
-        "  room_id=COALESCE(EXCLUDED.room_id, compositions.room_id) RETURNING id",
-        name, kind, spec, webhook_url, active, room_id,
+        "  room_id=COALESCE(EXCLUDED.room_id, compositions.room_id), "
+        "  description=COALESCE(EXCLUDED.description, compositions.description), "
+        "  section=COALESCE(EXCLUDED.section, compositions.section) RETURNING id",
+        name, kind, spec, webhook_url, active, room_id, description, section,
     )
 
 
@@ -1714,9 +1896,11 @@ async def list_compositions(
     return [
         {"id": str(r["id"]), "name": r["name"], "kind": r["kind"], "spec": _coerce(r["spec"]),
          "webhook_url": r["webhook_url"], "active": r["active"],
-         "room_id": str(r["room_id"]) if r["room_id"] else None}
+         "room_id": str(r["room_id"]) if r["room_id"] else None,
+         "description": r["description"], "section": r["section"]}
         for r in await pool.fetch(
-            "SELECT id, name, kind, spec, webhook_url, active, room_id FROM compositions "
+            "SELECT id, name, kind, spec, webhook_url, active, room_id, description, section "
+            "FROM compositions "
             "WHERE ($1::uuid IS NULL OR room_id=$1) ORDER BY created_at", room_id
         )
     ]
@@ -1805,11 +1989,10 @@ GEOGRAPHY_DISCREPANCY: dict[str, Any] = {
 BRIEFING: dict[str, Any] = {
     "op": "sections",
     "sections": [
-        {"title": "Open threads — what's unresolved",
-         "body": {"op": "table",
-                  "from": {"op": "select", "object_type": "Thread",
-                           "where": [{"property": "status", "op": "eq", "value": "open"}]},
-                  "columns": [{"name": "thread", "property": "summary"}]}},
+        # the RAW open-thread select showed 919 rows on 2026-07-11, 850 of them untouched
+        # miner echoes — the wall function is the graded truth (ruling 923c380f)
+        {"title": "The wall — what's genuinely unresolved",
+         "body": {"op": "function", "name": "wall"}},
         {"title": "Recent work — what just happened",
          "body": {"op": "table",
                   "from": {"op": "take", "n": 8,
@@ -1968,10 +2151,50 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     # rung 2: the graph auditing itself — report-only findings, testimony not verdicts.
     "graph-lint": {"op": "function", "name": "lint"},
     "echoes": {"op": "function", "name": "echoes"},
+    # THE ONE WALL LAW (ruling 923c380f): the graded unresolved view — orient's law as a lens.
+    "the-wall": {"op": "function", "name": "wall", "args": {"me": ["operator"]}},
+}
+
+# THE SHELF (ruling 923c380f): which sidebar section a lens belongs to + one line of 'when
+# to open this'. Applied by the seeder to defaults AND to already-saved compositions whose
+# names it knows — the lens clusterfuck was 19 flat chips in builder-dialect.
+_COMP_META: dict[str, tuple[str, str]] = {
+    "briefing": ("arrive", "start here — the graded wall, recent work, what self-healed"),
+    "pulse-digest": ("arrive", "what the autonomic loop sensed lately"),
+    "the-wall": ("wall", "what is GENUINELY unresolved — obligations first, echoes counted"),
+    "open threads": ("wall", "the raw unresolved list (ungraded — prefer the-wall)"),
+    "echoes": ("wall", "the triage pile: untouched miner echoes, oldest first"),
+    "decision-log": ("memory", "every decision with its WHY; superseded entries grayed"),
+    "design-canon": ("memory", "the design memory — ask it before re-deriving"),
+    "recent work": ("memory", "latest commits across the graph"),
+    "changelog by area": ("memory", "what changed, grouped by area"),
+    "fable-commits": ("memory", "commits authored by fleet sessions"),
+    "the composer arc": ("memory", "the composer's own build history"),
+    "fleet": ("fleet", "every agent the graph knows"),
+    "projects": ("fleet", "all repos by recency of touch"),
+    "project": ("fleet", "one repo's brief — focus a repo or pass args.repo"),
+    "project-briefing": ("fleet", "a project's scoped briefing (what orient reads)"),
+    "portfolio": ("fleet", "the operator's repos as a portfolio"),
+    "graph-lint": ("engine", "the graph auditing itself — findings, not verdicts"),
+    "family-consistency": ("engine", "config families that should agree but don't"),
+    "family-drift": ("engine", "how config families drift over time"),
+    "lap": ("engine", "one object's provenance timeline — how belief formed"),
+    "operational-vs-disclosed-geography": ("casework", "where an org operates vs claims"),
+    "co-investment-ties": ("casework", "who co-invests with the subject"),
+    "who-is-this": ("casework", "the subject's dossier at a glance"),
+    "screen-financing-network": ("casework", "the subject's financing network, screened"),
 }
 
 
 async def seed_default_compositions(pool: asyncpg.Pool) -> int:
     for name, spec in DEFAULT_COMPOSITIONS.items():
-        await save_composition(pool, name, spec, "lens")
+        section, desc = _COMP_META.get(name, (None, None))
+        await save_composition(pool, name, spec, "lens", description=desc, section=section)
+    # the shelf also reaches saved, non-default lenses it knows by name (agent-authored
+    # twins of the defaults) — metadata only, never their spec
+    for name, (section, desc) in _COMP_META.items():
+        if name not in DEFAULT_COMPOSITIONS:
+            await pool.execute(
+                "UPDATE compositions SET section=$2, description=$3 "
+                "WHERE name=$1 AND section IS NULL", name, section, desc)
     return len(DEFAULT_COMPOSITIONS)

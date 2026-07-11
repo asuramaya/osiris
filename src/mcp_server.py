@@ -940,89 +940,12 @@ async def retire(reason: str = "", ctx: Context | None = None) -> dict[str, Any]
                        if signer == "successor" else "")}
 
 
-# orient's open-thread wall is a bounded query, not a scroll: the assembly layer ranks the
-# composition's recency-ordered set (obligations first) and shows at most this many, noting
-# the remainder. Ranking + cap only — no GC, no auto-resolve (those need operator input).
-_ORIENT_OPEN_THREADS = 25
-
-
-def _rank_open_threads(
-    rows: list[dict[str, Any]], me: frozenset[str] = frozenset(),
-) -> tuple[list[dict[str, Any]], int]:
-    """Rank the project's open threads for orient and cap the display. Obligations — DUTIES an
-    action minted (kind='obligation') — float above ordinary threads. WITHIN each kind group,
-    ownership orders the wall for the READER (`me` = the caller's agent id + project): what
-    is MINE TO ACT (unowned, or owned by me/my project) rides first, another mind's claims
-    next, and 'waiting on the human' (owner='operator') last — visible, tagged, but never
-    shadowing the reader's own moves. The composition's recency-desc order breaks remaining
-    ties (Python's sort is stable). Returns the capped list + how many more exist beyond it.
-    Pure — the ordering is trivially testable."""
-    def whose_move(r: dict[str, Any]) -> int:
-        owner = (r.get("owner") or "").strip()
-        if not owner or owner in me:
-            return 0  # mine to act (unowned = anyone who reads it may act)
-        return 2 if owner == "operator" else 1
-    summ = [r for r in rows if r.get("summary")]
-    ranked = sorted(summ, key=lambda r: (r.get("kind") != "obligation", whose_move(r)))
-    shown = ranked[:_ORIENT_OPEN_THREADS]
-    return shown, len(ranked) - len(shown)
-
-
-_ECHO_FRESH_DAYS = 7  # a never-touched DERIVED thread younger than this still rides the wall
-
-
-async def _open_thread_wall(
-    pool: asyncpg.Pool, proj: uuid.UUID,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """The project's open threads, SPLIT: (wall, echoes). An ECHO is a thread no mind has
-    ever touched — not one self_declared assertion in its whole history — that is either
-    kind='question' or older than the freshness window. Its status stays OPEN in the record
-    (untouched ≠ resolved, ruling 758ded94); only the LENS stops hauling it. Rows carry the
-    8-char short id so triage verbs can name their target directly."""
-    rows = await pool.fetch(
-        "SELECT o.id, o.created_at, "
-        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='summary' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
-        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='kind' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
-        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='owner' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS owner, "
-        " NOT EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
-        "   AND sa.evidence_class='self_declared') AS untouched "
-        "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
-        "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
-        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
-        "   WHERE a.object_id=o.id AND a.name='status' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
-        "ORDER BY o.created_at DESC LIMIT 400", proj)
-    cutoff = datetime.now(UTC) - timedelta(days=_ECHO_FRESH_DAYS)
-    wall: list[dict[str, Any]] = []
-    echoes: list[dict[str, Any]] = []
-    for r in rows:
-        if not r["summary"]:
-            continue
-        # kind/owner render only when DECLARED (no null-key noise): an absent kind means no
-        # mind — and no mechanical rule — ever said what this is (the miner deliberately
-        # leaves mined commitments kind-less; backfilling 636 of them would testify above
-        # witness — Fulcrum III's ask, answered at the lens, verdict 2026-07-11).
-        item = {"id": str(r["id"])[:8], "summary": r["summary"]}
-        if r["kind"]:
-            item["kind"] = r["kind"]
-        if r["owner"]:  # whose move it is — absent means anyone's
-            item["owner"] = r["owner"]
-        # questions never ride the wall (whoever judged them said 'not work'); untouched
-        # DERIVED threads get a freshness window, then collapse until someone triages them.
-        # OBLIGATIONS are exempt — a duty must never hide, untouched or not (7336c5fc).
-        is_echo = r["kind"] == "question" or (
-            bool(r["untouched"]) and r["kind"] != "obligation"
-            and r["created_at"] < cutoff)
-        (echoes if is_echo else wall).append(
-            {**item, "born": r["created_at"].date().isoformat()} if is_echo else item)
-    echoes.reverse()  # oldest first — triage drains from the bottom of the pile
-    return wall, echoes
+# THE ONE WALL LAW (ruling 923c380f): the graded wall lives in compositions.py now — one
+# home shared by orient, the console briefing, and the `wall` function. The private names
+# stay importable here (tests and callers address orient's wall through them).
+_ORIENT_OPEN_THREADS = comp.ORIENT_OPEN_THREADS
+_rank_open_threads = comp.rank_open_threads
+_open_thread_wall = comp.open_thread_wall
 
 
 async def _project_briefing(

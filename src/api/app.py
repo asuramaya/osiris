@@ -746,6 +746,34 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         except ValueError as exc:
             return {"error": str(exc)}
 
+    # THE TRIAGE VERBS (ruling 923c380f — the operator's own word amends the read-only
+    # console): deliberate clicks write through the Actions waist, signed analyst:operator —
+    # the highest-grade testimony in the system. resolve closes; obligation/question/task
+    # reclassify WITHOUT touching status (untouched ≠ resolved, 758ded94). Bulk-capable:
+    # the echo pile drains by stories, not one call per click.
+    @app.post("/threads/triage")
+    async def triage_threads(
+        body: ThreadTriageBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        from src.orchestrator.capture import reclassify_thread, resolve_thread
+        if body.verb not in ("resolve", "obligation", "question", "task"):
+            return {"error": "verb must be resolve | obligation | question | task"}
+        acts = Actions(p)
+        out: list[dict[str, str]] = []
+        for ref in body.ids[:200]:
+            if body.verb == "resolve":
+                tid = await resolve_thread(acts, ref, because=body.because,
+                                           source="analyst:operator")
+            else:
+                tid = await reclassify_thread(acts, ref, kind=body.verb,
+                                              because=body.because,
+                                              source="analyst:operator")
+            out.append({"ref": ref, **({"id": str(tid), "ok": "1"} if tid
+                                       else {"error": "no match"})})
+        done = sum(1 for o in out if o.get("ok"))
+        return {"verb": body.verb, "acted": done, "missed": len(out) - done,
+                "results": out, "by": "analyst:operator"}
+
     # ---- the shared console cursor (real-time Claude↔front sync) -------------
     @app.get("/console")
     async def console_get(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
@@ -1162,6 +1190,12 @@ class RunSpecBody(BaseModel):
     spec: dict[str, Any]
     subject: str | None = None
     name: str | None = None
+
+
+class ThreadTriageBody(BaseModel):
+    ids: list[str]
+    verb: str  # resolve | obligation | question | task
+    because: str | None = None
 
 
 class ConsoleBody(BaseModel):

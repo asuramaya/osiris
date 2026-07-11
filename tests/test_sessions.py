@@ -423,8 +423,9 @@ async def test_obligation_lands_as_open_thread_and_surfaces_in_briefing(
     assert kind == "obligation"
     await seed_default_compositions(actions.pool)
     res = await run_composition(actions.pool, "briefing")
-    open_rows = res["items"]["Open threads — what's unresolved"]
-    assert any("restart the daemons" in r["thread"] for r in open_rows)
+    wall = res["items"]["The wall — what's genuinely unresolved"]
+    # an OBLIGATION rides the graded top-of-wall even untouched — a duty never hides
+    assert any("restart the daemons" in r["summary"] for r in wall["top_of_wall"])
 
 
 def test_worker_registers_the_sensing_cron() -> None:

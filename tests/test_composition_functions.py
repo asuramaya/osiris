@@ -108,7 +108,8 @@ async def test_function_registry_is_listable(actions: Actions) -> None:
     # `briefing`/`decisions` are NOT here — they decomposed into op-trees (see the tests below).
     assert list_functions() == ["canon", "coinvest", "echoes", "family",
                                 "family_drift", "lap", "lint", "portfolio", "project",
-                                "pulse", "screen_network", "search", "subject_report"]
+                                "pulse", "screen_network", "search", "subject_report",
+                                "wall"]
 
 
 async def test_briefing_is_a_sections_op_tree(actions: Actions) -> None:
@@ -139,11 +140,13 @@ async def test_briefing_is_a_sections_op_tree(actions: Actions) -> None:
     # runs with NO subject (it briefs the project, not an entity)
     res = await run_composition(actions.pool, "briefing")
     assert res["kind"] == "data"
-    threads = next(v for k, v in res["items"].items() if "Open threads" in k)
+    wall = next(v for k, v in res["items"].items() if "wall" in k)
     recent = next(v for k, v in res["items"].items() if "Recent work" in k)
     healed = next(v for k, v in res["items"].items() if "Resolved" in k)
-    assert any("THE WALL" in t["thread"] for t in threads)
-    assert not any("renderer" in t["thread"] for t in threads)   # resolved → not still open
+    # the open section is the GRADED wall (ruling 923c380f): the untouched kindless thread
+    # counts in the pile, never as a raw row; the resolved one is in neither
+    assert wall["totals"]["open"] == 1 and wall["totals"]["pile"] == 1
+    assert not any("renderer" in t["summary"] for t in wall["top_of_wall"])
     assert any(r["change"] == "ship the thing" and r["scope"] == "ui" for r in recent)
     assert any(h["by"] == "commit:zz" and "renderer" in h["because"] for h in healed)
 

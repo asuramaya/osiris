@@ -24,7 +24,7 @@ from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
 _DECISION_LOG = "Decisions — the project's WHY (mined from commit rationale)"
-_OPEN = "Open threads — what's unresolved"
+_OPEN = "The wall — what's genuinely unresolved"
 _RESOLVED = "Resolved — self-healed by later commits"
 
 
@@ -87,9 +87,11 @@ async def test_open_thread_surfaces_in_the_briefing_open_section(actions: Action
     await open_thread(actions, "wire the composed watcher into SOURCE_TICKS with a live key")
     await seed_default_compositions(actions.pool)
     res = await run_composition(actions.pool, "briefing")
-    open_rows = res["items"][_OPEN]
+    # the briefing's first section is the GRADED wall now (ruling 923c380f): a deliberate
+    # thread is TOUCHED, so it rides the fleet's top-of-wall even with no kind and no repo
+    open_rows = res["items"][_OPEN]["top_of_wall"]
     assert any(
-        r["thread"] == "wire the composed watcher into SOURCE_TICKS with a live key"
+        r["summary"] == "wire the composed watcher into SOURCE_TICKS with a live key"
         for r in open_rows
     )
 
@@ -103,10 +105,10 @@ async def test_resolve_thread_leaves_open_and_joins_resolved(actions: Actions) -
 
     await seed_default_compositions(actions.pool)
     res = await run_composition(actions.pool, "briefing")
-    open_rows = res["items"][_OPEN]
+    open_rows = res["items"][_OPEN]["top_of_wall"]
     resolved_rows = res["items"][_RESOLVED]
-    # left the open list (status superseded within-source), joined the resolved section
-    assert not any(r["thread"] == summary for r in open_rows)
+    # left the wall (status superseded within-source), joined the resolved section
+    assert not any(r["summary"] == summary for r in open_rows)
     resolved = next(r for r in resolved_rows if r["thread"] == summary)
     assert resolved["by"] == "session"        # a session closed it, not a later commit
     assert resolved["because"] == "tightened url_fetch"
@@ -162,7 +164,7 @@ async def test_status_resolution_honors_grade_over_recency(actions: Actions) -> 
     # 2) the briefing composition — gone from open, present in resolved
     await seed_default_compositions(actions.pool)
     res = await run_composition(actions.pool, "briefing")
-    assert not any(r["thread"] == summary for r in res["items"][_OPEN])
+    assert not any(r["summary"] == summary for r in res["items"][_OPEN]["top_of_wall"])
     assert any(r["thread"] == summary for r in res["items"][_RESOLVED])
 
     # 3) the scoped orient briefing (bespoke SQL, a distinct read path) also excludes it
