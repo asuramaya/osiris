@@ -185,6 +185,27 @@ async def sweep_session(ctx: dict[str, Any], transcript: str) -> int:
     return report["chunks"]
 
 
+async def embed_pass(ctx: dict[str, Any]) -> int:
+    """The semantic index's backfill walk (max-level ruling a0cfcca1): embed every
+    searchable winner text whose hash moved, drop vectors of inactive objects. The hash
+    watermark makes a quiet graph a free pass; a missing/unconfigured embedder makes the
+    whole cron a no-op (the semantic door simply stays closed). CPU-only by design."""
+    from src.orchestrator.semantics import embed_backfill, resolve_embedder
+
+    embedder = resolve_embedder()
+    if embedder is None:
+        return 0
+    actions: Actions = ctx["cascade"].actions
+    try:
+        report = await embed_backfill(actions.pool, embedder)
+    except Exception as exc:  # a model hiccup must not kill the cron
+        _log.warning("embed pass failed: %r", exc)
+        return 0
+    if report["embedded"] or report["dropped"]:
+        _log.info("embed pass: %s", report)
+    return report["embedded"]
+
+
 async def trigger_mail(ctx: dict[str, Any]) -> int:
     """The mailbox alarm clock: wake an agent in a project that has unread mail (bounded by a
     per-project rate cap; OFF unless osiris_trigger_enabled — the kill switch). A spawn failure
@@ -218,6 +239,9 @@ class WorkerSettings:
         # at ~50-90s each — arq's default 300s was one slow call from death, and 540 < 600
         # structurally forbids two ticks mining the same cursors concurrently.
         cron(sense_sessions, minute=set(range(0, 60, 10)), second={30}, timeout=540),
+        # the semantic index walks behind the miner (offset so they never contend for CPU):
+        # fresh text is embedded within ~10 minutes of landing; unchanged graphs cost nothing
+        cron(embed_pass, minute=set(range(5, 60, 10)), second={15}, timeout=300),
         # the mailbox alarm clock: wake an agent for a project with unread mail — bounded by a
         # per-project rate cap, and a no-op unless osiris_trigger_enabled (the kill switch).
         cron(trigger_mail, minute=set(range(0, 60)), second={45}),

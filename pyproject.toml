@@ -22,6 +22,8 @@ dependencies = [
     "reportlab>=4.5.1",
     "phonenumbers>=9.0.31",
     "mcp>=1.28.1",
+    "model2vec>=0.5",     # local static embeddings — the semantic search door (no GPU, no key)
+    "numpy>=1.26",        # cosine over the cached vector matrix (semantics.py)
 ]
 
 [dependency-groups]

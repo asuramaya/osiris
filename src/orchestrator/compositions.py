@@ -135,15 +135,46 @@ _GRADE_W = ("CASE a.evidence_class WHEN 'self_declared' THEN 1.0 "
             "ELSE 0.35 END")
 
 
+def _fuse_ranked(
+    lex: list[dict[str, Any]], sem: list[dict[str, Any]], limit: int, *, k: int = 60,
+) -> list[dict[str, Any]]:
+    """Reciprocal-rank fusion of the lexical and semantic hit lists — scale-free (an FTS
+    rank product and a cosine share no axis; their POSITIONS do). One row per object: a
+    hit found by both doors keeps the lexical row (its snippet is a real headline) and is
+    marked via='both'. Pure — the fusion policy is trivially testable."""
+    scores: dict[str, float] = {}
+    meta: dict[str, dict[str, Any]] = {}
+    for pos, h in enumerate(lex):
+        scores[h["id"]] = scores.get(h["id"], 0.0) + 1.0 / (k + pos + 1)
+        meta.setdefault(h["id"], h)
+    for pos, h in enumerate(sem):
+        scores[h["id"]] = scores.get(h["id"], 0.0) + 1.0 / (k + pos + 1)
+        if h["id"] in meta:
+            meta[h["id"]]["via"] = "both"
+        else:
+            meta[h["id"]] = h
+    out = sorted(meta.values(), key=lambda h: -scores[h["id"]])[:limit]
+    for h in out:
+        h["rank"] = round(scores[h["id"]], 6)
+    return out
+
+
+# python-side grade weights for the semantic door (the SQL door uses _GRADE_W — same table)
+_GRADE_W_PY = {"self_declared": 1.0, "authoritative_api": 0.95, "corroborated": 0.9,
+               "direct_observation": 0.8, "derived": 0.5}
+
+
 async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
-    """search v2 — ONE engine behind the tool, the console, and any op-tree (rung 1, thread
-    0deaec4f). Postgres FTS over the text-bearing assertion fields (name/summary/rationale —
-    the old search read only name: door plaques, not rooms), ranked
-    ts_rank × GRADE-WEIGHT × recency-decay (90-day half-scale), deduped one row per object
-    (best witness shown). Every hit carries TESTIMONY — field, source, grade, when, snippet —
-    a hit tells you WHY it surfaced. Every call lands in search_log: the zero-hit rate is the
-    objective tripwire for unparking embeddings; a memory system that doesn't measure its own
-    recall failures ends up mostly fart and certain it isn't."""
+    """search v2, MAX LEVEL (operator ruling a0cfcca1) — ONE engine, FOUR doors, one fused
+    answer. Lexical ladder: strict FTS (websearch AND) → OR-relaxation (any-term bags) →
+    TRIGRAM (pg_trgm word_similarity: every query word must fuzzily appear — the typo door).
+    Beside it, the SEMANTIC door: local static embeddings (semantics.py) cosine over the
+    vector index, so meaning matches where words don't. Doors fuse by reciprocal rank
+    (positions, not incomparable scores); grade × recency weight both sides — a deliberate
+    ruling outranks a mined echo at equal relevance in EVERY door. Every hit carries
+    TESTIMONY (field, source, grade, when, snippet, via) and every call lands in search_log
+    with which doors answered (relaxed / fuzzy / semantic) — the quality telemetry this
+    engine is judged by."""
     q = str(args.get("q", "")).strip()[:300]  # a 50KB paste is not a query
     limit = max(1, min(int(args.get("limit") or 15), 50))  # a negative limit is a PG error
     caller = str(args.get("caller") or "") or None
@@ -177,41 +208,125 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         "         'MaxWords=20, MinWords=8, MaxFragments=1') AS snippet "
         "FROM top, tq ORDER BY top.rank DESC")
     rows = await pool.fetch(_SQL, q, limit)
-    relaxed = False
-    if not rows:
+    relaxed = fuzzy = False
+    # explicit syntax (quotes, OR, minus) means the asker KNEW the language — no door
+    # behind this one may second-guess it (the OR-relaxation's law, inherited by trigram)
+    words = [w for w in q.split() if w]
+    plain_bag = ('"' not in q and " or " not in q.lower()
+                 and not any(w.startswith("-") for w in words))  # a leading '-' is NOT
+    # syntax; an inner hyphen (hands-free, rotten-apple) is just a word
+    if not rows and len(words) > 1 and plain_bag:
         # PROGRESSIVE RELAXATION (field report, agent e46a657e-ii, msg 124): websearch
         # semantics AND every term, so a keyword BAG ('Hector background skills experience
         # projects') needs all of them in ONE document — zero by construction, and the
         # docstring promises bags work. When strict-AND finds nothing and the query is a
-        # plain multi-word bag (no quotes/operators — those mean the asker knew the syntax),
-        # retry as ANY-term OR. Ranking still sorts the best-covered hits to the top.
-        words = [w for w in q.split() if w]
-        if (len(words) > 1 and '"' not in q and " or " not in q.lower()
-                and not any(w.startswith("-") for w in words)):  # a leading '-' is NOT syntax;
-            # an inner hyphen (hands-free, rotten-apple) is just a word
-            or_q = " OR ".join(words)
-            if await pool.fetchval(
-                    "SELECT websearch_to_tsquery('english', $1)::text", or_q):
-                rows = await pool.fetch(_SQL, or_q, limit)
-                relaxed = bool(rows)
-    hits = [
+        # plain multi-word bag, retry as ANY-term OR. Ranking still sorts the
+        # best-covered hits to the top.
+        or_q = " OR ".join(words)
+        if await pool.fetchval(
+                "SELECT websearch_to_tsquery('english', $1)::text", or_q):
+            rows = await pool.fetch(_SQL, or_q, limit)
+            relaxed = bool(rows)
+    if not rows and plain_bag:
+        # THE TRIGRAM DOOR (max-level, a0cfcca1): a misspelled word survives no tsquery —
+        # 'compositon' matches nothing lexically forever. word_similarity is strict-AND
+        # with typo tolerance: EVERY query word must fuzzily appear somewhere in the text.
+        # Last lexical rung: full-scan word_similarity is fine at this corpus size and
+        # only runs when both exact doors missed.
+        trgm_words = [w.lower() for w in re.findall(r"[a-z0-9][a-z0-9-]{2,}", q.lower())]
+        if trgm_words:
+            rows = await pool.fetch(_TRGM_SQL, trgm_words, limit)
+            fuzzy = bool(rows)
+    lex_hits = [
         {"id": str(r["id"]), "type": r["type"], "canonical": r["canonical"],
          "field": r["field"], "snippet": r["snippet"], "source": r["source_id"],
          "grade": r["evidence_class"], "when": r["observed_at"].isoformat(),
-         "rank": round(float(r["rank"]), 6)}
+         "rank": round(float(r["rank"]), 6), "via": "fuzzy" if fuzzy else "lexical"}
         for r in rows
     ]
+    # THE SEMANTIC DOOR runs beside the lexical ladder, never instead of it: meaning
+    # matches where words don't ('model downgrade' → the warm-swap rulings). Closed (no
+    # embedder / empty index / any error) it contributes nothing and costs nothing.
+    sem_hits = await _semantic_hits(pool, q, limit)
+    hits = _fuse_ranked(lex_hits, sem_hits, limit)
+    semantic = any(h["via"] in ("semantic", "both") for h in hits)
     await pool.execute(
-        "INSERT INTO search_log (query, caller, hits, top_rank, relaxed) "
-        "VALUES ($1,$2,$3,$4,$5)",
-        q, caller, len(hits), (hits[0]["rank"] if hits else None), relaxed)
+        "INSERT INTO search_log (query, caller, hits, top_rank, relaxed, fuzzy, semantic) "
+        "VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        q, caller, len(hits), (hits[0]["rank"] if hits else None), relaxed, fuzzy, semantic)
     # opportunistic retention: telemetry keeps 90 days (indexed delete, usually 0 rows)
     await pool.execute(
         "DELETE FROM search_log WHERE searched_at < now() - interval '90 days'")
     return {"hits": hits, "q": q,
             **({"note": "strict match (ALL terms) found nothing — these hits match ANY term, "
-                        "best-covered first"} if relaxed else {}),
+                        "best-covered first"} if relaxed and not fuzzy else {}),
+            **({"note": "exact matches found nothing — these are spelling-tolerant "
+                        "(trigram) matches"} if fuzzy else {}),
             **({"note": "no hits — logged; the zero-hit rate is watched"} if not hits else {})}
+
+
+_TRGM_SQL = (
+    "WITH words AS (SELECT unnest($1::text[]) AS w), "
+    "cand AS ("
+    "  SELECT DISTINCT ON (o.id) o.id, o.type, o.canonical, a.name AS field, "
+    "   a.value #>> '{}' AS text, a.source_id, a.evidence_class, a.observed_at, "
+    "   ((SELECT avg(word_similarity(words.w, a.value #>> '{}')) FROM words) * "
+    + _GRADE_W + " * "
+    "    (1.0 / (1.0 + EXTRACT(epoch FROM (now() - a.observed_at)) / 7776000.0)))::real "
+    "     AS rank "
+    "  FROM current_assertions a JOIN objects o ON o.id = a.object_id "
+    "   AND o.status = 'active' "
+    "  WHERE a.name IN ('name','summary','rationale') "
+    "    AND (SELECT min(word_similarity(words.w, a.value #>> '{}')) FROM words) > 0.4 "
+    "  ORDER BY o.id, rank DESC), "
+    "top AS (SELECT * FROM cand ORDER BY rank DESC LIMIT $2) "
+    "SELECT top.*, left(top.text, 160) AS snippet FROM top ORDER BY top.rank DESC")
+
+
+async def _semantic_hits(pool: asyncpg.Pool, q: str, limit: int) -> list[dict[str, Any]]:
+    """The semantic door's hit list, testimony included: cosine candidates hydrated with
+    the winner assertion behind each (object, field), ordered cos × grade × recency —
+    the same epistemics as the SQL doors, applied python-side. [] when the door is closed."""
+    from src.orchestrator import semantics
+
+    embedder = semantics.resolve_embedder()
+    if embedder is None:
+        return []
+    cands = await semantics.semantic_candidates(pool, embedder, q, k=limit * 2)
+    if not cands:
+        return []
+    rows = await pool.fetch(
+        "SELECT DISTINCT ON (o.id, a.name) o.id, o.type, o.canonical, a.name AS field, "
+        " a.value #>> '{}' AS text, a.source_id, a.evidence_class, a.observed_at "
+        "FROM current_assertions a JOIN objects o ON o.id = a.object_id "
+        "JOIN unnest($1::uuid[], $2::text[]) AS want(oid, fld) "
+        "  ON want.oid = o.id AND want.fld = a.name "
+        "WHERE o.status = 'active' "
+        "ORDER BY o.id, a.name, a.confidence DESC, a.observed_at DESC",
+        [c["object_id"] for c in cands], [c["field"] for c in cands])
+    by_key = {(r["id"], r["field"]): r for r in rows}
+    out: list[dict[str, Any]] = []
+    now = datetime.now(UTC)
+    for c in cands:
+        r = by_key.get((c["object_id"], c["field"]))
+        if r is None:
+            continue  # the index lags the graph by one backfill — skip, never invent
+        age_days = max(0.0, (now - r["observed_at"]).total_seconds() / 86400.0)
+        w = (c["cos"] * _GRADE_W_PY.get(r["evidence_class"], 0.35)
+             * (1.0 / (1.0 + age_days / 90.0)))
+        out.append(
+            {"id": str(r["id"]), "type": r["type"], "canonical": r["canonical"],
+             "field": r["field"], "snippet": (r["text"] or "")[:160],
+             "source": r["source_id"], "grade": r["evidence_class"],
+             "when": r["observed_at"].isoformat(), "rank": round(w, 6), "via": "semantic"})
+    out.sort(key=lambda h: -h["rank"])
+    seen: set[str] = set()  # one row per object, best field wins (mirrors DISTINCT ON o.id)
+    deduped = []
+    for h in out:
+        if h["id"] not in seen:
+            seen.add(h["id"])
+            deduped.append(h)
+    return deduped
 
 
 async def _fn_canon(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:

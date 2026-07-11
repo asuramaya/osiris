@@ -299,16 +299,20 @@ async def _retrieval(actions: Actions, since: datetime) -> dict[str, Any]:
     system that doesn't measure its own recall failures rots invisibly."""
     row = await actions.pool.fetchrow(
         "SELECT count(*) AS queries, count(*) FILTER (WHERE hits = 0) AS zero_hits, "
-        "count(*) FILTER (WHERE relaxed) AS relaxed "
+        "count(*) FILTER (WHERE relaxed) AS relaxed, "
+        "count(*) FILTER (WHERE fuzzy) AS fuzzy, "
+        "count(*) FILTER (WHERE semantic) AS semantic "
         "FROM search_log WHERE searched_at >= $1", since)
     missed = await actions.pool.fetch(
         "SELECT query, count(*) AS n FROM search_log "
         "WHERE searched_at >= $1 AND hits = 0 GROUP BY query ORDER BY n DESC LIMIT 3", since)
-    # relaxed = searches that only survived on the ANY-term fallback — the quality question
-    # (relaxed-hit relevance) is the next honest embeddings trigger now that zero-hits
-    # retired (ruling 40e68cb1).
+    # relaxed/fuzzy = searches that only survived on a fallback door; semantic = the
+    # embedding door contributed to the final answer. Together they say which doors
+    # actually carry recall — the quality telemetry the max-level engine is judged by
+    # (ruling a0cfcca1; zero-hits retired as the tripwire in 40e68cb1).
     return {"queries": int(row["queries"]), "zero_hits": int(row["zero_hits"]),
-            "relaxed": int(row["relaxed"]),
+            "relaxed": int(row["relaxed"]), "fuzzy": int(row["fuzzy"]),
+            "semantic": int(row["semantic"]),
             "top_missed": [{"query": m["query"], "times": int(m["n"])} for m in missed]}
 
 

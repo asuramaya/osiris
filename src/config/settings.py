@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     osiris_extract_provider: str = "auto"
     osiris_claude_binary: str = "claude"
     osiris_vision_model: str = "claude-haiku-4-5-20251001"
+    # Semantic search (the max-level ruling a0cfcca1). The Claude CLI has no embeddings
+    # endpoint and keyless is a feature, so the embedder is a LOCAL static model
+    # (model2vec — a distilled lookup table: pure CPU, no key, no GPU, ~30MB from HF on
+    # first load). 'auto' = model2vec when importable, else the semantic door stays closed
+    # and search runs its lexical doors only; 'none' forces it closed.
+    osiris_embed_provider: str = "auto"
+    osiris_embed_model: str = "minishlab/potion-base-8M"
     # Placeful satellite (cron Phase 6/7): this agent's id + the vantages it provides
     # (comma-separated). It claims dispatched collection jobs needing one of these.
     osiris_satellite_id: str = "satellite:local"
