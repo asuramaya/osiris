@@ -736,7 +736,9 @@ async def mount(
     the MCP server ever bounces, RE-ATTACH you to yourself instead of minting a twin. Without
     it you still mount, but a reconnect splits your identity. Registers an Agent object
     (works_in your project, acts_for the principal) and attributes every decision/thread you
-    record to `agent:<you>` instead of the shared `session` bucket. Then call orient()."""
+    record to `agent:<you>` instead of the shared `session` bucket. Then call orient().
+    ALREADY MOUNTED (the whisper said so)? Skip this — orient() for bearings and proceed;
+    re-mounting is only for after an MCP bounce, with your anchor (network msg 317)."""
     pool = await _pool_get()
     settings = get_settings()
     lease = settings.osiris_mail_lease_secs
