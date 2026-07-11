@@ -148,6 +148,49 @@ async def test_reply_does_not_ack_someone_elses_mail(actions: Actions) -> None:
     assert await unread_count(p, "b", reader_agent=R) == 1  # still b's to settle
 
 
+async def test_send_warns_when_the_thread_peer_already_wrote(actions: Actions) -> None:
+    """The crossed-mail tax (Anubis VIII, msg 236: four in-flight crossings in one day):
+    when a reply goes out while the peer's LATER note in the same thread sits unread in
+    the sender's inbox, send() says so at compose time — a mirror, never a push."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    peer = "agent:soundwave-vi"
+    # the peer opens a thread to alpha, then follows up in the SAME thread before alpha reads
+    m1 = await send_message(actions.pool, from_agent=peer, from_project="beta",
+                            to_project="alpha", body="first question")
+    await send_message(actions.pool, from_agent=peer, from_project="beta",
+                       to_project="alpha", body="actually, an update", reply_to=m1["id"])
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:alpha-1", session="alpha001", project="alpha", model=None, cwd=None)
+    try:
+        out = await srv.send("answering your first question", reply_to=m1["id"], ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "crossed" in out and "1 unread" in out["crossed"]  # the follow-up is in flight
+    # and with nothing unread in the thread, no warning (the mirror stays quiet)
+    m2 = await send_message(actions.pool, from_agent=peer, from_project="beta",
+                            to_project="gamma", body="solo note")
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:gamma-1", session="gamma001", project="gamma", model=None, cwd=None)
+    try:
+        out2 = await srv.send("a clean reply", reply_to=m2["id"], ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "crossed" not in out2
+
+
 async def test_reply_to_unknown_message_is_an_error(actions: Actions) -> None:
     with pytest.raises(ValueError, match="does not exist"):
         await send_message(actions.pool, from_agent="agent:x", from_project="a",

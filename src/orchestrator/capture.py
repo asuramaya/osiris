@@ -94,7 +94,7 @@ async def link_repo(
 async def record_decision(
     actions: Actions, summary: str, *, kind: str = "ruling",
     rationale: str | None = None, repo: str | None = None, source: str = _SOURCE,
-    grounds: list[uuid.UUID] | None = None,
+    grounds: list[uuid.UUID] | None = None, protocol: str | None = None,
 ) -> uuid.UUID:
     """Capture a decision at the moment it is made — the WHY, declared, not mined.
 
@@ -118,6 +118,13 @@ async def record_decision(
                                 evidence_class=_EC)
         if rationale:
             await a.assert_property(d, "rationale", rationale, source, observed, _CONF,
+                                    evidence_class=_EC)
+        if protocol:
+            # the INVOCATION, not just the conclusion (Anubis VIII, msg 236 — heinrich's
+            # biggest re-derivation class: a ruling that says what was found but not how
+            # to reproduce it). Its own property, never folded into rationale: a protocol
+            # buried in prose is a protocol lost.
+            await a.assert_property(d, "protocol", protocol, source, observed, _CONF,
                                     evidence_class=_EC)
         if repo:
             await link_repo(a, d, repo, observed, source=source, evidence_class=_EC)

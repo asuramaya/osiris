@@ -57,9 +57,26 @@ def main() -> int:
               f"call mount(cwd='{cwd}') by hand, then orient().")
         return 0
 
-    bits = [f"◈ OSIRIS — the fleet's shared memory. You are ALREADY MOUNTED as "
-            f"{out['agent']}" + (f" (project {out['project']}" if out.get("project") else "(")
-            + (f", {out['model']})" if out.get("model") else ")")]
+    # THE HONESTY GATE (grievance survey 2026-07-11, two witnesses: Chlear #235, Metron IV
+    # #242): "ALREADY MOUNTED" is only TRUE when this session can re-attach per-request —
+    # the client's X-Osiris-Job header expands ${CLAUDE_JOB_DIR}, and an interactive tab
+    # has no such env, so the header arrives empty and the FIRST tool call bounces with
+    # 'mount first' despite the whisper's promise. A whisper must never testify above the
+    # connection's actual state (the one law, everywhere).
+    anchored = bool(os.environ.get("CLAUDE_JOB_DIR"))
+    who = (f"{out['agent']}" + (f" (project {out['project']}" if out.get("project") else "(")
+           + (f", {out['model']})" if out.get("model") else ")"))
+    if anchored:
+        bits = [f"◈ OSIRIS — the fleet's shared memory. You are ALREADY MOUNTED as {who}"]
+    else:
+        bits = [f"◈ OSIRIS — the fleet's shared memory. It knows you as {who}, but this "
+                "session presents NO durable anchor per-request ($CLAUDE_JOB_DIR is unset "
+                "in interactive tabs, so the client's X-Osiris-Job header expands empty). "
+                f"Your FIRST osiris call must be mount(cwd='{cwd}'"
+                + (f", job_dir='{out['job_dir']}'" if out.get("job_dir") else "")
+                + ") — after that this connection knows you. Any osiris call before that "
+                "mount will bounce with 'mount first'; after an MCP reconnect, mount the "
+                "same way again."]
     if out.get("minted"):
         bits.append(f"You were MINTED as this lineage's successor — ancestor {out['minted']}; "
                     "your first act: read orient()'s succession note.")
@@ -101,7 +118,7 @@ def main() -> int:
                     "project, never an empty graph.")
     if out.get("pulse"):
         bits.append(f"Fleet pulse: {out['pulse']}.")
-    if out.get("job_dir"):
+    if out.get("job_dir") and anchored:
         # the durable anchor: if the MCP server ever drops and you must re-mount, pass THIS
         # (your $CLAUDE_JOB_DIR is empty) so you re-attach to yourself instead of minting a twin.
         bits.append(f"YOUR DURABLE ANCHOR is job_dir='{out['job_dir']}'. If you ever need to "

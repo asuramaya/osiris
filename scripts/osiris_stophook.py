@@ -19,7 +19,12 @@ import sys
 from pathlib import Path
 
 DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/osiris")
-LEASE_SECS = 900  # mirror osiris_mail_lease_secs — deliverable = unsettled + no live lease
+# The HOOK's patience window, deliberately longer than the mailbox lease (900s): a message
+# delivered to THIS agent within the hour is demonstrably in-hand — Anubis VIII's grievance
+# (msg 236): the hook blocked a turn that was itself composing the settlement, because a
+# long synthesis outlives the 15-min lease. The mailbox's redelivery semantics are
+# UNCHANGED (at-least-once holds for everyone else); only the stop-block relents.
+STOP_GRACE_SECS = 3600
 
 
 async def _deliverable(project: str, session_id: str) -> tuple[int, int | None]:
@@ -43,7 +48,7 @@ async def _deliverable(project: str, session_id: str) -> tuple[int, int | None]:
             "WHERE ((m.to_agent=$1) OR (m.to_project=$2 AND m.to_agent IS NULL)) "
             "AND m.read_at IS NULL AND r.read_at IS NULL "
             "AND (r.delivered_at IS NULL OR r.delivered_at < now() - make_interval(secs => $3))",
-            row["agent_id"], project, LEASE_SECS)
+            row["agent_id"], project, STOP_GRACE_SECS)
         return int(n), row["context_window_size"]
     finally:
         await conn.close()

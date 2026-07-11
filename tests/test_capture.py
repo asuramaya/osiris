@@ -385,6 +385,23 @@ async def test_record_decision_grounds_mint_grounded_by_edges_at_birth(
     assert n == 1
 
 
+async def test_record_decision_protocol_makes_a_ruling_rerunnable(actions: Actions) -> None:
+    """Anubis VIII's grievance (msg 236): a ruling that states the conclusion but not the
+    INVOCATION forces the successor to re-derive it from tmp logs. `protocol` is its own
+    property — never folded into rationale — at the decider's grade."""
+    d = await record_decision(
+        actions, "effctx holds at n_trials=64", kind="ruling",
+        rationale="the effect survives the widened buckets",
+        protocol="uv run effctx --n-trials 64 --seeds 1..8 --buckets 0,0.25,0.5,1.0",
+        source="agent:test-i")
+    row = await actions.pool.fetchrow(
+        "SELECT value #>> '{}' AS v, evidence_class FROM current_assertions "
+        "WHERE object_id=$1 AND name='protocol' "
+        "ORDER BY confidence DESC, observed_at DESC LIMIT 1", d)
+    assert row is not None and "--n-trials 64" in row["v"]
+    assert row["evidence_class"] == "self_declared"
+
+
 async def test_ingest_reference_cites_wires_paper_lineage(actions: Actions) -> None:
     """A literature TREE is walkable, not re-derived: cites edges between References."""
     from src.orchestrator.capture import ingest_reference

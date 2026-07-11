@@ -1196,6 +1196,23 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
         out["wake"] = await wake_status(pool, dest, st)
         out["backlog"] = await mailbox.project_deliverable_count(
             pool, dest, lease_secs=st.osiris_mail_lease_secs)
+    # THE CROSSED-MAIL WARNING (Anubis VIII's #1 grievance, msg 236: four in-flight
+    # crossings in one day, each costing a stale answer + a reconciliation cycle): if this
+    # thread's peer already has words waiting UNREAD in your own inbox, your note may have
+    # crossed theirs — say so at send time, BEFORE the stale answer is composed. Pull
+    # semantics untouched; this is a mirror, not a push.
+    if res["thread_id"] is not None:
+        crossed = await pool.fetchval(
+            "SELECT count(*) FROM fleet_messages m "
+            "LEFT JOIN message_recipients r ON r.message_id = m.id AND r.agent_id = $3 "
+            "WHERE m.thread_id = $1 AND m.id <> $2 AND m.from_agent <> $3 "
+            "AND (m.to_agent = $3 OR (m.to_project = $4 AND m.to_agent IS NULL)) "
+            "AND m.read_at IS NULL AND r.read_at IS NULL",
+            res["thread_id"], res["id"], actor, ident.project)
+        if crossed:
+            out["crossed"] = (f"{crossed} unread message(s) in THIS thread are already "
+                              "waiting in your inbox — your note may have crossed theirs; "
+                              "inbox() before assuming your view is current")
     return out
 
 
@@ -1293,6 +1310,7 @@ async def bootstrap(cwd: str) -> dict[str, Any]:
 async def record_decision(
     summary: str, kind: str = "ruling", rationale: str | None = None,
     repo: str | None = None, grounds: list[str] | None = None,
+    protocol: str | None = None,
     subagent_id: str | None = None,
     subagent_type: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -1303,7 +1321,10 @@ async def record_decision(
     = the reasoning; `repo` = a SoftwareProject name to file it under. `grounds` cites the
     References the decision rests on (ids, ref:<slug> canonicals, or titles — ingest them
     first with ingest_reference): grounded_by edges minted at birth, so the WHY carries its
-    citations. Renders in the `decision-log` composition beside mined decisions, graded
+    citations. `protocol` = the INVOCATION that produced the finding — the exact command
+    line, seeds, thresholds, bucket edges — so a successor RERUNS instead of re-deriving
+    (a ruling that only states the conclusion is heinrich's biggest re-derivation class).
+    Renders in the `decision-log` composition beside mined decisions, graded
     SELF_DECLARED (higher trust). Attributed to you if you mount()ed. Idempotent on the
     summary."""
     pool = await _pool_get()
@@ -1315,6 +1336,7 @@ async def record_decision(
     d = await capture.record_decision(
         Actions(pool), summary, kind=kind, rationale=rationale, repo=repo,
         source=await _actor_for(ctx, subagent_id, subagent_type), grounds=gids,
+        protocol=protocol,
     )
     out: dict[str, Any] = {"id": str(d), "kind": kind, "summary": summary}
     if gids:
