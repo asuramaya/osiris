@@ -282,6 +282,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         case_id: uuid.UUID | None = None,
         type: str | None = None,
         q: str | None = None,
+        exclude_types: str | None = None,
         limit: int = Query(100, le=2000),
     ) -> list[dict[str, Any]]:
         # Word-order-proof recall: tokenize `q` on whitespace; an object matches when EVERY
@@ -291,6 +292,11 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         # text. Single-token behaviour is unchanged. SQL-side and bounded (≤6 tokens): the
         # NOT-EXISTS says "no token failed to match anywhere" = all tokens matched.
         tokens = (q.split()[:6] if q else None) or None
+        # exclude_types (comma list): the shell's default set drops the 900 dead Agent
+        # hulls (10 live of 920 measured 2026-07-11) — agents belong to the fleet lens;
+        # a toggle brings them back deliberately
+        excl = [t.strip() for t in exclude_types.split(",") if t.strip()] \
+            if exclude_types else None
         rows = await p.fetch(
             "SELECT id, type, canonical, status, " + _OBJ_LABEL + " AS name "
             "FROM objects o "
@@ -298,6 +304,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             "  AND ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM case_objects co "
             "        WHERE co.object_id = o.id AND co.case_id = $1)) "
             "  AND ($2::text IS NULL OR type = $2) "
+            "  AND ($5::text[] IS NULL OR NOT (type = ANY($5::text[]))) "
             "  AND ($3::text[] IS NULL OR NOT EXISTS ("
             "        SELECT 1 FROM unnest($3::text[]) AS tok "
             "        WHERE o.canonical NOT ILIKE '%' || tok || '%' "
@@ -310,6 +317,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             type,
             tokens,
             limit,
+            excl,
         )
         return [dict(r) for r in rows]
 

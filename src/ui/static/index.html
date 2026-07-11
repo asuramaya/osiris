@@ -154,7 +154,7 @@
       <div class="railhead">Compositions <span class="add" title="New composition" onclick="openCompose(event)">＋</span></div>
       <div class="pad"><div id="comps"></div></div>
 
-      <div class="railhead">Object set <span class="n" id="setn">0</span></div>
+      <div class="railhead">Object set <span class="n" id="setn">0</span> <a id="agtog" onclick="toggleAgents()" title="agents live in the fleet lens; the default set hides their dead session hulls" style="cursor:pointer;color:#58a6ff;font-size:.72rem">+agents</a></div>
       <div class="pad">
         <input id="filter" class="filter" placeholder="Filter the set…" oninput="renderSet()" />
         <div id="set"></div>
@@ -531,8 +531,12 @@ async function openAnalysis(id){
 function objectSetUrl(){
   const room = ROOMS.find(r=>r.id===ROOM);
   const collect = !!(room && room.config && room.config.collect);
-  return (collect && ANALYSIS) ? `/objects?case_id=${ANALYSIS}&limit=1500` : `/objects?limit=1500`;
+  const ex = SHOW_AGENTS ? '' : '&exclude_types=Agent';   // 910 dead hulls off by default
+  return (collect && ANALYSIS) ? `/objects?case_id=${ANALYSIS}&limit=1500${ex}`
+                               : `/objects?limit=1500${ex}`;
 }
+let SHOW_AGENTS=false;
+function toggleAgents(){ SHOW_AGENTS=!SHOW_AGENTS; $('agtog').textContent=SHOW_AGENTS?'−agents':'+agents'; loadObjectSet(); }
 async function loadObjectSet(){
   const r = await fetch(objectSetUrl()).then(r=>r.json()).catch(()=>[]);
   SET = Array.isArray(r) ? r : [];   // never let an error body poison the set (SET.filter)

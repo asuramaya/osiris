@@ -123,3 +123,17 @@ async def test_the_shelf_metadata_reaches_the_list(actions: Actions) -> None:
     assert "GENUINELY unresolved" in comps["the-wall"]["description"]
     assert comps["graph-lint"]["section"] == "engine"
     assert comps["co-investment-ties"]["section"] == "casework"
+
+
+async def test_object_set_can_exclude_the_agent_hulls(
+        actions: Actions, client: httpx.AsyncClient) -> None:
+    """The icky object set (operator, 2026-07-11): 920 Agent objects, 10 live — dead
+    session hulls crowding the 1500-cap working set. The default shell set excludes them
+    via ?exclude_types=Agent; a deliberate toggle brings them back."""
+    await actions.create_or_find_object("Agent", "agent:hull-1", "session")
+    await actions.create_or_find_object("Decision", "decision:real", "session")
+    everything = (await client.get("/objects?limit=100")).json()
+    assert {o["type"] for o in everything} >= {"Agent", "Decision"}
+    slim = (await client.get("/objects?limit=100&exclude_types=Agent")).json()
+    assert all(o["type"] != "Agent" for o in slim)
+    assert any(o["type"] == "Decision" for o in slim)
