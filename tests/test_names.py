@@ -143,10 +143,57 @@ async def test_live_swap_passes_the_seat_mid_session(actions: Actions) -> None:
     again = await live_succession(actions, session_id="cafe0123-0000-4000-8000-000000000000",
                                   observed_model="claude-opus-4-8")
     assert again.get("unchanged") is True
-    # oscillation: the model flips BACK — a third mind, not the first restored (fork 1)
-    third = await live_succession(actions, session_id="cafe0123-0000-4000-8000-000000000000",
-                                  observed_model="claude-fable-5")
-    assert third["minted"] == "agent:cafe0123-iii" and third["seat"] == "Morpheus III"
+    # THE SEAM DEBOUNCE (supersedes fork 1's 'third mind'; Soundwave's grievance b813e389):
+    # the model flips straight BACK and the transient heir never ACTED — asserted nothing
+    # beyond its mint stamps, sent nothing, settled nothing (its read_inbox above only
+    # LEASED). No mind ever existed: the mint heals as false and the first is restored.
+    back = await live_succession(actions, session_id="cafe0123-0000-4000-8000-000000000000",
+                                 observed_model="claude-fable-5")
+    assert back.get("healed") == "agent:cafe0123-ii"
+    assert back.get("restored") == "agent:cafe0123"
+    row2 = await actions.pool.fetchrow(
+        "SELECT agent_id, model FROM agent_mounts WHERE job_dir='/h/.claude/jobs/cafe0123'")
+    assert row2 is not None
+    assert row2["agent_id"] == "agent:cafe0123" and row2["model"] == "claude-fable-5"
+    # the false heir is marked and closed; the record of the wobble SURVIVES (event-sourced)
+    fm = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='agent:cafe0123-ii' AND a.name='false_mint' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1")
+    assert fm == "true"
+    # the estate returned: the DM is deliverable to the RESTORED mind again
+    assert await unread_count(actions.pool, "handlingtheloop",
+                              reader_agent="agent:cafe0123") == 1
+    # ...and the lineage head-walk lands on the restored mind, so a FUTURE real seam mints
+    # -ii again (fresh find-or-create on the same canonical), never -iii over a ghost
+
+
+async def test_a_transient_mind_that_ACTED_is_a_real_generation(actions: Actions) -> None:
+    """The debounce's boundary: one witnessed act and the heir stands — a mind that settled
+    mail or wrote to the graph existed, however briefly; flipping back mints the NEXT
+    generation instead of healing (the numeral tracks the mind, a882b334)."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import live_succession
+
+    await _agent(actions, "agent:beef4567")
+    await mounts.save_mount(actions.pool, job_dir="/h/.claude/jobs/beef4567",
+                            agent_id="agent:beef4567", project="loopwork", cwd="/x",
+                            model="claude-fable-5", session_key="k2")
+    out = await live_succession(actions, session_id="beef4567-0000-4000-8000-000000000000",
+                                observed_model="claude-opus-4-8")
+    assert out["minted"] == "agent:beef4567-ii"
+    # the transient mind ACTS: one assertion on a foreign object, sourced to it
+    th = await actions.create_or_find_object("Thread", "thread:opus-was-here",
+                                             "agent:beef4567-ii")
+    await actions.assert_property(th, "summary", "the opus mind judged something",
+                                  "agent:beef4567-ii",
+                                  __import__("datetime").datetime.now(
+                                      __import__("datetime").UTC), 0.9,
+                                  evidence_class="self_declared")
+    back = await live_succession(actions, session_id="beef4567-0000-4000-8000-000000000000",
+                                 observed_model="claude-fable-5")
+    assert back.get("minted") == "agent:beef4567-iii"  # a real mind passed through
+    assert "healed" not in back
 
 
 async def test_a_display_variant_is_not_a_death(actions: Actions) -> None:

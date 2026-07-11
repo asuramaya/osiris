@@ -1011,9 +1011,21 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
                                    lease_secs=lease)
     op_mail = {"operator_mail": f"{op_unread} unread — inbox(project='operator') if the "
                                 "human is present"} if op_unread else {}
+    # THE STANDING-CHOICE STANDDOWN (Metron IV, wave-2 fa918939): a repo whose model
+    # choice is SETTLED — a .osiris file, or an intended_model property recorded on the
+    # SoftwareProject — must not re-confront every successor with the fleet default.
+    # A settled seam is not even a seam; the banner queries the record before preaching.
+    expected = read_project_model(ident.cwd) if ident else None
+    if ident and not expected and proj:
+        expected = await pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a "
+            "JOIN objects o ON o.id=a.object_id "
+            "WHERE o.canonical='repo:' || $1 AND o.type='SoftwareProject' "
+            "AND a.name='intended_model' "
+            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", proj)
     swap = swap_banner(classify_swap(
         ident.model_history, ident.model,
-        expected=read_project_model(ident.cwd) or get_settings().osiris_expected_model,
+        expected=expected or get_settings().osiris_expected_model,
         anchored=ident.model_method == "job_dir",
         deliberate=ident.model_deliberate)) if ident else None
     if spawn is not None:
@@ -1043,6 +1055,25 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             "note": f"scoped to {proj}; {fleet_open} fleet-wide open threads not shown "
                     "(run_composition('briefing') for the whole graph).",
         }
+    # THE UN-MOUNTED CAP (Metron IV, wave-2 fa918939: a fresh session's first orient
+    # returned 353K chars of whole-fleet briefing it had to jq from a dump file). An
+    # un-mounted caller gets a BOUNDED map — per-project open counts + the newest few
+    # decisions — and the mount ritual; the firehose stays one deliberate call away.
+    fleet_map = [dict(r) for r in await pool.fetch(
+        "SELECT p.canonical AS project, count(*) AS open_threads "
+        "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' AND p.status='active' "
+        "WHERE o.type='Thread' AND o.status='active' "
+        "AND (SELECT s.value #>> '{}' FROM current_assertions s WHERE s.object_id=o.id "
+        "  AND s.name='status' ORDER BY s.confidence DESC, s.observed_at DESC LIMIT 1)"
+        "  = 'open' "
+        "GROUP BY p.canonical ORDER BY count(*) DESC LIMIT 20")]
+    recent = [r["summary"][:160] for r in await pool.fetch(
+        "SELECT (SELECT s.value #>> '{}' FROM current_assertions s WHERE s.object_id=o.id "
+        "  AND s.name='summary' ORDER BY s.confidence DESC, s.observed_at DESC LIMIT 1) "
+        "  AS summary "
+        "FROM objects o WHERE o.type='Decision' AND o.status='active' "
+        "ORDER BY o.created_at DESC LIMIT 5") if r["summary"]]
     return {
         "you": who, "model": (ident.model if ident else None), "project": proj,
         "mail": mail,
@@ -1050,7 +1081,12 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         **op_mail,
         **({"swap": swap} if swap else {}),
         **({"while_you_were_away": away} if away else {}),
-        "briefing": await comp.run_composition(pool, "briefing"),
+        "fleet_map": fleet_map,
+        "recent_decisions": recent,
+        "note": "un-mounted → the BOUNDED fleet map, never the firehose. mount(cwd, "
+                "job_dir=…) then orient() for your project's briefing; orient(project=…) "
+                "peeks at another's; run_composition('briefing') if you truly want the "
+                "whole graph.",
     }
 
 
@@ -1515,8 +1551,9 @@ async def succession_route(request: Any) -> Any:
         out = await live_succession(Actions(await _pool_get()), session_id=session_id,
                                     observed_model=model)
         # the seat passed mid-session: the swapped tab's connection is still open — evict
-        # the ancestor from the hot cache so the next call re-attaches as the heir
-        _evict_stale_minds(out.get("from") if out.get("minted") else None)
+        # the stale mind from the hot cache so the next call re-attaches as the current one
+        # (the ancestor after a mint; the debounced false heir after a round-trip heal)
+        _evict_stale_minds(out.get("from") if out.get("minted") else out.get("healed"))
         return JSONResponse(out)
     except Exception as e:  # noqa: BLE001 — the chrome retries next render; never block it
         return JSONResponse({"error": str(e)[:200]}, status_code=500)

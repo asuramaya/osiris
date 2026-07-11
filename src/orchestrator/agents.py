@@ -438,6 +438,81 @@ async def mint_heir(
     return heir, a
 
 
+_SEAM_DEBOUNCE_SECS = 900
+_DEBOUNCE_SRC = "seam-debounce"
+
+
+async def _debounce_roundtrip(
+    actions: Actions, row: Any, observed: str, now: datetime,
+) -> dict[str, Any] | None:
+    """THE SEAM DEBOUNCE (Soundwave VII's wave-3 grievance, b813e389): the operator toggling
+    /model there-and-back within a minute minted a generation — roman-numeral churn for
+    settings churn dilutes what the numeral MEANS (ruling a882b334: the numeral tracks the
+    MIND). The distinction that keeps both truths: a mind is witnessed by its ACTS. When the
+    model returns to the seam's left side within the window and the transient heir asserted
+    nothing beyond its own mint stamps, sent nothing, and settled nothing — no mind ever
+    existed; the mint heals as false (event-sourced, compensating, its record stays) and the
+    ancestor takes its seat back, estate included. One witnessed act, and the heir stands:
+    a real mind passed through, however briefly. Returns the heal dict, or None (mint on)."""
+    cur = row["agent_id"]
+    cur_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Agent' AND status='active'", cur)
+    if cur_oid is None:
+        return None
+    meta = {r["name"]: (r["v"], r["at"]) for r in await actions.pool.fetch(
+        "SELECT DISTINCT ON (name) name, value #>> '{}' AS v, observed_at AS at "
+        "FROM current_assertions WHERE object_id=$1 "
+        "AND name IN ('succeeded_from','minted_because','model_succession') "
+        "ORDER BY name, confidence DESC, observed_at DESC", cur_oid)}
+    if meta.get("minted_because", (None, None))[0] != "live-swap":
+        return None
+    ancestor, minted_at = meta.get("succeeded_from", (None, None))
+    seam = meta.get("model_succession", ("", None))[0] or ""
+    if (not ancestor or minted_at is None
+            or (now - minted_at).total_seconds() > _SEAM_DEBOUNCE_SECS):
+        return None
+    left = normalize_model(seam.split("→")[0].strip()) if "→" in seam else None
+    if left is None or left != observed:
+        return None  # not a round-trip — a third model is a real third mind
+    ancestor_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", ancestor)
+    if ancestor_oid is None:
+        return None
+    acted = await actions.pool.fetchval(
+        # acts = assertions beyond the lineage bookkeeping pair, words sent, or mail SETTLED
+        # after the mint (a lease/delivery is passive perception, never an act)
+        "SELECT EXISTS (SELECT 1 FROM assertions "
+        "         WHERE source_id=$1 AND object_id NOT IN ($2, $3)) "
+        "  OR EXISTS (SELECT 1 FROM fleet_messages WHERE from_agent=$1) "
+        "  OR EXISTS (SELECT 1 FROM message_recipients "
+        "         WHERE agent_id=$1 AND read_at IS NOT NULL AND read_at > $4)",
+        cur, cur_oid, ancestor_oid, minted_at)
+    if acted:
+        return None
+    do = EvidenceClass.DIRECT_OBSERVATION
+    conf = confidence_for(do)
+    for k, v in (("false_mint", True), ("retired", True), ("retired_by", _DEBOUNCE_SRC),
+                 ("false_mint_because",
+                  "model round-trip within the debounce window, no witnessed act — "
+                  "settings churn, not a death (Soundwave's grievance, b813e389)")):
+        await actions.assert_property(cur_oid, k, v, _DEBOUNCE_SRC, now, conf,
+                                      evidence_class=do.value)
+    # unwind the head-walk (the old pointer stays in history — compensating, never deleted)
+    await actions.assert_property(ancestor_oid, "succeeded_by", "", _DEBOUNCE_SRC, now, conf,
+                                  evidence_class=do.value)
+    # the estate returns: unread DMs re-address to the restored mind; read state needs no
+    # unwind (the heir's copied rows are inert once the heir is retired)
+    await actions.pool.execute(
+        "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
+        ancestor, cur)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET agent_id=$2, model=$3, last_seen=now() WHERE job_dir=$1",
+        row["job_dir"], ancestor, observed)
+    return {"healed": cur, "restored": ancestor,
+            "seam": f"{seam} → {observed} (round-trip within "
+                    f"{_SEAM_DEBOUNCE_SECS // 60}m, no act — debounced, not a death)"}
+
+
 async def live_succession(
     actions: Actions, *, session_id: str, observed_model: str,
 ) -> dict[str, Any]:
@@ -466,6 +541,10 @@ async def live_succession(
             "UPDATE agent_mounts SET model=$2 WHERE job_dir=$1", row["job_dir"], observed)
         return {"unchanged": True, "reason": "first stamp"}
     now = datetime.now(UTC)
+    # a there-and-back /model toggle with no act between heals instead of minting again
+    healed = await _debounce_roundtrip(actions, row, observed, now)
+    if healed is not None:
+        return healed
     # whose hand moved the model? A /model on THIS session's own transcript makes the seam
     # the OPERATOR's deliberate act — the mint still happens (a death is a death, ruling
     # a882b334) but the seam string carries the hand, so no downstream surface preaches.

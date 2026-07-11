@@ -227,6 +227,66 @@ async def test_orient_explicit_project_overrides_the_mount(actions: Actions) -> 
     assert "the decepticons-only thread" in [r["summary"] for r in res["open_threads"]]
 
 
+async def test_unmounted_orient_is_a_bounded_map_never_the_firehose(
+        actions: Actions) -> None:
+    """Metron IV's flood (wave-2 fa918939): a fresh un-mounted session's first orient()
+    returned 353K chars of whole-fleet briefing. Un-mounted now gets a bounded per-project
+    map + the newest decisions + the mount ritual — the firehose only by deliberate call."""
+    from src import mcp_server as srv
+    from src.orchestrator.capture import open_thread, record_decision
+
+    await open_thread(actions, "an open line in some project", repo="mapproj")
+    await record_decision(actions, "a fresh fleet ruling for the map", repo="mapproj")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.orient(ctx=None)
+    finally:
+        srv._pool = saved_pool
+    assert "briefing" not in out                       # the firehose is gone
+    assert any(m["project"] == "repo:mapproj" and m["open_threads"] == 1
+               for m in out["fleet_map"])
+    assert any("fleet ruling for the map" in d for d in out["recent_decisions"])
+    assert "BOUNDED" in out["note"] and "mount(" in out["note"]
+
+
+async def test_swap_banner_stands_down_before_a_recorded_repo_choice(
+        actions: Actions) -> None:
+    """Metron IV's re-litigation (wave-2 fa918939): xxit runs opus by RECORDED operator
+    choice, yet every successor got the confess-or-fix banner. An intended_model property
+    on the SoftwareProject is the graph's own .osiris — the banner consults it first."""
+    from datetime import UTC, datetime
+
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    repo = await actions.create_or_find_object("SoftwareProject", "repo:opusland", "session")
+    ident = AgentIdentity(agent_id="agent:opus-1", session="opus0001", project="opusland",
+                          model="claude-opus-4-8", cwd=None, model_method="job_dir",
+                          model_history=("claude-opus-4-8",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = ident
+    try:
+        # no recorded choice yet: diverging from the fleet default earns the banner
+        out = await srv.orient(ctx=ctx)
+        assert out.get("swap")
+        # the operator's standing choice lands on the repo object — the banner stands down
+        await actions.assert_property(repo, "intended_model", "claude-opus-4-8", "session",
+                                      datetime.now(UTC), 0.9, evidence_class="self_declared")
+        out2 = await srv.orient(ctx=ctx)
+        assert not out2.get("swap")
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+
 def test_rank_open_threads_orders_obligations_first_and_caps() -> None:
     """The pure ranker (orient's wall → a bounded query): obligations float above ordinary
     threads, the composition's recency order is preserved WITHIN each group (stable sort),
