@@ -818,12 +818,17 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     # CONTRADICTION — same (object, field), different values from different sources, the top
     # two winners within eps of each other: the grade-then-recency resolver is deciding this
     # fact on a coin flip. Surface the tie; resolving it is a mind's job (tension audit).
-    # `status` is EXCLUDED: it is a lifecycle property — open→resolved from another hand is
+    # The LIFECYCLE FAMILY is EXCLUDED: `status` because open→resolved from another hand is
     # the state machine working, not a war (the first live lint flagged 23 of these; zero
-    # were real). Its one true failure mode gets its own check below (status-regression).
+    # were real), and `resolved_in`/`resolved_because` because two sources both writing them
+    # means two hands BOTH closed the thread — a same-status double-resolution is
+    # CORROBORATION, two witnesses attesting one fact from their own vantages (operator
+    # ruling 64adf08a, the 94ddca1f adjudication: keep both witnesses, never pick one to
+    # satisfy the lint). The family's one true failure mode — a close being overridden —
+    # gets its own check below (status-regression).
     con = await pool.fetch(
         "WITH multi AS (SELECT object_id, name FROM current_assertions "
-        "  WHERE name <> 'status' "
+        "  WHERE name NOT IN ('status', 'resolved_in', 'resolved_because') "
         "  GROUP BY object_id, name HAVING count(DISTINCT source_id) > 1), "
         "ranked AS (SELECT ca.object_id, ca.name, ca.value #>> '{}' AS v, ca.source_id, "
         "  ca.confidence, row_number() OVER (PARTITION BY ca.object_id, ca.name "

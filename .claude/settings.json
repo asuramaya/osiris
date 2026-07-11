@@ -6,18 +6,5 @@
   },
   "worktree": {
     "baseRef": "head"
-  },
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/home/asuramaya/code/osiris/.venv/bin/python /home/asuramaya/code/osiris/scripts/osiris_stophook.py",
-            "timeout": 10
-          }
-        ]
-      }
-    ]
   }
 }

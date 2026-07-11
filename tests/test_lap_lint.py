@@ -188,6 +188,38 @@ async def test_lint_status_lifecycle_is_not_a_war(actions: Actions) -> None:
                for f in _by_check(out3, "status-regression"))
 
 
+async def test_lint_double_resolution_is_corroboration(actions: Actions) -> None:
+    """Operator ruling 64adf08a (the 94ddca1f adjudication): two hands both closing the
+    same thread — status agrees, only resolved_in/resolved_because differ — is TWO
+    WITNESSES attesting one fact, never a contradiction. Keep both; the lint stays quiet.
+    A genuine non-lifecycle tie on the same object still flags."""
+    t = "agent:teller"
+    th = await actions.create_or_find_object("Thread", "thread:twice-blessed", t)
+    await actions.assert_property(th, "summary", "image the matched organ pair", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(th, "status", "open", t, NOW, 0.9, evidence_class=_SD)
+    for src, because, dt in (("agent:doer", "done in commit 2b3fe10", 1),
+                             ("session", "verified overnight by successor", 12)):
+        when = NOW + timedelta(hours=dt)
+        await actions.assert_property(th, "status", "resolved", src, when, 0.9,
+                                      evidence_class=_SD)
+        await actions.assert_property(th, "resolved_in", src, src, when, 0.9,
+                                      evidence_class=_SD)
+        await actions.assert_property(th, "resolved_because", because, src, when, 0.9,
+                                      evidence_class=_SD)
+    out = await _fn(actions, "lint", {})
+    assert _by_check(out, "contradiction") == []         # corroboration, not a war
+    assert _by_check(out, "status-regression") == []     # and no false regression either
+    # the exclusion is the lifecycle FAMILY only — a real tie elsewhere still surfaces
+    await actions.assert_property(th, "owner", "alice", "agent:one", NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(th, "owner", "bob", "agent:two",
+                                  NOW + timedelta(minutes=1), 0.9, evidence_class=_SD)
+    out2 = await _fn(actions, "lint", {})
+    con = _by_check(out2, "contradiction")
+    assert len(con) == 1 and con[0]["field"] == "owner"
+
+
 async def test_lint_orphan_links_stale_duties_and_ghosts(actions: Actions) -> None:
     t = "agent:teller"
     # a live link into a retired corpse
