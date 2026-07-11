@@ -34,6 +34,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from src.actions.core import Actions
+from src.api import chrome
 from src.api.membrane import render_membrane
 from src.config.settings import get_settings
 from src.connectors.leases import LeaseStore
@@ -910,6 +911,42 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             "SELECT to_project, from_agent, message_id, woke_at FROM agent_wakes "
             "ORDER BY woke_at DESC LIMIT 20")]
         return Response(render_membrane(dg, wakes), media_type="text/html")
+
+    # THE CHROME OPENED (operator, 2026-07-11): /desk /mail /fleet — clickable, openable,
+    # ~4s-fresh lenses so the human looks WITHOUT calling an agent. Same read-only
+    # constitution as /membrane; ?partial=1 serves just the content div for the poller.
+    @app.get("/desk")
+    async def desk_page(partial: int = 0, p: asyncpg.Pool = Depends(get_pool)) -> Response:
+        """The organized desk: bands (needs-decision / needs-hands / fyi), folds, dimmed
+        annotations, and the your-queue derived from owner='operator' threads. Reading here
+        never leases; settling stays with the MCP waist at the human's word."""
+        from src.orchestrator.mailbox import read_desk
+        inner = chrome.render_desk(await read_desk(p))
+        return Response(inner if partial else chrome.page("desk", "desk", inner),
+                        media_type="text/html")
+
+    @app.get("/mail")
+    async def mail_page(
+        box: str | None = None, partial: int = 0, p: asyncpg.Pool = Depends(get_pool)
+    ) -> Response:
+        """The fleet's mail, walkable: all mailboxes → one box's conversations, threads
+        opening in place. Raw reads — a glance here never leases anyone's mail."""
+        if box:
+            inner = chrome.render_mail_box(box, await chrome.mail_threads(p, box))
+        else:
+            inner = chrome.render_mail_overview(await chrome.mail_overview(p))
+        return Response(inner if partial else chrome.page("mail", "mail", inner),
+                        media_type="text/html")
+
+    @app.get("/fleet")
+    async def fleet_page(partial: int = 0, p: asyncpg.Pool = Depends(get_pool)) -> Response:
+        """Who is mounted RIGHT NOW (live dots, seats, models, worktrees) + the wake ledger
+        and the hourly spend against its budget."""
+        data = await chrome.fleet_data(
+            p, wake_budget=get_settings().osiris_wake_hourly_budget)
+        inner = chrome.render_fleet(data)
+        return Response(inner if partial else chrome.page("fleet", "fleet", inner),
+                        media_type="text/html")
 
     if _UI_DIR.is_dir():
         app.mount("/ui", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")

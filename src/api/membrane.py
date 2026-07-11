@@ -83,12 +83,14 @@ def render_membrane(dg: dict[str, Any], wakes: list[dict[str, Any]]) -> str:
     desk = dg["operator_inbox"]
     strip = (
         f'<div class="strip">'
-        f'<span><a href="#desk"><b class="{"red" if desk["unread"] else "dim"}">desk '
+        # the counts now OPEN (the chrome pages, 2026-07-11) — the in-page anchors remain
+        # below for the statusline's deep links
+        f'<span><a href="/desk"><b class="{"red" if desk["unread"] else "dim"}">desk '
         f'{desk["unread"]}</b></a></span>'
-        f'<span><a href="#conversations"><b>threads {s["conversations"]}</b></a></span>'
-        f'<span><a href="#fleet"><b>fleet {s["agents"]}</b></a>'
+        f'<span><a href="/mail"><b>threads {s["conversations"]}</b></a></span>'
+        f'<span><a href="/fleet"><b>fleet {s["agents"]}</b></a>'
         f' <span class="dim">({s["unresolved"]} unresolved · {s["swapped"]} swapped)</span></span>'
-        f'<span><a href="#wakes"><b>wakes {len(wakes)}</b></a></span>'
+        f'<span><a href="/fleet"><b>wakes {len(wakes)}</b></a></span>'
         f'<span><a href="#activity"><b>activity {s["activity"]}</b></a></span>'
         f'<span class="{"red" if s["laundering"] else "dim"}">laundering {s["laundering"]}</span>'
         + (f'<span><a href="#costs"><b>spend {_e(s.get("spend_tokens", 0))} tok</b></a>'
