@@ -59,18 +59,33 @@ _WAKE_PROMPT = (
 )
 
 
+# WAKE ECONOMICS (obligation 4e52af7e): defer non-urgent wakes when the fleet-wide hourly
+# spend nears its ceiling. The scheduler now reads the SAME ledger the chrome displays
+# ('wakes N/h') instead of ignoring it. Urgent mail (the operator's word, or mail old
+# enough that deferral would become starvation) rides through until the hard ceiling.
+_BUDGET_DEFER_AT = 0.8      # the soft ceiling: past this share, only urgent mail wakes
+_URGENT_AGE_SECS = 3600     # deferred this long, mail is urgent by starvation
+
+
 def should_wake(
-    *, enabled: bool, recent_wakes: int, rate_cap: int, within_grace: bool = False
+    *, enabled: bool, recent_wakes: int, rate_cap: int, within_grace: bool = False,
+    hourly_wakes: int = 0, hourly_budget: int = 0, urgent: bool = False,
 ) -> str | None:
     """The bounded decision (pure). Returns a SKIP REASON, or None to WAKE. The kill switch and
     the per-project rate cap are the safety — a ping-pong hits the cap and halts. `within_grace`
     is the double-wake guard: a project woken moments ago is still spawning/mounting (~100s+),
     so its mail only LOOKS unhandled — skip as 'wake-grace', distinct from the 'rate-capped' bound
-    (the cap wins when both apply — the harder signal). grace expiry re-arms the wake."""
+    (the cap wins when both apply — the harder signal). grace expiry re-arms the wake.
+    `hourly_budget` (0 = unmetered) is the fleet-wide hourly wake ceiling: exhausted blocks
+    everything; past the soft ceiling only `urgent` mail wakes (economics, 4e52af7e)."""
     if not enabled:
         return "disabled"
     if recent_wakes >= rate_cap:
         return "rate-capped"
+    if hourly_budget > 0 and hourly_wakes >= hourly_budget:
+        return "budget-exhausted"
+    if hourly_budget > 0 and not urgent and hourly_wakes >= _BUDGET_DEFER_AT * hourly_budget:
+        return "budget-deferred"
     if within_grace:
         return "wake-grace"
     return None
@@ -78,22 +93,25 @@ def should_wake(
 
 async def _projects_with_unread(
     pool: asyncpg.Pool, lease_secs: int
-) -> list[tuple[str, int, str | None]]:
-    """(project, oldest_deliverable_message_id, its_sender) for every project with deliverable
+) -> list[tuple[str, int, str | None, float]]:
+    """(project, oldest_deliverable_message_id, its_sender, age_secs) for every project with
+    deliverable
     BROADCAST mail. DELIVERABLE = no recipient has settled it AND none holds a live lease (mail
     being processed right now would double-spawn if re-woken; lease expiry re-arms). Broadcasts
     only: the wake ensures SOMEONE in the project looks, and a broadcast read by one agent still
     shows in the others' inboxes. DMs rely on pull until agent-precise waking (a later phase).
     The operator desk is skipped — never woken."""
     rows = await pool.fetch(
-        "SELECT DISTINCT ON (m.to_project) m.to_project, m.id, m.from_agent FROM fleet_messages m "
+        "SELECT DISTINCT ON (m.to_project) m.to_project, m.id, m.from_agent, "
+        " extract(epoch FROM (now() - m.created_at)) AS age_secs FROM fleet_messages m "
         "WHERE m.to_project <> $1 AND m.to_agent IS NULL AND m.read_at IS NULL "
         "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
         "  AND r.read_at IS NOT NULL) "
         "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
         "  AND r.delivered_at >= now() - make_interval(secs => $2)) "
         "ORDER BY m.to_project, m.created_at", OPERATOR_ADDR, lease_secs)
-    return [(r["to_project"], r["id"], r["from_agent"]) for r in rows]
+    return [(r["to_project"], r["id"], r["from_agent"], float(r["age_secs"] or 0))
+            for r in rows]
 
 
 async def _recent_wakes(pool: asyncpg.Pool, project: str, window_secs: int) -> int:
@@ -129,11 +147,17 @@ async def wake_status(pool: asyncpg.Pool, project: str, st: Settings) -> str:
     operator address is a desk, not a repo: 'operator (read at the desk, never woken)'."""
     if project == OPERATOR_ADDR:
         return "operator (read at the desk, never woken)"
+    hourly = await pool.fetchval(
+        "SELECT count(*) FROM agent_wakes WHERE woke_at > now() - interval '1 hour'")
     reason = should_wake(
         enabled=st.osiris_trigger_enabled,
         recent_wakes=await _recent_wakes(pool, project, st.osiris_trigger_window_secs),
         rate_cap=st.osiris_trigger_rate_cap,
-        within_grace=await _woken_within(pool, project, st.osiris_trigger_grace_secs))
+        within_grace=await _woken_within(pool, project, st.osiris_trigger_grace_secs),
+        hourly_wakes=int(hourly or 0), hourly_budget=st.osiris_wake_hourly_budget)
+    if reason == "budget-deferred":
+        return "budget-deferred (non-urgent near the hourly ceiling — urgent mail and " \
+               "aged mail still wake)"
     return reason if reason is not None else "armed"
 
 
@@ -327,7 +351,11 @@ async def trigger_mail_tick(
     st = settings or get_settings()
     pool = actions.pool
     report = {"woke": 0, "resumed": 0, "skipped": 0, "owner_live": 0}
-    for project, msg_id, sender in await _projects_with_unread(pool, st.osiris_mail_lease_secs):
+    # the fleet-wide hourly spend — the SAME number the chrome renders as 'wakes N/h'
+    hourly = await pool.fetchval(
+        "SELECT count(*) FROM agent_wakes WHERE woke_at > now() - interval '1 hour'")
+    for project, msg_id, sender, age in await _projects_with_unread(
+            pool, st.osiris_mail_lease_secs):
         if not st.osiris_trigger_enabled:
             report["skipped"] += 1
             continue
@@ -336,9 +364,15 @@ async def trigger_mail_tick(
             continue
         recent = await _recent_wakes(pool, project, st.osiris_trigger_window_secs)
         within_grace = await _woken_within(pool, project, st.osiris_trigger_grace_secs)
+        # urgent = the operator's own word, or mail deferred long enough that another
+        # deferral is starvation (the economics never silently orphan a message)
+        urgent = (sender or "").startswith("operator") or age >= _URGENT_AGE_SECS
         if should_wake(enabled=True, recent_wakes=recent,
                        rate_cap=st.osiris_trigger_rate_cap,
-                       within_grace=within_grace) is not None:
+                       within_grace=within_grace,
+                       hourly_wakes=int(hourly or 0) + report["woke"],
+                       hourly_budget=st.osiris_wake_hourly_budget,
+                       urgent=urgent) is not None:
             report["skipped"] += 1
             continue
         resume = None

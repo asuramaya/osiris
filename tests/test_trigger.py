@@ -32,13 +32,36 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
                            osiris_trigger_window_secs=window, osiris_mail_lease_secs=lease,
                            osiris_trigger_grace_secs=grace, osiris_owner_live_secs=live,
                            osiris_resume_ceiling_bytes=ceiling, osiris_sense_sessions=sense,
-                           osiris_wake_model=wake_model)
+                           osiris_wake_model=wake_model,
+                           osiris_wake_hourly_budget=0)  # unmetered: economics has its own tests
 
 
 def test_should_wake_is_off_by_default_and_rate_capped() -> None:
     assert should_wake(enabled=False, recent_wakes=0, rate_cap=5) == "disabled"    # kill switch
     assert should_wake(enabled=True, recent_wakes=5, rate_cap=5) == "rate-capped"  # the bound
     assert should_wake(enabled=True, recent_wakes=0, rate_cap=5) is None           # → WAKE
+
+
+def test_should_wake_reads_the_hourly_budget(_: None = None) -> None:
+    """Wake economics (obligation 4e52af7e): past the soft ceiling only URGENT mail wakes;
+    at the hard ceiling nothing does; budget 0 = unmetered (the old behavior)."""
+    # unmetered: the budget params change nothing
+    assert should_wake(enabled=True, recent_wakes=0, rate_cap=5,
+                       hourly_wakes=999, hourly_budget=0) is None
+    # under the soft ceiling: wakes flow
+    assert should_wake(enabled=True, recent_wakes=0, rate_cap=5,
+                       hourly_wakes=10, hourly_budget=30) is None
+    # past the soft ceiling (80%): non-urgent defers, urgent rides through
+    assert should_wake(enabled=True, recent_wakes=0, rate_cap=5,
+                       hourly_wakes=24, hourly_budget=30) == "budget-deferred"
+    assert should_wake(enabled=True, recent_wakes=0, rate_cap=5,
+                       hourly_wakes=24, hourly_budget=30, urgent=True) is None
+    # the hard ceiling blocks even urgent mail until the window slides
+    assert should_wake(enabled=True, recent_wakes=0, rate_cap=5,
+                       hourly_wakes=30, hourly_budget=30, urgent=True) == "budget-exhausted"
+    # ranking: the project rate cap is the harder, more specific signal
+    assert should_wake(enabled=True, recent_wakes=5, rate_cap=5,
+                       hourly_wakes=30, hourly_budget=30) == "rate-capped"
 
 
 def test_should_wake_grace_is_distinct_and_ranked_below_the_cap() -> None:

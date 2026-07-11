@@ -20,7 +20,8 @@ model, SAY SO in your first reply. A rug-pull is confessed, never inherited blin
   exports DATABASE_URL). Daemons: `systemctl --user status osiris-pulse osiris-worker`.
 - Orient: MCP `run_composition('briefing')` (socket in `.mcp.json`) — open threads,
   obligations, recent decisions. Design/ops questions: `consult_canon(q)` (canon + essays;
-  try q="ops"). History: grep docs/HISTORY.md — `ref:history-*` is outside mounted canon scope.
+  try q="ops"). History: the dated `ref:history-*` nodes ARE queryable (consult_canon +
+  search, both doors); docs/HISTORY.md is the same record's frozen file form.
 - Write back AS YOU GO: `record_decision` / `open_thread` (kind='obligation' for duties
   an action mints) / `resolve_thread`. A session can die at any instant; anything not
   written back does not exist. The session-miner backfills what you forget (DERIVED),

@@ -121,6 +121,11 @@ class Settings(BaseSettings):
     # full session (obligation + brief instead of grinding it in a haiku). Empty = the CLI's
     # default model (no --model flag passed).
     osiris_wake_model: str = ""
+    # Wake economics (obligation 4e52af7e): the fleet-wide hourly wake ceiling the trigger
+    # reads — the same ledger the chrome displays as 'wakes N/h'. Past 80% of it, only
+    # urgent mail (the operator's word, or mail aged past an hour) wakes; at it, nothing
+    # does until the window slides. 0 = unmetered (the old behavior).
+    osiris_wake_hourly_budget: int = 30
     # The operator's STANDING model choice (the intent). The fable harness silently demotes
     # fable→opus when it senses danger (ruling f2ae6346); the swap-detector flags an observed
     # model that diverges from this — the confession backstop the cold-boot ritual can't be.
