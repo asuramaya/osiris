@@ -206,6 +206,27 @@ async def embed_pass(ctx: dict[str, Any]) -> int:
     return report["embedded"]
 
 
+async def neighborhood_pass(ctx: dict[str, Any]) -> int:
+    """Rung 4's daily walk (ruling a0cfcca1): fold DERIVED echoes into their deliberate
+    captures (mechanical, free), then refresh up to 3 stale neighborhood summaries
+    (fingerprint-watermarked — an unchanged repo costs nothing; metered in llm_usage)."""
+    from src.ingest.providers import llm_provider
+    from src.orchestrator.neighborhoods import consolidate_pass, summarize_neighborhoods
+
+    actions: Actions = ctx["cascade"].actions
+    try:
+        mech = await consolidate_pass(actions)
+        llm = llm_provider()
+        summ = await summarize_neighborhoods(actions, llm) if llm else {}
+    except Exception as exc:  # a model/DB hiccup must not kill the cron
+        _log.warning("neighborhood pass failed: %r", exc)
+        return 0
+    report = {**mech, **summ}
+    if any(report.values()):
+        _log.info("neighborhood pass: %s", report)
+    return int(report.get("summarized", 0)) + int(report.get("threads_merged", 0))
+
+
 async def trigger_mail(ctx: dict[str, Any]) -> int:
     """The mailbox alarm clock: wake an agent in a project that has unread mail (bounded by a
     per-project rate cap; OFF unless osiris_trigger_enabled — the kill switch). A spawn failure
@@ -242,6 +263,9 @@ class WorkerSettings:
         # the semantic index walks behind the miner (offset so they never contend for CPU):
         # fresh text is embedded within ~10 minutes of landing; unchanged graphs cost nothing
         cron(embed_pass, minute=set(range(5, 60, 10)), second={15}, timeout=300),
+        # rung 4 walks nightly in the quiet hour: echo-folding is free, summaries are
+        # budgeted (≤3/pass, stalest-first) and skip-unchanged by fingerprint
+        cron(neighborhood_pass, hour={9}, minute={10}, timeout=480),
         # the mailbox alarm clock: wake an agent for a project with unread mail — bounded by a
         # per-project rate cap, and a no-op unless osiris_trigger_enabled (the kill switch).
         cron(trigger_mail, minute=set(range(0, 60)), second={45}),
