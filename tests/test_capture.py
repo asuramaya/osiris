@@ -287,6 +287,42 @@ async def test_swap_banner_stands_down_before_a_recorded_repo_choice(
         srv._agents.pop(srv._conn_key(ctx), None)
 
 
+async def test_orient_surfaces_the_ancestors_parting_words(actions: Actions) -> None:
+    """Anubis VIII (msg 236): the whisper says 'read orient()'s succession note' but no
+    such field existed — successors reconstructed their inheritance from open threads.
+    orient now surfaces the ancestor's HANDOFF thread and LETTER decision verbatim."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.capture import open_thread, record_decision
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ancestor = "agent:elder-vii"
+    await open_thread(actions, "HANDOFF — the estate is clean; take the rot lint first",
+                      repo="lineageproj", source=ancestor)
+    await record_decision(actions, "LETTER — it was a good day to be the seventh",
+                          kind="choice", repo="lineageproj", source=ancestor)
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:elder-viii", session="elder001", project="lineageproj",
+        model=None, cwd=None, succeeded_from=ancestor)
+    try:
+        out = await srv.orient(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    note = out.get("succession_note")
+    assert note is not None and note["from"] == ancestor
+    texts = " ".join(n["text"] for n in note["notes"])
+    assert "HANDOFF" in texts and "LETTER" in texts
+    assert "parting words" in note["note"]
+
+
 def test_rank_open_threads_orders_obligations_first_and_caps() -> None:
     """The pure ranker (orient's wall → a bounded query): obligations float above ordinary
     threads, the composition's recency order is preserved WITHIN each group (stable sort),

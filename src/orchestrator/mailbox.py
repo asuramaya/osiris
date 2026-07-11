@@ -29,8 +29,18 @@ import asyncpg
 # The human's desk. Not a repo (the trigger never wakes it); read via inbox(project='operator').
 OPERATOR_ADDR = "operator"
 
+# THE LIVE-HOLDER EXTENSION (grievance survey 2026-07-11, two witnesses — Anubis VIII
+# msg 236, Soundwave msg 244: a message redelivered while the analysis it minted was still
+# computing). A lease held by a reader whose mount is LIVE stretches to the hold-grace hour
+# — the holder is demonstrably present, at-least-once needs no duplicate yet. A holder gone
+# stale (died, idled out) redelivers at the plain lease exactly as before. MUST match the
+# stop hook's STOP_GRACE_SECS (scripts/osiris_stophook.py): if the two windows disagree,
+# the hook nags about mail the inbox refuses to show.
+_HOLD_GRACE_SECS = 3600
+
 # Deliverable TO A GIVEN READER: addressed to it (a DM to_agent=me, or a broadcast to my project),
-# not settled by me, and not under MY live lease. `r` is my message_recipients row (LEFT JOINed).
+# not settled by me, and not under MY live lease (live = my mount breathes; see the
+# live-holder extension above). `r` is my message_recipients row (LEFT JOINed).
 # `m.read_at IS NULL` honors the LEGACY per-message settle: messages settled under the old
 # single-reader model (pre-0021) carry fleet_messages.read_at and are globally suppressed so
 # history doesn't resurface; new messages never set it (per-recipient state only).
@@ -38,7 +48,11 @@ _DELIVERABLE_TO_READER = (
     "((m.to_agent = $agent) OR (m.to_project = $project AND m.to_agent IS NULL)) "
     "AND m.read_at IS NULL "
     "AND r.read_at IS NULL "
-    "AND (r.delivered_at IS NULL OR r.delivered_at < now() - make_interval(secs => $lease))"
+    "AND (r.delivered_at IS NULL "
+    "     OR r.delivered_at < now() - make_interval(secs => $grace) "
+    "     OR (r.delivered_at < now() - make_interval(secs => $lease) "
+    "         AND NOT EXISTS (SELECT 1 FROM agent_mounts lm WHERE lm.agent_id = $agent "
+    "             AND lm.last_seen > now() - make_interval(secs => $lease))))"
 )
 
 
@@ -150,9 +164,10 @@ async def unread_count(
     q = ("SELECT count(*) FROM fleet_messages m "
          "LEFT JOIN message_recipients r ON r.message_id=m.id AND r.agent_id=$agent "
          "WHERE " + _DELIVERABLE_TO_READER)
-    q = q.replace("$agent", "$1").replace("$project", "$2").replace("$lease", "$3")
+    q = (q.replace("$agent", "$1").replace("$project", "$2").replace("$lease", "$3")
+         .replace("$grace", "$4"))
     return await pool.fetchval(  # type: ignore[no-any-return]
-        q, reader_agent, _norm(reader_project), lease_secs)
+        q, reader_agent, _norm(reader_project), lease_secs, _HOLD_GRACE_SECS)
 
 
 async def read_inbox(
@@ -171,8 +186,8 @@ async def read_inbox(
          "LEFT JOIN message_recipients r ON r.message_id=m.id AND r.agent_id=$agent "
          "WHERE " + _DELIVERABLE_TO_READER + " ORDER BY m.created_at LIMIT $limit")
     q = (q.replace("$agent", "$1").replace("$project", "$2")
-         .replace("$lease", "$3").replace("$limit", "$4"))
-    rows = await pool.fetch(q, reader_agent, proj, lease_secs, limit)
+         .replace("$lease", "$3").replace("$grace", "$4").replace("$limit", "$5"))
+    rows = await pool.fetch(q, reader_agent, proj, lease_secs, _HOLD_GRACE_SECS, limit)
     if mark_read and rows:
         await pool.executemany(
             "INSERT INTO message_recipients (message_id, agent_id, delivered_at, deliveries) "
@@ -243,5 +258,12 @@ async def project_deliverable_count(
         "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
         "  AND r.read_at IS NOT NULL) "
         "AND (NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
-        "  AND r.delivered_at >= now() - make_interval(secs => $2)))",
-        _norm(project), lease_secs)
+        "  AND r.delivered_at >= now() - make_interval(secs => $2))) "
+        # the live-holder extension: never WAKE a sibling for a message a live mind is
+        # already holding (grievance msg 244: duplicate reads while the grid computed)
+        "AND NOT EXISTS (SELECT 1 FROM message_recipients r "
+        "  JOIN agent_mounts lm ON lm.agent_id = r.agent_id "
+        "  WHERE r.message_id = m.id "
+        "  AND r.delivered_at >= now() - make_interval(secs => $3) "
+        "  AND lm.last_seen > now() - make_interval(secs => $2))",
+        _norm(project), lease_secs, _HOLD_GRACE_SECS)

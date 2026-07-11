@@ -180,6 +180,31 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     caller = str(args.get("caller") or "") or None
     if not q:
         return {"hits": [], "note": "pass q — words, phrases, or \"quoted phrases\""}
+    # THE ID DOOR (Soundwave, msg 244: 'tonight's cross-referencing is all manual memory'):
+    # a bare hex fragment is a RULING/THREAD ID, not vocabulary — look it up by prefix and
+    # answer directly, testimony included. Fleet convention quotes ids by their prefix.
+    frag = q.lower()
+    if re.fullmatch(r"[0-9a-f][0-9a-f-]{5,35}", frag) and \
+            re.fullmatch(r"[0-9a-f]{6,32}", frag.replace("-", "")):
+        idrows = await pool.fetch(
+            "SELECT DISTINCT ON (o.id) o.id, o.type, o.canonical, a.value #>> '{}' AS text, "
+            " a.source_id, a.evidence_class, a.observed_at "
+            "FROM objects o LEFT JOIN current_assertions a ON a.object_id = o.id "
+            " AND a.name IN ('summary','name') "
+            "WHERE o.status = 'active' AND o.id::text LIKE $1 || '%' "
+            "ORDER BY o.id, a.confidence DESC, a.observed_at DESC LIMIT 5", frag)
+        if idrows:
+            hits = [
+                {"id": str(r["id"]), "type": r["type"], "canonical": r["canonical"],
+                 "field": "id", "snippet": (r["text"] or r["canonical"])[:160],
+                 **({"source": r["source_id"], "grade": r["evidence_class"],
+                     "when": r["observed_at"].isoformat()} if r["source_id"] else {}),
+                 "rank": 1.0, "via": "id"}
+                for r in idrows]
+            await pool.execute(
+                "INSERT INTO search_log (query, caller, hits, top_rank, relaxed) "
+                "VALUES ($1,$2,$3,1.0,false)", q, caller, len(hits))
+            return {"hits": hits, "q": q, "note": "id-fragment lookup (prefix match)"}
     # stopword-only / punctuation-only queries parse to an EMPTY tsquery: zero hits by
     # construction, not a recall failure — returning early keeps them OUT of the misses log
     # (they would poison the exact telemetry the embeddings tripwire reads).
@@ -917,6 +942,8 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     ORPHAN-LINK (info-grade: historical edges on non-active objects — expected under
     resolve-on-read, metered as consolidation debt, merge markers excluded),
     STALE-OBLIGATION (open duties older than `stale_days` — duties rot silently),
+    ROT-CANDIDATE (info: open threads whose repo's later commits share their vocabulary —
+    'probably resolved, confirm?' dealt to a mind's triage verbs, never auto-resolved),
     ATTRIBUTION (writes from agent ids the graph never registered — the impersonation
     class, made a standing tripwire)."""
     stale_days = max(1, min(int(args.get("stale_days") or 14), 365))
@@ -1121,6 +1148,61 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                    f"{_cell(r['summary'])}"}
         for r in sorted(th, key=lambda r: r["created_at"])
         if r["st"] == "open" and r["kind"] == "obligation"])
+
+    # ROT-CANDIDATE (info) — an open thread whose repo's COMMITS, landed AFTER the
+    # thread's last movement, share its distinctive vocabulary: the work probably
+    # happened and nobody testified (two witnesses: Metron IV fa918939, Soundwave
+    # b813e389 — 'I re-derive which obligations are actually alive at every mount').
+    # Report-only, ruling 758ded94 intact: the finding DEALS the thread to a mind's
+    # triage verbs; the status change stays testimony, never lint's.
+    from src.ingest.mined import _distinctive
+
+    open_th = await pool.fetch(
+        "SELECT o.id, p.canonical AS repo, "
+        " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
+        "   AND name='summary' ORDER BY confidence DESC, observed_at DESC LIMIT 1) "
+        "   AS summary, "
+        " (SELECT max(a.observed_at) FROM assertions a WHERE a.object_id=o.id) AS moved "
+        "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+        "WHERE o.type='Thread' AND o.status='active' "
+        "AND (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
+        "  AND name='status' ORDER BY confidence DESC, observed_at DESC LIMIT 1) = 'open' "
+        "ORDER BY moved ASC LIMIT 200")
+    rot: list[dict[str, Any]] = []
+    repos = {r["repo"] for r in open_th if r["summary"]}
+    commits: dict[str, list[Any]] = {}
+    for repo in repos:
+        commits[repo] = await pool.fetch(
+            "SELECT o.canonical, o.created_at, "
+            " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
+            "   AND name='summary' ORDER BY confidence DESC, observed_at DESC LIMIT 1) "
+            "   AS summary "
+            "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+            "JOIN objects p ON p.id=l.to_id AND p.canonical=$1 "
+            "WHERE o.type='Commit' AND o.status='active' "
+            "ORDER BY o.created_at DESC LIMIT 300", repo)
+    for r in open_th:
+        if not r["summary"]:
+            continue
+        want = _distinctive(r["summary"])
+        if len(want) < 4:
+            continue  # a thin summary matches everything; never deal it on weak evidence
+        for c in commits.get(r["repo"], ()):
+            if r["moved"] and c["created_at"] <= r["moved"]:
+                continue  # only commits NEWER than the thread's last movement testify
+            got = _distinctive(c["summary"] or "")
+            shared = want & got
+            if len(shared) >= 3 and len(shared) >= 0.4 * len(want):
+                rot.append({
+                    "subject": str(r["id"]),
+                    "detail": f"probably resolved, confirm? open thread "
+                              f"'{_cell(r['summary'])}' — later commit {c['canonical']} "
+                              f"shares its vocabulary ({', '.join(sorted(shared)[:5])}); "
+                              "if truly done: resolve_thread with the commit as the "
+                              "because — your judgment is the testimony"})
+                break
+    land("rot-candidate", "info", rot)
 
     # ATTRIBUTION — writes stamped from an agent id that was never registered as an Agent:
     # the impersonation class (thread 33838160) as a standing tripwire, not a one-off hunt.

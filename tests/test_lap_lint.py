@@ -262,6 +262,37 @@ async def test_lint_orphan_links_stale_duties_and_ghosts(actions: Actions) -> No
     assert "agent:teller" not in {f["subject"] for f in _by_check(out2, "attribution")}
 
 
+async def test_lint_deals_rot_candidates_but_never_resolves(actions: Actions) -> None:
+    """Two witnesses (Metron IV, Soundwave): open threads whose repo's LATER commits share
+    their vocabulary are probably done — the lint deals them as 'confirm?' candidates.
+    Report-only: the thread's status is untouched (758ded94 — testimony, never lint)."""
+    from src.orchestrator.capture import open_thread
+
+    t = "agent:teller"
+    tid = await open_thread(
+        actions, "wire the satellite dispatcher into the vantage scheduler queue",
+        repo="rotproj")
+    assert tid is not None
+    # a LATER commit in the same repo carries the thread's distinctive vocabulary
+    repo = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:rotproj'")
+    c = await actions.create_or_find_object("Commit", "commit:abc123rot", t)
+    await actions.assert_property(
+        c, "summary", "feat: satellite dispatcher wired into the vantage scheduler",
+        t, NOW + timedelta(days=2), 0.9, evidence_class="authoritative_api")
+    await actions.create_link(c, repo, "in_repo", t, NOW + timedelta(days=2), 0.9)
+    out = await _fn(actions, "lint", {})
+    rot = _by_check(out, "rot-candidate")
+    assert len(rot) == 1 and rot[0]["subject"] == str(tid)
+    assert "probably resolved, confirm?" in rot[0]["detail"]
+    assert "commit:abc123rot" in rot[0]["detail"]
+    # the record is UNTOUCHED — the lint dealt a card, it did not play a verb
+    st = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='status' "
+        "ORDER BY confidence DESC, observed_at DESC LIMIT 1", tid)
+    assert st == "open"
+
+
 async def test_lint_is_report_only_and_a_clean_graph_says_so(actions: Actions) -> None:
     """Rule #7 in test form: the lint must not write a single row — a linter that healed
     would be a loop pathology. And silence must be legible: clean checks are NAMED."""

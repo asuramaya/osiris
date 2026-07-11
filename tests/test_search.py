@@ -60,6 +60,21 @@ async def test_stemming_and_phrases_work(actions: Actions) -> None:
     assert (await _search(actions, '"lineage with minted"'))["hits"] == []  # order matters
 
 
+async def test_a_bare_hex_fragment_opens_the_id_door(actions: Actions) -> None:
+    """Soundwave (msg 244): cross-referencing rulings by id was 'all manual memory'. A
+    bare hex fragment is an ID, not vocabulary — prefix lookup answers directly."""
+    await _decision(actions, "decision:iddoor", "the id door answers by prefix",
+                    "agent:a", EvidenceClass.SELF_DECLARED.value)
+    oid = await actions.pool.fetchval(
+        "SELECT id::text FROM objects WHERE canonical='decision:iddoor'")
+    out = await _search(actions, oid[:8])
+    assert out["hits"] and out["hits"][0]["canonical"] == "decision:iddoor"
+    assert out["hits"][0]["via"] == "id" and "id door" in out["hits"][0]["snippet"]
+    assert "id-fragment" in out["note"]
+    # ...and ordinary words are never mistaken for ids ('decide' is not hex)
+    assert (await _search(actions, "decide"))["hits"] == []
+
+
 async def test_a_keyword_bag_relaxes_to_any_term(actions: Actions) -> None:
     """The false-empty repro (agent e46a657e-ii, msg 124): websearch ANDs every term, so
     'Hector background skills experience projects' needs all five words in ONE document —

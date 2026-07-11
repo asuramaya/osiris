@@ -180,6 +180,22 @@ def _job_hint(ctx: Context | None) -> str | None:
     return _sane_job_dir(str(hint) if hint else None)
 
 
+async def _expected_model(pool: asyncpg.Pool, cwd: str | None, proj: str | None) -> str:
+    """The operator's standing model choice for THIS repo — the .osiris file first, then
+    the SoftwareProject's intended_model property (the graph's own .osiris; the standing-
+    choice standdown, Metron IV fa918939), then the box default. Every banner and
+    divergence stamp measures against THIS, so a settled seam is never re-litigated."""
+    exp = read_project_model(cwd)
+    if not exp and proj:
+        exp = await pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a "
+            "JOIN objects o ON o.id=a.object_id "
+            "WHERE o.canonical='repo:' || $1 AND o.type='SoftwareProject' "
+            "AND a.name='intended_model' "
+            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", proj)
+    return str(exp) if exp else get_settings().osiris_expected_model
+
+
 async def _reattach(
     pool: asyncpg.Pool, key: str | None, job: str | None
 ) -> AgentIdentity | None:
@@ -202,7 +218,7 @@ async def _reattach(
         # that stomped a claimed seat back to its session hash on every silent reconnect.
         ident.agent_id = rec.agent_id
     await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
-                         expected_model=settings.osiris_expected_model)
+                         expected_model=await _expected_model(pool, rec.cwd, ident.project))
     if key is not None:
         _agents[key] = ident
         _agents_touched[key] = time.monotonic()
@@ -748,7 +764,7 @@ async def mount(
             # it, so seams and the registration run on the seat's lineage — like _reattach.
             ident.agent_id = bound.agent_id
     await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
-                         expected_model=settings.osiris_expected_model)
+                         expected_model=await _expected_model(pool, cwd, ident.project))
     if key is not None:
         _prune_agents()  # opportunistic: mount is where churn shows up
         _agents[key] = ident
@@ -777,7 +793,7 @@ async def mount(
                                    lease_secs=lease)
     banner = swap_banner(classify_swap(
         ident.model_history, ident.model,
-        expected=read_project_model(cwd) or settings.osiris_expected_model,  # repo intent wins
+        expected=await _expected_model(pool, cwd, ident.project),  # repo intent wins
         anchored=ident.model_method == "job_dir",   # only a true anchor confesses a swap
         deliberate=ident.model_deliberate))         # a /model on the record is never a sin
     seat = await handshake._seat_of(Actions(pool), ident.agent_id)
@@ -872,7 +888,11 @@ async def retire(reason: str = "", ctx: Context | None = None) -> dict[str, Any]
     released = await mounts.release_mounts(pool, ident.agent_id)
     return {"retired": ident.agent_id, "signed_by": signer, "seats_released": released,
             "note": "farewell recorded — the trigger will not reanimate this session; "
-                    "write your succession thread BEFORE you go dark"
+                    "write your succession BEFORE you go dark: a HANDOFF thread "
+                    "(open_thread) and your LETTER (record_decision kind='choice', "
+                    "summary starting 'LETTER — ') — a letter that lives only in mail is "
+                    "not findable by its name, and your successor's orient() surfaces "
+                    "these two verbatim"
                     + (" (certificate notes an HEIR signed for the ancestor)"
                        if signer == "successor" else "")}
 
@@ -1014,24 +1034,38 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
     # THE STANDING-CHOICE STANDDOWN (Metron IV, wave-2 fa918939): a repo whose model
     # choice is SETTLED — a .osiris file, or an intended_model property recorded on the
     # SoftwareProject — must not re-confront every successor with the fleet default.
-    # A settled seam is not even a seam; the banner queries the record before preaching.
-    expected = read_project_model(ident.cwd) if ident else None
-    if ident and not expected and proj:
-        expected = await pool.fetchval(
-            "SELECT a.value #>> '{}' FROM current_assertions a "
-            "JOIN objects o ON o.id=a.object_id "
-            "WHERE o.canonical='repo:' || $1 AND o.type='SoftwareProject' "
-            "AND a.name='intended_model' "
-            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", proj)
+    # A settled seam is not even a seam; every banner consults _expected_model first.
     swap = swap_banner(classify_swap(
         ident.model_history, ident.model,
-        expected=expected or get_settings().osiris_expected_model,
+        expected=await _expected_model(pool, ident.cwd, proj),
         anchored=ident.model_method == "job_dir",
         deliberate=ident.model_deliberate)) if ident else None
     if spawn is not None:
         swap = None  # the seat's swap history is the PARENT's confession duty, not the child's
     away = await mounts.while_away(
         pool, proj, ident.agent_id, _prev_seen.get(ident.agent_id)) if ident else None
+    # THE SUCCESSION NOTE (Anubis VIII, msg 236: 'orient() has no succession-note field —
+    # I reconstructed my inheritance from an open thread'): a successor's orient surfaces
+    # the ancestor's own parting words — its HANDOFF thread and LETTER decision — verbatim,
+    # instead of promising a field that never existed.
+    inheritance = None
+    if ident and ident.succeeded_from:
+        rows = await pool.fetch(
+            "SELECT DISTINCT ON (o.id) o.type, a.value #>> '{}' AS summary, a.observed_at "
+            "FROM current_assertions a JOIN objects o ON o.id = a.object_id "
+            "WHERE a.name = 'summary' AND a.source_id = $1 "
+            "AND a.evidence_class = 'self_declared' "
+            "AND o.type IN ('Thread','Decision') AND o.status = 'active' "
+            "AND (a.value #>> '{}' ILIKE '%handoff%' OR a.value #>> '{}' ILIKE '%letter%') "
+            "ORDER BY o.id, a.confidence DESC, a.observed_at DESC", ident.succeeded_from)
+        picks = sorted(rows, key=lambda r: r["observed_at"], reverse=True)[:2]
+        if picks:
+            inheritance = {
+                "from": ident.succeeded_from,
+                "notes": [{"kind": r["type"].lower(), "text": r["summary"][:800]}
+                          for r in picks],
+                "note": "your ancestor's own parting words — read before taking up work",
+            }
     try:  # one glance line — never let the pulse slow or crash orient
         pulse: str | None = await mounts.fleet_pulse(pool, lease_secs=lease)
     except Exception:  # noqa: BLE001
@@ -1049,6 +1083,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             **({"fleet_pulse": pulse} if pulse else {}),
             **op_mail,
             **({"swap": swap} if swap else {}),
+            **({"succession_note": inheritance} if inheritance else {}),
             **({"while_you_were_away": away} if away else {}),
             **scoped,
             "fleet_open_threads_total": fleet_open,

@@ -14,6 +14,7 @@ from src.orchestrator.mailbox import (
     OPERATOR_ADDR,
     ack_messages,
     in_flight,
+    project_deliverable_count,
     read_inbox,
     send_message,
     unread_count,
@@ -146,6 +147,38 @@ async def test_reply_does_not_ack_someone_elses_mail(actions: Actions) -> None:
     await send_message(p, from_agent="agent:c", from_project="c",
                        body="butting in", reply_to=m["id"])
     assert await unread_count(p, "b", reader_agent=R) == 1  # still b's to settle
+
+
+async def test_live_holder_lease_extends_and_a_dead_holder_redelivers(
+        actions: Actions) -> None:
+    """The live-holder extension (Anubis msg 236 / Soundwave msg 244: redelivered while
+    the minted analysis still computed): a lease held by a LIVE mind stretches to the
+    hold-grace hour — no self-duplicates, no sibling wakes; a holder gone stale redelivers
+    at the plain lease exactly as before; the grace hour is the hard ceiling either way."""
+    from src.orchestrator import mounts
+
+    p = actions.pool
+    holder = "agent:gridworker"
+    await send_message(p, from_agent="agent:x", from_project="a", to_project="grid",
+                       body="compute the discrimination grid")
+    (m,) = await read_inbox(p, "grid", reader_agent=holder)  # leases it
+    # the lease AGES past 15 min (but inside the hour) while the holder computes
+    await p.execute("UPDATE message_recipients SET delivered_at = now() - interval '20 min' "
+                    "WHERE agent_id=$1", holder)
+    await mounts.save_mount(p, job_dir="/h/.claude/jobs/grid0001", agent_id=holder,
+                            project="grid", cwd="/x", model=None, session_key="k")
+    assert await unread_count(p, "grid", reader_agent=holder) == 0    # no self-duplicate
+    assert await project_deliverable_count(p, "grid") == 0            # no sibling wake
+    # the holder DIES (mount goes stale) → the plain lease governs: redelivered at 15 min
+    await p.execute("UPDATE agent_mounts SET last_seen = now() - interval '30 min' "
+                    "WHERE agent_id=$1", holder)
+    assert await unread_count(p, "grid", reader_agent=holder) == 1
+    assert await project_deliverable_count(p, "grid") == 1
+    # a live holder past the GRACE hour is nagged again — the ceiling holds for everyone
+    await p.execute("UPDATE agent_mounts SET last_seen = now() WHERE agent_id=$1", holder)
+    await p.execute("UPDATE message_recipients SET delivered_at = now() - interval '2 hours' "
+                    "WHERE agent_id=$1", holder)
+    assert await unread_count(p, "grid", reader_agent=holder) == 1
 
 
 async def test_send_warns_when_the_thread_peer_already_wrote(actions: Actions) -> None:
