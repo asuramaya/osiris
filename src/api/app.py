@@ -312,7 +312,9 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             "             WHERE a.object_id=o.id "
             "             AND a.name IN ('name','summary','title','rationale') "
             "             AND a.value #>> '{}' ILIKE '%' || tok || '%'))) "
-            "ORDER BY type, created_at DESC LIMIT $4",
+            # recency across ALL types — type-first ordering let two alphabetically early types
+            # eat the whole cap (Decision+Commit = 1500; Threads never appeared)
+            "ORDER BY created_at DESC LIMIT $4",
             case_id,
             type,
             tokens,
