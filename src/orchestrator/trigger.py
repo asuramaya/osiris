@@ -315,16 +315,20 @@ async def _last_wake_mode(pool: asyncpg.Pool, project: str, message_id: int) -> 
 
 async def _spawn_claude(
     repo: str, prompt: str, *, job_dir: str | None = None, resume_session: str | None = None,
-    model: str | None = None,
+    model: str | None = None, allowed_tools: str | None = None,
 ) -> None:
     """Wake an agent: a detached `claude -p` in the repo. RESUME lane: `--resume <session>`
     continues the owner's own session — it pays only for the new mail, not a fresh cosmology
     (thread 9f2ddb44). MINT lane: a fresh process with a synthesized CLAUDE_JOB_DIR — the
-    durable identity anchor a triggered `claude -p` gets from no harness. Fire-and-forget."""
+    durable identity anchor a triggered `claude -p` gets from no harness. Fire-and-forget.
+    `allowed_tools` (thread ba73c0c8): headless -p cannot answer permission prompts — the
+    spawner pre-authorizes the graph tools, or the wake is born with its hands tied."""
     env = os.environ.copy()
     cmd = ["claude", "-p"]
     if model:  # wake economics: triage wakes on a cheaper model; the prompt escalates real work
         cmd += ["--model", model]
+    if allowed_tools:
+        cmd += ["--allowedTools", allowed_tools]
     if resume_session:
         cmd += ["--resume", resume_session]
     if job_dir:
@@ -384,7 +388,8 @@ async def trigger_mail_tick(
                 "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
                 "VALUES ($1,$2,$3,'resume')", project, sender, msg_id)
             await spawn(repo, _RESUME_PROMPT, resume_session=session_id,
-                        model=st.osiris_wake_model or None)
+                        model=st.osiris_wake_model or None,
+                        allowed_tools=st.osiris_wake_allowed_tools or None)
             report["resumed"] += 1
             report["woke"] += 1
             continue
@@ -396,7 +401,8 @@ async def trigger_mail_tick(
             "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
             "VALUES ($1,$2,$3,'mint') RETURNING id", project, sender, msg_id)
         await spawn(repo_path, _WAKE_PROMPT.format(repo=repo_path),
-                    job_dir=_wake_job_dir(wake_id), model=st.osiris_wake_model or None)
+                    job_dir=_wake_job_dir(wake_id), model=st.osiris_wake_model or None,
+                    allowed_tools=st.osiris_wake_allowed_tools or None)
         report["woke"] += 1
 
     # THE DM LANE (fleet mail phase 3, task #61): DELIVER → RESUME → nothing. No mint, ever —
@@ -437,7 +443,8 @@ async def trigger_mail_tick(
             "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
             "VALUES ($1,$2,$3,'dm-resume')", project, sender, msg_id)
         await spawn(repo, _DM_RESUME_PROMPT, resume_session=session_id,
-                    model=st.osiris_wake_model or None)
+                    model=st.osiris_wake_model or None,
+                    allowed_tools=st.osiris_wake_allowed_tools or None)
         report["resumed"] += 1
         report["woke"] += 1
     return report

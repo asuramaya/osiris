@@ -33,7 +33,8 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
                            osiris_trigger_grace_secs=grace, osiris_owner_live_secs=live,
                            osiris_resume_ceiling_bytes=ceiling, osiris_sense_sessions=sense,
                            osiris_wake_model=wake_model,
-                           osiris_wake_hourly_budget=0)  # unmetered: economics has its own tests
+                           osiris_wake_hourly_budget=0,  # unmetered: economics has its own tests
+                           osiris_wake_allowed_tools="mcp__osiris")
 
 
 def test_should_wake_is_off_by_default_and_rate_capped() -> None:
@@ -241,6 +242,43 @@ async def test_spawn_claude_injects_claude_job_dir_into_child_env(monkeypatch: A
     assert captured["args"][:3] == ("claude", "-p", "wake up")
     assert captured["env"]["CLAUDE_JOB_DIR"] == "/tmp/x/jobs/wake-7"
     assert "PATH" in captured["env"]  # inherited the parent environment, not a bare dict
+
+
+async def test_spawn_claude_authorizes_the_graph_hands(monkeypatch: Any) -> None:
+    """The wake permission storm (thread ba73c0c8): headless `claude -p` cannot answer a
+    permission prompt, so in a repo with no stored approval every mcp__osiris__* call is
+    silently denied — the wake dies blind and its mail redelivers forever. The spawner must
+    pre-authorize the hands it asks for: --allowedTools rides in the command."""
+    from src.orchestrator import trigger
+
+    captured: dict[str, Any] = {}
+
+    class _Proc:
+        pid = 4242
+
+    async def _fake_exec(*args: Any, **kwargs: Any) -> _Proc:
+        captured["args"] = args
+        return _Proc()
+
+    monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
+    await trigger._spawn_claude("/repo/demo", "wake up", allowed_tools="mcp__osiris")
+    assert ("--allowedTools", "mcp__osiris") == tuple(captured["args"][2:4])
+    # empty/None = the old behavior: rely on the repo's stored approvals, no flag at all
+    await trigger._spawn_claude("/repo/demo", "wake up", allowed_tools=None)
+    assert "--allowedTools" not in captured["args"]
+
+
+async def test_every_wake_lane_passes_the_allowed_tools(actions: Actions) -> None:
+    """The mint lane (and by the same call shape, both resume lanes) forwards the setting —
+    a wake is born with its graph hands authorized, not hoping for a stored approval."""
+    await _agent_with_mail(actions)
+    captured: list[Any] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        captured.append(kw.get("allowed_tools"))
+
+    rep = await trigger_mail_tick(actions, settings=_settings(enabled=True), spawn=_spawn)
+    assert rep["woke"] == 1 and captured == ["mcp__osiris"]
 
 # --- the dispatch order: DELIVER → RESUME → MINT (thread 9f2ddb44) ---
 

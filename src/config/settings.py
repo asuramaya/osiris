@@ -121,6 +121,14 @@ class Settings(BaseSettings):
     # full session (obligation + brief instead of grinding it in a haiku). Empty = the CLI's
     # default model (no --model flag passed).
     osiris_wake_model: str = ""
+    # Wake HANDS (thread ba73c0c8): a triggered `claude -p` is headless — it cannot answer a
+    # permission prompt, so in a repo with no stored approval every mcp__osiris__* call is
+    # silently DENIED: the wake dies blind, its mail never settles, redelivers, re-wakes (the
+    # 76-thread storm of 2026-07-11). The spawner must authorize the hands it asks for:
+    # this comma/space list is passed as --allowedTools. `mcp__osiris` = every tool of the
+    # osiris server and nothing else (a triage wake needs no Bash, no Edit). Empty = old
+    # behavior (rely on the repo's stored approvals).
+    osiris_wake_allowed_tools: str = "mcp__osiris"
     # Wake economics (obligation 4e52af7e): the fleet-wide hourly wake ceiling the trigger
     # reads — the same ledger the chrome displays as 'wakes N/h'. Past 80% of it, only
     # urgent mail (the operator's word, or mail aged past an hour) wakes; at it, nothing
