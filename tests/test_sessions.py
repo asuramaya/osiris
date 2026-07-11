@@ -738,3 +738,35 @@ async def test_emit_yield_questions_land_with_question_kind(actions: Actions) ->
     kinds = {r["s"]: r["k"] for r in rows}
     assert kinds["should the renderer support live theming, someone wondered"] == "question"
     assert kinds["the exporter is left broken pending the schema fix"] is None
+
+
+async def test_miner_skips_triage_wake_transcripts(actions: Actions, tmp_path: Path) -> None:
+    """TRIAGE-WAKE HUMILITY (miner overmint, 2026-07-11): a one-shot wake settles mail and
+    retires — its transcript is the MAIL's business, not project memory. The 2026-07-11
+    wake storm became 474 echo threads in one day because every doomed wake got mined.
+    The wake prompt's opening line is the marker: no model call, no minting, cursor still
+    advances (crash-safe forward-only sensing is untouched)."""
+    proj = tmp_path / "-home-someone-code-wakerepo"
+    proj.mkdir()
+    t = proj / "wake1.jsonl"
+    t.write_text("\n".join(_dialogue("bootstrap history " * 30, "old " * 30)) + "\n")
+    llm = FakeLLM({"decisions": [], "threads_opened": ["a next step the wake mused about"],
+                   "threads_resolved": [], "obligations": []})
+    rep = await sense_sessions_tick(actions, tmp_path, llm)
+    assert rep["planted"] == 1  # first sight plants at EOF
+
+    with t.open("a") as f:
+        for line in _dialogue(
+            'You have unread Osiris mail. Call mount(cwd="/repo/wakerepo", '
+            "job_dir=$CLAUDE_JOB_DIR), then inbox(peek=true) — settle each message. " * 3,
+            "mounted, read one grievance broadcast, acked it, retiring now. " * 5,
+        ):
+            f.write(line + "\n")
+    rep = await sense_sessions_tick(actions, tmp_path, llm)
+    assert rep.get("wakes_skipped") == 1
+    assert llm.prompts == []  # not even a model call — the yield discipline starts early
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Thread'") == 0
+    # the cursor ADVANCED past the wake chunk: a second tick re-reads nothing
+    rep2 = await sense_sessions_tick(actions, tmp_path, llm)
+    assert rep2["chunks"] == 0 and llm.prompts == []

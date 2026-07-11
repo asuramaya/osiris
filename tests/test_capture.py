@@ -513,11 +513,16 @@ async def test_orient_briefing_ranks_obligations_first_and_caps(actions: Actions
     await actions.assert_property(proj, "name", "ranktest", "session", now, 0.9)
 
     async def _thread(canon: str, summary: str, *, kind: str | None = None) -> uuid.UUID:
+        # DECLARED threads (self_declared): the never-hide duty law only shields what a
+        # mind actually declared — an untouched 400-day "obligation" is a pile-bound guess
         t = await actions.create_or_find_object("Thread", canon, "session")
-        await actions.assert_property(t, "summary", summary, "session", now, 0.9)
-        await actions.assert_property(t, "status", "open", "session", now, 0.9)
+        await actions.assert_property(t, "summary", summary, "session", now, 0.9,
+                                      evidence_class="self_declared")
+        await actions.assert_property(t, "status", "open", "session", now, 0.9,
+                                      evidence_class="self_declared")
         if kind:
-            await actions.assert_property(t, "kind", kind, "session", now, 0.9)
+            await actions.assert_property(t, "kind", kind, "session", now, 0.9,
+                                          evidence_class="self_declared")
         await actions.create_link(t, proj, "in_repo", "session", now, 0.9)
         return t
 

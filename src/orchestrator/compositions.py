@@ -917,9 +917,9 @@ async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
             continue
         if repo and (r["project"] or "").removeprefix("repo:") != repo.removeprefix("repo:"):
             continue
-        # obligations are exempt — a duty must never hide, untouched or not (7336c5fc)
-        if r["kind"] == "question" or (bool(r["untouched"]) and r["kind"] != "obligation"
-                                       and r["created_at"] < cutoff):
+        # a DECLARED duty never hides — declaring touches the thread; a guessed one
+        # joins the pile after its freshness week (overmint ruling, 2026-07-11)
+        if r["kind"] == "question" or (bool(r["untouched"]) and r["created_at"] < cutoff):
             echoes.append({
                 "id": str(r["id"])[:8], "born": r["created_at"].date().isoformat(),
                 "project": (r["project"] or "").removeprefix("repo:") or None,
@@ -1317,11 +1317,13 @@ async def open_thread_wall(
         if r["owner"]:  # whose move it is — absent means anyone's
             item["owner"] = r["owner"]
         # questions never ride the wall (whoever judged them said 'not work'); untouched
-        # DERIVED threads get a freshness window, then collapse until someone triages them.
-        # OBLIGATIONS are exempt — a duty must never hide, untouched or not (7336c5fc).
+        # threads get a freshness window, then collapse until someone triages them.
+        # A DECLARED duty never hides (7336c5fc) — and declaring one TOUCHES the thread,
+        # so the old kind-based exemption only ever protected MINER-GUESSED obligations
+        # (408 guessed vs 108 declared were riding every wall — overmint ruling,
+        # 2026-07-11). A guess gets its loud week, then joins the pile.
         is_echo = r["kind"] == "question" or (
-            bool(r["untouched"]) and r["kind"] != "obligation"
-            and r["created_at"] < cutoff)
+            bool(r["untouched"]) and r["created_at"] < cutoff)
         (echoes if is_echo else wall).append(
             {**item, "born": r["created_at"].date().isoformat()} if is_echo else item)
     echoes.reverse()  # oldest first — triage drains from the bottom of the pile
@@ -1355,11 +1357,7 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         " count(*) FILTER (WHERE EXISTS (SELECT 1 FROM assertions sa "
         "   WHERE sa.object_id=o.id AND sa.evidence_class='self_declared')) AS touched, "
         " count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM assertions sa "
-        "   WHERE sa.object_id=o.id AND sa.evidence_class='self_declared') "
-        "   AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
-        "     WHERE a.object_id=o.id AND a.name='kind' "
-        "     ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'') <> 'obligation') "
-        "   AS pile "
+        "   WHERE sa.object_id=o.id AND sa.evidence_class='self_declared')) AS pile "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
         "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' AND p.status='active' "
         "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
@@ -1392,7 +1390,8 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "    WHERE a.object_id=o.id AND a.name='status' "
         "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
         " ORDER BY o.created_at DESC LIMIT 400) t "
-        "WHERE t.summary IS NOT NULL AND (t.kind='obligation' OR t.touched)")]
+        "WHERE t.summary IS NOT NULL AND (t.touched OR (t.kind='obligation' "
+        "AND t.created_at > now() - make_interval(days => $1)))", ECHO_FRESH_DAYS)]
     shown, more = rank_open_threads(top_rows, me)
     # totals over the WHOLE record — a repo-less thread must count even though the
     # per-project breakdown can't file it
@@ -1403,11 +1402,7 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = 'obligation') "
         "   AS obligations, "
         " count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM assertions sa "
-        "   WHERE sa.object_id=o.id AND sa.evidence_class='self_declared') "
-        "   AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
-        "     WHERE a.object_id=o.id AND a.name='kind' "
-        "     ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'') <> 'obligation') "
-        "   AS pile "
+        "   WHERE sa.object_id=o.id AND sa.evidence_class='self_declared')) AS pile "
         "FROM objects o "
         "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "

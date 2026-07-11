@@ -967,6 +967,18 @@ async def sense_sessions_tick(
                 continue
             chunk_models = models_in(lines)  # provenance: who authored this excerpt
             text, cwd = distill(lines)
+            if text.startswith("OPERATOR: You have unread Osiris mail"):
+                # TRIAGE-WAKE HUMILITY (miner overmint, 2026-07-11): a one-shot wake
+                # settles mail and retires; its 'next steps' prose is the MAIL's business
+                # (settled by reply), not project memory. Minting it amplified the wake
+                # storm into 474 echo threads in one day. Real work a wake spots becomes
+                # a deliberate open_thread by the wake itself (its prompt teaches that) —
+                # SELF_DECLARED, not a miner guess. One-shot wakes are single-chunk; a
+                # multi-chunk wake's later chunks slip through, rare and tolerable.
+                offset = end
+                await set_cursor(pool, key, str(offset))
+                report["wakes_skipped"] = report.get("wakes_skipped", 0) + 1
+                continue
             if len(text) < _MIN_DISTILLED:
                 offset = end  # not worth a model call — advance free
                 await set_cursor(pool, key, str(offset))

@@ -137,3 +137,40 @@ async def test_object_set_can_exclude_the_agent_hulls(
     slim = (await client.get("/objects?limit=100&exclude_types=Agent")).json()
     assert all(o["type"] != "Agent" for o in slim)
     assert any(o["type"] == "Decision" for o in slim)
+
+
+async def test_a_guessed_duty_gets_a_week_then_joins_the_pile(actions: Actions) -> None:
+    """THE PROMOTION BAR (miner overmint, 2026-07-11: 408 miner-guessed obligations vs 108
+    declared were riding every wall forever). A DECLARED duty never hides — declaring it
+    touches the thread. A miner-stamped one rides only its freshness week, then collapses
+    into the pile for triage."""
+    from src.orchestrator.compositions import open_thread_wall
+
+    NOW2 = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:bartest", "session")
+    await actions.assert_property(proj, "name", "bartest", "session", NOW2, 0.9)
+
+    async def mined_obligation(canon: str, summary: str) -> None:
+        t = await actions.create_or_find_object("Thread", canon, "session-miner")
+        for name, val in (("summary", summary), ("status", "open"), ("kind", "obligation")):
+            await actions.assert_property(t, name, val, "session-miner", NOW2, 0.4,
+                                          evidence_class="derived")
+        await actions.create_link(t, proj, "in_repo", "session-miner", NOW2, 0.4,
+                                  evidence_class="derived")
+        return t
+
+    stale = await mined_obligation("thread:guess-old", "a guessed duty from three weeks ago")
+    await actions.pool.execute(
+        "UPDATE objects SET created_at = now() - interval '21 days' WHERE id=$1", stale)
+    await mined_obligation("thread:guess-new", "a guessed duty from this morning")
+    declared = await open_thread(actions, "a declared duty from three weeks ago",
+                                 repo="bartest", kind="obligation", source="agent:me")
+    await actions.pool.execute(
+        "UPDATE objects SET created_at = now() - interval '21 days' WHERE id=$1", declared)
+
+    wall, echoes = await open_thread_wall(actions.pool, proj)
+    on_wall = {w["summary"] for w in wall}
+    in_pile = {e["summary"] for e in echoes}
+    assert "a declared duty from three weeks ago" in on_wall      # declared: never hides
+    assert "a guessed duty from this morning" in on_wall          # guessed: loud week
+    assert "a guessed duty from three weeks ago" in in_pile       # guessed + stale: pile
