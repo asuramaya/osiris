@@ -14,6 +14,7 @@ from src.mcp_server import _project_briefing
 from src.orchestrator.capture import (
     link_repo,
     open_thread,
+    reclassify_thread,
     record_decision,
     record_tension,
     resolve_thread,
@@ -387,6 +388,73 @@ def test_rank_open_threads_orders_obligations_first_and_caps() -> None:
     shown, more = _rank_open_threads(many)
     assert len(shown) == _ORIENT_OPEN_THREADS and more == 5
     assert [r["summary"] for r in shown] == [f"t{i:02d}" for i in range(_ORIENT_OPEN_THREADS)]
+
+
+def test_rank_open_threads_orders_by_whose_move_within_a_kind() -> None:
+    """Owner tags (two grievance witnesses): within the obligations group, what is MINE TO
+    ACT (unowned, or owned by me / my project) rides above another mind's claims, and
+    'waiting on the human' (owner='operator') rides last — visible, never shadowing the
+    reader's own moves. Recency (input order) still breaks ties inside each ownership band."""
+    from src.mcp_server import _rank_open_threads
+
+    me = frozenset({"agent:me", "myproj"})
+    rows = [
+        {"summary": "waiting-on-human", "kind": "obligation", "owner": "operator"},
+        {"summary": "claimed-by-other", "kind": "obligation", "owner": "agent:other"},
+        {"summary": "unowned-duty", "kind": "obligation"},
+        {"summary": "mine-by-agent-id", "kind": "obligation", "owner": "agent:me"},
+        {"summary": "mine-by-project", "kind": "obligation", "owner": "myproj"},
+        {"summary": "ordinary-operator", "kind": None, "owner": "operator"},
+        {"summary": "ordinary-unowned", "kind": None},
+    ]
+    shown, _ = _rank_open_threads(rows, me)
+    assert [r["summary"] for r in shown] == [
+        "unowned-duty", "mine-by-agent-id", "mine-by-project",  # mine to act, recency order
+        "claimed-by-other",                                     # another mind's claim
+        "waiting-on-human",                                     # the human's move, still shown
+        "ordinary-unowned", "ordinary-operator",                # non-obligations, same bands
+    ]
+
+
+async def test_owner_tag_persists_and_rides_the_wall(actions: Actions) -> None:
+    """End to end: open_thread(owner='operator') stamps the property; the wall renders the
+    tag and sinks the waiting-on-human duty below an unowned one for any reader; the owner
+    key is ABSENT (not null) on unowned rows. reclassify_thread(owner=...) claims later."""
+    from src.mcp_server import _project_briefing
+
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:owntest", "session")
+    await actions.assert_property(proj, "name", "owntest", "session", now, 0.9)
+
+    waiting = await open_thread(actions, "waiting on the human's gemini key",
+                                repo="owntest", kind="obligation", owner="operator",
+                                source="agent:me")
+    await open_thread(actions, "an unowned duty anyone may take",
+                      repo="owntest", kind="obligation", source="agent:me")
+    await open_thread(actions, "a kindless mined commitment", repo="owntest",
+                      source="agent:me")
+
+    await seed_default_compositions(actions.pool)
+    scoped = await _project_briefing(actions.pool, "owntest",
+                                     me=frozenset({"agent:me", "owntest"}))
+    assert scoped is not None
+    wall = scoped["open_threads"]
+    assert [r["summary"] for r in wall] == [
+        "an unowned duty anyone may take", "waiting on the human's gemini key",
+        "a kindless mined commitment"]
+    assert wall[1]["owner"] == "operator" and "owner" not in wall[0]
+    # undeclared kind renders ABSENT, not null — no mind said what it is (Fulcrum III,
+    # answered at the lens: the record is untouched, the wall stops printing null noise)
+    assert "kind" not in wall[2] and wall[0]["kind"] == "obligation"
+
+    # triage claims an existing thread: the tag updates and re-banks the row
+    got = await reclassify_thread(actions, str(waiting), kind="obligation",
+                                  owner="agent:me", source="agent:me")
+    assert got == waiting
+    scoped = await _project_briefing(actions.pool, "owntest",
+                                     me=frozenset({"agent:me", "owntest"}))
+    assert scoped is not None
+    assert all(r.get("owner") in (None, "agent:me") for r in scoped["open_threads"])
 
 
 async def test_orient_briefing_ranks_obligations_first_and_caps(actions: Actions) -> None:

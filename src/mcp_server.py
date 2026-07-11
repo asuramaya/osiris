@@ -915,13 +915,24 @@ async def retire(reason: str = "", ctx: Context | None = None) -> dict[str, Any]
 _ORIENT_OPEN_THREADS = 25
 
 
-def _rank_open_threads(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+def _rank_open_threads(
+    rows: list[dict[str, Any]], me: frozenset[str] = frozenset(),
+) -> tuple[list[dict[str, Any]], int]:
     """Rank the project's open threads for orient and cap the display. Obligations — DUTIES an
-    action minted (kind='obligation') — float above ordinary threads; the composition's
-    recency-desc order breaks ties WITHIN each group (Python's sort is stable). Returns the
-    capped list + how many more exist beyond it. Pure — the ordering is trivially testable."""
+    action minted (kind='obligation') — float above ordinary threads. WITHIN each kind group,
+    ownership orders the wall for the READER (`me` = the caller's agent id + project): what
+    is MINE TO ACT (unowned, or owned by me/my project) rides first, another mind's claims
+    next, and 'waiting on the human' (owner='operator') last — visible, tagged, but never
+    shadowing the reader's own moves. The composition's recency-desc order breaks remaining
+    ties (Python's sort is stable). Returns the capped list + how many more exist beyond it.
+    Pure — the ordering is trivially testable."""
+    def whose_move(r: dict[str, Any]) -> int:
+        owner = (r.get("owner") or "").strip()
+        if not owner or owner in me:
+            return 0  # mine to act (unowned = anyone who reads it may act)
+        return 2 if owner == "operator" else 1
     summ = [r for r in rows if r.get("summary")]
-    ranked = sorted(summ, key=lambda r: r.get("kind") != "obligation")  # obligations (False) first
+    ranked = sorted(summ, key=lambda r: (r.get("kind") != "obligation", whose_move(r)))
     shown = ranked[:_ORIENT_OPEN_THREADS]
     return shown, len(ranked) - len(shown)
 
@@ -945,6 +956,9 @@ async def _open_thread_wall(
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='kind' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='owner' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS owner, "
         " NOT EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
         "   AND sa.evidence_class='self_declared') AS untouched "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
@@ -959,7 +973,15 @@ async def _open_thread_wall(
     for r in rows:
         if not r["summary"]:
             continue
-        item = {"id": str(r["id"])[:8], "summary": r["summary"], "kind": r["kind"]}
+        # kind/owner render only when DECLARED (no null-key noise): an absent kind means no
+        # mind — and no mechanical rule — ever said what this is (the miner deliberately
+        # leaves mined commitments kind-less; backfilling 636 of them would testify above
+        # witness — Fulcrum III's ask, answered at the lens, verdict 2026-07-11).
+        item = {"id": str(r["id"])[:8], "summary": r["summary"]}
+        if r["kind"]:
+            item["kind"] = r["kind"]
+        if r["owner"]:  # whose move it is — absent means anyone's
+            item["owner"] = r["owner"]
         # questions never ride the wall (whoever judged them said 'not work'); untouched
         # DERIVED threads get a freshness window, then collapse until someone triages them.
         # OBLIGATIONS are exempt — a duty must never hide, untouched or not (7336c5fc).
@@ -972,7 +994,9 @@ async def _open_thread_wall(
     return wall, echoes
 
 
-async def _project_briefing(pool: asyncpg.Pool, project: str) -> dict[str, Any] | None:
+async def _project_briefing(
+    pool: asyncpg.Pool, project: str, me: frozenset[str] = frozenset(),
+) -> dict[str, Any] | None:
     """A working agent's SCOPED bearings — its OWN project's open threads + recent decisions,
     not the whole fleet's (decepticons surfaced that orient's flood costs more context than it
     saves). Decisions/tensions ride the `project-briefing` composition (#20); the open-thread
@@ -990,7 +1014,7 @@ async def _project_briefing(pool: asyncpg.Pool, project: str) -> dict[str, Any] 
     if not isinstance(items, dict):  # unseeded / error — never crash orient, just show empty
         items = {}
     wall, echoes = await _open_thread_wall(pool, proj)
-    shown, more = _rank_open_threads(wall)
+    shown, more = _rank_open_threads(wall, me)
     out: dict[str, Any] = {
         "open_threads": shown,
         "recent_decisions": [r for r in (items.get("recent_decisions") or []) if r.get("summary")],
@@ -998,7 +1022,8 @@ async def _project_briefing(pool: asyncpg.Pool, project: str) -> dict[str, Any] 
     }
     if more > 0:  # trailing count so a capped wall never hides work silently (membrane, #6)
         out["open_threads_note"] = (
-            f"showing {len(shown)} of {len(shown) + more} open threads (obligations first, "
+            f"showing {len(shown)} of {len(shown) + more} open threads (obligations first; "
+            "within a kind, yours-to-act before others' claims before waiting-on-the-human, "
             f"then recency); {more} more not shown")
     if echoes:
         out["unread_echoes"] = {
@@ -1099,7 +1124,10 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         pulse: str | None = await mounts.fleet_pulse(pool, lease_secs=lease)
     except Exception:  # noqa: BLE001
         pulse = None
-    scoped = await _project_briefing(pool, proj) if proj else None
+    # the reader's identity feeds the wall's ownership ordering: what is MINE TO ACT rides
+    # above another mind's claims and above 'waiting on the human'
+    me = frozenset(x for x in ((ident.agent_id if ident else None), proj) if x)
+    scoped = await _project_briefing(pool, proj, me=me) if proj else None
     if scoped is not None:
         fleet_open = await pool.fetchval(
             "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "
@@ -1493,6 +1521,7 @@ async def ingest_reference(
 @mcp.tool()
 async def open_thread(
     summary: str, repo: str | None = None, kind: str | None = None,
+    owner: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, str]:
@@ -1501,9 +1530,12 @@ async def open_thread(
     files it under a SoftwareProject. Idempotent on the summary. This is how a session hands
     off its loose ends instead of losing them. `kind='obligation'` marks a DUTY minted by an
     action ('kernel changed → daemons need restart') — record those the moment they're minted;
-    they are neither rulings nor commits and otherwise die with the context window."""
+    they are neither rulings nor commits and otherwise die with the context window.
+    `owner` says WHOSE MOVE it is: 'operator' = blocked on the human, 'agent:<id>' = a
+    specific mind, a project name = any hand there; unowned = anyone who reads it may act.
+    orient sorts your wall by it — yours-to-act above waiting-on-the-human."""
     t = await capture.open_thread(
-        Actions(await _pool_get()), summary, repo=repo, kind=kind,
+        Actions(await _pool_get()), summary, repo=repo, kind=kind, owner=owner,
         source=await _actor_for(ctx, subagent_id, subagent_type)
     )
     return {"id": str(t), "summary": summary, "status": "open"}
@@ -1528,7 +1560,8 @@ async def resolve_thread(
 
 @mcp.tool()
 async def reclassify_thread(
-    ref: str, kind: str, because: str | None = None, subagent_id: str | None = None,
+    ref: str, kind: str, because: str | None = None, owner: str | None = None,
+    subagent_id: str | None = None,
     subagent_type: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
     """Triage a thread WITHOUT changing its status (untouched is not resolved — ruling
@@ -1537,9 +1570,11 @@ async def reclassify_thread(
     question back to a question (stays open and searchable, leaves the work wall),
     `kind='task'` marks ordinary work. `ref` is a UUID, an 8-char short id, or a summary
     substring; `because` records your judgment. SELF_DECLARED — your testimony outranks the
-    miner's guess. Use resolve_thread instead when the work is actually done or moot."""
+    miner's guess. Use resolve_thread instead when the work is actually done or moot.
+    `owner` optionally CLAIMS the thread in the same act ('operator' / 'agent:<id>' /
+    a project name) — triage is where an existing thread learns whose move it is."""
     t = await capture.reclassify_thread(
-        Actions(await _pool_get()), ref, kind=kind, because=because,
+        Actions(await _pool_get()), ref, kind=kind, because=because, owner=owner,
         source=await _actor_for(ctx, subagent_id, subagent_type))
     if t is None:
         return {"error": f"no thread matched {ref!r}"}

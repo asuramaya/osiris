@@ -187,7 +187,7 @@ async def ingest_reference(
 
 async def open_thread(
     actions: Actions, summary: str, *, repo: str | None = None, kind: str | None = None,
-    source: str = _SOURCE,
+    owner: str | None = None, source: str = _SOURCE,
 ) -> uuid.UUID:
     """Open a thread at source — an unresolved question / next-step for the next session
     to inherit. Same shape as a mined Thread (props summary + status=open) so it appears in
@@ -197,7 +197,12 @@ async def open_thread(
     action ("kernel changed → daemons need restart") — neither a ruling nor ordinary work,
     exactly the thing that used to die with the context window. Same Thread shape, so it
     surfaces in briefing beside the rest; the kind stays as data for filtering. `source`
-    attributes the opening actor (a fleet agent vs the lone `session`)."""
+    attributes the opening actor (a fleet agent vs the lone `session`).
+
+    `owner` says WHOSE MOVE it is (two grievance witnesses: 'mine to act' vs 'waiting on
+    the human' were illegible on the wall): 'operator' = blocked on the human's word or
+    hands; 'agent:<id>' = a specific mind; a bare project name = any hand on that project.
+    Unowned = anyone who reads it may act. The lens sorts by it; the record just keeps it."""
     observed = datetime.now(UTC)
     # ONE transaction (see record_decision): Thread + summary + status(+kind)(+repo) atomic —
     # never a status-less or summary-less thread husk from a mid-sequence death.
@@ -209,6 +214,9 @@ async def open_thread(
                                 evidence_class=_EC)
         if kind:
             await a.assert_property(t, "kind", kind, source, observed, _CONF,
+                                    evidence_class=_EC)
+        if owner:
+            await a.assert_property(t, "owner", owner.strip(), source, observed, _CONF,
                                     evidence_class=_EC)
         if repo:
             await link_repo(a, t, repo, observed, source=source, evidence_class=_EC)
@@ -247,7 +255,7 @@ _TRIAGE_KINDS = ("obligation", "question", "task")
 
 async def reclassify_thread(
     actions: Actions, ref: str, *, kind: str, because: str | None = None,
-    source: str = _SOURCE,
+    owner: str | None = None, source: str = _SOURCE,
 ) -> uuid.UUID | None:
     """Triage a thread WITHOUT lying about its state (ruling 758ded94: untouched ≠ resolved).
     Reclassification is TESTIMONY — a mind read the thread and judged what it IS: adopt a
@@ -255,7 +263,8 @@ async def reclassify_thread(
     question (kind='question'), or mark it an ordinary task. The status is untouched: a
     question stays OPEN in the record; the LENS ranks it out of the work wall. SELF_DECLARED
     (outranks the miner's DERIVED kind), event-sourced, reversible. Returns the thread id,
-    or None if `ref` matched nothing."""
+    or None if `ref` matched nothing. `owner` optionally CLAIMS the thread in the same act
+    (see open_thread) — triage is where an existing thread learns whose move it is."""
     if kind not in _TRIAGE_KINDS:
         raise ValueError(f"kind must be one of {_TRIAGE_KINDS}")
     tid = await _find_thread(actions.pool, ref)
@@ -264,6 +273,9 @@ async def reclassify_thread(
     observed = datetime.now(UTC)
     await actions.assert_property(tid, "kind", kind, source, observed, _CONF,
                                   evidence_class=_EC)
+    if owner:
+        await actions.assert_property(tid, "owner", owner.strip(), source, observed, _CONF,
+                                      evidence_class=_EC)
     if because:
         await actions.assert_property(tid, "reclassified_because", because, source, observed,
                                       _CONF, evidence_class=_EC)
