@@ -196,6 +196,32 @@ async def _expected_model(pool: asyncpg.Pool, cwd: str | None, proj: str | None)
     return str(exp) if exp else get_settings().osiris_expected_model
 
 
+async def _wake_economy_standdown(
+    pool: asyncpg.Pool, proj: str | None, observed: str | None,
+) -> str | None:
+    """The WAKE-ECONOMY standdown (pokex, msg 281): triage wakes ride a CHEAPER model by the
+    operator's own ruling (osiris_wake_model, 4e52af7e) — but the swap banner measured them
+    against the repo's standing choice, so every wake was told it had been rug-pulled and
+    dutifully 'escalated' the operator's own policy back to his desk, at wake cadence. If
+    the observed model IS the economy model and this project's wake ledger shows a wake
+    minutes ago, the divergence is the ruling WORKING: the banner stands down to a calm
+    note. The note still tells a non-wake how to tell the difference — witnessed (the
+    ledger), never assumed."""
+    st = get_settings()
+    if not st.osiris_wake_model or observed != st.osiris_wake_model or not proj:
+        return None
+    woken = await pool.fetchval(
+        "SELECT 1 FROM agent_wakes WHERE to_project=$1 "
+        "AND woke_at > now() - interval '30 minutes' LIMIT 1", proj)
+    if not woken:
+        return None
+    return (f"model {observed}: the TRIAGE-WAKE ECONOMY model — the operator's own ruling "
+            "(wakes ride a cheaper model; real work escalates to a full session: "
+            "open_thread(kind='obligation') + a pointer reply). Deliberate, not a rug-pull; "
+            "no confession owed. If you are NOT a triggered wake, treat this as a real swap "
+            "and say so to the operator.")
+
+
 async def _reattach(
     pool: asyncpg.Pool, key: str | None, job: str | None
 ) -> AgentIdentity | None:
@@ -844,7 +870,8 @@ async def mount(
             "confess the inheritance to the operator, and read while_you_were_away before "
             "claiming any earlier 'I'.")
     if banner:  # the graph confesses the swap the agent's own prompt hides (ruling f2ae6346)
-        out["swap"] = banner
+        out["swap"] = (await _wake_economy_standdown(pool, ident.project, ident.model)
+                       or banner)
     if ident.reanimated:  # bug #51 follow-up (decepticons msg 69): mounted a RETIRED identity
         out["reanimation"] = (
             f"⚠ REANIMATION: {ident.agent_id} was RETIRED, and this mount is wearing it again. "
@@ -1079,6 +1106,8 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         deliberate=ident.model_deliberate)) if ident else None
     if spawn is not None:
         swap = None  # the seat's swap history is the PARENT's confession duty, not the child's
+    if swap and ident:  # a triage wake on the economy model is policy, not a rug-pull
+        swap = await _wake_economy_standdown(pool, proj, ident.model) or swap
     away = await mounts.while_away(
         pool, proj, ident.agent_id, _prev_seen.get(ident.agent_id)) if ident else None
     # THE SUCCESSION NOTE (Anubis VIII, msg 236: 'orient() has no succession-note field —

@@ -288,6 +288,47 @@ async def test_swap_banner_stands_down_before_a_recorded_repo_choice(
         srv._agents.pop(srv._conn_key(ctx), None)
 
 
+async def test_swap_banner_stands_down_for_a_triage_wake_on_the_economy_model(
+        actions: Actions, monkeypatch) -> None:
+    """The wake-economy false alarm (pokex, msg 281): triage wakes ride a cheaper model by
+    the operator's OWN ruling (osiris_wake_model), yet the swap banner measured them against
+    the standing choice — every wake 'escalated' policy as a rug-pull. When the observed
+    model IS the economy model and the wake ledger witnesses a wake minutes ago, the banner
+    stands down to a calm policy note; with no wake on the ledger, the real banner stays."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    monkeypatch.setenv("OSIRIS_WAKE_MODEL", "claude-haiku-4-5-20251001")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    await actions.create_or_find_object("SoftwareProject", "repo:wakeland", "session")
+    ident = AgentIdentity(agent_id="agent:wake-9", session="wake0001", project="wakeland",
+                          model="claude-haiku-4-5-20251001", cwd=None, model_method="job_dir",
+                          model_history=("claude-haiku-4-5-20251001",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = ident
+    try:
+        # no wake on the ledger: the divergence banner stands (a real swap must not hide
+        # behind the economy model)
+        out = await srv.orient(ctx=ctx)
+        assert out.get("swap") and "ECONOMY" not in out["swap"]
+        # the ledger witnesses a wake → the banner stands down to the policy note
+        await actions.pool.execute(
+            "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+            "VALUES ('wakeland','agent:sender',1,'mint')")
+        out2 = await srv.orient(ctx=ctx)
+        assert "ECONOMY" in out2.get("swap", "") and "not a rug-pull" in out2["swap"]
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+
 async def test_orient_surfaces_the_ancestors_parting_words(actions: Actions) -> None:
     """Anubis VIII (msg 236): the whisper says 'read orient()'s succession note' but no
     such field existed — successors reconstructed their inheritance from open threads.

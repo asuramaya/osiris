@@ -40,8 +40,11 @@ _WAKE_JOB_ROOT = Path(tempfile.gettempdir()) / "osiris-wakes"
 
 _WAKE_PROMPT = (
     'You have unread Osiris mail. Call mount(cwd="{repo}", job_dir=$CLAUDE_JOB_DIR), then '
-    "inbox(), then act on what it asks. Write back as you go (record_decision / open_thread / "
-    "resolve_thread). SETTLE each message you have handled — reply with send(reply_to=<id>) "
+    "inbox(peek=true) — a peek leases nothing, and you can settle straight from it: "
+    "inbox(ack=[the ids you rendered]) for FYI/no-action mail; only lease (non-peek) what "
+    "needs deeper handling. Act on what it asks. Write back as you go (record_decision / "
+    "open_thread / resolve_thread). SETTLE each message you have handled — reply with "
+    "send(reply_to=<id>) "
     "or ack with inbox(ack=[ids]); unsettled mail redelivers and re-wakes you. Reply ONLY if "
     "it carries NEW information — never an acknowledgement-only message (that would just wake "
     "the sender again). REPORT UP (the operator must see the loop close): when this exchange "
