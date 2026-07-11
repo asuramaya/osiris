@@ -317,6 +317,17 @@ async def test_desk_folds_same_story_across_senders(actions: Actions) -> None:
     assert folded["same_story"]["count"] == 3
     assert {m["project"] for m in folded["same_story"]["also"]} == {"rotten-apple", "Like-Us"}
     assert "neo" in folded["body"]  # newest telling leads
+    # ONE sender's similar briefs never same-story fold (their lane is reply_to thread-fold):
+    # the false-fold guard — same-story means one condition, SEVERAL witnesses (live desk
+    # false pair 300 vs 237 measured 0.294; threshold 0.30 + this guard)
+    solo_story = "the quokka pipeline stalled at stage {} — retry budget exhausted, halting"
+    for stage in ("four", "five"):
+        await send_message(p, from_agent="agent:q", from_project="tony",
+                           to_project=OPERATOR_ADDR, body=solo_story.format(stage),
+                           desk_kind="fyi")
+    desk2 = await read_desk(p)
+    quokka = [c for c in desk2["fyi"] if "quokka" in c["body"]]
+    assert len(quokka) == 2 and all("same_story" not in c for c in quokka)
 
 
 async def test_desk_thread_fold_newest_brief_speaks_for_the_thread(actions: Actions) -> None:

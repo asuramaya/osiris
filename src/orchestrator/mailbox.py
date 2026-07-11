@@ -284,10 +284,13 @@ async def project_deliverable_count(
 
 DESK_KINDS = ("decision", "hands", "fyi")
 
-# same-story threshold: pg_trgm similarity between two briefs describing one fleet-wide
-# condition (measured on the 2026-07-11 model-divergence five: pairwise 0.28–0.5) vs
-# unrelated desk briefs (< 0.15). 0.25 folds the storm without folding strangers.
-_SAME_STORY_SIM = 0.25
+# same-story threshold: pg_trgm similarity MEASURED on the live desk (2026-07-11): the
+# model-divergence five pair at 0.32–0.44; the worst FALSE pair (two long technical briefs
+# sharing engine vocabulary, 300 vs 237) at 0.294. 0.30 splits them — thin, so the sender
+# guard below carries half the load: same-story means one condition SEVERAL witnesses
+# reported, so two briefs from ONE sender never same-story fold (their lane is the
+# thread-fold via reply_to, which the wake prompt teaches).
+_SAME_STORY_SIM = 0.30
 
 
 def classify_brief(body: str, desk_kind: str | None) -> str:
@@ -334,10 +337,13 @@ async def _same_story_clusters(
         return cards
     ids = [c["id"] for c in cards]
     bodies = [c["body"] for c in cards]
-    pairs = await pool.fetch(
+    sender = {c["id"]: c["from"] for c in cards}
+    pairs = [p for p in await pool.fetch(
         "WITH b AS (SELECT unnest($1::bigint[]) AS id, unnest($2::text[]) AS body) "
         "SELECT a.id AS ida, c.id AS idb FROM b a JOIN b c ON a.id < c.id "
         "WHERE similarity(a.body, c.body) > $3", ids, bodies, _SAME_STORY_SIM)
+        # several WITNESSES, one condition: a single sender's repeats are thread-fold's lane
+        if sender[p["ida"]] != sender[p["idb"]]]
     parent: dict[int, int] = {i: i for i in ids}
 
     def find(x: int) -> int:
