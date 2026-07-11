@@ -788,6 +788,30 @@ async def _deliberate_summaries(pool: asyncpg.Pool, origin: str) -> dict[str, li
     return out
 
 
+_RESOLVED_LOOKBACK_DAYS = 21  # how far back a finished thread still jaws the dup-gate
+
+
+async def _resolved_summaries(pool: asyncpg.Pool) -> list[str]:
+    """Summaries of threads RESOLVED within the lookback window — the second jaw of the
+    dup-gate (XVIII's re-echo forensics, 2026-07-11): as the cursor chews a LONG session,
+    later chunks re-describe work that finished earlier, and `_deliberate_summaries` alone
+    can't see it — the resolved thread's SUMMARY often belongs to another source (the miner's
+    own earlier echo, another agent), so the miner re-minted reworded copies of finished work
+    onto the wall. ANY resolver counts: the candidate is a dup of the WORK, not of one
+    author's words. Fleet-wide but time-bounded, so the in-memory comparison set stays small;
+    the resolved thread itself keeps its record — this only stops a fresh reworded twin."""
+    rows = await pool.fetch(
+        "SELECT a.value #>> '{}' AS summary "
+        "FROM current_assertions a JOIN objects o ON o.id = a.object_id "
+        "WHERE o.type = 'Thread' AND a.name = 'summary' AND EXISTS ("
+        "  SELECT 1 FROM current_assertions s WHERE s.object_id = o.id AND s.name = 'status' "
+        "  AND s.value #>> '{}' = 'resolved' "
+        "  AND s.observed_at > now() - make_interval(days => $1))",
+        _RESOLVED_LOOKBACK_DAYS,
+    )
+    return [r["summary"] for r in rows if r["summary"]]
+
+
 async def emit_yield(
     actions: Actions, y: SessionYield, *, repo: str | None,
     observed: datetime | None = None, source_model: str | None = None,
@@ -811,6 +835,10 @@ async def emit_yield(
     # this session's OWN deliberate captures — a fresh extraction must not re-mint a reworded
     # copy of what the agent already recorded at SELF_DECLARED (the miner over-read, f34c572c).
     prior = await _deliberate_summaries(actions.pool, origin) if origin else {}
+    # ...and recently-FINISHED work: a long session's later chunks re-describe threads that
+    # were already resolved — without this jaw the miner re-mints them reworded (XVIII's
+    # re-echo batches, 2026-07-11). Threads/obligations only; a Decision is not work to redo.
+    prior_threads = [*prior.get("Thread", ()), *await _resolved_summaries(actions.pool)]
     # re-home each item to the project it NAMES, not the session's cwd (the provenance fix).
     known = await _known_projects(actions.pool, repo) if repo else {}
     for d in y.decisions:
@@ -840,7 +868,7 @@ async def emit_yield(
     for t in y.threads_opened:
         text, cls = (t["summary"], t.get("class", "question")) if isinstance(t, dict) \
             else (t, "commitment")
-        if _dup_of_deliberate(text, prior.get("Thread", ())):
+        if _dup_of_deliberate(text, prior_threads):
             counts["skipped_dup"] += 1
             continue
         # questions carry kind='question': remembered, searchable, but ranked OUT of the
@@ -855,7 +883,7 @@ async def emit_yield(
         else:
             counts["skipped_foreign"] += 1
     for text in y.obligations:
-        if _dup_of_deliberate(text, prior.get("Thread", ())):
+        if _dup_of_deliberate(text, prior_threads):
             counts["skipped_dup"] += 1
             continue
         tid = await _emit_thread(actions, text, kind="obligation", observed=observed,

@@ -247,6 +247,7 @@ async def register_swarm(
         await prop("is_sidechain", True)
         await prop("last_active", s.last_active.isoformat())  # lifecycle: live vs historical
         await prop("backed_by_observation", s.backed_by_observation)  # credence rebuttal signal
+        await prop("spawn_witnessed", True)  # scanned FROM its transcript — witnessed by definition
         if s.agent_type:
             await prop("agent_type", s.agent_type)
         if s.description:
@@ -291,6 +292,7 @@ async def register_spawn(
     agent_type: str | None = None, parent_agent: str | None = None,
     project: str | None = None, session: str | None = None,
     transcript: Path | None = None, done: bool = False,
+    witnessed: bool | None = None,
 ) -> str | None:
     """Register ONE spawn the moment a hook sees it (the PreToolUse write-stamp, or
     SubagentStart/SubagentStop) — the LIVE half of register_swarm, so a spawn exists in the
@@ -299,7 +301,19 @@ async def register_spawn(
     full-tree pass later refines a sibling-spawned child's true parent — find-or-create means
     it converges on this object, never twins it), `acts_for` → the parent's principal.
     `transcript` (SubagentStop hands the child's own file) adds the OBSERVED model; `done`
-    stamps last_active. Returns the child's agent id, or None on an unusable raw id."""
+    stamps last_active. Returns the child's agent id, or None on an unusable raw id.
+
+    `witnessed` — did anything beyond the harness's ANNOUNCEMENT evidence this child? The
+    ghost-spawn law (ruling 708a972d): this layer writes at DIRECT_OBSERVATION grade, so it
+    must never testify above what it witnessed — Claude Code fires SubagentStart for
+    ephemeral internal sidechains whose transcript never materializes, and registering one
+    as a full child turned harness noise into an identity scare. Pass witnessed=True from
+    paths where the child itself is acting (a hook-stamped tool call IS an observed act);
+    a `transcript` argument folds in the disk truth (the file existing is a witness too,
+    and an announcement whose named path never materialized stamps False — but an already-
+    witnessed act is never un-witnessed by an unflushed file); leave None to stamp nothing.
+    Distinct from `backed_by_observation` (the credence layer's look-vs-hearsay signal):
+    unwitnessed means we never saw the child AT ALL, not that it only heard its children."""
     rid = normalize_spawn_id(raw_id)
     if rid is None:
         return None
@@ -331,6 +345,11 @@ async def register_spawn(
         model = await asyncio.to_thread(_read_model)
         if model:
             await prop("source_model", model)
+        # the disk is a witness: a path the harness named but never materialized stamps the
+        # spawn unwitnessed (ghost-spawn law, 708a972d) — unless an act was already seen
+        witnessed = bool(witnessed) or await asyncio.to_thread(transcript.is_file)
+    if witnessed is not None:
+        await prop("spawn_witnessed", witnessed)
     if done:
         await prop("last_active", now.isoformat())
     if parent_agent:

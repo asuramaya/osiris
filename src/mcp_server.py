@@ -264,7 +264,8 @@ async def _actor_for(
             Actions(await _pool_get()), rid, agent_type=subagent_type,
             parent_agent=ident.agent_id if ident else None,
             project=ident.project if ident else None,
-            session=ident.session if ident else None)
+            session=ident.session if ident else None,
+            witnessed=True)  # a hook-stamped tool call IS an observed act (708a972d)
         _spawns_seen[child] = time.monotonic()
         if len(_spawns_seen) > 512:  # spawns churn; keep the skip-cache bounded
             for k in sorted(_spawns_seen, key=_spawns_seen.__getitem__)[:256]:
@@ -710,7 +711,8 @@ async def mount(
             parent_agent=parent_ident.agent_id if parent_ident else None,
             project=parent_ident.project if parent_ident else None,
             session=parent_ident.session if parent_ident else None,
-            transcript=tpath)
+            transcript=tpath,
+            witnessed=True)  # it is CALLING mount — an observed act (708a972d)
         _spawns_seen[str(child)] = time.monotonic()
         return {
             "agent": child, "project": parent_ident.project if parent_ident else "?",
@@ -830,13 +832,16 @@ async def mount(
 
 
 @mcp.tool()
-async def retire(reason: str = "", ctx: Context | None = None) -> dict[str, str]:
+async def retire(reason: str = "", ctx: Context | None = None) -> dict[str, Any]:
     """Mark THIS mounted session RETIRED — a deliberate close the trigger must never
     reanimate (resume-not-mint dispatch, thread 9f2ddb44). Call it at a real farewell: the
     operator closing you out, or a context-ceiling handoff after your succession thread is
     written. Stamps retired=true on your Agent (SELF_DECLARED — your own act, on the record)
-    and detaches your hot mount. Future mail for your project resumes a LIVING session or
-    mints a stamped successor — never you."""
+    and RELEASES YOUR SEAT — hot mount and durable row both (thread b47b3814: a retired
+    agent must not haunt the fleet chrome as a live mount). Call it LAST: any osiris call
+    after retiring requires a fresh mount(), which lands on the loud reanimation path.
+    Future mail for your project resumes a LIVING session or mints a stamped successor —
+    never you."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — only a mounted session can retire itself"}
@@ -860,7 +865,12 @@ async def retire(reason: str = "", ctx: Context | None = None) -> dict[str, str]
     if key is not None:
         _agents.pop(key, None)
         _agents_touched.pop(key, None)
-    return {"retired": ident.agent_id, "signed_by": signer,
+    # the seat release (thread b47b3814): a retired agent must not keep holding a live seat —
+    # the durable row would read as a live mount in the chrome and the liveness counts until
+    # it aged out. Any later call from this session must re-mount, which lands on the
+    # REANIMATION path above — loud, exactly as designed.
+    released = await mounts.release_mounts(pool, ident.agent_id)
+    return {"retired": ident.agent_id, "signed_by": signer, "seats_released": released,
             "note": "farewell recorded — the trigger will not reanimate this session; "
                     "write your succession thread BEFORE you go dark"
                     + (" (certificate notes an HEIR signed for the ancestor)"

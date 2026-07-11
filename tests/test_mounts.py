@@ -106,6 +106,42 @@ async def test_mount_tool_honors_a_bound_seat(actions: Actions, tmp_path: Path) 
         srv._pool = saved_pool
 
 
+async def test_retire_releases_the_seat(actions: Actions, tmp_path: Path) -> None:
+    """The seat release (thread b47b3814): Anubis VII kept a live durable mount after its
+    farewell — the fleet chrome and liveness counts read a retired agent as a live seat.
+    retire() must drop the durable row (exact agent_id: a successor who overwrote the row
+    is never touched); any later call re-mounts via the loud reanimation path."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:  # minimal fake connection ctx — _conn_key keys on request_context.session
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    job_dir = str(tmp_path / "jobs" / "anubis07")
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:anubis-vii",
+                            project="anubis", cwd=str(tmp_path), model=None, session_key=None)
+    heir_dir = str(tmp_path / "jobs" / "anubis08")  # the successor's seat must survive
+    await mounts.save_mount(actions.pool, job_dir=heir_dir, agent_id="agent:anubis-viii",
+                            project="anubis", cwd=str(tmp_path), model=None, session_key=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:anubis-vii", session="anubis07", project="anubis",
+        model=None, cwd=None)
+    try:
+        out = await srv.retire(reason="farewell", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["retired"] == "agent:anubis-vii" and out["seats_released"] == 1
+    assert await mounts.find_mount(actions.pool, job_dir=job_dir) is None
+    heir = await mounts.find_mount(actions.pool, job_dir=heir_dir)
+    assert heir is not None and heir.agent_id == "agent:anubis-viii"
+
+
 def test_evict_stale_minds_purges_the_dead_ancestor() -> None:
     """A compaction kills the mind but not the MCP connection: the conn-keyed hot cache kept
     answering as the dead ancestor minutes after the whisper minted the heir. A mint evicts

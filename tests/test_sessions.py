@@ -22,7 +22,7 @@ from src.ingest.sessions import (
     redact,
     sense_sessions_tick,
 )
-from src.orchestrator.capture import open_thread, record_decision
+from src.orchestrator.capture import open_thread, record_decision, resolve_thread
 from src.orchestrator.compositions import run_composition, seed_default_compositions
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
@@ -610,6 +610,38 @@ async def test_miner_skips_extractions_the_session_already_declared(actions: Act
         "SELECT DISTINCT a.evidence_class AS ec FROM current_assertions a JOIN objects o "
         "ON o.id=a.object_id WHERE a.name='summary' AND a.value #>> '{}' ILIKE '%loop silently%'")
     assert [r["ec"] for r in grades] == ["self_declared"]       # only the capture; no echo
+
+
+async def test_miner_never_reminds_the_fleet_of_finished_work(actions: Actions) -> None:
+    """The re-echo dup-gate's second jaw (XVIII's forensics, 2026-07-11): a long session's
+    later chunks re-describe work that already FINISHED — the resolved thread's summary often
+    belongs to another source (the miner's own earlier echo, another agent), so the
+    deliberate-captures jaw never saw it and the miner re-minted reworded copies of done work.
+    A fresh extraction near-matching a recently-resolved thread is skipped; genuinely new
+    work still lands, and the resolved record itself is untouched."""
+    agent = "agent:heinrich"
+    tid = await open_thread(
+        actions, "escalate the miner timeout to a chosen 540 seconds", source=agent)
+    assert tid is not None
+    await resolve_thread(actions, "escalate the miner timeout", because="shipped", source=agent)
+    y = SessionYield(
+        # a reworded copy of the RESOLVED thread (capitalized + trailing clause) → skip
+        threads_opened=["Escalate the miner timeout to a chosen 540 seconds, per the plan"],
+        # an obligation restating the same finished work → the same jaw catches it
+        obligations=["escalate the miner timeout to a chosen 540 seconds"],
+    )
+    counts = await emit_yield(actions, y, repo=None, origin="agent:someone-else")
+    assert counts["skipped_dup"] == 2
+    assert counts["threads"] == 0 and counts["obligations"] == 0
+    # genuinely new work is not swallowed by the resolved set
+    y2 = SessionYield(threads_opened=["profile the digest renderer's slowest panel"])
+    counts2 = await emit_yield(actions, y2, repo=None, origin="agent:someone-else")
+    assert counts2["threads"] == 1 and counts2["skipped_dup"] == 0
+    # the finished thread's own record kept exactly one status: resolved
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", tid)
+    assert status == "resolved"
 
 
 async def test_tick_detects_a_warm_swap_and_stamps_the_danger_map(

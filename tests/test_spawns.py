@@ -200,6 +200,66 @@ async def test_dm_to_a_spawn_warns_of_the_dead_letter(actions: Actions, tmp_path
         srv._spawns_seen.clear()
 
 
+async def test_register_spawn_never_testifies_above_what_it_witnessed(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """The ghost-spawn law (ruling 708a972d): the harness announces sidechains whose
+    transcript never materializes. A named-but-absent transcript stamps the spawn
+    unwitnessed; the file appearing (Stop) upgrades it; an observed ACT (witnessed=True)
+    is never un-witnessed by an unflushed file."""
+    ghost_path = tmp_path / "agent-ghost0001.jsonl"  # announced, never materialized
+    child = await register_spawn(Actions(actions.pool), "ghost0001", agent_type="claude",
+                                 transcript=ghost_path)
+    assert child == "agent:ghost0001"
+    assert await _prop(actions, child, "spawn_witnessed") == "false"
+    # the transcript materializes (a real spawn's Stop): disk truth upgrades the stamp
+    ghost_path.write_text(json.dumps({"type": "assistant",
+                                      "message": {"model": "claude-haiku-4-5",
+                                                  "content": []}}) + "\n")
+    await register_spawn(Actions(actions.pool), "ghost0001", transcript=ghost_path, done=True)
+    assert await _prop(actions, child, "spawn_witnessed") == "true"
+    # an acting child (hook-stamped tool call) is witnessed even with no file yet
+    kid = await register_spawn(Actions(actions.pool), "acting01",
+                               transcript=tmp_path / "agent-acting01.jsonl", witnessed=True)
+    assert kid is not None
+    assert await _prop(actions, kid, "spawn_witnessed") == "true"
+    # no transcript, no act flag → nothing stamped (unknown is not unwitnessed)
+    quiet = await register_spawn(Actions(actions.pool), "quiet001")
+    assert quiet is not None
+    assert await _prop(actions, quiet, "spawn_witnessed") is None
+
+
+async def test_while_away_calms_the_ghost_and_keeps_the_warning_for_hands(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """The away-fold's warning is reserved for WITNESSED hands: when the only arrivals are
+    unwitnessed harness sidechains, the note says so calmly instead of 'another hand may
+    have worn your face' (Maat's identity scare, bug 75c59aad)."""
+    since = datetime.now(UTC) - timedelta(hours=1)
+    await actions.create_or_find_object("Agent", "agent:par00009", "agent:par00009")
+    await register_spawn(Actions(actions.pool), "ghost0009", agent_type="claude",
+                         parent_agent="agent:par00009", project="demo-ghost",
+                         transcript=tmp_path / "agent-ghost0009.jsonl")
+    away = await mounts.while_away(actions.pool, "demo-ghost", "agent:par00009", since)
+    assert away is not None
+    (spawn,) = away["spawns"]
+    assert spawn["agent"] == "agent:ghost0009"
+    assert "unwitnessed" in spawn and "likely internal" in spawn["unwitnessed"]
+    assert "another hand" not in away["note"]
+    assert "unwitnessed harness sidechains" in away["note"]
+    # a WITNESSED spawn arriving restores the full warning, and carries no ghost marker
+    t = tmp_path / "agent-real0009.jsonl"
+    t.write_text(json.dumps({"type": "assistant",
+                             "message": {"model": "claude-haiku-4-5", "content": []}}) + "\n")
+    await register_spawn(Actions(actions.pool), "real0009", agent_type="Explore",
+                         parent_agent="agent:par00009", project="demo-ghost", transcript=t)
+    away2 = await mounts.while_away(actions.pool, "demo-ghost", "agent:par00009", since)
+    assert away2 is not None and "another hand" in away2["note"]
+    by_id = {s["agent"]: s for s in away2["spawns"]}
+    assert "unwitnessed" not in by_id["agent:real0009"]
+    assert "unwitnessed" in by_id["agent:ghost0009"]
+
+
 async def test_while_away_names_your_spawns(actions: Actions) -> None:
     """The surprise kill: a returning parent's away-fold lists the children its lineage
     spawned since its last sign of life — type, model, when."""

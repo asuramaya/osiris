@@ -51,6 +51,17 @@ async def save_mount(
     )
 
 
+async def release_mounts(pool: asyncpg.Pool, agent_id: str) -> int:
+    """Close every durable mount row naming `agent_id` — retire()'s seat release (thread
+    b47b3814: Anubis VII held a live seat after its farewell, haunting the fleet chrome and
+    the liveness counts). The registry is hot state, not the event-sourced kernel — the
+    retirement itself is stamped on the Agent object, so dropping the seat loses no record.
+    Exact-id only: a successor re-mounted on the same job_dir has already overwritten the
+    row with its own agent_id and is never touched. Returns rows released."""
+    tag = await pool.execute("DELETE FROM agent_mounts WHERE agent_id=$1", agent_id)
+    return int(tag.rsplit(" ", 1)[-1])
+
+
 async def find_mount(pool: asyncpg.Pool, *, job_dir: str) -> MountRecord | None:
     """The durable mount for a job_dir, or None (never mounted / no durable handle)."""
     r = await pool.fetchrow(
@@ -175,12 +186,21 @@ async def while_away(
         " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=c.id "
         "   AND name='agent_type' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS kind, "
         " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=c.id "
-        "   AND name='source_model' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS model "
+        "   AND name='source_model' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS model, "
+        " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=c.id "
+        "   AND name='spawn_witnessed' "
+        "   ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS witnessed "
         "FROM links l JOIN objects c ON c.id=l.from_id JOIN objects p ON p.id=l.to_id "
         "WHERE l.type='spawned_by' AND (p.canonical = $1 OR p.canonical LIKE $1 || '-%') "
         "  AND l.first_seen > $2 ORDER BY l.first_seen DESC LIMIT 8", base, since)
     if not wakes and not wearers and not threads and not spawns:
         return None
+    # THE GHOST-SPAWN LAW (ruling 708a972d): a spawn whose only evidence is the harness's
+    # announcement — no transcript ever materialized, no act ever seen — must not wear the
+    # 'another hand' warning. It gets named (the record forgets nothing) but rendered as the
+    # harness machinery it almost certainly is; the scare is reserved for witnessed hands.
+    all_ghost = bool(spawns) and not wakes and not wearers and not threads \
+        and all(s["witnessed"] == "false" for s in spawns)
     return {
         "since": since.isoformat(),
         "wakes": {r["mode"]: r["n"] for r in wakes},
@@ -192,8 +212,14 @@ async def while_away(
             for t in threads],
         **({"spawns": [
             {"agent": s["canonical"], "type": s["kind"], "model": s["model"],
-             "at": s["first_seen"].isoformat()}
+             "at": s["first_seen"].isoformat(),
+             **({"unwitnessed": "ephemeral harness sidechain — announced but never "
+                                "observed; likely internal, not another hand"}
+                if s["witnessed"] == "false" else {})}
             for s in spawns]} if spawns else {}),
-        "note": "another hand may have worn your face here — read this before assuming you "
-                "know where you stand; the graph, not your memory, records these turns",
+        "note": ("only unwitnessed harness sidechains appeared — announced by the harness, "
+                 "but no transcript or act was ever observed; likely internal machinery. "
+                 "Nothing else moved in your name." if all_ghost else
+                 "another hand may have worn your face here — read this before assuming you "
+                 "know where you stand; the graph, not your memory, records these turns"),
     }
