@@ -323,6 +323,43 @@ async def test_orient_surfaces_the_ancestors_parting_words(actions: Actions) -> 
     assert "parting words" in note["note"]
 
 
+async def test_orient_names_the_live_siblings_in_your_project(actions: Actions) -> None:
+    """Co-agent blindness (Deckard XXVI, msg 258): a live sibling sharing your repo is the
+    one blindness that costs unrecoverable work — orient names them and the shared-tree
+    discipline; a lone agent gets no such block."""
+    from src import mcp_server as srv
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    await mounts.save_mount(actions.pool, job_dir="/h/.claude/jobs/sib00001",
+                            agent_id="agent:sibling-1", project="sharedtree", cwd="/x",
+                            model=None, session_key="k")
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:me-1", session="me000001", project="sharedtree",
+        model=None, cwd=None)
+    try:
+        out = await srv.orient(ctx=ctx)
+        assert out["co_agents"]["live"][0]["agent"] == "agent:sibling-1"
+        assert "git add -A" in out["co_agents"]["note"]
+        # the sibling goes stale → the block disappears (liveness, not history)
+        await actions.pool.execute(
+            "UPDATE agent_mounts SET last_seen = now() - interval '1 hour' "
+            "WHERE agent_id='agent:sibling-1'")
+        out2 = await srv.orient(ctx=ctx)
+        assert "co_agents" not in out2
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+
 def test_rank_open_threads_orders_obligations_first_and_caps() -> None:
     """The pure ranker (orient's wall → a bounded query): obligations float above ordinary
     threads, the composition's recency order is preserved WITHIN each group (stable sort),

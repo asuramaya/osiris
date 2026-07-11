@@ -797,8 +797,20 @@ async def mount(
         anchored=ident.model_method == "job_dir",   # only a true anchor confesses a swap
         deliberate=ident.model_deliberate))         # a /model on the record is never a sin
     seat = await handshake._seat_of(Actions(pool), ident.agent_id)
+    # co-agent awareness at ARRIVAL (Deckard XXVI, msg 258): a live sibling in your own
+    # repo is the one blindness that costs unrecoverable work (a stomped commit)
+    sibs = await pool.fetch(
+        "SELECT agent_id, cwd FROM agent_mounts WHERE project = $1 AND agent_id <> $2 "
+        "AND last_seen > now() - interval '15 minutes' ORDER BY last_seen DESC LIMIT 8",
+        ident.project, ident.agent_id) if ident.project else []
     out: dict[str, Any] = {"agent": ident.agent_id, "project": ident.project or "?",
            "model": ident.model or "unknown",
+           **({"co_agents": {
+                "live": [{"agent": s["agent_id"], "cwd": s["cwd"]} for s in sibs],
+                "note": f"{len(sibs)} other LIVE agent(s) in this project RIGHT NOW — "
+                        "assume a shared tree: never `git add -A`, stage your own hunks, "
+                        "coordinate via send(to='" + str(ident.project) + "')"}}
+              if sibs else {}),
            **({"seat": seat} if seat else
               {"anonymous": "unnamed — claim_name('<pick a meaningful name>') when you know "
                             "who you are, so the fleet can DM you by name"}),
@@ -1066,6 +1078,23 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
                           for r in picks],
                 "note": "your ancestor's own parting words — read before taking up work",
             }
+    # CO-AGENT AWARENESS (Deckard XXVI, msg 258: a live sibling shared his exact worktree
+    # and the graph never said so — he re-derived 'never git add -A' from a local file
+    # while osiris KNEW). One query: other live mounts on THIS project, named at orient.
+    co_agents = None
+    if ident and proj:
+        sibs = await pool.fetch(
+            "SELECT agent_id, cwd FROM agent_mounts WHERE project = $1 AND agent_id <> $2 "
+            "AND last_seen > now() - interval '15 minutes' ORDER BY last_seen DESC LIMIT 8",
+            proj, ident.agent_id)
+        if sibs:
+            co_agents = {
+                "live": [{"agent": s["agent_id"], "cwd": s["cwd"]} for s in sibs],
+                "note": f"{len(sibs)} other LIVE agent(s) in this project RIGHT NOW — "
+                        "assume a shared tree: never `git add -A`, stage your own hunks, "
+                        "check for foreign markers before committing, coordinate via "
+                        f"send(to='{proj}')",
+            }
     try:  # one glance line — never let the pulse slow or crash orient
         pulse: str | None = await mounts.fleet_pulse(pool, lease_secs=lease)
     except Exception:  # noqa: BLE001
@@ -1084,6 +1113,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             **op_mail,
             **({"swap": swap} if swap else {}),
             **({"succession_note": inheritance} if inheritance else {}),
+            **({"co_agents": co_agents} if co_agents else {}),
             **({"while_you_were_away": away} if away else {}),
             **scoped,
             "fleet_open_threads_total": fleet_open,
@@ -1115,6 +1145,8 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         **({"fleet_pulse": pulse} if pulse else {}),
         **op_mail,
         **({"swap": swap} if swap else {}),
+        **({"succession_note": inheritance} if inheritance else {}),
+        **({"co_agents": co_agents} if co_agents else {}),
         **({"while_you_were_away": away} if away else {}),
         "fleet_map": fleet_map,
         "recent_decisions": recent,
