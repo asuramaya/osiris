@@ -18,7 +18,7 @@ from typing import Any
 from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.db.pool import create_pool
-from src.ingest.mined import _distinctive, reconcile_mined, unquoted, well_bounded
+from src.ingest.mined import distinctive_terms, reconcile_mined, unquoted, well_bounded
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -179,14 +179,14 @@ async def resolve_threads(
     # oldest-first, so the first matching commit per thread is the one that actually closed it
     commits = sorted(
         ((datetime.fromisoformat(c["date"]), c["id"], c["canonical"],
-          _distinctive(f"{c['summary'] or ''} {c['scope'] or ''}"))
+          distinctive_terms(f"{c['summary'] or ''} {c['scope'] or ''}"))
          for c in commit_rows if c["date"]),
         key=lambda c: c[0],
     )
 
     resolved = 0
     for t in open_threads:
-        topic = _distinctive(t["summary"] or "")
+        topic = distinctive_terms(t["summary"] or "")
         if len(topic) < 2:
             continue
         origin = datetime.fromisoformat(t["origin_date"]) if t["origin_date"] else None

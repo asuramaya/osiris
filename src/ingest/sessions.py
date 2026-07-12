@@ -63,7 +63,7 @@ from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.db.pool import create_pool
 from src.ingest.extract import _strip_fences
-from src.ingest.mined import _distinctive, consolidate_memory
+from src.ingest.mined import consolidate_memory, distinctive_terms
 from src.ingest.providers import LLMClient, Usage, llm_provider
 from src.ingest.redact import credential_shaped, redact
 from src.ingest.usage import record_usage, usage_summary
@@ -705,12 +705,12 @@ async def _resolve_own_threads(
     )
     count = 0
     for text in resolved:
-        tokens = _distinctive(text)
+        tokens = distinctive_terms(text)
         best: tuple[int, Any] | None = None
         for r in own:
             if exclude and r["id"] in exclude:
                 continue
-            shared = len(tokens & _distinctive(r["summary"] or ""))
+            shared = len(tokens & distinctive_terms(r["summary"] or ""))
             if shared >= 2 and (best is None or shared > best[0]):
                 best = (shared, r)
         if best is None:

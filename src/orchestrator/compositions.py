@@ -903,6 +903,12 @@ async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='kind' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
+        # THE ROT CANDIDATE'S EVIDENCE (closure-miner, operator ruling 2026-07-12): a later
+        # commit that looks like it did this. It is a QUESTION, never a verdict — it rides the
+        # pile so the human can confirm a whole tree in one sitting instead of re-deriving each.
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='rot_candidate' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS probably_done, "
         " NOT EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
         "   AND sa.evidence_class='self_declared') AS untouched "
         "FROM objects o "
@@ -919,15 +925,21 @@ async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         if repo and (r["project"] or "").removeprefix("repo:") != repo.removeprefix("repo:"):
             continue
         # a DECLARED duty never hides — declaring touches the thread; a guessed one
-        # joins the pile after its freshness week (overmint ruling, 2026-07-11)
-        if r["kind"] == "question" or (bool(r["untouched"]) and r["created_at"] < cutoff):
+        # joins the pile after its freshness week (overmint ruling, 2026-07-11). A ROT CANDIDATE
+        # rides the pile whatever its age: it carries EVIDENCE, which is the entire point of it.
+        if (r["kind"] == "question" or r["probably_done"]
+                or (bool(r["untouched"]) and r["created_at"] < cutoff)):
             echoes.append({
                 "id": str(r["id"])[:8], "born": r["created_at"].date().isoformat(),
                 "project": (r["project"] or "").removeprefix("repo:") or None,
-                "kind": r["kind"], "summary": r["summary"][:200]})
+                "kind": r["kind"], "summary": r["summary"][:200],
+                **({"probably_done": r["probably_done"]} if r["probably_done"] else {})})
+    # evidence first: these are the ones a human can actually settle in one glance
+    echoes.sort(key=lambda e: (0 if e.get("probably_done") else 1, e["born"]))
     return {
         "echoes": echoes[:limit],
         "count": len(echoes),
+        "with_evidence": sum(1 for e in echoes if e.get("probably_done")),
         **({"note": f"showing oldest {limit} of {len(echoes)}"} if len(echoes) > limit else {}),
         "verbs": ("triage with testimony, never bulk writes: reclassify_thread(id, "
                   "kind='obligation') to adopt · resolve_thread(id, because=…) when done/moot "
@@ -1167,7 +1179,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     # b813e389 — 'I re-derive which obligations are actually alive at every mount').
     # Report-only, ruling 758ded94 intact: the finding DEALS the thread to a mind's
     # triage verbs; the status change stays testimony, never lint's.
-    from src.ingest.mined import _distinctive
+    from src.ingest.mined import distinctive_terms
 
     open_th = await pool.fetch(
         "SELECT o.id, p.canonical AS repo, "
@@ -1197,13 +1209,13 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     for r in open_th:
         if not r["summary"]:
             continue
-        want = _distinctive(r["summary"])
+        want = distinctive_terms(r["summary"])
         if len(want) < 4:
             continue  # a thin summary matches everything; never deal it on weak evidence
         for c in commits.get(r["repo"], ()):
             if r["moved"] and c["created_at"] <= r["moved"]:
                 continue  # only commits NEWER than the thread's last movement testify
-            got = _distinctive(c["summary"] or "")
+            got = distinctive_terms(c["summary"] or "")
             shared = want & got
             if len(shared) >= 3 and len(shared) >= 0.4 * len(want):
                 rot.append({

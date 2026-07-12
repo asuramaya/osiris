@@ -133,7 +133,7 @@ _GENERIC = frozenset({
 })
 
 
-def _distinctive(text: str) -> set[str]:
+def distinctive_terms(text: str) -> set[str]:
     """The project-distinctive tokens of a string (>=4 chars, minus generic vocabulary). The
     shared matcher for thread self-heal (resolve_threads) and near-duplicate consolidation."""
     return {t for t in re.findall(r"[a-z][a-z0-9_]{3,}", text.lower())} - _GENERIC
@@ -174,7 +174,7 @@ async def consolidate_memory(
         "FROM objects o WHERE o.type=$1 AND o.status='active' AND o.canonical LIKE $2 || '%'",
         object_type, prefix,
     )
-    items = [(r["id"], bool(r["deliberate"]), r["born"], _distinctive(r["summary"] or ""))
+    items = [(r["id"], bool(r["deliberate"]), r["born"], distinctive_terms(r["summary"] or ""))
              for r in rows]
     items = [it for it in items if len(it[3]) >= min_shared]  # thin summaries can't match safely
     # winner precedence: deliberate first (never a loser), then oldest (the original capture)
