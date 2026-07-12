@@ -4,8 +4,12 @@ Authority flows DOWN the fleet; results, accountability, and danger flow back UP
 This is that return path made visible — a stateless rolling-window digest that surfaces, with no
 new writes:
 
-  * ROSTER + HEALTH — every agent, its model/project, and whether its identity RESOLVED cleanly
-    (an onboarding that fell back to a best-effort id shows here).
+  * ROSTER + HEALTH — the agents SEEN IN THE WINDOW, their model/project, and whether each
+    identity RESOLVED cleanly (an onboarding that fell back to a best-effort id shows here).
+    The window applies here exactly as it does to every other stream: a digest of the last day
+    that also shipped every agent who ever lived was not a window, it was the firehose wearing
+    one. The COUNTS in `summary` remain over the whole fleet — nothing is undercounted, only
+    under-shown, and `roster_scope` says so.
   * ACTIVITY — what the fleet DECIDED / opened in your name since the window opened (agent-authored
     Decisions/Threads only — the miner's DERIVED backfill is excluded; this is deliberate work).
   * DANGER MAP — which agents were model-SWAPPED: the fable harness's silent demotion (ruling
@@ -79,7 +83,13 @@ async def _roster(actions: Actions) -> list[dict[str, Any]]:
         " ) AS handle, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='seat_generation' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS seat_gen "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS seat_gen, "
+        # WHEN was this mind last awake? The window needs it: a digest of 'the last 24 hours'
+        # that ships every agent who ever lived is not a window, it is the firehose wearing one.
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='last_active' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS last_active, "
+        " (SELECT max(m.last_seen) FROM agent_mounts m WHERE m.agent_id=o.canonical) AS seen "
         "FROM objects o WHERE o.type='Agent' ORDER BY project NULLS FIRST, o.canonical")
     from src.orchestrator.agents import seat_label
     out = []
@@ -97,8 +107,47 @@ async def _roster(actions: Actions) -> list[dict[str, Any]]:
              "swapped": r["swapped"],
              "live_model": r["live_model"] if live_swap else None,
              "live_swap": (f"{r['model']} → {r['live_model']} (unstamped)"
-                           if live_swap else None)})
+                           if live_swap else None),
+             "last_seen": _last_seen(r)})
     return out
+
+
+def _shipworthy(row: dict[str, Any], since: datetime) -> bool:
+    """Does the digest have anything to SAY about this agent?
+
+    Seen inside the window → yes, that's the digest's whole job. Carrying a health flag (an
+    identity that never resolved, a live swap the heartbeat caught unstamped) → yes, regardless
+    of the window: danger that is CURRENT does not expire because the window moved.
+
+    What this deliberately does NOT do is treat a never-seen agent as newsworthy just for being
+    unknowable. 208 of the fleet's 1026 have no liveness stamp of any kind. They are counted in
+    the summary (`unseen`, `swapped_unseen`) and reachable through fleet(full=True) — because
+    ABSENCE OF EVIDENCE IS NOT EVIDENCE OF ABSENCE, and a thing the graph cannot speak to must
+    still be COUNTED, never quietly deleted. But a count is where they belong: they are also
+    where the ghosts hide (an agent that died ungracefully and had its work picked up by
+    another — thread 53729dd6), and that is a census to build, not a stream to skim.
+    """
+    if row["live_swap"] or not row["resolved"]:
+        return True
+    if row["last_seen"] is None:
+        return False  # unknowable — counted in the summary, never shown as if it were news
+    return bool(row["last_seen"] >= since)
+
+
+def _last_seen(row: Any) -> datetime | None:
+    """The freshest sign of life — the miner's transcript stamp OR the durable mount registry.
+
+    (Both are stamped only when the agent SPEAKS to Osiris, so this measures chattiness and not
+    aliveness — bug 456960e5. It is honest enough to window a digest by; it is NOT honest enough
+    to declare a mind dead, and nothing here does.)
+    """
+    stamps = [s for s in (row["seen"],) if s is not None]
+    if row["last_active"]:
+        try:
+            stamps.append(datetime.fromisoformat(row["last_active"]))
+        except ValueError:
+            pass
+    return max(stamps) if stamps else None
 
 
 async def _activity(actions: Actions, since: datetime, limit: int = 50) -> list[dict[str, Any]]:
@@ -397,8 +446,22 @@ async def fleet_digest(
     # (the heartbeat caught the harness swapping the model since the last stamp — not yet in
     # the graph, but real and current). Both are "the harness got nervous"; the operator must
     # see either without waiting for a re-mount.
-    danger = [r for r in roster if r["swapped"] or r["live_swap"]]
+    # THE WINDOW APPLIES TO THE ROSTER TOO. It didn't, and that was the whole bug: every other
+    # stream here honours `since`, so a 24h digest shipped 24h of activity beside the fleet's
+    # ENTIRE lifetime of agents (1026 rows, 173k chars) and a danger map of swaps on minds that
+    # died weeks ago. The counts stay whole; only the ROWS are windowed.
+    shown = [r for r in roster if _shipworthy(r, effective_since)]
     unresolved = [r for r in roster if not r["resolved"]]
+    unseen = [r for r in roster if r["last_seen"] is None]
+    # DANGER = what the operator can still ACT on: a swap on a mind seen inside the window, or a
+    # live swap the heartbeat caught unstamped (current by definition). A swap on an agent the
+    # graph has NEVER seen is an artifact of a fleet that has run for months — 91 of them. Showing
+    # all 91 at every glance would rebuild the scary-red-desk the operator already ruled against:
+    # a permanent, unactionable number teaches you to stop reading it. They are COUNTED below
+    # (`swapped_unseen`) and reachable — counted is not dropped, and dropped is what we refuse.
+    danger = [r for r in shown if r["live_swap"]
+              or (r["swapped"] and r["last_seen"] is not None)]
+    swapped_unseen = [r for r in roster if r["swapped"] and r["last_seen"] is None]
     if mark_seen:  # the deliberate advance — the ONLY state change a digest can make
         marked_at = datetime.now(UTC)
         await set_cursor(actions.pool, OPERATOR_WATERMARK_KEY, marked_at.isoformat())
@@ -415,8 +478,14 @@ async def fleet_digest(
             "operator_unread": operator_inbox["unread"],
             "spend_tokens": costs["tokens"], "spend_usd": costs["usd"],
             "miner_errors": miner["errors"],
+            # the graph has NO sighting of these minds, ever — neither a transcript stamp nor a
+            # mount. A ghost hides in here (thread 53729dd6); counted, never silently dropped.
+            "unseen": len(unseen), "swapped_unseen": len(swapped_unseen),
         },
-        "roster": roster,
+        "roster": shown,
+        "roster_scope": (f"{len(shown)} of {len(roster)} agents — those seen since "
+                         f"{effective_since.isoformat()}, plus any carrying a health flag "
+                         f"(unresolved identity, or a swap we cannot rule out as historical)"),
         "activity": activity,
         "danger": danger,
         "laundering": laundering,

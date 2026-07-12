@@ -30,6 +30,10 @@ async def test_fleet_digest_surfaces_the_four_streams(actions: Actions) -> None:
     await _prop(actions, a, "identity_resolved", True, "fleet-observer", DO)
     await _prop(actions, a, "model_swapped", "claude-fable-5 → claude-opus-4-8",
                 "fleet-observer", DO)
+    # a swap is witnessed by READING a transcript, so the miner stamps the sighting in the same
+    # breath (see sessions._stamp_alive) — an agent cannot be swapped and never-seen at once.
+    await _prop(actions, a, "last_active", (NOW - timedelta(minutes=5)).isoformat(),
+                "fleet-observer", DO)
     u = await actions.create_or_find_object("Agent", "agent:unknown-heinrich", "fleet-observer")
     await _prop(actions, u, "identity_resolved", False, "fleet-observer", DO)
     # --- activity: a fresh agent-authored decision, an OLD one, and miner backfill (excluded) ---
@@ -320,3 +324,39 @@ async def test_miner_telemetry_is_bounded_and_absent_is_quiet(actions: Actions) 
     blob = await miner_health(actions.pool)
     assert len(blob["ticks"]) == _MINER_KEEP
     assert blob["ticks"][-1]["secs"] == float(_MINER_KEEP + 4)  # newest kept, oldest dropped
+
+
+async def test_the_window_bounds_the_roster_without_ever_deleting_a_soul(
+    actions: Actions,
+) -> None:
+    """The window applies to the ROSTER, and what it excludes it still COUNTS.
+
+    fleet_digest(hours=24) used to ship every agent that ever lived — 1026 rows, 173k chars, a
+    firehose wearing a window — because `_roster` was the one stream that ignored `since`. But
+    the naive fix (drop anything not seen in the window) would have silently deleted 91 real model
+    swaps from the danger map, on the grounds that the graph could not say whether those minds
+    were alive. Absence of evidence is not evidence of absence. So: bounded ROWS, whole COUNTS.
+    """
+    since = NOW - timedelta(hours=24)
+    fresh = await actions.create_or_find_object("Agent", "agent:fresh", "fleet-observer")
+    await _prop(actions, fresh, "identity_resolved", True, "fleet-observer", DO)
+    await _prop(actions, fresh, "last_active", (NOW - timedelta(hours=1)).isoformat(),
+                "fleet-observer", DO)
+    stale = await actions.create_or_find_object("Agent", "agent:stale", "fleet-observer")
+    await _prop(actions, stale, "identity_resolved", True, "fleet-observer", DO)
+    await _prop(actions, stale, "last_active", (NOW - timedelta(days=30)).isoformat(),
+                "fleet-observer", DO)
+    # the ghost: no sighting of any kind, ever — and it carries a swap
+    ghost = await actions.create_or_find_object("Agent", "agent:ghost", "fleet-observer")
+    await _prop(actions, ghost, "identity_resolved", True, "fleet-observer", DO)
+    await _prop(actions, ghost, "model_swapped", "claude-opus-4-8 → claude-haiku-4-5",
+                "fleet-observer", DO)
+
+    dg = await fleet_digest(actions, since=since)
+
+    shown = {r["agent"] for r in dg["roster"]}
+    assert shown == {"agent:fresh"}                  # the window bounds the ROWS
+    assert dg["summary"]["agents"] == 3              # ...and never the COUNTS
+    assert dg["summary"]["unseen"] == 1              # the ghost is named, not vanished
+    assert dg["summary"]["swapped_unseen"] == 1      # its swap is on the books
+    assert "3" in dg["roster_scope"]                 # and the lens says what it did

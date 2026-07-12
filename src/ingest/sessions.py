@@ -651,6 +651,33 @@ async def _emit_thread(
     return t
 
 
+async def _stamp_alive(actions: Actions, path: Path, agent_source: str) -> None:
+    """THE TRANSCRIPT MOVED — the one sign of life that is not chatter.
+
+    `last_active` was stamped on sub-agents (reconstructed from their own transcripts) and on
+    anything that CALLED Osiris, and never on a root session the miner read straight off disk.
+    So 208 of the fleet's 1026 agents carried no sign of life at all — while the miner had opened
+    their transcripts and knew, to the second, when each one last grew. The evidence was in hand
+    and thrown away. A graph that cannot say when a mind last worked cannot tell one that never
+    existed from one that died, which is exactly where the ghosts hide (thread 53729dd6).
+
+    A transcript grows when a mind WORKS — whether or not it deigns to speak to Osiris. That makes
+    the mtime a strictly better liveness signal than the mount registry's `last_seen`, which only
+    ever measured chattiness (bug 456960e5): an agent heads-down for twenty minutes still writes
+    every tool call to its own transcript. This fixes the SIGNAL. It does not yet fix every reader
+    of it — DM routing and the wake trigger still ask `last_seen`, and both still lie.
+
+    Graded DIRECT_OBSERVATION, not DERIVED like the rest of this miner: an LLM's reading of a
+    conversation is an inference, but a stat() is a fact about the disk.
+    """
+    mtime = await asyncio.to_thread(lambda: path.stat().st_mtime)
+    a = await actions.create_or_find_object("Agent", agent_source, _SOURCE)
+    await actions.assert_property(
+        a, "last_active", datetime.fromtimestamp(mtime, UTC).isoformat(), _SOURCE,
+        datetime.now(UTC), confidence_for(EvidenceClass.DIRECT_OBSERVATION),
+        evidence_class=EvidenceClass.DIRECT_OBSERVATION.value, actor=_SOURCE)
+
+
 async def _record_swap(
     actions: Actions, path: Path, models: list[str], repo: str | None,
     lines: list[str] | None = None,
@@ -953,6 +980,7 @@ async def sense_sessions_tick(
         self_doc = await _is_self_documenting(pool, agent_source)
         scanned = 0
         touched = False
+        grew = False  # did this transcript gain BYTES this tick? — the sign of life, see below
         while report["chunks"] < max_chunks and scanned < _MAX_SCAN_BYTES:
             lines, end = await asyncio.to_thread(
                 _read_chunk, path, offset, max_chunk_bytes
@@ -960,6 +988,7 @@ async def sense_sessions_tick(
             if end <= offset:
                 break
             scanned += end - offset
+            grew = True
             if self_doc:  # this session self-documents (SELF_DECLARED) — the miner defers to it
                 offset = end
                 await set_cursor(pool, key, str(offset))
@@ -1003,6 +1032,12 @@ async def sense_sessions_tick(
             touched = True
             for k, v in counts.items():
                 report[k] += v
+        # A transcript that GREW is a mind that worked — even one whose bytes we then declined to
+        # mine (a self-documenting session, a wake, a chunk too short to be worth a model call).
+        # Those paths all `continue` past `touched`, so gating the sign of life on `touched` would
+        # have gone on missing precisely the agents that write their own memory: the diligent ones.
+        if grew:
+            await _stamp_alive(actions, path, agent_source)
         if touched:
             report["files"] += 1
             touched_sessions.add(path.with_suffix(""))  # its subagents/ tree may have grown

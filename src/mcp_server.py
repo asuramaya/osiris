@@ -48,6 +48,7 @@ from src.orchestrator.agents import (
     resolve_identity,
     seat_bearings,
 )
+from src.orchestrator.budget import fit
 from src.orchestrator.console import get_console as _get_console
 from src.orchestrator.console import set_console as _set_console
 from src.orchestrator.dossier import entity_dossier
@@ -68,7 +69,25 @@ from src.orchestrator.sources import as_dicts, suggest
 from src.orchestrator.swaps import classify_swap, swap_banner
 from src.orchestrator.trigger import wake_status
 
-mcp = FastMCP(
+
+class BoundedMCP(FastMCP):
+    """FastMCP with a WAIST — every tool result passes the response budget on its way out.
+
+    Bounding at the seam, not per-tool, is the whole point: a tool added next year inherits
+    the bound without knowing it exists, and no lens's failure can cost a caller its context
+    window. The tools still decide what is worth sending (see src/orchestrator/budget.py);
+    this only guarantees that whatever they decide, it fits — and that any trim is announced.
+    """
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        result = await self._tool_manager.call_tool(
+            name, arguments, context=self.get_context(), convert_result=False)
+        tool = self._tool_manager.get_tool(name)
+        assert tool is not None  # call_tool already raised if the name were unknown
+        return tool.fn_metadata.convert_result(fit(result, tool=name))
+
+
+mcp = BoundedMCP(
     "osiris",
     instructions=(
         "Osiris is the durable memory a session doesn't have — the graph remembers what "
@@ -1165,9 +1184,14 @@ async def fleet_digest(hours: int | None = None, mark_seen: bool = False) -> dic
     batch of agents: read (peek), act, then mark_seen to draw the line."""
     pool = await _pool_get()
     since = (datetime.now(UTC) - timedelta(hours=hours)) if hours is not None else None
-    return {"window_hours": hours,
-            **await digest.fleet_digest(Actions(pool), since=since, mark_seen=mark_seen,
-                                        lease_secs=get_settings().osiris_mail_lease_secs)}
+    dg = await digest.fleet_digest(Actions(pool), since=since, mark_seen=mark_seen,
+                                   lease_secs=get_settings().osiris_mail_lease_secs)
+    # The console renders the ROSTER as a table and has all the room in the world; a reader with
+    # a context window does not, and the roster array is a SUPERSET of `danger` — shipping both
+    # sent every dangerous agent twice. The counts stay whole; the rows live behind fleet().
+    dg.pop("roster", None)
+    dg["roster"] = "counts only — fleet() for the live roster, fleet(full=True) for all of it"
+    return {"window_hours": hours, **dg}
 
 
 @mcp.tool()
@@ -1178,7 +1202,9 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     liveness = the freshest of the miner's last_active stamp and the durable mount registry's
     last_seen (an agent that just mounted is live even before the miner's next sweep).
     `full=True` expands everything (the old wall, grouped). `tree` is the glanceable render;
-    `registered` the flat rows."""
+    `registered` the flat rows — LIVE agents only, because the fleet's whole history is 1000+
+    rows and shipping it cost more context than it could ever be worth. `full=True` gives you
+    all of them; the counts (`count`/`live`/`swarm`) are always the whole truth."""
     pool = await _pool_get()
     rows = await pool.fetch(
         "SELECT o.canonical, "
@@ -1223,6 +1249,10 @@ async def fleet(full: bool = False) -> dict[str, Any]:
             "last_active": r["last_active"], "ts": ts,
             "live": ts is not None and now - ts < timedelta(minutes=15),
         }
+    # LAND ON COUNTS, WALK IN: the roster's history is 1000+ rows and never what you came for.
+    # The flat rows are the LIVE ones (or everything, if you deliberately asked) — the counts
+    # below are always over the whole fleet, so nothing here undercounts, it only under-SHOWS.
+    shown = {c: n for c, n in nodes.items() if full or n["live"]}
     return {
         "connected_now": len(_agents),
         "count": len(nodes),
@@ -1233,8 +1263,10 @@ async def fleet(full: bool = False) -> dict[str, Any]:
             {"agent": c, "model": n["model"], "project": n["project"], "depth": n["depth"],
              "parent": n["parent"], "live": n["live"],
              "last_seen": n["ts"].isoformat() if n["ts"] else None}
-            for c, n in nodes.items()
+            for c, n in shown.items()
         ],
+        **({} if full else {"registered_scope": f"live only — {len(nodes)} total, "
+                            f"fleet(full=True) for the rest"}),
     }
 
 
