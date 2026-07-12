@@ -233,11 +233,20 @@ async def test_object_set_can_exclude_the_agent_hulls(
     assert any(o["type"] == "Decision" for o in slim)
 
 
-async def test_a_guessed_duty_gets_a_week_then_joins_the_pile(actions: Actions) -> None:
-    """THE PROMOTION BAR (miner overmint, 2026-07-11: 408 miner-guessed obligations vs 108
-    declared were riding every wall forever). A DECLARED duty never hides — declaring it
-    touches the thread. A miner-stamped one rides only its freshness week, then collapses
-    into the pile for triage."""
+async def test_a_guessed_duty_never_rides_the_wall(actions: Actions) -> None:
+    """THE MINER MAY NOTICE, BUT MUST NEVER OBLIGE — the desk's law (61c1b20d), now the wall's.
+
+    A guessed duty used to get a "loud week" before folding into the pile. That window IS what let
+    the snowball grow: the miner mints faster than seven days, so the wall stayed permanently full
+    of fresh inferences. 908 of the fleet's 1067 open threads (85%) turned out to be untouched
+    miner guesses, and decepticons — a project the operator had KILLED — was showing 181 of them.
+
+    So a guess gets no week. A thread no mind has ever touched is a SUGGESTION, and it goes
+    straight to the counted pile, one click away. The wall shows only what a mind actually touched.
+    Nothing is deleted and nothing is hidden — the record keeps every thread open until testimony
+    says otherwise (untouched != resolved, 758ded94). It simply stops being presented as a promise
+    nobody made.
+    """
     from src.orchestrator.compositions import open_thread_wall
 
     NOW2 = datetime.now(UTC)
@@ -265,6 +274,7 @@ async def test_a_guessed_duty_gets_a_week_then_joins_the_pile(actions: Actions) 
     wall, echoes = await open_thread_wall(actions.pool, proj)
     on_wall = {w["summary"] for w in wall}
     in_pile = {e["summary"] for e in echoes}
-    assert "a declared duty from three weeks ago" in on_wall      # declared: never hides
-    assert "a guessed duty from this morning" in on_wall          # guessed: loud week
-    assert "a guessed duty from three weeks ago" in in_pile       # guessed + stale: pile
+    assert "a declared duty from three weeks ago" in on_wall      # a MIND said it: never hides
+    assert "a guessed duty from this morning" in in_pile          # fresh guess: still a guess
+    assert "a guessed duty from three weeks ago" in in_pile       # stale guess: also a guess
+    assert len(wall) == 1, "the wall is what minds DECLARED — nothing else"

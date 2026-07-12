@@ -383,17 +383,76 @@ def _file_size(path: Path) -> int:
     return path.stat().st_size
 
 
+_WAKE_FIRST_TURN = "You have unread Osiris mail"
+_wake_verdict: dict[str, bool] = {}  # path → is-a-wake-spawn. The first turn never changes.
+
+
+def _is_wake_spawn(path: Path) -> bool:
+    """Did OSIRIS ITSELF spawn this session? Its very first turn is the wake prompt.
+
+    A wake is not a conversation the fleet had — it is Osiris pressing its own doorbell. Mining it
+    means the graph LEARNS FROM ITS OWN ALARM CLOCK, and 203 of these had already been mined into
+    DERIVED threads and decisions before anyone noticed (2026-07-12). Every one was Osiris reading
+    back its own reflection and filing it as knowledge.
+
+    The instrument was already forbidden from reading itself (`-osiris-extract`), but that guard
+    keys on a DIRECTORY, and a wake's transcript lands in the project's ordinary folder among real
+    work. So the fingerprint has to be the content: the wake prompt IS the session's first words.
+
+    Cached forever per path — a transcript's opening turn cannot change, and re-reading 1300 files
+    every ten minutes to re-learn the same fact would be its own small madness.
+    """
+    key = str(path)
+    if key in _wake_verdict:
+        return _wake_verdict[key]
+    verdict = False
+    try:
+        with path.open("r", errors="replace") as fh:
+            for _ in range(40):  # the first user turn is at the top or it is not a wake
+                line = fh.readline()
+                if not line:
+                    break
+                if '"user"' not in line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if entry.get("type") != "user" or entry.get("isSidechain"):
+                    continue
+                content = (entry.get("message") or {}).get("content")
+                if isinstance(content, list):
+                    content = " ".join(c.get("text", "") for c in content if isinstance(c, dict))
+                verdict = str(content or "").lstrip().startswith(_WAKE_FIRST_TURN)
+                break
+    except OSError:
+        verdict = False
+    _wake_verdict[key] = verdict
+    return verdict
+
+
 def _list_transcripts(root: Path) -> list[Path]:
     """Sync (runs via to_thread): every transcript under the projects root, newest first
     — the busiest session gets the tick's LLM budget before dormant ones.
 
-    The extractor's OWN `claude -p` transcripts (project slug ending `-osiris-extract`,
-    the dedicated cwd in providers.ClaudeCliClient) are excluded: the miner must never
-    mine its own instrument — each extraction call would spawn a transcript for the next
-    tick to mine, one level removed, forever (the loop-pathology class, structurally)."""
+    TWO OWNERSHIP BOUNDARIES, both of the same class (rule 7 — an instrument may not read itself):
+
+    The extractor's OWN `claude -p` transcripts (project slug ending `-osiris-extract`, the
+    dedicated cwd in providers.ClaudeCliClient) are excluded: each extraction call would otherwise
+    spawn a transcript for the next tick to mine, one level removed, forever.
+
+    And the WAKE SPAWNS — sessions Osiris started itself by ringing its own doorbell. Mining those
+    is the same loop wearing a costume: the trigger wakes an agent, the agent talks, the miner
+    mines the talk, and Osiris files its own alarm clock's echo as something it LEARNED. 203 of
+    them had been mined before this landed. A wake's work is real if it writes to the graph
+    deliberately (record_decision / open_thread survive it, as they should); its CHATTER is not
+    knowledge, and it was becoming 85% of the open-thread wall.
+    """
     files = [
         p for p in root.expanduser().glob("*/*.jsonl")
-        if p.is_file() and not p.parent.name.endswith("-osiris-extract")
+        if p.is_file()
+        and not p.parent.name.endswith("-osiris-extract")
+        and not _is_wake_spawn(p)
     ]
     files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return files

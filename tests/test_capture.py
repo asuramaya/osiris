@@ -209,10 +209,14 @@ async def test_orient_explicit_project_overrides_the_mount(actions: Actions) -> 
     now = datetime.now(UTC)
     dec = await actions.create_or_find_object("SoftwareProject", "repo:decepticons", "session")
     await actions.assert_property(dec, "name", "decepticons", "session", now, 0.9)
+    # DECLARED (self_declared): this test is about project SCOPING, not the wall's grading —
+    # an untouched miner guess would now (correctly) fold into the echo pile and prove nothing.
     th = await actions.create_or_find_object("Thread", "thread:dec-scope", "session")
-    await actions.assert_property(th, "summary", "the decepticons-only thread", "session", now, 0.9)
-    await actions.assert_property(th, "status", "open", "session", now, 0.9)
-    await actions.create_link(th, dec, "in_repo", "session", now, 0.9)
+    for _n, _v in (("summary", "the decepticons-only thread"), ("status", "open")):
+        await actions.assert_property(th, _n, _v, "session", now, 0.9,
+                                      evidence_class=EvidenceClass.SELF_DECLARED.value)
+    await actions.create_link(th, dec, "in_repo", "session", now, 0.9,
+                              evidence_class=EvidenceClass.SELF_DECLARED.value)
     await seed_default_compositions(actions.pool)
 
     class _Ctx:  # minimal fake connection ctx — _conn_key reads id(request_context.session)
@@ -768,9 +772,14 @@ async def test_reclassify_thread_changes_kind_never_status(actions: Actions) -> 
 
 
 async def test_orient_wall_collapses_echoes_and_deals_a_triage_card(actions: Actions) -> None:
-    """The lens split: never-touched DERIVED threads older than the window (and judged
-    questions) leave the wall for a counted line + a 3-card triage hand; agent threads and
-    fresh miner threads still ride. The record keeps every one OPEN."""
+    """The lens split: a thread NO MIND HAS TOUCHED leaves the wall for a counted line + a
+    3-card triage hand. Agent threads ride however old; miner guesses do not ride at all.
+
+    AMENDED 2026-07-12 (the operator: "it's a snowball to hell"): a fresh miner guess used to get
+    a loud week before folding. That window is what let the pile grow — the miner mints faster than
+    seven days, so the wall stayed permanently full of inferences nobody had made. 908 of the
+    fleet's 1067 open threads were untouched guesses; a DEAD project was showing 181 of them.
+    THE MINER MAY NOTICE, BUT MUST NEVER OBLIGE. The record keeps every one OPEN."""
     from src.ingest.sessions import (
         SessionYield,
         emit_yield,  # the miner's own write path
@@ -784,7 +793,7 @@ async def test_orient_wall_collapses_echoes_and_deals_a_triage_card(actions: Act
     y = SessionYield(threads_opened=[
         {"summary": "old echo the fleet never read, first of two", "class": "commitment"},
         {"summary": "old echo the fleet never read, second of two", "class": "commitment"},
-        {"summary": "fresh miner commitment from this week", "class": "commitment"},
+        {"summary": "fresh miner commitment from this week", "class": "commitment"},  # a GUESS
     ])
     await emit_yield(actions, y, repo="testrepo", origin="agent:someone")
     await actions.pool.execute(
@@ -798,11 +807,13 @@ async def test_orient_wall_collapses_echoes_and_deals_a_triage_card(actions: Act
     out = await _project_briefing(actions.pool, "testrepo")
     assert out is not None
     wall = [r["summary"] for r in out["open_threads"]]
+    # a MIND declared it: rides, however old. A GUESS: never rides, however fresh.
     assert "off-box backup target still undecided" in wall
-    assert "fresh miner commitment from this week" in wall
+    assert "fresh miner commitment from this week" not in wall
     assert not any(s.startswith("old echo") for s in wall)
+    assert wall == ["off-box backup target still undecided"], "the wall is what minds touched"
     ech = out["unread_echoes"]
-    assert ech["count"] == 2
+    assert ech["count"] == 3   # both old echoes AND the fresh guess — all three untouched
     assert all(len(c["id"]) == 8 for c in ech["triage"])  # short ids, directly triageable
     assert "reclassify_thread" in ech["verbs"] and "never resolve" in ech["verbs"]
     # every echo is STILL open in the record

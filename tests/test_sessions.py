@@ -770,3 +770,42 @@ async def test_miner_skips_triage_wake_transcripts(actions: Actions, tmp_path: P
     # the cursor ADVANCED past the wake chunk: a second tick re-reads nothing
     rep2 = await sense_sessions_tick(actions, tmp_path, llm)
     assert rep2["chunks"] == 0 and llm.prompts == []
+
+
+def test_the_miner_never_mines_osiris_own_wake_spawns(tmp_path: Path) -> None:
+    """THE INSTRUMENT MAY NOT READ ITSELF (rule 7), second door.
+
+    The extractor's own transcripts were already excluded — but that guard keys on a DIRECTORY,
+    and a WAKE's transcript lands in the project's ordinary folder among real work. So Osiris was
+    mining sessions IT HAD SPAWNED ITSELF: the trigger rings its own doorbell, the woken agent
+    talks, and the miner files the echo of Osiris's own alarm clock as something the fleet LEARNED.
+    203 wake transcripts had been mined this way before anyone looked (2026-07-12).
+
+    A wake's DELIBERATE writes still survive it — record_decision / open_thread go straight to the
+    graph, as they should. It is the CHATTER that is not knowledge, and it had become 85% of the
+    open-thread wall.
+    """
+    from src.ingest.sessions import _is_wake_spawn, _list_transcripts
+
+    proj = tmp_path / "-home-x-code-demo"
+    proj.mkdir()
+
+    def _write(name: str, first_user: str) -> Path:
+        p = proj / name
+        p.write_text(
+            json.dumps({"type": "user", "message": {"content": first_user}}) + "\n"
+            + json.dumps({"type": "assistant", "message": {"content": "working on it"}}) + "\n")
+        return p
+
+    wake = _write("wake.jsonl", "You have unread Osiris mail. Call mount(cwd=\"/repo/demo\"...")
+    real = _write("real.jsonl", "fix the renderer, it drops the last frame")
+    # a session that merely DISCUSSES the wake prompt is not a wake — the fingerprint is the
+    # FIRST TURN, not a mention (this very session quotes the prompt constantly)
+    about = _write("about.jsonl", "why does the wake prompt say 'You have unread Osiris mail'?")
+
+    assert _is_wake_spawn(wake) is True
+    assert _is_wake_spawn(real) is False
+    assert _is_wake_spawn(about) is False, "a mention is not a spawn"
+
+    listed = {p.name for p in _list_transcripts(tmp_path)}
+    assert listed == {"real.jsonl", "about.jsonl"}   # the wake is not mined at all

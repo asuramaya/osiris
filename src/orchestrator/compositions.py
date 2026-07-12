@@ -1329,14 +1329,25 @@ async def open_thread_wall(
             item["kind"] = r["kind"]
         if r["owner"]:  # whose move it is — absent means anyone's
             item["owner"] = r["owner"]
-        # questions never ride the wall (whoever judged them said 'not work'); untouched
-        # threads get a freshness window, then collapse until someone triages them.
-        # A DECLARED duty never hides (7336c5fc) — and declaring one TOUCHES the thread,
-        # so the old kind-based exemption only ever protected MINER-GUESSED obligations
-        # (408 guessed vs 108 declared were riding every wall — overmint ruling,
-        # 2026-07-11). A guess gets its loud week, then joins the pile.
-        is_echo = r["kind"] == "question" or (
-            bool(r["untouched"]) and r["created_at"] < cutoff)
+        # THE MINER MAY NOTICE, BUT MUST NEVER OBLIGE (ruling 61c1b20d, extended from the desk
+        # to the wall — 2026-07-12, the operator: "it's a snowball to hell").
+        #
+        # An UNTOUCHED thread is one no mind has ever laid a self_declared assertion on: nobody
+        # opened it, nobody claimed it, nobody so much as triaged it. It exists because an LLM
+        # read a conversation and inferred that somebody, somewhere, owes work. That is a
+        # SUGGESTION, and it was riding the wall with the full authority of a declaration.
+        #
+        # It used to get a "loud week" (ECHO_FRESH_DAYS) before folding. That window is exactly
+        # what let the pile grow: the miner mints faster than seven days, so the wall was
+        # permanently full of fresh guesses. 908 of the fleet's 1067 open threads (85%) are
+        # untouched miner inferences; decepticons — a DEAD project — was showing 181 of them.
+        #
+        # So: a guess does not get a week. It goes to the `echoes` pile immediately, where it is
+        # COUNTED and one click away (land on counts, walk in). The wall now shows only what a
+        # MIND touched. Nothing is deleted, nothing is hidden — the record keeps every thread
+        # open until testimony says otherwise (untouched ≠ resolved, 758ded94). It simply stops
+        # being presented as though someone had promised it.
+        is_echo = r["kind"] == "question" or bool(r["untouched"])
         (echoes if is_echo else wall).append(
             {**item, "born": r["created_at"].date().isoformat()} if is_echo else item)
     echoes.reverse()  # oldest first — triage drains from the bottom of the pile
