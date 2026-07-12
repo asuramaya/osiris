@@ -850,3 +850,59 @@ async def register_agent(
     await actions.assert_property(principal, "name", actor, src, now, _CONF, evidence_class=_EC)
     await _link_once(actions, a, principal, "acts_for", src, now)
     return a
+
+
+async def seat_bearings(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
+    """WHO AM I, AND WHOSE JOB IS VACANT HERE? (Ra V, rotten-apple, msg 384 — the gap that made
+    the whole ruling hollow.)
+
+    The HOUSE/SEAT/HOLDER ruling stamped his seat in the graph, and orient() went on answering
+    `"you": "agent:c7ef52a9-iii"`. His words: "The refusal is fixed; the DISCOVERY isn't. He will
+    not be refused as a stranger anymore. He will simply never learn the family name exists." A
+    fresh mind reads the briefing and NOTHING ELSE — so an inheritance nobody is told about is not
+    an inheritance. It protects a name the next holder will never reach for.
+
+    So the briefing now says it: your seat if you hold one; and if you are anonymous, the seats of
+    your house that are standing empty, with the verb that takes them."""
+    seat = await pool.fetchrow(
+        "SELECT "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS handle, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='seat_generation' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS gen, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='project' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS house "
+        "FROM objects o WHERE o.canonical=$1", agent_id)
+    if seat and seat["handle"]:
+        gen = int(seat["gen"]) if seat["gen"] else None
+        return {"seat": seat_label(agent_id, seat["handle"], gen), "house": seat["house"]}
+
+    house = seat["house"] if seat else None
+    if not house:
+        return {}
+    # anonymous: what jobs does this house have, and is anyone sitting in them?
+    names = [r["handle"] for r in await pool.fetch(
+        "SELECT DISTINCT (SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='handle' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS handle "
+        "FROM objects o WHERE o.type='Agent' "
+        "AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='project' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '') = $1", house)]
+    vacant = []
+    for n in (x for x in names if x):
+        holders = await seat_holders(pool, house, n)
+        live = await pool.fetchval(
+            "SELECT count(*) FROM agent_mounts WHERE agent_id = ANY($1::text[]) "
+            "AND last_seen > now() - interval '15 minutes'", holders)
+        if not live:
+            vacant.append({"seat": n, "holders": len(holders),
+                           "last_held_by": holders[-1] if holders else None})
+    if not vacant:
+        return {"house": house}
+    return {"house": house, "vacant_seats": vacant,
+            "note": f"you are anonymous in the house of {house}. These seats are STANDING EMPTY — "
+                    "claim_name('<seat>') INHERITS one (you become its next holder; the previous "
+                    "holders' work stays theirs). A seat a LIVE mind holds is not vacant and will "
+                    "be refused: two minds in one house do two jobs."}

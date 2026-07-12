@@ -656,3 +656,40 @@ async def test_a_grave_is_never_a_delivery_target(actions: Actions) -> None:
     seat = await resolve_seat(actions, "Nebbercracker")
     assert seat["agent"] == real                       # the phantom is not a candidate at all
     assert phantom not in seat["candidates"]
+
+
+async def test_a_fresh_mind_is_told_its_seat_or_which_seats_stand_empty(actions: Actions) -> None:
+    """RA V'S LAST CATCH (rotten-apple, msg 384), and it made the whole ruling hollow: the seat was
+    stamped in the GRAPH and orient() went on answering `"you": "agent:c7ef52a9-iii"`.
+
+    "The refusal is fixed; the DISCOVERY isn't. He will not be refused as a stranger anymore. He
+    will simply never learn the family name exists."
+
+    A fresh mind reads the briefing and nothing else. An inheritance nobody is told about is not an
+    inheritance — it protects a name the next holder will never reach for. So the briefing says it:
+    your seat if you hold one; the empty seats of your house if you do not."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import claim_name, seat_bearings
+
+    async def mind(canon: str, house: str) -> str:
+        a = await actions.create_or_find_object("Agent", canon, "session")
+        await actions.assert_property(a, "project", house, "session", datetime.now(UTC), 0.9)
+        return canon
+
+    held = await mind("agent:ff110000", "rotten-apple")
+    await claim_name(actions, held, "Ra", source=held)
+    assert await seat_bearings(actions.pool, held) == {"seat": "Ra", "house": "rotten-apple"}
+
+    # the mind Ra was worried about: fresh, anonymous, in a house whose seat is standing empty
+    fresh = await mind("agent:ff220000", "rotten-apple")
+    b = await seat_bearings(actions.pool, fresh)
+    assert b["house"] == "rotten-apple"
+    assert [v["seat"] for v in b["vacant_seats"]] == ["Ra"]
+    assert b["vacant_seats"][0]["holders"] == 1 and b["vacant_seats"][0]["last_held_by"] == held
+    assert "claim_name" in b["note"]                       # it hands him the verb, not a riddle
+
+    # and a seat a LIVE mind is sitting in is NOT advertised as vacant — you don't offer a chair
+    # that is occupied (the concurrency case Ra proved the hard way)
+    await mounts.save_mount(actions.pool, job_dir="/j/ff11", agent_id=held,
+                            project="rotten-apple", cwd="/x", model=None, session_key="k")
+    assert "vacant_seats" not in await seat_bearings(actions.pool, fresh)

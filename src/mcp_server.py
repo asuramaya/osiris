@@ -46,6 +46,7 @@ from src.orchestrator.agents import (
     read_project_model,
     register_agent,
     resolve_identity,
+    seat_bearings,
 )
 from src.orchestrator.console import get_console as _get_console
 from src.orchestrator.console import set_console as _set_console
@@ -1094,6 +1095,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             "  = 'open'")
         return {
             "you": who, "model": (ident.model if ident else None), "project": proj,
+            **(await seat_bearings(pool, who) if who else {}),
             "mail": mail,
             **({"fleet_pulse": pulse} if pulse else {}),
             **op_mail,
@@ -1130,6 +1132,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         "ORDER BY o.created_at DESC LIMIT 5") if r["summary"]]
     return {
         "you": who, "model": (ident.model if ident else None), "project": proj,
+        **(await seat_bearings(pool, who) if who else {}),
         "mail": mail,
         **({"fleet_pulse": pulse} if pulse else {}),
         **op_mail,
