@@ -22,6 +22,7 @@ digest of testimony is not testimony. It never touches the member objects themse
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -53,6 +54,58 @@ _MAX_MEMBERS = 40           # the digest reads the neighborhood's densest recent
 # instead of re-deriving it.
 NEIGHBORHOOD = "neighborhood"
 
+_MAX_SUMMARIES = 3          # LLM budget per pass; stalest-first rotation covers the rest
+_EC = EvidenceClass.DERIVED.value
+_CONF = 0.5
+
+_SYSTEM = (
+    "You are the neighborhood consolidator of a provenance-first memory graph. You are "
+    "given one project's recent memory: open threads (unfinished lines of work) and "
+    "recent decisions (rulings, with rationales). Write a compact digest — under 300 "
+    "words, plain prose with short paragraphs — that a returning mind could read INSTEAD "
+    "of the fragments: what this project is about right now, the main open lines and how "
+    "they relate, and what was settled recently (with the WHY when it matters). Never "
+    "invent facts not present in the input; never editorialize about priorities.")
+
+
+async def discover_trees(
+    pool: asyncpg.Pool, *, roots: list[str], watched: list[str],
+) -> list[dict[str, Any]]:
+    """THE GARDEN AUDITS ITSELF (operator, 2026-07-12: "does it not detect the changes or is
+    that my fault"). Neither: decepticons had 126 commits on disk and the graph never read one,
+    because the pulse's repo list is a HAND-TYPED env var (OSIRIS_DEV_REPOS, 7 paths) while the
+    session-miner auto-discovers transcripts from every project alive. So Osiris learned what to
+    LISTEN TO from reality and what to LOOK AT from a list — it heard every promise in the fleet
+    and witnessed delivery in seven repos.
+
+    It never had to be that way: the graph ALREADY KNOWS its trees. 368 threads are filed under
+    repo:decepticons. It was told, 368 times, and had no mechanism to act on it.
+
+    This is the mechanism — and it only REPORTS. Osiris has no hands: it names the gap between
+    the trees it knows and the trees it watches, and a deliberate act closes it. Growing the
+    watch list is a decision, never a side effect (constitution #6: never silently).
+    """
+    rows = await pool.fetch(
+        "SELECT replace(p.canonical, 'repo:', '') AS tree, "
+        " count(*) FILTER (WHERE o.type='Thread') AS threads, "
+        " count(*) FILTER (WHERE o.type='Commit') AS commits "
+        "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' AND p.status='active' "
+        "WHERE o.status='active' GROUP BY 1 ORDER BY 2 DESC")
+    seen = {Path(w).name for w in watched if w.strip()}
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        tree = r["tree"]
+        path = next((str(c) for c in (Path(root) / tree for root in roots)
+                     if (c / ".git").is_dir()), None)
+        out.append({
+            "tree": tree, "threads": r["threads"], "commits": r["commits"],
+            "path": path, "watched": tree in seen,
+            # the gap that matters: the graph knows this tree, work exists on disk, nobody looks
+            "blind": bool(path) and tree not in seen,
+        })
+    return out
+
 
 async def neighborhoods_of(
     pool: asyncpg.Pool, ids: list[Any],
@@ -72,20 +125,6 @@ async def neighborhoods_of(
         "  AND p.type = 'SoftwareProject' AND p.status = 'active' "
         "ORDER BY l.from_id, l.created_at DESC", ids)
     return {r["oid"]: {"name": r["hood"], "id": str(r["pid"])} for r in rows}
-_MAX_SUMMARIES = 3          # LLM budget per pass; stalest-first rotation covers the rest
-_EC = EvidenceClass.DERIVED.value
-_CONF = 0.5
-
-_SYSTEM = (
-    "You are the neighborhood consolidator of a provenance-first memory graph. You are "
-    "given one project's recent memory: open threads (unfinished lines of work) and "
-    "recent decisions (rulings, with rationales). Write a compact digest — under 300 "
-    "words, plain prose with short paragraphs — that a returning mind could read INSTEAD "
-    "of the fragments: what this project is about right now, the main open lines and how "
-    "they relate, and what was settled recently (with the WHY when it matters). Never "
-    "invent facts not present in the input; never editorialize about priorities.")
-
-
 async def consolidate_pass(actions: Actions) -> dict[str, int]:
     """The mechanical motion: fold DERIVED echoes into deliberate captures, both memory
     types. Pure token-overlap, no LLM — cheap enough to walk daily."""

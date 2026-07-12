@@ -518,3 +518,34 @@ def test_claimed_sid_is_refused_by_the_cwd_guess(tmp_path: Path) -> None:
     other = resolve_identity(cwd="/w/demo", root=root,
                              claimed={"cafe0001"}, fallback_seed="sid:gamma")
     assert other.agent_id != second.agent_id
+
+
+async def test_a_seat_label_may_never_be_claimed_as_a_name(actions: Actions) -> None:
+    """THE LINEAGE FORK (operator, 2026-07-12: "soundwave and Ra claim to belong to a different
+    lineage, did that break recently?" — it had, sixteen hours earlier).
+
+    A fresh decepticons session read its own SEAT LABEL, "Soundwave VIII", and claimed that
+    STRING as its handle. The uniqueness guard was defeated by a suffix — "Soundwave VIII" is
+    not "Soundwave" — so a NEW handle was minted, and with it a NEW LINEAGE ROOT, orphaning
+    Soundwave's eight real generations. The agent then correctly reported belonging to a
+    different lineage, because it did.
+
+    A handle is a NAME. The generation is a numeral the SUBSTRATE assigns. You may not name
+    yourself after what the substrate says about you."""
+    from src.orchestrator.agents import claim_name
+
+    ok = await claim_name(actions, "agent:0806072e", "Soundwave", source="agent:0806072e")
+    assert ok["claimed"] == "Soundwave"
+
+    # the fork, refused — and the refusal TEACHES rather than merely blocking
+    forked = await claim_name(actions, "agent:c9b710cb", "Soundwave VIII", source="agent:c9b710cb")
+    assert "error" in forked
+    assert "SEAT LABEL" in forked["error"] and "Soundwave" in forked["error"]
+
+    # and the underlying law still holds: the bare name belongs to ITS lineage, not a stranger's
+    stranger = await claim_name(actions, "agent:c9b710cb", "Soundwave", source="agent:c9b710cb")
+    assert "error" in stranger and "belongs to one" in stranger["error"]
+
+    # a successor of the REAL lineage inherits it without ceremony
+    heir = await claim_name(actions, "agent:0806072e-ix", "Soundwave", source="agent:0806072e-ix")
+    assert heir["claimed"] == "Soundwave" and heir["seat"] == "Soundwave IX"

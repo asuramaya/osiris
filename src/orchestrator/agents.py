@@ -20,6 +20,7 @@ instance, which model, decided what — and (b) keeps the miner's ownership boun
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -166,15 +167,35 @@ def seat_label(canonical: str, handle: str | None) -> str | None:
     return handle if gen == 1 else f"{handle} {_roman_display(gen)}"
 
 
+# a trailing roman numeral is a SEAT, not a name ("Soundwave VIII" is what the substrate calls
+# Soundwave's 8th mind). Claiming it as a handle forks the lineage — see claim_name.
+_SEAT_SUFFIX = re.compile(r"[\s_-]+(?:[IVXLC]+)\s*$", re.IGNORECASE)
+
 async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str) -> dict[str, Any]:
     """An agent names itself (ruling 1e02e069): the intelligence picks a meaningful name, the
     substrate enforces uniqueness. Refuses a name held by a DIFFERENT lineage (permanent
     exhaustion — a name belongs to one lineage forever; a successor inherits it automatically,
     a stranger cannot take it). Global namespace → unambiguous addressing. Stamps `handle` on
-    the agent's Agent object (SELF_DECLARED)."""
+    the agent's Agent object (SELF_DECLARED).
+
+    A HANDLE IS A NAME. THE GENERATION IS A NUMERAL THE SYSTEM ASSIGNS (operator, 2026-07-12:
+    "soundwave and Ra claim to belong to a different lineage, did that break recently?" — it
+    had, sixteen hours earlier). The uniqueness guard below was defeated by a SUFFIX: a fresh
+    decepticons session read its own SEAT LABEL — "Soundwave VIII" — and claimed that STRING as
+    its name. "Soundwave VIII" != "Soundwave", so the check waved it through, minting a new
+    handle and therefore a NEW LINEAGE ROOT, orphaning Soundwave's eight real generations. The
+    agent was not confused; it was misfiled, and then it correctly reported belonging to a
+    different lineage. So: strip the numeral before judging the name, and refuse the claim —
+    a seat label is something the substrate SAYS about you, never something you may call
+    yourself."""
     name = (name or "").strip()
     if not name or name.lower().startswith("agent:") or len(name) > 40:
         return {"error": "pick a short human name (not an id)"}
+    bare = _SEAT_SUFFIX.sub("", name).strip()
+    if bare and bare.lower() != name.lower():
+        return {"error": f"'{name}' is a SEAT LABEL, not a name — the numeral is the generation, "
+                         f"and the substrate assigns it. Claim '{bare}' if that lineage is "
+                         "yours to continue; otherwise pick a name of your own."}
     root, _ = _generation(agent_id)
     holder = await actions.pool.fetchrow(
         "SELECT o.canonical FROM objects o JOIN current_assertions a ON a.object_id=o.id "

@@ -216,9 +216,15 @@ async def close_by_commits(
                     _SOURCE, observed, _CONF, evidence_class=_EC, actor=_SOURCE)
         else:
             candidates.append(row)
-            if not dry_run:
-                # NEVER a close: an annotation the human confirms (the membrane holds where the
-                # evidence is thin). It rides the echoes lens carrying its own reason.
+            # DON'T WRITE WHAT YOU WOULDN'T ACT ON (measured on the second tree, 2026-07-12).
+            # The weak band (WEAK..STRONG) is topically related and mostly NOT completion: on
+            # xxit it matched "User must verify on mobile that stem sampling works" to the commit
+            # that BUILT stem sampling — a commit that CREATED that obligation rather than
+            # discharging it. Persisting those puts ~90%-wrong guesses at the TOP of the human's
+            # triage queue (the echoes lens sorts evidenced threads first), which is worse than
+            # saying nothing. They stay in the dry-run REPORT, where a reader can weigh them; the
+            # GRAPH only carries what is worth a click.
+            if not dry_run and weight >= strong:
                 await actions.assert_property(
                     t["id"], "rot_candidate",
                     f"a later commit may have done this — {cite} ({why})"[:300],
@@ -227,6 +233,7 @@ async def close_by_commits(
         "repo": repo, "dry_run": dry_run,
         "threads": len(threads), "commits": len(commits),
         "resolved": len(resolved), "candidates": len(candidates),
+        "annotated": sum(1 for c in candidates if c["score"] >= strong),
         "resolved_rows": resolved[:20], "candidate_rows": candidates[:20],
         "note": ("DRY RUN — nothing written" if dry_run else
                  f"{len(resolved)} closed citing a commit; {len(candidates)} await your word"),
