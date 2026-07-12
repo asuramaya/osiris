@@ -188,7 +188,12 @@ class ClaudeCliClient:
         )
         out, err = await proc.communicate()
         if proc.returncode != 0:
-            raise RuntimeError(f"claude CLI exit {proc.returncode}: {err.decode()[:200]}")
+            # The CLI reports API failures (overload, rate limit, auth) as JSON on STDOUT and
+            # leaves stderr EMPTY — so reporting only stderr turned every one of them into the
+            # same content-free "claude CLI exit 1: ", which is a mystery, not a message. Say
+            # whichever stream actually spoke.
+            detail = (err.decode() or out.decode() or "no output on either stream").strip()
+            raise RuntimeError(f"claude CLI exit {proc.returncode}: {detail[:300]}")
         text = _cli_result(out)
         if usage_out is not None:  # the CLI envelope carries usage AND the real cost_usd
             usage_out.append(_usage(json.loads(out.decode() or "{}"), model, with_cost=True))

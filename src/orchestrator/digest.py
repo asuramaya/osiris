@@ -123,9 +123,8 @@ def _shipworthy(row: dict[str, Any], since: datetime) -> bool:
     unknowable. 208 of the fleet's 1026 have no liveness stamp of any kind. They are counted in
     the summary (`unseen`, `swapped_unseen`) and reachable through fleet(full=True) — because
     ABSENCE OF EVIDENCE IS NOT EVIDENCE OF ABSENCE, and a thing the graph cannot speak to must
-    still be COUNTED, never quietly deleted. But a count is where they belong: they are also
-    where the ghosts hide (an agent that died ungracefully and had its work picked up by
-    another — thread 53729dd6), and that is a census to build, not a stream to skim.
+    still be COUNTED, never quietly deleted. But a count is where they belong: it is a census to
+    build, not a stream to skim.
     """
     if row["live_swap"] or not row["resolved"]:
         return True
@@ -479,7 +478,11 @@ async def fleet_digest(
             "spend_tokens": costs["tokens"], "spend_usd": costs["usd"],
             "miner_errors": miner["errors"],
             # the graph has NO sighting of these minds, ever — neither a transcript stamp nor a
-            # mount. A ghost hides in here (thread 53729dd6); counted, never silently dropped.
+            # mount. Counted, never silently dropped. This is a CENSUS gap, not (yet) a ghost
+            # count: walking the 208 found 17 spawns still on disk, 25 bare lineage anchors, 4
+            # wake jobs, and 162 whose transcripts the disk no longer has. A ghost (thread
+            # 53729dd6) is a SUCCESSION gap — work continued with no handoff — which is a
+            # question about links, not about liveness. Do not read one for the other.
             "unseen": len(unseen), "swapped_unseen": len(swapped_unseen),
         },
         "roster": shown,
