@@ -224,9 +224,23 @@ def _anchorless(ctx: Context | None) -> str:
 
 
 def _job_hint(ctx: Context | None) -> str | None:
-    """The client's durable identity handle: the X-Osiris-Job header (.mcp.json sends
-    ${CLAUDE_JOB_DIR} per request — expansion PROVEN live via the probe reattach). Guarded
-    against a client that doesn't expand the variable."""
+    """The client's durable identity handle: the X-Osiris-Job header.
+
+    THIS HEADER HAS NEVER ONCE FIRED IN PRODUCTION, and this docstring used to claim the
+    opposite — "expansion PROVEN live via the probe reattach". That was FALSE. Ruling 40faa5e6
+    (2026-07-09) instrumented the server and caught what the client actually sends: the LITERAL
+    string '${CLAUDE_JOB_DIR}', unexpanded. Project-scope .mcp.json does expand ${VAR} in
+    headers — but the fleet is installed USER-SCOPE (~/.claude.json via `claude mcp add`), and
+    this client version does not expand there. So _sane_job_dir rejects every '$'-bearing value
+    and this function has returned None for the whole fleet, for its entire life. Durable
+    identity has been carried ENTIRELY by the hook-derived job_dir, never by this.
+
+    THE RULING SAID "corrected" AND THE CODE WAS NEVER CORRECTED. The false claim sat here for
+    three days and cost the next reader (me, 2026-07-12) a full re-derivation of a bug the graph
+    had already solved. A correction that lands in the graph but not at the site where the next
+    mind will READ is not a correction — it is a second lie with a citation. Kept as a live
+    fallback only in case a future client learns to expand it; expect None.
+    """
     if ctx is None:
         return None
     try:
