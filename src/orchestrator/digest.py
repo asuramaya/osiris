@@ -76,7 +76,10 @@ async def _roster(actions: Actions) -> list[dict[str, Any]]:
         "   ORDER BY m.last_seen DESC LIMIT 1) AS live_model, "
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1"
-        " ) AS handle "
+        " ) AS handle, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='seat_generation' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS seat_gen "
         "FROM objects o WHERE o.type='Agent' ORDER BY project NULLS FIRST, o.canonical")
     from src.orchestrator.agents import seat_label
     out = []
@@ -86,7 +89,9 @@ async def _roster(actions: Actions) -> list[dict[str, Any]]:
         # a mount-once agent silently runs the wrong model behind a stale-green roster.
         live_swap = (r["live_model"] and r["model"] and r["live_model"] != r["model"])
         out.append(
-            {"agent": r["agent"], "seat": seat_label(r["agent"], r["handle"]),
+            {"agent": r["agent"],
+             "seat": seat_label(r["agent"], r["handle"],
+                                int(r["seat_gen"]) if r["seat_gen"] else None),
              "project": r["project"], "model": r["model"],
              "resolved": r["resolved"] != "false",  # None/‘true’ → treated resolved
              "swapped": r["swapped"],

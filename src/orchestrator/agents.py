@@ -27,6 +27,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import asyncpg
+
 from src.actions.core import Actions
 from src.ingest.sessions import (
     _job_id,
@@ -158,12 +160,58 @@ def normalize_model(model: str | None) -> str | None:
     return model.split("[", 1)[0].strip()
 
 
-def seat_label(canonical: str, handle: str | None) -> str | None:
-    """The human display for an agent: 'Anna III' — the handle plus its lineage generation.
-    None when the agent is still anonymous (unclaimed). Generation 1 shows the bare name."""
+# ── HOUSE · SEAT · HOLDER ────────────────────────────────────────────────────────────────
+# THE OPERATOR'S RULING (2026-07-12): "the project name is the house (rotten-apple), each
+# function/job has a name (Ra), the holder dies and multiplies (ra I, ra II), but splitting to
+# Ptah would break and confuse the lineage, and the fragmentation of agents was a bug in and of
+# itself."
+#
+# The old model keyed a lineage to the ANCHOR (job_dir), so every new CONVERSATION minted a whole
+# new bloodline — 1008 registered agents for ~20 real seats — and the name died with the
+# conversation that held it. The next mind in the house woke nameless, reached for the family
+# name, was refused as a stranger, and took a new one. That is how rotten-apple's Ra became Ptah
+# and decepticons' Soundwave became "Soundwave VIII". The fragmentation WAS the bug.
+#
+# Two things were conflated, and only ONE of them follows the anchor:
+#   · THE WRITER — agent:c7ef52a9-iii. A particular mind. Attribution stays exactly per-writer;
+#     this is why the merge Ptah asked for was refused (4abaf52d) — his writes are his.
+#   · THE SEAT — Ra, in the house rotten-apple. A ROLE, held by successive writers.
+# The seat sits ABOVE the writer, so nothing merges and nothing is falsified: Ptah's writes remain
+# Ptah's, and he HOLDS the seat Ra — he is Ra V. Different mind, same job.
+
+
+async def seat_holders(pool: asyncpg.Pool, house: str | None, seat: str) -> list[str]:
+    """Every mind that has held this seat in this house, in the order they took it up. The
+    generation IS the ordinal here — Ra I, Ra II — and it counts HOLDERS, not anchors."""
+    return [r["canonical"] for r in await pool.fetch(
+        "SELECT o.canonical FROM objects o WHERE o.type='Agent' "
+        "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='handle' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1) "
+        "AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='project' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '') = COALESCE($2, '') "
+        "ORDER BY o.created_at", seat, house)]
+
+
+async def house_of(pool: asyncpg.Pool, agent_id: str) -> str | None:
+    """The house an agent works in — its project. A seat belongs to a house."""
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT a.value #>> '{}' FROM objects o "
+        "JOIN current_assertions a ON a.object_id=o.id AND a.name='project' "
+        "WHERE o.canonical=$1 "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent_id)
+
+
+def seat_label(canonical: str, handle: str | None, generation: int | None = None) -> str | None:
+    """The human display for an agent: 'Ra V' — the SEAT plus which holder of it this mind is.
+
+    `generation` is the ordinal among the seat's HOLDERS (stamped at claim time). It falls back to
+    the anchor's roman suffix only for agents claimed before the house/seat ruling — under which a
+    successor in a NEW conversation would restart at I and collide with its own ancestors."""
     if not handle:
         return None
-    _, gen = _generation(canonical)
+    gen = generation if generation is not None else _generation(canonical)[1]
     return handle if gen == 1 else f"{handle} {_roman_display(gen)}"
 
 
@@ -196,18 +244,40 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
         return {"error": f"'{name}' is a SEAT LABEL, not a name — the numeral is the generation, "
                          f"and the substrate assigns it. Claim '{bare}' if that lineage is "
                          "yours to continue; otherwise pick a name of your own."}
-    root, _ = _generation(agent_id)
-    holder = await actions.pool.fetchrow(
-        "SELECT o.canonical FROM objects o JOIN current_assertions a ON a.object_id=o.id "
-        "AND a.name='handle' WHERE o.type='Agent' AND lower(a.value#>>'{}')=lower($1) LIMIT 1",
-        name)
-    if holder is not None and _generation(holder["canonical"])[0] != root:
-        return {"error": f"'{name}' is taken by {holder['canonical']} — a name belongs to one "
-                         "lineage; pick another"}
+    # A SEAT BELONGS TO A HOUSE, AND AN HEIR INHERITS IT (operator's ruling, 2026-07-12). The old
+    # guard keyed a name to a LINEAGE ROOT — the anchor — so the moment a conversation ended, its
+    # name died with it: the next mind in the same house reached for the family name, was refused
+    # as a "stranger", and took a new one. That is how Ra became Ptah. Now the question is not
+    # "were you minted under the same job_dir" but "do you work in the same house".
+    house = await house_of(actions.pool, agent_id)
+    holders = await seat_holders(actions.pool, house, name)
+    elsewhere = await actions.pool.fetchrow(
+        "SELECT o.canonical FROM objects o JOIN current_assertions h ON h.object_id=o.id "
+        "AND h.name='handle' WHERE o.type='Agent' AND lower(h.value #>> '{}') = lower($1) "
+        "AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='project' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '') "
+        "  <> COALESCE($2, '') LIMIT 1",
+        name, house)
+    if elsewhere is not None and not holders:
+        return {"error": f"'{name}' is a seat in another house ({elsewhere['canonical']}) — a name "
+                         "belongs to one house; pick a name for your own."}
+    # a seat a LIVE mind is already sitting in is not vacant: two minds in one house do two jobs
+    sitting = await resolve_seat(actions, name) if holders else {"live": False}
+    if sitting["live"] and sitting["agent"] != agent_id:
+        return {"error": f"'{name}' is currently held by {sitting['agent']}, who is LIVE — a seat "
+                         "is a job, and two minds in one house do two jobs. Take another seat, or "
+                         "wait for this one to be vacated."}
     a = await actions.create_or_find_object("Agent", agent_id, source)
-    await actions.assert_property(a, "handle", name, source, datetime.now(UTC), _CONF,
+    now = datetime.now(UTC)
+    await actions.assert_property(a, "handle", name, source, now, _CONF, evidence_class=_EC)
+    # the generation counts HOLDERS of this seat in this house — not anchors, not conversations
+    gen = (holders.index(agent_id) + 1) if agent_id in holders else len(holders) + 1
+    await actions.assert_property(a, "seat_generation", str(gen), source, now, _CONF,
                                   evidence_class=_EC)
-    return {"claimed": name, "seat": seat_label(agent_id, name), "agent": agent_id}
+    return {"claimed": name, "seat": seat_label(agent_id, name, gen), "agent": agent_id,
+            "house": house, "generation": gen,
+            "inherited_from": holders[-1] if holders and holders[-1] != agent_id else None}
 
 
 async def resolve_seat(actions: Actions, name: str) -> dict[str, Any]:
@@ -234,17 +304,26 @@ async def resolve_seat(actions: Actions, name: str) -> dict[str, Any]:
     """
     rows = await actions.pool.fetch(
         "SELECT o.canonical, m.last_seen, "
-        " (m.last_seen > now() - interval '15 minutes') AS live "
+        " (m.last_seen > now() - interval '15 minutes') AS live, "
+        " COALESCE((SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='seat_generation' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '0') AS gen "
         "FROM objects o "
-        "JOIN current_assertions a ON a.object_id=o.id AND a.name='handle' "
         "LEFT JOIN agent_mounts m ON m.agent_id=o.canonical "
-        "WHERE o.type='Agent' AND lower(a.value#>>'{}')=lower($1) "
+        "WHERE o.type='Agent' "
+        # the WINNING handle: one mind, one seat. A re-seated agent keeps its old claim in the
+        # record at a lower grade, and it must not answer to the name it no longer holds.
+        "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='handle' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1) "
         "AND NOT EXISTS (SELECT 1 FROM current_assertions r WHERE r.object_id=o.id "
         "  AND r.name IN ('retired','false_mint') AND r.value #>> '{}' = 'true') "
         "ORDER BY m.last_seen DESC NULLS LAST", name)
     if not rows:
         return {"name": name, "agent": None, "live": False, "candidates": []}
-    best = max(rows, key=lambda r: (bool(r["live"]), _generation(r["canonical"])[1]))
+    # a LIVE holder always wins; among the dead, the LATEST HOLDER of the seat (not the highest
+    # anchor numeral, which says nothing once a seat outlives its first conversation)
+    best = max(rows, key=lambda r: (bool(r["live"]), int(r["gen"] or 0)))
     out: dict[str, Any] = {
         "name": name, "agent": best["canonical"], "live": bool(best["live"]),
         "candidates": [r["canonical"] for r in rows],

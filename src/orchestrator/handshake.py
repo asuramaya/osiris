@@ -130,7 +130,11 @@ async def automount(
 
 async def _seat_of(actions: Actions, agent_id: str) -> str | None:
     from src.orchestrator.agents import seat_label
-    handle = await actions.pool.fetchval(
-        "SELECT value#>>'{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
-        "WHERE o.canonical=$1 AND a.name='handle'", agent_id)
-    return seat_label(agent_id, handle)
+    row = await actions.pool.fetchrow(
+        "SELECT max(value#>>'{}') FILTER (WHERE a.name='handle') AS handle, "
+        "       max(value#>>'{}') FILTER (WHERE a.name='seat_generation') AS gen "
+        "FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name IN ('handle','seat_generation')", agent_id)
+    if not row or not row["handle"]:
+        return None
+    return seat_label(agent_id, row["handle"], int(row["gen"]) if row["gen"] else None)

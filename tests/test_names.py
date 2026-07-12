@@ -1,6 +1,8 @@
 """Phase 2 — names/seats: the model names itself, the substrate enforces uniqueness
-(ruling 1e02e069). Covers claim_name (global permanent exhaustion), the roman seat display,
-seat inheritance down a lineage, and DM-by-name addressing.
+(ruling 1e02e069), AMENDED by the HOUSE/SEAT/HOLDER ruling (operator, 2026-07-12): "the project
+name is the house (rotten-apple), each function/job has a name (Ra), the holder dies and
+multiplies (ra I, ra II)". Exhaustion is per-HOUSE, not global: a seat belongs to one house, and
+inside that house it is INHERITED by whoever takes up the job next.
 """
 from __future__ import annotations
 
@@ -24,22 +26,33 @@ async def _agent(actions: Actions, canonical: str, project: str = "handlingthelo
                                       __import__("datetime").UTC), 0.9)
 
 
-async def test_an_agent_names_itself_and_the_name_is_exhausted(actions: Actions) -> None:
-    await _agent(actions, "agent:aaa")
-    await _agent(actions, "agent:bbb")
+async def test_a_seat_belongs_to_one_house_and_is_inherited_inside_it(actions: Actions) -> None:
+    """AMENDED by the operator's ruling (2026-07-12). Exhaustion was GLOBAL and keyed to the
+    lineage ANCHOR, so when a conversation ended its name died with it and the next mind in the
+    same house was refused as a stranger — which is how rotten-apple's Ra became Ptah. Now a seat
+    belongs to a HOUSE: outsiders are refused, heirs inherit."""
+    await _agent(actions, "agent:aaa", project="alpha")
+    await _agent(actions, "agent:bbb", project="beta")
+    await _agent(actions, "agent:ccc", project="alpha")
+
     got = await claim_name(actions, "agent:aaa", "Wayland", source="agent:aaa")
-    assert got["claimed"] == "Wayland" and got["seat"] == "Wayland"  # generation 1 = bare name
-    # a DIFFERENT lineage cannot take it — permanent, global exhaustion
-    refused = await claim_name(actions, "agent:bbb", "wayland", source="agent:bbb")  # case-insens
-    assert "taken" in refused["error"]
-    # bbb picks its own
+    assert got["claimed"] == "Wayland" and got["seat"] == "Wayland"   # holder 1 = bare name
+
+    # a mind in ANOTHER HOUSE cannot take the seat (case-insensitive)
+    refused = await claim_name(actions, "agent:bbb", "wayland", source="agent:bbb")
+    assert "another house" in refused["error"]
     mine = await claim_name(actions, "agent:bbb", "Nadia", source="agent:bbb")
     assert mine["claimed"] == "Nadia"
 
+    # but the next mind in the SAME HOUSE inherits it — it is the same job, a new holder
+    heir = await claim_name(actions, "agent:ccc", "Wayland", source="agent:ccc")
+    assert heir["seat"] == "Wayland II" and heir["inherited_from"] == "agent:aaa"
+
 
 async def test_seat_display_carries_the_generation(actions: Actions) -> None:
-    assert seat_label("agent:x", "Anna") == "Anna"           # gen 1 → bare
-    assert seat_label("agent:x-ii", "Anna") == "Anna II"     # roman generation
+    assert seat_label("agent:x", "Anna") == "Anna"           # holder 1 → bare
+    assert seat_label("agent:x", "Anna", 5) == "Anna V"      # the HOLDER ordinal, when stamped
+    assert seat_label("agent:x-ii", "Anna") == "Anna II"     # legacy fallback: the anchor numeral
     assert seat_label("agent:x-iv", "Anna") == "Anna IV"     # full roman (not the id's i/v/x set)
     assert seat_label("agent:x", None) is None               # anonymous
 

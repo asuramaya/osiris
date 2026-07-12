@@ -405,10 +405,15 @@ async def fleet_data(pool: asyncpg.Pool, *, wake_budget: int = 0) -> dict[str, A
         " (SELECT a.value #>> '{}' FROM current_assertions a "
         "   JOIN objects o ON o.id=a.object_id "
         "   WHERE o.canonical=m.agent_id AND a.name='handle' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS handle "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS handle, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a "
+        "   JOIN objects o ON o.id=a.object_id "
+        "   WHERE o.canonical=m.agent_id AND a.name='seat_generation' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS seat_gen "
         "FROM agent_mounts m ORDER BY m.last_seen DESC LIMIT 60")]
     for m in mounts:
-        m["seat"] = seat_label(m["agent_id"], m["handle"])
+        gen = int(m["seat_gen"]) if m.get("seat_gen") else None
+        m["seat"] = seat_label(m["agent_id"], m["handle"], gen)
         m["live"] = (m["age_secs"] or 1e9) < 900
     wakes = [dict(r) for r in await pool.fetch(
         "SELECT to_project, from_agent, message_id, mode, woke_at FROM agent_wakes "

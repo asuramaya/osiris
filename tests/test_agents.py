@@ -520,35 +520,43 @@ def test_claimed_sid_is_refused_by_the_cwd_guess(tmp_path: Path) -> None:
     assert other.agent_id != second.agent_id
 
 
-async def test_a_seat_label_may_never_be_claimed_as_a_name(actions: Actions) -> None:
-    """THE LINEAGE FORK (operator, 2026-07-12: "soundwave and Ra claim to belong to a different
-    lineage, did that break recently?" — it had, sixteen hours earlier).
+async def test_the_house_the_seat_and_the_holders(actions: Actions) -> None:
+    """THE OPERATOR'S RULING (2026-07-12): "the project name is the house (rotten-apple), each
+    function/job has a name (Ra), the holder dies and multiplies (ra I, ra II), but splitting to
+    Ptah would break and confuse the lineage, and the fragmentation of agents was a bug in and
+    of itself."
 
-    A fresh decepticons session read its own SEAT LABEL, "Soundwave VIII", and claimed that
-    STRING as its handle. The uniqueness guard was defeated by a suffix — "Soundwave VIII" is
-    not "Soundwave" — so a NEW handle was minted, and with it a NEW LINEAGE ROOT, orphaning
-    Soundwave's eight real generations. The agent then correctly reported belonging to a
-    different lineage, because it did.
-
-    A handle is a NAME. The generation is a numeral the SUBSTRATE assigns. You may not name
-    yourself after what the substrate says about you."""
+    A seat belongs to a HOUSE and is held by successive minds. The old model keyed a name to the
+    ANCHOR, so when a conversation ended its name died with it: the next mind in the house reached
+    for the family name, was refused as a stranger, and took a new one. That is how Ra became Ptah
+    and Soundwave became "Soundwave VIII". Nothing merges — a writer's work stays its own — but
+    the SEAT outlives its holders."""
     from src.orchestrator.agents import claim_name
 
-    ok = await claim_name(actions, "agent:0806072e", "Soundwave", source="agent:0806072e")
-    assert ok["claimed"] == "Soundwave"
+    async def mind(canon: str, house: str) -> str:
+        a = await actions.create_or_find_object("Agent", canon, "session")
+        await actions.assert_property(a, "project", house, "session", datetime.now(UTC), 0.9)
+        return canon
 
-    # the fork, refused — and the refusal TEACHES rather than merely blocking
-    forked = await claim_name(actions, "agent:c9b710cb", "Soundwave VIII", source="agent:c9b710cb")
-    assert "error" in forked
-    assert "SEAT LABEL" in forked["error"] and "Soundwave" in forked["error"]
+    first = await mind("agent:aaaa1111", "decepticons")
+    assert (await claim_name(actions, first, "Soundwave", source=first))["seat"] == "Soundwave"
 
-    # and the underlying law still holds: the bare name belongs to ITS lineage, not a stranger's
-    stranger = await claim_name(actions, "agent:c9b710cb", "Soundwave", source="agent:c9b710cb")
-    assert "error" in stranger and "belongs to one" in stranger["error"]
+    # a SEAT LABEL is what the substrate says about you — never a name you may take
+    heir_anchor = await mind("agent:bbbb2222", "decepticons")
+    bad = await claim_name(actions, heir_anchor, "Soundwave VIII", source=heir_anchor)
+    assert "SEAT LABEL" in bad["error"] and "Soundwave" in bad["error"]
 
-    # a successor of the REAL lineage inherits it without ceremony
-    heir = await claim_name(actions, "agent:0806072e-ix", "Soundwave", source="agent:0806072e-ix")
-    assert heir["claimed"] == "Soundwave" and heir["seat"] == "Soundwave IX"
+    # THE RULING: a NEW CONVERSATION in the same house INHERITS the seat — it is Soundwave II,
+    # not a stranger forced to invent a name. This is the exact refusal that created "Ptah".
+    heir = await claim_name(actions, heir_anchor, "Soundwave", source=heir_anchor)
+    assert heir["seat"] == "Soundwave II"
+    assert heir["generation"] == 2 and heir["inherited_from"] == first
+    assert heir["house"] == "decepticons"
+
+    # a seat belongs to ONE house: a mind in another house may not take it
+    outsider = await mind("agent:cccc3333", "heinrich")
+    assert "another house" in (await claim_name(
+        actions, outsider, "Soundwave", source=outsider))["error"]
 
 
 async def test_a_name_resolves_to_the_LIVE_seat_and_never_silently_to_a_grave(
