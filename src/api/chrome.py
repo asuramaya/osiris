@@ -52,6 +52,14 @@ _CHROME_CSS = _CSS + """
 .proj summary{cursor:pointer;list-style:none;display:flex;gap:.7rem;align-items:baseline}
 .proj summary::before{content:"▸";color:#484f58;flex:none}
 .proj[open] summary::before{content:"▾"}
+.roster{border-collapse:collapse;width:100%;max-width:44rem;margin-top:.4rem}
+.roster td{padding:.5rem .8rem;border-top:1px solid #21262d}
+.roster tr:hover td{background:#11161d}
+.roster tr.crit td:first-child{border-left:3px solid #f85149;padding-left:.5rem}
+.roster a{color:#58a6ff;text-decoration:none;font-size:1.05rem}
+.roster a:hover{text-decoration:underline}
+.roster .num{text-align:right;color:#c9d1d9;white-space:nowrap}
+.roster .ts{text-align:right;white-space:nowrap}
 .debt{margin:.5rem 0;padding:.4rem 0;border-top:1px solid #1b2027}
 .debt code{color:#8b949e;font-size:.8rem}
 .verbs{display:inline-flex;gap:.35rem;margin-left:.5rem}
@@ -198,15 +206,10 @@ def _settle(ids: list[Any], label: str = "settle") -> str:
             f"{_e(label)}</button>")
 
 
-def render_desk(desk: dict[str, Any]) -> str:
-    """THE DESK AS A WORKSPACE (operator, 2026-07-11). Was: three bands of mail and a scary
-    red count that mixed debts with condolence letters, with no way to clear anything without
-    summoning an agent. Now: an honest count (what you OWE vs letters that owe nothing), the
-    debts grouped BY PROJECT so a sitting can clear one, and a verb on every row."""
-    out: list[str] = []
+def _counts(desk: dict[str, Any]) -> str:
     owed, letters = desk.get("owed", 0), desk.get("letters", 0)
     lett_ids = [m["id"] for m in (desk.get("fyi") or [])]
-    out.append(
+    return (
         f'<div class="counts"><span class="owe{" clear" if not owed else ""}">'
         f"YOU OWE <b>{owed}</b></span>"
         f'<span class="lett">letters <b>{letters}</b> '
@@ -214,63 +217,103 @@ def render_desk(desk: dict[str, Any]) -> str:
         + (_settle(lett_ids, f"clear all {letters}") if lett_ids else "")
         + "</span></div>")
 
+
+def render_desk(desk: dict[str, Any]) -> str:
+    """THE ROSTER (operator, 2026-07-11: "the desk is better off as a per-project thing, like
+    the mail. the overwhelming kill here is that i get flooded with my entire fleet worth of
+    backlog on one tab").
+
+    So the desk LANDS ON COUNTS, never on contents: one line per project — what you owe it,
+    who asked, how long it has been rotting. You pick ONE and walk in. The whole fleet's
+    backlog on a single scroll was itself the thing that made the desk unusable; a landing
+    page that shows everything shows nothing."""
+    out: list[str] = [_counts(desk)]
     projects = desk.get("by_project") or []
     if projects:
-        out.append('<div class="band"><h2>your debts — by project '
-                   '<span class="dim">(clear one project at a sitting)</span></h2>')
+        out.append('<div class="band"><h2>your desk '
+                   '<span class="dim">(one project at a sitting — click to walk in)</span>'
+                   "</h2><table class=\"roster\">")
         for p in projects:
             debts, asks = p.get("debts") or [], p.get("asks") or []
-            crit = " crit" if p.get("critical") else ""
-            pills = "".join(
-                f'<span class="pill">{n} {lbl}</span>'
-                for n, lbl in ((len(debts), "debt" + ("s" if len(debts) != 1 else "")),
-                               (len(asks), "ask" + ("s" if len(asks) != 1 else "")))
-                if n)
-            head = (f'<summary><span class="who">{_e(p["project"])}</span>'
-                    + ('<span class="hdr-decision">🚨</span>' if p.get("critical") else "")
-                    + f"{pills}</summary>")
-            rows = "".join(
-                f'<div class="debt"><code>{_e(t["id"])}</code> {_e(t["summary"])}'
-                + (' <span class="pill">obligation</span>'
-                   if t.get("kind") == "obligation" else "")
-                + _verbs(t, p["project"]) + "</div>" for t in debts)
-            asked = "".join(
-                f'<div class="debt">{_brief_card(m)}{_settle([m["id"]])}</div>' for m in asks)
-            out.append(f'<details class="proj{crit}" id="p-{_e(p["project"])}">'
-                       f"{head}{rows}{asked}</details>")
-        out.append("</div>")
-
-    letters_band = desk.get("fyi") or []
-    if letters_band:
-        out.append('<div class="band"><h2 class="hdr-fyi">letters '
-                   f'<span class="pill">{len(letters_band)}</span> '
-                   '<span class="dim">(reports and eulogies — nothing owed)</span></h2>')
-        for m in letters_band:
-            ids = [m["id"], *[a["id"] for a in (m.get("same_story") or {}).get("also", [])],
-                   *(m.get("thread_folded") or {}).get("ids", [])]
-            out.append(f'<div class="debt">{_brief_card(m)}{_settle(ids)}</div>')
-        out.append("</div>")
-
-    # DIMMED: an agent judged these moot and said WHY — but a dim is an annotation, never a
-    # settle (the membrane). They stay here, one line each, with the human's own dismiss.
-    dimmed = desk.get("dimmed") or []
-    if dimmed:
-        out.append('<div class="band"><h2 class="hdr-fyi">dimmed '
-                   f'<span class="pill">{len(dimmed)}</span> '
-                   '<span class="dim">(an agent called these moot — yours to dismiss)</span> '
-                   + _settle([d["id"] for d in dimmed], f"clear all {len(dimmed)}")
-                   + "</h2>")
-        for d in dimmed:
-            head = (f'<span class="who">{_e(d.get("project") or "?")}</span>'
-                    f'<span class="dim">{_e(d.get("headline") or "")}</span>')
-            out.append('<div class="debt">'
-                       + _card(f'dim{d["id"]}', head,
-                               f'moot ({_e(d.get("by"))}): {d.get("moot") or ""}')
-                       + _settle([d["id"]]) + "</div>")
-        out.append("</div>")
-    # (no separate "your queue" band any more — by_project above IS the queue, grouped the
-    # way the operator actually works it. Rendering both was the double-billing he saw.)
+            name = p["project"]
+            out.append(
+                f'<tr class="{"crit" if p.get("critical") else ""}">'
+                f'<td><a href="/desk?p={_e(name)}">{_e(name)}</a>'
+                + (' <span class="hdr-decision">🚨</span>' if p.get("critical") else "")
+                + f'</td><td class="num">{len(debts) or ""}'
+                + ('<span class="dim"> owed</span>' if debts else "")
+                + f'</td><td class="num">{len(asks) or ""}'
+                + ('<span class="dim"> asked</span>' if asks else "")
+                + f'</td><td class="ts">{_e(_age(p.get("oldest_secs")))}'
+                  "</td></tr>")
+        out.append("</table></div>")
+    else:
+        out.append('<p class="dim">desk clear — nothing owed, nobody waiting.</p>')
+    out.append(_letters_band(desk))
+    out.append(_dimmed_band(desk))
     return "".join(out)
+
+
+def render_desk_project(desk: dict[str, Any], project: str) -> str:
+    """ONE PROJECT, walked into: its debts (each with the four doors) and the briefs that
+    asked — together, because that is the unit of a sitting."""
+    p = next((x for x in (desk.get("by_project") or []) if x["project"] == project), None)
+    back = '<p><a href="/desk">← all projects</a></p>'
+    if p is None:
+        return (back + f'<p class="dim">nothing owed to <b>{_e(project)}</b> — '
+                       "cleared, or never was.</p>")
+    debts, asks = p.get("debts") or [], p.get("asks") or []
+    out = [back, f'<div class="band"><h2><span class="who">{_e(project)}</span> '
+                 + ('<span class="hdr-decision">🚨</span> ' if p.get("critical") else "")
+                 + f'<span class="pill">{len(debts)} owed</span> '
+                   f'<span class="pill">{len(asks)} asked</span></h2>']
+    for t in debts:
+        out.append(f'<div class="debt"><code>{_e(t["id"])}</code> {_e(t["summary"])}'
+                   + (' <span class="pill">obligation</span>'
+                      if t.get("kind") == "obligation" else "")
+                   + _verbs(t, project) + "</div>")
+    for m in asks:
+        out.append(f'<div class="debt">{_brief_card(m)}{_settle([m["id"]])}</div>')
+    out.append("</div>")
+    return "".join(out)
+
+
+def _letters_band(desk: dict[str, Any]) -> str:
+    """Reports and eulogies. They owe nothing, so they never touch the roster — they sit
+    FOLDED at the bottom and clear in one click."""
+    letters = desk.get("fyi") or []
+    if not letters:
+        return ""
+    rows = []
+    for m in letters:
+        ids = [m["id"], *[a["id"] for a in (m.get("same_story") or {}).get("also", [])],
+               *(m.get("thread_folded") or {}).get("ids", [])]
+        rows.append(f'<div class="debt">{_brief_card(m)}{_settle(ids)}</div>')
+    return ('<details class="band" id="letters"><summary class="hdr-fyi">letters '
+            f'<span class="pill">{len(letters)}</span> '
+            '<span class="dim">(reports and eulogies — nothing owed)</span></summary>'
+            + "".join(rows) + "</details>")
+
+
+def _dimmed_band(desk: dict[str, Any]) -> str:
+    """An agent judged these moot and said WHY — but a dim is an annotation, never a settle
+    (the membrane). They stay, folded, with the human's own dismiss."""
+    dimmed = desk.get("dimmed") or []
+    if not dimmed:
+        return ""
+    rows = []
+    for d in dimmed:
+        head = (f'<span class="who">{_e(d.get("project") or "?")}</span>'
+                f'<span class="dim">{_e(d.get("headline") or "")}</span>')
+        rows.append('<div class="debt">'
+                    + _card(f'dim{d["id"]}', head,
+                            f'moot ({_e(d.get("by"))}): {d.get("moot") or ""}')
+                    + _settle([d["id"]]) + "</div>")
+    return ('<details class="band" id="dimmedband"><summary class="hdr-fyi">dimmed '
+            f'<span class="pill">{len(dimmed)}</span> '
+            '<span class="dim">(an agent called these moot — yours to dismiss)</span>'
+            "</summary>" + _settle([d["id"] for d in dimmed], f"clear all {len(dimmed)}")
+            + "".join(rows) + "</details>")
 
 
 # ── /mail ────────────────────────────────────────────────────────────────────────────────

@@ -988,16 +988,25 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     # ~4s-fresh lenses so the human looks WITHOUT calling an agent. Same read-only
     # constitution as /membrane; ?partial=1 serves just the content div for the poller.
     @app.get("/desk")
-    async def desk_page(partial: int = 0, p: asyncpg.Pool = Depends(get_pool)) -> Response:
-        """THE DESK AS A WORKSPACE (operator, 2026-07-11: "a scary red 11 desk without a good
-        way to resolve these debts per thread or per project, so it snowballs into infinity").
-        An honest count (what you OWE vs letters that owe nothing), debts grouped BY PROJECT,
-        and a verb on every row. Reading still leases nothing; the WRITES here are the human's
-        own clicks (ruling 923c380f), signed analyst:operator through the Actions waist."""
+    async def desk_page(
+        partial: int = 0, p_: str | None = Query(None, alias="p"),
+        p: asyncpg.Pool = Depends(get_pool),
+    ) -> Response:
+        """THE DESK, PER PROJECT (operator, 2026-07-11: "the desk is better off as a
+        per-project thing, like the mail. the overwhelming kill here is that i get flooded
+        with my entire fleet worth of backlog on one tab").
+
+        No arg → the ROSTER: one line per project (owed · asked · age). `?p=<project>` walks
+        into one — its debts with the four doors, and the briefs that asked. Reading leases
+        nothing; the WRITES are the human's own clicks (ruling 923c380f), signed
+        analyst:operator through the Actions waist."""
         from src.orchestrator.mailbox import read_desk
-        inner = chrome.render_desk(await read_desk(p))
+        desk = await read_desk(p)
+        inner = (chrome.render_desk_project(desk, p_) if p_
+                 else chrome.render_desk(desk))
+        title = f"desk · {p_}" if p_ else "desk"
         return Response(inner if partial
-                        else chrome.page("desk", "desk", inner, actions=True),
+                        else chrome.page(title, "desk", inner, actions=True),
                         media_type="text/html")
 
     @app.get("/mail")

@@ -412,7 +412,7 @@ async def _operator_queue(pool: asyncpg.Pool, limit: int = 100) -> list[dict[str
         "  IS DISTINCT FROM 'obligation', o.created_at DESC LIMIT $1", limit)
     today = datetime.now(UTC).date().isoformat()
     return [{"id": str(r["id"])[:8], "summary": (r["s"] or "")[:200],
-             "project": r["proj"] or "—",
+             "project": r["proj"] or "—", "born": r["created_at"].isoformat(),
              **({"kind": r["k"]} if r["k"] else {})}
             for r in rows if r["s"] and not (r["d"] and r["d"] > today)]
 
@@ -501,5 +501,13 @@ def _group_by_project(
         p["owed"] = len(p["debts"])
         p["critical"] = any("🚨" in (a.get("body") or "") or "CRITICAL" in (a.get("body") or "")
                             for a in p["asks"])
+        # the oldest thing this project is waiting on — the roster's rot signal. Both forms:
+        # the stamp (for a mind reading via inbox) and the age in seconds (for the lens, which
+        # is pure and must not know what `now` is).
+        stamps = ([d["born"] for d in p["debts"] if d.get("born")]
+                  + [a["when"] for a in p["asks"] if a.get("when")])
+        p["oldest"] = min(stamps) if stamps else None
+        p["oldest_secs"] = ((datetime.now(UTC) - datetime.fromisoformat(p["oldest"]))
+                            .total_seconds() if p["oldest"] else None)
     out.sort(key=lambda p: (-int(p["critical"]), -p["owed"], -len(p["asks"]), p["project"]))
     return out

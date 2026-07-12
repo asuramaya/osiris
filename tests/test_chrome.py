@@ -6,6 +6,7 @@ from src.actions.core import Actions
 from src.api.chrome import (
     page,
     render_desk,
+    render_desk_project,
     render_fleet,
     render_mail_box,
     render_mail_overview,
@@ -39,38 +40,54 @@ def _desk() -> dict:
         "letters": 1,
         "by_project": [
             {"project": "coldspot", "debts": [], "owed": 0, "critical": True,
+             "oldest_secs": 18000.0,
              "asks": [{"id": 289, "from": "agent:d", "from_project": "coldspot",
                        "body": "🚨 CRITICAL: root escalation <script>x</script>",
                        "when": "2026-07-11T19:22:00+00:00"}]},
             {"project": "monsterhouse", "owed": 1, "critical": False, "asks": [],
+             "oldest_secs": 190000.0,
              "debts": [{"id": "3ea7b203", "summary": "refill the gemini key",
                         "kind": "obligation", "project": "monsterhouse"}]}],
         "note": "peek",
     }
 
 
-def test_desk_renders_projects_verbs_folds_and_dims() -> None:
-    """THE DESK AS A WORKSPACE (operator, 2026-07-11): an honest count (debts ≠ letters),
-    debts grouped BY PROJECT, and the FOUR DOORS on every row — the old page had bands and
-    no exits, which is why an eleven-item desk snowballed."""
+def test_desk_lands_on_a_roster_never_the_whole_backlog() -> None:
+    """THE FLOOD CURE (operator, 2026-07-11: "the desk is better off as a per-project thing,
+    like the mail. the overwhelming kill here is that i get flooded with my entire fleet worth
+    of backlog on one tab"). The landing page is COUNTS ONLY — one line per project, linked.
+    No brief bodies, no debt summaries: a page that shows everything shows nothing."""
     html = render_desk(_desk())
-    # the honest count: what you OWE, and letters that owe nothing (bulk-clearable)
     assert "YOU OWE <b>1</b>" in html and "letters <b>1</b>" in html
-    assert 'data-act="settle" data-ids="300,284,286"' in html  # folded ids clear with the lead
-    # grouped by project, the critical one flagged and ordered first
-    assert html.index('id="p-coldspot"') < html.index('id="p-monsterhouse"')
-    assert 'class="proj crit"' in html
-    # THE FOUR DOORS — and `not mine` hands the debt back to the project that owes it
+    # a roster of links, critical first — and NOT the contents
+    assert '<a href="/desk?p=coldspot">' in html and '<a href="/desk?p=monsterhouse">' in html
+    assert html.index("/desk?p=coldspot") < html.index("/desk?p=monsterhouse")
+    assert 'class="crit"' in html
+    assert "refill the gemini key" not in html    # debt summaries stay behind the click
+    assert "root escalation" not in html          # brief bodies stay behind the click
+    assert "your queue" not in html               # the old duplicate scroll is gone
+    # letters fold away (they owe nothing) but still clear in bulk, folded ids with the lead
+    assert 'data-act="settle" data-ids="300,284,286"' in html
+    assert "clear all 1" in html
+
+
+def test_walking_into_one_project_opens_its_debts_and_the_four_doors() -> None:
+    """?p=<project> is the sitting: that project's debts, each with its exits, and the briefs
+    that asked — together, because that is the unit of work."""
+    html = render_desk_project(_desk(), "monsterhouse")
+    assert '<a href="/desk">← all projects</a>' in html
+    assert "refill the gemini key" in html
     assert 'data-verb="resolve" data-id="3ea7b203"' in html
     assert 'data-verb="assign" data-id="3ea7b203" data-owner="monsterhouse"' in html
     assert 'data-verb="defer" data-id="3ea7b203" data-days="30"' in html
-    # untrusted bodies are escaped, cards carry stable ids for the poller's re-open
-    assert "<script>x</script>" not in html and "&lt;script&gt;" in html
-    assert 'id="m289"' in html and 'id="dim291"' in html
-    assert "×3 same story" in html and "Like-Us (284)" in html
-    assert "moot (agent:fixer): fixed in bcbdeab" in html
-    # the old duplicate "your queue" scroll is GONE — by_project IS the queue
-    assert "your queue" not in html
+    # the coldspot ask does NOT bleed into monsterhouse's sitting
+    assert "root escalation" not in html
+    # a project with an ask renders the brief + the human's own dismiss; bodies are escaped
+    cold = render_desk_project(_desk(), "coldspot")
+    assert 'id="m289"' in cold and 'data-act="settle" data-ids="289"' in cold
+    assert "<script>x</script>" not in cold and "&lt;script&gt;" in cold
+    # a cleared project says so instead of 500ing
+    assert "cleared, or never was" in render_desk_project(_desk(), "ghost-repo")
 
 
 def test_only_the_desk_arms_the_write_handler() -> None:
@@ -146,8 +163,12 @@ async def test_desk_and_fleet_data_round_trip_the_live_graph(actions: Actions) -
                        to_project="operator", body="🚨 CRITICAL: decide something")
     await send_message(p, from_agent="agent:a", from_project="osiris",
                        to_project="neo", body="lateral note")
-    html = render_desk(await read_desk(p))
-    assert "decide something" in html
+    desk = await read_desk(p)
+    html = render_desk(desk)
+    # the LANDING page is the ROSTER: osiris appears with one ask — and the body does NOT.
+    # That is the flood cure; contents live behind the click.
+    assert '<a href="/desk?p=osiris">' in html and "decide something" not in html
+    assert "decide something" in render_desk_project(desk, "osiris")
     boxes = await mail_overview(p)
     assert {b["box"] for b in boxes} == {"operator", "neo"}
     html2 = render_mail_box("neo", await mail_threads(p, "neo"))
