@@ -275,9 +275,18 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
     gen = (holders.index(agent_id) + 1) if agent_id in holders else len(holders) + 1
     await actions.assert_property(a, "seat_generation", str(gen), source, now, _CONF,
                                   evidence_class=_EC)
+    # THE SUCCESSION EDGE (Ra V, rotten-apple, msg 374): "the graph finally gets the parent edge
+    # it's been missing". Before this, successor seats carried NO edge to their ancestor, so a
+    # lineage was not WALKABLE from the record — which is exactly why Ra could not tell his
+    # CONTEMPORARY from his own ghost, and asked me to merge them. A seat's history must be
+    # traversable, or the next mind re-derives it from the disk the way he had to.
+    prior = holders[-1] if holders and holders[-1] != agent_id else None
+    if prior:
+        await actions.create_link(
+            a, await actions.create_or_find_object("Agent", prior, source),
+            "succeeds_seat", source, now, _CONF, evidence_class=_EC)
     return {"claimed": name, "seat": seat_label(agent_id, name, gen), "agent": agent_id,
-            "house": house, "generation": gen,
-            "inherited_from": holders[-1] if holders and holders[-1] != agent_id else None}
+            "house": house, "generation": gen, "inherited_from": prior}
 
 
 async def resolve_seat(actions: Actions, name: str) -> dict[str, Any]:

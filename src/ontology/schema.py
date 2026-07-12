@@ -217,6 +217,14 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "lineage-linked id (agent:<base>-ii…) instead of writing under the dead name — "
              "SUCCESSION, distinct from spawned_by (delegation).",
              ("Agent",), ("Agent",)),
+    LinkType("succeeds_seat", "Holder → the mind that held this SEAT before it (operator's "
+             "HOUSE/SEAT/HOLDER ruling, 2026-07-12; asked for by Ra V, rotten-apple). DISTINCT "
+             "from succeeded_from, which is ANCHOR ancestry — the same conversation minting an "
+             "heir across a model swap. This is a different conversation taking up the same JOB "
+             "in the same house, so a seat's history is WALKABLE from the record. Ra could not "
+             "walk it, mistook his live CONTEMPORARY for his own ghost, and asked to be merged "
+             "with a stranger; the missing edge is what made that reading possible.",
+             ("Agent",), ("Agent",)),
     LinkType("archived_snapshot", "A Wayback/archive snapshot of the target.", (), ("URL",)),
     LinkType("same_as", "Identity merge edge (loser → winner)."),
     LinkType("uses", "Actor/source employs this capability or technique."),

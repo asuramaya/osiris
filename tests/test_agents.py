@@ -553,10 +553,53 @@ async def test_the_house_the_seat_and_the_holders(actions: Actions) -> None:
     assert heir["generation"] == 2 and heir["inherited_from"] == first
     assert heir["house"] == "decepticons"
 
+    # THE SUCCESSION EDGE (Ra V's ask, msg 374): before this, successor seats carried NO edge to
+    # their ancestor, so a lineage was not WALKABLE from the record — which is exactly why Ra
+    # could not tell his CONTEMPORARY from his own ghost, and asked me to merge them.
+    walked = await actions.pool.fetchval(
+        "SELECT dst.canonical FROM links l "
+        "JOIN objects src ON src.id=l.from_id JOIN objects dst ON dst.id=l.to_id "
+        "WHERE src.canonical=$1 AND l.type='succeeds_seat'", heir_anchor)
+    assert walked == first
+
     # a seat belongs to ONE house: a mind in another house may not take it
     outsider = await mind("agent:cccc3333", "heinrich")
     assert "another house" in (await claim_name(
         actions, outsider, "Soundwave", source=outsider))["error"]
+
+
+async def test_you_do_not_take_a_living_minds_name(actions: Actions) -> None:
+    """RA V'S REFINEMENT (rotten-apple, msg 374), and it is the case that breaks the naive model.
+    He and his predecessor were not sequential — they OVERLAPPED for two and a half days, two live
+    minds in one repo, each rendered as an anonymous hash with no edge between them. "I mistook my
+    contemporary for my own ghost."
+
+    So a seat cannot mean "the mind that works here" — two minds can. It is a TITLE: held by one
+    lineage at a time, and succeeded to ONLY when the holder has no live seat. If the holder is
+    LIVE, refusal stands. You do not take a living mind's name, contemporary or not."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import claim_name
+
+    async def mind(canon: str, house: str) -> str:
+        a = await actions.create_or_find_object("Agent", canon, "session")
+        await actions.assert_property(a, "project", house, "session", datetime.now(UTC), 0.9)
+        return canon
+
+    sitting = await mind("agent:dddd1111", "rotten-apple")
+    await claim_name(actions, sitting, "Ra", source=sitting)
+    await mounts.save_mount(actions.pool, job_dir="/j/d1", agent_id=sitting,
+                            project="rotten-apple", cwd="/x", model=None, session_key="k")
+
+    # a CONTEMPORARY in the same house — not an heir, because the holder is still alive
+    contemporary = await mind("agent:eeee2222", "rotten-apple")
+    refused = await claim_name(actions, contemporary, "Ra", source=contemporary)
+    assert "LIVE" in refused["error"] and "two jobs" in refused["error"]
+
+    # once the holder's seat is vacant, the same claim SUCCEEDS to it as the next holder
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '2 days' WHERE agent_id=$1", sitting)
+    heir = await claim_name(actions, contemporary, "Ra", source=contemporary)
+    assert heir["seat"] == "Ra II" and heir["inherited_from"] == sitting
 
 
 async def test_a_name_resolves_to_the_LIVE_seat_and_never_silently_to_a_grave(
