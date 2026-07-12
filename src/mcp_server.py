@@ -1233,8 +1233,8 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         "  AND a.name='last_active' "
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS last_active, "
         # a SIGNED death certificate — retire()'s own act, and the only thing that earns the
-        # word "retired". 3 of 325 working minds ever managed it; the tree used to award it to
-        # anything that stopped talking (the ghosts, 53729dd6).
+        # word "retired". Only 41 of 517 root minds (8%) ever managed it; the tree used to award
+        # it to anything that stopped talking (the ghosts, 53729dd6).
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
         "  AND a.name='retired' "
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS retired, "

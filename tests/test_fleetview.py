@@ -76,8 +76,8 @@ def test_full_mode_expands_everything_grouped() -> None:
 
 def test_quiet_is_never_called_retired() -> None:
     """THE GHOSTS (operator, 2026-07-12). The fold line said "N retired sessions", but the fold
-    means nothing more than NOT LIVE — and exactly 3 minds out of 325 ever signed a death
-    certificate. The tree was awarding the word to the other 322.
+    means nothing more than NOT LIVE — and only 41 of 517 root minds (8%) ever signed a death
+    certificate. The tree was awarding the word to the other 92%.
 
     RETIRED IS NOT A SYNONYM FOR QUIET. It is a deliberate, signed close that the wake trigger is
     bound never to reanimate — a word with teeth. Spending it on minds that merely stopped talking
