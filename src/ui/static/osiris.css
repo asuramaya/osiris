@@ -147,6 +147,16 @@ a { color: var(--blue); text-decoration: none; }
   overflow-wrap: anywhere; }
 .r-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top;
   word-break: break-word; overflow-wrap: anywhere; }
+/* CLAMP (operator, 2026-07-11): an unclamped cell let ONE long summary eat 200px of vertical
+   space, so a 974-row result showed four rows per screen — the scroll felt infinite because
+   it nearly was. Two lines, then ellipsis; the full text rides the cell's title, and one
+   click opens the object in the inspector, which is what the inspector is FOR. */
+.r-table td .clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  line-clamp: 2; overflow: hidden; }
+/* the facts EVERY row shares are not columns — they are one chip on the header */
+.r-chip { display: inline-block; border: 1px solid var(--border2); border-radius: 10px;
+  padding: 0 7px; margin-right: 4px; font-size: 10.5px; color: var(--muted);
+  text-transform: none; letter-spacing: 0; font-weight: 500; }
 .r-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; }
 .r-group { margin-bottom: 18px; }
 .r-group h3 { font-size: 11px; letter-spacing: .5px; text-transform: uppercase; color: var(--text);

@@ -343,16 +343,29 @@ function renderComposerBar(){
     chips = (sel.where||[]).map((c,i)=>`<span class="fchip">${esc(c.property)}${Osiris.OPSYM[c.op]||c.op}${esc(c.value)}
       <span class="x" data-rmf="${i}">×</span></span>`).join('') + `<span class="cbtn" id="addf">+ filter</span>`;
   }
-  const grp = RESULT.kind==='objects' ? `<span class="cbtn" id="groupby">Group by…</span>` : '';
+  // FANOUT is the garden's verb (operator: "each project is a tree with fruits") — it sits
+  // beside the generic Group by…, because a project is not just another property: it is the
+  // neighborhood, the thing the whole stack organizes by.
+  const grp = RESULT.kind==='objects'
+    ? `<span class="cbtn" id="fanout">⑂ Fan out by project</span><span class="cbtn" id="groupby">Group by…</span>` : '';
   bar.innerHTML = lin + `<span style="flex:1"></span>` + chips + grp
     + `<span class="cbtn" id="saveas">Save as…</span>`;
   bar.querySelectorAll('[data-rmf]').forEach(x=>x.onclick=()=>{ sel.where.splice(+x.dataset.rmf,1); runWorking(); });
   if($('addf')) $('addf').onclick=addFilter;
   if($('groupby')) $('groupby').onclick=groupBy;
+  if($('fanout')) $('fanout').onclick=fanOut;
   $('saveas').onclick=saveWorkingAs;
 }
 // scale: collapse an object set into a count-per-group histogram (Foundry's move) — wrap
 // the working spec in aggregate→order. Composes with the filter chips above it.
+// the garden: collapse any object set into its TREES (bundle by neighborhood). The rows come
+// back {group:{neighborhood}, metric} — the same shape aggregate yields — so the existing
+// ranked-table renderer draws it and the existing drill walks back INTO a tree's fruit
+// (select … where neighborhood=<tree>). One primitive, no bespoke path.
+function fanOut(){
+  WORKING = {op:'bundle',by:'neighborhood',from:WORKING};   // bundle ranks its own trees
+  runWorking();
+}
 function groupBy(){
   const property=prompt('Group by property (e.g. type, sector):'); if(!property) return;
   WORKING = {op:'order',dir:'desc',from:{op:'aggregate',group_by:[property],
@@ -483,12 +496,19 @@ function renderSwitcher(){
 // drill an aggregate group into the objects it counts: rebuild the base select + filter it to
 // the group, then run it. 'changelog by area' → click 'composer' → select Commit where
 // scope=composer. The aggregate's own op-tree carries everything we need.
-function aggNode(spec){ for(let s=spec; s&&typeof s==='object'; s=s.from) if(s.op==='aggregate') return s; return null; }
+// a GROUPING node is anything that collapsed objects into counted rows: `aggregate` (by
+// property) or `bundle` (by neighborhood — the garden's fanout). Both drill the same way,
+// because `neighborhood` is a real dimension of select: that is the whole reason it was made
+// one, rather than given a bespoke walk-into-a-tree path.
+function aggNode(spec){ for(let s=spec; s&&typeof s==='object'; s=s.from)
+  if(s.op==='aggregate'||s.op==='bundle') return s; return null; }
+function groupKeys(n){ return n.op==='bundle' ? [n.by||'neighborhood'] : (n.group_by||[]); }
 async function drillInto(group, spec){
   const agg=aggNode(spec); if(!agg){ setStatus("This result can't be drilled."); return; }
   const base=agg.from && agg.from.op==='select' ? JSON.parse(JSON.stringify(agg.from)) : {op:'select'};
-  base.where=(base.where||[]).concat((agg.group_by||[]).map(p=>({property:p,op:'eq',value:String(group[p]??'')})));
-  const label=(agg.group_by||[]).map(p=>`${p}=${group[p]??'(none)'}`).join(', ');
+  const keys=groupKeys(agg);
+  base.where=(base.where||[]).concat(keys.map(p=>({property:p,op:'eq',value:String(group[p]??'')})));
+  const label=keys.map(p=>`${p}=${group[p]??'(none)'}`).join(', ');
   setStatus(`Opening ${label}…`);
   const res=await fetch('/compositions/run-spec',{method:'POST',headers:{'content-type':'application/json'},
     body:JSON.stringify({spec:base,subject:FOCUS,name:`${ACTIVE||'group'} · ${label}`})}).then(r=>r.json());

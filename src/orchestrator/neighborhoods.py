@@ -38,6 +38,40 @@ _SOURCE = "neighborhood-miner"
 _PURPOSE = "neighborhood-summary"
 _WINDOW_DAYS = 30
 _MAX_MEMBERS = 40           # the digest reads the neighborhood's densest recent core
+
+# THE NEIGHBORHOOD AS A PRIMITIVE (operator, 2026-07-11: "we don't hardcode, we build
+# primitives... a fanout and organizing per project helps across the entire stack. think about
+# neighborhoods and bundling. think about the garden of eden, and each project is a tree with
+# fruits"). The concept already lived here — but PRIVATE, owned by the summary miner, so every
+# surface that wanted "group this by project" re-derived it by hand: the operator's desk, the
+# wall's rollup, and (nearly) a bespoke console renderer. Three hand-rolled copies of one idea
+# is a primitive announcing itself.
+#
+# So: the garden is the graph, a TREE is a SoftwareProject, and the FRUIT is anything hanging
+# off it by `in_repo`. `neighborhoods_of` names the tree each fruit grew on — one batched query,
+# no N+1 — and everything above it (bundle/fanout, the desk roster, the wall) composes from it
+# instead of re-deriving it.
+NEIGHBORHOOD = "neighborhood"
+
+
+async def neighborhoods_of(
+    pool: asyncpg.Pool, ids: list[Any],
+) -> dict[Any, dict[str, Any]]:
+    """The TREE each of these objects hangs from — {object_id: {name, id}} for every object
+    with an `in_repo` edge. Objects with no tree are simply absent (the caller decides what
+    rootless fruit means: the desk calls it '—', a bundle gives it its own pile).
+
+    One query for the whole set. The newest edge wins if an object was re-filed."""
+    if not ids:
+        return {}
+    rows = await pool.fetch(
+        "SELECT DISTINCT ON (l.from_id) l.from_id AS oid, p.id AS pid, "
+        " replace(p.canonical, 'repo:', '') AS hood "
+        "FROM links l JOIN objects p ON p.id = l.to_id "
+        "WHERE l.from_id = ANY($1::uuid[]) AND l.type = 'in_repo' "
+        "  AND p.type = 'SoftwareProject' AND p.status = 'active' "
+        "ORDER BY l.from_id, l.created_at DESC", ids)
+    return {r["oid"]: {"name": r["hood"], "id": str(r["pid"])} for r in rows}
 _MAX_SUMMARIES = 3          # LLM budget per pass; stalest-first rotation covers the rest
 _EC = EvidenceClass.DERIVED.value
 _CONF = 0.5

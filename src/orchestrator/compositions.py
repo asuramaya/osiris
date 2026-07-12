@@ -61,6 +61,7 @@ from src.orchestrator.coinvest import coinvestment_ties
 from src.orchestrator.discrepancy import _HOME_PROPS, country_of
 from src.orchestrator.frontier import subject_report
 from src.orchestrator.monitor import match_condition
+from src.orchestrator.neighborhoods import NEIGHBORHOOD, neighborhoods_of
 
 # Named pure transforms a `collect` op may apply to a value. Kept tiny and neutral —
 # `country` is the only domain helper, shared with the (soon-vestigial) discrepancy code.
@@ -1348,8 +1349,12 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                                       "lens (adopt / question / resolve)"},
                 "note": "the graded wall — one law with orient(): obligations first, "
                         "yours-to-act before others' claims before waiting-on-the-human"}
+    # `id` rides along so the CONSOLE can WALK: clicking a project row focuses that
+    # SoftwareProject and re-runs this same wall scoped to it (operator, 2026-07-11: "the
+    # breakdown needs to let me walk through the cosmos like a project"). The rollup was
+    # already the map; it just had no coordinates to click.
     projects = [dict(r) for r in await pool.fetch(
-        "SELECT p.canonical AS project, count(*) AS open, "
+        "SELECT p.id::text AS id, p.canonical AS project, count(*) AS open, "
         " count(*) FILTER (WHERE (SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='kind' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = 'obligation') "
@@ -1364,7 +1369,7 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='status' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
-        "GROUP BY p.canonical ORDER BY count(*) DESC LIMIT 30")]
+        "GROUP BY p.id, p.canonical ORDER BY count(*) DESC LIMIT 30")]
     # the fleet's TOP OF WALL: obligations (a duty never hides) plus any thread a mind
     # actually TOUCHED — never the untouched echo mass; repo-less threads included (a
     # deliberate open_thread with no repo must still surface where it was promised to)
@@ -1531,9 +1536,18 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
             "SELECT id FROM objects WHERE status='active' AND ($1::text IS NULL OR type=$1) "
             "AND ($2::text IS NULL OR canonical LIKE $2 || '%')", ot, cp
         )
+        # `neighborhood` is a DIMENSION, not a property — an object's tree is an in_repo EDGE,
+        # not an assertion. Resolving it here (batched, only when asked for) makes it filterable
+        # like any other fact, which is what lets `bundle`'s rows drill straight back into their
+        # fruit with no bespoke drill path: select Thread where neighborhood=osiris.
+        hoods: dict[Any, dict[str, Any]] = {}
+        if any(c.get("property") == NEIGHBORHOOD for c in where):
+            hoods = await neighborhoods_of(pool, [r["id"] for r in rows])
         out: list[uuid.UUID] = []
         for r in rows:
             facts = await _props(pool, r["id"])
+            if hoods or any(c.get("property") == NEIGHBORHOOD for c in where):
+                facts[NEIGHBORHOOD] = (hoods.get(r["id"]) or {}).get("name", "(no tree)")
             if all(match_condition(facts.get(c.get("property")), c.get("op", "contains"),
                                    c.get("value")) for c in where):
                 out.append(r["id"])
@@ -1597,6 +1611,30 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         if kind == "objects":
             return Result("objects", objects=_setop(op, [s.objects for s in sets]))
         return Result("values", values=_setop(op, [s.values for s in sets]))
+
+    if op == "bundle":
+        # FANOUT — the garden's primitive (operator, 2026-07-11: "each project is a tree with
+        # fruits"). Collapse ANY object set into its trees: one row per neighborhood, counted,
+        # ordered by weight. Returns the same {group, metric} shape `aggregate` does, so it
+        # renders through the console's existing ranked-table renderer AND drills back through
+        # the existing drill — because `neighborhood` is a real dimension of `select` (below),
+        # clicking a tree re-selects exactly its fruit. Nothing about this knows what a Thread
+        # is: bundle a set of commits, files, decisions or threads and the garden works the same.
+        base = await _eval(pool, node["from"], subject)
+        by = node.get("by", NEIGHBORHOOD)
+        if by != NEIGHBORHOOD:
+            raise ValueError(
+                f"bundle fans out by '{NEIGHBORHOOD}' (the in_repo tree); "
+                f"for a plain property use aggregate(group_by=['{by}'])")
+        hoods = await neighborhoods_of(pool, base.objects)
+        tally: dict[str, dict[str, Any]] = {}
+        for oid in base.objects:
+            h = hoods.get(oid)
+            key = h["name"] if h else "(no tree)"
+            row = tally.setdefault(key, {"group": {NEIGHBORHOOD: key}, "metric": 0,
+                                         "id": h["id"] if h else None})
+            row["metric"] += 1
+        return Result("rows", rows=sorted(tally.values(), key=lambda r: -int(r["metric"])))
 
     if op == "aggregate":
         base = await _eval(pool, node["from"], subject)

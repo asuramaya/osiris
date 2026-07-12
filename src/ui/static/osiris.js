@@ -41,6 +41,7 @@ const Osiris = (() => {
       case "union": return ["union"];
       case "intersect": return ["intersect"];
       case "aggregate": return [...inner, `aggregate by ${(spec.group_by || []).join(", ") || "all"} (${(spec.metric || {}).type || "count"})`];
+      case "bundle": return [...inner, `⑂ fan out by ${spec.by || "neighborhood"}`];
       case "order": return [...inner, `order ${spec.dir || "asc"}`];
       case "take": return [...inner, `take ${spec.n}`];
       case "function": return [`${spec.name}()`];
@@ -317,18 +318,61 @@ const Osiris = (() => {
       el.oncontextmenu = (e) => { if (onCtx) { e.preventDefault(); onCtx(el.dataset.pick, el.dataset.type, e); } };
     });
   }
-  function objectsTable(panel, items, onPick, onCtx) {
+  // CONTEXTUAL COLUMNS (operator, 2026-07-11, screenshotting his own composer: "contextual
+  // chrome?"). The old table chose its columns by FREQUENCY — and frequency is exactly
+  // backwards: a property that is present on EVERY row with the SAME value scores highest and
+  // is worth nothing. Running `open threads` produced six columns of which four were void:
+  // TYPE ('Thread' ×974), STATUS ('open' ×974 — it was the FILTER), SOURCE_MODEL (empty on
+  // every row), and SUMMARY (byte-identical to NAME). Half the width was a mirror of itself.
+  //
+  // A column now earns its place by VARYING. Constant-across-every-row → it isn't a column,
+  // it's a fact about the whole set: it moves to a chip in the header. Empty everywhere →
+  // gone. A mirror of Name → gone. What's left is the part of the result that differs, which
+  // is the only part anyone reads.
+  function _tableShape(items) {
     const skip = new Set(["name", "demo", "tag"]);
-    const freq = {};
-    items.forEach((o) => Object.keys(o.props || {}).forEach((k) => { if (!skip.has(k)) freq[k] = (freq[k] || 0) + 1; }));
-    const cols = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 4).map((e) => e[0]);
-    const head = `<th>Type</th><th>Name</th>${cols.map((c) => `<th>${esc(c)}</th>`).join("")}`;
+    const seen = {}, filled = {};
+    items.forEach((o) => Object.entries(o.props || {}).forEach(([k, v]) => {
+      if (skip.has(k)) return;
+      const s = v == null ? "" : String(v).trim();
+      if (!s) return;                                     // empty is not evidence
+      (seen[k] = seen[k] || new Set()).add(s);
+      filled[k] = (filled[k] || 0) + 1;
+    }));
+    const mirrorsName = (k) => items.every((o) => {
+      const v = (o.props || {})[k];
+      const s = v == null ? "" : String(v).trim();
+      return !s || s === String(o.label || "").trim();
+    });
+    const chips = [];
+    const cols = Object.keys(seen).filter((k) => {
+      if (mirrorsName(k)) return false;                   // a second copy of Name
+      // one value, and every row has it → a property of the SET, not of any row
+      if (seen[k].size === 1 && filled[k] === items.length) {
+        chips.push(`${k}=${[...seen[k]][0]}`);
+        return false;
+      }
+      return true;                                        // it varies: it earns a column
+    }).sort((a, b) => filled[b] - filled[a]).slice(0, 4);
+    const types = [...new Set(items.map((o) => o.type))];
+    if (types.length === 1 && items.length) chips.unshift(types[0]);
+    return { cols, chips, showType: types.length > 1 };
+  }
+
+  function objectsTable(panel, items, onPick, onCtx) {
+    const { cols, chips, showType } = _tableShape(items);
+    const head = (showType ? "<th>Type</th>" : "") + "<th>Name</th>" +
+      cols.map((c) => `<th>${esc(c)}</th>`).join("");
+    const cell = (v) => `<td title="${esc(v)}"><span class="clamp">${esc(v)}</span></td>`;
     const body = items
       .map((o) => `<tr data-pick="${o.id}" data-type="${esc(o.type)}" style="cursor:pointer">
-        <td><span class="o-faint">${esc(o.type)}</span></td><td>${esc(o.label)}</td>
-        ${cols.map((c) => `<td>${esc((o.props || {})[c] || "")}</td>`).join("")}</tr>`)
+        ${showType ? `<td><span class="o-faint">${esc(o.type)}</span></td>` : ""}${cell(o.label || "")}
+        ${cols.map((c) => cell((o.props || {})[c] || "")).join("")}</tr>`)
       .join("");
-    panel.innerHTML = `<div class="r-head">${items.length} object${items.length === 1 ? "" : "s"}</div>` +
+    const chipbar = chips.map((c) => `<span class="r-chip">${esc(c)}</span>`).join("");
+    panel.innerHTML =
+      `<div class="r-head">${items.length} object${items.length === 1 ? "" : "s"}` +
+      (chips.length ? ` <span class="o-faint">— all share</span> ${chipbar}` : "") + "</div>" +
       (items.length ? `<table class="r-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
         : `<div class="o-empty">Empty result.</div>`);
     _wireRows(panel, onPick, onCtx);
