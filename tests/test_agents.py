@@ -549,3 +549,59 @@ async def test_a_seat_label_may_never_be_claimed_as_a_name(actions: Actions) -> 
     # a successor of the REAL lineage inherits it without ceremony
     heir = await claim_name(actions, "agent:0806072e-ix", "Soundwave", source="agent:0806072e-ix")
     assert heir["claimed"] == "Soundwave" and heir["seat"] == "Soundwave IX"
+
+
+async def test_a_name_resolves_to_the_LIVE_seat_and_never_silently_to_a_grave(
+        actions: Actions) -> None:
+    """THE GRAVE-DELIVERY BUG (Anubis X of heinrich and Atlas II of code, independently, within
+    one hour, 2026-07-12). send(to_agent='Soundwave') delivered into a seat three days dead,
+    returned sent=360, and the only signal was a boolean the caller had to notice. Atlas II's
+    whole port report died in a corpse's inbox — and his receipt said live=true.
+
+    Every mount banner tells the fleet to DM by name, so the DOCUMENTED path was the broken one,
+    and a dead seat accepts mail exactly like a live one: the loss is silent. Lineages that turn
+    over fastest resolved wrongest — the blast radius grew with the fleet's health."""
+    from src.orchestrator.agents import claim_name, resolve_seat
+
+    ancestor, heir = "agent:beef0001-ii", "agent:beef0001-iii"
+    for a in (ancestor, heir):
+        await claim_name(actions, a, "Quokka", source=a)
+    # the ancestor has a STALE mount row; the heir has none at all — the exact shape that used to
+    # make a corpse outrank a successor (ORDER BY last_seen DESC NULLS LAST)
+    await actions.pool.execute(
+        "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, mounted_at, last_seen) "
+        "VALUES ('/j/1',$1,'z','/z', now(), now() - interval '3 days')", ancestor)
+
+    seat = await resolve_seat(actions, "Quokka")
+    assert seat["agent"] == heir                       # the heir outranks its ancestor
+    assert seat["live"] is False
+    assert "may never be read" in seat["warning"]      # and it says so, LOUDLY
+
+    # a live seat always wins, whatever the generation ordering says
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() WHERE agent_id = $1", ancestor)
+    live = await resolve_seat(actions, "Quokka")
+    assert live["agent"] == ancestor and live["live"] is True and "warning" not in live
+
+
+async def test_a_grave_is_never_a_delivery_target(actions: Actions) -> None:
+    """Atlas II: send(to_agent='Nebbercracker') resolved to a false_mint [1m] PHANTOM — live=false,
+    seen=null, never a real session. Reaching a retired or phantom seat must take an explicit agent
+    id: an act of intent, never a name lookup a tired mind followed off a banner."""
+    from datetime import UTC, datetime
+
+    from src.orchestrator.agents import claim_name, resolve_seat
+
+    real, phantom = "agent:cafe0001", "agent:cafe0001-ii"
+    for a in (real, phantom):
+        await claim_name(actions, a, "Nebbercracker", source=a)
+    ghost = await actions.create_or_find_object("Agent", phantom, "session")
+    await actions.assert_property(ghost, "false_mint", "true", "session",
+                                  datetime.now(UTC), 0.9)
+    await actions.pool.execute(
+        "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, mounted_at, last_seen) "
+        "VALUES ('/j/2',$1,'z','/z', now(), now())", phantom)
+
+    seat = await resolve_seat(actions, "Nebbercracker")
+    assert seat["agent"] == real                       # the phantom is not a candidate at all
+    assert phantom not in seat["candidates"]

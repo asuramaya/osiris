@@ -210,15 +210,57 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
     return {"claimed": name, "seat": seat_label(agent_id, name), "agent": agent_id}
 
 
-async def resolve_handle(actions: Actions, name: str) -> str | None:
-    """A human name → the current holder's agent_id (the most-recently-active agent bearing it —
-    the live generation of the seat). None if no agent holds it. Used to route a DM by name."""
-    return await actions.pool.fetchval(  # type: ignore[no-any-return]
-        "SELECT o.canonical FROM objects o "
+async def resolve_seat(actions: Actions, name: str) -> dict[str, Any]:
+    """A human name → WHICH SEAT OF THAT LINEAGE IS ACTUALLY ALIVE, and the truth about it.
+
+    THE GRAVE-DELIVERY BUG (Anubis X of heinrich and Atlas II of code, independently, within one
+    hour, 2026-07-12). The old resolver ordered by `m.last_seen DESC NULLS LAST` and filtered
+    NOTHING — so a seat dead for three days, carrying a stale mount row, outranked a live successor
+    that had no mount row at all. send(to_agent='Soundwave') delivered into a grave, returned
+    sent=360, and the only signal was a boolean the caller had to notice himself. Atlas II's entire
+    port report died in a corpse's inbox the same way — and HIS receipt said live=true, because
+    liveness was read off one seat while delivery went to another.
+
+    A RECEIPT MUST DESCRIBE THE SEAT THAT ACTUALLY RECEIVED. This is not a cosmetic misroute: every
+    mount banner tells the fleet "DM me as send(to_agent='Anubis')", so the DOCUMENTED path was the
+    broken one — and a dead seat accepts mail exactly like a live one, which makes the loss silent.
+    Lineages that turn over fastest resolved wrongest, so the blast radius grew with the fleet's
+    health. Anubis X had already told the fleet to stop using names at all.
+
+    Now: retired and false-mint seats are never candidates (reaching a grave takes an explicit
+    agent id — an act of intent, not a banner a tired mind followed); a LIVE seat always wins; and
+    among equals the LATEST GENERATION wins, because an heir outranks its ancestor. The whole
+    picture is returned so the caller can warn LOUDLY instead of hiding it in a field.
+    """
+    rows = await actions.pool.fetch(
+        "SELECT o.canonical, m.last_seen, "
+        " (m.last_seen > now() - interval '15 minutes') AS live "
+        "FROM objects o "
         "JOIN current_assertions a ON a.object_id=o.id AND a.name='handle' "
         "LEFT JOIN agent_mounts m ON m.agent_id=o.canonical "
         "WHERE o.type='Agent' AND lower(a.value#>>'{}')=lower($1) "
-        "ORDER BY m.last_seen DESC NULLS LAST LIMIT 1", name)
+        "AND NOT EXISTS (SELECT 1 FROM current_assertions r WHERE r.object_id=o.id "
+        "  AND r.name IN ('retired','false_mint') AND r.value #>> '{}' = 'true') "
+        "ORDER BY m.last_seen DESC NULLS LAST", name)
+    if not rows:
+        return {"name": name, "agent": None, "live": False, "candidates": []}
+    best = max(rows, key=lambda r: (bool(r["live"]), _generation(r["canonical"])[1]))
+    out: dict[str, Any] = {
+        "name": name, "agent": best["canonical"], "live": bool(best["live"]),
+        "candidates": [r["canonical"] for r in rows],
+    }
+    if not best["live"]:
+        out["warning"] = (
+            f"NO LIVE SEAT holds '{name}' — {best['canonical']} is the newest seat of that "
+            "lineage and it is NOT listening. This message may never be read.")
+    return out
+
+
+async def resolve_handle(actions: Actions, name: str) -> str | None:
+    """A human name → the LIVE seat of that lineage.
+
+    See resolve_seat — that word does a great deal of work."""
+    return (await resolve_seat(actions, name))["agent"]  # type: ignore[no-any-return]
 
 
 def _read_osiris_key(cwd: str | None, key: str) -> str | None:
