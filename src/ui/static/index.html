@@ -30,14 +30,30 @@
   .spacer{flex:1}
 
   /* layout */
-  #main{display:grid;grid-template-columns:274px 1fr 350px;height:100%;min-height:0;
-    transition:grid-template-columns .16s ease}
+  #main{display:grid;grid-template-columns:var(--lw,274px) 1fr var(--rw,350px);height:100%;
+    min-height:0;transition:grid-template-columns .16s ease}
+  #main.dragging{transition:none;user-select:none;cursor:col-resize}
+  /* both ends drag: a 6px gutter riding the pane boundary, invisible until you reach for it.
+     It hangs off #main (the GRID), never off a rail — .rail{overflow-y:auto} would clip it,
+     and the right rail is the inspector, whose innerHTML is rewritten on every render. */
+  .grip{position:absolute;top:0;bottom:0;width:6px;cursor:col-resize;z-index:20}
+  .grip:hover,.grip.on{background:var(--blue);opacity:.45}
+  .grip.l{left:calc(var(--lw,274px) - 3px)} .grip.r{right:calc(var(--rw,350px) - 3px)}
+  #main.lefthidden .grip.l,#main.righthidden .grip.r{display:none}
+  /* the ugly scrollbars — thin, dark, and only as loud as the thing they scroll */
+  *{scrollbar-width:thin;scrollbar-color:var(--border2) transparent}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:6px;
+    border:2px solid transparent;background-clip:content-box}
+  ::-webkit-scrollbar-thumb:hover{background:var(--muted);background-clip:content-box}
+  ::-webkit-scrollbar-corner{background:transparent}
   /* calm: collapse the side panels to give the content room (U3 — open calm). NEVER
      display:none a panel — that drops it from the grid and shifts #center onto the 0px
      track (a 0-width center). Keep it a grid item at 0 width, clipped. */
-  #main.lefthidden{grid-template-columns:0 1fr 350px}
+  #main.lefthidden{grid-template-columns:0 1fr var(--rw,350px)}
   #main.lefthidden #left{overflow:hidden}
-  #main.righthidden{grid-template-columns:274px 1fr 0}
+  #main.righthidden{grid-template-columns:var(--lw,274px) 1fr 0}
   #main.righthidden #right{overflow:hidden}
   #main.lefthidden.righthidden{grid-template-columns:0 1fr 0}
   .panel-toggle{background:transparent;border:0;color:var(--muted);cursor:pointer;font-size:15px;
@@ -56,10 +72,14 @@
     font-size:12px;margin:0 0 8px}
 
   /* composition list */
-  .comp{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:7px;cursor:pointer;
-    border:1px solid transparent}
+  /* the name was being CRUSHED to "p.." / "f.." — .cdesc is a <div> CHILD of this flex row, so
+     it became a third flex item and ate the width. Wrap the row: name + badge on line one,
+     description on its own line, where it was always meant to be. */
+  .comp{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 8px;padding:7px 8px;
+    border-radius:7px;cursor:pointer;border:1px solid transparent}
   .comp:hover{background:var(--panel2)} .comp.sel{background:var(--panel2);border-color:var(--border2)}
-  .comp .cn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:550}
+  .comp .cn{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;font-weight:550;font-size:12.5px}
+  .comp .cdesc{flex:0 0 100%;color:var(--faint);font-size:11.5px;line-height:1.45}
   .kindb{font-size:9px;letter-spacing:.5px;text-transform:uppercase;border-radius:999px;padding:1px 6px;font-weight:700}
   .kindb.lens{color:var(--blue);background:#15263b;border:1px solid #1f3a5a}
   .kindb.watch{color:var(--accent);background:#10261a;border:1px solid #1d4a2e}
@@ -103,6 +123,7 @@
   .viewsw button.on{background:var(--chip);color:var(--text)}
   .viewsw button:hover{color:var(--text)}
   #stage{position:relative;min-height:0}
+  #main{position:relative}
   #cy{position:absolute;inset:0;background:
     radial-gradient(circle at 1px 1px,#161c25 1px,transparent 0) 0 0/22px 22px,var(--bg)}
   #result{position:absolute;inset:0;overflow:auto;padding:18px 22px;background:var(--bg);display:none}
@@ -199,6 +220,8 @@
         Click anything — an object in the set, a node on the board, a related entity — and it
         opens here with every fact and where it came from.</div>
     </aside>
+    <div class="grip l" data-grip="l" title="drag to resize · double-click to reset"></div>
+    <div class="grip r" data-grip="r" title="drag to resize · double-click to reset"></div>
   </div>
 </div>
 
@@ -362,6 +385,50 @@ function renderComposerBar(){
 // back {group:{neighborhood}, metric} — the same shape aggregate yields — so the existing
 // ranked-table renderer draws it and the existing drill walks back INTO a tree's fruit
 // (select … where neighborhood=<tree>). One primitive, no bespoke path.
+// BOTH ENDS RESIZE (operator: "let the hamburger sides be resizeable on both ends"). The
+// widths are CSS vars on the grid, so a drag is one number and the layout follows; they
+// persist, because a pane you re-drag every session is a pane that doesn't fit you.
+const PANE={l:{var:'--lw',min:180,max:640,def:274},r:{var:'--rw',min:220,max:760,def:350}};
+function loadPanes(){
+  for(const k of ['l','r']){
+    const v=localStorage.getItem('osiris.pane.'+k);
+    if(v) document.getElementById('main').style.setProperty(PANE[k].var, v+'px');
+  }
+}
+function wireGrips(){
+  const main=document.getElementById('main');
+  document.querySelectorAll('[data-grip]').forEach(g=>{
+    g.onmousedown=e=>{
+      e.preventDefault();
+      const k=g.dataset.grip, cfg=PANE[k];
+      // the grip's parent is #main (the GRID) — the pane it resizes must be named, not inferred
+      const rail=document.getElementById(k==='l'?'left':'right');
+      const start=e.clientX, w0=rail.getBoundingClientRect().width;
+      g.classList.add('on'); main.classList.add('dragging');
+      const MIN_CENTER=420;   // the panes frame the work; they may never starve it
+      const other = (k==='l' ? document.getElementById('right') : document.getElementById('left'))
+        .getBoundingClientRect().width;
+      const room = main.getBoundingClientRect().width - other - MIN_CENTER;
+      const move=ev=>{
+        const d = k==='l' ? (ev.clientX-start) : (start-ev.clientX);   // right rail grows leftward
+        const w = Math.max(cfg.min, Math.min(cfg.max, room, w0+d));
+        main.style.setProperty(cfg.var, w+'px');
+      };
+      const up=()=>{
+        document.removeEventListener('mousemove',move); document.removeEventListener('mouseup',up);
+        g.classList.remove('on'); main.classList.remove('dragging');
+        localStorage.setItem('osiris.pane.'+k,
+          parseInt(getComputedStyle(main).getPropertyValue(cfg.var))||cfg.def);
+      };
+      document.addEventListener('mousemove',move); document.addEventListener('mouseup',up);
+    };
+    g.ondblclick=()=>{                                   // double-click a grip: back to default
+      const k=g.dataset.grip;
+      main.style.setProperty(PANE[k].var, PANE[k].def+'px');
+      localStorage.removeItem('osiris.pane.'+k);
+    };
+  });
+}
 function fanOut(){
   WORKING = {op:'bundle',by:'neighborhood',from:WORKING};   // bundle ranks its own trees
   runWorking();
@@ -1018,6 +1085,7 @@ Osiris.loadSchema().then(async()=>{
   if(cur && cur.updated_by==='claude' && cur.composition && cur.composition!==ACTIVE)
     await runComp(cur.composition);
   await applyDeepLink();
+  loadPanes(); wireGrips();          // both rails: remembered widths + drag handles
   watchConsole(); });  // open the shared-cursor link with Claude
 </script>
 </body>
