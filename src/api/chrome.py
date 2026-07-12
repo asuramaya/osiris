@@ -249,9 +249,31 @@ def render_desk(desk: dict[str, Any]) -> str:
         out.append("</table></div>")
     else:
         out.append('<p class="dim">desk clear — nothing owed, nobody waiting.</p>')
+    out.append(_guesses_band(desk))
     out.append(_letters_band(desk))
     out.append(_dimmed_band(desk))
     return "".join(out)
+
+
+def _guesses_band(desk: dict[str, Any]) -> str:
+    """WHAT THE MINER THINKS YOU OWE — folded, grey, and never in the red number.
+
+    An LLM read a conversation and inferred a duty for the human. Nobody asked him. Five of
+    the six debts on this desk were exactly that, and two were provably false the moment anyone
+    checked. They are kept — the miner really did overhear something, and some of these are
+    real — but a guess that wears the same colour as a deliberate ask spends the only currency
+    the red number has. So: shown, with the same four doors, so a true one can be acted on and
+    a false one killed in a click."""
+    guesses = (desk.get("miner_guesses") or {}).get("threads") or []
+    if not guesses:
+        return ""
+    rows = [f'<div class="debt"><code>{_e(t["id"])}</code> '
+            f'<span class="dim">{_e(t["project"])}</span> {_e(t["summary"])}'
+            + _verbs(t, t["project"]) + "</div>" for t in guesses]
+    return ('<details class="band" id="guesses"><summary class="hdr-fyi">the miner thinks you '
+            f'may owe <span class="pill">{len(guesses)}</span> '
+            '<span class="dim">(inferred from overheard talk — nobody asked you; '
+            "not counted as debt)</span></summary>" + "".join(rows) + "</details>")
 
 
 def render_desk_project(desk: dict[str, Any], project: str) -> str:

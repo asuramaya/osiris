@@ -835,3 +835,54 @@ async def test_echoes_composition_lists_the_collapsed_pile(actions: Actions) -> 
     assert any(s.startswith("a question the miner remembered") for s in summaries)
     assert items["count"] >= 2
     assert "reclassify_thread" in items["verbs"]
+
+
+async def test_a_decision_closes_the_thread_it_answers(actions: Actions) -> None:
+    """record_decision(resolves=…) — the answer and the close in ONE act.
+
+    Capture had a one-way valve: the ruling landed and the question stayed lit, because
+    closing was a SEPARATE verb a dying session forgets. The operator ruled on the lineage
+    question on 2026-07-12; the decision recording that ruling said "resolving thread
+    2f353b8e" IN PROSE, nothing read the prose, and the graph went on asking him a question
+    he had already answered for a full day (bug 59c8e47d). The graph does not read prose.
+    """
+    t = await open_thread(actions, "IS A LINEAGE AN ANCHOR OR A NAME?", owner="operator")
+    d = await record_decision(actions, "HOUSE · SEAT · HOLDER — the seat outlives its holders",
+                              kind="ruling", resolves=str(t))
+
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", t)
+    assert status == "resolved"
+    # and the graph can now WALK from the question to the ruling that settled it
+    answered = await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='answers'", d)
+    assert answered == t
+    because = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='resolved_because' ORDER BY a.observed_at DESC LIMIT 1", t)
+    assert str(d)[:8] in because
+
+
+async def test_a_decision_that_miscites_its_question_records_nothing(actions: Actions) -> None:
+    """Same strictness as `supersedes`: a ruling that cannot name what it settled has not
+    settled it, and must not land half-done."""
+    import pytest
+    with pytest.raises(ValueError, match="resolves matched no thread"):
+        await record_decision(actions, "a ruling about nothing in particular",
+                              resolves="no-such-thread-anywhere")
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions a WHERE a.name='summary' "
+        "AND a.value #>> '{}' = 'a ruling about nothing in particular'")
+    assert n == 0
+
+
+async def test_resolves_is_idempotent(actions: Actions) -> None:
+    """Re-recording the same ruling (the fleet does this on retry) must not double-link."""
+    t = await open_thread(actions, "should the miner oblige the human?", owner="operator")
+    for _ in range(2):
+        d = await record_decision(actions, "THE MINER MAY NOTICE, BUT MUST NEVER OBLIGE",
+                                  resolves=str(t))
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND to_id=$2 AND type='answers'", d, t)
+    assert n == 1

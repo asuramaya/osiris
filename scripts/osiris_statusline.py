@@ -228,6 +228,15 @@ async def _counts(
             "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
             "    AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
             "    = 'operator' "
+            # THE MINER MAY NOTICE, BUT MUST NEVER OBLIGE. A DERIVED thread is an LLM's
+            # INFERENCE that the human owes something — five of the six debts on this desk were
+            # exactly that, and two were provably false (a "mid-flight" rsync that had landed a
+            # day earlier; a review queue of 17 that held one resolved row). A guess that wears
+            # the red number spends the only currency the number has. Guesses live on the desk,
+            # in their own band (mailbox.read_desk → miner_guesses); they are not DEBT.
+            "  AND COALESCE((SELECT a.evidence_class FROM current_assertions a "
+            "    WHERE a.object_id=o.id AND a.name='summary' "
+            "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'') <> 'derived' "
             "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
             "    WHERE a.object_id=o.id AND a.name='status' "
             "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open') = 'open'), "

@@ -386,11 +386,25 @@ async def _operator_queue(pool: asyncpg.Pool, limit: int = 100) -> list[dict[str
     per thread or per project, so it snowballs into infinity", 2026-07-11).
 
     DEFERRED debts are hidden until their date (capture.defer_thread). Fix at the lens: the
-    thread stays open and owned in the record; only its visibility moves."""
+    thread stays open and owned in the record; only its visibility moves.
+
+    ASKED vs GUESSED — each row carries the GRADE of the mind that placed it (2026-07-12, the
+    operator: "according to the desk, this session owes 6, accurate or bug?" — bug, all six).
+    FIVE of those six were DERIVED: the miner read a conversation, inferred "the human must do
+    X", and minted a duty nobody ever asked him for — "check the mid-flight 121G rsync" (none
+    had run in a day), "process 17 non-auto-mergeable decisions" (the queue held one, already
+    resolved). Evidence-graded ingest puts DERIVED at the BOTTOM, and yet a DERIVED guess was
+    landing on the human's queue with the same weight, the same red number and the same
+    permanence as a deliberate ask. LEXICAL SIMILARITY MAY ASK BUT NEVER ASSERT, one level up:
+    THE MINER MAY NOTICE, BUT MUST NEVER OBLIGE. So the grade rides along and the lens splits
+    on it — the record keeps every guess, the RED NUMBER counts only what a mind actually asked.
+    """
     rows = await pool.fetch(
         "SELECT o.id, o.created_at, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS s, "
+        " (SELECT a.evidence_class FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS ec, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS k, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -413,6 +427,7 @@ async def _operator_queue(pool: asyncpg.Pool, limit: int = 100) -> list[dict[str
     today = datetime.now(UTC).date().isoformat()
     return [{"id": str(r["id"])[:8], "summary": (r["s"] or "")[:200],
              "project": r["proj"] or "—", "born": r["created_at"].isoformat(),
+             "guessed": r["ec"] == "derived",  # the miner INFERRED this duty; nobody asked
              **({"kind": r["k"]} if r["k"] else {})}
             for r in rows if r["s"] and not (r["d"] and r["d"] > today)]
 
@@ -457,7 +472,12 @@ async def read_desk(pool: asyncpg.Pool, *, limit: int = 100) -> dict[str, Any]:
         bands[c.pop("band")].append(c)
     for k in DESK_KINDS:  # same-story folding never crosses a band
         bands[k] = await _same_story_clusters(pool, bands[k])
-    queue = await _operator_queue(pool)
+    everything = await _operator_queue(pool)
+    # THE RED NUMBER IS A PROMISE. A debt is a duty a MIND deliberately placed on him; a
+    # miner's inference is a SUGGESTION and must never wear the same colour. A count he cannot
+    # trust is a count he learns to ignore — which is how the desk reached a scary red 11.
+    queue = [t for t in everything if not t["guessed"]]
+    guessed = [t for t in everything if t["guessed"]]
     return {
         "owed": len(queue),
         "letters": len(bands["fyi"]),
@@ -467,12 +487,19 @@ async def read_desk(pool: asyncpg.Pool, *, limit: int = 100) -> dict[str, Any]:
         **({"dimmed": dimmed} if dimmed else {}),
         **({"your_queue": {
             "threads": queue,
-            "note": "open threads owned by YOU (owner='operator') — derived live from the "
-                    "graph; the canonical waiting-on-your-hands list"}} if queue else {}),
+            "note": "open threads a mind deliberately put on YOU (owner='operator', "
+                    "SELF_DECLARED) — the canonical waiting-on-your-hands list"}} if queue else {}),
+        **({"miner_guesses": {
+            "threads": guessed,
+            "note": f"{len(guessed)} duties the MINER inferred you owe, from overhearing "
+                    "conversation. Nobody asked you. They are NOT counted in `owed` and never "
+                    "go red — read them, then resolve or assign the ones that are real"}}
+           if guessed else {}),
         "by_project": _group_by_project(queue, bands["decision"] + bands["hands"]),
         "note": "peek — nothing leased; settle only at your word (inbox(project='operator', "
                 "ack=[ids])). Folded ids settle with their lead card. THE COUNT THAT MATTERS "
-                "is `owed` (debts on your hands); `letters` carry no debt and clear in bulk.",
+                "is `owed` (debts a mind actually asked of you); `letters` carry no debt and "
+                "clear in bulk; `miner_guesses` are inferences, not obligations.",
     }
 
 

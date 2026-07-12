@@ -159,6 +159,7 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `decided_in` | Decision → Commit | Decision was stated in this commit (the 'why', sourced). |
 | `supersedes` | Decision → Decision | This decision overrides/replaces an earlier one. |
 | `grounded_by` | Decision → Reference | Decision is grounded by this design reference (the canon). |
+| `answers` | Decision → Thread | This decision is the ANSWER to that thread — the ruling a question was minted to get. Distinct from decided_in (where it was said) and grounded_by (what it rests on): this names what it SETTLED. Minted by record_decision(resolves=…), which closes the thread in the same act, so a ruling that names its question never leaves the question lit. |
 <!-- END generated:schema -->
 
 ## Evidence classes

@@ -95,7 +95,7 @@ async def record_decision(
     actions: Actions, summary: str, *, kind: str = "ruling",
     rationale: str | None = None, repo: str | None = None, source: str = _SOURCE,
     grounds: list[uuid.UUID] | None = None, protocol: str | None = None,
-    supersedes: str | None = None,
+    supersedes: str | None = None, resolves: str | None = None,
 ) -> uuid.UUID:
     """Capture a decision at the moment it is made — the WHY, declared, not mined.
 
@@ -116,7 +116,19 @@ async def record_decision(
     superseded decisions leave orient's recent list; the decision-log renders them with
     their successor. NEVER a delete — the wrong hypothesis stays readable under its
     correction. Raises ValueError when the ref matches nothing (the new decision is NOT
-    recorded — a correction that can't name its target is not yet a correction)."""
+    recorded — a correction that can't name its target is not yet a correction).
+
+    `resolves` CLOSES THE THREAD THIS DECISION ANSWERS, in the same act — mints `answers`
+    and marks the thread resolved. Until this existed, capture had a one-way valve: the
+    answer landed and the question stayed lit, because closing was a SEPARATE verb that a
+    dying session forgets. The operator ruled on the lineage question on 2026-07-12; the
+    decision recording that ruling announced "resolving thread 2f353b8e" IN PROSE, nothing
+    in the code read the prose, and the graph went on asking him a question he had already
+    answered for a full day (bug 59c8e47d). open_thread(question) → record_decision(answer)
+    is the fleet's most common write; the close belongs INSIDE the answer, not beside it.
+    A ruling that can name its question should not need a second verb to finish the sentence.
+    Same strictness as `supersedes`: a ref that matches nothing raises, and NOTHING is
+    recorded — a ruling that miscites the question it settles has not settled it."""
     observed = datetime.now(UTC)
     old: uuid.UUID | None = None
     if supersedes:
@@ -124,6 +136,12 @@ async def record_decision(
         if old is None:
             raise ValueError(f"supersedes matched no decision: {supersedes!r} — quote its "
                              "UUID, 8-char short id, or a summary substring")
+    answered: uuid.UUID | None = None
+    if resolves:
+        answered = await _find_thread(actions.pool, resolves)
+        if answered is None:
+            raise ValueError(f"resolves matched no thread: {resolves!r} — quote its UUID, "
+                             "8-char short id, or a summary substring")
     # ONE transaction: the Decision, its summary/kind/rationale, and the repo link either all
     # land or none do — a process death mid-sequence can no longer leave a summary-less husk.
     async with actions.atomic() as a:
@@ -159,6 +177,24 @@ async def record_decision(
                                     source, observed, _CONF, evidence_class=_EC)
             await a.assert_property(d, "supersedes", str(old), source, observed, _CONF,
                                     evidence_class=_EC)
+        if answered is not None:
+            # the ANSWER and the CLOSE in one transaction: a ruling that lands while its
+            # question stays open is how the operator gets asked twice. Same shape the
+            # resolve_thread verb writes (status/resolved_in/resolved_because), so every
+            # lens that already renders a resolved thread renders this one unchanged.
+            exists = await a.pool.fetchval(
+                "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='answers'",
+                d, answered)
+            if not exists:
+                await a.create_link(d, answered, "answers", source, observed, _CONF,
+                                    evidence_class=_EC)
+            await a.assert_property(answered, "status", "resolved", source, observed, _CONF,
+                                    evidence_class=_EC)
+            await a.assert_property(answered, "resolved_in", source, source, observed, _CONF,
+                                    evidence_class=_EC)
+            await a.assert_property(answered, "resolved_because",
+                                    f"answered by decision {str(d)[:8]}: {summary[:200]}",
+                                    source, observed, _CONF, evidence_class=_EC)
     return d
 
 

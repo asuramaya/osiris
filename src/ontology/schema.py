@@ -254,6 +254,12 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              ("Decision",), ("Decision",)),
     LinkType("grounded_by", "Decision is grounded by this design reference (the canon).",
              ("Decision",), ("Reference",)),
+    LinkType("answers", "This decision is the ANSWER to that thread — the ruling a question was "
+                        "minted to get. Distinct from decided_in (where it was said) and "
+                        "grounded_by (what it rests on): this names what it SETTLED. Minted by "
+                        "record_decision(resolves=…), which closes the thread in the same act, "
+                        "so a ruling that names its question never leaves the question lit.",
+             ("Decision",), ("Thread",)),
 )
 
 OBJECT_TYPES: dict[str, ObjectType] = {t.name: t for t in _OBJECT_TYPES}

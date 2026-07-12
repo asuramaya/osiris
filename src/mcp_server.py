@@ -1470,7 +1470,7 @@ async def record_decision(
     summary: str, kind: str = "ruling", rationale: str | None = None,
     repo: str | None = None, grounds: list[str] | None = None,
     protocol: str | None = None, supersedes: str | None = None,
-    subagent_id: str | None = None,
+    resolves: str | None = None, subagent_id: str | None = None,
     subagent_type: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Write back a DECISION you made this session — a ruling, an architecture pivot, a
@@ -1488,7 +1488,12 @@ async def record_decision(
     recent list and the decision-log grays it with its successor; never deleted, always
     unwindable. Renders in the `decision-log` composition beside mined decisions, graded
     SELF_DECLARED (higher trust). Attributed to you if you mount()ed. Idempotent on the
-    summary."""
+    summary.
+    `resolves` = the THREAD this decision ANSWERS (UUID, 8-char short id, or a summary
+    substring). It closes it in the same act. USE IT whenever your ruling settles an open
+    question — otherwise the answer lands and the question stays lit, and the next mind (or
+    the operator) is asked something you already decided. Naming the thread in your prose
+    does nothing; the graph does not read prose."""
     pool = await _pool_get()
     gids: list[uuid.UUID] = []
     missing: list[str] = []
@@ -1501,12 +1506,21 @@ async def record_decision(
         if old is None:
             return {"error": f"supersedes matched no decision: {supersedes!r} — quote its "
                              "UUID, 8-char short id, or a summary substring"}
+    answered: uuid.UUID | None = None
+    if resolves:  # same strictness: a ruling that miscites its question has not settled it
+        answered = await capture._find_thread(pool, resolves)
+        if answered is None:
+            return {"error": f"resolves matched no thread: {resolves!r} — quote its UUID, "
+                             "8-char short id, or a summary substring"}
     d = await capture.record_decision(
         Actions(pool), summary, kind=kind, rationale=rationale, repo=repo,
         source=await _actor_for(ctx, subagent_id, subagent_type), grounds=gids,
         protocol=protocol, supersedes=str(old) if old else None,
+        resolves=str(answered) if answered else None,
     )
     out: dict[str, Any] = {"id": str(d), "kind": kind, "summary": summary}
+    if answered is not None:
+        out["resolved_thread"] = f"{str(answered)[:8]} — closed by this decision (answers edge)"
     if old is not None:
         out["superseded"] = (
             "self (identical summary re-recorded) — nothing buried" if old == d else

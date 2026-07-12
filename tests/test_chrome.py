@@ -2,6 +2,8 @@
 these feed them fixtures. The data functions get one live-graph test each via `actions`."""
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from src.actions.core import Actions
 from src.api.chrome import (
     page,
@@ -11,6 +13,10 @@ from src.api.chrome import (
     render_mail_box,
     render_mail_overview,
 )
+from src.orchestrator.capture import open_thread
+from src.parsers.base import EvidenceClass
+
+NOW = datetime.now(UTC)
 
 
 def _desk() -> dict:
@@ -175,3 +181,37 @@ async def test_desk_and_fleet_data_round_trip_the_live_graph(actions: Actions) -
     assert "lateral note" in html2
     html3 = render_fleet(await fleet_data(p, wake_budget=30))
     assert "wake ledger" in html3
+
+
+async def test_a_miner_guess_is_never_debt(actions: Actions) -> None:
+    """THE MINER MAY NOTICE, BUT MUST NEVER OBLIGE (operator, 2026-07-12: "the desk says this
+    session owes 6, accurate or bug?" — bug; five of the six were the miner's inferences and
+    two were provably false).
+
+    A DERIVED thread owned by 'operator' is an LLM's guess that the human owes something.
+    Nobody asked him. It stays on the desk — some guesses are real — but it must never enter
+    `owed`, because a red number he cannot trust is one he learns to ignore, and that is how
+    the desk reached a scary red 11 in the first place.
+    """
+    from src.orchestrator.mailbox import read_desk
+
+    p = actions.pool
+    asked = await open_thread(actions, "ship the release — needs your key", owner="operator",
+                              repo="osiris")
+    assert asked
+    guess = await actions.create_or_find_object("Thread", "thread:mined-guess", "session-miner")
+    await actions.assert_property(guess, "summary", "Check mid-flight 121G rsync",
+                                  "session-miner", NOW, 0.4,
+                                  evidence_class=EvidenceClass.DERIVED.value)
+    await actions.assert_property(guess, "owner", "operator", "session-miner", NOW, 0.4,
+                                  evidence_class=EvidenceClass.DERIVED.value)
+
+    desk = await read_desk(p)
+    assert desk["owed"] == 1                                   # the ASK counts
+    assert [t["id"] for t in desk["your_queue"]["threads"]] == [str(asked)[:8]]
+    guesses = desk["miner_guesses"]["threads"]                 # the GUESS is kept, not counted
+    assert [t["summary"] for t in guesses] == ["Check mid-flight 121G rsync"]
+
+    html = render_desk(desk)
+    assert "the miner thinks you may owe" in html              # shown, folded, never red
+    assert "not counted as debt" in html
