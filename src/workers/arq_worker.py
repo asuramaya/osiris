@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import time
 import uuid
@@ -34,6 +35,7 @@ from src.orchestrator.monitor import (
     evaluate_watches,
     miner_tick_ended,
     miner_tick_started,
+    record_job,
     tick,
     write_heartbeat,
 )
@@ -151,11 +153,14 @@ async def sense_sessions(ctx: dict[str, Any]) -> int:
             await asyncio.shield(miner_tick_ended(
                 pool, secs=time.monotonic() - t0, budget=_SENSE_BUDGET, error="timeout"))
         raise
-    except Exception as exc:  # a bad transcript/LLM hiccup must not kill the cron
-        _log.warning("session sensing failed: %r", exc)
+    except Exception as exc:
+        # RECORD the rich tick telemetry, then RE-RAISE. It used to swallow here and return 0 —
+        # which is what let it fail every tick for ten hours while looking exactly like a clean
+        # pass with nothing to mine. The `watched` seam now owns "log it and wait for the next
+        # tick" for every cron, and a job that hides its own failure can no longer look green.
         await miner_tick_ended(pool, secs=time.monotonic() - t0,
                                budget=_SENSE_BUDGET, error=repr(exc))
-        return 0
+        raise
     await miner_tick_ended(pool, secs=time.monotonic() - t0,
                            budget=_SENSE_BUDGET, report=report)
     if report["chunks"] or report["planted"]:
@@ -242,33 +247,73 @@ async def trigger_mail(ctx: dict[str, Any]) -> int:
     return report["woke"]
 
 
+def watched(fn: Any, *, every: int) -> Any:
+    """THE SEAM WHERE A JOB CANNOT LIE ABOUT ITS OWN HEALTH.
+
+    The session-miner failed every tick for ten hours and nothing knew, because it CAUGHT its own
+    exception, logged a warning nobody reads, and returned 0 — indistinguishable from a clean tick
+    with nothing to do. A job that swallows its error looks green.
+
+    So error handling moves OUT of the jobs and into this seam. Every cron reports its outcome
+    here — success or failure — and one added next year inherits the watch without its author
+    knowing this exists. The "a failed pass logs and waits for the next tick" contract is now kept
+    in ONE place, for all of them, instead of being re-implemented (or forgotten) per job.
+
+    `every` is the job's cadence in seconds, stamped WITH the outcome, so the reader can tell
+    "late" from "dead" without a table of magic numbers somewhere else.
+    """
+    @functools.wraps(fn)
+    async def run(ctx: dict[str, Any]) -> int:
+        pool = ctx["cascade"].actions.pool
+        t0 = time.monotonic()
+        try:
+            n: int = await fn(ctx)
+        except asyncio.CancelledError:  # arq's timeout: confess before dying, shielded
+            with contextlib.suppress(Exception):
+                await asyncio.shield(record_job(
+                    pool, fn.__name__, every=every, secs=time.monotonic() - t0, error="timeout"))
+            raise
+        except Exception as exc:  # a hiccup must not kill the cron — but it MUST be recorded
+            _log.warning("%s failed: %r", fn.__name__, exc)
+            with contextlib.suppress(Exception):
+                await record_job(pool, fn.__name__, every=every,
+                                 secs=time.monotonic() - t0, error=repr(exc))
+            return 0
+        with contextlib.suppress(Exception):  # telemetry must never fail the work it watched
+            await record_job(pool, fn.__name__, every=every, secs=time.monotonic() - t0)
+        return n
+    return run
+
+
 class WorkerSettings:
     # enqueueable jobs (the API hands heavy work here instead of running it inline)
     functions: list[Any] = [expand_case_job, sweep_session]
     cron_jobs = [
-        cron(drain_cascade, second=set(range(0, 60, 5)), run_at_startup=True),
+        cron(watched(drain_cascade, every=5), second=set(range(0, 60, 5)), run_at_startup=True),
         # the watch: evaluate subscriptions every 5s (offset from the cascade drain),
         # pull source deltas once a minute.
-        cron(evaluate_watch, second=set(range(2, 60, 5)), run_at_startup=True),
-        cron(run_source_ticks, minute=set(range(0, 60)), second={0}),
+        cron(watched(evaluate_watch, every=5), second=set(range(2, 60, 5)), run_at_startup=True),
+        cron(watched(run_source_ticks, every=60), minute=set(range(0, 60)), second={0}),
         # self-heal orphaned claims every 5 min (the failure-drill recovery path).
-        cron(reap_runs, minute=set(range(0, 60, 5)), run_at_startup=True),
+        cron(watched(reap_runs, every=300), minute=set(range(0, 60, 5)), run_at_startup=True),
         # liveness heartbeat every 30s (the dead-man's-switch /health/worker reads).
-        cron(heartbeat, second={0, 30}, run_at_startup=True),
+        cron(watched(heartbeat, every=30), second={0, 30}, run_at_startup=True),
         # session-sensing every 10 min (a few LLM calls max per tick; no-op when unset).
         # timeout is EXPLICIT and under the cadence: a saturated tick is 3 extract calls
         # at ~50-90s each — arq's default 300s was one slow call from death, and 540 < 600
         # structurally forbids two ticks mining the same cursors concurrently.
-        cron(sense_sessions, minute=set(range(0, 60, 10)), second={30}, timeout=540),
+        cron(watched(sense_sessions, every=600), minute=set(range(0, 60, 10)), second={30},
+             timeout=540),
         # the semantic index walks behind the miner (offset so they never contend for CPU):
         # fresh text is embedded within ~10 minutes of landing; unchanged graphs cost nothing
-        cron(embed_pass, minute=set(range(5, 60, 10)), second={15}, timeout=300),
+        cron(watched(embed_pass, every=600), minute=set(range(5, 60, 10)), second={15},
+             timeout=300),
         # rung 4 walks nightly in the quiet hour: echo-folding is free, summaries are
         # budgeted (≤3/pass, stalest-first) and skip-unchanged by fingerprint
-        cron(neighborhood_pass, hour={9}, minute={10}, timeout=480),
+        cron(watched(neighborhood_pass, every=86400), hour={9}, minute={10}, timeout=480),
         # the mailbox alarm clock: wake an agent for a project with unread mail — bounded by a
         # per-project rate cap, and a no-op unless osiris_trigger_enabled (the kill switch).
-        cron(trigger_mail, minute=set(range(0, 60)), second={45}),
+        cron(watched(trigger_mail, every=60), minute=set(range(0, 60)), second={45}),
     ]
     on_startup = startup
     on_shutdown = shutdown

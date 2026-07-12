@@ -65,6 +65,7 @@ from src.orchestrator.mailbox import (
 from src.orchestrator.mailbox import (
     dim_brief as mailbox_dim,
 )
+from src.orchestrator.monitor import health_banner, organ_health
 from src.orchestrator.sources import as_dicts, suggest
 from src.orchestrator.swaps import classify_swap, swap_banner
 from src.orchestrator.trigger import wake_status
@@ -1102,6 +1103,15 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         pulse: str | None = await mounts.fleet_pulse(pool, lease_secs=lease)
     except Exception:  # noqa: BLE001
         pulse = None
+    # THE ORGANS. If the miner is down, the graph is NOT forming memory — and every mind that
+    # mounts is about to trust a record that stopped growing. It went unnoticed for ten hours
+    # because the only witness was a counter inside a payload too large to open (79e1328c).
+    # Derived at READ time, here, in a process that is alive by construction: a watchdog cron
+    # would have lived inside the very worker that died. Silent when the body is well.
+    try:
+        organs: str | None = health_banner(await organ_health(pool))
+    except Exception:  # noqa: BLE001
+        organs = None
     # the reader's identity feeds the wall's ownership ordering: what is MINE TO ACT rides
     # above another mind's claims and above 'waiting on the human'
     me = frozenset(x for x in ((ident.agent_id if ident else None), proj) if x)
@@ -1114,6 +1124,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             "  = 'open'")
         return {
             "you": who, "model": (ident.model if ident else None), "project": proj,
+            **({"osiris_health": organs} if organs else {}),
             **(await seat_bearings(pool, who) if who else {}),
             "mail": mail,
             **({"fleet_pulse": pulse} if pulse else {}),
@@ -1159,6 +1170,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         **({"succession_note": inheritance} if inheritance else {}),
         **({"co_agents": co_agents} if co_agents else {}),
         **({"while_you_were_away": away} if away else {}),
+        **({"osiris_health": organs} if organs else {}),
         "fleet_map": fleet_map,
         "recent_decisions": recent,
         "note": "un-mounted → the BOUNDED fleet map, never the firehose. mount(cwd, "

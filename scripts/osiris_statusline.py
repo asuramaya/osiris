@@ -16,6 +16,7 @@ import asyncio
 import json
 import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/osiris")
@@ -266,8 +267,27 @@ async def _counts(
             " (SELECT count(*) FROM agent_wakes "
             "   WHERE woke_at > now() - interval '1 hour') AS wakes",
             project, LEASE_SECS, agent)
+        # THE ORGANS — is Osiris still SENSING? The session-miner died at 08:50 on 2026-07-12
+        # and stayed dead ten hours: the memory simply stopped forming and nothing said so.
+        # Computed HERE, at read time, in a process that is alive by construction — a watchdog
+        # cron would have lived inside the very worker that died (79e1328c). Each job stamps
+        # its own cadence with its outcome, so "late" needs no magic number kept elsewhere.
+        jobs = await conn.fetch("SELECT key, cursor FROM watermarks WHERE key LIKE 'job:%'")
+        sick: list[str] = []
+        for j in jobs:
+            try:
+                blob = json.loads(j["cursor"] or "{}")
+            except ValueError:
+                continue
+            ok, every = blob.get("last_ok"), int(blob.get("every") or 600)
+            if not ok:
+                sick.append(j["key"][4:])
+                continue
+            age = (datetime.now(UTC) - datetime.fromisoformat(ok)).total_seconds()
+            if age > 3 * every:  # three cadences missed is not a blip
+                sick.append(j["key"][4:])
         return (row["desk"], row["mail"], row["dm"], row["flight"], row["live_agents"],
-                row["wakes"], row["owed"], row["owed_here"])
+                row["wakes"], row["owed"], row["owed_here"], sick)
     finally:
         await conn.close()
 
@@ -296,7 +316,7 @@ def main() -> None:
     window_size = int(window_size) if isinstance(window_size, (int, float)) else None
 
     try:
-        desk, mail, dm, flight, live, wakes, owed, owed_here = asyncio.run(
+        desk, mail, dm, flight, live, wakes, owed, owed_here, sick = asyncio.run(
             asyncio.wait_for(_counts(project, session_id, model_id, model_raw, window_size),
                              timeout=1.5))
         # THE DEBT, NOT THE DOORBELL. `owe 5·13` = five open duties in THIS tree, thirteen
@@ -315,8 +335,14 @@ def main() -> None:
         dm_s = f" {RED}✉{dm}{RESET}" if dm else ""
         mail_s = (f"mail {mail}{flight_s}{dm_s}" if (mail or flight)
                   else f"{DIM}mail 0{RESET}")
+        # DARK UNTIL IT MATTERS. Nothing is rendered while the body is well — an alarm that is
+        # always lit is wallpaper. But if Osiris has stopped SENSING, that outranks every other
+        # number here: the graph is not forming memory, and everything else on this line is a
+        # reading off a record that has quietly stopped growing.
+        sick_s = (f"{RED}⚠ not sensing: {','.join(sick[:2])}{RESET}" if sick else "")
         parts = [
             _link(f"◈ {project}", "desk"),
+            *([_link(sick_s, "fleet")] if sick_s else []),
             _link(owe_s, "desk"),
             *([_link(desk_s, "desk")] if desk_s else []),
             _link(mail_s, "conversations"),

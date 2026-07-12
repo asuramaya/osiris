@@ -83,6 +83,132 @@ async def heartbeat_age_secs(pool: asyncpg.Pool) -> float | None:
     return age
 
 
+# --- ORGAN HEALTH: per-JOB vitals, derived at READ time -------------------------
+#
+# The session-miner died at 08:50 on 2026-07-12 and stayed dead for TEN HOURS. Every ten-minute
+# tick failed ("no LLM provider"), the memory stopped forming, and nothing told anyone — the only
+# witness was a counter buried inside a fleet_digest too large to open (bug 79e1328c).
+#
+# TWO THINGS THAT LOOK LIKE FIXES AND ARE NOT:
+#
+#  1. "Add a cron that checks whether the miner is dead." That cron would live in the SAME worker.
+#     A dead process cannot report its own death — the watcher would fail exactly when it mattered
+#     (loop pathology, invariant 7). So health is never WRITTEN by a watchdog; it is DERIVED at
+#     READ time by whoever asks, all of whom are alive by construction: the statusline (the
+#     operator's shell), orient() (the MCP), the console. No new daemon watches the daemons.
+#
+#  2. "Check the worker's heartbeat." It was GREEN the whole ten hours. The worker was perfectly
+#     alive and healthy — it was the JOB INSIDE IT that was failing. A process-level pulse would
+#     have reported all-clear while the graph went blind. So vitals are per-JOB, never per-process.
+#
+# And Osiris HAS NO HANDS: this senses and surfaces. It never restarts anything.
+_JOB_PREFIX = "job:"
+
+
+async def record_job(
+    pool: asyncpg.Pool, name: str, *, every: int, secs: float = 0.0, error: str | None = None,
+) -> None:
+    """A job confesses its own outcome — the one write in this file's health story.
+
+    `every` is the job's PERIOD in seconds, recorded WITH the outcome so the reader never needs
+    a table of magic thresholds: a job is late relative to its own cadence, and a job added next
+    year brings its own definition of late.
+
+    A failure does NOT clear `last_ok` — the reader needs to know both that it broke and when it
+    last worked, which is the difference between "down 4 minutes" and "down ten hours".
+    """
+    key = f"{_JOB_PREFIX}{name}"
+    raw = await get_cursor(pool, key)
+    try:
+        blob: dict[str, Any] = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        blob = {}
+    now = datetime.now(UTC).isoformat()
+    blob["every"] = every
+    blob["last_run"] = now
+    blob["secs"] = round(secs, 1)
+    if error is None:
+        blob["last_ok"] = now
+        blob["fails"] = 0
+        blob.pop("last_error", None)
+    else:
+        blob["last_error"] = error[:300]
+        blob["fails"] = int(blob.get("fails", 0)) + 1
+    await set_cursor(pool, key, json.dumps(blob))
+
+
+def _verdict(last_ok: datetime | None, every: int, now: datetime) -> tuple[str, float | None]:
+    if last_ok is None:
+        return "never", None
+    age = (now - last_ok).total_seconds()
+    if age > 3 * every:      # three cadences missed in a row is not a blip
+        return "down", age
+    if age > 1.5 * every:
+        return "stale", age
+    return "ok", age
+
+
+async def organ_health(pool: asyncpg.Pool) -> list[dict[str, Any]]:
+    """THE READ SIDE — every job's vitals, computed now, by you, from what it last stamped.
+
+    Returns one row per job, worst first, so a caller can `[o for o in organs if o["down"]]` and
+    render nothing at all when the body is well. Silence when healthy is the whole design: an
+    alarm that is always on is an alarm nobody reads.
+    """
+    rows = await pool.fetch(
+        "SELECT key, cursor FROM watermarks WHERE key LIKE $1", f"{_JOB_PREFIX}%")
+    now = datetime.now(UTC)
+    organs: list[dict[str, Any]] = []
+    for r in rows:
+        try:
+            blob = json.loads(r["cursor"] or "{}")
+        except json.JSONDecodeError:
+            continue
+        every = int(blob.get("every") or 600)
+        raw_ok = blob.get("last_ok")
+        last_ok = datetime.fromisoformat(raw_ok) if raw_ok else None
+        verdict, age = _verdict(last_ok, every, now)
+        organs.append({
+            "job": r["key"][len(_JOB_PREFIX):],
+            "verdict": verdict,
+            "down": verdict in ("down", "never"),
+            "every_secs": every,
+            "last_ok": raw_ok,
+            "age_secs": round(age) if age is not None else None,
+            "fails": int(blob.get("fails") or 0),
+            **({"last_error": blob["last_error"]} if blob.get("last_error") else {}),
+        })
+    rank = {"never": 0, "down": 1, "stale": 2, "ok": 3}
+    organs.sort(key=lambda o: (rank[o["verdict"]], -(o["age_secs"] or 0)))
+    return organs
+
+
+def health_banner(organs: list[dict[str, Any]]) -> str | None:
+    """One line, or None when the body is well. The line a mind reads at mount, and the operator
+    reads at every prompt: WHAT stopped, and HOW LONG AGO it last worked."""
+    sick = [o for o in organs if o["down"]]
+    if not sick:
+        return None
+    parts = []
+    for o in sick[:3]:
+        when = "never ran" if o["verdict"] == "never" else f"last ok {_ago(o['age_secs'])}"
+        parts.append(f"{o['job']} ({when})")
+    more = f" +{len(sick) - 3} more" if len(sick) > 3 else ""
+    return ("⚠ OSIRIS IS NOT SENSING — " + ", ".join(parts) + more
+            + ". The graph is not forming memory while this is true; nothing auto-restarts it "
+              "(Osiris has no hands). Check: systemctl --user status osiris-worker")
+
+
+def _ago(secs: float | None) -> str:
+    if secs is None:
+        return "never"
+    if secs < 3600:
+        return f"{int(secs // 60)}m ago"
+    if secs < 86400:
+        return f"{int(secs // 3600)}h ago"
+    return f"{int(secs // 86400)}d ago"
+
+
 # --- miner tick telemetry: the onboarding-day lesson (decision 3191e0df) --------
 # A fail-open cron was down a DAY behind a green heartbeat. The heartbeat says the worker
 # breathes; THIS says whether the sensing tick actually finishes, how long it runs, and
