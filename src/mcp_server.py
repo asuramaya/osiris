@@ -191,6 +191,38 @@ def _sane_job_dir(value: str | None) -> str | None:
     return value
 
 
+def _anchorless(ctx: Context | None) -> str:
+    """WHY this call could not be re-attached — the difference between a mystery and a message.
+
+    Two monsterhouse agents reported the same thing within an hour (msgs 397, 403): after an MCP
+    socket hiccup a tool call bounces with "mount first", and — worse — an un-mounted write falls
+    back to the anonymous `session` bucket. As one of them put it: "MCP socket → missing anchor →
+    anonymous writes... one careless reconnect and a session's work lands unattributed." For a
+    graph whose entire value is provenance, that is the worst failure it has.
+
+    The re-attach machinery already exists and is starved, not broken: it keys off the X-Osiris-Job
+    header, which .mcp.json sends as ${CLAUDE_JOB_DIR}. If the client's environment does not set
+    that variable, the header arrives EMPTY or as the literal, _sane_job_dir rightly rejects it,
+    and there is nothing to re-attach by. So say exactly that, instead of "mount first" — a bounce
+    that names its own cause is a bug report the next mind does not have to file again.
+    """
+    if ctx is None:
+        return "no request context"
+    raw = None
+    try:
+        req = ctx.request_context.request
+        raw = req.headers.get("x-osiris-job") if req is not None else None
+    except (AttributeError, LookupError):
+        pass
+    if not raw:
+        return ("your client sent NO X-Osiris-Job header — CLAUDE_JOB_DIR is unset in its "
+                "environment, so I have no anchor to re-attach you by")
+    if "$" in raw:
+        return (f"your client sent the header UNEXPANDED ({raw!r}) — CLAUDE_JOB_DIR is not set "
+                "in its environment, so I have no anchor to re-attach you by")
+    return f"the anchor {raw!r} matches no mount in the registry"
+
+
 def _job_hint(ctx: Context | None) -> str | None:
     """The client's durable identity handle: the X-Osiris-Job header (.mcp.json sends
     ${CLAUDE_JOB_DIR} per request — expansion PROVEN live via the probe reattach). Guarded
@@ -722,7 +754,8 @@ async def context_window(ctx: Context | None = None) -> dict[str, Any]:
     pool = await _pool_get()
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount(cwd, job_dir=<your anchor>) first — self-knowledge needs an "
+        return {"why": _anchorless(ctx),
+                "error": "mount(cwd, job_dir=<your anchor>) first — self-knowledge needs an "
                          "anchored identity"}
     row = await pool.fetchrow(
         "SELECT job_dir, model_raw, context_window_size FROM agent_mounts WHERE agent_id=$1 "
@@ -926,7 +959,8 @@ async def retire(reason: str = "", ctx: Context | None = None) -> dict[str, Any]
     never you."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — only a mounted session can retire itself"}
+        return {"error": "mount first — only a mounted session can retire itself",
+                "why": _anchorless(ctx)}
     pool = await _pool_get()
     a = Actions(pool)
     oid = await a.create_or_find_object("Agent", ident.agent_id, ident.agent_id)
@@ -1309,7 +1343,8 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a message must say who "
-                         "it's from (the anchor re-attaches you automatically after a bounce)"}
+                         "it's from (the anchor re-attaches you automatically after a bounce)",
+                "why": _anchorless(ctx)}
     pool = await _pool_get()
     st = get_settings()
     # a SPAWN's mail goes out under its OWN name (the hook-stamped sidechain identity),
@@ -1445,7 +1480,8 @@ async def dim(message_id: int, because: str, ctx: Context | None = None) -> dict
     Only works on briefs addressed to the operator's desk. Requires mount."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount(cwd, job_dir=<your anchor>) first — an annotation must say "
+        return {"why": _anchorless(ctx),
+                "error": "mount(cwd, job_dir=<your anchor>) first — an annotation must say "
                          "whose testimony it is"}
     try:
         return await mailbox_dim(await _pool_get(), message_id,
@@ -1464,7 +1500,8 @@ async def claim_name(name: str, ctx: Context | None = None) -> dict[str, Any]:
     lineage — pick another. Global namespace; choose something distinctive."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount(cwd, job_dir=<your anchor>) first — a name attaches to YOU"}
+        return {"error": "mount(cwd, job_dir=<your anchor>) first — a name attaches to YOU",
+                "why": _anchorless(ctx)}
     from src.orchestrator.agents import claim_name as _claim
     return await _claim(Actions(await _pool_get()), ident.agent_id, name, source=ident.agent_id)
 

@@ -755,3 +755,33 @@ async def test_succeeds_seat_is_not_succeeded_from(actions: Actions) -> None:
     types = {r["type"] for r in await actions.pool.fetch(
         "SELECT type FROM links WHERE from_id=$1", heir_oid)}
     assert {"succeeded_from", "succeeds_seat"} <= types
+
+
+def test_an_anchorless_bounce_names_its_own_cause() -> None:
+    """A bounce that says only "mount first" is a mystery; one that names its cause is a bug
+    report the next mind does not have to file again.
+
+    Two monsterhouse agents reported the same thing within an hour (msgs 397/403): after an MCP
+    socket hiccup the call bounces, and an un-mounted write silently falls back to the anonymous
+    `session` bucket — "one careless reconnect and a session's work lands unattributed". For a
+    graph whose whole value is provenance that is the worst failure it has. The re-attach path is
+    STARVED, not broken: it keys off X-Osiris-Job (.mcp.json sends ${CLAUDE_JOB_DIR}), so a client
+    whose environment lacks that variable sends nothing usable and cannot be re-attached at all.
+    """
+    from src.mcp_server import _anchorless
+
+    class _Req:
+        def __init__(self, hdr: dict[str, str]) -> None:
+            self.headers = hdr
+
+    class _Ctx:
+        def __init__(self, hdr: dict[str, str]) -> None:
+            self.request_context = type("RC", (), {"request": _Req(hdr)})()
+
+    assert "NO X-Osiris-Job header" in _anchorless(_Ctx({}))
+    assert "CLAUDE_JOB_DIR is unset" in _anchorless(_Ctx({}))
+    # the literal, unexpanded variable — a client that never substituted it
+    unexpanded = _anchorless(_Ctx({"x-osiris-job": "${CLAUDE_JOB_DIR}"}))
+    assert "UNEXPANDED" in unexpanded and "not set" in unexpanded
+    # a real anchor that simply isn't registered is a DIFFERENT failure, and says so
+    assert "matches no mount" in _anchorless(_Ctx({"x-osiris-job": "/home/x/.claude/jobs/abc"}))
