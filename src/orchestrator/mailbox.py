@@ -22,6 +22,7 @@ to the sender as a DM; a reply to a broadcast routes to the thread's project.
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import asyncpg
@@ -375,16 +376,29 @@ async def _same_story_clusters(
     return out
 
 
-async def _operator_queue(pool: asyncpg.Pool, limit: int = 10) -> list[dict[str, Any]]:
+async def _operator_queue(pool: asyncpg.Pool, limit: int = 100) -> list[dict[str, Any]]:
     """The standing YOUR-QUEUE: open threads whose owner is the human (owner='operator' —
     the tags shipped 90b2832). Derived LIVE from the graph, so briefs can point at a thread
-    instead of re-stating the blocker in prose that instantly goes stale."""
+    instead of re-stating the blocker in prose that instantly goes stale.
+
+    Carries the PROJECT (the in_repo edge) so the desk can group by it — the operator works
+    his debts a project at a time, not a band at a time ("no good way to resolve these debts
+    per thread or per project, so it snowballs into infinity", 2026-07-11).
+
+    DEFERRED debts are hidden until their date (capture.defer_thread). Fix at the lens: the
+    thread stays open and owned in the record; only its visibility moves."""
     rows = await pool.fetch(
-        "SELECT o.id, "
+        "SELECT o.id, o.created_at, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS s, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS k "
+        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS k, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='deferred_until' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS d, "
+        " (SELECT replace(p.canonical,'repo:','') FROM links l JOIN objects p ON p.id=l.to_id "
+        "   WHERE l.from_id=o.id AND l.type='in_repo' AND p.type='SoftwareProject' "
+        "   ORDER BY l.created_at DESC LIMIT 1) AS proj "
         "FROM objects o "
         "WHERE o.type='Thread' AND o.status='active' "
         "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -396,8 +410,11 @@ async def _operator_queue(pool: asyncpg.Pool, limit: int = 10) -> list[dict[str,
         "ORDER BY (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "  AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
         "  IS DISTINCT FROM 'obligation', o.created_at DESC LIMIT $1", limit)
+    today = datetime.now(UTC).date().isoformat()
     return [{"id": str(r["id"])[:8], "summary": (r["s"] or "")[:200],
-             **({"kind": r["k"]} if r["k"] else {})} for r in rows if r["s"]]
+             "project": r["proj"] or "—",
+             **({"kind": r["k"]} if r["k"] else {})}
+            for r in rows if r["s"] and not (r["d"] and r["d"] > today)]
 
 
 async def read_desk(pool: asyncpg.Pool, *, limit: int = 100) -> dict[str, Any]:
@@ -442,6 +459,8 @@ async def read_desk(pool: asyncpg.Pool, *, limit: int = 100) -> dict[str, Any]:
         bands[k] = await _same_story_clusters(pool, bands[k])
     queue = await _operator_queue(pool)
     return {
+        "owed": len(queue),
+        "letters": len(bands["fyi"]),
         "needs_decision": bands["decision"],
         "needs_hands": bands["hands"],
         "fyi": bands["fyi"],
@@ -450,6 +469,37 @@ async def read_desk(pool: asyncpg.Pool, *, limit: int = 100) -> dict[str, Any]:
             "threads": queue,
             "note": "open threads owned by YOU (owner='operator') — derived live from the "
                     "graph; the canonical waiting-on-your-hands list"}} if queue else {}),
+        "by_project": _group_by_project(queue, bands["decision"] + bands["hands"]),
         "note": "peek — nothing leased; settle only at your word (inbox(project='operator', "
-                "ack=[ids])). Folded ids settle with their lead card.",
+                "ack=[ids])). Folded ids settle with their lead card. THE COUNT THAT MATTERS "
+                "is `owed` (debts on your hands); `letters` carry no debt and clear in bulk.",
     }
+
+
+def _group_by_project(
+    debts: list[dict[str, Any]], asks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """THE DESK AS A WORKSPACE, not a notification list (operator, 2026-07-11: "no good way to
+    resolve these debts per thread or per project, so it snowballs into infinity"). One card
+    per project carrying BOTH what he owes it (threads) and who asked (the decision/hands
+    briefs) — because he clears a project at a sitting, not a band. Letters (fyi) are excluded
+    on purpose: they carry no debt and must never crowd the ledger.
+
+    Ordered by weight: most debts first, then most asks — the project that needs him loudest
+    is the one he opens."""
+    projects: dict[str, dict[str, Any]] = {}
+
+    def slot(name: str) -> dict[str, Any]:
+        return projects.setdefault(name, {"project": name, "debts": [], "asks": []})
+
+    for d in debts:
+        slot(d.get("project") or "—")["debts"].append(d)
+    for a in asks:
+        slot(a.get("from_project") or "—")["asks"].append(a)
+    out = list(projects.values())
+    for p in out:
+        p["owed"] = len(p["debts"])
+        p["critical"] = any("🚨" in (a.get("body") or "") or "CRITICAL" in (a.get("body") or "")
+                            for a in p["asks"])
+    out.sort(key=lambda p: (-int(p["critical"]), -p["owed"], -len(p["asks"]), p["project"]))
+    return out

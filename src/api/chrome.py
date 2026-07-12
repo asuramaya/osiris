@@ -19,7 +19,6 @@ import asyncpg
 
 from src.api.membrane import _CSS, _age, _e
 from src.orchestrator.agents import seat_label
-from src.orchestrator.mailbox import DESK_KINDS
 
 _CHROME_CSS = _CSS + """
 .nav{display:flex;gap:1.4rem;margin:.4rem 0 1.4rem;flex-wrap:wrap}
@@ -39,7 +38,60 @@ _CHROME_CSS = _CSS + """
 .pill{border:1px solid #30363d;border-radius:10px;padding:0 .5rem;color:#8b949e;
       font-size:.8rem}
 .live{color:#3fb950}
+.counts{display:flex;gap:1rem;align-items:center;margin:.2rem 0 1rem;flex-wrap:wrap}
+.owe{border:1px solid #f85149;border-radius:6px;padding:.35rem .8rem;color:#f85149;
+     letter-spacing:.1em;font-size:.85rem}
+.owe b{font-size:1.3rem;color:#ff7b72}
+.owe.clear{border-color:#3fb950;color:#3fb950}.owe.clear b{color:#3fb950}
+.lett{border:1px solid #30363d;border-radius:6px;padding:.35rem .8rem;color:#8b949e;
+      font-size:.85rem}
+.proj{border:1px solid #21262d;border-left:3px solid #30363d;border-radius:6px;
+      padding:.6rem .9rem;margin:.5rem 0;background:#11161d}
+.proj[open]{border-left-color:#58a6ff}
+.proj.crit{border-left-color:#f85149}
+.proj summary{cursor:pointer;list-style:none;display:flex;gap:.7rem;align-items:baseline}
+.proj summary::before{content:"▸";color:#484f58;flex:none}
+.proj[open] summary::before{content:"▾"}
+.debt{margin:.5rem 0;padding:.4rem 0;border-top:1px solid #1b2027}
+.debt code{color:#8b949e;font-size:.8rem}
+.verbs{display:inline-flex;gap:.35rem;margin-left:.5rem}
+button[data-act]{background:#161b22;border:1px solid #30363d;color:#8b949e;cursor:pointer;
+      border-radius:5px;padding:.1rem .55rem;font:inherit;font-size:.78rem}
+button[data-act]:hover{border-color:#58a6ff;color:#c9d1d9}
+button[data-verb="resolve"]:hover{border-color:#3fb950;color:#3fb950}
+button[data-verb="assign"]:hover{border-color:#d29922;color:#d29922}
+button[data-act="settle"]:hover,button[data-act="settle-all"]:hover{
+      border-color:#3fb950;color:#3fb950}
+button[disabled]{opacity:.4;cursor:default}
 """
+
+# THE DESK GREW HANDS (operator, 2026-07-11: "i sit on a scary red 11 desk without a good way
+# to resolve these debts per thread or per project, so it snowballs into infinity"). One
+# delegated handler; every button is the OPERATOR'S OWN CLICK posting through the Actions
+# waist (ruling 923c380f — reads stay free, only explicit acts write, signed analyst:operator).
+# After the write it just calls tick(): the 4s poller re-renders from the graph, so the page
+# never holds state and can never disagree with the record.
+_ACTIONS = """<script>
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('button[data-act]');if(!b)return;
+  e.preventDefault();e.stopPropagation();
+  const J={'content-type':'application/json'};
+  b.disabled=true;const was=b.textContent;b.textContent='…';
+  try{
+    if(b.dataset.act==='settle'){
+      await fetch('/desk/settle',{method:'POST',headers:J,body:JSON.stringify(
+        {ids:b.dataset.ids.split(',').map(Number)})});
+    }else{
+      const p={ids:b.dataset.id.split(','),verb:b.dataset.verb,
+               because:b.dataset.because||'operator triage from the desk'};
+      if(b.dataset.owner)p.owner=b.dataset.owner;
+      if(b.dataset.days)p.days=+b.dataset.days;
+      await fetch('/threads/triage',{method:'POST',headers:J,body:JSON.stringify(p)});
+    }
+  }catch(err){b.textContent=was;b.disabled=false;return}
+  tick();
+});
+</script>"""
 
 # the poller: re-fetch this page's body every 4s (paused when the tab is hidden), swap it
 # in, and RE-OPEN whatever cards the operator was reading — a refresh must never close the
@@ -64,19 +116,23 @@ setInterval(tick,4000);
 _TABS = (("desk", "/desk"), ("mail", "/mail"), ("fleet", "/fleet"), ("membrane", "/membrane"))
 
 
-def page(title: str, active: str, inner: str) -> str:
+def page(title: str, active: str, inner: str, *, actions: bool = False) -> str:
     """The shell: nav + the poll-swapped content div. Everything inside #c must render
-    identically when served as ?partial=1 — the poller depends on it."""
+    identically when served as ?partial=1 — the poller depends on it.
+
+    `actions=True` arms the click handler (the desk only). The label tells the truth about
+    which it is: a page that can write must never present itself as a read-only lens."""
     nav = "".join(
         f'<a href="{href}" class="{"on" if name == active else ""}">{name}</a>'
         for name, href in _TABS)
+    mode = "your clicks write (signed operator)" if actions else "read-only"
     return (
         '<!doctype html><meta charset="utf-8">'
         f"<title>osiris {_e(title)}</title><style>{_CHROME_CSS}</style>"
         f'<h1>◈ {_e(title)}</h1><div class="nav">{nav}'
         f'<span class="ts">updated <span id="ts">just now</span> · refreshes 4s · '
-        "read-only</span></div>"
-        f'<div id="c">{inner}</div>{_POLLER}'
+        f"{mode}</span></div>"
+        f'<div id="c">{inner}</div>{_POLLER}{_ACTIONS if actions else ""}'
     )
 
 
@@ -91,10 +147,10 @@ def _card(dom_id: str, head: str, body: str, sub: str = "") -> str:
 
 # ── /desk ────────────────────────────────────────────────────────────────────────────────
 
-_BAND_HDRS = {"decision": ("needs your decision", "hdr-decision"),
-              "hands": ("blocked on your hands", "hdr-hands"),
-              "fyi": ("fyi", "hdr-fyi")}
-_BAND_KEYS = {"decision": "needs_decision", "hands": "needs_hands", "fyi": "fyi"}
+# The bands are no longer the desk's TOP-LEVEL shape (they still are in read_desk, and still
+# are for AGENTS reading via inbox — a mind wants "what must the human decide"). The HUMAN's
+# page groups by project instead: decision+hands become a project's `asks`, fyi becomes the
+# letters bin. Same record, two lenses.
 
 
 def _brief_card(m: dict[str, Any]) -> str:
@@ -114,36 +170,106 @@ def _brief_card(m: dict[str, Any]) -> str:
     return _card(f'm{m["id"]}', head, m.get("body") or "", "".join(subs))
 
 
+def _verbs(t: dict[str, Any], project: str) -> str:
+    """The FOUR DOORS off a debt. Before these, a thread on the operator's desk had two exits
+    — he did it, or it rotted — which is why his desk snowballed. `not mine` is the one that
+    was missing: it hands the duty back to the project that owes it (owner=<project>), where
+    orient() puts it on THAT project's wall at its next mount. No dispatcher; the graph is
+    the dispatcher."""
+    tid = _e(t["id"])
+    hand_to = _e(project) if project and project != "—" else ""
+    back = (f'<button data-act="triage" data-verb="assign" data-id="{tid}" '
+            f'data-owner="{hand_to}" data-because="operator: not mine — {hand_to} owns this" '
+            f'title="hand it back to {hand_to} — stays open, stops being yours"'
+            f'>not mine</button>' if hand_to else "")
+    return (
+        f'<span class="verbs">'
+        f'<button data-act="triage" data-verb="resolve" data-id="{tid}" '
+        f'data-because="operator: done" title="close it — done">done</button>'
+        f'{back}'
+        f'<button data-act="triage" data-verb="defer" data-id="{tid}" data-days="30" '
+        f'data-because="operator: not now" title="mine, but not now — back in 30 days"'
+        f'>later</button>'
+        f"</span>")
+
+
+def _settle(ids: list[Any], label: str = "settle") -> str:
+    return (f'<button data-act="settle" data-ids="{",".join(str(i) for i in ids)}">'
+            f"{_e(label)}</button>")
+
+
 def render_desk(desk: dict[str, Any]) -> str:
-    """The organized desk (mailbox.read_desk's shape) as clickable bands."""
+    """THE DESK AS A WORKSPACE (operator, 2026-07-11). Was: three bands of mail and a scary
+    red count that mixed debts with condolence letters, with no way to clear anything without
+    summoning an agent. Now: an honest count (what you OWE vs letters that owe nothing), the
+    debts grouped BY PROJECT so a sitting can clear one, and a verb on every row."""
     out: list[str] = []
-    for kind in DESK_KINDS:
-        cards = desk.get(_BAND_KEYS[kind]) or []
-        title, cls = _BAND_HDRS[kind]
-        out.append(f'<div class="band"><h2 class="{cls}">{title} '
-                   f'<span class="pill">{len(cards)}</span></h2>')
-        out.append("".join(_brief_card(m) for m in cards)
-                   or '<p class="dim">nothing here</p>')
+    owed, letters = desk.get("owed", 0), desk.get("letters", 0)
+    lett_ids = [m["id"] for m in (desk.get("fyi") or [])]
+    out.append(
+        f'<div class="counts"><span class="owe{" clear" if not owed else ""}">'
+        f"YOU OWE <b>{owed}</b></span>"
+        f'<span class="lett">letters <b>{letters}</b> '
+        f'<span class="dim">— no debt attached</span> '
+        + (_settle(lett_ids, f"clear all {letters}") if lett_ids else "")
+        + "</span></div>")
+
+    projects = desk.get("by_project") or []
+    if projects:
+        out.append('<div class="band"><h2>your debts — by project '
+                   '<span class="dim">(clear one project at a sitting)</span></h2>')
+        for p in projects:
+            debts, asks = p.get("debts") or [], p.get("asks") or []
+            crit = " crit" if p.get("critical") else ""
+            pills = "".join(
+                f'<span class="pill">{n} {lbl}</span>'
+                for n, lbl in ((len(debts), "debt" + ("s" if len(debts) != 1 else "")),
+                               (len(asks), "ask" + ("s" if len(asks) != 1 else "")))
+                if n)
+            head = (f'<summary><span class="who">{_e(p["project"])}</span>'
+                    + ('<span class="hdr-decision">🚨</span>' if p.get("critical") else "")
+                    + f"{pills}</summary>")
+            rows = "".join(
+                f'<div class="debt"><code>{_e(t["id"])}</code> {_e(t["summary"])}'
+                + (' <span class="pill">obligation</span>'
+                   if t.get("kind") == "obligation" else "")
+                + _verbs(t, p["project"]) + "</div>" for t in debts)
+            asked = "".join(
+                f'<div class="debt">{_brief_card(m)}{_settle([m["id"]])}</div>' for m in asks)
+            out.append(f'<details class="proj{crit}" id="p-{_e(p["project"])}">'
+                       f"{head}{rows}{asked}</details>")
         out.append("</div>")
+
+    letters_band = desk.get("fyi") or []
+    if letters_band:
+        out.append('<div class="band"><h2 class="hdr-fyi">letters '
+                   f'<span class="pill">{len(letters_band)}</span> '
+                   '<span class="dim">(reports and eulogies — nothing owed)</span></h2>')
+        for m in letters_band:
+            ids = [m["id"], *[a["id"] for a in (m.get("same_story") or {}).get("also", [])],
+                   *(m.get("thread_folded") or {}).get("ids", [])]
+            out.append(f'<div class="debt">{_brief_card(m)}{_settle(ids)}</div>')
+        out.append("</div>")
+
+    # DIMMED: an agent judged these moot and said WHY — but a dim is an annotation, never a
+    # settle (the membrane). They stay here, one line each, with the human's own dismiss.
     dimmed = desk.get("dimmed") or []
     if dimmed:
         out.append('<div class="band"><h2 class="hdr-fyi">dimmed '
-                   f'<span class="pill">{len(dimmed)}</span></h2>')
+                   f'<span class="pill">{len(dimmed)}</span> '
+                   '<span class="dim">(an agent called these moot — yours to dismiss)</span> '
+                   + _settle([d["id"] for d in dimmed], f"clear all {len(dimmed)}")
+                   + "</h2>")
         for d in dimmed:
             head = (f'<span class="who">{_e(d.get("project") or "?")}</span>'
                     f'<span class="dim">{_e(d.get("headline") or "")}</span>')
-            out.append(_card(f'dim{d["id"]}', head,
-                             f'moot ({_e(d.get("by"))}): {d.get("moot") or ""}'))
+            out.append('<div class="debt">'
+                       + _card(f'dim{d["id"]}', head,
+                               f'moot ({_e(d.get("by"))}): {d.get("moot") or ""}')
+                       + _settle([d["id"]]) + "</div>")
         out.append("</div>")
-    q = (desk.get("your_queue") or {}).get("threads") or []
-    if q:
-        items = "".join(
-            f'<li><span class="dim">{_e(t["id"])}</span> {_e(t["summary"])}'
-            + (' <span class="pill">obligation</span>' if t.get("kind") == "obligation"
-               else "") + "</li>" for t in q)
-        out.append('<div class="band"><h2>your queue '
-                   '<span class="dim">(owner=operator threads, live from the graph)</span>'
-                   f'</h2><ul class="queue">{items}</ul></div>')
+    # (no separate "your queue" band any more — by_project above IS the queue, grouped the
+    # way the operator actually works it. Rendering both was the double-billing he saw.)
     return "".join(out)
 
 

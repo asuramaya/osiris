@@ -12,6 +12,7 @@ from src.api.app import create_app
 from src.orchestrator.capture import open_thread
 from src.orchestrator.compositions import (
     list_compositions,
+    open_thread_wall,
     run_composition,
     seed_default_compositions,
 )
@@ -111,6 +112,99 @@ async def test_triage_route_writes_as_the_operator(
     # bad verb refused
     r3 = await client.post("/threads/triage", json={"ids": [duty], "verb": "delete"})
     assert "error" in r3.json()
+
+
+async def test_the_four_doors_off_the_operators_desk(
+        actions: Actions, client: httpx.AsyncClient) -> None:
+    """THE SNOWBALL CURE (operator, 2026-07-11: "a scary red 11 desk without a good way to
+    resolve these debts per thread or per project, so it snowballs into infinity"). A debt
+    on his queue had two exits — do it, or let it rot. Now four:
+
+      done      → resolved, leaves the record's open set
+      NOT MINE  → owner becomes the project that owes it; STILL OPEN, just no longer his
+      later     → deferred_until stamps a date; the LENS hides it, the RECORD keeps it open
+      (reclassify → it isn't the kind of thing it claimed to be)
+
+    The two new doors must NEVER lie about status (758ded94: untouched ≠ resolved) — that is
+    what separates a hand-back from a quiet delete."""
+    from src.orchestrator.mailbox import read_desk
+    await _project_with_threads(actions)
+
+    async def owner_of(tid: str) -> str | None:
+        return await actions.pool.fetchval(  # type: ignore[no-any-return]
+            "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1::uuid "
+            "AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", tid)
+
+    async def status_of(tid: str) -> str | None:
+        return await actions.pool.fetchval(  # type: ignore[no-any-return]
+            "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1::uuid "
+            "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", tid)
+
+    blocker = str(await actions.pool.fetchval(
+        "SELECT o.id FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+        "WHERE a.name='summary' AND a.value #>> '{}' = 'an operator blocker'"))
+    assert await owner_of(blocker) == "operator"       # it starts on the human
+
+    # DOOR 2 — "not mine": hand it back to the project. Open in the record, off his desk.
+    r = await client.post("/threads/triage", json={
+        "ids": [blocker[:8]], "verb": "assign", "owner": "walltest",
+        "because": "operator: not mine — walltest owns this"})
+    assert r.json()["acted"] == 1
+    assert await owner_of(blocker) == "walltest"
+    assert await status_of(blocker) == "open"          # NOT a resolve, and never pretends to be
+
+    def queued(desk: dict) -> set[str]:
+        return {t["id"] for t in (desk.get("your_queue") or {}).get("threads", [])}
+
+    assert blocker[:8] not in queued(await read_desk(actions.pool))   # gone from HIS queue...
+    # ...and now on walltest's wall, where orient() will hand it to their next living mind
+    wall, _ = await open_thread_wall(actions.pool, await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:walltest'"))
+    assert blocker[:8] in {str(w["id"])[:8] for w in wall}
+
+    # DOOR 3 — "later": mine, but not now. Hidden at the LENS, untouched in the RECORD.
+    duty = str(await actions.pool.fetchval(
+        "SELECT o.id FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+        "WHERE a.name='summary' AND a.value #>> '{}' = 'a duty someone owes'"))
+    await client.post("/threads/triage", json={"ids": [duty], "verb": "assign",
+                                               "owner": "operator", "because": "mine"})
+    assert duty[:8] in queued(await read_desk(actions.pool))
+    r2 = await client.post("/threads/triage", json={
+        "ids": [duty], "verb": "defer", "days": 30, "because": "operator: not now"})
+    assert r2.json()["acted"] == 1
+    assert duty[:8] not in queued(await read_desk(actions.pool))
+    assert await status_of(duty) == "open"             # deferral is a LENS act, never a close
+    assert await owner_of(duty) == "operator"          # still his — just not today
+
+    # assign without an owner is refused, not silently applied
+    assert "error" in (await client.post("/threads/triage", json={
+        "ids": [duty], "verb": "assign"})).json()
+
+
+async def test_the_desk_counts_debts_apart_from_letters_and_groups_by_project(
+        actions: Actions, client: httpx.AsyncClient) -> None:
+    """The "scary red 11" was a lie: it summed debts the operator owed with condolence letters
+    that owed nothing. `owed` counts only his open threads; `letters` counts the fyi briefs,
+    which clear in bulk through his own click — an agent still cannot settle this desk."""
+    from src.orchestrator.mailbox import read_desk, send_message
+    await _project_with_threads(actions)
+    await send_message(actions.pool, from_agent="agent:ghost", from_project="walltest",
+                       to_project="operator", desk_kind="fyi",
+                       body="retirement letter: it was a good life")
+    await send_message(actions.pool, from_agent="agent:ghost", from_project="walltest",
+                       to_project="operator", desk_kind="hands",
+                       body="AUTHORIZE the deploy — blocked on you")
+    desk = await read_desk(actions.pool)
+    assert desk["owed"] == 1 and desk["letters"] == 1      # one operator-owned thread, one letter
+    proj = next(p for p in desk["by_project"] if p["project"] == "walltest")
+    assert proj["owed"] == 1 and len(proj["asks"]) == 1    # the debt AND who asked, together
+    assert all("retirement letter" not in (a.get("body") or "") for a in proj["asks"])
+
+    # the human's own click dismisses; the count falls
+    letter = desk["fyi"][0]["id"]
+    r = await client.post("/desk/settle", json={"ids": [letter]})
+    assert r.json()["settled"] == 1
+    assert (await read_desk(actions.pool))["letters"] == 0
 
 
 async def test_the_shelf_metadata_reaches_the_list(actions: Actions) -> None:

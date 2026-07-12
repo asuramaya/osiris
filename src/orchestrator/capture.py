@@ -31,7 +31,7 @@ from __future__ import annotations
 import hashlib
 import re
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import asyncpg
 
@@ -350,6 +350,57 @@ async def resolve_thread(
                                   _CONF, evidence_class=_EC)
     if because:
         await actions.assert_property(tid, "resolved_because", because, source, observed,
+                                      _CONF, evidence_class=_EC)
+    return tid
+
+
+async def assign_thread(
+    actions: Actions, ref: str, *, owner: str, because: str | None = None,
+    source: str = _SOURCE,
+) -> uuid.UUID | None:
+    """HAND A THREAD BACK — reassign whose move it is, WITHOUT closing it (operator, 2026-07-11:
+    "no good way to resolve these debts per thread or per project, so it snowballs into
+    infinity"). A debt on the human's queue had exactly two exits — he does it, or it rots —
+    so everything he was ever cc'd on accumulated on him forever. This is the third door:
+    owner='<project>' pushes the duty back to the hands that actually own it, where orient()
+    surfaces it on THAT project's wall at its next mount. Nobody dispatches; the graph does.
+
+    Not a resolve and never pretends to be (untouched ≠ resolved, 758ded94): status is
+    untouched, the debt stays OPEN in the record — it simply stops being HIS. Reversible
+    (assign it back), event-sourced, SELF_DECLARED when the operator's own click signs it."""
+    tid = await _find_thread(actions.pool, ref)
+    if tid is None:
+        return None
+    observed = datetime.now(UTC)
+    await actions.assert_property(tid, "owner", owner.strip(), source, observed, _CONF,
+                                  evidence_class=_EC)
+    if because:
+        await actions.assert_property(tid, "assigned_because", because, source, observed,
+                                      _CONF, evidence_class=_EC)
+    return tid
+
+
+async def defer_thread(
+    actions: Actions, ref: str, *, days: int, because: str | None = None,
+    source: str = _SOURCE,
+) -> uuid.UUID | None:
+    """SNOOZE — the debt is real, owned, and NOT NOW. Stamps `deferred_until`; the LENS hides
+    it from the queue/wall until that date, then it returns on its own. The fourth door, and
+    the honest one for "yes, mine, but not this month": the alternative the operator actually
+    had was leaving it on a red desk to be re-read and re-skipped every single day, which is
+    how a queue stops being read at all.
+
+    Fix at the LENS, never at the record: the thread stays OPEN and owned; only its VISIBILITY
+    moves. A deferral is testimony with an expiry — it can never silently become a resolve."""
+    tid = await _find_thread(actions.pool, ref)
+    if tid is None:
+        return None
+    observed = datetime.now(UTC)
+    until = observed + timedelta(days=max(1, days))
+    await actions.assert_property(tid, "deferred_until", until.date().isoformat(), source,
+                                  observed, _CONF, evidence_class=_EC)
+    if because:
+        await actions.assert_property(tid, "deferred_because", because, source, observed,
                                       _CONF, evidence_class=_EC)
     return tid
 

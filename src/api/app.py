@@ -765,15 +765,35 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def triage_threads(
         body: ThreadTriageBody, p: asyncpg.Pool = Depends(get_pool)
     ) -> dict[str, Any]:
-        from src.orchestrator.capture import reclassify_thread, resolve_thread
-        if body.verb not in ("resolve", "obligation", "question", "task"):
-            return {"error": "verb must be resolve | obligation | question | task"}
+        # THE FOUR DOORS OFF THE DESK (operator, 2026-07-11 — "it snowballs into infinity"):
+        # a debt used to have two exits, do-it or rot, so everything he was ever cc'd on piled
+        # up on him. resolve = done · assign = NOT MINE (hand it back to the project that owes
+        # it; orient puts it on THEIR wall) · defer = mine, not now (hidden at the lens until
+        # its date) · obligation/question/task = it isn't what it claims to be. Only `resolve`
+        # touches status — the other three never lie about state (758ded94).
+        from src.orchestrator.capture import (
+            assign_thread,
+            defer_thread,
+            reclassify_thread,
+            resolve_thread,
+        )
+        verbs = ("resolve", "obligation", "question", "task", "assign", "defer")
+        if body.verb not in verbs:
+            return {"error": f"verb must be one of {' | '.join(verbs)}"}
+        if body.verb == "assign" and not (body.owner or "").strip():
+            return {"error": "assign needs an owner — a project name, 'agent:<id>', or 'operator'"}
         acts = Actions(p)
         out: list[dict[str, str]] = []
         for ref in body.ids[:200]:
             if body.verb == "resolve":
                 tid = await resolve_thread(acts, ref, because=body.because,
                                            source="analyst:operator")
+            elif body.verb == "assign":
+                tid = await assign_thread(acts, ref, owner=(body.owner or "").strip(),
+                                          because=body.because, source="analyst:operator")
+            elif body.verb == "defer":
+                tid = await defer_thread(acts, ref, days=body.days, because=body.because,
+                                         source="analyst:operator")
             else:
                 tid = await reclassify_thread(acts, ref, kind=body.verb,
                                               because=body.because,
@@ -783,6 +803,20 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         done = sum(1 for o in out if o.get("ok"))
         return {"verb": body.verb, "acted": done, "missed": len(out) - done,
                 "results": out, "by": "analyst:operator"}
+
+    @app.post("/desk/settle")
+    async def desk_settle(
+        body: DeskSettleBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        """DISMISS briefs from the operator's desk. The membrane holds in the only way that
+        matters: an AGENT still cannot settle this desk (dim_brief annotates, never clears) —
+        this route exists solely so the HUMAN'S OWN CLICK can, without him having to summon a
+        mind to run inbox(ack=[…]) for him. His hand, his signature."""
+        from src.orchestrator.mailbox import OPERATOR_ADDR, ack_messages
+        ids = body.ids[:200]
+        n = await ack_messages(p, OPERATOR_ADDR, ids, reader_agent=OPERATOR_ADDR)
+        return {"settled": n, "asked": len(ids), "by": "operator",
+                "note": "dismissed by the human's own click"}
 
     # ---- the shared console cursor (real-time Claude↔front sync) -------------
     @app.get("/console")
@@ -955,12 +989,15 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     # constitution as /membrane; ?partial=1 serves just the content div for the poller.
     @app.get("/desk")
     async def desk_page(partial: int = 0, p: asyncpg.Pool = Depends(get_pool)) -> Response:
-        """The organized desk: bands (needs-decision / needs-hands / fyi), folds, dimmed
-        annotations, and the your-queue derived from owner='operator' threads. Reading here
-        never leases; settling stays with the MCP waist at the human's word."""
+        """THE DESK AS A WORKSPACE (operator, 2026-07-11: "a scary red 11 desk without a good
+        way to resolve these debts per thread or per project, so it snowballs into infinity").
+        An honest count (what you OWE vs letters that owe nothing), debts grouped BY PROJECT,
+        and a verb on every row. Reading still leases nothing; the WRITES here are the human's
+        own clicks (ruling 923c380f), signed analyst:operator through the Actions waist."""
         from src.orchestrator.mailbox import read_desk
         inner = chrome.render_desk(await read_desk(p))
-        return Response(inner if partial else chrome.page("desk", "desk", inner),
+        return Response(inner if partial
+                        else chrome.page("desk", "desk", inner, actions=True),
                         media_type="text/html")
 
     @app.get("/mail")
@@ -1203,9 +1240,17 @@ class RunSpecBody(BaseModel):
 
 
 class ThreadTriageBody(BaseModel):
+    """`assign` needs `owner` (the project/agent taking it); `defer` needs `days`."""
     ids: list[str]
-    verb: str  # resolve | obligation | question | task
+    verb: str  # resolve | obligation | question | task | assign | defer
     because: str | None = None
+    owner: str | None = None
+    days: int = 30
+
+
+class DeskSettleBody(BaseModel):
+    """The operator DISMISSING briefs from his own desk — his click, his signature."""
+    ids: list[int]
 
 
 class ConsoleBody(BaseModel):

@@ -32,22 +32,56 @@ def _desk() -> dict:
             {"id": 291, "from": "agent:a", "project": "tony",
              "headline": "model check", "moot": "fixed in bcbdeab", "by": "agent:fixer"}],
         "your_queue": {"threads": [
-            {"id": "3ea7b203", "summary": "refill the gemini key", "kind": "obligation"}],
+            {"id": "3ea7b203", "summary": "refill the gemini key", "kind": "obligation",
+             "project": "monsterhouse"}],
             "note": "owner=operator"},
+        "owed": 1,
+        "letters": 1,
+        "by_project": [
+            {"project": "coldspot", "debts": [], "owed": 0, "critical": True,
+             "asks": [{"id": 289, "from": "agent:d", "from_project": "coldspot",
+                       "body": "🚨 CRITICAL: root escalation <script>x</script>",
+                       "when": "2026-07-11T19:22:00+00:00"}]},
+            {"project": "monsterhouse", "owed": 1, "critical": False, "asks": [],
+             "debts": [{"id": "3ea7b203", "summary": "refill the gemini key",
+                        "kind": "obligation", "project": "monsterhouse"}]}],
         "note": "peek",
     }
 
 
-def test_desk_renders_bands_folds_dims_and_queue() -> None:
+def test_desk_renders_projects_verbs_folds_and_dims() -> None:
+    """THE DESK AS A WORKSPACE (operator, 2026-07-11): an honest count (debts ≠ letters),
+    debts grouped BY PROJECT, and the FOUR DOORS on every row — the old page had bands and
+    no exits, which is why an eleven-item desk snowballed."""
     html = render_desk(_desk())
-    assert "needs your decision" in html and "blocked on your hands" in html
+    # the honest count: what you OWE, and letters that owe nothing (bulk-clearable)
+    assert "YOU OWE <b>1</b>" in html and "letters <b>1</b>" in html
+    assert 'data-act="settle" data-ids="300,284,286"' in html  # folded ids clear with the lead
+    # grouped by project, the critical one flagged and ordered first
+    assert html.index('id="p-coldspot"') < html.index('id="p-monsterhouse"')
+    assert 'class="proj crit"' in html
+    # THE FOUR DOORS — and `not mine` hands the debt back to the project that owes it
+    assert 'data-verb="resolve" data-id="3ea7b203"' in html
+    assert 'data-verb="assign" data-id="3ea7b203" data-owner="monsterhouse"' in html
+    assert 'data-verb="defer" data-id="3ea7b203" data-days="30"' in html
     # untrusted bodies are escaped, cards carry stable ids for the poller's re-open
     assert "<script>x</script>" not in html and "&lt;script&gt;" in html
     assert 'id="m289"' in html and 'id="dim291"' in html
     assert "×3 same story" in html and "Like-Us (284)" in html
-    assert "supersedes 1 earlier" in html and "(42)" in html
     assert "moot (agent:fixer): fixed in bcbdeab" in html
-    assert "refill the gemini key" in html and "your queue" in html
+    # the old duplicate "your queue" scroll is GONE — by_project IS the queue
+    assert "your queue" not in html
+
+
+def test_only_the_desk_arms_the_write_handler() -> None:
+    """The console constitution, precisely: reads are free everywhere, and exactly one page
+    may write — the operator's own desk (ruling 923c380f). A page that can write must also
+    SAY it can; the read-only lenses must not ship the handler at all."""
+    assert 'data-act' in page("desk", "desk", "<p>x</p>", actions=True)
+    assert "your clicks write (signed operator)" in page("desk", "desk", "x", actions=True)
+    for lens in ("mail", "fleet"):
+        html = page(lens, lens, "<p>x</p>")
+        assert "read-only" in html and "/desk/settle" not in html
 
 
 def test_page_shell_carries_nav_poller_and_partial_contract() -> None:
