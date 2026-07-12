@@ -23,7 +23,7 @@ NOW = datetime(2026, 7, 6, tzinfo=UTC)
 def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
               lease: int = 900, grace: int = 0, live: int = 900,
               ceiling: int = 8_000_000, sense: str = "",
-              wake_model: str = "") -> SimpleNamespace:
+              wake_model: str = "", attempts: int = 0) -> SimpleNamespace:
     # grace defaults to 0 (disabled) so the rate-cap / lease tests exercise those bounds in
     # isolation; the wake-grace tests set it explicitly. sense="" → resume resolution looks at
     # ~/.claude/projects (no anchored transcript for the test ids there → mint), so the legacy
@@ -34,6 +34,7 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
                            osiris_resume_ceiling_bytes=ceiling, osiris_sense_sessions=sense,
                            osiris_wake_model=wake_model,
                            osiris_wake_hourly_budget=0,  # unmetered: economics has its own tests
+                           osiris_wake_message_attempts=attempts,
                            osiris_wake_allowed_tools="mcp__osiris")
 
 
@@ -77,7 +78,7 @@ def test_should_wake_grace_is_distinct_and_ranked_below_the_cap() -> None:
 def test_wake_prompt_carries_the_upward_duty() -> None:
     # the woken agent's contract: settle what it handles, and REPORT UP when the loop closes —
     # the operator must see it (membrane #6); acks-only replies stay forbidden (ping-pong).
-    p = _WAKE_PROMPT.format(repo="/repo/demo")
+    p = _WAKE_PROMPT.format(repo="/repo/demo", job_dir="/tmp/osiris-wakes/jobs/wake-demo")
     assert "send(reply_to=" in p and "ack" in p          # the settle ritual
     assert "send(to='operator'" in p and "record_decision" in p  # the report-up duty
     assert "desk=" in p and "'fyi'" in p                 # the desk bands ride the brief
@@ -202,25 +203,35 @@ async def test_wake_grace_expiry_rearms(actions: Actions) -> None:
 
 
 async def test_spawned_wake_carries_a_durable_job_dir_anchor(actions: Actions) -> None:
-    """Obligation e1ed13fb part 1: a triggered `claude -p` gets no CLAUDE_JOB_DIR from any
-    harness, so the woken agent used to mount by guessing its identity off a co-tenant's
-    transcript. The trigger now synthesizes a durable, deterministic per-wake anchor with a
-    'jobs/wake-<row id>' shape _job_id parses — so the agent mounts as a stable agent:wake-<id>."""
+    """Obligation e1ed13fb part 1: a triggered `claude -p` gets no CLAUDE_JOB_DIR from any harness,
+    so the woken agent used to mount by guessing its identity off a co-tenant's transcript. The
+    trigger synthesizes a durable anchor with a 'jobs/wake-<x>' shape _job_id parses.
+
+    AMENDED 2026-07-12: <x> was the WAKE ROW ID, so every wake became a new agent:wake-<id> — 463
+    mints, 463 strangers on the roster, 48 of them in a project the operator had not opened in two
+    days. A wake is not a new MIND; it is the same errand run again. It is now keyed on the
+    PROJECT: one ghost per house, re-worn, and instantly recognisable as a machine.
+
+    The anchor ALSO now rides in the PROMPT as a literal path. It used to be the text
+    `$CLAUDE_JOB_DIR`, which a woken agent (tools: mcp__osiris only, no shell) cannot expand — so
+    the mount hook refused the '$' and derived a fresh session-based identity every single time,
+    and this anchor was never used ONCE in 463 mints."""
     from src.ingest.sessions import _job_id
 
     await _agent_with_mail(actions)
-    captured: list[str] = []
+    captured: list[tuple[str, str]] = []
 
     async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
-        captured.append(kw["job_dir"])
+        captured.append((kw["job_dir"], prompt))
 
     rep = await trigger_mail_tick(actions, settings=_settings(enabled=True), spawn=_spawn)
     assert rep["woke"] == 1 and len(captured) == 1
-    jd = captured[0]
-    wake_id = await actions.pool.fetchval("SELECT id FROM agent_wakes WHERE to_project='demo'")
-    assert jd.endswith(f"jobs/wake-{wake_id}")     # the token is the ledger row id (deterministic)
-    assert _job_id(jd) == f"wake-{wake_id}"        # the parser resolves it to the session handle
+    jd, prompt = captured[0]
+    assert jd.endswith("jobs/wake-demo")           # the token is the PROJECT, not the row id
+    assert _job_id(jd) == "wake-demo"              # the parser resolves it to a stable handle
     assert Path(jd).is_dir()                       # a REAL created dir, not just a string
+    # and the agent is TOLD the literal path — it has no shell to expand a variable with
+    assert f'job_dir="{jd}"' in prompt and "$CLAUDE_JOB_DIR" not in prompt
 
 
 async def test_spawn_claude_injects_claude_job_dir_into_child_env(monkeypatch: Any) -> None:
@@ -506,3 +517,142 @@ async def test_the_mint_prompt_retires_its_face() -> None:
     """Wake hygiene (thread fc2071f8): a triage wake is one-shot — the prompt itself carries
     the retire() duty so no zombie card survives it."""
     assert "retire()" in _WAKE_PROMPT and "ONE-SHOT" in _WAKE_PROMPT
+
+
+def test_a_rate_is_not_a_bound() -> None:
+    """THE 2026-07-12 GHOST FARM, in one assertion.
+
+    Every guard in should_wake measured wakes over a SLIDING WINDOW — the per-project cap, the
+    hourly budget, the grace. Every one of them RESETS. So one unread letter ("to whoever mounts
+    monsterhouse next") spawned 79 `claude -p` sessions over 18 hours on a project the operator
+    had not opened in two days, minting a fresh agent every ~32 minutes — AT EXACTLY THE CAP.
+    The cap was working perfectly, and that was the bug: it bounded the RATE while nothing bounded
+    the TOTAL, so a message that could never be settled became a permanent alarm clock ticking at
+    the legal limit.
+    """
+    # the old world: the window has rolled over, so the rate cap happily says WAKE — forever
+    assert should_wake(enabled=True, recent_wakes=0, rate_cap=5) is None
+    # the new bound is a TOTAL and it does not reset
+    assert should_wake(enabled=True, recent_wakes=0, rate_cap=5,
+                       attempts=3, attempt_limit=3) == "unsettleable"
+    assert should_wake(enabled=True, recent_wakes=0, rate_cap=5,
+                       attempts=2, attempt_limit=3) is None      # still trying: fine
+    assert should_wake(enabled=True, recent_wakes=0, rate_cap=5,
+                       attempts=79, attempt_limit=3) == "unsettleable"
+
+
+def test_urgency_cannot_override_the_total() -> None:
+    """A message that has failed three times is still failing, and urgency is not a reason to
+    keep failing louder. `urgent` rides through the budget guards — it must NOT ride through
+    this one, or the loop simply returns wearing a hat."""
+    assert should_wake(enabled=True, recent_wakes=0, rate_cap=5, urgent=True,
+                       hourly_wakes=0, hourly_budget=30,
+                       attempts=3, attempt_limit=3) == "unsettleable"
+
+
+def test_the_limit_is_checked_before_every_other_guard() -> None:
+    """'unsettleable' is the hardest signal here: it is a fact about the MESSAGE, not about our
+    current appetite. It must win over rate-capped/grace, or the true reason gets masked and the
+    escalation to the human never fires."""
+    assert should_wake(enabled=True, recent_wakes=99, rate_cap=5, within_grace=True,
+                       attempts=3, attempt_limit=3) == "unsettleable"
+    # ...but the kill switch still wins over everything. Off means off.
+    assert should_wake(enabled=False, recent_wakes=0, rate_cap=5,
+                       attempts=3, attempt_limit=3) == "disabled"
+
+
+def test_attempt_limit_off_by_default_leaves_the_old_behaviour_intact() -> None:
+    assert should_wake(enabled=True, recent_wakes=0, rate_cap=5,
+                       attempts=999, attempt_limit=0) is None
+
+
+async def test_an_unsettleable_letter_stops_forever_and_tells_the_human(
+    actions: Actions,
+) -> None:
+    """THE GHOST FARM, killed end to end.
+
+    The rate-cap test above proves the loop halts WITHIN A WINDOW. It does not halt ACROSS
+    windows — the cap resets, and the wake fires again, forever. That is exactly what happened:
+    one letter spawned 79 sessions over 18 hours on an abandoned project, each wake obediently
+    reading it, correctly judging it was not theirs to ack, leaving it politely alone, and
+    thereby summoning its replacement. The letter's own politeness was the fuel.
+
+    Now the total bounds it: after `attempts` tries the trigger STOPS on that message forever and
+    hands it to the only reader who can act — the human. Nothing is deleted; the letter stays in
+    the graph. It simply stops ringing.
+    """
+    await _agent_with_mail(actions)
+    spawned: list[str] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        spawned.append(repo)
+
+    # rate_cap high + window rolling is the old world; the TOTAL is what must bite.
+    st = _settings(enabled=True, rate_cap=99, lease=0, attempts=3)
+    for _ in range(20):                      # twenty ticks, mail never settled — the storm
+        await trigger_mail_tick(actions, settings=st, spawn=_spawn)
+
+    assert len(spawned) == 3, "the TOTAL must bound it — a rate would have spawned 20"
+
+    # the tombstone: recorded once, and excluded from the attempt count so it cannot re-arm
+    tombs = await actions.pool.fetchval(
+        "SELECT count(*) FROM agent_wakes WHERE mode='abandoned'")
+    assert tombs == 1
+
+    # AND THE HUMAN IS TOLD — the loop may close, but never silently
+    desk = await read_inbox(actions.pool, OPERATOR_ADDR, reader_agent="operator",
+                            mark_read=False)
+    briefs = [m for m in desk if "UNSETTLEABLE MAIL" in m["body"]]
+    assert len(briefs) == 1
+    assert "STOPPED waking on it" in briefs[0]["body"]
+    assert "it is a leak" in briefs[0]["body"]
+
+    # a further twenty ticks change nothing: no new spawns, no second brief, no re-arm
+    for _ in range(20):
+        await trigger_mail_tick(actions, settings=st, spawn=_spawn)
+    assert len(spawned) == 3
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM agent_wakes WHERE mode='abandoned'") == 1
+
+
+async def test_the_wake_prompt_forbids_leaving_mail_unsettled() -> None:
+    """The prompt gave a triage wake two exits — ack it, or leave it — and 'leave it' silently
+    re-armed the wake. It needs the THIRD DOOR named, or a well-behaved agent keeps the loop
+    alive by doing exactly what it was told."""
+    assert "MUST NOT LEAVE MAIL UNSETTLED" in _WAKE_PROMPT
+    assert "THIRD DOOR" in _WAKE_PROMPT
+    assert "obligation" in _WAKE_PROMPT
+
+
+def test_a_wake_gets_one_stable_ghost_per_project_not_one_per_wake() -> None:
+    """463 MINTS, 463 IDENTITIES, AND NOT ONE OF THEM THE INTENDED ONE.
+
+    The anchor was keyed on the WAKE ROW ID, so every wake resolved to a fresh agent:wake-<id>
+    and the roster filled with strangers the operator never started — 48 in monsterhouse alone,
+    a project he had not opened in two days. A wake is not a new MIND; it is the same errand run
+    again. One name per house, re-worn.
+    """
+    from src.orchestrator.trigger import _wake_job_dir
+
+    a = _wake_job_dir("monsterhouse")
+    b = _wake_job_dir("monsterhouse")
+    assert a == b and a.endswith("/jobs/wake-monsterhouse")   # same errand, same face
+    assert _wake_job_dir("tony") != a                          # different house, different face
+    # a hostile project name cannot escape the jobs dir
+    assert "/jobs/wake-" in _wake_job_dir("../../etc/passwd")
+    assert ".." not in _wake_job_dir("../../etc/passwd").split("/jobs/")[1]
+
+
+def test_the_wake_prompt_carries_a_literal_anchor_never_a_shell_variable() -> None:
+    """A woken agent has NO SHELL — its tools are mcp__osiris only — so `$CLAUDE_JOB_DIR` in a
+    prompt is just text it hands over verbatim. The mount-anchor hook rightly refuses a '$'-bearing
+    path and derives one from the SESSION id instead, fresh for every `claude -p`. That is how all
+    463 mints got a new identity while the stable anchor sat unused.
+
+    Ruling 40faa5e6 had already fixed exactly this for the SessionStart whisper ("tell the agent
+    the literal path, never $CLAUDE_JOB_DIR") and nobody carried the fix here.
+    """
+    assert "$CLAUDE_JOB_DIR" not in _WAKE_PROMPT
+    rendered = _WAKE_PROMPT.format(repo="/repo/demo", job_dir="/tmp/osiris-wakes/jobs/wake-demo")
+    assert 'job_dir="/tmp/osiris-wakes/jobs/wake-demo"' in rendered
+    assert "$" not in rendered.split("mount(")[1].split(")")[0]

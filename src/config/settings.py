@@ -134,6 +134,12 @@ class Settings(BaseSettings):
     # urgent mail (the operator's word, or mail aged past an hour) wakes; at it, nothing
     # does until the window slides. 0 = unmetered (the old behavior).
     osiris_wake_hourly_budget: int = 30
+    # THE TOTAL, not a rate. How many times ONE message may wake a project before the trigger
+    # gives up on it forever and escalates to the operator. Every other wake guard is a rate over
+    # a sliding window, so every one of them RESETS — which is how a single unread letter spawned
+    # 79 `claude -p` sessions in 18 hours on an abandoned project (2026-07-12). A retry that has
+    # failed 79 times is not a retry; it is a leak.
+    osiris_wake_message_attempts: int = 3
     # The operator's STANDING model choice (the intent). The fable harness silently demotes
     # fable→opus when it senses danger (ruling f2ae6346); the swap-detector flags an observed
     # model that diverges from this — the confession backstop the cold-boot ritual can't be.

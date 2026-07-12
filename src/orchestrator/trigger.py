@@ -16,6 +16,7 @@ by construction: bounded, visible, killable.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import tempfile
@@ -27,9 +28,12 @@ import asyncpg
 from src.actions.core import Actions
 from src.config.settings import Settings, get_settings
 from src.ingest.sessions import locate_current_transcript
-from src.orchestrator.mailbox import OPERATOR_ADDR
+from src.orchestrator.mailbox import OPERATOR_ADDR, send_message
 
 _log = logging.getLogger("osiris.trigger")
+
+# the trigger speaks in its own name when it gives up — never in an agent's
+_TRIGGER_AGENT = "agent:osiris-trigger"
 
 # Where a spawned wake's synthesized CLAUDE_JOB_DIR lives. A triggered `claude -p` inherits no
 # job dir from any harness, so the woken agent has no durable identity anchor and mounts by
@@ -39,7 +43,7 @@ _log = logging.getLogger("osiris.trigger")
 _WAKE_JOB_ROOT = Path(tempfile.gettempdir()) / "osiris-wakes"
 
 _WAKE_PROMPT = (
-    'You have unread Osiris mail. Call mount(cwd="{repo}", job_dir=$CLAUDE_JOB_DIR), then '
+    'You have unread Osiris mail. Call mount(cwd="{repo}", job_dir="{job_dir}"), then '
     "inbox(peek=true) — a peek leases nothing, and you can settle straight from it: "
     "inbox(ack=[the ids you rendered]) for FYI/no-action mail; only lease (non-peek) what "
     "needs deeper handling. Act on what it asks. Write back as you go (record_decision / "
@@ -58,6 +62,15 @@ _WAKE_PROMPT = (
     "ECONOMY: you are a TRIAGE wake — if the mail demands real work (analysis, building, long "
     "reads), do NOT grind it here: open_thread(kind='obligation') describing it, reply with "
     "that pointer (which settles the mail), and let a full session take it. "
+    "YOU MUST NOT LEAVE MAIL UNSETTLED. This is the one rule with teeth. A letter you leave "
+    "untouched does not wait politely for a better reader — it RE-ARMS THIS WAKE and spawns "
+    "another session exactly like you, forever. On 2026-07-12 one letter addressed 'to whoever "
+    "mounts this project next' spawned 79 of us over 18 hours on a project its owner had not "
+    "opened in two days: every wake read it, correctly judged it was not theirs to ack, left it "
+    "politely alone, and thereby summoned its replacement. If mail is not yours to act on, that "
+    "is not a reason to leave it — it is the THIRD DOOR: open_thread(kind='obligation') carrying "
+    "what it asks, then ack it. The letter is not lost (nothing is ever deleted; it stays "
+    "readable in the graph and the thread now carries its duty) — it simply stops ringing. "
     "ONE-SHOT (wake hygiene, thread fc2071f8): before your final word, call retire() — a "
     "triage wake's face closes cleanly (no zombie card, no reanimation target); everything "
     "you settled outlives you in the graph."
@@ -75,16 +88,32 @@ _URGENT_AGE_SECS = 3600     # deferred this long, mail is urgent by starvation
 def should_wake(
     *, enabled: bool, recent_wakes: int, rate_cap: int, within_grace: bool = False,
     hourly_wakes: int = 0, hourly_budget: int = 0, urgent: bool = False,
+    attempts: int = 0, attempt_limit: int = 0,
 ) -> str | None:
-    """The bounded decision (pure). Returns a SKIP REASON, or None to WAKE. The kill switch and
-    the per-project rate cap are the safety — a ping-pong hits the cap and halts. `within_grace`
-    is the double-wake guard: a project woken moments ago is still spawning/mounting (~100s+),
-    so its mail only LOOKS unhandled — skip as 'wake-grace', distinct from the 'rate-capped' bound
-    (the cap wins when both apply — the harder signal). grace expiry re-arms the wake.
-    `hourly_budget` (0 = unmetered) is the fleet-wide hourly wake ceiling: exhausted blocks
-    everything; past the soft ceiling only `urgent` mail wakes (economics, 4e52af7e)."""
+    """The bounded decision (pure). Returns a SKIP REASON, or None to WAKE.
+
+    A RATE IS NOT A BOUND. Every other guard here — the per-project cap, the hourly budget, the
+    grace — measures wakes over a SLIDING WINDOW, so every one of them RESETS and the wake fires
+    again. On 2026-07-12 that let ONE unread letter ("to whoever mounts monsterhouse next") spawn
+    79 `claude -p` sessions over 18 hours on a project the operator had not opened in two days,
+    minting a fresh agent every ~32 minutes, at exactly the cap. The cap was working perfectly.
+    THAT WAS THE BUG: it capped the RATE and nothing capped the TOTAL, so a message that could
+    never be settled became a permanent alarm clock ticking at the legal limit.
+
+    `attempts` is the lifetime count of wakes on THIS MESSAGE and `attempt_limit` bounds it — a
+    TOTAL, which never resets. It is checked FIRST and `urgent` cannot override it: a message that
+    has failed three times is still failing, and urgency is not a reason to keep failing louder.
+    A retry that has failed 79 times is not a retry, it is a leak. When the limit is hit the
+    caller must ESCALATE to the human and stop (the membrane: a loop may close, but never
+    silently — and this one never closed at all).
+
+    (The DM lane already knew this — "one resume attempt per message: a resume that didn't settle
+    it is not looped". The broadcast lane simply never learned it.)
+    """
     if not enabled:
         return "disabled"
+    if attempt_limit > 0 and attempts >= attempt_limit:
+        return "unsettleable"
     if recent_wakes >= rate_cap:
         return "rate-capped"
     if hourly_budget > 0 and hourly_wakes >= hourly_budget:
@@ -125,6 +154,59 @@ async def _recent_wakes(pool: asyncpg.Pool, project: str, window_secs: int) -> i
         "AND woke_at > now() - make_interval(secs => $2)", project, window_secs)
 
 
+async def _attempts_on(pool: asyncpg.Pool, message_id: int) -> int:
+    """How many times we have woken ANYONE for THIS message, ever. No window: this is the total
+    the rate-limiters never kept, and its absence is what let one letter spawn 79 sessions."""
+    n: int | None = await pool.fetchval(
+        "SELECT count(*) FROM agent_wakes WHERE message_id=$1 AND mode <> 'abandoned'",
+        message_id)
+    return n or 0
+
+
+async def _abandon(
+    pool: asyncpg.Pool, project: str, message_id: int, sender: str | None, attempts: int,
+) -> bool:
+    """GIVE UP, AND SAY SO. The loop may close, but never silently — and a wake loop that simply
+    kept firing never closed at all.
+
+    Some mail CANNOT be settled by a triage wake, and no number of retries will change that. The
+    letter that caused the 2026-07-12 storm was addressed "to whoever mounts monsterhouse next" —
+    a message for a future full session. Every wake read it, correctly judged it was not FYI it
+    could ack, left it unsettled exactly as instructed... and thereby summoned its replacement.
+    THE LETTER'S OWN POLITENESS WAS THE FUEL. Every agent in that chain behaved perfectly and the
+    machine still burned for 18 hours.
+
+    So after `attempt_limit` tries we stop waking on this message FOREVER (the 'abandoned' row is
+    the tombstone, and it is excluded from the attempt count so it cannot re-arm anything) and we
+    hand it to the one reader who can actually act: the human. Idempotent — one brief, not one per
+    tick. Returns True when this call is the one that abandoned it."""
+    already = await pool.fetchval(
+        "SELECT 1 FROM agent_wakes WHERE message_id=$1 AND mode='abandoned'", message_id)
+    if already:
+        return False
+    await pool.execute(
+        "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+        "VALUES ($1,$2,$3,'abandoned')", project, sender, message_id)
+    body = (
+        f"UNSETTLEABLE MAIL — I woke {project} {attempts} time(s) for message {message_id} and "
+        f"no agent ever settled it, so I have STOPPED waking on it. It is not a retry any more; "
+        f"it is a leak.\n\n"
+        f"A triage wake can only ack mail it can dispose of. Mail addressed to a future session "
+        f"(\"to whoever mounts {project} next\"), or asking for a judgement only you can make, "
+        f"will never be settled by a machine reading its inbox — it will only summon another one. "
+        f"That is the loop this stop exists to end.\n\n"
+        f"It needs a real session on {project}, or your word. Read it at /mail?box={project} "
+        f"(message {message_id}); nothing is lost and nothing was deleted. No further wake will "
+        f"fire for it."
+    )
+    with contextlib.suppress(Exception):  # a failed brief must never re-arm the wake
+        await send_message(pool, from_agent=_TRIGGER_AGENT, from_project="osiris",
+                           to_project=OPERATOR_ADDR, body=body, desk_kind="decision")
+    _log.warning("wake ABANDONED: project=%s message=%s after %d attempts",
+                 project, message_id, attempts)
+    return True
+
+
 async def _woken_within(pool: asyncpg.Pool, project: str, grace_secs: int) -> bool:
     """True if this project was woken within the last `grace_secs` — a wake still in flight (the
     agent is spawning/mounting/leasing, ~100s+). grace_secs<=0 disables the grace (only the rate
@@ -136,12 +218,27 @@ async def _woken_within(pool: asyncpg.Pool, project: str, grace_secs: int) -> bo
         "AND woke_at > now() - make_interval(secs => $2) LIMIT 1", project, grace_secs))
 
 
-def _wake_job_dir(wake_id: int) -> str:
-    """A durable per-wake CLAUDE_JOB_DIR (a real created dir). The token 'wake-<row id>' is stable
-    and unique — derived from the ledger row just inserted, never Date-random, so the woken agent
-    resolves to the same agent:wake-<id> across a re-attach and tests stay deterministic. The
-    literal 'jobs' segment is exactly what _job_id parses to that token."""
-    d = _WAKE_JOB_ROOT / "jobs" / f"wake-{wake_id}"
+def _wake_job_dir(project: str) -> str:
+    """ONE GHOST PER PROJECT, reused forever — not one per wake.
+
+    This was keyed on the WAKE ROW ID, so every wake resolved to a brand-new agent:wake-<id>: the
+    trigger minted 463 identities over the fleet's life and the roster filled with strangers the
+    operator never started (48 in monsterhouse alone, a project he had not opened in two days).
+    A wake is not a new MIND, it is the same errand run again — so it gets one stable name per
+    house, `agent:wake-<project>`, and re-wearing it is the whole point.
+
+    Worse, none of it ever ran: the anchor was handed to the agent as the literal text
+    `$CLAUDE_JOB_DIR` inside a PROMPT, and a woken agent has no shell to expand it with (its
+    tools are `mcp__osiris` only). The mount-anchor hook rightly refuses a `$`-bearing path and
+    fell back to deriving one from the SESSION id — fresh for every `claude -p` — so all 463
+    mints got a new identity and the stable anchor was never used once. Ruling 40faa5e6 had
+    already fixed this exact bug for the SessionStart whisper ("tell the agent the literal path,
+    never $CLAUDE_JOB_DIR") and nobody carried it here. The prompt now carries the real path.
+
+    The literal 'jobs' segment is exactly what _job_id parses to that token.
+    """
+    slug = "".join(c if (c.isalnum() or c in "-_") else "-" for c in project)[:40] or "unknown"
+    d = _WAKE_JOB_ROOT / "jobs" / f"wake-{slug}"
     d.mkdir(parents=True, exist_ok=True)
     return str(d)
 
@@ -359,7 +456,7 @@ async def trigger_mail_tick(
     spawn — the ledger is the rate limiter, the chain, and the alternation guard."""
     st = settings or get_settings()
     pool = actions.pool
-    report = {"woke": 0, "resumed": 0, "skipped": 0, "owner_live": 0}
+    report = {"woke": 0, "resumed": 0, "skipped": 0, "owner_live": 0, "abandoned": 0}
     # the fleet-wide hourly spend — the SAME number the chrome renders as 'wakes N/h'
     hourly = await pool.fetchval(
         "SELECT count(*) FROM agent_wakes WHERE woke_at > now() - interval '1 hour'")
@@ -376,12 +473,23 @@ async def trigger_mail_tick(
         # urgent = the operator's own word, or mail deferred long enough that another
         # deferral is starvation (the economics never silently orphan a message)
         urgent = (sender or "").startswith("operator") or age >= _URGENT_AGE_SECS
-        if should_wake(enabled=True, recent_wakes=recent,
-                       rate_cap=st.osiris_trigger_rate_cap,
-                       within_grace=within_grace,
-                       hourly_wakes=int(hourly or 0) + report["woke"],
-                       hourly_budget=st.osiris_wake_hourly_budget,
-                       urgent=urgent) is not None:
+        # THE TOTAL, not the rate — the bound every other guard here forgot to keep.
+        attempts = await _attempts_on(pool, msg_id)
+        reason = should_wake(enabled=True, recent_wakes=recent,
+                             rate_cap=st.osiris_trigger_rate_cap,
+                             within_grace=within_grace,
+                             hourly_wakes=int(hourly or 0) + report["woke"],
+                             hourly_budget=st.osiris_wake_hourly_budget,
+                             urgent=urgent,
+                             attempts=attempts,
+                             attempt_limit=st.osiris_wake_message_attempts)
+        if reason == "unsettleable":
+            # we have tried and failed enough times to know that trying again is not a plan.
+            # Stop forever, and tell the human — the only reader who can actually act.
+            if await _abandon(pool, project, msg_id, sender, attempts):
+                report["abandoned"] += 1
+            continue
+        if reason is not None:
             report["skipped"] += 1
             continue
         resume = None
@@ -405,8 +513,11 @@ async def trigger_mail_tick(
         wake_id = await pool.fetchval(
             "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
             "VALUES ($1,$2,$3,'mint') RETURNING id", project, sender, msg_id)
-        await spawn(repo_path, _WAKE_PROMPT.format(repo=repo_path),
-                    job_dir=_wake_job_dir(wake_id), model=st.osiris_wake_model or None,
+        # the anchor goes into the PROMPT as a literal path — a woken agent has no shell to
+        # expand $CLAUDE_JOB_DIR with, which is why 463 mints never once used the stable anchor
+        wake_anchor = _wake_job_dir(project)
+        await spawn(repo_path, _WAKE_PROMPT.format(repo=repo_path, job_dir=wake_anchor),
+                    job_dir=wake_anchor, model=st.osiris_wake_model or None,
                     allowed_tools=st.osiris_wake_allowed_tools or None)
         report["woke"] += 1
 
