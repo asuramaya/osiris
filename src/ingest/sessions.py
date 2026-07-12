@@ -843,16 +843,45 @@ def _home_repo(known: dict[str, str], summary: str, default: str) -> str:
     return hits[0] if len(hits) == 1 else default
 
 
+async def _writers_for(pool: asyncpg.Pool, agent_id: str) -> list[str]:
+    """EVERY IDENTITY THIS SESSION WRITES UNDER — and there are two of them.
+
+    A transcript's id is derived from its FILENAME (`agent:513aa520`). The id a session actually
+    WRITES with is the seat it took when it mounted (`agent:ad1a1cb0-xxvii`). They are the same
+    mind and they are not the same string, and every ownership check that compared them has been
+    silently answering the wrong question.
+
+    The durable mount registry already holds the join: a mount's `job_dir` ends in the session id.
+    """
+    sid = agent_id.removeprefix("agent:")
+    rows = await pool.fetch(
+        "SELECT DISTINCT agent_id FROM agent_mounts WHERE job_dir LIKE '%' || $1", sid)
+    return [agent_id, *(r["agent_id"] for r in rows)]
+
+
 async def _is_self_documenting(pool: asyncpg.Pool, agent_id: str, *, floor: int = 3) -> bool:
     """True if this session's agent captures its OWN memory deliberately — it has authored at
     least `floor` SELF_DECLARED decisions/threads. The miner's OWNERSHIP BOUNDARY (rule #7): it
     backfills the SILENT (unmounted / non-capturing sessions) and never second-guesses the
     diligent. A self-documenting session's DERIVED echoes are exactly the noise that buries the
-    deliberate record — a soft loop pathology (the miner mining the scribe as it writes)."""
+    deliberate record — a soft loop pathology (the miner mining the scribe as it writes).
+
+    IT HAS NEVER ONCE FIRED FOR A SEATED AGENT, and that is why the graph is 81% DERIVED.
+
+    It looked for self_declared writes by the TRANSCRIPT-DERIVED id (agent:513aa520) — but a mind
+    that has mounted writes under its SEAT (agent:ad1a1cb0-xxvii). Same session, two strings. So
+    the count came back zero for every agent that holds a name, which is every real agent in the
+    fleet, and the miner went on mining precisely the sessions that were documenting themselves —
+    re-minting a reworded DERIVED copy of every decision they had already recorded deliberately.
+    THE MINER WAS PLAGIARISING ITS MOST DILIGENT AUTHORS. Caught 2026-07-12: this very session had
+    recorded 15 decisions by hand and the miner was busily minting its own version of each.
+
+    The boundary now asks about the whole session — every identity it writes under (_writers_for).
+    """
     n = await pool.fetchval(
         "SELECT count(DISTINCT a.object_id) FROM current_assertions a JOIN objects o "
-        "ON o.id=a.object_id WHERE a.source_id=$1 AND a.evidence_class='self_declared' "
-        "AND o.type IN ('Decision','Thread')", agent_id)
+        "ON o.id=a.object_id WHERE a.source_id = ANY($1) AND a.evidence_class='self_declared' "
+        "AND o.type IN ('Decision','Thread')", await _writers_for(pool, agent_id))
     return bool(n and n >= floor)
 
 

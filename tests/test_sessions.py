@@ -809,3 +809,41 @@ def test_the_miner_never_mines_osiris_own_wake_spawns(tmp_path: Path) -> None:
 
     listed = {p.name for p in _list_transcripts(tmp_path)}
     assert listed == {"real.jsonl", "about.jsonl"}   # the wake is not mined at all
+
+
+async def test_the_miner_stops_plagiarising_its_most_diligent_authors(actions: Actions) -> None:
+    """THE BIGGEST NOISE PUMP OF ALL, and it hid behind a working-looking guard.
+
+    The ownership boundary (rule 7) says the miner backfills the SILENT and never second-guesses
+    the diligent. It checked for deliberate writes by the TRANSCRIPT-DERIVED id (agent:513aa520) —
+    but a mind that has mounted writes under its SEAT (agent:ad1a1cb0-xxvii). Same session, two
+    strings. The count came back ZERO for every agent that holds a name, which is every real agent
+    in the fleet.
+
+    So the miner mined precisely the sessions that were documenting themselves, re-minting a
+    reworded DERIVED copy of every decision they had already recorded by hand. It was PLAGIARISING
+    ITS MOST DILIGENT AUTHORS — and that is a large part of why 81% of the graph is DERIVED.
+    """
+    from src.ingest.sessions import _is_self_documenting, _writers_for
+    from src.orchestrator.capture import record_decision
+
+    pool = actions.pool
+    # a session whose transcript is 513aa520... but which MOUNTED and took the seat 'Thoth XXVII'
+    await pool.execute(
+        "INSERT INTO agent_mounts (agent_id, job_dir, cwd, last_seen) "
+        "VALUES ($1,$2,$3, now()) ON CONFLICT (job_dir) DO UPDATE SET agent_id=EXCLUDED.agent_id",
+        "agent:seatholder-xxvii", "/home/x/.claude/jobs/abc12345", "/repo/demo")
+
+    # the join the boundary was missing: transcript id -> the seat it actually writes under
+    writers = await _writers_for(pool, "agent:abc12345")
+    assert "agent:seatholder-xxvii" in writers
+
+    # it writes back deliberately, like a good citizen — under its SEAT, not its filename
+    for i in range(3):
+        await record_decision(actions, f"a deliberate ruling number {i}",
+                              source="agent:seatholder-xxvii")
+
+    # ...and the miner now RECOGNISES that and leaves it alone
+    assert await _is_self_documenting(pool, "agent:abc12345") is True
+    # a silent session (no deliberate writes) is still backfilled — that is the miner's real job
+    assert await _is_self_documenting(pool, "agent:nobody-home") is False
