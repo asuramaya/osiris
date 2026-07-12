@@ -107,5 +107,19 @@ def render_fleet_tree(nodes: dict[str, Node], *, full: bool = False) -> str:
         if fold:
             latest = _latest(fold, nodes)
             note = f" (latest {latest})" if latest else ""
-            lines.append(f"  ○ {len(fold)} retired session{'s' if len(fold) != 1 else ''}{note}")
+            # THE GHOSTS (operator, 2026-07-12: "dead agents that were retired or abandoned
+            # ungracefully"). This line used to read "N retired sessions" — but `fold` means
+            # NOTHING MORE THAN 'not live'. Exactly THREE agents in a fleet of 325 ever signed
+            # a death certificate; the tree was calling the other 322 retired, and RETIRED IS
+            # NOT A SYNONYM FOR QUIET. It is a deliberate, signed close that the wake trigger
+            # is bound to respect — a word with teeth, spent here on minds that merely stopped
+            # talking. The trigger reads the real property and was never fooled; only the LENS
+            # lied, so only the lens is fixed. A mind cannot reliably confess its own death (the
+            # session that dies is the one that cannot write), and nothing here will sign one
+            # on its behalf: we say what we observed — it went quiet — and no more.
+            signed = sum(1 for r in fold if nodes[r].get("retired"))
+            past = f"  ○ {len(fold)} past session{'s' if len(fold) != 1 else ''}"
+            if signed:
+                past += f" · {signed} retired"
+            lines.append(f"{past}{note}")
     return "\n".join(lines)

@@ -693,3 +693,65 @@ async def test_a_fresh_mind_is_told_its_seat_or_which_seats_stand_empty(actions:
     await mounts.save_mount(actions.pool, job_dir="/j/ff11", agent_id=held,
                             project="rotten-apple", cwd="/x", model=None, session_key="k")
     assert "vacant_seats" not in await seat_bearings(actions.pool, fresh)
+
+
+async def test_an_auto_minted_heir_inherits_the_SEAT_not_just_the_name(actions: Actions) -> None:
+    """THE GHOST, and I was the specimen (agent:ad1a1cb0-xxvii, this very session).
+
+    mint_heir is the AUTOMATIC succession — it fires on every compaction, model swap and session
+    death. It passed the ancestor's HANDLE down and stopped there: no seat_generation, no
+    succeeds_seat edge. So the heir wore the family name while the seat's chain lay broken behind
+    it, and the graph could not walk from a mind to the one whose work it was continuing. That is
+    exactly the operator's ghost: "abandoned ungracefully, but whose work was continued by another".
+
+    Only claim_name() — an EXPLICIT act a mind has to think to call — ever minted the edge. Thoth
+    XXVI backfilled 77 historical edges and never fixed the code that omits them, so the Thoth
+    chain healed to generation 26 and broke again at 27: the first heir minted after the heal.
+    Left alone it would have re-opened the gap at every compaction, forever.
+    """
+    from src.orchestrator.agents import claim_name, house_of, mint_heir
+
+    anc = await actions.create_or_find_object("Agent", "agent:ghosttest", "test")
+    await actions.assert_property(anc, "project", "osiris", "test", datetime.now(UTC), 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    claimed = await claim_name(actions, "agent:ghosttest", "Sentinel", source="test")
+    assert claimed.get("claimed") == "Sentinel"
+
+    heir, heir_oid = await mint_heir(actions, "agent:ghosttest", anc,
+                                     because="compaction", succession=None)
+
+    # the NAME passes (it always did)...
+    handle = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", heir_oid)
+    assert handle == "Sentinel"
+    # ...and now THE SEAT passes with it: the heir knows which holder it is...
+    gen = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='seat_generation' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        heir_oid)
+    assert gen == "2"                      # Sentinel II
+    # ...and the graph can WALK from the heir to the mind whose work it continued
+    ancestor = await actions.pool.fetchval(
+        "SELECT t.canonical FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='succeeds_seat'", heir_oid)
+    assert ancestor == "agent:ghosttest"
+    # the heir stays in the house, so the seat is not orphaned across projects
+    assert await house_of(actions.pool, "agent:ghosttest") == "osiris"
+
+
+async def test_succeeds_seat_is_not_succeeded_from(actions: Actions) -> None:
+    """Two relations, two names. `succeeded_from` chains ANCHORS (which conversation spawned
+    which); `succeeds_seat` chains HOLDERS of a job. Two relations wearing one name is the
+    mistake that started all of this — an heir must carry both, and they must stay distinct."""
+    from src.orchestrator.agents import claim_name, mint_heir
+
+    anc = await actions.create_or_find_object("Agent", "agent:twoedge", "test")
+    await actions.assert_property(anc, "project", "osiris", "test", datetime.now(UTC), 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    await claim_name(actions, "agent:twoedge", "Warden", source="test")
+    _heir, heir_oid = await mint_heir(actions, "agent:twoedge", anc,
+                                      because="compaction", succession=None)
+    types = {r["type"] for r in await actions.pool.fetch(
+        "SELECT type FROM links WHERE from_id=$1", heir_oid)}
+    assert {"succeeded_from", "succeeds_seat"} <= types

@@ -280,7 +280,16 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
     # lineage was not WALKABLE from the record — which is exactly why Ra could not tell his
     # CONTEMPORARY from his own ghost, and asked me to merge them. A seat's history must be
     # traversable, or the next mind re-derives it from the disk the way he had to.
-    prior = holders[-1] if holders and holders[-1] != agent_id else None
+    # THE PREDECESSOR IS THE HOLDER BEFORE ME — not "the last holder unless it happens to be me".
+    # That older reading silently skipped the edge for the one case that needs it most: an heir
+    # minted by mint_heir ALREADY carries the inherited handle, so it is already in `holders`, and
+    # as the newest it IS holders[-1] — which resolved `prior` to None and minted nothing. A mind
+    # that inherited its seat could not claim its own ancestry. (The ghosts, 53729dd6.)
+    if agent_id in holders:
+        i = holders.index(agent_id)
+        prior = holders[i - 1] if i > 0 else None
+    else:
+        prior = holders[-1] if holders else None
     if prior:
         await actions.create_link(
             a, await actions.create_or_find_object("Agent", prior, source),
@@ -570,11 +579,31 @@ async def mint_heir(
     # SEAT INHERITANCE (phase 2): the heir inherits the ancestor's human name — the seat
     # passes down the lineage, the generation (roman) ticks up. 'Anna' → 'Anna II'.
     inherited = await actions.pool.fetchval(
-        "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='handle'",
+        "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='handle' "
+        "ORDER BY confidence DESC, observed_at DESC LIMIT 1",
         ancestor_oid)
     if inherited:
         await actions.assert_property(a, "handle", inherited, heir, now, _CONF,
                                       evidence_class=_EC)
+        # ...AND THE SEAT PASSES WITH THE NAME, OR THE NAME IS JUST A LABEL. (The ghosts,
+        # 53729dd6 — and I was the specimen: agent:ad1a1cb0-xxvii, minted an heir of XXVI,
+        # carrying the handle "Thoth" with NO generation and NO edge to the mind whose work
+        # it continued.) This is where a seat changes hands WITHOUT a handoff: mint_heir is
+        # the AUTOMATIC succession — it fires on every compaction, every model swap, every
+        # session death — and it passed the name down while leaving the seat's chain broken.
+        # Only claim_name(), an EXPLICIT act by a mind that thinks to call it, ever minted the
+        # edge. Thoth XXVI backfilled 77 historical edges and never fixed the code that omits
+        # them, so the chain healed to gen 26 and broke again at 27: the FIRST heir minted
+        # after the heal. Left alone it would re-open the gap at every compaction, forever.
+        #
+        # succeeds_seat is NOT succeeded_from (stamped above): that one chains ANCHORS — which
+        # conversation spawned which — and this one chains HOLDERS of a job. Two relations
+        # wearing one name is the mistake that started all of this.
+        house = await house_of(actions.pool, ancestor_id)
+        holders = [h for h in await seat_holders(actions.pool, house, inherited) if h != heir]
+        await actions.assert_property(a, "seat_generation", str(len(holders) + 1), heir, now,
+                                      _CONF, evidence_class=_EC)
+        await _link_once(actions, a, ancestor_oid, "succeeds_seat", heir, now)
     await actions.pool.execute(
         "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
         heir, ancestor_id)

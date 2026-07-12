@@ -1232,6 +1232,12 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
         "  AND a.name='last_active' "
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS last_active, "
+        # a SIGNED death certificate — retire()'s own act, and the only thing that earns the
+        # word "retired". 3 of 325 working minds ever managed it; the tree used to award it to
+        # anything that stopped talking (the ghosts, 53729dd6).
+        " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='retired' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS retired, "
         " (SELECT max(m.last_seen) FROM agent_mounts m WHERE m.agent_id=o.canonical) "
         "  AS mount_seen, "
         " (SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
@@ -1259,6 +1265,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
             "model": r["model"], "project": r["project"], "parent": r["parent"],
             "depth": int(r["depth"]) if r["depth"] else 0,
             "last_active": r["last_active"], "ts": ts,
+            "retired": r["retired"] in ("true", "True"),  # SIGNED, not merely silent
             "live": ts is not None and now - ts < timedelta(minutes=15),
         }
     # LAND ON COUNTS, WALK IN: the roster's history is 1000+ rows and never what you came for.
