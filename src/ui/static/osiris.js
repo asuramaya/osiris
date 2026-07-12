@@ -407,36 +407,98 @@ const Osiris = (() => {
       (tr.onclick = () => onDrill && onDrill(rows[i].group, spec)));
   }
 
-  // a Function's output, rendered generically by shape (no per-Function knowledge)
+  // a Function's output, rendered generically by shape (no per-Function knowledge).
+  //
+  // TWO BUGS THIS FIXES, both visible in one 4K screenshot of `briefing` (operator, 2026-07-11,
+  // "feng sui"):
+  //  (1) THE SILENTLY DROPPED SECTION. The old grouper kept only ARRAY-valued keys — so the
+  //      wall, whose section is a DICT (totals + projects + top_of_wall), was filtered out and
+  //      never drawn. The briefing announced "3 sections" and rendered two, and the one it ate
+  //      was the most important one. A renderer must never discard a shape it doesn't expect;
+  //      it must render it AS ITSELF (scalars → chips, lists → tables, dicts → recurse).
+  //  (2) THE UNBOUNDED DUMP. "Resolved — self-healed by later commits" printed all 794 rows
+  //      inline, forever. Same law as his desk and the garden: LAND ON COUNTS, WALK IN. Every
+  //      section is capped, and — per the no-silent-caps ruling — it SAYS what it withheld.
+  const SECTION_CAP = 12;
+
+  function _more(n) {
+    return `<div class="r-more">+${n} more — filter, or ⑂ fan out, to see the rest</div>`;
+  }
+  function _capped(list) {
+    if (!list.length) return `<div class="o-empty">—</div>`;
+    const shown = list.slice(0, SECTION_CAP);
+    return table(shown) + (list.length > shown.length ? _more(list.length - shown.length) : "");
+  }
   function renderData(data) {
     if (data == null) return `<div class="o-empty">Empty.</div>`;
-    if (Array.isArray(data)) return data.length ? table(data) : `<div class="o-empty">No results.</div>`;
+    if (Array.isArray(data)) return data.length ? _capped(data) : `<div class="o-empty">No results.</div>`;
     if (typeof data === "object") {
-      // dict whose values are arrays -> grouped sections (e.g. the tiered subject report)
-      const groups = Object.entries(data).filter(([, v]) => Array.isArray(v));
-      if (groups.length)
-        return groups
-          .map(([k, v]) => `<div class="r-group"><h3>${esc(k)} <span class="o-faint">${v.length}</span></h3>${
-            v.length ? table(v) : '<div class="o-empty">—</div>'}</div>`)
-          .join("");
-      return `<pre class="r-pre">${esc(JSON.stringify(data, null, 2))}</pre>`;
+      const ent = Object.entries(data);
+      // a scalar leaf is a FACT ABOUT THE SECTION (974 open · 302 obligations), not a row —
+      // it belongs on the header as a chip, the same law the object table now follows.
+      const facts = ent.filter(([, v]) => v == null || typeof v !== "object");
+      const blocks = ent.filter(([, v]) => v && typeof v === "object");
+      const long = facts.filter(([, v]) => typeof v === "string" && String(v).length > 60);
+      const chips = facts.filter((e) => !long.includes(e));
+      let out = "";
+      if (chips.length)
+        out += `<div class="r-facts">${chips.map(([k, v]) =>
+          `<span class="r-chip"><b>${esc(v)}</b> ${esc(k)}</span>`).join("")}</div>`;
+      if (long.length)
+        out += long.map(([, v]) => `<div class="r-note">${esc(v)}</div>`).join("");
+      out += blocks.map(([k, v]) =>
+        `<div class="r-group"><h3>${esc(k)}${Array.isArray(v) ? ` <span class="o-faint">${v.length}</span>` : ""}</h3>` +
+        `${renderData(v)}</div>`).join("");
+      return out || `<div class="o-empty">Empty.</div>`;
     }
     return `<div class="r-head">${esc(data)}</div>`;
   }
 
-  // a list of dicts -> a table (columns = union of keys; arrays/objects flattened)
+  // a list of dicts -> a table (columns = union of keys; arrays/objects flattened).
+  // Same two laws the object table follows, because they are laws and not special cases:
+  //   · a column earns its place by VARYING — an empty column is gone, a constant one becomes
+  //     a chip above the table (it is a fact about the SET, not about any row);
+  //   · width is decided by CONTENT, never position — a column whose longest value is short is
+  //     marked .r-tight and shrinks to fit, so the prose column takes the width it needs
+  //     instead of splitting a 4K panel evenly with a one-word `scope`.
+  const _txt = (v) => {
+    if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v)) v = v.slice(0, 10);   // ISO → date
+    return v == null ? "" : Array.isArray(v) ? v.join(", ")
+      : typeof v === "object" ? JSON.stringify(v) : String(v);
+  };
+  const TIGHT = 24;                                // a column whose widest value fits in a glance
+
   function table(list) {
-    const cols = [...new Set(list.flatMap((o) => (o && typeof o === "object" ? Object.keys(o) : [])))];
-    if (!cols.length) return `<ul class="r-list">${list.map((v) => `<li>${esc(v)}</li>`).join("")}</ul>`;
+    const keys = [...new Set(list.flatMap((o) => (o && typeof o === "object" ? Object.keys(o) : [])))];
+    if (!keys.length) return `<ul class="r-list">${list.map((v) => `<li>${esc(v)}</li>`).join("")}</ul>`;
+    const vals = {}, widest = {};
+    keys.forEach((k) => {
+      const seen = list.map((o) => _txt(o ? o[k] : "")).filter((s) => s !== "");
+      vals[k] = new Set(seen);
+      widest[k] = seen.reduce((m, s) => Math.max(m, s.length), 0);
+    });
+    const chips = [];
+    const cols = keys.filter((k) => {
+      if (!vals[k].size) return false;                                    // empty everywhere
+      if (vals[k].size === 1 && vals[k].size === list.length) return true;  // 1 row: keep it
+      if (vals[k].size === 1 && list.length > 1) {                        // constant → a chip
+        chips.push(`${k}=${[...vals[k]][0]}`);
+        return false;
+      }
+      return true;
+    });
+    if (!cols.length) return `<div class="o-empty">—</div>`;
     const cell = (v) => {
-      if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v)) v = v.slice(0, 10);   // ISO → date
-      const s = v == null ? "" : Array.isArray(v) ? v.join(", ")
-        : typeof v === "object" ? JSON.stringify(v) : String(v);
+      const s = _txt(v);
       return s.length > 160                        // clamp a wall of text; full text in the tooltip
         ? `<span title="${esc(s)}">${esc(s.slice(0, 157))}…</span>` : esc(s);
     };
-    return `<table class="r-table"><thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead>
-      <tbody>${list.map((o) => `<tr>${cols.map((c) => `<td>${cell(o ? o[c] : "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+    const cls = (k) => (widest[k] <= TIGHT ? ' class="r-tight"' : "");
+    return (chips.length
+      ? `<div class="r-facts">${chips.map((c) => `<span class="r-chip">${esc(c)}</span>`).join("")}</div>`
+      : "") +
+      `<table class="r-table"><thead><tr>${cols.map((c) => `<th${cls(c)}>${esc(c)}</th>`).join("")}</tr></thead>
+      <tbody>${list.map((o) => `<tr>${cols.map((c) => `<td${cls(c)}>${cell(o ? o[c] : "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
   }
 
   return { $, esc, pct, OPSYM, loadSchema, ty, objectDetail, loadRels, makeBoard,

@@ -1349,12 +1349,8 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                                       "lens (adopt / question / resolve)"},
                 "note": "the graded wall — one law with orient(): obligations first, "
                         "yours-to-act before others' claims before waiting-on-the-human"}
-    # `id` rides along so the CONSOLE can WALK: clicking a project row focuses that
-    # SoftwareProject and re-runs this same wall scoped to it (operator, 2026-07-11: "the
-    # breakdown needs to let me walk through the cosmos like a project"). The rollup was
-    # already the map; it just had no coordinates to click.
     projects = [dict(r) for r in await pool.fetch(
-        "SELECT p.id::text AS id, p.canonical AS project, count(*) AS open, "
+        "SELECT p.canonical AS project, count(*) AS open, "
         " count(*) FILTER (WHERE (SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='kind' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = 'obligation') "
@@ -1369,7 +1365,7 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='status' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
-        "GROUP BY p.id, p.canonical ORDER BY count(*) DESC LIMIT 30")]
+        "GROUP BY p.canonical ORDER BY count(*) DESC LIMIT 30")]
     # the fleet's TOP OF WALL: obligations (a duty never hides) plus any thread a mind
     # actually TOUCHED — never the untouched echo mass; repo-less threads included (a
     # deliberate open_thread with no repo must still surface where it was promised to)

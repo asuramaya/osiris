@@ -209,8 +209,32 @@ async def _counts(
             "   AND NOT EXISTS(SELECT 1 FROM message_recipients r2 WHERE r2.message_id=m.id "
             "     AND r2.read_at IS NOT NULL))"
         )
+        # WHAT YOU OWE, WHERE YOU STAND (operator, 2026-07-11: "attack the chrome with the same
+        # mentality"). `desk` counted NOTIFICATIONS — unread briefs, letters and eulogies mixed
+        # in with real asks — and it read the same from every directory, which is the opposite
+        # of contextual. The honest number is the DEBT: open threads owned by the human, minus
+        # the ones he deferred. Split by NEIGHBORHOOD (the garden's primitive) so the chrome
+        # answers the question he actually has standing in a repo: what do I owe HERE, and how
+        # much is waiting everywhere else?
         row = await conn.fetchrow(
-            "SELECT "
+            "WITH ops AS (SELECT o.id, "
+            "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "    AND a.name='deferred_until' "
+            "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS defer, "
+            "  (SELECT replace(p.canonical,'repo:','') FROM links l JOIN objects p ON p.id=l.to_id "
+            "    WHERE l.from_id=o.id AND l.type='in_repo' AND p.type='SoftwareProject' "
+            "    ORDER BY l.created_at DESC LIMIT 1) AS hood "
+            "  FROM objects o WHERE o.type='Thread' AND o.status='active' "
+            "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "    AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "    = 'operator' "
+            "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+            "    WHERE a.object_id=o.id AND a.name='status' "
+            "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open') = 'open'), "
+            " live AS (SELECT * FROM ops WHERE defer IS NULL "
+            "   OR defer <= to_char(now(), 'YYYY-MM-DD')) "
+            "SELECT (SELECT count(*) FROM live) AS owed, "
+            " (SELECT count(*) FROM live WHERE hood = $1) AS owed_here, "
             " (SELECT count(*) FROM fleet_messages m WHERE m.to_project='operator' "
             "   AND m.to_agent IS NULL AND m.read_at IS NULL "
             "   AND NOT EXISTS(SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
@@ -229,12 +253,12 @@ async def _counts(
             "   AND r.agent_id <> $3 AND r.read_at IS NULL AND r.delivered_at IS NOT NULL "
             "   AND r.delivered_at >= now() - make_interval(secs => $2)) AS flight, "
             " (SELECT count(*) FROM agent_mounts "
-            "   WHERE last_seen > now() - interval '15 minutes') AS live, "
+            "   WHERE last_seen > now() - interval '15 minutes') AS live_agents, "
             " (SELECT count(*) FROM agent_wakes "
             "   WHERE woke_at > now() - interval '1 hour') AS wakes",
             project, LEASE_SECS, agent)
-        return (row["desk"], row["mail"], row["dm"], row["flight"], row["live"],
-                row["wakes"])
+        return (row["desk"], row["mail"], row["dm"], row["flight"], row["live_agents"],
+                row["wakes"], row["owed"], row["owed_here"])
     finally:
         await conn.close()
 
@@ -263,10 +287,19 @@ def main() -> None:
     window_size = int(window_size) if isinstance(window_size, (int, float)) else None
 
     try:
-        desk, mail, dm, flight, live, wakes = asyncio.run(
+        desk, mail, dm, flight, live, wakes, owed, owed_here = asyncio.run(
             asyncio.wait_for(_counts(project, session_id, model_id, model_raw, window_size),
                              timeout=1.5))
-        desk_s = f"{RED}desk {desk}{RESET}" if desk else f"{DIM}desk 0{RESET}"
+        # THE DEBT, NOT THE DOORBELL. `owe 5·13` = five open duties in THIS tree, thirteen
+        # across the garden. Red only when you owe something HERE — a fleet-wide number you
+        # can do nothing about from this directory is not an alarm, it is wallpaper, and
+        # wallpaper that is always red stops being read.
+        elsewhere = f"{DIM}·{owed}{RESET}" if owed > owed_here else ""
+        owe_s = (f"{RED}owe {owed_here}{RESET}{elsewhere}" if owed_here
+                 else (f"{DIM}owe 0·{owed}{RESET}" if owed else f"{GREEN}owe 0{RESET}"))
+        # briefs = unread mail on his desk. It is a NOTIFICATION, so it is dim: a letter owes
+        # nothing, and it used to be summed into the same scary red number as a real duty.
+        desk_s = f"{DIM}briefs {desk}{RESET}" if desk else ""
         # mail N(+M) ✉D — M = in flight (a sibling's live lease); ✉D = DMs addressed to YOU
         # specifically (phase 4: a private message outranks group traffic visually)
         flight_s = f"{AMBER}+{flight}{RESET}" if flight else ""
@@ -275,7 +308,8 @@ def main() -> None:
                   else f"{DIM}mail 0{RESET}")
         parts = [
             _link(f"◈ {project}", "desk"),
-            _link(desk_s, "desk"),
+            _link(owe_s, "desk"),
+            *([_link(desk_s, "desk")] if desk_s else []),
             _link(mail_s, "conversations"),
             _link(f"fleet {live}●", "fleet"),
             _link(f"wakes {wakes}/h", "wakes"),

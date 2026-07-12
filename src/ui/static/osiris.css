@@ -139,9 +139,13 @@ a { color: var(--blue); text-decoration: none; }
 .r-head { font-size: 11px; letter-spacing: .5px; text-transform: uppercase; color: var(--faint);
   font-weight: 600; margin: 0 0 10px; }
 .r-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
-/* table-layout:fixed shares width across columns so NO single long cell (a sentence) can steal
-   it all and crush the others into a one-char-per-line column (the briefing "BY" overflow). */
-.r-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12.5px; }
+/* AUTO layout, not fixed. `fixed` shared the width EVENLY, which is why a one-word `scope`
+   column and a three-sentence `because` column got the same inches at 4K. `auto` sizes each
+   column to its content — and the thing `fixed` was originally guarding against (one long
+   cell stealing everything) is now handled properly instead: the table has a max measure and
+   every cell clamps. NB `.r-tight` below only shrinks correctly under auto; under fixed,
+   width:1% is taken literally and nowrap content overlaps its neighbours. */
+.r-table { width: 100%; table-layout: auto; border-collapse: collapse; font-size: 12.5px; }
 .r-table th { text-align: left; color: var(--faint); font-weight: 600; font-size: 10.5px;
   text-transform: uppercase; letter-spacing: .4px; padding: 6px 8px; border-bottom: 1px solid var(--border2);
   overflow-wrap: anywhere; }
@@ -157,6 +161,21 @@ a { color: var(--blue); text-decoration: none; }
 .r-chip { display: inline-block; border: 1px solid var(--border2); border-radius: 10px;
   padding: 0 7px; margin-right: 4px; font-size: 10.5px; color: var(--muted);
   text-transform: none; letter-spacing: 0; font-weight: 500; }
+.r-chip b { color: var(--text); font-weight: 650; }
+.r-facts { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 10px; }
+.r-note { color: var(--faint); font-size: 12px; margin: 0 0 10px; max-width: 70ch; }
+/* NO SILENT CAPS: a section that withheld rows must SAY SO (a truncation that stays quiet
+   reads as "that's all of it", which is the most expensive lie a lens can tell). */
+.r-more { color: var(--faint); font-size: 11.5px; padding: 8px 8px 0; font-style: italic; }
+/* FENG SHUI (operator, at 4K half-screen): table-layout:fixed split the width EVENLY, so a
+   `scope` column holding one word and a `because` column holding three sentences got the same
+   inches — the prose was crushed into a ribbon while the short columns held acres of nothing.
+   Width cannot be decided by POSITION (the 3rd column is `when` in one table and `because` in
+   the next); it is decided by CONTENT, in the renderer, which marks a column .r-tight when its
+   longest value is short. Readable text also has a max measure — past ~110ch the eye loses its
+   place returning to the left margin — so a 4K panel widens the text to a limit and stops. */
+.r-table { max-width: 160ch; }
+.r-table th.r-tight, .r-table td.r-tight { width: 1%; white-space: nowrap; color: var(--muted); }
 .r-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; }
 .r-group { margin-bottom: 18px; }
 .r-group h3 { font-size: 11px; letter-spacing: .5px; text-transform: uppercase; color: var(--text);
