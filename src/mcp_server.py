@@ -878,7 +878,8 @@ async def mount(
             pool, exclude_session_key=key, within_secs=settings.osiris_owner_live_secs)
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model,
                              claimed=claimed, fallback_seed=key)
-    if job_dir and (bound := await mounts.find_mount(pool, job_dir=job_dir)) is not None:
+    bound = await mounts.find_mount(pool, job_dir=job_dir) if job_dir else None
+    if bound is not None:
         from src.orchestrator.agents import _generation
         if _generation(bound.agent_id)[0] != _generation(ident.agent_id)[0]:
             # THE BINDING (thread 33838160), the explicit-mount leg: the whisper tells every
@@ -888,6 +889,15 @@ async def mount(
             # 2026-07-10). A row naming a foreign lineage is a deliberate seat claim: honor
             # it, so seams and the registration run on the seat's lineage — like _reattach.
             ident.agent_id = bound.agent_id
+    elif job_dir:
+        # THE FORK (7cbc2f98), the explicit-mount leg — and this is the door Anubis XII was
+        # turned away at (msg 424). A forked session has no row for its new anchor, so the old
+        # code derived a fresh identity from the anchor's basename and seated ONE MIND TWICE.
+        # He could only get his mail out by re-mounting, which minted the very twin he was
+        # writing to report. Ask the transcript's record uuids who he already is.
+        forked = await handshake.fork_seat(Actions(pool), job_dir=job_dir)
+        if forked is not None:
+            ident.agent_id = forked
     await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
                          expected_model=await _expected_model(pool, cwd, ident.project))
     if key is not None:

@@ -20,9 +20,35 @@ from pathlib import Path
 from typing import Any
 
 from src.actions.core import Actions
-from src.orchestrator import mounts
+from src.ingest.sessions import locate_current_transcript
+from src.orchestrator import forks, mounts
 from src.orchestrator.agents import register_agent, resolve_identity
 from src.orchestrator.mailbox import OPERATOR_ADDR, settle_history_at_join, unread_count
+
+
+async def fork_seat(
+    actions: Actions, *, job_dir: str | None, root: Path | None = None,
+) -> str | None:
+    """The seat this session ALREADY HAS under another name — or None if it is truly new.
+
+    `claude --fork-session --resume` continues one mind under a NEW session id: new id, new
+    whisper, new automount, A SECOND SEAT (see forks.py for the autopsy). The fork is not a
+    stranger; it is the same conversation, still running. Ask the transcript who it really is
+    before minting anybody.
+
+    Called ONLY when the registry has no row for this anchor — i.e. once, at a session's birth
+    — and memoized from there. A session that is nobody's child pays one ~1s disk sweep, ever.
+    """
+    if not job_dir:
+        return None
+    base = root or (Path.home() / ".claude/projects")
+    path = locate_current_transcript(base, job_dir, anchored_only=True)
+    if path is None:
+        return None  # no transcript yet (a spare, or a session that has not written): not a fork
+    try:
+        return await forks.seat_of_fork(actions.pool, path, root=base)
+    except Exception:  # noqa: BLE001 — identity may degrade, but the whisper must never die
+        return None
 
 
 def _derive_job_dir(session_id: str, *, jobs_home: Path | None = None) -> str | None:
@@ -60,7 +86,13 @@ async def automount(
     job_dir = _derive_job_dir(session_id, jobs_home=jobs_home)
     mint_reason = None
     bound = await mounts.find_mount(actions.pool, job_dir=job_dir) if job_dir else None
-    if source in ("compact", "clear") and bound is not None:
+    # THE FORK (7cbc2f98): no row for this anchor does NOT mean a new mind. `--fork-session
+    # --resume` gives one running conversation a brand-new session id, and the transcript it
+    # carries REWRITES every record's sessionId to the new one, so the fork swears it is newborn.
+    # Ask its record uuids who its parent is before we mint it a second identity.
+    forked = await fork_seat(actions, job_dir=job_dir, root=root) if bound is None else None
+    # you can only DIE if you LIVED — and a fork has lived, under its ancestor's name.
+    if source in ("compact", "clear") and (bound is not None or forked is not None):
         mint_reason = "compaction" if source == "compact" else "context-clear"
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, root=root, project_label=project_label)
     if bound is not None:
@@ -68,6 +100,10 @@ async def automount(
         if _generation(bound.agent_id)[0] != _generation(ident.agent_id)[0]:
             # the deliberate binding wins: seams (swap/compaction) run on the SEAT's lineage
             ident.agent_id = bound.agent_id
+    elif forked is not None:
+        # the same mind, wearing a new session id. Adopt the ancestor's SEAT — never the
+        # transcript's root sid, which would invent a third identity while curing a second.
+        ident.agent_id = forked
     await register_agent(actions, ident, actor=actor, expected_model=expected_model,
                          mint_reason=mint_reason)
     prev = None
