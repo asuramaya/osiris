@@ -29,6 +29,7 @@ from src.db.redis import create_redis
 from src.ingest.sessions import adversary_pass, sense_sessions_tick
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, expand_case, run_cascade
+from src.orchestrator.liveness import observe_liveness
 from src.orchestrator.manifests import load_manifests
 from src.orchestrator.monitor import (
     Puller,
@@ -123,6 +124,25 @@ async def heartbeat(ctx: dict[str, Any]) -> int:
     visible at GET /health/worker (a stale beat) instead of an invisible tripwire gap."""
     await write_heartbeat(ctx["pool"])
     return 1
+
+
+async def sense_liveness(ctx: dict[str, Any]) -> int:
+    """IS THAT MIND ALIVE, OR HAS IT MERELY STOPPED TALKING TO US? (456960e5)
+
+    `last_seen` was refreshed only when an agent CALLED Osiris, and every liveness test reads
+    `last_seen > now() - 15 minutes` — so a mind heads-down for twenty minutes reads as DEAD. WE
+    WERE MEASURING CHATTINESS AND CALLING IT ALIVENESS. The wake trigger reads that same field,
+    which is how it woke projects whose agent was alive and working, putting two agents on one tree.
+
+    A `stat()` on the transcripts fixes it: a live session is WRITING, whether or not it is talking
+    to us. FREE, deterministic, never wrong — an OBSERVATION, not a guess, which is why it runs on
+    its own switch (OSIRIS_TRANSCRIPTS) and NOT the adversary's. Killing the expensive inferrer must
+    never blind the free observer.
+    """
+    root = get_settings().osiris_transcripts
+    if not root:
+        return 0
+    return await observe_liveness(ctx["pool"], Path(root))
 
 
 _SENSE_BUDGET = 3  # LLM extract calls per tick — the tick's wall-clock is ~this many calls
@@ -305,6 +325,11 @@ class WorkerSettings:
         cron(watched(reap_runs, every=300), minute=set(range(0, 60, 5)), run_at_startup=True),
         # liveness heartbeat every 30s (the dead-man's-switch /health/worker reads).
         cron(watched(heartbeat, every=30), second={0, 30}, run_at_startup=True),
+        # THE FREE OBSERVER, every 60s: stat the transcripts so a mind heads-down for 20 minutes
+        # is not read as DEAD (456960e5). No model, no money — it may run always, and it does NOT
+        # ride the adversary's switch (killing the inferrer must never blind the observer).
+        cron(watched(sense_liveness, every=60), minute=set(range(0, 60)), second={15},
+             run_at_startup=True),
         # THE CRAWL IS GONE (B6 of ruling ceae1604). There is no session-sensing cron, and its
         # absence is the design, not an omission.
         #

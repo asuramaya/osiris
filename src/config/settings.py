@@ -89,6 +89,15 @@ class Settings(BaseSettings):
     # session forgot to write back. Empty => off. Forward-only: an unseen transcript starts
     # at its current end; history is `python -m src.ingest.sessions backfill`'s explicit job.
     osiris_sense_sessions: str = ""
+    # THE FREE OBSERVER, and it has its OWN switch on purpose. The transcripts root, read with a
+    # `stat()` and nothing else: a session that is alive is WRITING TO ITS TRANSCRIPT whether or
+    # not it is talking to us, so liveness is the freshest of (osiris call, transcript write).
+    # DELIBERATELY SEPARATE from osiris_sense_sessions above, which is the ADVERSARY'S licence to
+    # read those same files WITH A MODEL — that costs money and is gated; this costs nothing and
+    # is always right. KILLING THE EXPENSIVE INFERRER MUST NEVER BLIND THE FREE OBSERVER. It is
+    # the whole charter for a background critter: observe for nothing, infer only on a licence —
+    # and never let them share a switch, or one day someone pulls the wrong one.
+    osiris_transcripts: str = ""
     # The fleet TRIGGER-hook (mailbox → wake) — OFF by default. When on, the worker (the alarm
     # clock; never Osiris's own hands) spawns `claude -p` in a recipient project's repo when it
     # has unread mail, so an agent processes coordination without the operator hand-triggering it.
