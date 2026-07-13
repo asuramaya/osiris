@@ -28,6 +28,7 @@ from src.db.pool import create_pool
 from src.db.redis import create_redis
 from src.ingest.orphans import find_orphans, mark_swept
 from src.ingest.sessions import adversary_pass, sense_sessions_tick
+from src.ingest.wake_cost import meter_wakes
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, expand_case, run_cascade
 from src.orchestrator.liveness import observe_liveness
@@ -195,6 +196,29 @@ async def sense_sessions(ctx: dict[str, Any]) -> int:
     if report["chunks"] or report["planted"]:
         _log.info("session sensing: %s", report)
     return report["chunks"]
+
+
+async def meter_the_wakes(ctx: dict[str, Any]) -> int:
+    """WHAT DID THE GHOST FARM COST? 818 wakes, ZERO in the ledger (B-final).
+
+    Spawning an entire Claude session is the most expensive thing Osiris can do, and it was the one
+    thing nobody could see. I can price the miner to the cent; I cannot tell the operator what the
+    farm that minted 463 agents on his abandoned projects cost him. That is the SAME disease I spent
+    the week killing in the miner — a producer whose spend nobody counted, and which therefore could
+    not be falsified, and which therefore rotted. A HAND YOU CANNOT COST IS A HAND YOU CANNOT
+    GOVERN.
+
+    The truth was on the disk the whole time: a wake writes a transcript, and every assistant turn
+    carries its real tokens and its model. This reads them. Free, deterministic, once per session —
+    an OBSERVATION, so it rides the observer's switch, not the adversary's.
+    """
+    root = get_settings().osiris_transcripts
+    if not root:
+        return 0
+    rep = await meter_wakes(ctx["pool"], Path(root))
+    if rep["metered"]:
+        _log.info("wake spend metered: %s", rep)
+    return int(rep["metered"])
 
 
 async def reap_orphans(ctx: dict[str, Any]) -> int:
@@ -394,6 +418,11 @@ class WorkerSettings:
         # orphan is then swept ONCE by the same licence-gated death rite. Not a crawl: its cost is
         # (sessions that actually died un-swept) and it converges to zero.
         cron(watched(reap_orphans, every=900), minute={7, 22, 37, 52}, second={0}, timeout=600),
+        # THE GHOST FARM'S BILL: 818 wakes, none of them ever in the ledger. Free (a parse of
+        # transcripts we already have), deterministic, once per session — so it rides the
+        # OBSERVER's switch, never the adversary's.
+        cron(watched(meter_the_wakes, every=600), minute=set(range(3, 60, 10)), second={40},
+             timeout=300),
         # THE CRAWL IS GONE (B6 of ruling ceae1604). There is no session-sensing cron, and its
         # absence is the design, not an omission.
         #
