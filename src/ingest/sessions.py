@@ -48,6 +48,7 @@ used to die with the window. They land as open Threads with kind=obligation.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import re
@@ -80,6 +81,8 @@ _CONF = confidence_for(EvidenceClass.DERIVED)
 _MAX_CHUNK_BYTES = 262_144
 # distilled text shorter than this isn't worth a model call — advance the cursor free
 _MIN_DISTILLED = 200
+# rows swept per tick — bounded; the sediment took months and need not clear in one
+_JANITOR_BUDGET = 150
 # raw bytes a single tick may scan per file even without LLM calls (bounds I/O on a
 # file whose delta is megabytes of tool traffic that distills to nothing)
 _MAX_SCAN_BYTES = 16 * 1024 * 1024
@@ -1149,6 +1152,20 @@ async def sense_sessions_tick(
     for k, v in (await consolidate_memory(
             actions, object_type="Thread", prefix="thread:")).items():
         report[k] = report.get(k, 0) + v
+
+    # THE JANITOR — the miner cleans up after itself, on the same pass it emits (the operator,
+    # 2026-07-12: "it should not only shit out slop, it should also clean up and check and balance
+    # itself on the same pass so we don't end up with a noisy garbage graph"). The miner was
+    # WRITE-ONLY: every bug in it laid permanent sediment, and a memory that only accretes is a
+    # landfill. It now retracts its OWN provable garbage — never a mind's declaration, never
+    # anything a mind has touched, and never on suspicion. Bounded per tick; the sediment took
+    # months and does not have to clear in one. See src/ingest/janitor.py for the boundaries.
+    from src.ingest.janitor import janitor_pass
+    with contextlib.suppress(Exception):  # a janitor that breaks the miner is worse than the mess
+        swept = await janitor_pass(actions, root=root, dry_run=False, limit=_JANITOR_BUDGET)
+        for k in ("retracted", "from_wake", "plagiarised"):
+            if swept.get(k):
+                report[f"swept_{k}"] = swept[k]
     return report
 
 

@@ -2155,7 +2155,10 @@ PROJECT_BRIEFING: dict[str, Any] = {
                 "from": {"op": "order", "by": "recency", "dir": "desc", "from": {
                     "op": "intersect", "sets": [
                         {"op": "select", "object_type": "Decision", "where": [
-                            {"property": "superseded_by", "op": "absent"}]},
+                            {"property": "superseded_by", "op": "absent"},
+                            # ...and never brief a mind with the miner's retracted slop: the
+                            # janitor sweeps its own output, and the record keeps every row
+                            {"property": "retracted", "op": "absent"}]},
                         {"op": "traverse", "from": {"op": "subject"}, "direction": "in",
                          "link_type": "in_repo", "hops": 1}]}}}}},
         # the live tensions — held polarities the session inherits (not a verdict). A Tension
