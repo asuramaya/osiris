@@ -185,3 +185,33 @@ async def test_a_DECOMMISSIONED_organ_stops_nagging_forever(actions: Actions) ->
     finally:
         monitor.scheduled_jobs = saved              # type: ignore[assignment]
     assert "sense_sessions" in {o["job"] for o in organs}, "fail LOUD, never quiet"
+
+
+async def test_a_DECOMMISSIONED_organ_is_REAPED_not_merely_hidden(actions: Actions) -> None:
+    """THE OPERATOR CAUGHT THIS ONE: "sense_sessions not sensing though."
+
+    He was right, and it is the bug I have committed all week. I DID fix it — in ONE of the three
+    places that ask "is Osiris sensing?". organ_health got a filter. The STATUSLINE re-implements
+    the same check inline (it is standalone on purpose and imports nothing). PREFLIGHT has its own
+    copy again. A correction that lands at one site and not at the others that READ is not a
+    correction.
+
+    So the fix is not a third filter — it is to STOP LYING IN THE DB. The schedule is the source of
+    truth; the watermark is only residue; and the worker, which knows its own schedule, reconciles
+    the two at boot. Every reader is corrected for free, including one written next year by someone
+    who never learns this happened.
+    """
+    from src.orchestrator.monitor import reap_decommissioned_jobs
+
+    await record_job(actions.pool, "heartbeat", every=30, secs=0.01)     # a real, scheduled cron
+    await record_job(actions.pool, "sense_sessions", every=600, secs=1.0)  # the ghost of the crawl
+
+    reaped = await reap_decommissioned_jobs(actions.pool)
+    assert reaped == ["sense_sessions"], "the ghost must be named as it goes — never silently"
+
+    left = {r["key"] for r in await actions.pool.fetch(
+        "SELECT key FROM watermarks WHERE key LIKE 'job:%'")}
+    assert left == {"job:heartbeat"}, "the residue is GONE from the DB, not merely hidden at a lens"
+
+    # ...and it is idempotent: a second boot reaps nothing and says nothing
+    assert await reap_decommissioned_jobs(actions.pool) == []

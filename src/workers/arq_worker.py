@@ -36,6 +36,7 @@ from src.orchestrator.monitor import (
     evaluate_watches,
     miner_tick_ended,
     miner_tick_started,
+    reap_decommissioned_jobs,
     record_job,
     tick,
     write_heartbeat,
@@ -78,6 +79,13 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["pool"] = pool
     ctx["redis"] = redis
     register_default_watchers()
+    # THE SCHEDULE IS THE SOURCE OF TRUTH; a watermark is only residue. A cron that is removed
+    # leaves its vitals behind, and three separate readers went on reporting "NOT SENSING" forever
+    # about the miner's crawl months after we deleted it. Reconcile the DB to the schedule at boot,
+    # LOUDLY — an organ that vanishes silently is the exact failure this telemetry exists to catch.
+    reaped = await reap_decommissioned_jobs(pool)
+    if reaped:
+        _log.warning("decommissioned organs reaped from telemetry: %s", ", ".join(reaped))
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:

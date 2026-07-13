@@ -38,7 +38,6 @@ BACKUP_DIR = REPO / "backups"
 VAULT_DIR = Path(os.environ.get("OSIRIS_VAULT") or Path.home() / "osiris-vault")
 BACKUP_MAX_AGE_H = 48
 VAULT_MAX_AGE_D = 8
-MINER_MAX_SILENCE_MIN = 35  # 3 missed 10-min ticks = sensing is down, whatever the heartbeat says
 DEFAULT_PORTS = ["5432", "6379"]  # the shadow-trap band: settings' fallback DSN aims here
 
 
@@ -152,16 +151,20 @@ def evaluate(m: dict) -> list[str]:
         fails.append("vault is empty or missing")
     elif m["vault_age_d"] > VAULT_MAX_AGE_D:
         fails.append(f"vault untouched for {m['vault_age_d']:.0f}d (max {VAULT_MAX_AGE_D}d)")
+    # THE MINER IS SUMMONED, NOT SCHEDULED (ceae1604). It used to walk every transcript every ten
+    # minutes, so a silent tick meant sensing was DOWN and this check was right to fail on it. The
+    # crawl is gone: the adversary now runs ONCE, at a session's death rite, so a quiet hour means
+    # nobody's session ended — not that anything is broken. Demanding a tick every 35 minutes from
+    # a job that no longer ticks would fail this preflight FOREVER, on purpose, about nothing.
+    #
+    # We still fail on ERRORS, which are always real. We simply no longer mistake SILENCE for death
+    # — the same distinction the wall now draws between "untouched" and "resolved", and the same
+    # one the liveness fix drew between "quiet" and "dead". Absence of activity is not evidence of
+    # failure; it is only evidence of absence.
     miner = m.get("miner")
-    if miner:  # None = telemetry absent (young instrument / DB down — those fail elsewhere)
-        age = miner.get("last_ok_age_min")
-        if age is None or age > MINER_MAX_SILENCE_MIN:
-            shown = "never" if age is None else f"{age:.0f}m ago"
-            fails.append(f"miner tick last SUCCEEDED {shown} (max {MINER_MAX_SILENCE_MIN}m) "
-                         "— sensing is down behind a green heartbeat, the onboarding-day class")
-        if miner.get("recent_errors", 0) >= 3:
-            fails.append(f"miner tick errored {miner['recent_errors']} of the last "
-                         f"{miner['recent']} runs — the cron is failing open")
+    if miner and miner.get("recent_errors", 0) >= 3:
+        fails.append(f"adversary errored {miner['recent_errors']} of the last "
+                     f"{miner['recent']} runs — the death-rite sweep is failing")
     return fails
 
 

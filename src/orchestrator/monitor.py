@@ -148,6 +148,39 @@ def _verdict(last_ok: datetime | None, every: int, now: datetime) -> tuple[str, 
     return "ok", age
 
 
+async def reap_decommissioned_jobs(pool: asyncpg.Pool) -> list[str]:
+    """DELETE the watermarks of crons that no longer exist. Returns what it reaped.
+
+    A watermark OUTLIVES the job that wrote it. When the session-miner's crawl was removed
+    (ceae1604), `job:sense_sessions` stayed behind with its last_ok frozen at the moment it died —
+    and THREE separate readers, each with its own copy of the same law, went on reporting "NOT
+    SENSING" forever about a capability we had deliberately deleted. The operator saw it on his
+    statusline and told me. He was right.
+
+    I had already fixed this — in ONE of the three. organ_health got a filter; the statusline
+    re-implements the check inline (it is standalone on purpose, so it imports nothing); preflight
+    has its own copy again. THAT IS THE BUG I HAVE COMMITTED ALL WEEK: a correction that lands at
+    one site and not at the others that READ.
+
+    So the fix is not a third filter. It is to stop lying in the DB. THE SCHEDULE IS THE SOURCE OF
+    TRUTH; the watermark is only residue — and the worker, which knows its own schedule, reconciles
+    the two at boot. Every reader is corrected for free, and a reader written next year inherits it
+    without knowing this exists.
+
+    It is telemetry, never the graph: deleting it forgets an outage's *timing*, not any fact the
+    kernel holds. And it is LOUD — the caller logs what it reaped, because an organ silently
+    vanishing is exactly the class of failure this whole module exists to prevent.
+    """
+    live = scheduled_jobs()
+    if not live:                       # cannot ask the schedule → never reap on a guess
+        return []
+    rows = await pool.fetch(
+        "DELETE FROM watermarks WHERE key LIKE $1 "
+        "AND substring(key from 5) <> ALL($2::text[]) RETURNING key",
+        f"{_JOB_PREFIX}%", list(live))
+    return [r["key"][len(_JOB_PREFIX):] for r in rows]
+
+
 def scheduled_jobs() -> set[str]:
     """The crons that ACTUALLY run right now — imported lazily so the read path never depends on
     the worker being importable. Empty set = "I could not ask", and the caller then trusts the

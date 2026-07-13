@@ -63,14 +63,25 @@ def test_absent_miner_telemetry_is_quiet() -> None:
     assert evaluate(m) == []
 
 
-def test_silent_miner_is_named() -> None:
-    """Three missed ticks = sensing is down, whatever the heartbeat says."""
+def test_a_SILENT_adversary_is_not_a_BROKEN_one() -> None:
+    """THE LAW CHANGED WHEN THE CRAWL DIED (ceae1604), and this test guarded the old one.
+
+    "Three missed ticks = sensing is down" was TRUE of a cron that walked every transcript every
+    ten minutes: silence meant the memory had stopped forming, and this check was right to fail on
+    it (the miner once died for ten hours behind a green heartbeat). But the miner is SUMMONED now,
+    at a session's death rite. A quiet hour means NOBODY'S SESSION ENDED — not that anything is
+    broken. Demanding a tick from a job that no longer ticks would fail this preflight FOREVER, on
+    purpose, about nothing.
+
+    ABSENCE OF ACTIVITY IS NOT EVIDENCE OF FAILURE; IT IS ONLY EVIDENCE OF ABSENCE. It is the same
+    distinction the wall now draws between "untouched" and "resolved", and the same one the
+    liveness fix drew between "quiet" and "dead". Osiris keeps relearning it.
+    """
     m = _green()
-    m["miner"] = {**_healthy_miner(), "last_ok_age_min": 240.0}
-    fails = "\n".join(evaluate(m))
-    assert "miner tick last SUCCEEDED 240m ago" in fails
-    m["miner"] = {**_healthy_miner(), "last_ok_age_min": None}
-    assert "miner tick last SUCCEEDED never" in "\n".join(evaluate(m))
+    m["miner"] = {**_healthy_miner(), "last_ok_age_min": 240.0}   # four hours of quiet...
+    assert evaluate(m) == [], "silence from a summoned producer is not an outage"
+    m["miner"] = {**_healthy_miner(), "last_ok_age_min": None}    # ...or no run at all
+    assert evaluate(m) == []
 
 
 def test_failing_open_miner_is_named() -> None:
