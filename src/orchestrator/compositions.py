@@ -1288,6 +1288,17 @@ def rank_open_threads(
     return shown, len(ranked) - len(shown)
 
 
+# A HALTED project's work is not the fleet's debt (the operator halts a program BY NAME — it is on
+# the record, testimony, not a guess). Its threads are real yield on a dead tree: not garbage, so
+# never swept; not debt, so never counted. 333 of them were inflating every number in the system
+# (decepticons 257, heinrich 78). Resume the project and they all come back — this is a LENS.
+_NOT_HALTED = (
+    "NOT EXISTS (SELECT 1 FROM links hl JOIN objects hp ON hp.id=hl.to_id "
+    "  JOIN current_assertions ha ON ha.object_id=hp.id AND ha.name='lifecycle' "
+    "  WHERE hl.from_id=o.id AND hl.type='in_repo' AND hp.type='SoftwareProject' "
+    "    AND ha.value #>> '{}' = 'halted')"
+)
+
 async def open_thread_wall(
     pool: asyncpg.Pool, proj: uuid.UUID,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -1388,6 +1399,8 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "   WHERE sa.object_id=o.id AND sa.evidence_class='self_declared')) AS pile "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
         "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' AND p.status='active' "
+        "  AND NOT EXISTS (SELECT 1 FROM current_assertions ha WHERE ha.object_id=p.id "
+        "    AND ha.name='lifecycle' AND ha.value #>> '{}' = 'halted') "
         "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='status' "
@@ -1456,15 +1469,26 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='status' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open'")
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "  AND " + _NOT_HALTED)
+    halted = await pool.fetchval(
+        "SELECT count(*) FROM objects o "
+        "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
+        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "   WHERE a.object_id=o.id AND a.name='status' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "  AND NOT " + _NOT_HALTED)
     totals = {
         "open": trow["open"],
         "wall": trow["open"] - trow["pile"],   # a mind touched it — open = wall + pile, exactly
         "pile": trow["pile"],
         "obligations": trow["obligations"],    # DECLARED duties, a subset of `wall`
         "guessed_obligations": trow["guessed_obligations"],  # the miner's, sitting in the pile
-        "reads": "open = wall + pile. `obligations` are DECLARED duties and are a subset of "
-                 "`wall` — never add them to anything.",
+        "halted": halted,   # real yield on programs the operator killed BY NAME — not debt
+        "reads": "open = wall + pile, over LIVE projects only. `obligations` are DECLARED duties "
+                 "and are a subset of `wall` — never add them to anything. `halted` is work on "
+                 "programs the operator stopped: not garbage (never swept), not debt (never "
+                 "counted); resume the project and it returns.",
     }
     return {"totals": totals, "projects": projects,
             "top_of_wall": shown, "more_on_wall": more,

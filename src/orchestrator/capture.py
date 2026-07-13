@@ -465,3 +465,34 @@ async def record_tension(
         await link_repo(actions, t, repo, observed, source=source, evidence_class=_EC,
                         confidence=_CONF)
     return t
+
+
+async def set_lifecycle(
+    actions: Actions, project: str, lifecycle: str, *, because: str | None = None,
+    source: str = _SOURCE,
+) -> uuid.UUID | None:
+    """HALT A PROGRAM — the operator kills a project by name, and the graph should hear it.
+
+    A halted project's threads are REAL YIELD ON A DEAD TREE: not garbage (so the janitor must
+    never sweep them — the miner did its job, and the work was genuine), and not debt (so no lens
+    may count them). 333 of them — decepticons 257, heinrich 78 — were inflating every number in
+    the system after the operator had explicitly stopped both programs. A memory that cannot hear
+    "we stopped doing that" will keep billing you for it forever.
+
+    This is TESTIMONY, not a guess: the human said it, an agent records it, and the lens obeys.
+    Reversible by construction — set it back to 'active' and every thread returns exactly as it
+    was. Nothing is deleted, nothing is swept, nothing is lost. `lifecycle`: active | halted.
+    """
+    if lifecycle not in ("active", "halted"):
+        raise ValueError(f"lifecycle must be 'active' or 'halted', not {lifecycle!r}")
+    pid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1", f"repo:{project}")
+    if pid is None:
+        return None
+    now = datetime.now(UTC)
+    await actions.assert_property(pid, "lifecycle", lifecycle, source, now, _CONF,
+                                  evidence_class=_EC)
+    if because:
+        await actions.assert_property(pid, "lifecycle_because", because, source, now, _CONF,
+                                      evidence_class=_EC)
+    return pid  # type: ignore[no-any-return]

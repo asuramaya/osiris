@@ -556,6 +556,74 @@ def _sandwich(text: str) -> str:
 _KINDS = ("ruling", "choice", "rejection", "reset", "override", "decision")
 
 
+_CRITIC_SYSTEM = (
+    "You are the OVERMINT CRITIC for Osiris, a shared memory graph. Another pass has proposed "
+    "candidate THREADS to write into a fleet's work list. Your only job is to REJECT WORK-STEPS "
+    "before they land. You judge; you never rewrite.\n\n"
+    "THE INHERITANCE TEST, and it is the whole job: a THREAD is something the NEXT session must "
+    "INHERIT. A WORK-STEP is something the conversation that proposed it will plausibly finish "
+    "before it ends.\n\n"
+    "REJECT (work-steps — errands the conversation was already doing):\n"
+    "  'rebuild the bundle', 'run the gate tests', 'restart the session to load the config', "
+    "'fix the lint', 'update the import', 'commit the change', 'verify the render looks right', "
+    "'settle with osiris before compacting', 'reopen /hooks'.\n"
+    "KEEP (a real inheritance):\n"
+    "  a blocker awaiting something EXTERNAL (a human, hardware, a third party); a decision "
+    "deliberately DEFERRED; a gap knowingly LEFT UNBUILT; something left BROKEN; a question "
+    "raised and never answered.\n\n"
+    "Return STRICT JSON, no prose, no fences:\n"
+    '  {"verdicts":[{"i":<0-based index>,"keep":true|false}]}\n'
+    "One verdict per candidate, in order.\n\n"
+    "WHEN UNSURE, REJECT. The asymmetry is deliberate and it is not close: a false thread lands "
+    "on a human's work list and rots there forever, and thousands of them make the list "
+    "worthless. A dropped step costs nothing — the conversation was going to do it anyway, the "
+    "transcript is still on disk, and anything that truly mattered gets recorded deliberately by "
+    "the mind that owned it. You are a BACKFILL's conscience, not its author."
+)
+
+
+def _critic_prompt(threads: list[dict[str, str]]) -> str:
+    lines = [f"{i}. {t.get('summary', '')}" for i, t in enumerate(threads)]
+    return "<candidates>\n" + "\n".join(lines) + "\n</candidates>\n\nReturn the verdicts JSON now."
+
+
+async def critique_threads(
+    llm: LLMClient, threads: list[dict[str, str]], *, model: str,
+) -> tuple[list[dict[str, str]], int]:
+    """THE MINER JUDGES ITS OWN YIELD BEFORE IT WRITES (the operator, 2026-07-12: "it should
+    also clean up and CHECK AND BALANCE ITSELF on the same pass").
+
+    The extractor is TOLD, in its own system prompt, that a work-step is never a thread — and it
+    mints them anyway: "rebuild the bundle after the lighting change", "restart the session to
+    load the config", "settle with osiris before compacting" (that last one was the operator's
+    instruction to ONE agent, minted as a duty for the whole fleet). Instruction-following decays
+    across a long prompt with six competing jobs; a critic with ONE job does not have that problem.
+
+    So the yield is judged by a second, single-purpose pass before it lands. This is a check the
+    miner performs ON ITSELF — the balance the janitor cannot provide, because the janitor may
+    only retract what is PROVABLY garbage, and "this is a work-step" is a judgement, not a proof.
+    Made at BIRTH it is cheap and safe (nothing is lost — the transcript is on disk and a real
+    duty gets declared by the mind that owns it). Made later it would be a censor.
+
+    FAIL-OPEN: a critic that errors keeps everything. The miner must degrade to its old, noisier
+    self rather than silently drop a yield it never actually judged.
+    """
+    if not threads:
+        return threads, 0
+    try:
+        raw = await llm.complete(system=_CRITIC_SYSTEM, prompt=_critic_prompt(threads),
+                                 model=model, max_tokens=1024)
+        data = json.loads(_strip_fences(raw))
+        verdicts = {int(v["i"]): bool(v.get("keep")) for v in data.get("verdicts", [])
+                    if isinstance(v, dict) and "i" in v}
+    except Exception:  # noqa: BLE001 — a provider outage raises anything; fail OPEN, always
+        return threads, 0  # unjudged is better than wrongly-dropped, and never a crashed tick
+    if not verdicts:
+        return threads, 0
+    kept = [t for i, t in enumerate(threads) if verdicts.get(i, True)]
+    return kept, len(threads) - len(kept)
+
+
 @dataclass
 class SessionYield:
     decisions: list[dict[str, str]] = field(default_factory=list)
@@ -1110,8 +1178,17 @@ async def sense_sessions_tick(
             if usage_out:  # per-call token/cost telemetry (llm_usage) — no longer an estimate
                 await record_usage(actions.pool, purpose="session-extract",
                                    usage=usage_out[-1])
+            # THE CHECK AND BALANCE, at birth. The extractor is TOLD a work-step is never a
+            # thread and mints them anyway — instruction-following decays across a long prompt
+            # with six competing jobs. A critic with ONE job judges the yield before it lands.
+            # Fail-open: an unjudged yield beats a wrongly-dropped one.
+            y = parse_session_yield(raw)
+            y.threads_opened, dropped = await critique_threads(
+                llm, y.threads_opened, model=model)
+            if dropped:
+                report["steps_dropped"] = report.get("steps_dropped", 0) + dropped
             counts = await emit_yield(
-                actions, parse_session_yield(raw), repo=repo,
+                actions, y, repo=repo,
                 source_model=chunk_models[-1] if chunk_models else None,
                 origin=agent_source,
             )

@@ -847,3 +847,57 @@ async def test_the_miner_stops_plagiarising_its_most_diligent_authors(actions: A
     assert await _is_self_documenting(pool, "agent:abc12345") is True
     # a silent session (no deliberate writes) is still backfilled — that is the miner's real job
     assert await _is_self_documenting(pool, "agent:nobody-home") is False
+
+
+async def test_the_critic_drops_work_steps_before_they_land() -> None:
+    """THE CHECK AND BALANCE, at birth (the operator: "it should also check and balance itself on
+    the same pass").
+
+    The extractor is TOLD, in its own system prompt, that a work-step is never a thread — and it
+    mints them anyway: "rebuild the bundle after the lighting change", "restart the session to
+    load the config", "settle with osiris before compacting" (that last was the operator's
+    instruction to ONE agent, minted as a duty for the whole fleet). Instruction-following decays
+    across a long prompt juggling six jobs; a critic with ONE job does not have that problem.
+    """
+    from src.ingest.sessions import _CRITIC_SYSTEM, critique_threads
+
+    class _Critic:
+        seen: dict[str, str] = {}
+
+        async def complete(self, *, system: str, prompt: str, model: str,
+                           max_tokens: int = 2048, usage_out: object = None) -> str:
+            _Critic.seen = {"system": system, "prompt": prompt}
+            # index 0 and 2 are errands; 1 is a real inheritance
+            return '{"verdicts":[{"i":0,"keep":false},{"i":1,"keep":true},{"i":2,"keep":false}]}'
+
+    threads = [
+        {"summary": "Rebuild bundle after lighting changes to pbr_viewer.js"},
+        {"summary": "Operator must verify pen pressure on the real tablet — no device on hand"},
+        {"summary": "Settle with osiris and prepare to compact before retiring"},
+    ]
+    kept, dropped = await critique_threads(_Critic(), threads, model="haiku")  # type: ignore[arg-type]
+    assert dropped == 2
+    assert [t["summary"] for t in kept] == [
+        "Operator must verify pen pressure on the real tablet — no device on hand"]
+    # the asymmetry is deliberate and it is stated
+    assert "WHEN UNSURE, REJECT" in _CRITIC_SYSTEM
+    assert "rots there forever" in _CRITIC_SYSTEM
+
+
+async def test_the_critic_fails_OPEN_never_silently_dropping_an_unjudged_yield() -> None:
+    """A critic that errors keeps EVERYTHING. The miner must degrade to its old, noisier self
+    rather than silently drop a yield it never actually judged — unjudged beats wrongly-dropped."""
+    from src.ingest.sessions import critique_threads
+
+    class _Broken:
+        async def complete(self, **kw: object) -> str:
+            raise RuntimeError("the model is down")
+
+    class _Garbage:
+        async def complete(self, **kw: object) -> str:
+            return "I'm afraid I can't do that"
+
+    threads = [{"summary": "a real thread"}, {"summary": "another"}]
+    for llm in (_Broken(), _Garbage()):
+        kept, dropped = await critique_threads(llm, threads, model="haiku")  # type: ignore[arg-type]
+        assert dropped == 0 and len(kept) == 2

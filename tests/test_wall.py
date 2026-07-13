@@ -322,3 +322,51 @@ async def test_the_fleet_totals_actually_add_up(actions: Actions) -> None:
     assert t["guessed_obligations"] == 2
     # and it says so, so no reader ever stacks them again
     assert "open = wall + pile" in t["reads"]
+
+
+async def test_a_halted_program_is_not_debt(actions: Actions) -> None:
+    """THE DEAD TREE'S FRUIT (operator, 2026-07-12). He killed decepticons and heinrich BY NAME.
+    Their 333 open threads are REAL YIELD — the miner did its job and the work was genuine — so
+    the janitor must never sweep them. But they are not DEBT either, and they were inflating every
+    number in the system long after he had stopped both programs.
+
+    A memory that cannot hear "we stopped doing that" will keep billing you for it forever.
+
+    This is TESTIMONY, not a guess: the human said it, an agent records it, the lens obeys. And it
+    is reversible by construction — set the project back to 'active' and every thread returns
+    exactly as it was. Nothing is deleted; nothing is swept.
+    """
+    from src.orchestrator.capture import set_lifecycle
+    from src.orchestrator.compositions import _fn_wall
+
+    live = await actions.create_or_find_object("SoftwareProject", "repo:aliveproj", "session")
+    await actions.assert_property(live, "name", "aliveproj", "session", datetime.now(UTC), 0.9)
+    dead = await actions.create_or_find_object("SoftwareProject", "repo:deadproj", "session")
+    await actions.assert_property(dead, "name", "deadproj", "session", datetime.now(UTC), 0.9)
+
+    await open_thread(actions, "a live duty", repo="aliveproj", kind="obligation",
+                      source="agent:me")
+    await open_thread(actions, "a duty on the program he killed", repo="deadproj",
+                      kind="obligation", source="agent:me")
+
+    before = (await _fn_wall(actions.pool, None, {}))["totals"]
+    assert before["open"] == 2 and before["obligations"] == 2
+
+    await set_lifecycle(actions, "deadproj", "halted",
+                        because="the operator abandoned the program, 2026-07-12")
+
+    after = (await _fn_wall(actions.pool, None, {}))["totals"]
+    assert after["open"] == 1 and after["obligations"] == 1   # the dead tree stops billing
+    assert after["halted"] == 1                               # ...and is COUNTED, never hidden
+    assert after["open"] == after["wall"] + after["pile"]     # still partitions
+
+    # the thread is untouched in the record — this is a LENS
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions a WHERE a.name='status' "
+        "AND a.value #>> '{}' = 'open'")
+    assert n == 2
+
+    # ...and RESUMING the program brings every thread straight back
+    await set_lifecycle(actions, "deadproj", "active", because="he changed his mind")
+    resumed = (await _fn_wall(actions.pool, None, {}))["totals"]
+    assert resumed["open"] == 2 and resumed["halted"] == 0
