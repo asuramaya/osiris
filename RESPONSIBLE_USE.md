@@ -7,14 +7,36 @@ is powerful and dual-use: the same engine that exposes a fraud can be pointed at
 for harassment. **This document governs the public-record face.** Read it before you use it
 that way.
 
-## No hands (both faces)
+## No hands over your systems (both faces)
 
-Osiris reads and *tells*; it does not act. It will not write to your repositories, commit,
-send, or automate a mutation of any system. It produces a sourced finding; a human — or
-Claude with a shell, or `git` — applies it. This is a deliberate boundary, not a missing
-feature: an autonomous mutator you must supervise is the opposite of a tool you can trust,
-so acting stays with hands that already have authority. See
+Osiris reads and *tells*; it does not act **on your systems**. It will not write to your
+repositories, commit, send, or automate a mutation of any system you own. It produces a
+sourced finding; a human — or Claude with a shell, or `git` — applies it. This is a
+deliberate boundary, not a missing feature: an autonomous mutator you must supervise is the
+opposite of a tool you can trust, so acting stays with hands that already have authority. See
 [`ROADMAP.md`](ROADMAP.md#deliberately-not-done-and-why).
+
+### The one exception, declared
+
+There is exactly one thing Osiris can do that looks like acting, and we will not bury it in
+the word "never".
+
+**With the wake trigger enabled, Osiris can start a Claude session in one of your repos** —
+a headless `claude -p` — when that project has unread fleet mail. It summons a mind; it does
+not become one. The session it summons has only the tools you granted it (by default, Osiris's
+own MCP surface: no shell, no file writes).
+
+**It ships off** (`OSIRIS_TRIGGER_ENABLED=false`), it is capped by *lifetime attempts per
+message* and not merely by rate, and every wake is recorded in `agent_wakes`.
+
+We are explicit about this because we got it wrong once and it is instructive: one unread
+letter spawned **79 sessions in 18 hours** on an abandoned project — every wake behaving
+correctly, each one politely declining to answer a letter that was not its own, and thereby
+summoning its replacement. Nothing malfunctioned; the *composition* of correct parts was a
+loop. The full incident is in [`README.md`](README.md#one-hand-the-wake-trigger).
+
+A tool whose entire thesis is provenance does not get to hide its own worst incident. If the
+trade is not one you want: leave the trigger off. Everything else works without it.
 
 ## Intended use (the public-record face)
 

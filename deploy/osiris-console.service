@@ -21,14 +21,14 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/asuramaya/code/osiris
+WorkingDirectory=%h/code/osiris
 # Point at the dev instance (PG :5601 / Redis :6396), inline so the repo's .env is untouched;
 # systemd Environment= overrides pydantic's .env.
 Environment=DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris
 Environment=REDIS_URL=redis://127.0.0.1:6396/0
 # --factory: uvicorn calls create_app() (which builds its OWN pool + lifespan), the self-standing
 # form of the app; the module-level `app` is the same surface for the /opt system unit.
-ExecStart=/home/asuramaya/code/osiris/.venv/bin/uvicorn --factory src.api.app:create_app --host 127.0.0.1 --port 8011
+ExecStart=%h/code/osiris/.venv/bin/uvicorn --factory src.api.app:create_app --host 127.0.0.1 --port 8011
 Restart=always
 RestartSec=2
 # A read surface holds no truth; a modest cap contains a runaway render without starving the box.

@@ -20,7 +20,10 @@ The same kernel serves two corpora with no change — **your own work** (git his
 decisions, the file tree) and **the public record** — because the domain is never the
 identity, the engine is. And an autonomic loop, the **pulse**, keeps it fresh: it senses
 when a tracked source changes, re-ingests only the delta, and accumulates what changed. The
-engine *reads and tells*; it never mutates the world (it has no hands — see the surfaces).
+engine *reads and tells*; it never mutates the world you own (it has no hands over your
+systems — see the surfaces). It has exactly one outward act, declared and off by default: the
+**wake trigger** can start a Claude session in a repo that has unread fleet mail. It summons a
+mind; it does not become one. See [`README.md`](README.md#one-hand-the-wake-trigger).
 
 ```
         surfaces        MCP server  ·  FastAPI console  ·  compositions (the composer)
@@ -71,10 +74,17 @@ Drivers reach into the messy world and emit graded, sourced mutations through th
 They differ along one axis that dictates everything — **placefulness**:
 
 - **Self-track drivers** — the developer face. `gitlog` (a repo's history → SoftwareProject
-  / Commit / developer), `files` (the tree → File nodes, metadata only; content stays in
-  git, read on demand), and miners that turn commit rationale into `Decision` and `Thread`
-  objects. Federating *your own work* is federation too: same waist, same grading, and
+  / Commit / developer) and `files` (the tree → File nodes, metadata only; content stays in
+  git, read on demand). These are **deterministic observers**: a commit exists, a file
+  changed. They cost nothing, they are never wrong, and they are the backbone of the
+  developer face. Federating *your own work* is federation too: same waist, same grading, and
   cross-repo identity resolution fuses *you* across your repos.
+
+  A third kind — an **inferring** miner that reads conversation transcripts and proposes
+  loose ends you forgot — is a different animal, and it is held to a different standard: it
+  may **propose**, never assert, and its licence is its measured rate of use. It is being
+  rebuilt and is currently **off**; see [`ROADMAP.md`](ROADMAP.md). The line that matters is
+  not background-vs-foreground and not cheap-model-vs-expensive: it is **observe vs infer**.
 - **Placeless federators** — pure HTTP over open bases; stateless, rate-limited per
   origin, run anywhere. EDGAR (companies + Form D), OpenSanctions (sanctions/PEP + OFAC
   crypto wallets), Wikidata, GLEIF (LEI + ownership), OrgBook BC, CourtListener,

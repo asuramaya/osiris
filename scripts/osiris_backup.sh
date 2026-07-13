@@ -8,9 +8,11 @@
 # one-time snapshot it was born as. Same-disk still (the off-box rung stays open until
 # the operator names a target); RPO drops from 24h to 6h.
 set -euo pipefail
-REPO="/home/asuramaya/code/osiris"
+# Portable: derive the repo from THIS script's location, never a hardcoded home. A path baked
+# to one machine is a script that only works for the person who wrote it.
+REPO="${OSIRIS_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 DIR="$REPO/backups"
-VAULT="/home/asuramaya/osiris-vault"
+VAULT="${OSIRIS_VAULT:-$HOME/osiris-vault}"
 mkdir -p "$DIR" "$VAULT"
 
 docker exec osiris-pg pg_dump -U osiris -d osiris > "$DIR/osiris-$(date +%Y%m%d-%H%M%S).sql"

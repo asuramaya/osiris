@@ -33,15 +33,17 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/asuramaya/code/osiris
+WorkingDirectory=%h/code/osiris
 # Point at the dev instance (PG :5601 / Redis :6396), inline so the repo's .env is untouched;
 # systemd Environment= overrides pydantic's .env, which here only carries a non-DB key.
 Environment=DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris
 Environment=REDIS_URL=redis://127.0.0.1:6396/0
-Environment=OSIRIS_DEV_REPOS=/home/asuramaya/code/osiris,/home/asuramaya/code/rotten-apple
+# Repos the developer-pulse watches (read-only). Comma-separated absolute paths.
+# Leave empty to watch nothing. Example: %h/code/osiris,%h/code/other
+Environment=OSIRIS_DEV_REPOS=%h/code/osiris
 # Sense HEAD every 600s. The digest/staleness verdict is computed on READ (the pulse-digest
 # lens), so a dead loop is visible in the digest even if this unit stops (the dead-man's-switch).
-ExecStart=/home/asuramaya/code/osiris/.venv/bin/python -m src.orchestrator.pulse --watch 600
+ExecStart=%h/code/osiris/.venv/bin/python -m src.orchestrator.pulse --watch 600
 Restart=always
 RestartSec=10
 

@@ -6,5 +6,5 @@ Description=Osiris preflight — the audit that can't be forgotten
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/asuramaya/code/osiris
-ExecStart=/home/asuramaya/code/osiris/.venv/bin/python scripts/osiris_preflight.py --drill
+WorkingDirectory=%h/code/osiris
+ExecStart=%h/code/osiris/.venv/bin/python scripts/osiris_preflight.py --drill

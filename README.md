@@ -31,8 +31,12 @@ asleep. **Osiris is precisely those missing organs.** The division of labor:
 - **Claude is the intelligence**, in two modes: a **lens** (foreground, on-demand — you
   ask, it reasons and drives) and a **tripwire** (background, always-on, flash-tier — it
   narrates what changed, cheaply, 24/7).
-- **Neither has hands.** Osiris reads and tells; it never mutates your systems. Acting is
-  left to you, to `git`, to your own tools — the last inch stays where trust already lives.
+- **Neither has hands *over your systems*.** Osiris reads and tells; it never writes a file,
+  commits, pushes, or mutates anything you own. Acting is left to you, to `git`, to your own
+  tools — the last inch stays where trust already lives.
+- **It has exactly one hand, and it points inward.** With the wake trigger on, the worker can
+  *start a Claude session* in a repo that has unread fleet mail. It summons a mind; it does
+  not become one. It **ships off**, and [we will tell you what it cost us](#one-hand-the-wake-trigger).
 
 Everything below follows from that split.
 
@@ -163,10 +167,11 @@ dossiers, shown with their warts, because provenance is the point.
 
 ## What it can't do (yet, or by design)
 
-- **It has no hands, on purpose.** It will not write to your repos, commit, or act in your
-  systems. It produces the sourced finding; you (or Claude with a shell) apply it. Crossing
-  into autonomous mutation of your systems is a
-  [trap it deliberately refuses](ROADMAP.md#deliberately-not-done-and-why).
+- **It has no hands over your systems, on purpose.** It will not write to your repos, commit,
+  or act in them. It produces the sourced finding; you (or Claude with a shell) apply it.
+  Crossing into autonomous mutation of your systems is a
+  [trap it deliberately refuses](ROADMAP.md#deliberately-not-done-and-why). The one exception
+  is declared below, and it ships off.
 - **The public-record face reaches only the open *entity* commons** — by design (keyless),
   it is weak on private *persons*. A [safety feature, not only a limitation](RESPONSIBLE_USE.md).
 - **Provenance makes errors auditable, not absent.** There is known entity-resolution and
@@ -174,6 +179,57 @@ dossiers, shown with their warts, because provenance is the point.
   [`ROADMAP.md`](ROADMAP.md).
 - The heartbeat's *reflection* layer (flash-tier Claude narrating the meaning of a change)
   is the active next step; today the pulse reports reliable facts, not yet interpretation.
+
+---
+
+## One hand: the wake trigger
+
+Everything above says Osiris has no hands. That is true of **your** systems and we intend to
+keep it true. But it would be dishonest to stop there, because Osiris can do one thing that
+looks a lot like acting, and you should hear it from us rather than find it in the source.
+
+**Osiris can summon a mind.** The fleet mailbox is pull-based — an agent only sees mail when
+it takes a turn — so a message to a project nobody is sitting in waits forever. The *wake
+trigger* closes that gap: the worker starts a headless `claude -p` session in that repo, and
+that session mounts, reads its inbox, and decides what to do. Osiris does not act. **It
+summons something that can.** The distinction is real, and it is also thin enough that you
+deserve to be told about it plainly.
+
+### What it cost us
+
+We shipped it, and it built a ghost farm.
+
+One unread letter — addressed *"to whoever mounts this project next"* — spawned **79 sessions
+over 18 hours**, on a project its owner had not opened in two days. Every wake behaved
+*correctly*: it read the letter, rightly judged the letter was not its to answer, politely
+left it alone — **and thereby summoned its replacement.** The letter's own politeness was the
+fuel. Across the fleet the trigger fired 818 times and minted 463 agents, and none of it was
+a malfunction. Every component did its job, and the *composition* of correct components was a
+perpetual-motion machine that ran on the operator's money.
+
+The bug was that **a rate is not a bound.** Every guard we had — per-project cap, hourly
+budget, grace window — measured wakes over a *sliding window*, so every one of them reset and
+fired again. The cap was working perfectly. That was the bug: it capped the *rate*, and
+nothing capped the *total*, so a message that could never be settled became a permanent alarm
+clock ticking at exactly the legal limit.
+
+### So it ships off, and here is the whole safety story
+
+- **`OSIRIS_TRIGGER_ENABLED` defaults to `false`.** A fresh clone cannot wake anything.
+- A **lifetime attempt cap per message** (not just a rate): a message that has failed three
+  times is escalated to the human and stops. A retry that has failed 79 times is not a retry,
+  it is a leak.
+- Rate cap per project, an hourly fleet budget, and a cheaper model tier for triage wakes.
+- **Every wake is recorded** in `agent_wakes` — the chain is visible and auditable after the
+  fact, which is how we found the farm.
+- A woken session gets only the tools you grant it (`OSIRIS_WAKE_ALLOWED_TOOLS`, default:
+  Osiris's own MCP surface — no shell, no file writes).
+- Kill switch: set `OSIRIS_TRIGGER_ENABLED=0` and restart the worker. It is off right now in
+  the author's own deployment, and it stays off until it is field-proven.
+
+If that trade is not one you want, **leave it off** — everything else in Osiris works without
+it. We are telling you this because a memory system whose whole thesis is *provenance* has no
+business hiding its own worst incident.
 
 ---
 

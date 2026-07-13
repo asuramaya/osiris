@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import time
@@ -30,9 +31,11 @@ UNITS = ["osiris-mcp", "osiris-worker", "osiris-pulse", "osiris-console"]
 TIMERS = ["osiris-backup.timer"]
 CONTAINERS = ["osiris-pg", "osiris-redis"]
 NAMED_VOLUMES = {"osiris-pg-data", "osiris-redis-data"}
-BACKUP_DIR = Path("/home/asuramaya/code/osiris/backups")
-VAULT_DIR = Path("/home/asuramaya/osiris-vault")
-REPO = Path("/home/asuramaya/code/osiris")
+# Portable: derive the repo from THIS file, never a hardcoded home — a path baked to one
+# machine is a script that only works for the person who wrote it.
+REPO = Path(os.environ.get("OSIRIS_REPO") or Path(__file__).resolve().parent.parent)
+BACKUP_DIR = REPO / "backups"
+VAULT_DIR = Path(os.environ.get("OSIRIS_VAULT") or Path.home() / "osiris-vault")
 BACKUP_MAX_AGE_H = 48
 VAULT_MAX_AGE_D = 8
 MINER_MAX_SILENCE_MIN = 35  # 3 missed 10-min ticks = sensing is down, whatever the heartbeat says

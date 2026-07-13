@@ -121,6 +121,14 @@ tier. Each rung of the capability ladder is also a rung of deployment commitment
   refused one: the moat is the memory and the provenance, not a robot arm, and an
   autonomous mutator you have to *watch* is the opposite of the trust the tool is for.
 
+  **The honest footnote:** there is one outward act, and we declare it rather than hide it
+  behind the word "never". The **wake trigger** can start a Claude session in a repo with
+  unread fleet mail — Osiris summons a mind, it does not become one. It ships **off**, it is
+  bounded by *lifetime* attempts per message (a rate is not a bound — we learned that the
+  expensive way, and the story is in [`README.md`](README.md#one-hand-the-wake-trigger)), and
+  every wake is recorded. The line we hold is the *last inch*: nothing Osiris starts inherits
+  a shell or write access unless you grant it.
+
 ## Known noise
 
 Honesty about the current deliverable's rough edges (all visible *with* their provenance,

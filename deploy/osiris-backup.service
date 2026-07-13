@@ -5,4 +5,4 @@ Description=Osiris graph nightly pg_dump (keep 14)
 
 [Service]
 Type=oneshot
-ExecStart=/home/asuramaya/code/osiris/scripts/osiris_backup.sh
+ExecStart=%h/code/osiris/scripts/osiris_backup.sh
