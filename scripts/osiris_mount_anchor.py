@@ -37,6 +37,15 @@ SPAWN_AWARE = {
     "mcp__osiris__reclassify_thread",
 }
 
+# tools whose server signature accepts `session_anchor` — the RE-ATTACH hint, carried on EVERY
+# call so an MCP reconnect costs a silent re-attach instead of a bounce or an anonymous write.
+# KEEP IN LOCKSTEP WITH mcp_server: a name here whose tool does not take the param makes the call
+# fail schema validation, which is a louder, worse bug than the one it fixes.
+ANCHOR_AWARE = {
+    "mcp__osiris__orient", "mcp__osiris__inbox", "mcp__osiris__send",
+    "mcp__osiris__record_decision", "mcp__osiris__open_thread", "mcp__osiris__resolve_thread",
+}
+
 
 def main() -> int:
     try:
@@ -70,10 +79,11 @@ def main() -> int:
                     ti.pop(key)
                     changed = True
 
+    sid = str(payload.get("session_id") or "")
+    derived = str(Path.home() / ".claude" / "jobs" / sid[:8]) if len(sid) >= 8 else ""
+
     if tool == "mcp__osiris__mount" and not child:
-        sid = str(payload.get("session_id") or "")
-        if len(sid) >= 8:
-            derived = str(Path.home() / ".claude" / "jobs" / sid[:8])
+        if derived:
             # respect an explicit, valid anchor the agent already supplied; only fill a
             # missing/empty/unexpanded one (the '$CLAUDE_JOB_DIR'-literal case)
             existing = str(ti.get("job_dir") or "")
@@ -86,6 +96,25 @@ def main() -> int:
             else:
                 ti["job_dir"] = derived
                 changed = True
+
+    # THE ANCHOR ON EVERY CALL, not only at mount (d5fdc94a / f8525d2c) — and this is the whole
+    # fix for the most-reported bug in the fleet.
+    #
+    # The server's re-attach machinery has always existed. It was STARVED, not broken: it keys off
+    # the X-Osiris-Job header, which .mcp.json fills from ${CLAUDE_JOB_DIR} — AND THAT IS EMPTY IN
+    # EVERY INTERACTIVE SESSION. So after an MCP reconnect the server has nothing to re-attach BY,
+    # and the call bounces with "mount first" (or, far worse, writes ANONYMOUSLY).
+    #
+    # This hook has the harness's own session_id on EVERY osiris call and can derive the durable
+    # job_dir from it. It was already doing that — and then handing it over only for mount().
+    #
+    # Four independent sightings in one night (Khepri III/tony, the code seat, the xxit seat, and
+    # Thoth XXVIII four times — once while reading the mail reporting it). Every one of us called
+    # it "transient", because there was no way to know otherwise. A spawn is excluded: a child gets
+    # no seat anchor, ever.
+    if derived and not child and tool in ANCHOR_AWARE and not ti.get("session_anchor"):
+        ti["session_anchor"] = derived
+        changed = True
 
     if changed:
         print(json.dumps({"hookSpecificOutput": {

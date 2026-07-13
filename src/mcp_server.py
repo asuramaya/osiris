@@ -216,13 +216,24 @@ def _anchorless(ctx: Context | None) -> str:
         raw = req.headers.get("x-osiris-job") if req is not None else None
     except (AttributeError, LookupError):
         pass
+    # TRANSIENT OR TERMINAL? — Khepri III's ask, and it is the right one (msg 420): "a reason code
+    # would let an agent tell 'transient, just retry' from 'something actually forgot me'." A
+    # bounce that says only "mount first" is INDISTINGUISHABLE FROM AMNESIA, so every agent guesses
+    # — and a guessing agent either re-mounts needlessly or panics about continuity it never lost.
+    # These are DIFFERENT FACTS and the bounce must say which.
     if not raw:
-        return ("your client sent NO X-Osiris-Job header — CLAUDE_JOB_DIR is unset in its "
-                "environment, so I have no anchor to re-attach you by")
+        return ("[no-anchor · TRANSIENT] your client sent no X-Osiris-Job header (CLAUDE_JOB_DIR "
+                "is unset in interactive sessions — this is normal). NOTHING HAS FORGOTTEN YOU: "
+                "the PreToolUse hook now stamps session_anchor on every call, so if you are seeing "
+                "this, that hook is not installed. Re-mount with your durable anchor and you are "
+                "whole; your identity and your work are intact in the graph")
     if "$" in raw:
-        return (f"your client sent the header UNEXPANDED ({raw!r}) — CLAUDE_JOB_DIR is not set "
-                "in its environment, so I have no anchor to re-attach you by")
-    return f"the anchor {raw!r} matches no mount in the registry"
+        return (f"[unexpanded-anchor · TRANSIENT] your client sent the header literal ({raw!r}) — "
+                "CLAUDE_JOB_DIR is not set in its environment. Nothing has forgotten you: re-mount "
+                "with the real path and you are whole")
+    return (f"[unknown-anchor · TERMINAL] the anchor {raw!r} matches no mount in the registry. "
+            "This one is REAL: either you were never mounted under it, or you are wearing another "
+            "session's anchor. Mount properly; do not simply retry")
 
 
 def _job_hint(ctx: Context | None) -> str | None:
@@ -332,23 +343,34 @@ async def _reattach(
     return ident
 
 
-async def _ident_for(ctx: Context | None) -> AgentIdentity | None:
-    """The mounted identity for this call — the hot dict first, then RE-ATTACH from the
-    durable registry by the client's job_dir header. A server bounce used to wipe the whole
-    fleet's identities at once (decision 56f6a0d6); now it costs each agent one transparent
-    re-attach. None only when there is truly nothing to re-attach by."""
+async def _ident_for(ctx: Context | None, anchor: str | None = None) -> AgentIdentity | None:
+    """The mounted identity for this call — the hot dict first, then RE-ATTACH from the durable
+    registry. A server bounce used to wipe the whole fleet's identities at once (56f6a0d6); now it
+    costs each agent one transparent re-attach.
+
+    TWO HINT SOURCES, and the second is why this finally works. The first is the client's
+    X-Osiris-Job header, which .mcp.json fills from ${CLAUDE_JOB_DIR} — AND THAT IS EMPTY IN EVERY
+    INTERACTIVE SESSION, so for most of the fleet the re-attach machinery has been STARVED, not
+    broken, for its whole life. The second is `anchor`: the PreToolUse hook holds the harness's own
+    session_id on EVERY osiris call and can derive the durable job_dir from it, so it now stamps it
+    into the call rather than only into mount().
+
+    Four independent sightings in one night (Khepri III/tony msg 420, the code seat msg 417, the
+    xxit seat, and me four times — once while reading the mail reporting it) all trace here. Every
+    one of us wrote it off as "transient", because the bounce gave us no way to know otherwise.
+    """
     key = _conn_key(ctx)
     if key is not None and (cached := _agents.get(key)) is not None:
         _agents_touched[key] = time.monotonic()
         return cached
-    return await _reattach(await _pool_get(), key, _job_hint(ctx))
+    return await _reattach(await _pool_get(), key, _job_hint(ctx) or (anchor or None))
 
 
-async def _source_for(ctx: Context | None) -> str:
+async def _source_for(ctx: Context | None, anchor: str | None = None) -> str:
     """The attributing actor for a write: the mounted agent on this connection (re-attached
     from the durable registry if the server bounced), else the lone-operator `session`
     (back-compat — an un-mounted agent still writes, just coarsely)."""
-    ident = await _ident_for(ctx)
+    ident = await _ident_for(ctx, anchor)
     return ident.agent_id if ident else "session"
 
 
@@ -1145,7 +1167,8 @@ async def _project_briefing(
 
 @mcp.tool()
 async def orient(project: str | None = None, subagent_id: str | None = None,
-                 subagent_type: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
+                 subagent_type: str | None = None, session_anchor: str | None = None,
+                 ctx: Context | None = None) -> dict[str, Any]:
     """Get your bearings — the mount ritual as one call. Returns a SCOPED briefing: open
     threads + recent decisions for a project, plus a count of fleet-wide threads not shown.
     An explicit `project` OVERRIDES your mount (so you can peek at another repo's briefing);
@@ -1153,7 +1176,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
     Call after mount(), and again after any compaction, to inherit instead of starting blind."""
     pool = await _pool_get()
     lease = get_settings().osiris_mail_lease_secs
-    ident = await _ident_for(ctx)
+    ident = await _ident_for(ctx, session_anchor)
     proj = project or (ident.project if ident else None)  # explicit scope overrides the mount
     who = ident.agent_id if ident else "session (un-mounted — call mount(cwd) first)"
     reader = ident.agent_id if ident else (proj or "")
@@ -1434,8 +1457,9 @@ async def fleet(full: bool = False) -> dict[str, Any]:
 @mcp.tool()
 async def send(body: str, to: str | None = None, to_agent: str | None = None,
                reply_to: int | None = None, desk: str | None = None,
-               subagent_id: str | None = None,
-               subagent_type: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
+               subagent_id: str | None = None, subagent_type: str | None = None,
+               session_anchor: str | None = None,
+               ctx: Context | None = None) -> dict[str, Any]:
     """Message the fleet. TWO channels: `to`=<project> is a BROADCAST — the group chat, seen by
     every agent working that project (`to='operator'` reaches the HUMAN's desk); `to_agent`=
     <agent:id> is a DM — a private message to one specific agent (find ids in orient()/fleet).
@@ -1448,7 +1472,7 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     act) | 'fyi' (loop-closed status). The desk renders in those bands; an unclassified brief
     gets a heuristic guess. Same topic as an earlier brief of yours → reply_to it (the desk
     thread-folds superseded briefs under your newest)."""
-    ident = await _ident_for(ctx)
+    ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a message must say who "
                          "it's from (the anchor re-attaches you automatically after a bounce)",
@@ -1515,7 +1539,8 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
 @mcp.tool()
 async def inbox(project: str | None = None, peek: bool = False,
                 ack: list[int] | None = None, subagent_id: str | None = None,
-                subagent_type: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
+                subagent_type: str | None = None, session_anchor: str | None = None,
+                ctx: Context | None = None) -> dict[str, Any]:
     """Read messages other agents left for you (the fleet mailbox). Defaults to YOUR mounted
     project; pass `project` to read another's (project='operator' reads the human's desk).
     Reading LEASES a message, it does NOT consume it: SETTLE each one you've handled — reply
@@ -1526,10 +1551,14 @@ async def inbox(project: str | None = None, peek: bool = False,
     at project='operator' ONLY with peek; settle it ONLY at the human's explicit word (the
     desk count means "briefs the operator hasn't dismissed" — an agent consuming it silently
     would blind the one lane that exists for the human)."""
-    ident = await _ident_for(ctx)
+    ident = await _ident_for(ctx, session_anchor)
     proj = project or (ident.project if ident else None)
     if proj is None:
-        return {"error": "mount(cwd, job_dir=<your anchor>) first, or pass project=<repo>"}
+        # THIS is the bounce that hit Thoth XXVIII tonight — twice — and it carried no diagnostic
+        # at all, which is precisely why four seats independently filed it as "transient" and
+        # nobody chased it for a week.
+        return {"error": "mount(cwd, job_dir=<your anchor>) first, or pass project=<repo>",
+                "why": _anchorless(ctx)}
     pool = await _pool_get()
     st = get_settings()
     # a SPAWN reads over its parent's shoulder: PEEK only. It must never LEASE the seat's
@@ -1635,7 +1664,8 @@ async def record_decision(
     repo: str | None = None, grounds: list[str] | None = None,
     protocol: str | None = None, supersedes: str | None = None,
     resolves: str | None = None, subagent_id: str | None = None,
-    subagent_type: str | None = None, ctx: Context | None = None,
+    subagent_type: str | None = None, session_anchor: str | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Write back a DECISION you made this session — a ruling, an architecture pivot, a
     deliberate rejection — so the WHY becomes durable graph memory the next session inherits
@@ -1741,7 +1771,7 @@ async def ingest_reference(
 @mcp.tool()
 async def open_thread(
     summary: str, repo: str | None = None, kind: str | None = None,
-    owner: str | None = None,
+    owner: str | None = None, session_anchor: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, str]:
@@ -1764,7 +1794,8 @@ async def open_thread(
 @mcp.tool()
 async def resolve_thread(
     ref: str, because: str | None = None, subagent_id: str | None = None,
-    subagent_type: str | None = None, ctx: Context | None = None
+    subagent_type: str | None = None, session_anchor: str | None = None,
+    ctx: Context | None = None
 ) -> dict[str, str]:
     """Close a THREAD you (or an earlier session) resolved — `ref` is its UUID or a summary
     substring; `because` records why. It leaves briefing's open list and joins the resolved

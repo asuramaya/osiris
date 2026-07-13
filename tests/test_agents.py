@@ -778,10 +778,22 @@ def test_an_anchorless_bounce_names_its_own_cause() -> None:
         def __init__(self, hdr: dict[str, str]) -> None:
             self.request_context = type("RC", (), {"request": _Req(hdr)})()
 
-    assert "NO X-Osiris-Job header" in _anchorless(_Ctx({}))
-    assert "CLAUDE_JOB_DIR is unset" in _anchorless(_Ctx({}))
-    # the literal, unexpanded variable — a client that never substituted it
+    # TRANSIENT OR TERMINAL — Khepri III's ask (msg 420), and the fourth seat to file this bug:
+    # "a reason code would let an agent tell 'transient, just retry' from 'something actually
+    # forgot me'." A bounce that says only "mount first" is INDISTINGUISHABLE FROM AMNESIA, so
+    # every agent guesses — and a guessing agent either re-mounts needlessly, or panics about
+    # continuity it never lost. These are DIFFERENT FACTS.
+    none = _anchorless(_Ctx({}))
+    assert "[no-anchor · TRANSIENT]" in none
+    assert "CLAUDE_JOB_DIR is unset" in none
+    assert "NOTHING HAS FORGOTTEN YOU" in none      # the sentence four seats needed to read
+
     unexpanded = _anchorless(_Ctx({"x-osiris-job": "${CLAUDE_JOB_DIR}"}))
-    assert "UNEXPANDED" in unexpanded and "not set" in unexpanded
-    # a real anchor that simply isn't registered is a DIFFERENT failure, and says so
-    assert "matches no mount" in _anchorless(_Ctx({"x-osiris-job": "/home/x/.claude/jobs/abc"}))
+    assert "[unexpanded-anchor · TRANSIENT]" in unexpanded and "not set" in unexpanded
+    assert "Nothing has forgotten you" in unexpanded
+
+    # a real anchor that simply is not registered is a DIFFERENT failure — and it is the REAL one
+    terminal = _anchorless(_Ctx({"x-osiris-job": "/home/x/.claude/jobs/abc"}))
+    assert "[unknown-anchor · TERMINAL]" in terminal
+    assert "matches no mount" in terminal
+    assert "do not simply retry" in terminal
