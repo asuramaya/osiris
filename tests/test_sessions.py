@@ -457,24 +457,28 @@ async def test_obligation_lands_as_open_thread_and_surfaces_in_briefing(
     assert status == "open"
 
 
-def test_worker_registers_the_sensing_cron() -> None:
-    """The liveness lesson: a capability nothing schedules is a shelf ornament."""
+def test_MINING_IS_SUMMONED_NEVER_WALKING() -> None:
+    """THE CRAWL IS GONE, and its absence is the design (B6, ruling ceae1604).
+
+    The old law here was "a capability nothing schedules is a shelf ornament", and it was half
+    right. A capability that schedules ITSELF, against a world that never stops growing, is a
+    LEAK. The miner walked every transcript in the fleet every ten minutes, forever, paying a
+    `claude -p` per chunk: 3,579 rows, 10.5% ever used, $40, and a worker wedged at its memory cap.
+
+    Worse, the crawl's SHAPE was the bug. It read a growing file FORWARD, in byte-chunks, with a
+    cursor and no memory — minting the question from an early chunk and NEVER SEEING THE ANSWER
+    that arrived forty minutes later. It cannot do otherwise while it crawls.
+
+    So mining is now SUMMONED: `sweep_session` fires at the death rite, against the ONE dying
+    transcript, read WHOLE. This test guards the absence — if a cron ever schedules the miner
+    again, someone has quietly rebuilt the leak.
+    """
     from src.workers.arq_worker import WorkerSettings
 
     names = {c.coroutine.__name__ for c in WorkerSettings.cron_jobs}
-    assert "sense_sessions" in names
-
-
-def test_sensing_cron_timeout_is_explicit_and_under_the_cadence() -> None:
-    """A saturated tick is ~3 extract calls at 50-90s each: arq's default 300s was one
-    slow call from death (the 2026-07-10 timeout). The timeout must be CHOSEN, and it
-    must stay under the 600s cadence so two ticks never mine the same cursors at once."""
-    from src.workers.arq_worker import WorkerSettings
-
-    sense = next(c for c in WorkerSettings.cron_jobs
-                 if c.coroutine.__name__ == "sense_sessions")
-    assert sense.timeout_s is not None, "the tick must not ride arq's default timeout"
-    assert 300 < sense.timeout_s < 600
+    assert "sense_sessions" not in names, "the miner must never walk again — it is summoned"
+    assert "sweep_session" in {f.__name__ for f in WorkerSettings.functions}, \
+        "...but the death rite must still be able to summon it"
 
 
 # --- source model as provenance (the probe) --------------------------------------------

@@ -148,7 +148,21 @@ def _verdict(last_ok: datetime | None, every: int, now: datetime) -> tuple[str, 
     return "ok", age
 
 
-async def organ_health(pool: asyncpg.Pool) -> list[dict[str, Any]]:
+def scheduled_jobs() -> set[str]:
+    """The crons that ACTUALLY run right now — imported lazily so the read path never depends on
+    the worker being importable. Empty set = "I could not ask", and the caller then trusts the
+    watermarks rather than silently hiding a sick organ (fail-loud, not fail-quiet)."""
+    try:
+        from src.workers.arq_worker import WorkerSettings
+        return {n for c in WorkerSettings.cron_jobs
+                if (n := getattr(c.coroutine, "__name__", ""))}
+    except Exception:  # pragma: no cover — arq missing in a satellite/read-only deploy
+        return set()
+
+
+async def organ_health(
+    pool: asyncpg.Pool, *, scheduled: set[str] | None = None,
+) -> list[dict[str, Any]]:
     """THE READ SIDE — every job's vitals, computed now, by you, from what it last stamped.
 
     Returns one row per job, worst first, so a caller can `[o for o in organs if o["down"]]` and
@@ -157,9 +171,18 @@ async def organ_health(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     """
     rows = await pool.fetch(
         "SELECT key, cursor FROM watermarks WHERE key LIKE $1", f"{_JOB_PREFIX}%")
+    live = scheduled_jobs() if scheduled is None else scheduled
     now = datetime.now(UTC)
     organs: list[dict[str, Any]] = []
     for r in rows:
+        job = r["key"][len(_JOB_PREFIX):]
+        # AN ORGAN THAT IS NO LONGER SCHEDULED IS NOT AN ORGAN. A watermark row outlives the job
+        # that wrote it, so a DECOMMISSIONED cron (the session-miner's crawl, killed in ceae1604)
+        # would sit here reading "down" forever and nag the operator at every prompt about a
+        # capability we deliberately removed. THE SCHEDULE IS THE SOURCE OF TRUTH, never the
+        # residue. An alarm that is always on is an alarm nobody reads.
+        if live and job not in live:
+            continue
         try:
             blob = json.loads(r["cursor"] or "{}")
         except json.JSONDecodeError:
@@ -185,7 +208,15 @@ async def organ_health(pool: asyncpg.Pool) -> list[dict[str, Any]]:
 
 def health_banner(organs: list[dict[str, Any]]) -> str | None:
     """One line, or None when the body is well. The line a mind reads at mount, and the operator
-    reads at every prompt: WHAT stopped, and HOW LONG AGO it last worked."""
+    reads at every prompt: WHAT stopped, and HOW LONG AGO it last worked.
+
+    THE BANNER MUST NOT OVERSTATE. It used to end "the graph is not forming memory" — written when
+    the only organ that could plausibly die was the session-miner's crawl. That crawl is gone
+    (ceae1604) and memory now forms through DELIBERATE CAPTURE, which no cron can break. A banner
+    that cries "you have lost your memory" because the semantic index is late is the same crime as
+    everything else we killed this week: a claim wearing more authority than the evidence supports.
+    So it names WHAT stopped and lets the reader judge the blast radius.
+    """
     sick = [o for o in organs if o["down"]]
     if not sick:
         return None
@@ -194,9 +225,10 @@ def health_banner(organs: list[dict[str, Any]]) -> str | None:
         when = "never ran" if o["verdict"] == "never" else f"last ok {_ago(o['age_secs'])}"
         parts.append(f"{o['job']} ({when})")
     more = f" +{len(sick) - 3} more" if len(sick) > 3 else ""
-    return ("⚠ OSIRIS IS NOT SENSING — " + ", ".join(parts) + more
-            + ". The graph is not forming memory while this is true; nothing auto-restarts it "
-              "(Osiris has no hands). Check: systemctl --user status osiris-worker")
+    return ("⚠ AN OSIRIS ORGAN HAS STOPPED — " + ", ".join(parts) + more
+            + ". Deliberate capture (record_decision / open_thread) still works — it does not "
+              "ride a cron. Nothing auto-restarts this (Osiris has no hands over your systems). "
+              "Check: systemctl --user status osiris-worker")
 
 
 def _ago(secs: float | None) -> str:

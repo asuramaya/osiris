@@ -298,12 +298,24 @@ class WorkerSettings:
         cron(watched(reap_runs, every=300), minute=set(range(0, 60, 5)), run_at_startup=True),
         # liveness heartbeat every 30s (the dead-man's-switch /health/worker reads).
         cron(watched(heartbeat, every=30), second={0, 30}, run_at_startup=True),
-        # session-sensing every 10 min (a few LLM calls max per tick; no-op when unset).
-        # timeout is EXPLICIT and under the cadence: a saturated tick is 3 extract calls
-        # at ~50-90s each — arq's default 300s was one slow call from death, and 540 < 600
-        # structurally forbids two ticks mining the same cursors concurrently.
-        cron(watched(sense_sessions, every=600), minute=set(range(0, 60, 10)), second={30},
-             timeout=540),
+        # THE CRAWL IS GONE (B6 of ruling ceae1604). There is no session-sensing cron, and its
+        # absence is the design, not an omission.
+        #
+        # The miner used to walk EVERY transcript in the fleet every ten minutes, forever, paying
+        # a `claude -p` per chunk. It read a GROWING file FORWARD, in byte-chunks, with a cursor
+        # and NO MEMORY — so it minted a question from an early chunk and NEVER SAW THE ANSWER
+        # that landed forty minutes later. That one property produced ECHO (no memory of what it
+        # already minted: the worker-wedge was minted THREE TIMES from three chunks of the very
+        # conversation diagnosing it) and STALE (never sees the resolution). 3,579 rows, 10.5%
+        # ever used, $40, and a wedged worker.
+        #
+        # MINING IS NOW SUMMONED, NEVER WALKING: `sweep_session` fires at the DEATH RITE
+        # (PreCompact / Stop / settle) against ONE transcript — the dying one — read WHOLE, so it
+        # can finally see a thing raised and closed. Cost is proportional to sessions that
+        # actually END, not to wall-clock times every transcript that has ever existed.
+        #
+        # A capability nothing schedules used to be a shelf ornament. A capability that schedules
+        # ITSELF, against a world that never stops growing, is a leak.
         # the semantic index walks behind the miner (offset so they never contend for CPU):
         # fresh text is embedded within ~10 minutes of landing; unchanged graphs cost nothing
         cron(watched(embed_pass, every=600), minute=set(range(5, 60, 10)), second={15},

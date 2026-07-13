@@ -19,6 +19,7 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import asyncpg
+from src.actions.core import Actions
 from src.orchestrator.monitor import (
     health_banner,
     organ_health,
@@ -43,7 +44,7 @@ async def _stamp(pool: asyncpg.Pool, job: str, *, every: int, last_ok: datetime 
 
 async def test_a_healthy_body_says_nothing(actions) -> None:  # type: ignore[no-untyped-def]
     """Silence when well is the whole design: an alarm that is always lit is wallpaper."""
-    await record_job(actions.pool, "sense_sessions", every=600, secs=12.0)
+    await record_job(actions.pool, "embed_pass", every=600, secs=12.0)
     organs = await organ_health(actions.pool)
     assert [o["verdict"] for o in organs] == ["ok"]
     assert health_banner(organs) is None
@@ -52,15 +53,20 @@ async def test_a_healthy_body_says_nothing(actions) -> None:  # type: ignore[no-
 async def test_a_job_down_for_hours_is_named_and_timed(actions) -> None:  # type: ignore[no-untyped-def]
     """The exact outage: ten hours of failing ten-minute ticks."""
     now = datetime.now(UTC)
-    await _stamp(actions.pool, "sense_sessions", every=600, last_ok=now - timedelta(hours=10),
+    await _stamp(actions.pool, "embed_pass", every=600, last_ok=now - timedelta(hours=10),
                  error="RuntimeError('no LLM provider for session-sensing')")
     organs = await organ_health(actions.pool)
     sick = [o for o in organs if o["down"]]
-    assert [o["job"] for o in sick] == ["sense_sessions"]
+    assert [o["job"] for o in sick] == ["embed_pass"]
     banner = health_banner(organs)
     assert banner is not None
-    assert "sense_sessions" in banner and "10h ago" in banner
-    assert "not forming memory" in banner
+    assert "embed_pass" in banner and "10h ago" in banner
+    # THE BANNER MUST NOT OVERSTATE. It used to end "the graph is not forming memory" —
+    # true only of the miner's crawl, which no longer exists. Deliberate capture rides
+    # no cron and cannot be broken by one; claiming otherwise is the same crime as
+    # everything else we killed this week.
+    assert "not forming memory" not in banner
+    assert "Deliberate capture" in banner and "still works" in banner
     assert "no hands" in banner       # it SURFACES; it never restarts anything
 
 
@@ -70,12 +76,12 @@ async def test_a_live_worker_does_not_vouch_for_a_dead_job(actions) -> None:  # 
     the graph went blind, which is why vitals are per-JOB."""
     await write_heartbeat(actions.pool)                                  # worker: alive, healthy
     await record_job(actions.pool, "heartbeat", every=30, secs=0.01)     # its own cron: fine
-    await _stamp(actions.pool, "sense_sessions", every=600,
+    await _stamp(actions.pool, "embed_pass", every=600,
                  last_ok=datetime.now(UTC) - timedelta(hours=10), error="boom")
     organs = await organ_health(actions.pool)
     by_job = {o["job"]: o for o in organs}
     assert by_job["heartbeat"]["verdict"] == "ok"       # the process is beating...
-    assert by_job["sense_sessions"]["down"]             # ...and the memory has still stopped
+    assert by_job["embed_pass"]["down"]             # ...and an organ has still stopped
     assert health_banner(organs) is not None
 
 
@@ -100,8 +106,8 @@ async def test_late_is_not_dead(actions) -> None:  # type: ignore[no-untyped-def
 async def test_a_failure_does_not_erase_when_it_last_worked(actions) -> None:  # type: ignore[no-untyped-def]
     """'Down 4 minutes' and 'down ten hours' are different emergencies — a failure records the
     error WITHOUT clearing last_ok, or the reader cannot tell them apart."""
-    await record_job(actions.pool, "sense_sessions", every=600, secs=9.0)
-    await record_job(actions.pool, "sense_sessions", every=600, secs=1.0, error="claude CLI exit 1")
+    await record_job(actions.pool, "embed_pass", every=600, secs=9.0)
+    await record_job(actions.pool, "embed_pass", every=600, secs=1.0, error="claude CLI exit 1")
     organs = await organ_health(actions.pool)
     o = organs[0]
     assert o["last_ok"] is not None            # we still know when it last truly worked
@@ -111,9 +117,10 @@ async def test_a_failure_does_not_erase_when_it_last_worked(actions) -> None:  #
 
 
 async def test_the_seam_records_a_failure_the_job_tried_to_hide(actions) -> None:  # type: ignore[no-untyped-def]
-    """THE ROOT CAUSE, guarded. sense_sessions used to catch its own exception, log a warning
-    nobody reads, and `return 0` — which is indistinguishable from a clean tick with nothing to
-    mine. It looked green for ten hours.
+    """THE ROOT CAUSE, guarded. The SESSION-MINER used to catch its own exception, log a warning
+    nobody reads, and `return 0` — indistinguishable from a clean tick with nothing to mine. It
+    looked green for ten hours. (Its cron is gone now, killed in ceae1604, so the specimen below
+    is a synthetic job; the disease it carries is the miner's.)
 
     Error handling now lives in the `watched` seam, not in the jobs, so a job CANNOT swallow its
     own failure and still be counted alive. A cron added next year inherits this without its
@@ -128,7 +135,9 @@ async def test_the_seam_records_a_failure_the_job_tried_to_hide(actions) -> None
     out = await watched(a_job_that_hides_its_error, every=600)(ctx)
 
     assert out == 0                            # the cron survives — a hiccup never kills it
-    organs = await organ_health(actions.pool)  # ...but the failure is ON THE RECORD
+    # a SYNTHETIC job is not in the live schedule, so we name it explicitly — the filter that
+    # hides decommissioned crons must not also hide a job a test deliberately invented.
+    organs = await organ_health(actions.pool, scheduled={"a_job_that_hides_its_error"})
     o = next(x for x in organs if x["job"] == "a_job_that_hides_its_error")
     assert o["verdict"] == "never"             # it has never once succeeded
     assert o["down"] and "no LLM provider" in o["last_error"]
@@ -143,5 +152,36 @@ async def test_the_seam_records_success_without_touching_the_result(actions) -> 
 
     ctx = {"cascade": type("C", (), {"actions": actions})()}
     assert await watched(a_good_job, every=60)(ctx) == 7
-    organs = await organ_health(actions.pool)
+    organs = await organ_health(actions.pool, scheduled={"a_good_job"})   # synthetic: named
     assert next(x for x in organs if x["job"] == "a_good_job")["verdict"] == "ok"
+
+
+async def test_a_DECOMMISSIONED_organ_stops_nagging_forever(actions: Actions) -> None:
+    """AN ORGAN THAT IS NO LONGER SCHEDULED IS NOT AN ORGAN.
+
+    A watermark row OUTLIVES the job that wrote it. When we killed the session-miner's crawl
+    (ceae1604), its `job:sense_sessions` row stayed behind — last_ok frozen at the moment it
+    died — so organ_health would have read it as DOWN forever and nagged the operator at every
+    single prompt about a capability we deliberately removed.
+
+    The schedule is the source of truth; the watermark is only residue. An alarm that is always
+    on is an alarm nobody reads.
+    """
+    from src.orchestrator import monitor
+
+    await record_job(actions.pool, "heartbeat", every=30, secs=0.01)
+    await record_job(actions.pool, "sense_sessions", every=600, secs=1.0)   # the ghost
+
+    organs = await organ_health(actions.pool)
+    jobs = {o["job"] for o in organs}
+    assert "heartbeat" in jobs
+    assert "sense_sessions" not in jobs, "a job we deleted must not haunt the health banner"
+
+    # ...and if we CANNOT ask the schedule, we trust the watermarks rather than hide a sick organ
+    saved = monitor.scheduled_jobs
+    monitor.scheduled_jobs = lambda: set()          # type: ignore[assignment]
+    try:
+        organs = await organ_health(actions.pool)
+    finally:
+        monitor.scheduled_jobs = saved              # type: ignore[assignment]
+    assert "sense_sessions" in {o["job"] for o in organs}, "fail LOUD, never quiet"
