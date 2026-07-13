@@ -264,7 +264,47 @@ async def adversary_yield(
     if judged:
         out["yield"] = round(admitted / judged, 3)
         out["reads"] = ("admitted ÷ judged — the adversary's LICENCE. Osiris's own first pass "
-                        "scored 0.098 (26 of 264). Below a floor, it does not get to spend.")
+                        "scored 0.098 (26 of 264). Below the floor, it does not get to spend.")
     else:
         out["reads"] = "nothing judged in this window — the seam has not been walked"
     return out
+
+
+# THE FLOOR. Below this measured rate of use, the adversary is not earning its tokens and loses
+# the right to spend them. Chosen, not tuned: the crawl scored 0.098 over its whole life, so a
+# floor of 0.15 says "beat what the thing we deleted managed, or stop." It is deliberately LOW —
+# this is a circuit breaker for a producer that has gone bad, not a performance target.
+YIELD_FLOOR = 0.15
+
+# ...and it cannot fire before there is anything to measure. A producer must be given a real
+# sample before it is judged, or the first unlucky session kills it. (The same courtesy the
+# WALL now extends to a guess: judged on evidence, never on suspicion.)
+LICENCE_MIN_JUDGED = 40
+
+
+async def licence(pool: asyncpg.Pool, *, days: int = 30) -> dict[str, Any]:
+    """MAY THE ADVERSARY SPEND? — the check that runs BEFORE it is allowed to call a model.
+
+    THIS IS THE FIX FOR THE ACTUAL ROOT CAUSE, and it is worth being blunt about why. The miner's
+    tick reported {"chunks": 12, "threads": 8} — WHAT IT MADE, never WHAT WAS USED. So a
+    90%-garbage producer and a 90%-gold producer emitted IDENTICAL telemetry, and neither the
+    operator, nor the miner, nor any mind reading the graph could tell them apart. It drifted to
+    garbage for eight days and $40 and NOTHING ANYWHERE COULD NOTICE. A producer that cannot be
+    falsified will rot — not might, WILL, because nothing is pushing back.
+
+    So the meter is not a dashboard. It is a GATE. Below the floor, the adversary does not run.
+
+    Fail-OPEN on an unmeasurable state (no data yet, or a broken query): a metering bug must never
+    silently disable the memory. It fails LOUD instead — `reason` says exactly why it is open.
+    """
+    m = await adversary_yield(pool, days=days)
+    judged, rate = int(m["judged"]), m.get("yield")
+    if judged < LICENCE_MIN_JUDGED:
+        return {"may_spend": True, "reason": f"only {judged} rows judged in {days}d — a producer "
+                f"is given a real sample ({LICENCE_MIN_JUDGED}) before it is judged", **m}
+    if rate is not None and rate < YIELD_FLOOR:
+        return {"may_spend": False, "reason": f"YIELD {rate} IS BELOW THE FLOOR ({YIELD_FLOOR}) "
+                f"over {judged} judged rows in {days}d — the adversary is not earning its tokens "
+                "and has lost the right to spend them. Fix its prompt, or leave it dark. Nothing "
+                "auto-restarts it (Osiris has no hands over your systems).", **m}
+    return {"may_spend": True, "reason": f"yield {rate} clears the floor ({YIELD_FLOOR})", **m}

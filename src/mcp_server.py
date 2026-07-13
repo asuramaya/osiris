@@ -12,6 +12,7 @@ Actions layer.
 
 from __future__ import annotations
 
+import contextlib
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -1236,6 +1237,21 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         organs: str | None = health_banner(await organ_health(pool))
     except Exception:  # noqa: BLE001
         organs = None
+    # THE ADVERSARY'S PILE AND ITS LICENCE. A gate nobody can see is a gate nobody trusts, and the
+    # whole root cause was that nothing surfaced whether the producer's output was ever USED. So
+    # the seat sees its own undisposed pile, and — when the adversary has spent itself out of a
+    # licence — the number that took it away.
+    seam: dict[str, Any] = {}
+    with contextlib.suppress(Exception):
+        pile = await dispose_seam.candidates(pool, project=proj, limit=0) if proj else None
+        if pile and pile["count"]:
+            seam["your_pile"] = (
+                f"{pile['count']} miner candidates on {proj} that no mind has judged. They are "
+                "GUESSES, not duties — candidates() to read, dispose() to settle. Nobody else has "
+                "standing to judge your project's pile.")
+        lic = await dispose_seam.licence(pool)
+        if not lic["may_spend"]:
+            seam["adversary_refused"] = lic["reason"]
     # the reader's identity feeds the wall's ownership ordering: what is MINE TO ACT rides
     # above another mind's claims and above 'waiting on the human'
     me = frozenset(x for x in ((ident.agent_id if ident else None), proj) if x)
@@ -1249,6 +1265,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         return {
             "you": who, "model": (ident.model if ident else None), "project": proj,
             **({"osiris_health": organs} if organs else {}),
+            **seam,
             **(await seat_bearings(pool, who) if who else {}),
             "mail": mail,
             **({"fleet_pulse": pulse} if pulse else {}),
@@ -1295,6 +1312,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         **({"co_agents": co_agents} if co_agents else {}),
         **({"while_you_were_away": away} if away else {}),
         **({"osiris_health": organs} if organs else {}),
+        **seam,
         "fleet_map": fleet_map,
         "recent_decisions": recent,
         "note": "un-mounted → the BOUNDED fleet map, never the firehose. mount(cwd, "

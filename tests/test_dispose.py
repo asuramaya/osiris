@@ -153,3 +153,65 @@ async def test_disposing_twice_is_a_no_op_never_a_double_retraction(actions: Act
     again = await dispose(actions, source=SEAT, drop=[{"id": str(t)[:8], "why": "echo"}])
     assert first["dropped"] == 1
     assert again["dropped"] == 0 and "not a candidate" in again["skipped"][0]["why"]
+
+
+# --- THE LICENCE (B5) — the meter is not a dashboard, it is a GATE ------------------------
+
+async def _judged(actions: Actions, *, admit: int, drop: int) -> None:
+    """Walk the seam `admit` + `drop` times, so the meter has a real sample to read."""
+    for i in range(admit):
+        t = await _mined(actions, f"thread:a{i}", f"a real loose end {i}")
+        await dispose(actions, source=SEAT,
+                      admit=[{"id": str(t)[:8], "because": "real, and nobody wrote it down"}])
+    for i in range(drop):
+        t = await _mined(actions, f"thread:d{i}", f"work-step {i}")
+        await dispose(actions, source=SEAT, drop=[{"id": str(t)[:8], "why": "narration"}])
+
+
+async def test_a_producer_BELOW_THE_FLOOR_LOSES_THE_RIGHT_TO_SPEND(actions: Actions) -> None:
+    """THE FIX FOR THE ACTUAL ROOT CAUSE.
+
+    The miner's tick reported {"chunks": 12, "threads": 8} — WHAT IT MADE, never WHAT WAS USED.
+    So a 90%-garbage producer and a 90%-gold producer emitted IDENTICAL telemetry, and nobody —
+    not the operator, not the miner, not any mind reading the graph — could tell them apart. It
+    drifted to garbage for eight days and $40 and NOTHING ANYWHERE COULD NOTICE.
+
+    A producer that cannot be falsified will rot. Not might: WILL, because nothing pushes back.
+    So the meter is a GATE, and this is it closing.
+    """
+    from src.orchestrator.dispose import YIELD_FLOOR, licence
+
+    await _judged(actions, admit=4, drop=46)          # yield 0.08 — the crawl's own lifetime score
+    lic = await licence(actions.pool)
+    assert lic["yield"] == 0.08 and lic["yield"] < YIELD_FLOOR
+    assert lic["may_spend"] is False
+    assert "BELOW THE FLOOR" in lic["reason"]
+    assert "no hands" in lic["reason"]                # it refuses; it never restarts itself
+
+
+async def test_a_producer_that_EARNS_ITS_TOKENS_keeps_spending(actions: Actions) -> None:
+    """The gate is a circuit breaker for a producer gone bad, not a performance target. An
+    adversary that beats the thing we deleted keeps its licence."""
+    from src.orchestrator.dispose import licence
+
+    await _judged(actions, admit=20, drop=30)         # yield 0.4
+    lic = await licence(actions.pool)
+    assert lic["may_spend"] is True and lic["yield"] == 0.4
+
+
+async def test_the_gate_cannot_fire_before_there_is_ANYTHING_TO_MEASURE(actions: Actions) -> None:
+    """A producer is given a real sample before it is judged, or one unlucky session kills it —
+    the same courtesy the wall now extends to a guess: judged on EVIDENCE, never on suspicion.
+
+    And it fails OPEN: a metering bug must never silently disable the memory. It says WHY.
+    """
+    from src.orchestrator.dispose import LICENCE_MIN_JUDGED, licence
+
+    lic = await licence(actions.pool)                 # nothing judged at all
+    assert lic["may_spend"] is True and lic["judged"] == 0
+    assert "given a real sample" in lic["reason"]
+
+    await _judged(actions, admit=0, drop=5)           # yield 0.0 — but only 5 rows
+    lic = await licence(actions.pool)
+    assert lic["judged"] < LICENCE_MIN_JUDGED
+    assert lic["may_spend"] is True, "a 0% yield over 5 rows is noise, not a verdict"

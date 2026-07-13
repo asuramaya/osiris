@@ -51,6 +51,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import logging
 import re
 import uuid
 from collections.abc import Iterable
@@ -70,10 +71,12 @@ from src.ingest.providers import LLMClient, Usage, llm_provider
 from src.ingest.redact import credential_shaped, redact
 from src.ingest.usage import record_usage, usage_summary
 from src.orchestrator.capture import link_repo
+from src.orchestrator.dispose import licence
 from src.orchestrator.monitor import get_cursor, set_cursor
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
+_log = logging.getLogger("osiris.adversary")
 _SOURCE = "session-miner"
 _EC = EvidenceClass.DERIVED.value  # an LLM reading of a conversation is an inference
 _CONF = confidence_for(EvidenceClass.DERIVED)
@@ -1201,6 +1204,17 @@ async def adversary_pass(
                            "ANTHROPIC_API_KEY")
     model = model or get_settings().osiris_extract_model
     report = {"proposed": 0, "resolved": 0, "skipped_dup": 0, "skipped_foreign": 0}
+
+    # THE LICENCE, CHECKED BEFORE A SINGLE TOKEN IS SPENT. Its measured rate of use is its right
+    # to run: a producer whose telemetry counted what it MADE rather than what was USED drifted to
+    # garbage for eight days and $40 with nothing anywhere able to notice. The meter is not a
+    # dashboard. It is a gate.
+    lic = await licence(actions.pool)
+    if not lic["may_spend"]:
+        report["refused"] = 1
+        report["why"] = lic["reason"]
+        _log.warning("the adversary is refusing to spend: %s", lic["reason"])
+        return report
 
     if await asyncio.to_thread(_is_wake_spawn, path):
         report["skipped_wake"] = 1     # Osiris's own alarm clock: its chatter was never knowledge
