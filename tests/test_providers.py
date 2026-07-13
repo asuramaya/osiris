@@ -7,8 +7,10 @@ model is deferred (needs a key), exactly like the extractor.
 """
 from __future__ import annotations
 
+import asyncio
 import stat
 from pathlib import Path
+from typing import Any
 
 import pytest
 from src.config.settings import Settings
@@ -66,6 +68,82 @@ async def test_claude_cli_client_raises_on_error(tmp_path: Path) -> None:
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
     with pytest.raises(RuntimeError, match="claude CLI error"):
         await ClaudeCliClient(binary=str(fake)).complete(system="s", prompt="p", model="m")
+
+
+def _hangs(tmp_path: Path) -> Path:
+    """A `claude` that never returns — the shape of a wedged CLI call."""
+    fake = tmp_path / "claude"
+    fake.write_text("#!/bin/sh\nsleep 30\n")
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    return fake
+
+
+def _spy(monkeypatch: pytest.MonkeyPatch) -> tuple[list[Any], asyncio.Event]:
+    """Capture the Process objects the client spawns, so a test can ask: did it DIE?
+
+    The Event fires the moment a child is out the door — a test waits on THAT, never on a
+    sleep, so it cancels at the exact instant the hand is extended."""
+    import src.ingest.providers as prov
+    spawned: list[Any] = []
+    out_the_door = asyncio.Event()
+    real = prov.asyncio.create_subprocess_exec
+
+    async def watched(*a: Any, **k: Any) -> Any:
+        proc = await real(*a, **k)
+        spawned.append(proc)
+        out_the_door.set()
+        return proc
+
+    monkeypatch.setattr(prov.asyncio, "create_subprocess_exec", watched)
+    return spawned, out_the_door
+
+
+async def test_a_timed_out_extractor_is_KILLED_not_abandoned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE LEAK THAT WEDGED THE WORKER. `await proc.communicate()` had no timeout: a hung CLI
+    call held an arq slot AND 290MB forever. Now the call dies — and takes its child with it."""
+    spawned, _ = _spy(monkeypatch)
+    client = ClaudeCliClient(binary=str(_hangs(tmp_path)), timeout=0.3)
+    with pytest.raises(TimeoutError):
+        await client.complete(system="s", prompt="p", model="m")
+    assert len(spawned) == 1
+    assert spawned[0].returncode is not None, "the extractor outlived the call that spawned it"
+
+
+async def test_a_CANCELLED_extractor_is_KILLED_not_abandoned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one that actually happened: arq's timeout CANCELS the tick, and CancelledError is not
+    an Exception. The old code caught nothing, so the `claude -p` kept running — and kept
+    BILLING — long after the job that owned it was dead. Osiris must be able to close its hand."""
+    spawned, out_the_door = _spy(monkeypatch)
+    client = ClaudeCliClient(binary=str(_hangs(tmp_path)), timeout=30)
+    task = asyncio.create_task(client.complete(system="s", prompt="p", model="m"))
+    await out_the_door.wait()               # the child is running; NOW pull the rug
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert spawned[0].returncode is not None, "a cancelled call abandoned a live, billing child"
+
+
+async def test_only_ONE_extractor_is_ever_alive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """10 × 290MB into a 2G cgroup is not a race condition, it is arithmetic. arq will happily
+    run ten jobs at once; the gate is what stops ten subprocesses from existing at once."""
+    import src.ingest.providers as prov
+    monkeypatch.setattr(prov, "_CLI_GATE", asyncio.Semaphore(1))  # fresh gate per test
+    log = tmp_path / "log"
+    fake = tmp_path / "claude"
+    fake.write_text(f'#!/bin/sh\necho + >> {log}\nsleep 0.15\necho - >> {log}\n'
+                    f'echo \'{{"result":"ok","is_error":false}}\'\n')
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    client = ClaudeCliClient(binary=str(fake))
+    await asyncio.gather(*(client.complete(system="s", prompt=str(i), model="m")
+                           for i in range(3)))
+    marks = log.read_text().split()
+    assert marks == ["+", "-", "+", "-", "+", "-"], f"extractors overlapped: {marks}"
 
 
 def test_vision_provider_resolves_from_config() -> None:

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import shutil
@@ -29,6 +30,35 @@ from src.config.settings import Settings, get_settings
 
 _ANTHROPIC = "https://api.anthropic.com"
 _VERSION = "2023-06-01"
+
+# THE HANDS. The constitution says Osiris has NO HANDS — and that stopped being true the day
+# someone gave it a subprocess. A `claude -p` is a real process, ~290MB, spending real money,
+# and until now Osiris could not RETRACT one: `await proc.communicate()` had no timeout and no
+# kill-on-cancel, so an arq timeout ABANDONED a live extractor that kept running and kept
+# billing. Ten of them wedged the worker against its 2G cap and starved every other cron —
+# including the health telemetry that would have said so.
+#
+# Two guards, both load-bearing:
+#   _CLI_GATE   ONE extractor alive, worker-wide. A semaphore, not a hope. arq runs 10 jobs
+#               concurrently by default; 10 × 290MB into a 2G cgroup is not a race condition,
+#               it is arithmetic.
+#   _terminate  ANY exit that is not a clean return takes the child with it. A hand Osiris
+#               cannot close is not a tool, it is a leak.
+_CLI_GATE = asyncio.Semaphore(1)
+_CLI_TIMEOUT = 180.0
+
+
+async def _terminate(proc: asyncio.subprocess.Process) -> None:
+    """Kill an extractor and REAP it, even while we ourselves are being cancelled.
+
+    Shielded on purpose: the caller is usually already unwinding from arq's timeout, and a
+    second cancel arriving mid-kill must not leave the child half-dead and unwaited."""
+    if proc.returncode is not None:
+        return
+    with contextlib.suppress(ProcessLookupError):
+        proc.kill()
+    with contextlib.suppress(Exception):
+        await asyncio.shield(asyncio.create_task(proc.wait()))
 
 
 @dataclass
@@ -163,6 +193,7 @@ class ClaudeCliClient:
     """
 
     binary: str = "claude"
+    timeout: float = _CLI_TIMEOUT
 
     async def complete(
         self, *, system: str, prompt: str, model: str, max_tokens: int = 2048,
@@ -180,13 +211,21 @@ class ClaudeCliClient:
         # (an instrument reading itself is the loop-pathology class).
         workdir = os.path.join(tempfile.gettempdir(), "osiris-extract")
         os.makedirs(workdir, exist_ok=True)
-        proc = await asyncio.create_subprocess_exec(
-            self.binary, "-p", prompt, "--model", model, "--system-prompt", system,
-            "--output-format", "json", "--setting-sources", "",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            cwd=workdir,
-        )
-        out, err = await proc.communicate()
+        async with _CLI_GATE:  # one hand out at a time, worker-wide
+            proc = await asyncio.create_subprocess_exec(
+                self.binary, "-p", prompt, "--model", model, "--system-prompt", system,
+                "--output-format", "json", "--setting-sources", "",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                cwd=workdir,
+            )
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(), self.timeout)
+            except BaseException:
+                # BaseException, not Exception: CancelledError is the one that ACTUALLY happens
+                # here (arq's timeout, a worker shutdown) and it is not an Exception. Catching
+                # only Exception is exactly how the old code abandoned a live, billing child.
+                await _terminate(proc)
+                raise
         if proc.returncode != 0:
             # The CLI reports API failures (overload, rate limit, auth) as JSON on STDOUT and
             # leaves stderr EMPTY — so reporting only stderr turned every one of them into the

@@ -510,9 +510,9 @@ async def trigger_mail_tick(
         if repo_path is None:  # no known repo → can't spawn; the mail stays pull-only
             report["skipped"] += 1
             continue
-        wake_id = await pool.fetchval(
+        await pool.execute(  # the wake is RECORDED before it is fired — a spawn we can't count
             "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
-            "VALUES ($1,$2,$3,'mint') RETURNING id", project, sender, msg_id)
+            "VALUES ($1,$2,$3,'mint')", project, sender, msg_id)
         # the anchor goes into the PROMPT as a literal path — a woken agent has no shell to
         # expand $CLAUDE_JOB_DIR with, which is why 463 mints never once used the stable anchor
         wake_anchor = _wake_job_dir(project)

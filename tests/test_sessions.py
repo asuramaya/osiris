@@ -414,6 +414,18 @@ def test_extractor_instrument_transcripts_are_excluded(tmp_path: Path) -> None:
 async def test_obligation_lands_as_open_thread_and_surfaces_in_briefing(
     actions: Actions,
 ) -> None:
+    """A GUESS MUST NEVER APPEAR WHERE A PROMISE APPEARS.
+
+    The old law here was "a duty never hides" — and it was half right. A duty a MIND declared
+    never hides. A duty a MACHINE GUESSED is a proposal, and it was riding the wall wearing the
+    full authority of a declaration. It got a week's grace before folding into the pile, and
+    the miner mints faster than a week, so the wall was permanently full of fresh guesses: 88%
+    of the fleet's open threads were inferences no mind had ever touched.
+
+    Nothing is deleted and nothing is hidden — the guess stays OPEN and stays COUNTED in the
+    pile, one click away (land on counts, walk in). It simply stops billing the operator for a
+    promise nobody made.
+    """
     y = SessionYield(obligations=["restart the daemons after kernel changes to ingest paths"])
     counts = await emit_yield(actions, y, repo=None)
     assert counts["obligations"] == 1
@@ -421,11 +433,28 @@ async def test_obligation_lands_as_open_thread_and_surfaces_in_briefing(
         "SELECT value #>> '{}' FROM current_assertions WHERE name='kind' "
         "AND object_id = (SELECT id FROM objects WHERE type='Thread' LIMIT 1)")
     assert kind == "obligation"
+
+    # ...and a duty a MIND declared, in its own name
+    await open_thread(actions, "hand the composer branch to the operator for the push gate",
+                      kind="obligation", source="agent:someone")
+
     await seed_default_compositions(actions.pool)
     res = await run_composition(actions.pool, "briefing")
     wall = res["items"]["The wall — what's genuinely unresolved"]
-    # an OBLIGATION rides the graded top-of-wall even untouched — a duty never hides
-    assert any("restart the daemons" in r["summary"] for r in wall["top_of_wall"])
+    top = [r["summary"] for r in wall["top_of_wall"]]
+
+    assert any("composer branch" in s for s in top), "a DECLARED duty must never hide"
+    assert not any("restart the daemons" in s for s in top), \
+        "a MINER'S GUESS rode the wall with the authority of a promise"
+
+    # and it is not gone — untouched is a fact about readers, never a resolution (758ded94)
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE a.name='status' AND o.type='Thread' AND EXISTS (SELECT 1 FROM current_assertions s "
+        "  WHERE s.object_id=o.id AND s.name='summary' "
+        "  AND s.value #>> '{}' LIKE 'restart the daemons%') "
+        "ORDER BY a.confidence DESC LIMIT 1")
+    assert status == "open"
 
 
 def test_worker_registers_the_sensing_cron() -> None:

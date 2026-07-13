@@ -887,10 +887,10 @@ async def _fn_lap(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str,
 
 async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
     """The collapsed pile, listable (ruling 758ded94): open threads the LENS ranks off the
-    wall — miner echoes no mind has ever touched (not one self_declared assertion, older
-    than the freshness window) plus judged questions (kind='question'). Their status is OPEN
-    and stays open: untouched is a fact about readers, never a resolution. Oldest first —
-    triage drains from the bottom. `args.repo` scopes to one project; report-only."""
+    wall — miner echoes no mind has ever touched (not one self_declared assertion, AT ANY AGE)
+    plus judged questions (kind='question'). Their status is OPEN and stays open: untouched is
+    a fact about readers, never a resolution. Oldest first — triage drains from the bottom.
+    `args.repo` scopes to one project; report-only."""
     repo = str(args.get("repo") or "").strip()
     limit = max(1, min(int(args.get("limit") or 100), 500))
     rows = await pool.fetch(
@@ -917,18 +917,17 @@ async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         "   WHERE a.object_id=o.id AND a.name='status' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
         "ORDER BY o.created_at ASC LIMIT 3000")
-    cutoff = datetime.now(UTC) - timedelta(days=ECHO_FRESH_DAYS)
     echoes = []
     for r in rows:
         if not r["summary"]:
             continue
         if repo and (r["project"] or "").removeprefix("repo:") != repo.removeprefix("repo:"):
             continue
-        # a DECLARED duty never hides — declaring touches the thread; a guessed one
-        # joins the pile after its freshness week (overmint ruling, 2026-07-11). A ROT CANDIDATE
-        # rides the pile whatever its age: it carries EVIDENCE, which is the entire point of it.
-        if (r["kind"] == "question" or r["probably_done"]
-                or (bool(r["untouched"]) and r["created_at"] < cutoff)):
+        # A DECLARED duty never hides — declaring TOUCHES the thread. A guess folds into the
+        # pile IMMEDIATELY: no freshness week (see the scoped lens below for why the "loud week"
+        # is exactly what let the pile grow). A ROT CANDIDATE rides the pile whatever its age —
+        # it carries EVIDENCE, which is the entire point of it.
+        if r["kind"] == "question" or r["probably_done"] or bool(r["untouched"]):
             echoes.append({
                 "id": str(r["id"])[:8], "born": r["created_at"].date().isoformat(),
                 "project": (r["project"] or "").removeprefix("repo:") or None,
@@ -1266,7 +1265,6 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
 # lives HERE, and mcp_server imports it: one wall, every lens.
 
 ORIENT_OPEN_THREADS = 25
-ECHO_FRESH_DAYS = 7  # a never-touched DERIVED thread younger than this still rides the wall
 
 
 def rank_open_threads(
@@ -1326,7 +1324,6 @@ async def open_thread_wall(
         "   WHERE a.object_id=o.id AND a.name='status' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
         "ORDER BY o.created_at DESC LIMIT 400", proj)
-    cutoff = datetime.now(UTC) - timedelta(days=ECHO_FRESH_DAYS)
     wall: list[dict[str, Any]] = []
     echoes: list[dict[str, Any]] = []
     for r in rows:
@@ -1348,10 +1345,10 @@ async def open_thread_wall(
         # read a conversation and inferred that somebody, somewhere, owes work. That is a
         # SUGGESTION, and it was riding the wall with the full authority of a declaration.
         #
-        # It used to get a "loud week" (ECHO_FRESH_DAYS) before folding. That window is exactly
-        # what let the pile grow: the miner mints faster than seven days, so the wall was
-        # permanently full of fresh guesses. 908 of the fleet's 1067 open threads (85%) are
-        # untouched miner inferences; decepticons — a DEAD project — was showing 181 of them.
+        # It used to get a "loud week" before folding. That window is exactly what let the pile
+        # grow: the miner mints faster than seven days, so the wall was permanently full of
+        # fresh guesses. 908 of the fleet's 1067 open threads (85%) are untouched miner
+        # inferences; decepticons — a DEAD project — was showing 181 of them.
         #
         # So: a guess does not get a week. It goes to the `echoes` pile immediately, where it is
         # COUNTED and one click away (land on counts, walk in). The wall now shows only what a
@@ -1431,8 +1428,12 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "    WHERE a.object_id=o.id AND a.name='status' "
         "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
         " ORDER BY o.created_at DESC LIMIT 400) t "
-        "WHERE t.summary IS NOT NULL AND (t.touched OR (t.kind='obligation' "
-        "AND t.created_at > now() - make_interval(days => $1)))", ECHO_FRESH_DAYS)]
+        # ONE RULE, THREE LENSES. This predicate, the fleet pile above, and the scoped wall
+        # below must agree or the numbers cannot add up — and the operator caught them
+        # disagreeing ("1051 open · 334 obligations · 951 pile — this doesn't add up").
+        # A thread rides the wall IFF A MIND TOUCHED IT. A guessed obligation used to get a
+        # week's grace here; the miner mints faster than a week, so the grace WAS the pile.
+        "WHERE t.summary IS NOT NULL AND t.touched")]
     shown, more = rank_open_threads(top_rows, me)
     # totals over the WHOLE record — a repo-less thread must count even though the
     # per-project breakdown can't file it
