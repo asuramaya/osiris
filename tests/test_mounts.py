@@ -74,7 +74,7 @@ async def test_reattach_honors_a_bound_seat(actions: Actions, tmp_path: Path) ->
 
     job_dir = str(tmp_path / "jobs" / "c9b710cb")  # the session's own dir...
     await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:0806072e",
-                            project="decepticons", cwd=str(tmp_path / "d"),
+                            project="sibling-two", cwd=str(tmp_path / "d"),
                             model=None, session_key="sid:old")  # ...bound to the SEAT
     srv._agents.pop("sid:re", None)
     ident = await srv._reattach(actions.pool, "sid:re", job_dir)
@@ -241,14 +241,14 @@ async def test_while_away_names_the_face_wearers(actions: Actions) -> None:
     # while the owner slept: a twin was woken (resume lane), SENT mail wearing the project's
     # face, and the counterparty's ask got leased+settled
     await p.execute("INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
-                    "VALUES ('heinrich','agent:deceptor',NULL,'resume')")
-    ask = await send_message(p, from_agent="agent:deceptor", from_project="decepticons",
-                             to_project="heinrich", body="image the 50k pair?")
-    await read_inbox(p, "heinrich", reader_agent="agent:twin")  # the twin leased it…
-    await send_message(p, from_agent="agent:twin-99", from_project="heinrich",
+                    "VALUES ('sibling-one','agent:deceptor',NULL,'resume')")
+    ask = await send_message(p, from_agent="agent:deceptor", from_project="sibling-two",
+                             to_project="sibling-one", body="image the 50k pair?")
+    await read_inbox(p, "sibling-one", reader_agent="agent:twin")  # the twin leased it…
+    await send_message(p, from_agent="agent:twin-99", from_project="sibling-one",
                        body="done — imaged, verdict recorded", reply_to=ask["id"])  # …and settled
 
-    away = await mounts.while_away(p, "heinrich", "agent:a8c15486", anchor)
+    away = await mounts.while_away(p, "sibling-one", "agent:a8c15486", anchor)
 
     assert away is not None
     assert away["acted_in_your_name"] == ["agent:twin-99"]      # the face-wearer, named
@@ -258,10 +258,10 @@ async def test_while_away_names_the_face_wearers(actions: Actions) -> None:
     # hasn't read it yet — settled=False is the honest state ("answered for you, their side
     # pending"), and last_from names the hand that did it
     assert threads[ask["id"]]["last_from"] == "agent:twin-99"
-    assert threads[ask["id"]]["between"] == "heinrich → decepticons"
+    assert threads[ask["id"]]["between"] == "sibling-one → sibling-two"
     assert threads[ask["id"]]["settled"] is False
     # the owner itself is never listed as its own face-wearer
-    away2 = await mounts.while_away(p, "heinrich", "agent:twin-99", anchor)
+    away2 = await mounts.while_away(p, "sibling-one", "agent:twin-99", anchor)
     assert away2 is not None and away2["acted_in_your_name"] == []
 
 
@@ -274,20 +274,20 @@ async def test_while_away_is_quiet_when_nothing_happened(actions: Actions) -> No
 
 async def test_fresh_session_anchors_on_the_project_lineage(actions: Actions) -> None:
     """A brand-new session id has no past of its own — exactly the case that must NOT wake
-    blind: the fold anchor falls back to the PROJECT lineage's last sign of life (heinrich's
+    blind: the fold anchor falls back to the PROJECT lineage's last sign of life (sibling-one's
     tab reopened as a fresh session while twins had settled its threads, and got no fold)."""
     p = actions.pool
     # an elder of the lineage, seen a while ago
     await mounts.save_mount(p, job_dir="/x/jobs/elder001", agent_id="agent:elder001",
-                            project="heinrich", cwd="/repo/heinrich", model=None,
+                            project="sibling-one", cwd="/repo/sibling-one", model=None,
                             session_key=None)
     # the fresh session mounts: own prev is None…
     prev = await mounts.save_mount(p, job_dir="/x/jobs/fresh002", agent_id="agent:fresh002",
-                                   project="heinrich", cwd="/repo/heinrich", model=None,
+                                   project="sibling-one", cwd="/repo/sibling-one", model=None,
                                    session_key=None)
     assert prev is None
     # …but the lineage has a past, and the fallback finds it (excluding the fresh row itself)
-    lineage_prev = await mounts.project_prev_seen(p, "heinrich",
+    lineage_prev = await mounts.project_prev_seen(p, "sibling-one",
                                                   exclude_job_dir="/x/jobs/fresh002")
     assert lineage_prev is not None
     # a lineage with no elders stays quiet (no false anchor)

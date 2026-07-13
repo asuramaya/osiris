@@ -11,7 +11,7 @@ from pathlib import Path
 from src.actions.core import Actions
 from src.orchestrator.bootstrap import bootstrap_project
 
-_LOG = """# CLAUDE.md — decepticons
+_LOG = """# CLAUDE.md — sibling-two
 
 ## Build order
 - **Phase 0 (DONE, 2026-05-01):** the megatron core — """ + "spark " * 90 + """
@@ -21,7 +21,7 @@ _ESSAY = "---\nname: decept-strategy\ndescription: the plan\n---\n\n# Strategy\n
 
 
 async def _make_project(tmp: Path) -> Path:
-    root = tmp / "decepticons"
+    root = tmp / "sibling-two"
     (root / "memory").mkdir(parents=True)
     (root / "CLAUDE.md").write_text(_LOG)
     (root / "memory" / "decept-strategy.md").write_text(_ESSAY)
@@ -36,12 +36,12 @@ async def test_bootstrap_migrates_memory_and_registers_project(
     root = await _make_project(tmp_path)
     res = await bootstrap_project(actions, str(root))
 
-    assert res["project"] == "decepticons"
+    assert res["project"] == "sibling-two"
     # the dated build-log bullets became their OWN retrieval-sized nodes, namespaced
     allspark = await actions.pool.fetchrow(
         "SELECT o.canonical, (SELECT value#>>'{}' FROM current_assertions a "
         " WHERE a.object_id=o.id AND a.name='date') AS d FROM objects o "
-        "WHERE o.type='Reference' AND o.canonical LIKE 'ref:decepticons-history-%' "
+        "WHERE o.type='Reference' AND o.canonical LIKE 'ref:sibling-two-history-%' "
         "AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
         "  AND a.name='name' AND a.value#>>'{}' ILIKE '%ALLSPARK%')")
     assert allspark is not None and allspark["d"] == "2026-06-02"
@@ -53,9 +53,9 @@ async def test_bootstrap_migrates_memory_and_registers_project(
         "SELECT 1 FROM objects WHERE type='Reference' AND canonical LIKE '%readme%'")
     # the project is registered, and a boot sector is suggested (not written)
     assert await actions.pool.fetchval(
-        "SELECT 1 FROM objects WHERE type='SoftwareProject' AND canonical='repo:decepticons'")
+        "SELECT 1 FROM objects WHERE type='SoftwareProject' AND canonical='repo:sibling-two'")
     assert "mount(cwd=" in res["suggested_boot_sector"]
-    assert "decepticons constitution" in res["suggested_boot_sector"]
+    assert "sibling-two constitution" in res["suggested_boot_sector"]
     assert (root / "CLAUDE.md").read_text() == _LOG  # NO HANDS: the file is untouched
 
 
@@ -85,9 +85,9 @@ async def test_bootstrap_discovers_docs_layout_not_just_osiris_shape(
     actions: Actions, tmp_path: Path
 ) -> None:
     """A repo that keeps its memory under docs/ (not memory/) must be FULLY migrated — the
-    dogfood gap Heinrich surfaced: bootstrap was osiris-shaped and would have silently dropped
+    dogfood gap sibling-one surfaced: bootstrap was osiris-shaped and would have silently dropped
     the whole docs/ pile, migrating only the root CLAUDE.md."""
-    root = tmp_path / "heinrich"
+    root = tmp_path / "sibling-one"
     (root / "docs").mkdir(parents=True)
     (root / "web").mkdir()
     (root / "CLAUDE.md").write_text(_LOG)
@@ -107,7 +107,8 @@ async def test_bootstrap_discovers_docs_layout_not_just_osiris_shape(
             "SELECT 1 FROM objects WHERE type='Reference' AND canonical=$1", canon), canon
     # docs/DESIGN.md was chunked as a LOG under the design topic, not a single doc node
     assert await actions.pool.fetchval(
-        "SELECT 1 FROM objects WHERE type='Reference' AND canonical LIKE 'ref:heinrich-design-%'")
+        "SELECT 1 FROM objects WHERE type='Reference' "
+        "AND canonical LIKE 'ref:sibling-one-design-%'")
     # the public web/ tree was NOT swept (only docs/ | memory/ | paper/ + root PLAN.md)
     assert not await actions.pool.fetchval(
         "SELECT 1 FROM objects WHERE type='Reference' AND canonical LIKE '%readme%'")

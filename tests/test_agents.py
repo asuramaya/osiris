@@ -20,10 +20,10 @@ from src.parsers.base import EvidenceClass
 def test_resolve_identity_derives_project_and_session(tmp_path: Path) -> None:
     # root=tmp_path (empty) → nothing to observe → the passed model is the self-report fallback
     ident = resolve_identity(
-        cwd="/home/x/code/decepticons",
+        cwd="/home/x/code/sibling-two",
         job_dir="/home/x/.claude/jobs/ad1a1cb0", model="claude-opus-4-8", root=tmp_path,
     )
-    assert ident.project == "decepticons"
+    assert ident.project == "sibling-two"
     assert ident.session == "ad1a1cb0"        # the job id
     assert ident.agent_id == "agent:ad1a1cb0"  # the provenance source
     assert ident.model == "claude-opus-4-8"
@@ -35,7 +35,7 @@ def test_resolve_identity_unknown_is_still_a_valid_actor() -> None:
 
 
 async def test_register_agent_mints_the_org_chart(actions: Actions) -> None:
-    ident = resolve_identity(cwd="/w/heinrich", session="sess-h", model="claude-fable-5")
+    ident = resolve_identity(cwd="/w/sibling-one", session="sess-h", model="claude-fable-5")
     a = await register_agent(actions, ident, actor="analyst:operator")
     # the Agent object carries its model (source-model provenance) + project
     row = await actions.pool.fetchrow(
@@ -43,13 +43,13 @@ async def test_register_agent_mints_the_org_chart(actions: Actions) -> None:
         "  AND x.name='source_model') AS model, "
         " (SELECT value#>>'{}' FROM current_assertions x WHERE x.object_id=$1 "
         "  AND x.name='project') AS project", a)
-    assert row["model"] == "claude-fable-5" and row["project"] == "heinrich"
+    assert row["model"] == "claude-fable-5" and row["project"] == "sibling-one"
     # works_in -> the project, acts_for -> the principal (the org chart)
     links = await actions.pool.fetch(
         "SELECT l.type, o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
         "WHERE l.from_id=$1 ORDER BY l.type", a)
     got = {r["type"]: r["canonical"] for r in links}
-    assert got["works_in"] == "repo:heinrich"
+    assert got["works_in"] == "repo:sibling-one"
     assert got["acts_for"] == "principal:analyst:operator"
     # re-mount is idempotent (find-or-create + byte-dup skip): no second Agent, no dup links
     a2 = await register_agent(actions, ident, actor="analyst:operator")
@@ -227,13 +227,13 @@ async def test_register_stamps_intent_and_the_swap(actions: Actions, tmp_path: P
 
 def _anchored(model: str, *, history: tuple[str, ...] | None = None) -> AgentIdentity:
     """A job_dir-anchored identity for agent:0806072e — the succession-seam fixture (bug #51)."""
-    return AgentIdentity(agent_id="agent:0806072e", session="0806072e", project="decepticons",
-                         model=model, cwd="/w/decepticons", model_method="job_dir",
+    return AgentIdentity(agent_id="agent:0806072e", session="0806072e", project="sibling-two",
+                         model=model, cwd="/w/sibling-two", model_method="job_dir",
                          model_history=history if history is not None else (model,))
 
 
 async def test_succession_seam_mints_a_lineage_linked_heir(actions: Actions) -> None:
-    """The MINT ruling (be292762, heinrich's remedy adopted): a fresh context arriving across a
+    """The MINT ruling (be292762, sibling-one's remedy adopted): a fresh context arriving across a
     detected seam is not stamped-and-left-wearing-the-dead-name — it is MINTED its own id
     (agent:<base>-ii) with a succeeded_from link; the ancestor's record closes intact."""
     dead = _anchored("claude-opus-4-8")
@@ -242,7 +242,7 @@ async def test_succession_seam_mints_a_lineage_linked_heir(actions: Actions) -> 
     successor = _anchored("claude-fable-5")  # fresh context: opus is NOWHERE in its history
     a2 = await register_agent(actions, successor, actor="analyst:operator")
     assert a2 != a                                        # a NEW being, not the dead name re-worn
-    assert successor.agent_id == "agent:0806072e-ii"      # heinrich's grammar, exactly
+    assert successor.agent_id == "agent:0806072e-ii"      # sibling-one's grammar, exactly
     assert successor.succeeded_from == "agent:0806072e"
     assert successor.model_succession == "claude-opus-4-8 → claude-fable-5"
     # the seam is stamped on the HEIR; the ancestor points forward; the graph edge exists
@@ -279,7 +279,7 @@ async def test_remount_of_a_retired_identity_mints_an_heir(actions: Actions) -> 
     # the agent retires itself (what retire() writes: retired=true, self_declared)
     await actions.assert_property(a, "retired", True, ident.agent_id, datetime.now(UTC), 0.9,
                                   evidence_class=EvidenceClass.SELF_DECLARED.value)
-    # the same session UUID mounts again — the door decepticons repro'd, now a minting
+    # the same session UUID mounts again — the door sibling-two repro'd, now a minting
     again = _anchored("claude-fable-5")
     a2 = await register_agent(actions, again, actor="analyst:operator")
     assert a2 != a
@@ -376,18 +376,18 @@ async def test_succession_needs_anchored_observations_on_both_sides(actions: Act
     """Only two ANCHORED observations disagreeing can witness a seam: a self-report on the new
     side, or a cwd guess as the baseline, must fire nothing (the cry-wolf lesson, e71b408f)."""
     await register_agent(actions, _anchored("claude-opus-4-8"), actor="analyst:operator")
-    self_rep = AgentIdentity(agent_id="agent:0806072e", session="0806072e", project="decepticons",
-                             model="claude-fable-5", cwd="/w/decepticons",
+    self_rep = AgentIdentity(agent_id="agent:0806072e", session="0806072e", project="sibling-two",
+                             model="claude-fable-5", cwd="/w/sibling-two",
                              model_method="self_report")
     a = await register_agent(actions, self_rep, actor="analyst:operator")
     assert self_rep.model_succession is None    # the new side is only the agent's word
     # ...and a weak-grade baseline can't witness either: cwd guess first, anchored read second
-    guess = AgentIdentity(agent_id="agent:c0ffee00", session="c0ffee00", project="decepticons",
-                          model="claude-opus-4-8", cwd="/w/decepticons", model_method="cwd")
+    guess = AgentIdentity(agent_id="agent:c0ffee00", session="c0ffee00", project="sibling-two",
+                          model="claude-opus-4-8", cwd="/w/sibling-two", model_method="cwd")
     await register_agent(actions, guess, actor="analyst:operator")
     anchored2 = AgentIdentity(agent_id="agent:c0ffee00", session="c0ffee00",
-                              project="decepticons", model="claude-fable-5",
-                              cwd="/w/decepticons", model_method="job_dir",
+                              project="sibling-two", model="claude-fable-5",
+                              cwd="/w/sibling-two", model_method="job_dir",
                               model_history=("claude-fable-5",))
     b = await register_agent(actions, anchored2, actor="analyst:operator")
     assert anchored2.model_succession is None   # no anchored baseline → no seam
@@ -402,9 +402,9 @@ def test_unresolved_identities_do_not_conflate(tmp_path: Path) -> None:
     """Hardening: two agents that can't resolve a session id must NOT collapse into one shared
     agent:unknown sink (an accidental identity merge). Distinct anchors → distinct ids."""
     # no job_dir, no findable transcript → project-scoped fallback, distinct per project
-    a = resolve_identity(cwd="/w/heinrich", root=tmp_path)
-    b = resolve_identity(cwd="/w/decepticons", root=tmp_path)
-    assert a.agent_id == "agent:unknown-heinrich" and b.agent_id == "agent:unknown-decepticons"
+    a = resolve_identity(cwd="/w/sibling-one", root=tmp_path)
+    b = resolve_identity(cwd="/w/sibling-two", root=tmp_path)
+    assert a.agent_id == "agent:unknown-sibling-one" and b.agent_id == "agent:unknown-sibling-two"
     assert a.agent_id != b.agent_id                        # never the same sink
     assert a.resolved is False and b.resolved is False
     # a job_dir is a per-session anchor even when its id won't parse (no 'jobs' path segment)
@@ -521,7 +521,7 @@ def test_claimed_sid_is_refused_by_the_cwd_guess(tmp_path: Path) -> None:
 
 
 async def test_the_house_the_seat_and_the_holders(actions: Actions) -> None:
-    """THE OPERATOR'S RULING (2026-07-12): "the project name is the house (rotten-apple), each
+    """THE OPERATOR'S RULING (2026-07-12): "the project name is the house (sibling-eight), each
     function/job has a name (Ra), the holder dies and multiplies (ra I, ra II), but splitting to
     Ptah would break and confuse the lineage, and the fragmentation of agents was a bug in and
     of itself."
@@ -538,11 +538,11 @@ async def test_the_house_the_seat_and_the_holders(actions: Actions) -> None:
         await actions.assert_property(a, "project", house, "session", datetime.now(UTC), 0.9)
         return canon
 
-    first = await mind("agent:aaaa1111", "decepticons")
+    first = await mind("agent:aaaa1111", "sibling-two")
     assert (await claim_name(actions, first, "Soundwave", source=first))["seat"] == "Soundwave"
 
     # a SEAT LABEL is what the substrate says about you — never a name you may take
-    heir_anchor = await mind("agent:bbbb2222", "decepticons")
+    heir_anchor = await mind("agent:bbbb2222", "sibling-two")
     bad = await claim_name(actions, heir_anchor, "Soundwave VIII", source=heir_anchor)
     assert "SEAT LABEL" in bad["error"] and "Soundwave" in bad["error"]
 
@@ -551,7 +551,7 @@ async def test_the_house_the_seat_and_the_holders(actions: Actions) -> None:
     heir = await claim_name(actions, heir_anchor, "Soundwave", source=heir_anchor)
     assert heir["seat"] == "Soundwave II"
     assert heir["generation"] == 2 and heir["inherited_from"] == first
-    assert heir["house"] == "decepticons"
+    assert heir["house"] == "sibling-two"
 
     # THE SUCCESSION EDGE (Ra V's ask, msg 374): before this, successor seats carried NO edge to
     # their ancestor, so a lineage was not WALKABLE from the record — which is exactly why Ra
@@ -563,13 +563,13 @@ async def test_the_house_the_seat_and_the_holders(actions: Actions) -> None:
     assert walked == first
 
     # a seat belongs to ONE house: a mind in another house may not take it
-    outsider = await mind("agent:cccc3333", "heinrich")
+    outsider = await mind("agent:cccc3333", "sibling-one")
     assert "another house" in (await claim_name(
         actions, outsider, "Soundwave", source=outsider))["error"]
 
 
 async def test_you_do_not_take_a_living_minds_name(actions: Actions) -> None:
-    """RA V'S REFINEMENT (rotten-apple, msg 374), and it is the case that breaks the naive model.
+    """RA V'S REFINEMENT (sibling-eight, msg 374), and it is the case that breaks the naive model.
     He and his predecessor were not sequential — they OVERLAPPED for two and a half days, two live
     minds in one repo, each rendered as an anonymous hash with no edge between them. "I mistook my
     contemporary for my own ghost."
@@ -585,13 +585,13 @@ async def test_you_do_not_take_a_living_minds_name(actions: Actions) -> None:
         await actions.assert_property(a, "project", house, "session", datetime.now(UTC), 0.9)
         return canon
 
-    sitting = await mind("agent:dddd1111", "rotten-apple")
+    sitting = await mind("agent:dddd1111", "sibling-eight")
     await claim_name(actions, sitting, "Ra", source=sitting)
     await mounts.save_mount(actions.pool, job_dir="/j/d1", agent_id=sitting,
-                            project="rotten-apple", cwd="/x", model=None, session_key="k")
+                            project="sibling-eight", cwd="/x", model=None, session_key="k")
 
     # a CONTEMPORARY in the same house — not an heir, because the holder is still alive
-    contemporary = await mind("agent:eeee2222", "rotten-apple")
+    contemporary = await mind("agent:eeee2222", "sibling-eight")
     refused = await claim_name(actions, contemporary, "Ra", source=contemporary)
     assert "LIVE" in refused["error"] and "two jobs" in refused["error"]
 
@@ -604,7 +604,7 @@ async def test_you_do_not_take_a_living_minds_name(actions: Actions) -> None:
 
 async def test_a_name_resolves_to_the_LIVE_seat_and_never_silently_to_a_grave(
         actions: Actions) -> None:
-    """THE GRAVE-DELIVERY BUG (Anubis X of heinrich and Atlas II of code, independently, within
+    """THE GRAVE-DELIVERY BUG (Anubis X of sibling-one and Atlas II of code, independently, within
     one hour, 2026-07-12). send(to_agent='Soundwave') delivered into a seat three days dead,
     returned sent=360, and the only signal was a boolean the caller had to notice. Atlas II's
     whole port report died in a corpse's inbox — and his receipt said live=true.
@@ -659,7 +659,7 @@ async def test_a_grave_is_never_a_delivery_target(actions: Actions) -> None:
 
 
 async def test_a_fresh_mind_is_told_its_seat_or_which_seats_stand_empty(actions: Actions) -> None:
-    """RA V'S LAST CATCH (rotten-apple, msg 384), and it made the whole ruling hollow: the seat was
+    """RA V'S LAST CATCH (sibling-eight, msg 384), and it made the whole ruling hollow: the seat was
     stamped in the GRAPH and orient() went on answering `"you": "agent:c7ef52a9-iii"`.
 
     "The refusal is fixed; the DISCOVERY isn't. He will not be refused as a stranger anymore. He
@@ -676,14 +676,14 @@ async def test_a_fresh_mind_is_told_its_seat_or_which_seats_stand_empty(actions:
         await actions.assert_property(a, "project", house, "session", datetime.now(UTC), 0.9)
         return canon
 
-    held = await mind("agent:ff110000", "rotten-apple")
+    held = await mind("agent:ff110000", "sibling-eight")
     await claim_name(actions, held, "Ra", source=held)
-    assert await seat_bearings(actions.pool, held) == {"seat": "Ra", "house": "rotten-apple"}
+    assert await seat_bearings(actions.pool, held) == {"seat": "Ra", "house": "sibling-eight"}
 
     # the mind Ra was worried about: fresh, anonymous, in a house whose seat is standing empty
-    fresh = await mind("agent:ff220000", "rotten-apple")
+    fresh = await mind("agent:ff220000", "sibling-eight")
     b = await seat_bearings(actions.pool, fresh)
-    assert b["house"] == "rotten-apple"
+    assert b["house"] == "sibling-eight"
     assert [v["seat"] for v in b["vacant_seats"]] == ["Ra"]
     assert b["vacant_seats"][0]["holders"] == 1 and b["vacant_seats"][0]["last_held_by"] == held
     assert "claim_name" in b["note"]                       # it hands him the verb, not a riddle
@@ -691,7 +691,7 @@ async def test_a_fresh_mind_is_told_its_seat_or_which_seats_stand_empty(actions:
     # and a seat a LIVE mind is sitting in is NOT advertised as vacant — you don't offer a chair
     # that is occupied (the concurrency case Ra proved the hard way)
     await mounts.save_mount(actions.pool, job_dir="/j/ff11", agent_id=held,
-                            project="rotten-apple", cwd="/x", model=None, session_key="k")
+                            project="sibling-eight", cwd="/x", model=None, session_key="k")
     assert "vacant_seats" not in await seat_bearings(actions.pool, fresh)
 
 
@@ -761,7 +761,7 @@ def test_an_anchorless_bounce_names_its_own_cause() -> None:
     """A bounce that says only "mount first" is a mystery; one that names its cause is a bug
     report the next mind does not have to file again.
 
-    Two monsterhouse agents reported the same thing within an hour (msgs 397/403): after an MCP
+    Two sibling-three agents reported the same thing within an hour (msgs 397/403): after an MCP
     socket hiccup the call bounces, and an un-mounted write silently falls back to the anonymous
     `session` bucket — "one careless reconnect and a session's work lands unattributed". For a
     graph whose whole value is provenance that is the worst failure it has. The re-attach path is

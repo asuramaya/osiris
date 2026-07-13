@@ -34,7 +34,7 @@ async def test_fleet_digest_surfaces_the_four_streams(actions: Actions) -> None:
     # breath (see sessions._stamp_alive) — an agent cannot be swapped and never-seen at once.
     await _prop(actions, a, "last_active", (NOW - timedelta(minutes=5)).isoformat(),
                 "fleet-observer", DO)
-    u = await actions.create_or_find_object("Agent", "agent:unknown-heinrich", "fleet-observer")
+    u = await actions.create_or_find_object("Agent", "agent:unknown-sibling-one", "fleet-observer")
     await _prop(actions, u, "identity_resolved", False, "fleet-observer", DO)
     # --- activity: a fresh agent-authored decision, an OLD one, and miner backfill (excluded) ---
     d = await actions.create_or_find_object("Decision", "decision:recent", "agent:aaa")
@@ -63,7 +63,8 @@ async def test_fleet_digest_surfaces_the_four_streams(actions: Actions) -> None:
     assert dg["summary"]["agents"] == 3
     assert dg["summary"]["unresolved"] == 1
     assert dg["summary"]["swapped"] == 1
-    assert any(not r["resolved"] and r["agent"] == "agent:unknown-heinrich" for r in dg["roster"])
+    assert any(not r["resolved"] and r["agent"] == "agent:unknown-sibling-one"
+               for r in dg["roster"])
     # danger map names the swapped agent + its transition
     assert dg["danger"][0]["agent"] == "agent:aaa"
     assert "claude-fable-5 → claude-opus-4-8" in dg["danger"][0]["swapped"]
@@ -89,12 +90,12 @@ async def test_digest_surfaces_conversations_and_the_operator_desk(actions: Acti
     p = actions.pool
     since = NOW - timedelta(hours=24)
     # a lateral request→reply thread between two projects
-    ask = await send_message(p, from_agent="agent:aaa", from_project="decepticons",
-                             to_project="heinrich", body="run the ablation?")
-    await send_message(p, from_agent="agent:bbb", from_project="heinrich",
+    ask = await send_message(p, from_agent="agent:aaa", from_project="sibling-two",
+                             to_project="sibling-one", body="run the ablation?")
+    await send_message(p, from_agent="agent:bbb", from_project="sibling-one",
                        body="done — organ delta reproduces", reply_to=ask["id"])
     # a report-up brief on the operator's desk
-    await send_message(p, from_agent="agent:bbb", from_project="heinrich",
+    await send_message(p, from_agent="agent:bbb", from_project="sibling-one",
                        to_project=OPERATOR_ADDR, body="FINDING: organ delta is real; "
                        "two witnesses agree. Details in decision log.")
 
@@ -102,12 +103,12 @@ async def test_digest_surfaces_conversations_and_the_operator_desk(actions: Acti
 
     assert dg["summary"]["conversations"] >= 1
     lateral = next(c for c in dg["conversations"] if c["thread"] == ask["id"])
-    assert set(lateral["between"]) >= {"decepticons", "heinrich"}
+    assert set(lateral["between"]) >= {"sibling-two", "sibling-one"}
     assert lateral["msgs"] == 2
     assert lateral["last"]["body"].startswith("done — organ delta")
     # the desk: counted and previewed, newest first, NOT leased by the digest (a peek)
     assert dg["summary"]["operator_unread"] == 1
-    assert dg["operator_inbox"]["latest"][0]["from_project"] == "heinrich"
+    assert dg["operator_inbox"]["latest"][0]["from_project"] == "sibling-one"
     dg2 = await fleet_digest(actions, since=since)
     assert dg2["summary"]["operator_unread"] == 1  # reading the digest didn't consume it
 
@@ -206,15 +207,15 @@ async def test_desk_folds_superseded_briefs_under_the_newest_head(actions: Actio
     duty) stacks the thread; the desk shows ONE head per thread with the older briefs counted
     under it. The system folds; only the human settles — the superseded rows stay unread."""
     p = actions.pool
-    first = await send_message(p, from_agent="agent:h", from_project="heinrich",
+    first = await send_message(p, from_agent="agent:h", from_project="sibling-one",
                                to_project=OPERATOR_ADDR, body="BRIEF: run 1 started")
     # the self-reply routes ONWARD to the desk (not back to the sender) and joins the thread
-    second = await send_message(p, from_agent="agent:h", from_project="heinrich",
+    second = await send_message(p, from_agent="agent:h", from_project="sibling-one",
                                 body="BRIEF v2: run 1 done — organ delta reproduces",
                                 reply_to=first["id"])
     assert second["to"] == OPERATOR_ADDR and second["thread_id"] == first["id"]
     # an unrelated brief from another project is its own head
-    await send_message(p, from_agent="agent:c", from_project="chronohorn",
+    await send_message(p, from_agent="agent:c", from_project="sibling-five",
                        to_project=OPERATOR_ADDR, body="BRIEF: memory audit queued")
 
     dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
@@ -235,25 +236,25 @@ async def test_replying_to_your_own_lateral_message_routes_onward(actions: Actio
     """The route fix behind the fold: reply_to your OWN message goes to its RECIPIENT (thread
     continuation), never back to yourself."""
     p = actions.pool
-    ask = await send_message(p, from_agent="agent:a", from_project="decepticons",
-                             to_project="heinrich", body="first volley")
-    follow = await send_message(p, from_agent="agent:a", from_project="decepticons",
+    ask = await send_message(p, from_agent="agent:a", from_project="sibling-two",
+                             to_project="sibling-one", body="first volley")
+    follow = await send_message(p, from_agent="agent:a", from_project="sibling-two",
                                 body="second volley, same thread", reply_to=ask["id"])
-    assert follow["to"] == "heinrich" and follow["thread_id"] == ask["id"]
-    assert await unread_count(p, "heinrich", reader_agent="agent:h", lease_secs=0) == 2
+    assert follow["to"] == "sibling-one" and follow["thread_id"] == ask["id"]
+    assert await unread_count(p, "sibling-one", reader_agent="agent:h", lease_secs=0) == 2
 
 
 async def test_live_swap_surfaces_before_a_re_mount(actions: Actions) -> None:
-    """The rotten-apple audit's #2: a mid-session classifier swap lands in agent_mounts via
+    """The sibling-eight audit's #2: a mid-session classifier swap lands in agent_mounts via
     the heartbeat BEFORE the Agent object is re-stamped. The danger map must show it live —
     a mount-once agent can't be left running opus behind a stale-green roster."""
     a = await actions.create_or_find_object("Agent", "agent:ra", "fleet-observer")
-    await _prop(actions, a, "project", "rotten-apple", "fleet-observer", DO)
+    await _prop(actions, a, "project", "sibling-eight", "fleet-observer", DO)
     await _prop(actions, a, "source_model", "claude-fable-5", "fleet-observer", DO)
     # the heartbeat wrote the LIVE model (opus) to the mount row; the Agent object still says fable
     await actions.pool.execute(
         "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, model, last_seen) "
-        "VALUES ('/j/ra','agent:ra','rotten-apple','/w/ra','claude-opus-4-8', now())")
+        "VALUES ('/j/ra','agent:ra','sibling-eight','/w/ra','claude-opus-4-8', now())")
 
     dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
     r = next(x for x in dg["roster"] if x["agent"] == "agent:ra")

@@ -12,14 +12,14 @@ def _digest() -> dict:
         "roster": [
             {"agent": "agent:aaa", "project": "osiris", "model": "claude-fable-5",
              "resolved": True, "swapped": None},
-            {"agent": "agent:bbb", "project": "heinrich", "model": "claude-opus-4-8",
+            {"agent": "agent:bbb", "project": "sibling-one", "model": "claude-opus-4-8",
              "resolved": False, "swapped": "claude-fable-5 ↔ claude-opus-4-8"},
         ],
         "activity": [{"type": "Decision", "agent": "agent:aaa",
                       "summary": "shipped <thing>", "at": "2026-07-07T12:00:00+00:00"}],
         "danger": [], "laundering": [],
         "conversations": [
-            {"thread": 7, "between": ["decepticons", "heinrich"], "msgs": 3, "unsettled": 1,
+            {"thread": 7, "between": ["sibling-two", "sibling-one"], "msgs": 3, "unsettled": 1,
              "last_at": "2026-07-07T12:30:00+00:00",
              "last": {"from": "agent:bbb", "body": "digit-exact & <b>bold</b> claims"}},
         ],
@@ -32,14 +32,14 @@ def _digest() -> dict:
 
 def test_membrane_renders_all_anchored_sections() -> None:
     page = render_membrane(_digest(), wakes=[
-        {"to_project": "heinrich", "from_agent": "agent:x", "message_id": 37,
+        {"to_project": "sibling-one", "from_agent": "agent:x", "message_id": 37,
          "woke_at": "2026-07-07 16:04:45+00"},
     ])
     for anchor in ('id="desk"', 'id="conversations"', 'id="fleet"', 'id="wakes"',
                    'id="activity"'):
         assert anchor in page
     assert "agent:bbb" in page and "unresolved" in page
-    assert "heinrich" in page and "msg 37" in page
+    assert "sibling-one" in page and "msg 37" in page
 
 
 def test_membrane_escapes_untrusted_bodies() -> None:

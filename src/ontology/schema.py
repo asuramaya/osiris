@@ -218,7 +218,7 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "SUCCESSION, distinct from spawned_by (delegation).",
              ("Agent",), ("Agent",)),
     LinkType("succeeds_seat", "Holder → the mind that held this SEAT before it (operator's "
-             "HOUSE/SEAT/HOLDER ruling, 2026-07-12; asked for by Ra V, rotten-apple). DISTINCT "
+             "HOUSE/SEAT/HOLDER ruling, 2026-07-12; asked for by Ra V, a-sibling). DISTINCT "
              "from succeeded_from, which is ANCHOR ancestry — the same conversation minting an "
              "heir across a model swap. This is a different conversation taking up the same JOB "
              "in the same house, so a seat's history is WALKABLE from the record. Ra could not "

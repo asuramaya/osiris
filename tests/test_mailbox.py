@@ -25,18 +25,18 @@ R = "agent:reader"  # a representative reader for single-agent-project tests
 
 async def test_reading_leases_rather_than_consumes(actions: Actions) -> None:
     p = actions.pool
-    res = await send_message(p, from_agent="agent:aaa", from_project="decepticons",
-                             to_project="heinrich", body="the Toeplitz counterfactual holds")
+    res = await send_message(p, from_agent="agent:aaa", from_project="sibling-two",
+                             to_project="sibling-one", body="the Toeplitz counterfactual holds")
     assert res["id"] > 0 and res["dedup"] is False
-    assert await unread_count(p, "heinrich", reader_agent=R) == 1
-    box = await read_inbox(p, "heinrich", reader_agent=R)
+    assert await unread_count(p, "sibling-one", reader_agent=R) == 1
+    box = await read_inbox(p, "sibling-one", reader_agent=R)
     assert len(box) == 1 and box[0]["from"] == "agent:aaa" and "Toeplitz" in box[0]["body"]
     # LEASED, not consumed: hidden from THIS reader while the lease is live…
-    assert await unread_count(p, "heinrich", reader_agent=R) == 0
-    assert await read_inbox(p, "heinrich", reader_agent=R) == []
+    assert await unread_count(p, "sibling-one", reader_agent=R) == 0
+    assert await read_inbox(p, "sibling-one", reader_agent=R) == []
     # …but the expired lease REDELIVERS, flagged — never silently lost.
-    assert await unread_count(p, "heinrich", reader_agent=R, lease_secs=0) == 1
-    again = await read_inbox(p, "heinrich", reader_agent=R, lease_secs=0)
+    assert await unread_count(p, "sibling-one", reader_agent=R, lease_secs=0) == 1
+    again = await read_inbox(p, "sibling-one", reader_agent=R, lease_secs=0)
     assert len(again) == 1 and again[0]["redelivered"] is True
 
 
@@ -126,18 +126,18 @@ async def test_send_dedups_a_client_retry(actions: Actions) -> None:
 
 async def test_reply_routes_back_threads_and_acks(actions: Actions) -> None:
     p = actions.pool
-    ask = await send_message(p, from_agent="agent:asker", from_project="decepticons",
-                             to_project="heinrich", body="what does your witness say?")
-    (q,) = await read_inbox(p, "heinrich", reader_agent="agent:h")
-    reply = await send_message(p, from_agent="agent:h", from_project="heinrich",
+    ask = await send_message(p, from_agent="agent:asker", from_project="sibling-two",
+                             to_project="sibling-one", body="what does your witness say?")
+    (q,) = await read_inbox(p, "sibling-one", reader_agent="agent:h")
+    reply = await send_message(p, from_agent="agent:h", from_project="sibling-one",
                                body="digit-exact agreement", reply_to=q["id"])
-    assert reply["to"] == "decepticons" and reply["thread_id"] == ask["id"]
-    assert await unread_count(p, "heinrich", reader_agent="agent:h", lease_secs=0) == 0
-    (a2,) = await read_inbox(p, "decepticons", reader_agent="agent:asker")
+    assert reply["to"] == "sibling-two" and reply["thread_id"] == ask["id"]
+    assert await unread_count(p, "sibling-one", reader_agent="agent:h", lease_secs=0) == 0
+    (a2,) = await read_inbox(p, "sibling-two", reader_agent="agent:asker")
     assert a2["thread"] == ask["id"] and a2["reply_to"] == q["id"]
-    hop2 = await send_message(p, from_agent="agent:asker", from_project="decepticons",
+    hop2 = await send_message(p, from_agent="agent:asker", from_project="sibling-two",
                               body="and the control?", reply_to=a2["id"])
-    assert hop2["to"] == "heinrich" and hop2["thread_id"] == ask["id"]
+    assert hop2["to"] == "sibling-one" and hop2["thread_id"] == ask["id"]
 
 
 async def test_reply_does_not_ack_someone_elses_mail(actions: Actions) -> None:
@@ -234,28 +234,28 @@ async def test_reply_to_unknown_message_is_an_error(actions: Actions) -> None:
 
 async def test_inbox_is_scoped_and_normalized(actions: Actions) -> None:
     p = actions.pool
-    await send_message(p, from_agent="agent:x", from_project="a", to_project="heinrich",
+    await send_message(p, from_agent="agent:x", from_project="a", to_project="sibling-one",
                        body="yo")
-    assert await unread_count(p, "decepticons", reader_agent="agent:d") == 0
-    assert await read_inbox(p, "decepticons", reader_agent="agent:d") == []
-    assert await unread_count(p, "heinrich", reader_agent=R) == 1
-    assert await unread_count(p, "repo:heinrich", reader_agent=R) == 1  # repo: prefix normalized
+    assert await unread_count(p, "sibling-two", reader_agent="agent:d") == 0
+    assert await read_inbox(p, "sibling-two", reader_agent="agent:d") == []
+    assert await unread_count(p, "sibling-one", reader_agent=R) == 1
+    assert await unread_count(p, "repo:sibling-one", reader_agent=R) == 1  # repo: prefix normalized
 
 
 async def test_operator_is_an_ordinary_reader(actions: Actions) -> None:
     p = actions.pool
-    await send_message(p, from_agent="agent:x", from_project="decepticons",
+    await send_message(p, from_agent="agent:x", from_project="sibling-two",
                        to_project=OPERATOR_ADDR, body="finding: emergence confirmed")
     assert await unread_count(p, OPERATOR_ADDR, reader_agent=OPERATOR_ADDR) == 1
     (m,) = await read_inbox(p, OPERATOR_ADDR, reader_agent=OPERATOR_ADDR, mark_read=False)
-    assert m["from_project"] == "decepticons"
+    assert m["from_project"] == "sibling-two"
 
 
 async def test_lease_is_visible_to_the_group(actions: Actions) -> None:
     """A sibling holding a live lease on shared broadcast mail is VISIBLE (in_flight names it) —
     'mail 0' must never hide 'the other agent is answering the group thread right now'."""
     p = actions.pool
-    await send_message(p, from_agent="agent:x", from_project="decepticons",
+    await send_message(p, from_agent="agent:x", from_project="sibling-two",
                        to_project="handlingtheloop", body="who takes this?")
     await read_inbox(p, "handlingtheloop", reader_agent="agent:ux")  # ux leases it
     flight = await in_flight(p, "handlingtheloop", reader_agent="agent:engine")
@@ -274,7 +274,7 @@ async def test_desk_bands_by_sender_triage_and_heuristic(actions: Actions) -> No
     await send_message(p, from_agent="agent:a", from_project="coldspot",
                        to_project=OPERATOR_ADDR, body="pick a signing strategy",
                        desk_kind="decision")
-    await send_message(p, from_agent="agent:b", from_project="monsterhouse",
+    await send_message(p, from_agent="agent:b", from_project="sibling-three",
                        to_project=OPERATOR_ADDR, body="need the gemini key refilled",
                        desk_kind="hands")
     await send_message(p, from_agent="agent:c", from_project="osiris",
@@ -303,7 +303,7 @@ async def test_desk_folds_same_story_across_senders(actions: Actions) -> None:
     p = actions.pool
     story = ("Model divergence at mount: intended claude-fable-5, running claude-haiku-4-5. "
              "Either the harness demoted the seat or .osiris needs updating — {}")
-    for i, proj in enumerate(("rotten-apple", "Like-Us", "neo")):
+    for i, proj in enumerate(("sibling-eight", "Like-Us", "neo")):
         await send_message(p, from_agent=f"agent:w{i}", from_project=proj,
                            to_project=OPERATOR_ADDR, body=story.format(proj),
                            desk_kind="fyi")
@@ -315,7 +315,7 @@ async def test_desk_folds_same_story_across_senders(actions: Actions) -> None:
     assert len(desk["fyi"]) == 2  # 3 tellings folded to 1 + the unrelated brief
     folded = [c for c in desk["fyi"] if "same_story" in c][0]
     assert folded["same_story"]["count"] == 3
-    assert {m["project"] for m in folded["same_story"]["also"]} == {"rotten-apple", "Like-Us"}
+    assert {m["project"] for m in folded["same_story"]["also"]} == {"sibling-eight", "Like-Us"}
     assert "neo" in folded["body"]  # newest telling leads
     # ONE sender's similar briefs never same-story fold (their lane is reply_to thread-fold):
     # the false-fold guard — same-story means one condition, SEVERAL witnesses (live desk

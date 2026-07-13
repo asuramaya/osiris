@@ -55,7 +55,7 @@ LEGIT_DECISIONS = (
     ("Triggers as a pure projection of manifests (ruling #5)", "ruling"),
     ("DELIBERATELY NOT DONE: acronym-aware cross-base for SPV LPs (BP <-> Brilliant Phoenix) "
      '— token-overlap on "neuralink" would merge every Neuralink SPV', "rejection"),
-    ("Aim the watch at a real persona beat — the foreclosure broker (ForeScan's customer) — "
+    ("Aim the watch at a real persona beat — the foreclosure broker (old-venture's customer) — "
      "and build the subscriber-facing surface: a sourced tripwire feed, deliberately NOT a CRM",
      "rejection"),
     ("Deliberately NOT added to sources.py — that registry is the per-entity investigation "

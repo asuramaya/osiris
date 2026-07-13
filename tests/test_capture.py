@@ -199,7 +199,7 @@ async def test_tension_surfaces_in_the_scoped_briefing(actions: Actions) -> None
 
 
 async def test_orient_explicit_project_overrides_the_mount(actions: Actions) -> None:
-    """Heinrich's verified bug: orient(project=X) silently returned the MOUNT's briefing instead
+    """sibling-one's verified bug: orient(project=X) silently returned the MOUNT's briefing instead
     of X's — a silent wrong-scope (the confound class the fleet exists to catch). An explicit
     project must OVERRIDE the mount."""
     from src.mcp_server import _agents, _conn_key, orient
@@ -207,12 +207,12 @@ async def test_orient_explicit_project_overrides_the_mount(actions: Actions) -> 
     from src.orchestrator.compositions import seed_default_compositions
 
     now = datetime.now(UTC)
-    dec = await actions.create_or_find_object("SoftwareProject", "repo:decepticons", "session")
-    await actions.assert_property(dec, "name", "decepticons", "session", now, 0.9)
+    dec = await actions.create_or_find_object("SoftwareProject", "repo:sibling-two", "session")
+    await actions.assert_property(dec, "name", "sibling-two", "session", now, 0.9)
     # DECLARED (self_declared): this test is about project SCOPING, not the wall's grading —
     # an untouched miner guess would now (correctly) fold into the echo pile and prove nothing.
     th = await actions.create_or_find_object("Thread", "thread:dec-scope", "session")
-    for _n, _v in (("summary", "the decepticons-only thread"), ("status", "open")):
+    for _n, _v in (("summary", "the sibling-two-only thread"), ("status", "open")):
         await actions.assert_property(th, _n, _v, "session", now, 0.9,
                                       evidence_class=EvidenceClass.SELF_DECLARED.value)
     await actions.create_link(th, dec, "in_repo", "session", now, 0.9,
@@ -224,14 +224,14 @@ async def test_orient_explicit_project_overrides_the_mount(actions: Actions) -> 
             session = object()
 
     ctx = _Ctx()
-    _agents[_conn_key(ctx)] = AgentIdentity(   # mounted as heinrich...
-        agent_id="agent:heinX", session="heinX", project="heinrich", model=None, cwd=None)
+    _agents[_conn_key(ctx)] = AgentIdentity(   # mounted as sibling-one...
+        agent_id="agent:heinX", session="heinX", project="sibling-one", model=None, cwd=None)
     try:
-        res = await orient(project="decepticons", ctx=ctx)   # ...but explicitly asks decepticons
+        res = await orient(project="sibling-two", ctx=ctx)   # ...but explicitly asks sibling-two
     finally:
         _agents.pop(_conn_key(ctx), None)
-    assert res["project"] == "decepticons"                   # honored the explicit scope
-    assert "the decepticons-only thread" in [r["summary"] for r in res["open_threads"]]
+    assert res["project"] == "sibling-two"                   # honored the explicit scope
+    assert "the sibling-two-only thread" in [r["summary"] for r in res["open_threads"]]
 
 
 async def test_unmounted_orient_is_a_bounded_map_never_the_firehose(
@@ -259,7 +259,7 @@ async def test_unmounted_orient_is_a_bounded_map_never_the_firehose(
 
 async def test_swap_banner_stands_down_before_a_recorded_repo_choice(
         actions: Actions) -> None:
-    """Metron IV's re-litigation (wave-2 fa918939): xxit runs opus by RECORDED operator
+    """Metron IV's re-litigation (wave-2 fa918939): sibling-seven runs opus by RECORDED operator
     choice, yet every successor got the confess-or-fix banner. An intended_model property
     on the SoftwareProject is the graph's own .osiris — the banner consults it first."""
     from datetime import UTC, datetime
@@ -296,7 +296,7 @@ async def test_swap_banner_stands_down_before_a_recorded_repo_choice(
 
 async def test_swap_banner_stands_down_for_a_triage_wake_on_the_economy_model(
         actions: Actions, monkeypatch) -> None:
-    """The wake-economy false alarm (pokex, msg 281): triage wakes ride a cheaper model by
+    """The wake-economy false alarm (sibling-four, msg 281): triage wakes ride a cheaper model by
     the operator's OWN ruling (osiris_wake_model), yet the swap banner measured them against
     the standing choice — every wake 'escalated' policy as a rug-pull. When the observed
     model IS the economy model and the wake ledger witnesses a wake minutes ago, the banner
@@ -623,7 +623,7 @@ async def test_supersede_self_is_a_noop_not_a_burial(actions: Actions) -> None:
 
 
 async def test_record_decision_is_atomic_no_orphan_husk(actions: Actions) -> None:
-    """The write-integrity fix (rotten-apple audit): record_decision was five sequential
+    """The write-integrity fix (sibling-eight audit): record_decision was five sequential
     transactions — a process death between the create and its summary left an orphan Decision
     with no body. Now it is ONE transaction: force a failure mid-sequence and prove NOTHING
     persists — not even the object husk."""

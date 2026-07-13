@@ -317,7 +317,7 @@ async def _stale_resumable_owner(actions: Actions, tmp_path: Path,
 
 async def test_live_owner_gets_delivery_not_a_twin(actions: Actions, tmp_path: Path) -> None:
     """An awake owner (fresh mount) means DELIVER: the mail sits in its box, nothing spawns —
-    waking a twin beside a live owner is the fragmentation heinrich reported."""
+    waking a twin beside a live owner is the fragmentation sibling-one reported."""
     from src.orchestrator import mounts
 
     await _agent_with_mail(actions)
@@ -524,7 +524,7 @@ def test_a_rate_is_not_a_bound() -> None:
 
     Every guard in should_wake measured wakes over a SLIDING WINDOW — the per-project cap, the
     hourly budget, the grace. Every one of them RESETS. So one unread letter ("to whoever mounts
-    monsterhouse next") spawned 79 `claude -p` sessions over 18 hours on a project the operator
+    sibling-three next") spawned 79 `claude -p` sessions over 18 hours on a project the operator
     had not opened in two days, minting a fresh agent every ~32 minutes — AT EXACTLY THE CAP.
     The cap was working perfectly, and that was the bug: it bounded the RATE while nothing bounded
     the TOTAL, so a message that could never be settled became a permanent alarm clock ticking at
@@ -628,15 +628,15 @@ def test_a_wake_gets_one_stable_ghost_per_project_not_one_per_wake() -> None:
     """463 MINTS, 463 IDENTITIES, AND NOT ONE OF THEM THE INTENDED ONE.
 
     The anchor was keyed on the WAKE ROW ID, so every wake resolved to a fresh agent:wake-<id>
-    and the roster filled with strangers the operator never started — 48 in monsterhouse alone,
+    and the roster filled with strangers the operator never started — 48 in sibling-three alone,
     a project he had not opened in two days. A wake is not a new MIND; it is the same errand run
     again. One name per house, re-worn.
     """
     from src.orchestrator.trigger import _wake_job_dir
 
-    a = _wake_job_dir("monsterhouse")
-    b = _wake_job_dir("monsterhouse")
-    assert a == b and a.endswith("/jobs/wake-monsterhouse")   # same errand, same face
+    a = _wake_job_dir("sibling-three")
+    b = _wake_job_dir("sibling-three")
+    assert a == b and a.endswith("/jobs/wake-sibling-three")   # same errand, same face
     assert _wake_job_dir("tony") != a                          # different house, different face
     # a hostile project name cannot escape the jobs dir
     assert "/jobs/wake-" in _wake_job_dir("../../etc/passwd")

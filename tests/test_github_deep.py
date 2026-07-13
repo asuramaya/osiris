@@ -23,7 +23,7 @@ def test_github_deep_extracts_declared_links_domains_and_commit_email() -> None:
         "profile": {"name": "architect of illusions", "twitter_username": "asuramaya_hq",
                     "blog": "asuramaya.com", "bio": "researcher"},
         "readme": readme,
-        "homepages": ["https://madapesai.com", "https://chronohorn.com"],
+        "homepages": ["https://other-repo.com", "https://sibling-five.com"],
         "commit_emails": {"dakota.jm@gmail.com": 400,
                           "69973947+asuramaya@users.noreply.github.com": 100},
     }
@@ -42,9 +42,9 @@ def test_github_deep_extracts_declared_links_domains_and_commit_email() -> None:
     # the github account itself is not re-emitted as a separate declared account
     assert ("github:asuramaya", "declares") not in links
     # owned sites -> URL + Domain
-    assert ("URL", "https://madapesai.com") in objs
-    assert ("Domain", "madapesai.com") in objs
-    assert ("Domain", "chronohorn.com") in objs
+    assert ("URL", "https://other-repo.com") in objs
+    assert ("Domain", "other-repo.com") in objs
+    assert ("Domain", "sibling-five.com") in objs
     # the real committing email (strongest tie); github noreply is dropped
     assert (
         objs[("Email", "dakota.jm@gmail.com")].evidence_class

@@ -40,7 +40,7 @@ def _desk() -> dict:
              "headline": "model check", "moot": "fixed in bcbdeab", "by": "agent:fixer"}],
         "your_queue": {"threads": [
             {"id": "3ea7b203", "summary": "refill the gemini key", "kind": "obligation",
-             "project": "monsterhouse"}],
+             "project": "sibling-three"}],
             "note": "owner=operator"},
         "owed": 1,
         "letters": 1,
@@ -50,10 +50,10 @@ def _desk() -> dict:
              "asks": [{"id": 289, "from": "agent:d", "from_project": "coldspot",
                        "body": "🚨 CRITICAL: root escalation <script>x</script>",
                        "when": "2026-07-11T19:22:00+00:00"}]},
-            {"project": "monsterhouse", "owed": 1, "critical": False, "asks": [],
+            {"project": "sibling-three", "owed": 1, "critical": False, "asks": [],
              "oldest_secs": 190000.0,
              "debts": [{"id": "3ea7b203", "summary": "refill the gemini key",
-                        "kind": "obligation", "project": "monsterhouse"}]}],
+                        "kind": "obligation", "project": "sibling-three"}]}],
         "note": "peek",
     }
 
@@ -66,8 +66,8 @@ def test_desk_lands_on_a_roster_never_the_whole_backlog() -> None:
     html = render_desk(_desk())
     assert "YOU OWE <b>1</b>" in html and "letters <b>1</b>" in html
     # a roster of links, critical first — and NOT the contents
-    assert '<a href="/desk?p=coldspot">' in html and '<a href="/desk?p=monsterhouse">' in html
-    assert html.index("/desk?p=coldspot") < html.index("/desk?p=monsterhouse")
+    assert '<a href="/desk?p=coldspot">' in html and '<a href="/desk?p=sibling-three">' in html
+    assert html.index("/desk?p=coldspot") < html.index("/desk?p=sibling-three")
     assert 'class="crit"' in html
     assert "refill the gemini key" not in html    # debt summaries stay behind the click
     assert "root escalation" not in html          # brief bodies stay behind the click
@@ -80,13 +80,13 @@ def test_desk_lands_on_a_roster_never_the_whole_backlog() -> None:
 def test_walking_into_one_project_opens_its_debts_and_the_four_doors() -> None:
     """?p=<project> is the sitting: that project's debts, each with its exits, and the briefs
     that asked — together, because that is the unit of work."""
-    html = render_desk_project(_desk(), "monsterhouse")
+    html = render_desk_project(_desk(), "sibling-three")
     assert '<a href="/desk">← all projects</a>' in html
     assert "refill the gemini key" in html
     assert 'data-verb="resolve" data-id="3ea7b203"' in html
-    assert 'data-verb="assign" data-id="3ea7b203" data-owner="monsterhouse"' in html
+    assert 'data-verb="assign" data-id="3ea7b203" data-owner="sibling-three"' in html
     assert 'data-verb="defer" data-id="3ea7b203" data-days="30"' in html
-    # the coldspot ask does NOT bleed into monsterhouse's sitting
+    # the coldspot ask does NOT bleed into sibling-three's sitting
     assert "root escalation" not in html
     # a project with an ask renders the brief + the human's own dismiss; bodies are escaped
     cold = render_desk_project(_desk(), "coldspot")
@@ -119,7 +119,7 @@ def test_page_shell_carries_nav_poller_and_partial_contract() -> None:
 def test_mail_overview_links_boxes_and_flags_unsettled() -> None:
     html = render_mail_overview([
         {"box": "osiris", "msgs": 12, "unsettled": 0, "last_at": "2026-07-11 19:49:56"},
-        {"box": "decepticons", "msgs": 54, "unsettled": 3, "last_at": "2026-07-11 10:00:00"},
+        {"box": "sibling-two", "msgs": 54, "unsettled": 3, "last_at": "2026-07-11 10:00:00"},
     ])
     assert '<a href="/mail?box=osiris">' in html
     assert "3 unsettled" in html and "settled" in html
@@ -127,14 +127,14 @@ def test_mail_overview_links_boxes_and_flags_unsettled() -> None:
 
 def test_mail_box_renders_threads_with_messages_inside() -> None:
     html = render_mail_box("osiris", [
-        {"thread": 228, "between": ["osiris", "rotten-apple"], "unsettled": 1,
+        {"thread": 228, "between": ["osiris", "sibling-eight"], "unsettled": 1,
          "last_at": "2026-07-11 19:54:12",
          "msgs": [
-             {"id": 301, "from_agent": "agent:ra", "from_project": "rotten-apple",
+             {"id": 301, "from_agent": "agent:ra", "from_project": "sibling-eight",
               "to_agent": None, "body": "grievances <b>bold</b>",
               "created_at": "2026-07-11 19:54:12", "settled": False},
          ]}])
-    assert 'id="t228"' in html and "osiris ↔ rotten-apple" in html
+    assert 'id="t228"' in html and "osiris ↔ sibling-eight" in html
     assert "&lt;b&gt;bold&lt;/b&gt;" in html and "unsettled" in html
 
 

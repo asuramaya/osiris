@@ -239,7 +239,7 @@ async def test_a_guessed_duty_never_rides_the_wall(actions: Actions) -> None:
     A guessed duty used to get a "loud week" before folding into the pile. That window IS what let
     the snowball grow: the miner mints faster than seven days, so the wall stayed permanently full
     of fresh inferences. 908 of the fleet's 1067 open threads (85%) turned out to be untouched
-    miner guesses, and decepticons — a project the operator had KILLED — was showing 181 of them.
+    miner guesses, and sibling-two — a project the operator had KILLED — was showing 181 of them.
 
     So a guess gets no week. A thread no mind has ever touched is a SUGGESTION, and it goes
     straight to the counted pile, one click away. The wall shows only what a mind actually touched.
@@ -325,7 +325,7 @@ async def test_the_fleet_totals_actually_add_up(actions: Actions) -> None:
 
 
 async def test_a_halted_program_is_not_debt(actions: Actions) -> None:
-    """THE DEAD TREE'S FRUIT (operator, 2026-07-12). He killed decepticons and heinrich BY NAME.
+    """THE DEAD TREE'S FRUIT (operator, 2026-07-12). He killed sibling-two and sibling-one BY NAME.
     Their 333 open threads are REAL YIELD — the miner did its job and the work was genuine — so
     the janitor must never sweep them. But they are not DEBT either, and they were inflating every
     number in the system long after he had stopped both programs.

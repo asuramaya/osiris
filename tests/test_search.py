@@ -81,20 +81,20 @@ async def test_a_keyword_bag_relaxes_to_any_term(actions: Actions) -> None:
     zero by construction while the graph is full. A plain multi-word bag that strict-AND
     can't satisfy relaxes to ANY-term, best-covered first; explicit syntax (quotes,
     operators) is never second-guessed."""
-    await _decision(actions, "decision:ga", "the gestalt head-pointer ships",
+    await _decision(actions, "decision:ga", "the sibling-six head-pointer ships",
                     "agent:a", EvidenceClass.SELF_DECLARED.value)
     await _decision(actions, "decision:tr", "training the reinforcement loop on pytorch",
                     "agent:a", EvidenceClass.SELF_DECLARED.value)
     # strict-AND would need one doc holding all of these — instead both docs surface
-    out = await _search(actions, "gestalt accessibility pointer hands-free training")
+    out = await _search(actions, "sibling-six accessibility pointer hands-free training")
     got = {h["canonical"] for h in out["hits"]}
     assert {"decision:ga", "decision:tr"} <= got
     assert "ANY term" in out["note"]
     # a quoted phrase is the asker's own syntax — no relaxation behind their back
-    assert (await _search(actions, '"gestalt training loop"'))["hits"] == []
+    assert (await _search(actions, '"sibling-six training loop"'))["hits"] == []
     # the log records the ORIGINAL query with the relaxed outcome (telemetry stays honest)
     row = await actions.pool.fetchrow(
-        "SELECT hits FROM search_log WHERE query='gestalt accessibility pointer hands-free "
+        "SELECT hits FROM search_log WHERE query='sibling-six accessibility pointer hands-free "
         "training'")
     assert row is not None and row["hits"] >= 2
 

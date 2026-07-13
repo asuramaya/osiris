@@ -240,7 +240,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     words = [w for w in q.split() if w]
     plain_bag = ('"' not in q and " or " not in q.lower()
                  and not any(w.startswith("-") for w in words))  # a leading '-' is NOT
-    # syntax; an inner hyphen (hands-free, rotten-apple) is just a word
+    # syntax; an inner hyphen (hands-free, a-sibling) is just a word
     if not rows and len(words) > 1 and plain_bag:
         # PROGRESSIVE RELAXATION (field report, agent e46a657e-ii, msg 124): websearch
         # semantics AND every term, so a keyword BAG ('Hector background skills experience

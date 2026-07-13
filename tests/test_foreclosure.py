@@ -1,5 +1,5 @@
 """Harris County foreclosure vertical — watcher, object-level beat matching, and the
-leads feed read-model. The broker beat (ForeScan, done right): a notice → a graded
+leads feed read-model. The broker beat (old-venture, done right): a notice → a graded
 Property node → a sourced lead, with a beat that fires only on what it cares about.
 """
 from __future__ import annotations

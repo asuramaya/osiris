@@ -21,20 +21,20 @@ def test_groups_by_project_and_collapses_the_past() -> None:
         "agent:live1": _n(live=True, ts=T1),
         "agent:old1": _n(ts=T0),
         "agent:old2": _n(ts=T1),
-        "agent:h1": _n(project="heinrich", model="claude-opus-4-8"),
-        "agent:h2": _n(project="heinrich"),
+        "agent:h1": _n(project="sibling-one", model="claude-opus-4-8"),
+        "agent:h2": _n(project="sibling-one"),
     }
     tree = render_fleet_tree(nodes)
     lines = tree.splitlines()
-    # one section per project, sorted; counts in the header
-    assert lines[0].startswith("▸ heinrich — 0 live · 2 sessions")
-    assert any(line.startswith("▸ osiris — 1 live · 3 sessions") for line in lines)
+    # one section per project, sorted ALPHABETICALLY; counts in the header
+    assert lines[0].startswith("▸ osiris — 1 live · 3 sessions")
+    assert any(line.startswith("▸ sibling-one — 0 live · 2 sessions") for line in lines)
     # the live agent is expanded; the retired collapse to one counted line with the freshest id
     assert "● agent:live1  fable-5" in tree
     assert "○ 2 past sessions (latest agent:old2)" in tree
     assert "agent:old1" not in tree  # folded away
-    # heinrich has no timestamps at all → count only, no latest note
-    assert "○ 2 past sessions" in tree.split("▸ osiris")[0]
+    # sibling-one has no timestamps at all → count only, no latest note
+    assert "○ 2 past sessions" in tree.split("▸ sibling-one")[1]
 
 
 def test_swarm_children_fold_into_a_model_tally() -> None:

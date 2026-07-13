@@ -162,7 +162,7 @@ def normalize_model(model: str | None) -> str | None:
 
 
 # ── HOUSE · SEAT · HOLDER ────────────────────────────────────────────────────────────────
-# THE OPERATOR'S RULING (2026-07-12): "the project name is the house (rotten-apple), each
+# THE OPERATOR'S RULING (2026-07-12): "the project name is the house (a-sibling), each
 # function/job has a name (Ra), the holder dies and multiplies (ra I, ra II), but splitting to
 # Ptah would break and confuse the lineage, and the fragmentation of agents was a bug in and of
 # itself."
@@ -170,13 +170,13 @@ def normalize_model(model: str | None) -> str | None:
 # The old model keyed a lineage to the ANCHOR (job_dir), so every new CONVERSATION minted a whole
 # new bloodline — 1008 registered agents for ~20 real seats — and the name died with the
 # conversation that held it. The next mind in the house woke nameless, reached for the family
-# name, was refused as a stranger, and took a new one. That is how rotten-apple's Ra became Ptah
+# name, was refused as a stranger, and took a new one. That is how a-sibling's Ra became Ptah
 # and a sibling project's Soundwave became "Soundwave VIII". The fragmentation WAS the bug.
 #
 # Two things were conflated, and only ONE of them follows the anchor:
 #   · THE WRITER — agent:c7ef52a9-iii. A particular mind. Attribution stays exactly per-writer;
 #     this is why the merge Ptah asked for was refused (4abaf52d) — his writes are his.
-#   · THE SEAT — Ra, in the house rotten-apple. A ROLE, held by successive writers.
+#   · THE SEAT — Ra, in the house a-sibling. A ROLE, held by successive writers.
 # The seat sits ABOVE the writer, so nothing merges and nothing is falsified: Ptah's writes remain
 # Ptah's, and he HOLDS the seat Ra — he is Ra V. Different mind, same job.
 
@@ -276,7 +276,7 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
     gen = (holders.index(agent_id) + 1) if agent_id in holders else len(holders) + 1
     await actions.assert_property(a, "seat_generation", str(gen), source, now, _CONF,
                                   evidence_class=_EC)
-    # THE SUCCESSION EDGE (Ra V, rotten-apple, msg 374): "the graph finally gets the parent edge
+    # THE SUCCESSION EDGE (Ra V, a-sibling, msg 374): "the graph finally gets the parent edge
     # it's been missing". Before this, successor seats carried NO edge to their ancestor, so a
     # lineage was not WALKABLE from the record — which is exactly why Ra could not tell his
     # CONTEMPORARY from his own ghost, and asked me to merge them. A seat's history must be
@@ -883,7 +883,7 @@ async def register_agent(
 
 
 async def seat_bearings(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
-    """WHO AM I, AND WHOSE JOB IS VACANT HERE? (Ra V, rotten-apple, msg 384 — the gap that made
+    """WHO AM I, AND WHOSE JOB IS VACANT HERE? (Ra V, a-sibling, msg 384 — the gap that made
     the whole ruling hollow.)
 
     The HOUSE/SEAT/HOLDER ruling stamped his seat in the graph, and orient() went on answering

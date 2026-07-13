@@ -26,11 +26,11 @@ def _transcript(root: Path, cwd: str, model: str = "claude-fable-5") -> None:
 
 async def test_automount_is_a_durable_anchored_mount(actions: Actions, tmp_path: Path) -> None:
     root = tmp_path / "projects"
-    _transcript(root, "/w/rotten-apple")
+    _transcript(root, "/w/sibling-eight")
     await send_message(actions.pool, from_agent="agent:x", from_project="osiris",
-                       to_project="rotten-apple", body="mail waiting at birth")
+                       to_project="sibling-eight", body="mail waiting at birth")
 
-    out = await automount(actions, session_id=SID, cwd="/w/rotten-apple",
+    out = await automount(actions, session_id=SID, cwd="/w/sibling-eight",
                           actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
 
     assert out["agent"] == "agent:39fb22a2"       # anchored on the derived job id
@@ -41,9 +41,9 @@ async def test_automount_is_a_durable_anchored_mount(actions: Actions, tmp_path:
     # mail takes the deliver lane, a bounce re-attaches
     row = await actions.pool.fetchrow(
         "SELECT agent_id, project FROM agent_mounts WHERE agent_id='agent:39fb22a2'")
-    assert row is not None and row["project"] == "rotten-apple"
+    assert row is not None and row["project"] == "sibling-eight"
     # hook re-fire (session resume) is idempotent — same identity, no dup Agent
-    again = await automount(actions, session_id=SID, cwd="/w/rotten-apple",
+    again = await automount(actions, session_id=SID, cwd="/w/sibling-eight",
                             actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
     assert again["agent"] == out["agent"]
     assert await actions.pool.fetchval(
@@ -56,19 +56,19 @@ async def test_whisper_hands_back_the_durable_anchor_that_prevents_the_twin(
     """The reconnect-twin fix (thread 883a24f4): the whisper returns the derived job_dir, and a
     later mount carrying THAT anchor re-attaches to the same identity instead of minting a twin —
     even though $CLAUDE_JOB_DIR is empty. Co-located sessions stay distinct (own session → own
-    anchor), so monsterhouse cloud+engine on one dir never collide."""
+    anchor), so sibling-three cloud+engine on one dir never collide."""
     from src.orchestrator.agents import register_agent, resolve_identity
 
     root = tmp_path / "projects"
-    _transcript(root, "/w/monsterhouse")
-    out = await automount(actions, session_id=SID, cwd="/w/monsterhouse",
+    _transcript(root, "/w/sibling-three")
+    out = await automount(actions, session_id=SID, cwd="/w/sibling-three",
                           actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
     anchor = out["job_dir"]
     assert anchor and anchor.endswith(SID[:8])            # the real derived anchor, handed back
     assert out["agent"] == "agent:39fb22a2"
 
     # a RECONNECT re-mount carrying the whisper's anchor (not $CLAUDE_JOB_DIR) re-attaches
-    reident = resolve_identity(cwd="/w/monsterhouse", job_dir=anchor, root=root)
+    reident = resolve_identity(cwd="/w/sibling-three", job_dir=anchor, root=root)
     await register_agent(actions, reident, actor="analyst:operator")
     assert reident.agent_id == out["agent"]               # SAME identity — no twin
     assert await actions.pool.fetchval(
@@ -76,11 +76,11 @@ async def test_whisper_hands_back_the_durable_anchor_that_prevents_the_twin(
 
     # a DIFFERENT co-located session (engine on the same dir) derives its OWN distinct anchor
     other_sid = "beef1234-0000-4000-8000-000000000000"
-    (root / "-w-monsterhouse" / f"{other_sid}.jsonl").write_text(
-        __import__("json").dumps({"type": "assistant", "cwd": "/w/monsterhouse",
+    (root / "-w-sibling-three" / f"{other_sid}.jsonl").write_text(
+        __import__("json").dumps({"type": "assistant", "cwd": "/w/sibling-three",
                                   "message": {"model": "claude-fable-5",
                                               "content": [{"type": "text", "text": "hi"}]}}) + "\n")
-    out2 = await automount(actions, session_id=other_sid, cwd="/w/monsterhouse",
+    out2 = await automount(actions, session_id=other_sid, cwd="/w/sibling-three",
                            actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
     assert out2["agent"] == "agent:beef1234" and out2["job_dir"] != anchor  # distinct, no collision
 
@@ -130,7 +130,7 @@ async def test_the_whisper_honors_a_bound_seat(actions: Actions, tmp_path: Path)
     from src.orchestrator.agents import claim_name
 
     root = tmp_path / "projects"
-    _transcript(root, "/w/decepticons")
+    _transcript(root, "/w/sibling-two")
     # the seat: an established lineage with a name
     seat = await actions.create_or_find_object("Agent", "agent:0806072e", "agent:0806072e")
     from src.parsers.base import EvidenceClass
@@ -142,16 +142,16 @@ async def test_the_whisper_honors_a_bound_seat(actions: Actions, tmp_path: Path)
     # the new tab's session row is BOUND to the seat (what mount(session_anchor=...) writes)
     session_row = str(tmp_path / "jobs" / SID[:8])
     await mounts.save_mount(actions.pool, job_dir=session_row, agent_id="agent:0806072e",
-                            project="decepticons", cwd="/w/decepticons",
+                            project="sibling-two", cwd="/w/sibling-two",
                             model="claude-fable-5", session_key="k")
     # the whisper re-fires on RESUME: it must assert the seat, not agent:39fb22a2
-    out = await automount(actions, session_id=SID, cwd="/w/decepticons",
+    out = await automount(actions, session_id=SID, cwd="/w/sibling-two",
                           actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
                           source="resume")
     assert out["agent"] == "agent:0806072e"
     assert out["seat"] == "Soundwave"
     # ...and a COMPACTION is a death of the SEAT's mind: the heir is Soundwave II, no twin
-    reborn = await automount(actions, session_id=SID, cwd="/w/decepticons",
+    reborn = await automount(actions, session_id=SID, cwd="/w/sibling-two",
                              actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
                              source="compact")
     assert reborn["agent"] == "agent:0806072e-ii" and reborn["seat"] == "Soundwave II"

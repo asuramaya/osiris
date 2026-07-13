@@ -845,7 +845,7 @@ async def mount(
     # verbatim). The client's .mcp.json/user-scope entry sends the TRUE dir in the X-Osiris-Job
     # header on this very request (expansion client-side, proven live) — fall back to it, so a
     # by-the-book mount is durable + resolved instead of silently degrading to the cwd-guess
-    # (rotten-apple's first mount: unresolved identity, no registry row, invisible to the
+    # (a-sibling's first mount: unresolved identity, no registry row, invisible to the
     # trigger's owner-liveness — the wake lane would have minted a twin over a LIVE tab).
     job_dir = _sane_job_dir(job_dir) or _job_hint(ctx)
     key = _conn_key(ctx)

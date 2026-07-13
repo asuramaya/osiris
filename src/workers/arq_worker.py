@@ -26,7 +26,7 @@ from src.config.settings import get_settings
 from src.connectors.registry import CONNECTORS
 from src.db.pool import create_pool
 from src.db.redis import create_redis
-from src.ingest.sessions import sense_sessions_tick
+from src.ingest.sessions import adversary_pass, sense_sessions_tick
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, expand_case, run_cascade
 from src.orchestrator.manifests import load_manifests
@@ -169,11 +169,18 @@ async def sense_sessions(ctx: dict[str, Any]) -> int:
 
 
 async def sweep_session(ctx: dict[str, Any], transcript: str) -> int:
-    """The DEATH RITE's sweep half (task #22, ruling a882b334): a PreCompact hook posts the
-    dying session's transcript here and the miner senses it NOW — anything the mind forgot to
-    record deliberately is mined (DERIVED) around the seam instead of up to 10 minutes later,
-    so the heir's first orient() already shows it. Same miner, same ownership boundary, just
-    summoned to a deathbed instead of walking its rounds."""
+    """THE DEATH RITE — and now the ONLY way the adversary ever runs (B6, ruling ceae1604).
+
+    A PreCompact/Stop hook posts the dying session's transcript here and the adversary reads it
+    WHOLE, once, at the seam. Not a chunk with a cursor: the WHOLE ARC. That is what makes its
+    hardest rule possible — "before you return anything, search the rest of the transcript for its
+    resolution" — and it is why the crawl could never have obeyed that rule at any prompt quality.
+    A reader that cannot remember mints the question and never sees the answer.
+
+    Mining is SUMMONED, never walking: the cost is one call per session that actually ENDS, and
+    its output is disposed of at the seam by the mind that still holds the context, instead of
+    accumulating on a wall for eight days.
+    """
     import asyncio
 
     root = get_settings().osiris_sense_sessions
@@ -182,12 +189,12 @@ async def sweep_session(ctx: dict[str, Any], transcript: str) -> int:
         return 0
     actions: Actions = ctx["cascade"].actions
     try:
-        report = await sense_sessions_tick(actions, Path(root), only=path)
+        report = await adversary_pass(actions, path)
     except Exception as exc:  # a deathbed hiccup must not kill the worker
-        _log.warning("precompact sweep failed for %s: %r", transcript, exc)
+        _log.warning("death-rite sweep failed for %s: %r", transcript, exc)
         return 0
-    _log.info("precompact sweep %s: %s", path.name, report)
-    return report["chunks"]
+    _log.info("death-rite sweep %s: %s", path.name, report)
+    return int(report.get("proposed", 0))
 
 
 async def embed_pass(ctx: dict[str, Any]) -> int:

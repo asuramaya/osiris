@@ -34,11 +34,11 @@ async def test_emit_yield_rehomes_cross_project_items(actions: Actions) -> None:
     """The provenance fix: an item that distinctively names ANOTHER registered project is homed
     THERE, not blanket-attributed to the session's cwd repo. Ambiguity/self-mention keeps cwd."""
     now = datetime.now(UTC)
-    for name in ("osiris", "chronohorn"):
+    for name in ("osiris", "siblingrepo"):
         p = await actions.create_or_find_object("SoftwareProject", f"repo:{name}", "gitlog")
         await actions.assert_property(p, "name", name, "gitlog", now, 0.9)
     y = SessionYield(threads_opened=[
-        "Build chronohorn's local executor with mandatory checkpoints",  # -> chronohorn
+        "Build siblingrepo's local executor with mandatory checkpoints",  # -> siblingrepo
         "wire the osiris composer authoring shell",                      # -> osiris (self-named)
         "tune the extractor inheritance test until it converges",        # -> osiris (default)
     ])
@@ -50,7 +50,8 @@ async def test_emit_yield_rehomes_cross_project_items(actions: Actions) -> None:
         "  WHERE l.from_id=o.id AND l.type='in_repo' LIMIT 1) AS home "
         "FROM objects o WHERE o.type='Thread'")
     home = {r["s"]: r["home"] for r in rows}
-    assert home["Build chronohorn's local executor with mandatory checkpoints"] == "repo:chronohorn"
+    assert home["Build siblingrepo's local executor with mandatory checkpoints"] \
+        == "repo:siblingrepo"
     assert home["wire the osiris composer authoring shell"] == "repo:osiris"
     assert home["tune the extractor inheritance test until it converges"] == "repo:osiris"
 
@@ -199,9 +200,11 @@ async def test_first_sight_plants_cursor_then_senses_only_forward(
     t = proj / "session1.jsonl"
     t.write_text("\n".join(_dialogue("old history " * 30, "old reply " * 30)) + "\n")
 
-    llm = FakeLLM({"decisions": [{"summary": "the session transcript is a sensed source",
-                                  "kind": "ruling", "rationale": "compaction must not matter"}],
-                   "threads_opened": [], "threads_resolved": [], "obligations": []})
+    # the specimen is a THREAD, not a Decision: the adversary no longer mints decisions at all
+    # (1,620 minted, ZERO ever touched — a decision is what a mind KNOWS it made and records).
+    llm = FakeLLM({"threads_opened": [{"summary": "the session transcript is a sensed source",
+                                       "class": "commitment"}],
+                   "threads_resolved": []})
     rep = await sense_sessions_tick(actions, tmp_path, llm)
     # first sight PLANTS the cursor at EOF — history is backfill's explicit job
     assert rep["planted"] == 1 and rep["chunks"] == 0 and llm.prompts == []
@@ -221,8 +224,12 @@ async def test_first_sight_plants_cursor_then_senses_only_forward(
             f.write(line + "\n")
 
     rep = await sense_sessions_tick(actions, tmp_path, llm)
-    assert rep["chunks"] == 1 and rep["decisions"] == 1
-    assert len(llm.prompts) == 1
+    assert rep["chunks"] == 1 and rep["threads"] == 1
+    # TWO calls: the adversary reads, then the CRITIC judges its yield before it lands (the
+    # check-and-balance at birth). The critic only fires on threads — it never had a decision to
+    # judge, which is its own small indictment of the decision-mining we just deleted.
+    assert len(llm.prompts) == 2
+    assert llm.prompts[0].startswith("<transcript>") and "<candidates>" in llm.prompts[1]
     assert "PRINTED_SECRET" not in llm.prompts[0]  # tool result skipped unread
     assert "OPERATOR:" in llm.prompts[0] and "ownership boundary" in llm.prompts[0]
     assert llm.prompts[0].startswith("<transcript>")  # dialogue rides as fenced DATA
@@ -231,10 +238,14 @@ async def test_first_sight_plants_cursor_then_senses_only_forward(
         "WHERE name='summary' AND value #>> '{}' = 'the session transcript is a sensed source'"
     )
     assert row is not None
-    # origin attribution: the extraction is SOURCED to the originating agent (agent:<sid>, from
-    # the transcript stem 'session1'), so the credence clamp can reach it — not the old
-    # 'session-miner' bucket that laundered it. The grade stays DERIVED (a mined reading).
-    assert row["source_id"] == "agent:session1"
+    # THE SPEAKER IS THE ADVERSARY; THE AGENT IS THE SUBJECT (B4). Rows used to be SOURCED to
+    # agent:<session> on the argument that "the mined words are the agent's words" — they are not.
+    # The agent never said them: THE MINER SAID THEM ABOUT THE AGENT, and the graph answered
+    # "who said this?" with a name that had never uttered the sentence.
+    assert row["source_id"] == "session-miner"                       # who SPOKE
+    assert await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='about_agent'",
+        row["object_id"]) == "agent:session1"                        # whom it spoke ABOUT
     assert row["evidence_class"] == "derived"  # an LLM reading is an inference, never more
     # ...but the MINER stays the ACTOR (audit_log) — a mined row is still tellable from a declared
     # one two ways: the DERIVED grade AND the miner-vs-agent actor. Provenance preserved.
@@ -252,7 +263,7 @@ async def test_first_sight_plants_cursor_then_senses_only_forward(
         "WHERE l.type='in_repo' AND p.canonical='repo:testrepo'") == 1
 
     rep = await sense_sessions_tick(actions, tmp_path, llm)  # nothing new
-    assert rep["chunks"] == 0 and len(llm.prompts) == 1
+    assert rep["chunks"] == 0 and len(llm.prompts) == 2
 
 
 async def test_oversized_line_never_wedges_the_cursor(
@@ -286,17 +297,16 @@ async def test_oversized_line_never_wedges_the_cursor(
 # --- ownership: the prosthesis boundary, from the OTHER side ----------------------------
 
 async def test_miner_never_writes_onto_capture_owned_objects(actions: Actions) -> None:
-    s = "the endgame is a composition shape-shifter"
-    await record_decision(actions, s, kind="ruling")
     await open_thread(actions, "wire the composed watcher into SOURCE_TICKS with a live key")
+    await open_thread(actions, "the endgame is a composition shape-shifter")
 
-    y = SessionYield(
-        decisions=[{"summary": s, "kind": "ruling", "rationale": "re-derived by the miner"}],
-        threads_opened=["wire the composed watcher into SOURCE_TICKS with a live key"],
-    )
+    y = SessionYield(threads_opened=[
+        "wire the composed watcher into SOURCE_TICKS with a live key",
+        "the endgame is a composition shape-shifter",
+    ])
     counts = await emit_yield(actions, y, repo=None)
     assert counts["skipped_foreign"] == 2
-    assert counts["decisions"] == 0 and counts["threads"] == 0
+    assert counts["threads"] == 0
     # not one assertion from the miner landed on the session-owned objects
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM assertions WHERE source_id='session-miner'") == 0
@@ -505,11 +515,11 @@ def test_model_probe_reads_the_harness_field_not_the_prompt() -> None:
 
 def test_locate_anchors_on_job_id_over_newest(tmp_path: Path) -> None:
     """The multi-session box runs a FLEET; newest-mtime grabs the hottest parallel session
-    (proven live — the probe found 'heinrich' then 'xxit' before the anchor was fixed)."""
+    (proven live — the probe found 'a-sibling' then 'a-sibling' before the anchor was fixed)."""
     from src.ingest.sessions import locate_current_transcript
 
     mine = tmp_path / "-home-x-code-osiris"
-    other = tmp_path / "-home-x-code-heinrich"
+    other = tmp_path / "-home-x-code-a-sibling"
     mine.mkdir()
     other.mkdir()
     ours = mine / "ad1a1cb0-5985-491e-9ac2-abcdef012345.jsonl"
@@ -533,11 +543,11 @@ def test_repo_from_cwd_walks_to_the_git_root(tmp_path: Path) -> None:
     project (its git root), not the subdir basename (which minted a junk repo:my)."""
     from src.ingest.sessions import _repo_from_cwd
 
-    proj = tmp_path / "monsterhouse"
+    proj = tmp_path / "a-sibling"
     (proj / ".git").mkdir(parents=True)
     (proj / "my").mkdir()
-    assert _repo_from_cwd(str(proj / "my")) == "monsterhouse"  # subdir → project
-    assert _repo_from_cwd(str(proj)) == "monsterhouse"
+    assert _repo_from_cwd(str(proj / "my")) == "a-sibling"  # subdir → project
+    assert _repo_from_cwd(str(proj)) == "a-sibling"
     loose = tmp_path / "loose" / "dir"
     loose.mkdir(parents=True)
     assert _repo_from_cwd(str(loose)) == "dir"  # no .git → basename fallback
@@ -545,11 +555,11 @@ def test_repo_from_cwd_walks_to_the_git_root(tmp_path: Path) -> None:
 
 
 def test_locate_transcript_by_cwd_when_no_job_dir(tmp_path: Path) -> None:
-    """The decepticons fix: when CLAUDE_JOB_DIR is empty, find the session by its cwd's
+    """The a-sibling fix: when CLAUDE_JOB_DIR is empty, find the session by its cwd's
     project dir (newest transcript = active session) instead of falling to 'unknown'."""
     from src.ingest.sessions import locate_transcript_by_cwd
 
-    proj = tmp_path / "-home-x-code-decepticons"
+    proj = tmp_path / "-home-x-code-a-sibling"
     proj.mkdir()
     old = proj / "aaaaaaaa-1111.jsonl"
     old.write_text(_amodel("old", "claude-fable-5") + "\n")
@@ -558,87 +568,53 @@ def test_locate_transcript_by_cwd_when_no_job_dir(tmp_path: Path) -> None:
     import os
 
     os.utime(active, (10**10, 10**10))  # newest = the active session
-    assert locate_transcript_by_cwd("/home/x/code/decepticons", root=tmp_path) == active
+    assert locate_transcript_by_cwd("/home/x/code/a-sibling", root=tmp_path) == active
     # a trailing slash is tolerated; an unknown project → None (anonymous, never a crash)
-    assert locate_transcript_by_cwd("/home/x/code/decepticons/", root=tmp_path) == active
+    assert locate_transcript_by_cwd("/home/x/code/a-sibling/", root=tmp_path) == active
     assert locate_transcript_by_cwd("/home/x/code/ghost", root=tmp_path) is None
 
 
 async def test_source_model_stamped_on_emitted_yield(actions: Actions) -> None:
-    y = SessionYield(
-        decisions=[{"summary": "the source model is a provenance datapoint", "kind": "ruling",
-                    "rationale": ""}],
-        threads_opened=["wire the model probe into the miner"],
-    )
+    y = SessionYield(threads_opened=["wire the model probe into the miner"])
     await emit_yield(actions, y, repo=None, source_model="claude-opus-4-8")
-    for typ in ("Decision", "Thread"):
-        sm = await actions.pool.fetchval(
-            "SELECT value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
-            "WHERE o.type=$1 AND a.name='source_model' LIMIT 1", typ)
-        assert sm == "claude-opus-4-8"  # which Claude wrote it, on every write
+    sm = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.type='Thread' AND a.name='source_model' LIMIT 1")
+    assert sm == "claude-opus-4-8"  # which Claude wrote it, on every write
 
 
-# --- origin attribution: mined words are the agent's, the miner is only the actor -------
-
-async def test_origin_attribution_sources_to_agent_but_actor_stays_miner(
-    actions: Actions,
-) -> None:
-    """Succession follow-up #1: a mined extraction is SOURCED to the ORIGINATING agent (so the
-    credence clamp can reach it — the miner stops laundering the agent's words under its own
-    identity), while `session-miner` stays the ACTOR. The mined-vs-declared tell survives two
-    ways: the DERIVED grade AND the miner actor."""
-    y = SessionYield(
-        decisions=[{"summary": "route mined memory to the originating agent, not the miner",
-                    "kind": "ruling", "rationale": "the words are the agent's, relayed"}],
-        threads_opened=["wire the credence clamp onto the mined write path"],
-    )
-    counts = await emit_yield(actions, y, repo=None, origin="agent:heinrich")
-    assert counts["decisions"] == 1 and counts["threads"] == 1
-    rows = await actions.pool.fetch(
-        "SELECT a.source_id AS src, a.evidence_class AS ec FROM current_assertions a "
-        "JOIN objects o ON o.id=a.object_id WHERE a.name='summary'")
-    assert rows and all(r["src"] == "agent:heinrich" for r in rows)  # sourced to the agent
-    assert all(r["ec"] == "derived" for r in rows)                   # still graded a mining
-    # not one assertion carries the miner as its SOURCE — the laundering channel is gone
-    assert await actions.pool.fetchval(
-        "SELECT count(*) FROM current_assertions WHERE source_id='session-miner'") == 0
-    # yet EVERY write's actor is the miner (audit_log + object_events) — auditability preserved
-    write_actors = await actions.pool.fetch(
-        "SELECT DISTINCT actor FROM audit_log "
-        "WHERE action IN ('assert_property','create_object')")
-    assert {r["actor"] for r in write_actors} == {"session-miner"}
-    assert await actions.pool.fetchval(
-        "SELECT count(DISTINCT actor) FROM object_events WHERE event_type='create'") == 1
-    assert await actions.pool.fetchval(
-        "SELECT DISTINCT actor FROM object_events WHERE event_type='create'") == "session-miner"
+# --- origin attribution: THE SPEAKER IS THE ADVERSARY, THE AGENT IS THE SUBJECT ----------
+#
+# The test that lived here guarded the OPPOSITE law — that a mined row is SOURCED to the
+# originating agent, 'so the miner stops laundering the agent's words under its own
+# identity'. That reasoning was backwards and it produced the disease: THE AGENT NEVER SAID
+# THOSE WORDS. The miner said them ABOUT the agent, and the graph then answered 'who said
+# this?' with a name that had never uttered the sentence. See
+# test_the_adversary_SPEAKS_IN_ITS_OWN_NAME_never_the_agent_s (B4, ruling ceae1604).
 
 
 async def test_miner_skips_extractions_the_session_already_declared(actions: Actions) -> None:
-    """Miner over-read dedup (thread f34c572c / Heinrich grief #4): when the ORIGINATING agent
+    """Miner over-read dedup (thread f34c572c, a sibling's grievance #4): when the ORIGINATING
+    agent
     already recorded something deliberately (SELF_DECLARED), a fresh extraction that merely
     REWORDS it — same modulo case/punctuation and a prefix/suffix — is skipped, never re-minted
     as a DERIVED near-duplicate. Exact-hash dups are the ownership boundary's job; this catches
     the normalized near-dups the hash misses. A genuinely-new extraction still lands."""
-    agent = "agent:heinrich"
-    await record_decision(
-        actions, "The membrane must never close the loop silently", kind="ruling", source=agent)
+    agent = "agent:a-sibling"
+    await open_thread(
+        actions, "The membrane must never close the loop silently", source=agent)
     await open_thread(
         actions, "wire the composed watcher into SOURCE_TICKS with a live key", source=agent)
-    y = SessionYield(
-        decisions=[
-            # a reworded copy of the deliberate ruling (lowercased + trailing clause) → skip
-            {"summary": "the membrane must never close the loop silently, per the ruling",
-             "kind": "ruling", "rationale": ""},
-            # genuinely new → mint
-            {"summary": "the satellite poller advances its cursor forward only",
-             "kind": "choice", "rationale": ""},
-        ],
-        # a reworded copy of the deliberate thread (capitalized + trailing period) → skip
-        threads_opened=["Wire the composed watcher into SOURCE_TICKS with a live key."],
-    )
+    y = SessionYield(threads_opened=[
+        # reworded copies of what the agent ALREADY wrote by hand (case + trailing clause) → skip
+        "the membrane must never close the loop silently, per the ruling",
+        "Wire the composed watcher into SOURCE_TICKS with a live key.",
+        # genuinely new → it lands
+        "the satellite poller advances its cursor forward only",
+    ])
     counts = await emit_yield(actions, y, repo=None, origin=agent)
-    assert counts["skipped_dup"] == 2                            # the reworded decision + thread
-    assert counts["decisions"] == 1 and counts["threads"] == 0  # only the new decision landed
+    assert counts["skipped_dup"] == 2                 # both rewordings of the agent's own words
+    assert counts["threads"] == 1                     # only the genuinely-new one landed
     # the deliberate record is untouched — no DERIVED echo of it was minted alongside it
     grades = await actions.pool.fetch(
         "SELECT DISTINCT a.evidence_class AS ec FROM current_assertions a JOIN objects o "
@@ -653,7 +629,7 @@ async def test_miner_never_reminds_the_fleet_of_finished_work(actions: Actions) 
     deliberate-captures jaw never saw it and the miner re-minted reworded copies of done work.
     A fresh extraction near-matching a recently-resolved thread is skipped; genuinely new
     work still lands, and the resolved record itself is untouched."""
-    agent = "agent:heinrich"
+    agent = "agent:a-sibling"
     tid = await open_thread(
         actions, "escalate the miner timeout to a chosen 540 seconds", source=agent)
     assert tid is not None
@@ -934,3 +910,68 @@ async def test_the_critic_fails_OPEN_never_silently_dropping_an_unjudged_yield()
     for llm in (_Broken(), _Garbage()):
         kept, dropped = await critique_threads(llm, threads, model="haiku")  # type: ignore[arg-type]
         assert dropped == 0 and len(kept) == 2
+
+
+# --- THE ADVERSARY (B4, ruling ceae1604) -------------------------------------------------
+
+async def test_the_adversary_SPEAKS_IN_ITS_OWN_NAME_never_the_agent_s(actions: Actions) -> None:
+    """THE ATTRIBUTION LIE, and it is the whole law of this week in one field.
+
+    Mined rows used to be SOURCED to `agent:<the session whose transcript it read>`, on the
+    argument that "the mined words are the agent's words". THEY ARE NOT. The agent never said
+    them — THE MINER SAID THEM ABOUT THE AGENT. So the graph answered "who said this?" with a
+    name that had never uttered the sentence, and 3,579 machine guesses sat on the fleet's wall
+    WEARING THEIR AUTHORS' FACES.
+
+    Provenance exists to keep speaker and subject apart. So: source_id = the adversary (who
+    spoke), about_agent = the subject (whose transcript it read).
+    """
+    y = SessionYield(threads_opened=[{"summary": "the seam design was never finished",
+                                      "class": "commitment"}])
+    await emit_yield(actions, y, repo=None, origin="agent:someone-else")
+
+    row = await actions.pool.fetchrow(
+        "SELECT a.source_id, a.evidence_class, "
+        "  (SELECT value #>> '{}' FROM current_assertions WHERE object_id=a.object_id "
+        "   AND name='about_agent') AS subject "
+        "FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.type='Thread' AND a.name='summary'")
+    assert row["source_id"] != "agent:someone-else", \
+        "the adversary signed an agent's name to words that agent never said"
+    assert row["source_id"] == "session-miner"      # the SPEAKER
+    assert row["subject"] == "agent:someone-else"   # the SUBJECT — findable, but not the author
+    assert row["evidence_class"] == "derived"       # and still, always, a guess
+
+
+async def test_the_adversary_CANNOT_MINT_A_DECISION_even_if_it_tries(actions: Actions) -> None:
+    """1,620 mined Decisions. ZERO ever touched by anyone, ever.
+
+    A decision is precisely the thing a mind KNOWS it made and records on purpose — there is
+    nothing there to infer, and eight days of trying produced a 0% hit rate. The prompt no longer
+    asks for them; this is the belt to that braces, because a model that drifts back to an old
+    habit must not be able to LAND it.
+    """
+    y = SessionYield(
+        decisions=[{"summary": "we will rewrite the parser", "kind": "ruling", "rationale": ""}],
+        threads_opened=[{"summary": "a real loose end", "class": "question"}])
+    counts = await emit_yield(actions, y, repo=None, origin="agent:x")
+
+    assert counts["decisions"] == 0
+    assert await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Decision'") == 0
+    assert counts["threads"] == 1, "...but its actual job still works"
+
+
+def test_the_whole_arc_is_read_or_the_elision_SAYS_SO(tmp_path: Path) -> None:
+    """ABANDONMENT IS ONLY VISIBLE ACROSS A CONVERSATION — a thing raised early and never
+    returned to. Head-and-tail sampling would destroy the very signal we hunt, so when a session
+    is too big to fit we keep the head (where things get flagged) and the tail (where they get
+    forgotten) and SAY SO in the middle, loudly, rather than lying by omission."""
+    from src.ingest.sessions import _whole_arc
+
+    assert _whole_arc("short", cap=100) == "short"          # the common case: the WHOLE thing
+
+    big = "A" * 500 + "M" * 500 + "Z" * 500
+    out = _whole_arc(big, cap=300)
+    assert out.startswith("A") and out.endswith("Z")        # head AND tail, never one end
+    assert "ELIDED" in out and "Prefer silence to a guess" in out
+    assert "M" * 100 not in out                             # the middle really is gone

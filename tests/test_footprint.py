@@ -37,7 +37,7 @@ def test_url_to_account_recognizes_profiles() -> None:
 
 def test_url_account_ignores_non_profile_urls() -> None:
     # a repo path or article is not a profile -> no account derived
-    r = parse_url_accounts({}, _inp("URL", "https://github.com/asuramaya/MadApes.ai"))
+    r = parse_url_accounts({}, _inp("URL", "https://github.com/someuser/SomeRepo"))
     assert r.objects == []
     r2 = parse_url_accounts({}, _inp("URL", "https://zenodo.org/record/2403053/files/article.pdf"))
     assert r2.objects == []

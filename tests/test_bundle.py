@@ -20,7 +20,7 @@ NOW = datetime(2026, 7, 11, tzinfo=UTC)
 
 async def _garden(actions: Actions) -> None:
     """Two trees with fruit, and one rootless object hanging in the void."""
-    for repo, threads, commits in (("osiris", 3, 1), ("monsterhouse", 2, 0)):
+    for repo, threads, commits in (("osiris", 3, 1), ("sibling-three", 2, 0)):
         proj = await actions.create_or_find_object("SoftwareProject", f"repo:{repo}", "session")
         await actions.assert_property(proj, "name", repo, "session", NOW, 0.9)
         for i in range(threads):
@@ -46,7 +46,7 @@ async def test_fanout_collapses_any_set_into_its_trees(actions: Actions) -> None
                  "where": [{"property": "status", "op": "eq", "value": "open"}]}})
     assert out["kind"] == "rows"
     rows = out["items"]
-    assert [r["group"]["neighborhood"] for r in rows] == ["osiris", "monsterhouse", "(no tree)"]
+    assert [r["group"]["neighborhood"] for r in rows] == ["osiris", "sibling-three", "(no tree)"]
     assert [r["metric"] for r in rows] == [3, 2, 1]        # ranked by weight, no ORDER needed
     assert rows[0]["id"] is not None                       # carries the tree's id, so it walks
     assert rows[-1]["id"] is None                          # the void has no coordinates
@@ -79,7 +79,7 @@ async def test_the_garden_is_type_blind(actions: Actions) -> None:
     assert [(r["group"]["neighborhood"], r["metric"]) for r in commits["items"]] == [("osiris", 1)]
     everything = await run_spec(actions.pool, {"op": "bundle", "from": {"op": "select"}})
     trees = {r["group"]["neighborhood"]: r["metric"] for r in everything["items"]}
-    assert trees["osiris"] == 4 and trees["monsterhouse"] == 2   # threads AND commits, one call
+    assert trees["osiris"] == 4 and trees["sibling-three"] == 2   # threads AND commits, one call
 
 
 async def test_neighborhoods_of_is_one_query_and_names_the_tree(actions: Actions) -> None:
@@ -89,6 +89,6 @@ async def test_neighborhoods_of_is_one_query_and_names_the_tree(actions: Actions
     ids = [r["id"] for r in await actions.pool.fetch(
         "SELECT id FROM objects WHERE type='Thread' AND status='active'")]
     hoods = await neighborhoods_of(actions.pool, ids)
-    assert sorted({h["name"] for h in hoods.values()}) == ["monsterhouse", "osiris"]
+    assert sorted({h["name"] for h in hoods.values()}) == ["osiris", "sibling-three"]
     assert len(hoods) == len(ids) - 1                     # the rootless one is absent, not faked
     assert all(h["id"] for h in hoods.values())           # every tree carries coordinates

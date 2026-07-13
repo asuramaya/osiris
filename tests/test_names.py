@@ -1,6 +1,6 @@
 """Phase 2 — names/seats: the model names itself, the substrate enforces uniqueness
 (ruling 1e02e069), AMENDED by the HOUSE/SEAT/HOLDER ruling (operator, 2026-07-12): "the project
-name is the house (rotten-apple), each function/job has a name (Ra), the holder dies and
+name is the house (sibling-eight), each function/job has a name (Ra), the holder dies and
 multiplies (ra I, ra II)". Exhaustion is per-HOUSE, not global: a seat belongs to one house, and
 inside that house it is INHERITED by whoever takes up the job next.
 """
@@ -29,7 +29,7 @@ async def _agent(actions: Actions, canonical: str, project: str = "handlingthelo
 async def test_a_seat_belongs_to_one_house_and_is_inherited_inside_it(actions: Actions) -> None:
     """AMENDED by the operator's ruling (2026-07-12). Exhaustion was GLOBAL and keyed to the
     lineage ANCHOR, so when a conversation ended its name died with it and the next mind in the
-    same house was refused as a stranger — which is how rotten-apple's Ra became Ptah. Now a seat
+    same house was refused as a stranger — which is how sibling-eight's Ra became Ptah. Now a seat
     belongs to a HOUSE: outsiders are refused, heirs inherit."""
     await _agent(actions, "agent:aaa", project="alpha")
     await _agent(actions, "agent:bbb", project="beta")
@@ -276,7 +276,7 @@ def test_dot_osiris_label_decouples_from_the_folder(tmp_path: Path) -> None:
     """The project label lives in .osiris, not the folder name — so a rename doesn't move the
     project (ruling 1e02e069). Explicit override > .osiris > folder basename."""
     from src.orchestrator.agents import read_project_label
-    repo = tmp_path / "xxit"
+    repo = tmp_path / "sibling-seven"
     repo.mkdir()
     (repo / ".git").mkdir()
     assert read_project_label(str(repo)) is None            # no file → caller uses basename
