@@ -236,20 +236,35 @@ async def dispose(
     return done
 
 
+# WHICH PRODUCER ARE WE MEASURING? The version marker is already in the data and costs nothing:
+# the v2 adversary stamps `about_agent` (it speaks in its OWN name, about the agent), while every
+# v1 crawl row was SOURCED to the agent and carries no such field. So "rows the current producer
+# made" is a fact we can read, not a config knob someone must remember to turn.
+_V2_ONLY = ("AND EXISTS (SELECT 1 FROM current_assertions v WHERE v.object_id=a.object_id "
+            "            AND v.name='about_agent') ")
+
+
 async def adversary_yield(
     pool: asyncpg.Pool, *, project: str | None = None, days: int = 30,
+    current_producer_only: bool = False,
 ) -> dict[str, Any]:
     """THE LICENCE. admitted ÷ judged over a window — the miner's measured rate of use.
 
     A producer whose telemetry counts what it MADE rather than what was USED is unfalsifiable and
     will rot without anyone noticing. This is the number that would have read 10.5% on day two and
     saved eight days and forty dollars. Below a floor, the adversary loses the right to spend.
+
+    `current_producer_only` measures the ADVERSARY THAT ACTUALLY EXISTS, not its dead predecessor.
+    Default False, so the historical record stays readable — that 0.098 is what killed v1 and it
+    should not be quietly erased. But the GATE reads the scoped number; see `licence`.
     """
     scope, args = "", [days]
     if project:
         scope = ("AND EXISTS (SELECT 1 FROM links l JOIN objects p ON p.id=l.to_id "
                  "  WHERE l.from_id=a.object_id AND l.type='in_repo' AND p.canonical=$2) ")
         args.append(project if project.startswith("repo:") else f"repo:{project}")  # type: ignore[arg-type]
+    if current_producer_only:
+        scope += _V2_ONLY
     row = await pool.fetchrow(
         "SELECT count(*) FILTER (WHERE a.name='admitted_because') AS admitted, "
         "       count(*) FILTER (WHERE a.name='retracted_because') AS dropped "
@@ -294,10 +309,19 @@ async def licence(pool: asyncpg.Pool, *, days: int = 30) -> dict[str, Any]:
 
     So the meter is not a dashboard. It is a GATE. Below the floor, the adversary does not run.
 
+    IT MEASURES THE PRODUCER THAT ACTUALLY EXISTS. I shipped this gate reading the FLEET-WIDE
+    yield, ran it, and it refused — on v1's 0.098, over rows v1 made, against a v2 that had not
+    yet written a line. And v2 could never have raised that number, because it was not allowed to
+    produce. A GATE THAT CAN NEVER OPEN IS A KILL SWITCH WEARING A GATE'S CLOTHES — the same crime
+    as everything else killed this week: a mechanism whose stated purpose and actual behaviour
+    differ. So it scopes to the current producer (rows carrying `about_agent`), which starts its
+    record at zero and EARNS it. The old 0.098 stays visible in adversary_yield(); it is what
+    killed v1 and it should not be quietly erased.
+
     Fail-OPEN on an unmeasurable state (no data yet, or a broken query): a metering bug must never
     silently disable the memory. It fails LOUD instead — `reason` says exactly why it is open.
     """
-    m = await adversary_yield(pool, days=days)
+    m = await adversary_yield(pool, days=days, current_producer_only=True)
     judged, rate = int(m["judged"]), m.get("yield")
     if judged < LICENCE_MIN_JUDGED:
         return {"may_spend": True, "reason": f"only {judged} rows judged in {days}d — a producer "

@@ -18,12 +18,19 @@ SEAT = "agent:thoth-xxviii"
 
 
 async def _mined(actions: Actions, canon: str, summary: str, *, origin: str = "session-miner",
-                 repo: str | None = None) -> object:
-    """A row the MINER wrote: DERIVED, unsigned by any mind."""
+                 repo: str | None = None, v2: bool = True) -> object:
+    """A row the MINER wrote: DERIVED, unsigned by any mind.
+
+    `v2` stamps `about_agent` — the speaker/subject split the current adversary always writes, and
+    therefore the marker that says WHICH PRODUCER MADE THIS ROW. v2=False forges v1 sediment: a
+    row from the dead crawl, which the licence gate must not hold against its successor."""
     o = await actions.create_or_find_object("Thread", canon, origin)
     await actions.assert_property(o, "summary", summary, origin, NOW, 0.4,
                                   evidence_class="derived")
     await actions.assert_property(o, "status", "open", origin, NOW, 0.4, evidence_class="derived")
+    if v2:
+        await actions.assert_property(o, "about_agent", "agent:whoever", origin, NOW, 0.4,
+                                      evidence_class="derived")
     if repo:
         await link_repo(actions, o, repo, NOW, source=origin, evidence_class="derived")
     return o
@@ -157,14 +164,14 @@ async def test_disposing_twice_is_a_no_op_never_a_double_retraction(actions: Act
 
 # --- THE LICENCE (B5) — the meter is not a dashboard, it is a GATE ------------------------
 
-async def _judged(actions: Actions, *, admit: int, drop: int) -> None:
+async def _judged(actions: Actions, *, admit: int, drop: int, v2: bool = True) -> None:
     """Walk the seam `admit` + `drop` times, so the meter has a real sample to read."""
     for i in range(admit):
-        t = await _mined(actions, f"thread:a{i}", f"a real loose end {i}")
+        t = await _mined(actions, f"thread:a{i}", f"a real loose end {i}", v2=v2)
         await dispose(actions, source=SEAT,
                       admit=[{"id": str(t)[:8], "because": "real, and nobody wrote it down"}])
     for i in range(drop):
-        t = await _mined(actions, f"thread:d{i}", f"work-step {i}")
+        t = await _mined(actions, f"thread:d{i}", f"work-step {i}", v2=v2)
         await dispose(actions, source=SEAT, drop=[{"id": str(t)[:8], "why": "narration"}])
 
 
@@ -215,3 +222,32 @@ async def test_the_gate_cannot_fire_before_there_is_ANYTHING_TO_MEASURE(actions:
     lic = await licence(actions.pool)
     assert lic["judged"] < LICENCE_MIN_JUDGED
     assert lic["may_spend"] is True, "a 0% yield over 5 rows is noise, not a verdict"
+
+
+async def test_the_gate_JUDGES_THE_PRODUCER_THAT_EXISTS_not_its_dead_predecessor(
+    actions: Actions,
+) -> None:
+    """A GATE THAT CAN NEVER OPEN IS A KILL SWITCH WEARING A GATE'S CLOTHES.
+
+    I shipped the licence reading the FLEET-WIDE yield, ran it live, and it refused — on v1's
+    0.098, computed over rows V1 MADE, against a v2 that had not yet written a single line. And
+    v2 could never have raised that number, because it was not allowed to produce. The stated
+    purpose (a circuit breaker) and the actual behaviour (a permanent lockout) differed, which is
+    the same crime as everything else killed this week.
+
+    The version marker is already in the data and costs nothing: the v2 adversary stamps
+    `about_agent` (it speaks in its OWN name, ABOUT the agent); every v1 crawl row was sourced to
+    the agent and carries no such field. So the gate reads the producer that actually exists.
+    """
+    from src.orchestrator.dispose import adversary_yield, licence
+
+    # v1's sediment: 4 admits, 46 drops = 0.08, well under the floor, and NO about_agent
+    await _judged(actions, admit=4, drop=46, v2=False)
+
+    hist = await adversary_yield(actions.pool)
+    assert hist["yield"] == 0.08, "the historical record must stay READABLE — it is what killed v1"
+
+    lic = await licence(actions.pool)
+    assert lic["may_spend"] is True, "v2 was condemned for a crime its predecessor committed"
+    assert lic["judged"] == 0                       # its own record starts at zero, and it earns it
+    assert "given a real sample" in lic["reason"]
