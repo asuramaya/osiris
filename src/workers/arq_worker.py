@@ -26,6 +26,7 @@ from src.config.settings import get_settings
 from src.connectors.registry import CONNECTORS
 from src.db.pool import create_pool
 from src.db.redis import create_redis
+from src.ingest.orphans import find_orphans, mark_swept
 from src.ingest.sessions import adversary_pass, sense_sessions_tick
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, expand_case, run_cascade
@@ -196,6 +197,50 @@ async def sense_sessions(ctx: dict[str, Any]) -> int:
     return report["chunks"]
 
 
+async def reap_orphans(ctx: dict[str, Any]) -> int:
+    """THE ORPHAN LANE (B7) — a session that died with no rite left NOBODY holding the context.
+
+    Killing the crawl made the PreCompact hook the only bell, so a session that crashes, is killed,
+    or simply ENDS without reaching the context ceiling was never read at all. That was a
+    regression I shipped knowingly, and this is its fix.
+
+    IT IS NOT A CRAWL. The crawl walked EVERY transcript FOREVER on a clock. This DETECTS — for
+    free, with a stat() and a watermark lookup — which sessions have ENDED and were never read, and
+    hands each ONCE to the same licence-gated death rite a graceful session gets. Its cost is
+    (sessions that actually died un-swept), and it converges to zero.
+
+    And it is the case that proves why the adversary cannot be the agent: a crashed session left
+    nobody to ask what it forgot. The mind is gone. Only an outside reader can recover it.
+    """
+    root = get_settings().osiris_sense_sessions
+    if not root:
+        return 0                       # the adversary is dark: detect nothing, spend nothing
+    pool = ctx["pool"]
+    orphans = await find_orphans(pool, Path(root))
+    if not orphans:
+        return 0
+    for path in orphans:
+        _log.info("orphan sweep: %s (died with no rite)", path.name)
+        await _arq_sweep(ctx, path)
+    return len(orphans)
+
+
+async def _arq_sweep(ctx: dict[str, Any], path: Path) -> None:
+    """Sweep one transcript and mark it read — whatever it yielded, INCLUDING NOTHING.
+
+    An empty yield is a COMPLETE answer (most sessions abandon nothing); re-reading a session
+    because it had nothing to say would be paying, forever, to be told nothing twice.
+    """
+    actions: Actions = ctx["cascade"].actions
+    try:
+        report = await adversary_pass(actions, path)
+        _log.info("orphan sweep %s: %s", path.name, report)
+    except Exception as exc:  # a dead session's hiccup must not stall the ones behind it
+        _log.warning("orphan sweep failed for %s: %r", path.name, exc)
+    finally:
+        await mark_swept(ctx["pool"], path)
+
+
 async def sweep_session(ctx: dict[str, Any], transcript: str) -> int:
     """THE DEATH RITE — and now the ONLY way the adversary ever runs (B6, ruling ceae1604).
 
@@ -221,6 +266,12 @@ async def sweep_session(ctx: dict[str, Any], transcript: str) -> int:
     except Exception as exc:  # a deathbed hiccup must not kill the worker
         _log.warning("death-rite sweep failed for %s: %r", transcript, exc)
         return 0
+    finally:
+        # MARK IT READ EVEN IF IT FAILED. The orphan reaper (B7) looks for transcripts that ended
+        # and were never swept — without this mark, every session that dies GRACEFULLY would be
+        # swept a second time, 45 minutes later, by the reaper. Two full extractions of the same
+        # conversation is exactly the ECHO class we deleted the crawl to be rid of.
+        await mark_swept(actions.pool, path)
     _log.info("death-rite sweep %s: %s", path.name, report)
     return int(report.get("proposed", 0))
 
@@ -338,6 +389,11 @@ class WorkerSettings:
         # ride the adversary's switch (killing the inferrer must never blind the observer).
         cron(watched(sense_liveness, every=60), minute=set(range(0, 60)), second={15},
              run_at_startup=True),
+        # THE ORPHAN LANE (B7): sessions that died with NO rite — a crash, a kill -9, a closed
+        # laptop — left nobody holding the context. DETECTION is free (a stat + a watermark); each
+        # orphan is then swept ONCE by the same licence-gated death rite. Not a crawl: its cost is
+        # (sessions that actually died un-swept) and it converges to zero.
+        cron(watched(reap_orphans, every=900), minute={7, 22, 37, 52}, second={0}, timeout=600),
         # THE CRAWL IS GONE (B6 of ruling ceae1604). There is no session-sensing cron, and its
         # absence is the design, not an omission.
         #
