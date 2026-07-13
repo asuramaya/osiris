@@ -278,3 +278,47 @@ async def test_a_guessed_duty_never_rides_the_wall(actions: Actions) -> None:
     assert "a guessed duty from this morning" in in_pile          # fresh guess: still a guess
     assert "a guessed duty from three weeks ago" in in_pile       # stale guess: also a guess
     assert len(wall) == 1, "the wall is what minds DECLARED — nothing else"
+
+
+async def test_the_fleet_totals_actually_add_up(actions: Actions) -> None:
+    """THE NUMBERS MUST PARTITION (operator, 2026-07-12, reading Ferryman's console:
+    "1051 open · 334 obligations · 951 pile — this doesn't add up, the numbers are absurd").
+
+    He was right, and they never could have. These were three OVERLAPPING CUTS of one set, stacked
+    as if they were three SLICES of it: `open` was the whole, `obligations` cut it by KIND, `pile`
+    cut it by TOUCHED-NESS. An obligation can sit in the pile, so 381 + 951 = 1332 > 1114. Anyone
+    trying to reconcile them was doing arithmetic on a category error.
+
+    And the duty count was inflated threefold: of 381 threads carrying kind='obligation', 259 were
+    the MINER's guess that somebody owed something, untouched by any mind. The real number was 122.
+    The miner may notice, but it must never oblige — here, at the level of the headline figure.
+    """
+    from src.orchestrator.compositions import _fn_wall
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:counttest", "session")
+    await actions.assert_property(proj, "name", "counttest", "session", datetime.now(UTC), 0.9)
+    now = datetime.now(UTC)
+
+    async def guessed(canon: str, kind: str) -> None:
+        t = await actions.create_or_find_object("Thread", canon, "session-miner")
+        for n, v in (("summary", canon), ("status", "open"), ("kind", kind)):
+            await actions.assert_property(t, n, v, "session-miner", now, 0.4,
+                                          evidence_class="derived")
+        await actions.create_link(t, proj, "in_repo", "session-miner", now, 0.4,
+                                  evidence_class="derived")
+
+    await guessed("thread:g1", "obligation")   # the miner GUESSED a duty — not a debt
+    await guessed("thread:g2", "obligation")
+    await guessed("thread:g3", "commitment")
+    await open_thread(actions, "a duty a mind actually declared", repo="counttest",
+                      kind="obligation", source="agent:me")
+
+    out = await _fn_wall(actions.pool, None, {})
+    t = out["totals"]
+    assert t["open"] == t["wall"] + t["pile"], "open MUST partition into wall + pile"
+    assert t["wall"] == 1 and t["pile"] == 3
+    # the duty count is what a MIND declared — the miner's two guesses are not debt
+    assert t["obligations"] == 1
+    assert t["guessed_obligations"] == 2
+    # and it says so, so no reader ever stacks them again
+    assert "open = wall + pile" in t["reads"]

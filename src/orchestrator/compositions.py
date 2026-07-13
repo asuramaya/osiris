@@ -1372,14 +1372,18 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                                       "lens (adopt / question / resolve)"},
                 "note": "the graded wall — one law with orient(): obligations first, "
                         "yours-to-act before others' claims before waiting-on-the-human"}
+    # same partition per project: open = wall + pile, and `obligations` counts only DECLARED
+    # duties (a miner-guessed obligation nobody touched is a guess, not a debt)
     projects = [dict(r) for r in await pool.fetch(
         "SELECT p.canonical AS project, count(*) AS open, "
-        " count(*) FILTER (WHERE (SELECT a.value #>> '{}' FROM current_assertions a "
-        "   WHERE a.object_id=o.id AND a.name='kind' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = 'obligation') "
+        " count(*) FILTER (WHERE EXISTS (SELECT 1 FROM assertions sa "
+        "     WHERE sa.object_id=o.id AND sa.evidence_class='self_declared') "
+        "   AND (SELECT a.value #>> '{}' FROM current_assertions a "
+        "     WHERE a.object_id=o.id AND a.name='kind' "
+        "     ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = 'obligation') "
         "   AS obligations, "
         " count(*) FILTER (WHERE EXISTS (SELECT 1 FROM assertions sa "
-        "   WHERE sa.object_id=o.id AND sa.evidence_class='self_declared')) AS touched, "
+        "   WHERE sa.object_id=o.id AND sa.evidence_class='self_declared')) AS wall, "
         " count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM assertions sa "
         "   WHERE sa.object_id=o.id AND sa.evidence_class='self_declared')) AS pile "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
@@ -1419,26 +1423,55 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     shown, more = rank_open_threads(top_rows, me)
     # totals over the WHOLE record — a repo-less thread must count even though the
     # per-project breakdown can't file it
+    # THE NUMBERS MUST ADD UP (operator, 2026-07-12: "1051 open · 334 obligations · 951 pile —
+    # this doesn't add up, the numbers are absurd"). He was right, and they never could have.
+    #
+    # These were THREE OVERLAPPING CUTS of one set, stacked as if they were three SLICES of it:
+    # `open` was the whole, `obligations` cut it by KIND, `pile` cut it by TOUCHED-NESS — and an
+    # obligation can sit in the pile, so 381 + 951 = 1332 > 1114. Any reader who tried to
+    # reconcile them was doing arithmetic on a category error.
+    #
+    # Now they PARTITION: open = wall + pile, exactly, always. And `obligations` is reported as
+    # what it actually is — a SUBSET OF THE WALL, and only the DECLARED ones. Of 381 threads
+    # carrying kind='obligation', 259 were the MINER's guess that somebody owed something and no
+    # mind ever touched them. Counting those as duties inflated the fleet's debt threefold. The
+    # real number is 122. (Same law, one more altitude: the miner may notice, but never oblige.)
     trow = await pool.fetchrow(
         "SELECT count(*) AS open, "
-        " count(*) FILTER (WHERE (SELECT a.value #>> '{}' FROM current_assertions a "
-        "   WHERE a.object_id=o.id AND a.name='kind' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = 'obligation') "
+        " count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM assertions sa "
+        "   WHERE sa.object_id=o.id AND sa.evidence_class='self_declared')) AS pile, "
+        " count(*) FILTER (WHERE EXISTS (SELECT 1 FROM assertions sa "
+        "     WHERE sa.object_id=o.id AND sa.evidence_class='self_declared') "
+        "   AND (SELECT a.value #>> '{}' FROM current_assertions a "
+        "     WHERE a.object_id=o.id AND a.name='kind' "
+        "     ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = 'obligation') "
         "   AS obligations, "
         " count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM assertions sa "
-        "   WHERE sa.object_id=o.id AND sa.evidence_class='self_declared')) AS pile "
+        "     WHERE sa.object_id=o.id AND sa.evidence_class='self_declared') "
+        "   AND (SELECT a.value #>> '{}' FROM current_assertions a "
+        "     WHERE a.object_id=o.id AND a.name='kind' "
+        "     ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = 'obligation') "
+        "   AS guessed_obligations "
         "FROM objects o "
         "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='status' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open'")
-    totals = {"open": trow["open"], "obligations": trow["obligations"], "pile": trow["pile"]}
+    totals = {
+        "open": trow["open"],
+        "wall": trow["open"] - trow["pile"],   # a mind touched it — open = wall + pile, exactly
+        "pile": trow["pile"],
+        "obligations": trow["obligations"],    # DECLARED duties, a subset of `wall`
+        "guessed_obligations": trow["guessed_obligations"],  # the miner's, sitting in the pile
+        "reads": "open = wall + pile. `obligations` are DECLARED duties and are a subset of "
+                 "`wall` — never add them to anything.",
+    }
     return {"totals": totals, "projects": projects,
             "top_of_wall": shown, "more_on_wall": more,
-            "note": "the fleet wall — the graded top (obligations + threads a mind "
-                    "touched), never the raw scroll: `pile` is untouched miner echoes "
-                    "(no mind has read them; triage per-project in the echoes lens); "
-                    "focus a project to see its full graded wall"}
+            "note": "the fleet wall — the graded top (declared duties + threads a mind touched), "
+                    "never the raw scroll. `pile` is untouched miner echoes (no mind has read "
+                    "them); `guessed_obligations` are duties the MINER inferred and nobody "
+                    "confirmed — they are NOT debt. Focus a project to see its own graded wall."}
 
 
 _FUNCTIONS: dict[str, Function] = {
