@@ -1946,7 +1946,13 @@ async def sweep_route(request: Any) -> Any:
             _arq = await arq_create_pool(RedisSettings.from_dsn(get_settings().redis_url))
         await _arq.enqueue_job("sweep_session", transcript)
         return JSONResponse({"enqueued": True})
-    except Exception as e:  # noqa: BLE001 — a missed sweep costs ≤10 min of miner lag, never a block
+    except Exception as e:  # noqa: BLE001
+        # THE STAKES CHANGED WHEN THE CRAWL DIED (ceae1604). This used to read "a missed sweep
+        # costs ≤10 min of miner lag" — true when a cron walked every transcript every ten minutes
+        # and would pick it up on the next round. There IS no next round. Mining is SUMMONED, and
+        # this doorbell is the only bell: a missed sweep now loses THE WHOLE SESSION's yield.
+        # It still must never block the dying mind — a hook that can refuse a death is worse than
+        # a lost extraction — but it is no longer cheap, and the next reader should know that.
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 
