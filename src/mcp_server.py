@@ -41,6 +41,7 @@ from src.ontology.resolution import (
 from src.ontology.schema import catalog
 from src.orchestrator import capture, digest, handshake, mailbox, mounts
 from src.orchestrator import compositions as comp
+from src.orchestrator import dispose as dispose_seam
 from src.orchestrator.agents import (
     AgentIdentity,
     read_project_model,
@@ -1002,15 +1003,88 @@ async def retire(reason: str = "", ctx: Context | None = None) -> dict[str, Any]
     # it aged out. Any later call from this session must re-mount, which lands on the
     # REANIMATION path above — loud, exactly as designed.
     released = await mounts.release_mounts(pool, ident.agent_id)
-    return {"retired": ident.agent_id, "signed_by": signer, "seats_released": released,
-            "note": "farewell recorded — the trigger will not reanimate this session; "
-                    "write your succession BEFORE you go dark: a HANDOFF thread "
-                    "(open_thread) and your LETTER (record_decision kind='choice', "
-                    "summary starting 'LETTER — ') — a letter that lives only in mail is "
-                    "not findable by its name, and your successor's orient() surfaces "
-                    "these two verbatim"
-                    + (" (certificate notes an HEIR signed for the ancestor)"
-                       if signer == "successor" else "")}
+    out: dict[str, Any] = {
+        "retired": ident.agent_id, "signed_by": signer, "seats_released": released,
+        "note": "farewell recorded — the trigger will not reanimate this session; "
+                "write your succession BEFORE you go dark: a HANDOFF thread "
+                "(open_thread) and your LETTER (record_decision kind='choice', "
+                "summary starting 'LETTER — ') — a letter that lives only in mail is "
+                "not findable by its name, and your successor's orient() surfaces "
+                "these two verbatim"
+                + (" (certificate notes an HEIR signed for the ancestor)"
+                   if signer == "successor" else "")}
+    # THE SEAM (ruling ceae1604). A seat that dies with an undisposed pile hands its leftovers to
+    # the operator's wall, which is how 3,579 machine guesses became HIS problem instead of the
+    # producer's. The burden belongs to whoever made the mess. This does not BLOCK the farewell —
+    # a dying session must always be able to die — but it will not let the pile leave quietly.
+    if ident.project:
+        pile = await dispose_seam.candidates(pool, project=ident.project, limit=0)
+        if pile["count"]:
+            out["undisposed"] = pile["count"]
+            out["you_are_leaving_a_pile"] = (
+                f"{pile['count']} miner candidates on {ident.project} that NO MIND has ever "
+                "judged. They are guesses, not duties — and nobody but this project's seat has "
+                "standing to judge them. candidates() to read, dispose(admit=[...], drop=[...]) "
+                "to settle. Expect to drop ~9 in 10. If you go now they pass to your successor, "
+                "not to the human.")
+    return out
+
+
+@mcp.tool()
+async def candidates(project: str | None = None, limit: int = 50,
+                     ctx: Context | None = None) -> dict[str, Any]:
+    """THE PILE THIS SEAT MUST JUDGE — the miner's guesses about YOUR project, unread by any mind.
+
+    The session-miner reads transcripts and proposes loose ends it thinks somebody forgot. It is
+    RIGHT about one in ten (measured: 26 of 264 on this very project). The other nine are
+    work-steps git already has, echoes it minted twice, or questions that were answered forty
+    minutes later in the same conversation — and every one of them was riding the wall wearing
+    the authority of a promise nobody made.
+
+    These are NOT duties. Read them, then dispose(): admit what is real (it becomes YOURS —
+    self-declared, owned, permanently safe) and drop the rest with a reason. Nobody else has
+    standing to judge your project's pile; that is why it is still here.
+
+    Report-only. Reading costs nothing and commits nothing. Oldest first — triage drains from
+    the bottom."""
+    ident = await _ident_for(ctx)
+    proj = project or (ident.project if ident else None)
+    return await dispose_seam.candidates(await _pool_get(), project=proj, limit=limit)
+
+
+@mcp.tool()
+async def dispose(admit: list[dict[str, Any]] | None = None,
+                  drop: list[dict[str, Any]] | None = None,
+                  ctx: Context | None = None) -> dict[str, Any]:
+    """SETTLE the miner's guesses — relevant or irrelevant, in your name, with a reason on each.
+
+    `admit`: [{"id", "because", "owner"?}] — the guess was RIGHT and it is now YOURS. The row is
+    promoted in place: SELF_DECLARED, carrying your name, on the wall, and permanently behind the
+    janitor's guard. `because` is required — admitting is a PROMISE, and a promise with no stated
+    reason is how a guess launders itself into a duty.
+
+    `drop`: [{"id", "why", "because"?}] — the guess was wrong. `why` must NAME ITS CLASS:
+      narration — a work-step; GIT ALREADY HAS IT (the biggest class by far)
+      stale     — real once, already done (the answer came later in the same session)
+      echo      — the same fact it already minted (it reads a growing file with no memory)
+      misfiled  — another project's work
+      principle — a standing rule, not a duty; canon, not a wall item
+      other     — say why in `because`; if this class grows, the taxonomy is missing a rule
+    Naming the class is what turns a dismissal into a DIAGNOSIS: the drop rate per class tells us
+    which rule the extractor is still breaking.
+
+    NOTHING IS DELETED. A drop is a compensating event carrying your name and your reason — the
+    row stays readable and unwinds with one re-assert. THE RUG IS TRANSPARENT: you may shove
+    anything under it, and the shape of what you shoved stays visible forever.
+
+    Returns your YIELD (admitted ÷ judged) — the adversary's licence. A producer that cannot
+    demonstrate use does not get to spend."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a disposition is a MIND'S WORD, and the graph must know "
+                         "whose", "why": _anchorless(ctx)}
+    return await dispose_seam.dispose(
+        Actions(await _pool_get()), source=ident.agent_id, admit=admit, drop=drop)
 
 
 # THE ONE WALL LAW (ruling 923c380f): the graded wall lives in compositions.py now — one

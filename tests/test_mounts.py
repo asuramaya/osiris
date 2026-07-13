@@ -335,3 +335,47 @@ async def test_live_claimed_sids_sees_other_clients_lineage_aware(actions: Actio
                      cwd="/w/osiris", model=None, session_key="sid:me")
     got = await mounts.live_claimed_sids(p, exclude_session_key="sid:me")
     assert got == {"cafe0001", "beef0002"}  # heir claims its base; my own claim excluded
+
+
+async def test_retire_will_not_let_the_pile_LEAVE_QUIETLY(actions: Actions, tmp_path: Path) -> None:
+    """THE SEAM (ruling ceae1604). A seat that dies with an undisposed pile hands its leftovers to
+    the OPERATOR's wall — which is exactly how 3,579 machine guesses became the human's problem
+    instead of the producer's. The burden belongs to whoever made the mess.
+
+    It does NOT block the farewell: a dying session must always be able to die (a retire() that
+    can be refused is a session that cannot settle, which is a worse bug than the pile). It simply
+    refuses to let the pile leave in silence — the count, and whose it is, ride out with the
+    death certificate.
+    """
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.capture import link_repo
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    # a guess the miner minted about this project, that no mind has ever touched
+    guess = await actions.create_or_find_object("Thread", "thread:guess", "session-miner")
+    await actions.assert_property(guess, "summary", "somebody probably owes this",
+                                  "session-miner", datetime.now(UTC), 0.4, evidence_class="derived")
+    await actions.assert_property(guess, "status", "open", "session-miner", datetime.now(UTC),
+                                  0.4, evidence_class="derived")
+    await link_repo(actions, guess, "ghosts", datetime.now(UTC), source="session-miner",
+                    evidence_class="derived")
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:leaver", session="leaver01", project="ghosts", model=None, cwd=None)
+    try:
+        out = await srv.retire(reason="farewell", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert out["retired"] == "agent:leaver", "the farewell must ALWAYS be allowed to complete"
+    assert out["undisposed"] == 1
+    assert "not to the human" in out["you_are_leaving_a_pile"]
