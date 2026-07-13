@@ -154,7 +154,7 @@ async def record_decision(
             await a.assert_property(d, "rationale", rationale, source, observed, _CONF,
                                     evidence_class=_EC)
         if protocol:
-            # the INVOCATION, not just the conclusion (Anubis VIII, msg 236 — heinrich's
+            # the INVOCATION, not just the conclusion (Anubis VIII, msg 236 — a sibling project's
             # biggest re-derivation class: a ruling that says what was found but not how
             # to reproduce it). Its own property, never folded into rationale: a protocol
             # buried in prose is a protocol lost.
@@ -473,9 +473,9 @@ async def set_lifecycle(
 ) -> uuid.UUID | None:
     """HALT A PROGRAM — the operator kills a project by name, and the graph should hear it.
 
-    A halted project's threads are REAL YIELD ON A DEAD TREE: not garbage (so the janitor must
+    A halted project's threads are REAL YIELD ON A PAUSED TREE: not garbage (so the janitor must
     never sweep them — the miner did its job, and the work was genuine), and not debt (so no lens
-    may count them). 333 of them — decepticons 257, heinrich 78 — were inflating every number in
+    may count them). 333 of them — 257 in one, 78 in another — were inflating every number in
     the system after the operator had explicitly stopped both programs. A memory that cannot hear
     "we stopped doing that" will keep billing you for it forever.
 

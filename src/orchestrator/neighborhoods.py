@@ -72,14 +72,14 @@ async def discover_trees(
     pool: asyncpg.Pool, *, roots: list[str], watched: list[str],
 ) -> list[dict[str, Any]]:
     """THE GARDEN AUDITS ITSELF (operator, 2026-07-12: "does it not detect the changes or is
-    that my fault"). Neither: decepticons had 126 commits on disk and the graph never read one,
+    that my fault"). Neither: one project had 126 commits on disk and the graph never read one,
     because the pulse's repo list is a HAND-TYPED env var (OSIRIS_DEV_REPOS, 7 paths) while the
     session-miner auto-discovers transcripts from every project alive. So Osiris learned what to
     LISTEN TO from reality and what to LOOK AT from a list — it heard every promise in the fleet
     and witnessed delivery in seven repos.
 
     It never had to be that way: the graph ALREADY KNOWS its trees. 368 threads are filed under
-    repo:decepticons. It was told, 368 times, and had no mechanism to act on it.
+    that one repo. It was told, 368 times, and had no mechanism to act on it.
 
     This is the mechanism — and it only REPORTS. Osiris has no hands: it names the gap between
     the trees it knows and the trees it watches, and a deliberate act closes it. Growing the

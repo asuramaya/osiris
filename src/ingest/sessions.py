@@ -135,8 +135,8 @@ def distill(lines: list[str]) -> tuple[str, str | None]:
 
 def _repo_from_cwd(cwd: str | None) -> str | None:
     """The PROJECT a session was working in. Walk up from the cwd to the git-repo root, so a
-    session working in a SUBDIRECTORY (e.g. monsterhouse/my) attributes to the project
-    (monsterhouse), not the subdir basename — which minted a junk `repo:my`, caught in the
+    session working in a SUBDIRECTORY (e.g. <repo>/my) attributes to the project
+    (the repo root), not the subdir basename — which minted a junk `repo:my`, caught in the
     provenance audit. Falls back to the basename when no `.git` is found (a non-repo dir).
     Does filesystem IO (walks parents), so callers run it off the event loop."""
     if not cwd:
@@ -730,7 +730,7 @@ def _near_same(a: str, b: str, *, floor: int = 24, coverage: float = 0.6) -> boo
 def _dup_of_deliberate(summary: str, prior: Iterable[str]) -> bool:
     """True when `summary` restates something THIS session already captured deliberately — the
     write-time guard against the miner re-minting a reworded copy of the agent's own
-    SELF_DECLARED record (the miner over-read, thread f34c572c / Heinrich grief #4)."""
+    SELF_DECLARED record (the miner over-read, thread f34c572c / A sibling project grief #4)."""
     return any(_near_same(summary, s) for s in prior)
 
 

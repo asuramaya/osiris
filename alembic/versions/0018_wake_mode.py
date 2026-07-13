@@ -4,7 +4,7 @@ Revision ID: 0018
 Revises: 0017
 Create Date: 2026-07-08
 
-Resume-not-mint (thread 9f2ddb44, heinrich's problem shape): the trigger's dispatch order
+Resume-not-mint (thread 9f2ddb44, a sibling project's problem shape): the trigger's dispatch order
 becomes deliver → resume → mint, and the ledger must record which lane fired — 'resume'
 (the owner's own session continued via claude --resume) vs 'mint' (a fresh twin). The
 alternation guard reads this column: a resume that never leased its mail is not retried —

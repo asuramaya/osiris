@@ -74,10 +74,10 @@ class AgentIdentity:
     resolved: bool = True
     # SET BY register_agent (the one out-param): "<prior> → <observed>" when this registration
     # crossed a succession seam — a fresh context inheriting an identity another model wrote under
-    # (bug #51, decepticons). None when no seam fired. mount() reads it to confess the seam.
+    # (bug #51, a sibling project). None when no seam fired. mount() reads it to confess the seam.
     model_succession: str | None = None
     # SET BY register_agent: True when this mount RE-ATTACHED an identity carrying a winning
-    # retired=true (bug #51 follow-up, decepticons msg 69). The trigger already refuses to
+    # retired=true (bug #51 follow-up, a sibling project msg 69). The trigger already refuses to
     # reanimate the retired (resume-not-mint), but a plain mount from the same session UUID would
     # silently un-retire the name. register_agent now stamps the reanimation as a first-class
     # OBSERVED event and mount() confesses it — never a silent reanimation (membrane, rule #6).
@@ -88,8 +88,9 @@ class AgentIdentity:
     succeeded_from: str | None = None
 
 
-# Roman generations for successor ids (heinrich's grammar: agent:a8c15486-ii). The alphabet is
-# DELIBERATELY restricted to {i, v, x} — none of which are hex digits — so a full-UUID canonical
+# Roman generations for successor ids (a sibling's grammar: agent:a8c15486-ii). The alphabet
+# is DELIBERATELY restricted to {i, v, x} — none of which are hex digits — so a full-UUID
+# canonical
 # like agent:2f81c6d5-…-0a7cd0e63f21 can never misparse its tail as a generation ('d' and 'c'
 # are valid Roman AND valid hex; 'i'/'v'/'x' are Roman only). Caps the alphabet at 39 (xxxix); a
 # lineage deeper than that gets a plain numeric suffix, still hex-collision-free.
@@ -170,7 +171,7 @@ def normalize_model(model: str | None) -> str | None:
 # new bloodline — 1008 registered agents for ~20 real seats — and the name died with the
 # conversation that held it. The next mind in the house woke nameless, reached for the family
 # name, was refused as a stranger, and took a new one. That is how rotten-apple's Ra became Ptah
-# and decepticons' Soundwave became "Soundwave VIII". The fragmentation WAS the bug.
+# and a sibling project's Soundwave became "Soundwave VIII". The fragmentation WAS the bug.
 #
 # Two things were conflated, and only ONE of them follows the anchor:
 #   · THE WRITER — agent:c7ef52a9-iii. A particular mind. Attribution stays exactly per-writer;
@@ -229,7 +230,7 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
     A HANDLE IS A NAME. THE GENERATION IS A NUMERAL THE SYSTEM ASSIGNS (operator, 2026-07-12:
     "soundwave and Ra claim to belong to a different lineage, did that break recently?" — it
     had, sixteen hours earlier). The uniqueness guard below was defeated by a SUFFIX: a fresh
-    decepticons session read its own SEAT LABEL — "Soundwave VIII" — and claimed that STRING as
+    a sibling session read its own SEAT LABEL — "Soundwave VIII" — and claimed that STRING as
     its name. "Soundwave VIII" != "Soundwave", so the check waved it through, minting a new
     handle and therefore a NEW LINEAGE ROOT, orphaning Soundwave's eight real generations. The
     agent was not confused; it was misfiled, and then it correctly reported belonging to a
@@ -301,7 +302,7 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
 async def resolve_seat(actions: Actions, name: str) -> dict[str, Any]:
     """A human name → WHICH SEAT OF THAT LINEAGE IS ACTUALLY ALIVE, and the truth about it.
 
-    THE GRAVE-DELIVERY BUG (Anubis X of heinrich and Atlas II of code, independently, within one
+    THE GRAVE-DELIVERY BUG (two seats on two different projects, independently, within one
     hour, 2026-07-12). The old resolver ordered by `m.last_seen DESC NULLS LAST` and filtered
     NOTHING — so a seat dead for three days, carrying a stale mount row, outranked a live successor
     that had no mount row at all. send(to_agent='Soundwave') delivered into a grave, returned
@@ -784,7 +785,7 @@ async def register_agent(
     operator's standing choice) turns on the swap-detector: the intent is stamped, and a silent
     demotion away from it is recorded as a first-class OBSERVED event on the Agent.
 
-    THE SUCCESSION SEAM (bug #51, decepticons): session-keyed identity means a retire+compact+
+    THE SUCCESSION SEAM (bug #51, a sibling project): session-keyed identity means a retire+compact+
     swap hands a DEAD agent's id to a fresh context — a different model then writes AS it, and
     the transcript-level swap-detector is blind when the new transcript never ran the old model.
     So registration also compares the fresh ANCHORED observation against the graph's last

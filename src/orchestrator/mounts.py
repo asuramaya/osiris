@@ -97,7 +97,7 @@ async def project_prev_seen(
 ) -> datetime | None:
     """The LINEAGE's last sign of life, excluding the caller's own (just-upserted) row — the
     while-you-were-away anchor for a FRESH session: a new session id has no past of its own,
-    but its project does, and that past is exactly what it must not wake blind to (heinrich's
+    but its project does, and that past is exactly what it must not wake blind to (a sibling's
     tab re-opened as a new session and got NO fold while twins had settled its threads)."""
     if not project:
         return None

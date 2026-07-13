@@ -94,7 +94,7 @@ def should_wake(
 
     A RATE IS NOT A BOUND. Every other guard here — the per-project cap, the hourly budget, the
     grace — measures wakes over a SLIDING WINDOW, so every one of them RESETS and the wake fires
-    again. On 2026-07-12 that let ONE unread letter ("to whoever mounts monsterhouse next") spawn
+    again. On 2026-07-12 that let ONE unread letter ("to whoever mounts <project> next") spawn
     79 `claude -p` sessions over 18 hours on a project the operator had not opened in two days,
     minting a fresh agent every ~32 minutes, at exactly the cap. The cap was working perfectly.
     THAT WAS THE BUG: it capped the RATE and nothing capped the TOTAL, so a message that could
@@ -170,7 +170,7 @@ async def _abandon(
     kept firing never closed at all.
 
     Some mail CANNOT be settled by a triage wake, and no number of retries will change that. The
-    letter that caused the 2026-07-12 storm was addressed "to whoever mounts monsterhouse next" —
+    letter that caused the 2026-07-12 storm was addressed "to whoever mounts <project> next" —
     a message for a future full session. Every wake read it, correctly judged it was not FYI it
     could ack, left it unsettled exactly as instructed... and thereby summoned its replacement.
     THE LETTER'S OWN POLITENESS WAS THE FUEL. Every agent in that chain behaved perfectly and the
@@ -223,7 +223,7 @@ def _wake_job_dir(project: str) -> str:
 
     This was keyed on the WAKE ROW ID, so every wake resolved to a brand-new agent:wake-<id>: the
     trigger minted 463 identities over the fleet's life and the roster filled with strangers the
-    operator never started (48 in monsterhouse alone, a project he had not opened in two days).
+    operator never started (48 on ONE project alone, which he had not opened in two days).
     A wake is not a new MIND, it is the same errand run again — so it gets one stable name per
     house, `agent:wake-<project>`, and re-wearing it is the whole point.
 
@@ -347,7 +347,7 @@ async def _agent_resumable(
 async def _owner_live(pool: asyncpg.Pool, project: str, within_secs: int) -> bool:
     """A mount fresher than the liveness window = an awake owner. DELIVER, don't spawn: its
     own chrome/orient shows the mail; waking a twin beside a live owner is the fragmentation
-    heinrich reported (thread 9f2ddb44 — 'strangers worked in my name')."""
+    a sibling project reported (thread 9f2ddb44 — 'strangers worked in my name')."""
     return bool(await pool.fetchval(
         "SELECT 1 FROM agent_mounts WHERE project=$1 "
         "AND last_seen > now() - make_interval(secs => $2) LIMIT 1", project, within_secs))
@@ -370,7 +370,7 @@ def _pick_resumable_sync(
     (job_dir, cwd), anchor its transcript and check the context ceiling. Returns
     (full_session_id, cwd) for the first resumable owner. The transcript stem IS the session
     id `claude --resume` takes; a transcript at the ceiling is retirement-by-compaction
-    territory — resuming it would replay heinrich's 21:30 case, which was LEGITIMATE
+    territory — resuming it would replay a sibling project's 21:30 case, which was LEGITIMATE
     succession."""
     for job_dir, cwd in cands:
         t = locate_current_transcript(root, job_dir, anchored_only=True)

@@ -201,8 +201,8 @@ brings the stack up. The Docker daemon works, so testcontainers and `docker run`
   `author=` filter) → the real `committed_as` Email @0.9 (noreply dropped); keyless, optional
   GITHUB_TOKEN, bounded calls, 24h cache. 132 tests green. Proven: seeding username `asuramaya`
   alone now auto-yields github:asuramaya, soundcloud:wrenaudio7, linkedin:priya-kowalski-…,
-  dakota.jm@gmail.com (committed_as), and owned domains (asuramaya.com/chronohorn.com/
-  decepticons.win/madapesai.com) — with the prior account-noise eliminated.
+  dakota.jm@gmail.com (committed_as), and owned domains (asuramaya.com/a sibling project.com/
+  a sibling project.win/another repo.com) — with the prior account-noise eliminated.
 - **RESET — engine-as-product (DONE, 2026-06-24):** the program had grown into a "confused
   tech demo" carrying two identities (threat-intel spine + footprint crawler). Decision: the
   **engine is the product**; both verticals are thin frontends. Root-caused the noise as a
@@ -263,7 +263,7 @@ brings the stack up. The Docker daemon works, so testcontainers and `docker run`
   - **THE PIVOT (data is the moat/wall):** keyless gets the whole open *entity* graph and almost
     no private-*person* data. So keyless steers Osiris toward **entity intelligence** (the
     OpenSanctions/Sayari space), away from personal footprint. Don't crawl county/local records
-    (the "ForeScan grave"); *federate finished open bases*. See [[osiris-data-strategy]].
+    (the "an earlier attempt grave"); *federate finished open bases*. See [[osiris-data-strategy]].
   - **Bulk-ingest bases** (`src/ingest/`): `opensanctions.py` (FollowTheMoney loader — schema→
     object type, properties→assertions, relationship-entities→links; **role-typed endpoint
     stubs** bridge edges whose endpoints live elsewhere, enriched in place by a later same-id
@@ -472,7 +472,7 @@ brings the stack up. The Docker daemon works, so testcontainers and `docker run`
   IS their toolkit (no subpoena/LexisNexis). Competitor = Maltego+spreadsheet, not Palantir. See
   [[osiris-product-persona]]. Build order for the persona: court records → dossier output →
   blockchain ([[osiris-blockchain-layer]], deferred; reuse asuramaya/remix-etherscan-mcp +
-  asuramaya/exciton). Built #1 and #2:
+  asuramaya/another repo). Built #1 and #2:
   - **Court records** (`src/ingest/courtlistener.py`): keyless CourtListener v4 (RECAP dockets +
     opinions) by party name → CourtCase nodes (court/dates/docket/judge/parties/attorneys/firms),
     linked to subject DIRECT_OBSERVATION when a NAMED PARTY, CO_OCCURRENCE when merely mentioned —
@@ -635,9 +635,8 @@ brings the stack up. The Docker daemon works, so testcontainers and `docker run`
     on "neuralink" would merge every Neuralink SPV; GP-level fusion + LEI link the families safely.
 - **v0.1.0 PUBLIC RELEASE PREP (2026-06-27):** first release to https://github.com/asuramaya/osiris.
   Strategy crystallized in a long discussion (see [[osiris-roadmap-deployment]]): the kernel is the
-  spine the operator's two dead projects (ForeScan foreclosure lead-gen, Lakshmi gov-contract
-  crawler) circled but never built; both died collection-first (swamped by local processing + bad-
-  data theatrics). Capability ladder = each holder forces one kernel capability: journalist→
+  spine two earlier attempts circled but never built; both died collection-first (swamped by
+  local processing + bad-data theatrics). Capability ladder = each holder forces one kernel capability: journalist→
   convergence (PROVEN), broker→persistence/cron (NEXT), analyst→correlation, then standing graph.
   Deployment = separate by placefulness/blast-radius/trust-zone; PG+Redis as the bus (no RPC mesh);
   cuts not rewrites; lens runs anywhere, tripwire forces always-on. Adoption = MCP-first, AGPL-3.0,
@@ -808,7 +807,7 @@ brings the stack up. The Docker daemon works, so testcontainers and `docker run`
   with a live LLM key; harden the alert sink (dedup/throttle before it can become a 3am false alert);
   promote cron-persistence→main when reviewed.
 - **HARRIS COUNTY FORECLOSURE VERTICAL + the product front-end (DONE, 2026-06-27, on cron-persistence):**
-  aimed the watch at a REAL persona beat (the foreclosure broker = ForeScan's customer) and built the
+  aimed the watch at a REAL persona beat (the foreclosure broker = an earlier attempt's customer) and built the
   SUBSCRIBER-facing surface — a sourced tripwire feed, deliberately NOT a CRM. (UI later GENERICIZED —
   see next entry.) 285 tests green, ruff + mypy --strict clean.
   - `src/ingest/harris_foreclosure.py`: `make_harris_foreclosure_watcher(fetch=)` → a monitor.Puller
@@ -816,7 +815,7 @@ brings the stack up. The Docker daemon works, so testcontainers and `docker run`
     address/owner/lienholder/trustee/sale_date/opening_bid/zip/filed_date, AUTHORITATIVE_API). The
     county portal (cclerk.hctx.net FRCL_R.aspx) is an ASPX web-form, NOT an API → `live_fetch` is a
     documented satellite-shaped integration point (the county last-mile; NOT a mass-crawl — the
-    ForeScan-grave discipline holds). A clearly-labelled DEMO dataset (`SAMPLE_NOTICES`, fictional
+    an earlier attempt-grave discipline holds). A clearly-labelled DEMO dataset (`SAMPLE_NOTICES`, fictional
     owners / real Houston ZIPs / first-Tuesday sale dates, `demo=true`) + `demo_fetch` lets the front
     end be felt now; the pipeline (parse→grade→lead→alert) is fully real.
   - **Object-level beat matching** (`monitor.matches` + `GraphEvent.props`): a generic
@@ -1021,7 +1020,7 @@ brings the stack up. The Docker daemon works, so testcontainers and `docker run`
   briefing, recorded the endgame + feature-freeze-until-alive rulings, opened the settings.local
   thread, authored the `fable-commits` lens from one sentence (**LENS TEST** — a new question →
   saved roomed composition → renders, zero code), died; life 2 inherited all of it. Identity
-  unified via claim-identity (asuramaya.hq = self; github-noreply + hector merged in). gestalt
+  unified via claim-identity (asuramaya.hq = self; github-noreply + hector merged in). a sibling project
   finally ingested (4 commits); pulse watches all 6 repos (family lives under ~/code/REPOS/).
   415 tests green, ruff + mypy --strict clean. **MORNING LIST for operator:** (a) one-liner
   `.claude/settings.local.json` env `DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris`

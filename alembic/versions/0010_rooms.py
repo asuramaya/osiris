@@ -8,7 +8,7 @@ A Room is a saved STANCE the operator switches between (journalist / broker / en
 all three at once). It scopes the WORK ARTIFACTS — cases and compositions — to a beat,
 but NOT the entity graph: objects/links stay global, so resolution is global and cross-room
 connections light up if they're real. Segmentation over the one shared store, never separate
-databases (the ForeScan trap). `room_id` is nullable: NULL = unassigned, visible only in "All".
+databases (the an earlier attempt trap). `room_id` is nullable: NULL = unassigned, visible only in "All".
 """
 from __future__ import annotations
 

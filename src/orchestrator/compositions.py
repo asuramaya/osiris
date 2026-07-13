@@ -1287,9 +1287,9 @@ def rank_open_threads(
 
 
 # A HALTED project's work is not the fleet's debt (the operator halts a program BY NAME — it is on
-# the record, testimony, not a guess). Its threads are real yield on a dead tree: not garbage, so
+# the record, testimony, not a guess). Its threads are real yield on a PAUSED tree: not garbage, so
 # never swept; not debt, so never counted. 333 of them were inflating every number in the system
-# (decepticons 257, heinrich 78). Resume the project and they all come back — this is a LENS.
+# (257 in one, 78 in another). Resume the project and they all come back — this is a LENS.
 _NOT_HALTED = (
     "NOT EXISTS (SELECT 1 FROM links hl JOIN objects hp ON hp.id=hl.to_id "
     "  JOIN current_assertions ha ON ha.object_id=hp.id AND ha.name='lifecycle' "
@@ -1348,7 +1348,7 @@ async def open_thread_wall(
         # It used to get a "loud week" before folding. That window is exactly what let the pile
         # grow: the miner mints faster than seven days, so the wall was permanently full of
         # fresh guesses. 908 of the fleet's 1067 open threads (85%) are untouched miner
-        # inferences; decepticons — a DEAD project — was showing 181 of them.
+        # inferences; ONE PAUSED PROJECT was showing 181 of them.
         #
         # So: a guess does not get a week. It goes to the `echoes` pile immediately, where it is
         # COUNTED and one click away (land on counts, walk in). The wall now shows only what a

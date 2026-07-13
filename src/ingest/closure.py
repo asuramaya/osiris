@@ -218,8 +218,9 @@ async def close_by_commits(
             candidates.append(row)
             # DON'T WRITE WHAT YOU WOULDN'T ACT ON (measured on the second tree, 2026-07-12).
             # The weak band (WEAK..STRONG) is topically related and mostly NOT completion: on
-            # xxit it matched "User must verify on mobile that stem sampling works" to the commit
-            # that BUILT stem sampling — a commit that CREATED that obligation rather than
+            # in one repo it matched "User must verify on mobile that stem sampling works" to
+            # the commit that BUILT stem sampling — a commit that CREATED that obligation
+            # rather than
             # discharging it. Persisting those puts ~90%-wrong guesses at the TOP of the human's
             # triage queue (the echoes lens sorts evidenced threads first), which is worse than
             # saying nothing. They stay in the dry-run REPORT, where a reader can weigh them; the

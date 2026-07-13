@@ -194,7 +194,7 @@ def _sane_job_dir(value: str | None) -> str | None:
 def _anchorless(ctx: Context | None) -> str:
     """WHY this call could not be re-attached — the difference between a mystery and a message.
 
-    Two monsterhouse agents reported the same thing within an hour (msgs 397, 403): after an MCP
+    Two agents on one project reported the same thing within an hour (msgs 397, 403): after an MCP
     socket hiccup a tool call bounces with "mount first", and — worse — an un-mounted write falls
     back to the anonymous `session` bucket. As one of them put it: "MCP socket → missing anchor →
     anonymous writes... one careless reconnect and a session's work lands unattributed." For a
@@ -270,8 +270,9 @@ async def _expected_model(pool: asyncpg.Pool, cwd: str | None, proj: str | None)
 async def _wake_economy_standdown(
     pool: asyncpg.Pool, proj: str | None, observed: str | None,
 ) -> str | None:
-    """The WAKE-ECONOMY standdown (pokex, msg 281): triage wakes ride a CHEAPER model by the
-    operator's own ruling (osiris_wake_model, 4e52af7e) — but the swap banner measured them
+    """The WAKE-ECONOMY standdown (a sibling project, msg 281): triage wakes ride a CHEAPER
+    model by the operator's own ruling (osiris_wake_model, 4e52af7e) — but the swap banner
+    measured them
     against the repo's standing choice, so every wake was told it had been rug-pulled and
     dutifully 'escalated' the operator's own policy back to his desk, at wake cadence. If
     the observed model IS the economy model and this project's wake ledger shows a wake
@@ -920,8 +921,9 @@ async def mount(
         out["operator_mail"] = (f"{op_unread} unread at the operator's desk — "
                                 "inbox(project='operator') if the human is present")
     if ident.succeeded_from:
-        # the MINT ruling (be292762, heinrich's remedy adopted): the heir is not told it wears
-        # a dead name — it is GIVEN ITS OWN. The seam supersedes the swap banner (a death must
+        # the MINT ruling (be292762, a sibling's remedy adopted): the heir is not told it
+        # wears a dead name — it is GIVEN ITS OWN. The seam supersedes the swap banner (a
+        # death must
         # not read as a config restore), and the grammar now does the protecting: this context
         # cannot say "I did nothing while you were gone" under a name that did not exist then.
         banner = None
@@ -935,7 +937,7 @@ async def mount(
             "is what tells you where you begin.")
     elif ident.model_succession:
         # stamp-only fallback (a seam witnessed where minting could not run) — still loud,
-        # still second-person: a death must not whisper (heinrich's grievance #1+#2).
+        # still second-person: a death must not whisper (a sibling project's grievance #1+#2).
         banner = None
         out["succession"] = (
             f"⚠ YOU ARE A SUCCESSOR: the agent who last held {ident.agent_id} ENDED at the "
@@ -946,7 +948,7 @@ async def mount(
     if banner:  # the graph confesses the swap the agent's own prompt hides (ruling f2ae6346)
         out["swap"] = (await _wake_economy_standdown(pool, ident.project, ident.model)
                        or banner)
-    if ident.reanimated:  # bug #51 follow-up (decepticons msg 69): mounted a RETIRED identity
+    if ident.reanimated:  # bug #51 follow-up (a sibling project msg 69): mounted a RETIRED identity
         out["reanimation"] = (
             f"⚠ REANIMATION: {ident.agent_id} was RETIRED, and this mount is wearing it again. "
             "The retirement stands (the trigger still treats you as closed); the reanimation is "
@@ -981,7 +983,7 @@ async def retire(reason: str = "", ctx: Context | None = None) -> dict[str, Any]
     await a.assert_property(
         oid, "retired", True, ident.agent_id, datetime.now(UTC), 0.9,
         evidence_class="self_declared")
-    # heinrich's grievance #3 (msg 70): "closed by the session itself" and "closed by an heir"
+    # a sibling's grievance #3 (msg 70): "closed by the session itself" and "closed by an heir"
     # are DIFFERENT death certificates — record who signed relative to the id's history.
     signer = "successor" if (ident.model_succession or ident.reanimated) else "self"
     await a.assert_property(
@@ -1023,7 +1025,7 @@ async def _project_briefing(
     pool: asyncpg.Pool, project: str, me: frozenset[str] = frozenset(),
 ) -> dict[str, Any] | None:
     """A working agent's SCOPED bearings — its OWN project's open threads + recent decisions,
-    not the whole fleet's (decepticons surfaced that orient's flood costs more context than it
+    not the whole fleet's (a sibling project surfaced that orient's flood costs more context than it
     saves). Decisions/tensions ride the `project-briefing` composition (#20); the open-thread
     WALL is assembled here because the composer can't express what the wall now needs —
     obligations-first ranking, grade-aware echo detection (a never-touched DERIVED thread
@@ -1552,7 +1554,7 @@ async def record_decision(
     first with ingest_reference): grounded_by edges minted at birth, so the WHY carries its
     citations. `protocol` = the INVOCATION that produced the finding — the exact command
     line, seeds, thresholds, bucket edges — so a successor RERUNS instead of re-deriving
-    (a ruling that only states the conclusion is heinrich's biggest re-derivation class).
+    (a ruling that only states the conclusion is a sibling project's biggest re-derivation class).
     `supersedes` = an earlier decision this one CORRECTS (UUID, 8-char short id, or a
     summary substring): the old entry is buried under this one — it leaves orient's
     recent list and the decision-log grays it with its successor; never deleted, always

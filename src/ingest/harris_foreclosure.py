@@ -1,11 +1,11 @@
-"""Harris County foreclosure watcher — the broker beat (ForeScan, done right).
+"""Harris County foreclosure watcher — the broker beat, done right.
 
 Texas counties post a Notice of (Substitute) Trustee Sale 21 days before the
 first-Tuesday auction. Harris County publishes them at the County Clerk's portal
 (cclerk.hctx.net/applications/websearch/FRCL_R.aspx). The broker's edge is speed:
 turn a freshly-filed notice into a sourced lead the day it posts.
 
-This is the county last-mile the ForeScan grave is about — and the discipline holds:
+This is the county last-mile a failed predecessor died on — and the discipline holds:
 the portal is an ASPX web-form, NOT a clean API, so the LIVE fetch is an HTML/postback
 scrape (`live_fetch`, a documented integration point that a placeful satellite serves;
 it is intentionally not a speculative mass-crawl). The PIPELINE, though, is fully real:
@@ -76,7 +76,7 @@ def make_harris_foreclosure_watcher(
 
 def make_harris_collector(*, fetch: Any) -> Callable[[Any], Awaitable[list[WatchItem]]]:
     """A satellite Collector over the county portal. It runs AT a vantage with portal
-    access (the placeful last mile — NOT a placeless mass-scrape; the ForeScan grave is
+    access (the placeful last mile — NOT a placeless mass-scrape; the collection-first grave is
     exactly the thing we don't re-enter). `job.target` carries the cursor (last filed_date);
     only strictly-newer notices become Property WatchItems, emitted into the CENTRAL graph
     by the satellite runner. `fetch` is injected (live_fetch in prod, demo_fetch in tests)."""
