@@ -73,15 +73,23 @@ async def observe_liveness(pool: asyncpg.Pool, root: Path) -> int:
     GREATEST(last_seen, mtime): a transcript that moved makes you alive; an Osiris call still makes
     you alive. This can only ever ADD life, never take it away — a liveness fix that could mark a
     working mind dead would be worse than the bug it replaces.
+
+    THIS IS ALSO THE PROMOTION PATH for a PROVISIONAL seat (save_mount(alive=False)): the whisper
+    seats a session without a pulse, and the first thing that transcript writes is what certifies
+    the process as a mind. A spare never writes, so it is never promoted — which is the entire
+    point, and it costs a stat() we were already doing.
     """
     seen = await asyncio.to_thread(_sessions, root)
     if not seen:
         return 0
-    # one round trip: (short_id, mtime) pairs joined against the mounts by their anchor
+    # one round trip: (short_id, mtime) pairs joined against the mounts by their anchor.
+    # `last_seen IS NULL` is NOT the same as `v.moved > m.last_seen` — the latter is NULL, which
+    # is not TRUE, so a provisional seat would NEVER BE PROMOTED and a real agent could work all
+    # day while the fleet read it as dead. The whole provisional design hangs on this one clause.
     rows = await pool.fetch(
         "UPDATE agent_mounts m SET last_seen = GREATEST(m.last_seen, v.moved) "
         "FROM (SELECT * FROM unnest($1::text[], $2::timestamptz[]) AS t(sid, moved)) v "
-        "WHERE m.job_dir LIKE '%' || v.sid AND v.moved > m.last_seen "
+        "WHERE m.job_dir LIKE '%' || v.sid AND (m.last_seen IS NULL OR v.moved > m.last_seen) "
         "RETURNING m.agent_id",
         [s[:8] for s, _ in seen], [t for _, t in seen])
     return len(rows)

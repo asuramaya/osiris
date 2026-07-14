@@ -108,9 +108,17 @@ async def automount(
                          mint_reason=mint_reason)
     prev = None
     if job_dir:
+        # PROVISIONAL — seated, but with NO PULSE. The whisper fires for processes that are not
+        # anybody (`claude bg-spare`, pty hosts, claim-socket daemons: a real session id, a real
+        # cwd, and no conversation ever). Granting them a heartbeat made them LIVE by every test
+        # the fleet has — inflating the roster, crying wolf about contended trees, and taking
+        # delivery of mail into a process that will never read it (Anubis XII, msg 424).
+        # A HEARTBEAT MUST BE EARNED BY AN ACT, NEVER GRANTED BY A GREETING. A real session
+        # certifies itself within seconds: its first Osiris call bumps this row, or its transcript
+        # grows and observe_liveness stamps it. A spare does neither, forever.
         prev = await mounts.save_mount(
             actions.pool, job_dir=job_dir, agent_id=ident.agent_id, project=ident.project,
-            cwd=cwd, model=ident.model, session_key=f"whisper:{session_id[:8]}")
+            cwd=cwd, model=ident.model, session_key=f"whisper:{session_id[:8]}", alive=False)
         if prev is None:  # a fresh session: anchor the fold on the lineage's last life
             # ...and a JOINER inherits the room's collective settle-state (sibling-settled
             # broadcasts are not a newcomer's unread; truly-open mail still greets it)

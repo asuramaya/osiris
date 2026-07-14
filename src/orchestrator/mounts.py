@@ -34,20 +34,40 @@ class MountRecord:
 
 async def save_mount(
     pool: asyncpg.Pool, *, job_dir: str, agent_id: str, project: str | None, cwd: str,
-    model: str | None, session_key: str | None,
+    model: str | None, session_key: str | None, alive: bool = True,
 ) -> datetime | None:
     """Upsert the durable mount row. Called at mount() and again at every re-attach (bumping
     last_seen — the fleet's liveness signal for the listener probe). Returns the PREVIOUS
     last_seen (None on first mount) — the anchor for the while-you-were-away fold: everything
-    that happened in this lineage's name between its last sign of life and this re-entry."""
+    that happened in this lineage's name between its last sign of life and this re-entry.
+
+    `alive=False` SEATS WITHOUT A PULSE — the provisional mount, and it exists because of the
+    GHOST (Anubis XII, msg 424). Claude Code fires SessionStart for processes that are not
+    anybody: `claude bg-spare` pre-warms, pty hosts, claim-socket daemons. Each has a real
+    session id and a real cwd, so the whisper seats it, and `last_seen=now()` handed it a
+    HEARTBEAT — which made it live by every test the fleet has. It inflated the roster, it made
+    the co-agent warning cry wolf on an uncontended tree, and it could take delivery of a DM into
+    a process that will never read anything.
+
+        A HEARTBEAT MUST BE EARNED BY AN ACT, NEVER GRANTED BY A GREETING.
+
+    So the whisper seats you (your identity is ready the moment you exist) but does not certify
+    you as living. A real session proves itself within seconds — its first Osiris call bumps this
+    row, or its transcript grows and observe_liveness stamps it. A spare never does either, and
+    lies there with a null pulse, costing nothing and fooling no one.
+    """
     return await pool.fetchval(  # type: ignore[no-any-return]
         "WITH old AS (SELECT last_seen FROM agent_mounts WHERE job_dir=$1) "
-        "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, model, session_key) "
-        "VALUES ($1,$2,$3,$4,$5,$6) "
+        "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, model, session_key, "
+        "                          last_seen) "
+        "VALUES ($1,$2,$3,$4,$5,$6, CASE WHEN $7 THEN now() END) "
         "ON CONFLICT (job_dir) DO UPDATE SET agent_id=$2, project=$3, cwd=$4, model=$5, "
-        "session_key=$6, last_seen=now() "
+        "session_key=$6, "
+        # a greeting must never REVOKE a pulse either: a re-whispered session that is already
+        # proven alive keeps what it earned.
+        "last_seen=CASE WHEN $7 THEN now() ELSE agent_mounts.last_seen END "
         "RETURNING (SELECT last_seen FROM old)",
-        job_dir, agent_id, project, cwd, model, session_key,
+        job_dir, agent_id, project, cwd, model, session_key, alive,
     )
 
 
