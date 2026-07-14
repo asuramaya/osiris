@@ -84,7 +84,17 @@ async def _verify_husk(actions: Actions, canonical: str) -> tuple[uuid.UUID | No
     ancestor = await _prop(actions, oid, "succeeded_from")
     anc_oid = await _oid(actions, ancestor) if ancestor else None
     exclude = [oid] + ([anc_oid] if anc_oid else [])
-    if await agent_has_acted(actions, canonical, exclude=exclude, settled_after=None):
+    # mail read-state is INHERITED at mint (mint_heir copies the ancestor's recipient rows —
+    # the heir literally remembers reading them), so only a settle AFTER its own birth is the
+    # heir's act. The first rehearsal ran with settled_after=None and refused all eight husks
+    # for their ancestors' memories — caught only by RUNNING it, which is what dry-run is for.
+    minted_at = await actions.pool.fetchval(
+        "SELECT observed_at FROM current_assertions WHERE object_id=$1 "
+        "AND name='succeeded_from' ORDER BY confidence DESC, observed_at DESC LIMIT 1", oid)
+    if minted_at is None:
+        minted_at = await actions.pool.fetchval(
+            "SELECT created_at FROM objects WHERE id=$1", oid)
+    if await agent_has_acted(actions, canonical, exclude=exclude, settled_after=minted_at):
         return None, "it ACTED — a mind lived here, however briefly; not ours to erase"
     return oid, ""
 
