@@ -161,6 +161,11 @@ async def meter_wakes(pool: asyncpg.Pool, root: Path, *, limit: int = BATCH) -> 
         if cost is not None:
             usage = replace(usage, cost_usd=cost)   # the vendor's word beats our arithmetic
             priced += 1
+            # ...and the receipt is now SPENT: the receipts pass below must not bill it again
+            await pool.execute(
+                "INSERT INTO watermarks (key, cursor, updated_at) VALUES ($1,'1',now()) "
+                "ON CONFLICT (key) DO UPDATE SET updated_at=now()",
+                receipt_key(path.stem[:8]))
         ran = await asyncio.to_thread(_last_turn, path)
         await record_usage(pool, purpose="wake", usage=usage, ran_at=ran)
         metered += 1
@@ -168,3 +173,70 @@ async def meter_wakes(pool: asyncpg.Pool, root: Path, *, limit: int = BATCH) -> 
         if metered >= limit:
             break
     return {"metered": metered, "tokens": tokens, "priced": priced}
+
+
+_RECEIPT_METERED = "wake-receipt-metered:"
+
+
+def receipt_key(stem: str) -> str:
+    return f"{_RECEIPT_METERED}{stem}"
+
+
+def _envelope(path: Path) -> Usage | None:
+    """One CLI envelope → a Usage row: the vendor's own dollars AND this run's own token deltas.
+    None when the envelope is unreadable, unpriced, or empty (a 0-byte file from a spawn that
+    died before its first write — wake-7.json, 2026-07-14 — is a non-event, not a row)."""
+    try:
+        env = json.loads(path.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return None
+    cost = env.get("total_cost_usd")
+    if not isinstance(cost, (int, float)):
+        return None
+    u = env.get("usage") or {}
+    models = list((env.get("modelUsage") or {}).keys())
+    return Usage(
+        model=models[0] if models else "",
+        input_tokens=int(u.get("input_tokens") or 0),
+        output_tokens=int(u.get("output_tokens") or 0),
+        cache_read_tokens=int(u.get("cache_read_input_tokens") or 0),
+        cache_creation_tokens=int(u.get("cache_creation_input_tokens") or 0),
+        cost_usd=float(cost))
+
+
+async def meter_receipts(pool: asyncpg.Pool, *, receipts: Path | None = None) -> dict[str, int]:
+    """Price the wakes the TRANSCRIPT pass can never see — the resume-mode wakes.
+
+    THE FIELD RUN THAT FOUND THIS (the pokex pile-drain, 2026-07-14, wake 819): the meter's
+    watermark is once-per-transcript-file, EVER — correct for a minted wake (a fresh file),
+    and structurally blind to a RESUMED one, which appends to an old transcript the historical
+    backfill already walked. The wake's unit of account is the EVENT; the file was the wrong
+    key. $0.2559 of real spend sat in a perfect receipt while three meter ticks walked past it.
+
+    The receipt envelope is BETTER evidence than the transcript for exactly this case: the CLI
+    reports this run's own dollars and this run's own token deltas, so nothing is double-
+    counted from the transcript's earlier life. The transcript pass plants receipt_key when it
+    prices a fresh wake, so each receipt is billed exactly once, whichever pass sees it first.
+    Dated by the receipt file's mtime — the event, never the bookkeeping."""
+    from src.orchestrator.trigger import RECEIPTS
+    root = receipts or RECEIPTS
+    try:
+        files = [p for p in root.iterdir() if p.suffix == ".json"]
+    except OSError:
+        return {"receipts_metered": 0}
+    done = {r["key"] for r in await pool.fetch(
+        "SELECT key FROM watermarks WHERE key LIKE $1", f"{_RECEIPT_METERED}%")}
+    metered = 0
+    for path in files:
+        if receipt_key(path.stem) in done:
+            continue
+        usage = await asyncio.to_thread(_envelope, path)
+        if usage is None:
+            continue  # unpriced/empty: leave un-watermarked — the session may still be running
+        await pool.execute(
+            "INSERT INTO watermarks (key, cursor, updated_at) VALUES ($1,'1',now()) "
+            "ON CONFLICT (key) DO UPDATE SET updated_at=now()", receipt_key(path.stem))
+        ran = await asyncio.to_thread(_last_turn, path)
+        await record_usage(pool, purpose="wake", usage=usage, ran_at=ran)
+        metered += 1
+    return {"receipts_metered": metered}

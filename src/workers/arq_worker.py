@@ -28,7 +28,7 @@ from src.db.pool import create_pool
 from src.db.redis import create_redis
 from src.ingest.orphans import find_orphans, mark_swept
 from src.ingest.sessions import adversary_pass, sense_sessions_tick
-from src.ingest.wake_cost import meter_wakes
+from src.ingest.wake_cost import meter_receipts, meter_wakes
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, expand_case, run_cascade
 from src.orchestrator.liveness import observe_liveness
@@ -216,9 +216,13 @@ async def meter_the_wakes(ctx: dict[str, Any]) -> int:
     if not root:
         return 0
     rep = await meter_wakes(ctx["pool"], Path(root))
-    if rep["metered"]:
+    # the receipts pass: RESUME-mode wakes append to transcripts the once-ever watermark has
+    # already walked, so their spend lives ONLY in the CLI envelope (found live: wake 819,
+    # $0.2559 in a perfect receipt that three ticks walked past). Same cron, same switch.
+    rep |= await meter_receipts(ctx["pool"])
+    if rep["metered"] or rep.get("receipts_metered"):
         _log.info("wake spend metered: %s", rep)
-    return int(rep["metered"])
+    return int(rep["metered"]) + int(rep.get("receipts_metered", 0))
 
 
 async def reap_orphans(ctx: dict[str, Any]) -> int:
