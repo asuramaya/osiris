@@ -332,3 +332,42 @@ async def licence(pool: asyncpg.Pool, *, days: int = 30) -> dict[str, Any]:
                 "and has lost the right to spend them. Fix its prompt, or leave it dark. Nothing "
                 "auto-restarts it (Osiris has no hands over your systems).", **m}
     return {"may_spend": True, "reason": f"yield {rate} clears the floor ({YIELD_FLOOR})", **m}
+
+
+async def orphans(pool: asyncpg.Pool) -> dict[str, Any]:
+    """MACHINE-MINTED ROWS THAT BELONG TO NO PROJECT — and therefore to no SEAT, and therefore to
+    NOBODY.
+
+    THE HOLE THIS PLUGS, and it is a hole in the DESIGN, not in a query. The whole remediation
+    spec (449c393f) rests on one sentence: EVERY PROJECT JUDGES ITS OWN MACHINE'S GUESSES, at its
+    own death rite, by the seat that made the mess. That sentence has a silent precondition — that
+    every guess HAS a project. `mine_threads` never filed one (25 of its 26 threads had no repo),
+    so those rows were structurally unreachable by the ritual: on nobody's wall, in nobody's queue,
+    nobody's problem. FOREVER. Not "hard to reach" — CANNOT BE REACHED.
+
+    A backlog you cannot assign is not a backlog. It is a landfill with a ticketing system.
+
+    So this is the TRIPWIRE, and it must stay at zero. It is not a cleanup tool: it names, loudly,
+    any producer that has minted a row it cannot name an owner for — because the next such producer
+    will not announce itself either, and the only reason we found THIS one was that the operator
+    asked "are orphans even possible with the changes?" and would not accept a sweep as an answer.
+
+        A PRODUCER THAT CANNOT NAME AN OWNER FOR ITS OUTPUT MUST NOT BE ALLOWED TO PRODUCE IT.
+    """
+    rows = await pool.fetch(
+        _MINER_ORIGIN +
+        "SELECT g.source_id, count(*) AS n, "
+        "       to_char(max(o.created_at),'YYYY-MM-DD HH24:MI') AS newest "
+        "FROM objects o JOIN origin g ON g.object_id=o.id "
+        "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
+        "  AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo') " +
+        _CANDIDATE_WHERE +
+        "GROUP BY g.source_id ORDER BY n DESC")
+    total = sum(int(r["n"]) for r in rows)
+    return {
+        "orphans": total,
+        "by_producer": [dict(r) for r in rows],
+        "verdict": "clean — every machine guess has an owner" if not total else
+                   f"{total} row(s) belong to NO project, so NO seat can ever dispose them. "
+                   f"The producer must be made to name an owner, not the pile swept.",
+    }

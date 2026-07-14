@@ -77,8 +77,34 @@ async def mine_threads(
     actions: Actions, *, source_id: str = _SOURCE, case_id: uuid.UUID | None = None
 ) -> dict[str, Any]:
     """Scan every Commit's rationale, mint a Thread per open-thread sentence (idempotent on a
-    content hash), and link it `noted_in` the commit. A re-mine then RECONCILES: mined Threads
-    the fresh pass no longer produces are archived (event-sourced, reversible). Returns counts."""
+    content hash), link it `noted_in` the commit AND `in_repo` that commit's repo. A re-mine then
+    RECONCILES: mined Threads the fresh pass no longer produces are archived (event-sourced,
+    reversible). Returns counts.
+
+    THE `in_repo` LINK IS NOT DECORATION — IT IS WHAT MAKES THE ROW DISPOSABLE.
+
+    This miner filed NOTHING for its whole life: 25 of its 26 threads had no repo, which made them
+    ORPHANS — rows that belong to no project, that therefore no SEAT has standing over, and that
+    the entire per-seat disposal ritual (every project judges its own machine's guesses at its
+    death rite) can never reach. Not "hard to reach". CANNOT. They would have sat there forever,
+    on nobody's wall, in nobody's queue, being nobody's problem, which is the definition of the
+    landfill this system spent a week digging itself out of.
+
+        A PRODUCER THAT CANNOT NAME AN OWNER FOR ITS OUTPUT MUST NOT BE ALLOWED TO PRODUCE IT.
+
+    And the fix was sitting right there: every Commit already carries `in_repo` (all 1,164 of
+    them). The miner had the owner in its hand at the moment of minting and simply never wrote it
+    down.
+
+    THE LATENT HAZARD WE ARE LEAVING ALONE, DELIBERATELY: `canon` is the hash of the TEXT and
+    NOTHING ELSE, so one sentence appearing in two repos would collapse into ONE thread object
+    noted_in both — an accidental cross-repo identity merge. I measured before touching it: it has
+    happened ZERO times (commit prose is distinctive). Re-keying the canonical would change the
+    identity of every existing thread, including the one a mind has actually TOUCHED — trading a
+    hazard that has never fired for a merge that certainly would. So the canonical stands, a thread
+    may honestly carry two `in_repo` links if it ever truly spans two repos, and the collision is
+    now VISIBLE rather than silent.
+    """
     pool = actions.pool
     rows = await pool.fetch(
         "SELECT o.id, "
@@ -87,12 +113,17 @@ async def mine_threads(
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS body, "
         " (SELECT value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='authored_date' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS date "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS date, "
+        # the OWNER, carried from the commit that raised the thread — the seat that will one day
+        # have to judge this guess. It was always one join away.
+        " (SELECT l.to_id FROM links l WHERE l.from_id=o.id AND l.type='in_repo' LIMIT 1) AS repo "
         "FROM objects o WHERE o.type='Commit'"
     )
     # create_link is a plain append — dedup the noted_in edge so a re-mine never inflates
     existing = {(r["from_id"], r["to_id"]) for r in
                 await pool.fetch("SELECT from_id, to_id FROM links WHERE type='noted_in'")}
+    filed = {(r["from_id"], r["to_id"]) for r in
+             await pool.fetch("SELECT from_id, to_id FROM links WHERE type='in_repo'")}
     threads = 0
     produced: set[str] = set()
     for r in rows:
@@ -112,6 +143,10 @@ async def mine_threads(
                 await actions.create_link(t, r["id"], "noted_in", source_id, observed, _CONF,
                                           case_id=case_id, evidence_class=_EC)
                 existing.add((t, r["id"]))
+            if r["repo"] and (t, r["repo"]) not in filed:
+                await actions.create_link(t, r["repo"], "in_repo", source_id, observed, _CONF,
+                                          case_id=case_id, evidence_class=_EC)
+                filed.add((t, r["repo"]))
             threads += 1
     out: dict[str, Any] = {"threads": threads, "commits_scanned": len(rows)}
     if rows:  # never reconcile against an empty commit record (nothing to compare to)
