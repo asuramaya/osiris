@@ -24,7 +24,7 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
               lease: int = 900, grace: int = 0, live: int = 900,
               ceiling: int = 8_000_000, sense: str = "",
               wake_model: str = "", attempts: int = 0,
-              daily_usd: float = -1.0) -> SimpleNamespace:
+              daily_usd: float = -1.0, projects: str = "") -> SimpleNamespace:
     # grace defaults to 0 (disabled) so the rate-cap / lease tests exercise those bounds in
     # isolation; the wake-grace tests set it explicitly. sense="" → resume resolution looks at
     # ~/.claude/projects (no anchored transcript for the test ids there → mint), so the legacy
@@ -41,7 +41,8 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
                            osiris_wake_hourly_budget=0,  # unmetered: economics has its own tests
                            osiris_wake_message_attempts=attempts,
                            osiris_wake_allowed_tools="mcp__osiris",
-                           osiris_daily_usd=daily_usd)
+                           osiris_daily_usd=daily_usd,
+                           osiris_trigger_projects=projects)
 
 
 def test_should_wake_is_off_by_default_and_rate_capped() -> None:
@@ -108,6 +109,31 @@ async def test_trigger_is_dormant_when_disabled(actions: Actions) -> None:
 
     rep = await trigger_mail_tick(actions, settings=_settings(enabled=False), spawn=_spawn)
     assert spawned == [] and rep["woke"] == 0  # OFF by default — nothing woken
+
+
+async def test_a_scoped_rearm_touches_ONLY_its_named_subjects(actions: Actions) -> None:
+    """THE RE-ARM SCOPE (2026-07-14, the pokex pile-drain experiment): every handoff since
+    XXVII said 'turn it on for ONE project, watched' — and until tonight that was a promise,
+    not a setting. Armed with an allowlist, unread mail OUTSIDE the scope is scoped_out, never
+    woken; the named project wakes normally. An empty allowlist keeps the old behavior."""
+    await _agent_with_mail(actions)  # project 'demo' has unread mail
+    spawned: list[str] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        spawned.append(repo)
+
+    # armed, but the re-arm names a DIFFERENT project — demo's mail waits, no wake
+    rep = await trigger_mail_tick(
+        actions, settings=_settings(enabled=True, projects="pokex"), spawn=_spawn)
+    assert spawned == [] and rep["woke"] == 0 and rep["scoped_out"] == 1
+    # the same tick with demo IN scope wakes it
+    rep = await trigger_mail_tick(
+        actions, settings=_settings(enabled=True, projects="pokex, demo"), spawn=_spawn)
+    assert len(spawned) == 1 and rep["woke"] == 1 and rep["scoped_out"] == 0
+    # ...and the sender-visible signal tells the scoped truth, never a false 'armed'
+    st = _settings(enabled=True, projects="pokex")
+    assert "scoped-out" in await wake_status(actions.pool, "demo", st)  # type: ignore[arg-type]
+    assert await wake_status(actions.pool, "pokex", st) == "armed"  # type: ignore[arg-type]
 
 
 async def test_rate_cap_bounds_the_recursive_pingpong(actions: Actions) -> None:

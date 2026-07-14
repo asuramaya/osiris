@@ -257,6 +257,11 @@ async def wake_status(pool: asyncpg.Pool, project: str, st: Settings) -> str:
     operator address is a desk, not a repo: 'operator (read at the desk, never woken)'."""
     if project == OPERATOR_ADDR:
         return "operator (read at the desk, never woken)"
+    allow = {p.strip() for p in st.osiris_trigger_projects.split(",") if p.strip()}
+    if st.osiris_trigger_enabled and allow and project not in allow:
+        # the sender must see the SCOPED truth: "armed" for a project outside a scoped
+        # re-arm would be the same false witness the mcp-unit mirror was built to kill
+        return f"scoped-out (this re-arm names only: {', '.join(sorted(allow))})"
     hourly = await pool.fetchval(
         "SELECT count(*) FROM agent_wakes WHERE woke_at > now() - interval '1 hour'")
     reason = should_wake(
@@ -501,7 +506,10 @@ async def trigger_mail_tick(
     spawn — the ledger is the rate limiter, the chain, and the alternation guard."""
     st = settings or get_settings()
     pool = actions.pool
-    report = {"woke": 0, "resumed": 0, "skipped": 0, "owner_live": 0, "abandoned": 0}
+    report = {"woke": 0, "resumed": 0, "skipped": 0, "owner_live": 0, "abandoned": 0,
+              "scoped_out": 0}
+    # the re-arm scope: a non-empty allowlist names the ONLY projects this trigger may touch
+    allow = {p.strip() for p in st.osiris_trigger_projects.split(",") if p.strip()}
 
     # THE CEILING — and this is the producer it was built for. A wake is not a token, it is an
     # entire Claude session with tools, in a repo, on the operator's card. 463 of them were minted
@@ -523,6 +531,11 @@ async def trigger_mail_tick(
             pool, st.osiris_mail_lease_secs):
         if not st.osiris_trigger_enabled:
             report["skipped"] += 1
+            continue
+        if allow and project not in allow:
+            # a scoped re-arm touches ONLY its named subjects — unread mail elsewhere waits
+            # for its own re-arm (or a live reader), it is never a licence to wake
+            report["scoped_out"] += 1
             continue
         if await _owner_live(pool, project, st.osiris_owner_live_secs):
             report["owner_live"] += 1  # deliver: the awake owner reads its own box

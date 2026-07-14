@@ -124,6 +124,13 @@ class Settings(BaseSettings):
     # loop hits its own cap and halts. The agent_wakes ledger makes the chain visible; the enabled
     # flag is the kill switch (membrane #6: never silent, never irreversible).
     osiris_trigger_enabled: bool = False
+    # THE RE-ARM SCOPE (the protocol every handoff since XXVII demanded: "turn it on for ONE
+    # project, watched"): comma-separated project allowlist — when non-empty, only the named
+    # projects may be woken; everything else is scoped_out. Empty = all projects (the
+    # pre-scoping behavior). The trigger's own history is 463 mints on projects the operator
+    # had not opened in days; a re-arm after a dark period should NAME ITS SUBJECTS, and this
+    # makes that a setting instead of a promise.
+    osiris_trigger_projects: str = ""
     osiris_trigger_rate_cap: int = 5
     osiris_trigger_window_secs: int = 3600
     # Wake-GRACE (the double-wake guard, obligation c45bb2e3): the cron ticks (60s) faster than a
