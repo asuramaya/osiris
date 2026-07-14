@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from src.actions.core import Actions
+from src.ingest.mined import consolidate_memory
 from src.mcp_server import _project_briefing
 from src.orchestrator.capture import (
     link_repo,
@@ -186,6 +187,45 @@ async def test_record_tension_holds_a_polarity_and_moves_the_lean(actions: Actio
     assert (await _props(actions.pool, t1))["lean"] == "leaning complete after the leak"
     # it is a Tension, never a Thread/Decision — grade-resolution & consolidation can't reach it
     assert await actions.pool.fetchval("SELECT type FROM objects WHERE id=$1", t1) == "Tension"
+
+
+async def test_a_derived_echo_cannot_move_a_held_tension(actions: Actions) -> None:
+    """b347df65 — `Tension` exists to HOLD contradiction; the resolver exists to PICK A WINNER.
+    Nobody had ever checked which one wins. Answer: THE HOLD. winning-props ranks grade before
+    recency, so a deliberate (SELF_DECLARED) lean outranks a FRESHER machine echo, and a
+    swapped-pole derived re-record cannot flip the deliberate pair either."""
+    a, b = "ship the fast path now", "keep the kernel append-only"
+    t = await record_tension(actions, a, b, lean="append-only, always", repo="osiris")
+    later = datetime.now(UTC) + timedelta(seconds=5)
+    d_conf = confidence_for(EvidenceClass.DERIVED)
+    d_ec = EvidenceClass.DERIVED.value
+    # a fresher machine echo tries to resolve the polarity: move the lean, swap a pole
+    await actions.assert_property(t, "lean", "fast path won", "session-miner", later, d_conf,
+                                  evidence_class=d_ec)
+    await actions.assert_property(t, "pole_a", b, "session-miner", later, d_conf,
+                                  evidence_class=d_ec)
+    props = await _props(actions.pool, t)
+    assert props["lean"] == "append-only, always"  # grade outranks recency: the hold wins
+    assert props["pole_a"] == a                    # the deliberate pair survives the echo
+
+
+async def test_consolidation_cannot_absorb_a_tension_even_when_aimed_at_it(
+    actions: Actions,
+) -> None:
+    """b347df65's other half — dedup. A Tension carries poles, never a summary, so the
+    near-duplicate folder has nothing to match on. Pinned as a CONTRACT: if Tension ever
+    grows a summary property, this fails before the dedup machinery gains a way in."""
+    t1 = await record_tension(actions, "bounded recall is the product",
+                              "complete memory is the product", lean="bounded")
+    t2 = await record_tension(actions, "bounded recall is the products",   # near-dup poles
+                              "complete memory is the products")
+    out = await consolidate_memory(actions, object_type="Tension", prefix="tension:")
+    assert out == {"tensions_merged": 0, "tensions_for_review": 0}
+    for t in (t1, t2):
+        assert await actions.pool.fetchval(
+            "SELECT status FROM objects WHERE id=$1", t) == "active"
+        assert await actions.pool.fetchval(
+            "SELECT merged_into FROM objects WHERE id=$1", t) is None
 
 
 async def test_tension_surfaces_in_the_scoped_briefing(actions: Actions) -> None:
