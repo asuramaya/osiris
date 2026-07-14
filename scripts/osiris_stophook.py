@@ -27,11 +27,13 @@ DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/
 STOP_GRACE_SECS = 3600
 
 
-async def _deliverable(project: str, session_id: str) -> tuple[int, int | None]:
-    """(deliverable mail count, KNOWN window size or None) for THIS session — mail mirrors
-    mailbox.unread_count exactly (per-recipient, migration 0021); the window comes from the
-    mount row's context_window_size, stamped by the chrome from the harness's own accounting.
-    An unmounted session has no inbox → (0, None)."""
+async def _deliverable(project: str, session_id: str) -> tuple[int, list[str], int | None]:
+    """(deliverable mail count, its senders, KNOWN window size or None) for THIS session —
+    mail mirrors mailbox.unread_count exactly (per-recipient, migration 0021); the window
+    comes from the mount row's context_window_size, stamped by the chrome from the harness's
+    own accounting. An unmounted session has no inbox → (0, [], None). The SENDERS ride along
+    because a notification that omits them forces a read to discover whether a read was
+    warranted (Metron V, msg 444)."""
     import asyncpg
 
     conn = await asyncpg.connect(DSN, timeout=1.0)
@@ -42,14 +44,21 @@ async def _deliverable(project: str, session_id: str) -> tuple[int, int | None]:
             "ORDER BY last_seen DESC LIMIT 1", (session_id or "")[:8])
         if row is None or not row["agent_id"]:
             return 0, None
-        n = await conn.fetchval(
-            "SELECT count(*) FROM fleet_messages m "
+        # `m.from_agent <> $1` on the broadcast leg: THE SELF-ECHO (Metron V, msgs 444/446) —
+        # without it this hook BLOCKED a turn to make an agent read its own outbound, six
+        # times in one night. Mirrors mailbox._DELIVERABLE_TO_READER; keep them in step.
+        n_row = await conn.fetchrow(
+            "SELECT count(*) AS n, array_agg(DISTINCT m.from_agent) AS senders "
+            "FROM fleet_messages m "
             "LEFT JOIN message_recipients r ON r.message_id=m.id AND r.agent_id=$1 "
-            "WHERE ((m.to_agent=$1) OR (m.to_project=$2 AND m.to_agent IS NULL)) "
+            "WHERE ((m.to_agent=$1) "
+            "   OR (m.to_project=$2 AND m.to_agent IS NULL AND m.from_agent <> $1)) "
             "AND m.read_at IS NULL AND r.read_at IS NULL "
             "AND (r.delivered_at IS NULL OR r.delivered_at < now() - make_interval(secs => $3))",
             row["agent_id"], project, STOP_GRACE_SECS)
-        return int(n), row["context_window_size"]
+        n = int(n_row["n"]) if n_row else 0
+        senders = [s for s in (n_row["senders"] or []) if s] if n_row else []
+        return n, senders, row["context_window_size"]
     finally:
         await conn.close()
 
@@ -134,15 +143,16 @@ def main() -> None:
     project = Path(cwd).name
     session_id = payload.get("session_id") or ""
     try:
-        n, window = asyncio.run(
+        n, senders, window = asyncio.run(
             asyncio.wait_for(_deliverable(project, session_id), timeout=1.5))
     except Exception:  # noqa: BLE001 — graph down = allow the stop; the chrome still shows it
         return
     if n:
+        who = f" (from {', '.join(senders[:4])})" if senders else ""
         print(json.dumps({
             "decision": "block",
-            "reason": (f"Osiris: {n} deliverable message(s) for {project} — call inbox(), act "
-                       "on what carries new work, SETTLE each handled message (reply with "
+            "reason": (f"Osiris: {n} deliverable message(s) for {project}{who} — call inbox(), "
+                       "act on what carries new work, SETTLE each handled message (reply with "
                        "send(reply_to=<id>) or ack with inbox(ack=[ids])), then finish. If a "
                        "message needs nothing, ack it."),
         }))

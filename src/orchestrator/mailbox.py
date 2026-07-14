@@ -39,14 +39,21 @@ OPERATOR_ADDR = "operator"
 # the hook nags about mail the inbox refuses to show.
 _HOLD_GRACE_SECS = 3600
 
-# Deliverable TO A GIVEN READER: addressed to it (a DM to_agent=me, or a broadcast to my project),
-# not settled by me, and not under MY live lease (live = my mount breathes; see the
-# live-holder extension above). `r` is my message_recipients row (LEFT JOINed).
+# Deliverable TO A GIVEN READER: addressed to it (a DM to_agent=me, or a broadcast to my project
+# THAT I DID NOT WRITE), not settled by me, and not under MY live lease (live = my mount
+# breathes; see the live-holder extension above). `r` is my message_recipients row (LEFT JOINed).
 # `m.read_at IS NULL` honors the LEGACY per-message settle: messages settled under the old
 # single-reader model (pre-0021) carry fleet_messages.read_at and are globally suppressed so
 # history doesn't resurface; new messages never set it (per-recipient state only).
+# THE SELF-ECHO (Metron V, msgs 444/446, six blocked turns in one night): a project broadcast
+# fanned out to its own author, so every send() came back as unread mail, the blocking stop
+# hook fired on it, and the author paid a full read to discover its own voice. Worse than
+# noise: the author's reflexive self-ack marked the broadcast SETTLED, which silenced the
+# wake for the real recipient. An agent's outbox is not its mail — the author is excluded
+# from its own broadcast's fan-out (the DM path always had this predicate).
 _DELIVERABLE_TO_READER = (
-    "((m.to_agent = $agent) OR (m.to_project = $project AND m.to_agent IS NULL)) "
+    "((m.to_agent = $agent) "
+    " OR (m.to_project = $project AND m.to_agent IS NULL AND m.from_agent <> $agent)) "
     "AND m.read_at IS NULL "
     "AND r.read_at IS NULL "
     "AND (r.delivered_at IS NULL "

@@ -393,3 +393,28 @@ async def test_desk_your_queue_derives_from_operator_owned_threads(actions: Acti
     assert [t["summary"] for t in q] == [
         "refill the gemini key for #37", "someday: pick a desk color"]
     assert q[0]["kind"] == "obligation"
+
+
+async def test_an_agents_OWN_broadcast_is_not_its_mail(actions: Actions) -> None:
+    """THE SELF-ECHO (Metron V, msgs 444/446 — six blocked turns in one night, all of them to
+    acknowledge his own voice). A project broadcast fanned out to its own author: every send()
+    came back as unread, the blocking stop hook fired on it, and the author paid a full read
+    to learn it had written the thing. Worse than noise — the author's reflexive self-ack
+    marked the broadcast SETTLED, silencing the wake for the real recipient. The author is
+    excluded from its own broadcast's fan-out; the DM path always was (his own A/B: msg 444
+    the DM, no echo; msg 445 the broadcast reply, echoed)."""
+    p = actions.pool
+    author, peer = "agent:metron", "agent:deckard"
+    res = await send_message(p, from_agent=author, from_project="xxit", to_project="xxit",
+                             body="thread 413: the aligner acts only when it beats doing nothing")
+    # the author never sees its own words as mail; the peer does
+    assert await unread_count(p, "xxit", reader_agent=author) == 0
+    assert await unread_count(p, "xxit", reader_agent=peer) == 1
+    assert await read_inbox(p, "xxit", reader_agent=author) == []
+    # and the wake signal stays ARMED until the real recipient settles it — the author's
+    # phantom self-ack can no longer silence it
+    assert await project_deliverable_count(p, "xxit", lease_secs=0) == 1
+    (m,) = await read_inbox(p, "xxit", reader_agent=peer)
+    await ack_messages(p, "xxit", [m["id"]], reader_agent=peer)
+    assert await project_deliverable_count(p, "xxit", lease_secs=0) == 0
+    assert res["id"] > 0
