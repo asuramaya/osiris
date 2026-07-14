@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     # So $10 is "a busy day and no worse" — it would never have blocked an honest day's work.
     # 0 = STOPPED (an honest kill switch). < 0 = UNLIMITED (a deliberate choice to run with no net).
     osiris_daily_usd: float = 10.0
+    # THE COMMIT MINERS (pulse: mine_threads + mine_decisions) — DARK BY DEFAULT, by the operator's
+    # ruling of 2026-07-14. They INFER that a sentence in a commit body is a durable duty or a
+    # decision, and both failed the licence the rest of the fleet lives under (11.1% and 0%).
+    # They survived every guard we built for one reason: THEY COST NOTHING, so the daily ceiling
+    # could not see them and the miner kill-switch (which names `session-miner`) did not reach the
+    # pulse daemon at all. The charter's line is OBSERVE vs INFER, not paid vs free — being free is
+    # not a licence, it is only the reason nobody was watching. The pulse's OBSERVATIONS (repo
+    # sensing, commit + tree ingest) are unaffected and always run: they cannot be wrong.
+    osiris_mine_commits: bool = False
     # Inference providers — the GPU-as-an-API-key abstraction (src/ingest/providers.py).
     # The engine never runs a GPU; the model is a hosted API (a key), the LOCAL claude CLI
     # (subscription-covered, no key), or a local GPU backend. `osiris_extract_provider`:

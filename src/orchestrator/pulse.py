@@ -132,9 +132,33 @@ async def pulse(
             await set_cursor(pool, f"devhead:{name}", head)
             synced.append(name)
     if synced:                                  # only re-reflect when something actually moved
-        await mine_decisions(actions)
-        await mine_threads(actions)
-        await resolve_threads(actions)
+        # THE OBSERVATIONS ABOVE ARE FREE AND ALWAYS RUN: a repo's HEAD moved, so its commits and
+        # its tree enter the graph. That is sensing, it cannot be wrong, and nothing here gates it.
+        #
+        # WHAT FOLLOWS IS INFERENCE, AND IT IS DARK BY DEFAULT (operator's ruling, 2026-07-14).
+        # `mine_decisions` and `mine_threads` decide that a SENTENCE IN A COMMIT BODY is a durable
+        # decision or a standing duty. That is a judgement, and both failed the licence the fleet
+        # already lives under:
+        #     mine_threads    26 minted,  9 judged,  1 admitted  -> 11.1%   (floor is 15%)
+        #     mine_decisions  41 minted,  0 judged,  0 admitted  -> NOBODY HAS EVER USED ONE
+        #
+        # AND THIS IS HOW THEY SURVIVED SO LONG: they cost NOTHING. The daily ceiling gates on
+        # measured dollars and they spend zero. The adversary's licence was keyed to the adversary.
+        # The miner kill-switch named `session-miner` and this is a different daemon entirely — it
+        # was still minting thirteen hours after we "killed the miner".
+        #
+        #     THE CHARTER'S LINE IS OBSERVE vs INFER, NOT PAID vs FREE. A critter may observe for
+        #     nothing; it may only infer on a licence. BEING FREE IS NOT A LICENCE — it is merely
+        #     the reason nobody was watching.
+        #
+        # Nothing is lost by darkening them: GIT ALREADY HAS THE COMMIT BODIES, in full, with the
+        # context the fragment strips away. What died here was never knowledge — it was a keyword
+        # match wearing a duty's clothes, and two of the last nine it minted were OUR OWN LAWS,
+        # filed back at us as chores.
+        if get_settings().osiris_mine_commits:
+            await mine_decisions(actions)
+            await mine_threads(actions)
+            await resolve_threads(actions)
         await find_dev_identity_candidates(pool)
     cur = await _snapshot(pool)
     prev = await pool.fetchrow("SELECT snapshot FROM dev_pulses ORDER BY id DESC LIMIT 1")

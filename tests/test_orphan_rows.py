@@ -20,8 +20,13 @@ answer in its hand at the moment of minting and never wrote it down.
 
 from __future__ import annotations
 
+import os
+import subprocess
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 from src.actions.core import Actions
 from src.ingest.threads import mine_threads
@@ -103,3 +108,78 @@ async def test_a_thread_a_MIND_touched_is_never_an_orphan_candidate(actions: Act
     await actions.assert_property(t, "status", "open", "agent:someone", NOW, 0.9,
                                   evidence_class="self_declared")
     assert (await orphans(actions.pool))["orphans"] == 0, "a mind had touched it; it was not ours"
+
+
+def _mk_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "util"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    (repo / "README.md").write_text("# util")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m",
+                    "feat: genesis\n\nTODO: the renderer still needs a key"],
+                   check=True, env={**os.environ, "GIT_AUTHOR_NAME": "t",
+                                    "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+                                    "GIT_COMMITTER_EMAIL": "t@t"})
+    return repo
+
+
+async def _counts(actions: Actions) -> tuple[int, int]:
+    commits = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Commit'")
+    threads = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Thread' AND canonical LIKE 'thread:%'")
+    return int(commits), int(threads)
+
+
+async def test_the_PULSE_observes_for_free_but_INFERS_only_on_a_LICENCE(
+    actions: Actions, tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """THE CHARTER, MADE ENFORCEABLE — and the reason these miners survived a week of purges.
+
+    `mine_threads` and `mine_decisions` cost NOTHING (regex over commit bodies — no model, no
+    dollars). So the DAILY CEILING could not see them (they spend $0), the adversary's licence was
+    keyed to the adversary, and the miner kill-switch names `session-miner` — while these live in
+    the PULSE, a different daemon it never touched. They were still minting THIRTEEN HOURS after we
+    "killed the miner", and one of the last rows they made was our own ruling about killing it.
+
+        THE LINE IS OBSERVE vs INFER, NOT PAID vs FREE. Being free is not a licence — it is only
+        the reason nobody was watching.
+
+    BOTH halves are pinned here, because getting one right and the other wrong is a bug that HAS
+    ALREADY HAPPENED: killing the expensive inferrer silently BLINDED the free observer for a whole
+    day (456960e5), because they shared one switch. A commit is a FACT and must always be sensed. A
+    sentence inside it being a DUTY is a guess, and a guess needs a licence.
+    """
+    from src.orchestrator import pulse as pulse_mod
+
+    repo = _mk_repo(tmp_path)
+    repos = [("util", str(repo))]
+
+    def _dark(**_: Any) -> Any:
+        return SimpleNamespace(osiris_mine_commits=False)
+
+    def _armed(**_: Any) -> Any:
+        return SimpleNamespace(osiris_mine_commits=True)
+
+    # DARK (the default): the commit is SENSED, and no duty is invented from it.
+    monkeypatch.setattr(pulse_mod, "get_settings", _dark)
+    out = await pulse_mod.pulse(actions, repos, now=NOW)
+    assert out["synced"] == ["util"]
+    commits, threads = await _counts(actions)
+    assert commits >= 1, "the OBSERVER was blinded — a commit is a fact and must always be sensed"
+    assert threads == 0, "an unlicensed inference minted a duty"
+
+    # ARMED (the operator's explicit choice): now, and only now, it may guess.
+    monkeypatch.setattr(pulse_mod, "get_settings", _armed)
+    await actions.pool.execute("DELETE FROM watermarks WHERE key LIKE 'devhead:%'")
+    await pulse_mod.pulse(actions, repos, now=NOW)
+    _, threads = await _counts(actions)
+    assert threads >= 1, "the licence was granted and the producer stayed dark"
+
+
+def test_the_commit_miners_are_DARK_BY_DEFAULT() -> None:
+    """The operator's ruling, 2026-07-14. Their measured licence: mine_threads 1 admitted of 9
+    judged (11.1%, floor is 15%); mine_decisions 41 minted and NOT ONE ever used or even judged."""
+    from src.config.settings import Settings
+
+    assert Settings().osiris_mine_commits is False

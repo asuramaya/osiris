@@ -20,7 +20,16 @@ _TABLES = (
     "cases,objects,case_objects,object_events,assertions,links,helper_runs,"
     "triggers,audit_log,outbox,merge_candidates,cookie_leases,handoffs,helper_cache,"
     "alerts,watermarks,collection_jobs,compositions,rooms,"
-    "fleet_messages,message_recipients,agent_wakes,agent_mounts,llm_usage,search_log"
+    "fleet_messages,message_recipients,agent_wakes,agent_mounts,llm_usage,search_log,"
+    # LEAKED ACROSS TESTS UNTIL 2026-07-14. `dev_pulses` was never truncated, so the FIRST test to
+    # call pulse() left a row behind and every later one saw a "previous" pulse that belonged to
+    # another test entirely. test_pulse's baseline assertion passed only because it happened to run
+    # first — for its whole life it was resting on alphabetical luck, and a new test file sorting
+    # before it (test_orphan_rows) was enough to break it.
+    # A SHARED FIXTURE THAT FORGETS ONE TABLE DOES NOT FAIL — IT MAKES EVERY TEST'S RESULT DEPEND
+    # ON WHO RAN BEFORE IT, which is the same class as everything else we killed this week: state
+    # written at a seam and never reconciled.
+    "dev_pulses,console_state,search_vectors"
 )
 
 
