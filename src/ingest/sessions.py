@@ -71,6 +71,7 @@ from src.ingest.providers import LLMClient, Usage, llm_provider
 from src.ingest.redact import credential_shaped, redact
 from src.ingest.usage import record_usage, usage_summary
 from src.orchestrator.capture import link_repo
+from src.orchestrator.ceiling import may_spend
 from src.orchestrator.dispose import licence
 from src.orchestrator.monitor import get_cursor, set_cursor
 from src.parsers.base import EvidenceClass
@@ -1170,7 +1171,7 @@ def _whole_arc(text: str, cap: int = _ADVERSARY_MAX_CHARS) -> str:
 
 async def adversary_pass(
     actions: Actions, path: Path, llm: LLMClient | None = None, *, model: str | None = None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """THE ADVERSARY, SUMMONED — one dying transcript, read WHOLE, one call, at the seam.
 
     This is the whole of miner v2's read path (B4/B6, ruling ceae1604), and everything it does
@@ -1203,7 +1204,23 @@ async def adversary_pass(
         raise RuntimeError("no LLM provider for the adversary — install Claude Code, or set "
                            "ANTHROPIC_API_KEY")
     model = model or get_settings().osiris_extract_model
-    report = {"proposed": 0, "resolved": 0, "skipped_dup": 0, "skipped_foreign": 0}
+    # dict[str, Any], not dict[str, int]: a REFUSAL carries a reason, and a gate that can only
+    # return a number cannot tell you why it shut. mypy caught this the moment the ceiling's
+    # honestly-typed `str` met a report the old licence branch had been smuggling `Any` into.
+    report: dict[str, Any] = {
+        "proposed": 0, "resolved": 0, "skipped_dup": 0, "skipped_foreign": 0}
+
+    # THE CEILING, CHECKED FIRST, BECAUSE IT ANSWERS THE QUESTION NOBODY HAD ASKED. The licence
+    # below asks "IS THIS PRODUCER ANY GOOD?" (its measured rate of use). The ceiling asks "CAN
+    # THE OPERATOR AFFORD IT?" (measured dollars). Those are different questions and until now
+    # only one of them was answered — a producer can be excellent and still ruinous, and every
+    # disaster in this system's life was the second kind wearing the first one's clothes.
+    ok, why = await may_spend(actions.pool, cap=get_settings().osiris_daily_usd)
+    if not ok:
+        report["refused"] = 1
+        report["why"] = why
+        _log.warning("the adversary is refusing to spend: %s", why)
+        return report
 
     # THE LICENCE, CHECKED BEFORE A SINGLE TOKEN IS SPENT. Its measured rate of use is its right
     # to run: a producer whose telemetry counted what it MADE rather than what was USED drifted to

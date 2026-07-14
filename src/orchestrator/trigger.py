@@ -28,7 +28,15 @@ import asyncpg
 from src.actions.core import Actions
 from src.config.settings import Settings, get_settings
 from src.ingest.sessions import locate_current_transcript
+from src.orchestrator.ceiling import may_spend
 from src.orchestrator.mailbox import OPERATOR_ADDR, send_message
+
+# Where a wake drops the CLI's own cost envelope (`--output-format json` -> total_cost_usd).
+# Outside the transcript tree ON PURPOSE: everything under ~/.claude/projects is read by the
+# liveness observer, the orphan reaper and the adversary, and a receipt landing in there would
+# be Osiris sensing its own exhaust — the loop-pathology class, and the exact shape of the bug
+# where the miner mined its own alarm clock.
+RECEIPTS = Path.home() / ".osiris" / "wake-receipts"
 
 _log = logging.getLogger("osiris.trigger")
 
@@ -415,6 +423,20 @@ async def _last_wake_mode(pool: asyncpg.Pool, project: str, message_id: int) -> 
         "ORDER BY woke_at DESC LIMIT 1", project, message_id)
 
 
+def _receipt_path(job_dir: str | None, resume_session: str | None) -> Path | None:
+    """Where this wake drops the CLI's cost envelope. None when we have nowhere to put it — and
+    a wake with nowhere to put its receipt is a wake nobody can ever cost, which the log says
+    out loud rather than letting it pass for free."""
+    stem = None
+    if job_dir:
+        stem = Path(job_dir).name
+    elif resume_session:
+        stem = resume_session[:8]
+    if not stem:
+        return None
+    return RECEIPTS / f"{stem}.json"
+
+
 async def _spawn_claude(
     repo: str, prompt: str, *, job_dir: str | None = None, resume_session: str | None = None,
     model: str | None = None, allowed_tools: str | None = None,
@@ -426,7 +448,7 @@ async def _spawn_claude(
     `allowed_tools` (thread ba73c0c8): headless -p cannot answer permission prompts — the
     spawner pre-authorizes the graph tools, or the wake is born with its hands tied."""
     env = os.environ.copy()
-    cmd = ["claude", "-p"]
+    cmd = ["claude", "-p", "--output-format", "json"]
     if model:  # wake economics: triage wakes on a cheaper model; the prompt escalates real work
         cmd += ["--model", model]
     if allowed_tools:
@@ -436,13 +458,36 @@ async def _spawn_claude(
     if job_dir:
         env["CLAUDE_JOB_DIR"] = job_dir
     cmd.append(prompt)
+
+    # THE RECEIPT (21a99136). This was `stdout=DEVNULL`, and so Osiris's single most expensive act
+    # — an entire Claude session, with tools, in a repo, on the operator's card — threw away the
+    # vendor's own price for itself on every one of 463 spawns. `--output-format json` makes the
+    # CLI print an envelope carrying `total_cost_usd`: authoritative, free, volunteered. It is
+    # exactly where the miner's $40.49-to-the-cent comes from. We were binning it.
+    #
+    # STILL FIRE-AND-FORGET: the receipt goes to a FILE, and NOTHING HERE AWAITS THE PROCESS. That
+    # is not laziness, it is B1's scar — an arq timeout that abandoned a live billing `claude -p`
+    # is precisely how the worker wedged itself with ten 290MB children against a 2G cap. A
+    # separate free observer (ingest/wake_cost.meter_wakes) reads these envelopes after the fact.
+    #
+    #   A HAND YOU CANNOT COST IS A HAND YOU CANNOT GOVERN — and the cost was being handed to us.
+    receipt = _receipt_path(job_dir, resume_session)
+    out: Any = asyncio.subprocess.DEVNULL
+    if receipt is not None:
+        try:
+            receipt.parent.mkdir(parents=True, exist_ok=True)
+            out = receipt.open("wb")
+        except OSError:  # an unwritable receipt must never stop the wake — degrade, don't die
+            out = asyncio.subprocess.DEVNULL
+            receipt = None
     proc = await asyncio.create_subprocess_exec(
-        *cmd, cwd=repo, env=env,
-        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        *cmd, cwd=repo, env=env, stdout=out, stderr=asyncio.subprocess.DEVNULL,
     )
-    _log.info("trigger: woke %s in %s (pid %s)",
+    if receipt is not None and out is not asyncio.subprocess.DEVNULL:
+        out.close()  # the child holds the fd; the parent must not, or the file never closes
+    _log.info("trigger: woke %s in %s (pid %s, receipt %s)",
               f"resume:{resume_session}" if resume_session else f"mint:{job_dir}",
-              repo, proc.pid)
+              repo, proc.pid, receipt or "NONE — this wake will be invisible in the ledger")
 
 
 async def trigger_mail_tick(
@@ -457,6 +502,20 @@ async def trigger_mail_tick(
     st = settings or get_settings()
     pool = actions.pool
     report = {"woke": 0, "resumed": 0, "skipped": 0, "owner_live": 0, "abandoned": 0}
+
+    # THE CEILING — and this is the producer it was built for. A wake is not a token, it is an
+    # entire Claude session with tools, in a repo, on the operator's card. 463 of them were minted
+    # on projects he had not opened in days, and NOT ONE was ever in the ledger, because the
+    # spawner throws the vendor's own receipt at /dev/null (21a99136). Every other guard here is a
+    # RATE (wakes per hour, attempts per message) — and a rate is not a bound: the storm ran for
+    # days at a perfectly legal 5/hr. THIS is the bound.
+    ok, why = await may_spend(pool, cap=st.osiris_daily_usd)
+    if not ok:
+        report["refused"] = 1
+        report["why"] = why  # type: ignore[assignment]
+        _log.warning("the trigger is refusing to spend: %s", why)
+        return report
+
     # the fleet-wide hourly spend — the SAME number the chrome renders as 'wakes N/h'
     hourly = await pool.fetchval(
         "SELECT count(*) FROM agent_wakes WHERE woke_at > now() - interval '1 hour'")

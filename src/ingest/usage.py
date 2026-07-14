@@ -7,6 +7,7 @@ Operational telemetry, a plain append-only table, never the event-sourced graph.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 import asyncpg
@@ -14,15 +15,27 @@ import asyncpg
 from src.ingest.providers import Usage
 
 
-async def record_usage(pool: asyncpg.Pool, *, purpose: str, usage: Usage) -> None:
-    """Append one completion's usage. `purpose` names the call-site ('session-extract')."""
+async def record_usage(
+    pool: asyncpg.Pool, *, purpose: str, usage: Usage, ran_at: datetime | None = None,
+) -> None:
+    """Append one completion's usage. `purpose` names the call-site ('session-extract').
+
+    `ran_at` IS THE MOMENT THE MONEY WAS SPENT, not the moment we got around to looking — and
+    the difference is not cosmetic once a DAILY CEILING reads this table. The wake meter is a
+    BACKFILL: it read 257 historical wakes off disk in one pass, and defaulting to now() filed a
+    WEEK OF SPENDING UNDER A SINGLE DAY. A ceiling reading that would have refused to spend a
+    cent on a day that had cost nothing — a producer starved by an accountant's clerical error.
+
+    A LEDGER MUST BE DATED BY THE EVENT, NEVER BY THE BOOKKEEPING. Live callers pass nothing and
+    get now(), which is correct because for them the two are the same instant.
+    """
     await pool.execute(
         "INSERT INTO llm_usage (purpose, model, input_tokens, output_tokens, "
-        "cache_read_tokens, cache_creation_tokens, cost_usd, duration_ms) "
-        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+        "cache_read_tokens, cache_creation_tokens, cost_usd, duration_ms, ran_at) "
+        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8, coalesce($9, now()))",
         purpose, usage.model, usage.input_tokens, usage.output_tokens,
         usage.cache_read_tokens, usage.cache_creation_tokens, usage.cost_usd,
-        usage.duration_ms,
+        usage.duration_ms, ran_at,
     )
 
 

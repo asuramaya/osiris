@@ -25,6 +25,15 @@ class Settings(BaseSettings):
     # document→entities task is flash-tier; Opus would be wasteful per-filing.
     osiris_extract_model: str = "claude-haiku-4-5-20251001"
     anthropic_api_key: str = ""
+    # THE DAILY CEILING (src/orchestrator/ceiling.py) — what Osiris may SPEND in a rolling 24h
+    # before every paid producer stops. Until now NOTHING said this, anywhere, and every
+    # catastrophe in this system's life was a spend catastrophe: a miner that walked every
+    # transcript forever, a trigger that minted 463 real Claude sessions on abandoned projects.
+    # The operator's law: "nobody will touch this if it burns."
+    # Osiris's real measured spend, per day, over its whole life: median ~$3.60, peak $11.89.
+    # So $10 is "a busy day and no worse" — it would never have blocked an honest day's work.
+    # 0 = STOPPED (an honest kill switch). < 0 = UNLIMITED (a deliberate choice to run with no net).
+    osiris_daily_usd: float = 10.0
     # Inference providers — the GPU-as-an-API-key abstraction (src/ingest/providers.py).
     # The engine never runs a GPU; the model is a hosted API (a key), the LOCAL claude CLI
     # (subscription-covered, no key), or a local GPU backend. `osiris_extract_provider`:

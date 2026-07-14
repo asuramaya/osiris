@@ -23,11 +23,16 @@ NOW = datetime(2026, 7, 6, tzinfo=UTC)
 def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
               lease: int = 900, grace: int = 0, live: int = 900,
               ceiling: int = 8_000_000, sense: str = "",
-              wake_model: str = "", attempts: int = 0) -> SimpleNamespace:
+              wake_model: str = "", attempts: int = 0,
+              daily_usd: float = -1.0) -> SimpleNamespace:
     # grace defaults to 0 (disabled) so the rate-cap / lease tests exercise those bounds in
     # isolation; the wake-grace tests set it explicitly. sense="" → resume resolution looks at
     # ~/.claude/projects (no anchored transcript for the test ids there → mint), so the legacy
     # mint-path tests stay exactly as they were.
+    # daily_usd defaults to -1 (NO CEILING) so these tests keep exercising the DISPATCH decisions
+    # — rate caps, leases, alternation — in isolation. The ceiling has its own suite
+    # (test_ceiling.py) and its own trigger test below; a spend gate silently swallowing every
+    # other test's wake would hide the very behaviour they exist to pin.
     return SimpleNamespace(osiris_trigger_enabled=enabled, osiris_trigger_rate_cap=rate_cap,
                            osiris_trigger_window_secs=window, osiris_mail_lease_secs=lease,
                            osiris_trigger_grace_secs=grace, osiris_owner_live_secs=live,
@@ -35,7 +40,8 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
                            osiris_wake_model=wake_model,
                            osiris_wake_hourly_budget=0,  # unmetered: economics has its own tests
                            osiris_wake_message_attempts=attempts,
-                           osiris_wake_allowed_tools="mcp__osiris")
+                           osiris_wake_allowed_tools="mcp__osiris",
+                           osiris_daily_usd=daily_usd)
 
 
 def test_should_wake_is_off_by_default_and_rate_capped() -> None:
@@ -251,7 +257,11 @@ async def test_spawn_claude_injects_claude_job_dir_into_child_env(monkeypatch: A
 
     monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
     await trigger._spawn_claude("/repo/demo", "wake up", job_dir="/tmp/x/jobs/wake-7")
-    assert captured["args"][:3] == ("claude", "-p", "wake up")
+    # by POSITION only where position is load-bearing: `claude -p` leads, and the PROMPT is last
+    # (flags are appended between them). Pinning the prompt at index 2 broke the moment the wake
+    # learned to keep its receipt — a test asserting an ARRANGEMENT rather than a REQUIREMENT.
+    assert captured["args"][:2] == ("claude", "-p")
+    assert captured["args"][-1] == "wake up"
     assert captured["env"]["CLAUDE_JOB_DIR"] == "/tmp/x/jobs/wake-7"
     assert "PATH" in captured["env"]  # inherited the parent environment, not a bare dict
 
@@ -274,10 +284,50 @@ async def test_spawn_claude_authorizes_the_graph_hands(monkeypatch: Any) -> None
 
     monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
     await trigger._spawn_claude("/repo/demo", "wake up", allowed_tools="mcp__osiris")
-    assert ("--allowedTools", "mcp__osiris") == tuple(captured["args"][2:4])
+    assert ("--allowedTools", "mcp__osiris") in _pairs(captured["args"])
     # empty/None = the old behavior: rely on the repo's stored approvals, no flag at all
     await trigger._spawn_claude("/repo/demo", "wake up", allowed_tools=None)
     assert "--allowedTools" not in captured["args"]
+
+
+def _pairs(args: tuple[Any, ...]) -> list[tuple[Any, Any]]:
+    return [(args[i], args[i + 1]) for i in range(len(args) - 1)]
+
+
+async def test_the_wake_KEEPS_ITS_RECEIPT(monkeypatch: Any, tmp_path: Path) -> None:
+    """OSIRIS'S MOST EXPENSIVE ACT THREW AWAY THE VENDOR'S OWN PRICE FOR IT, 463 TIMES.
+
+    A wake is a whole Claude session — with tools, in a repo, on the operator's card. It was
+    spawned with `stdout=DEVNULL`, so the CLI's output envelope went in the bin. That envelope
+    carries `total_cost_usd`: authoritative, free, volunteered on every call. It is EXACTLY where
+    the miner's $40.49-to-the-cent comes from. Nobody ever read it, and so the single question the
+    operator actually cares about — what does this cost per day? — had no answer for eight days.
+
+        A HAND YOU CANNOT COST IS A HAND YOU CANNOT GOVERN.
+
+    And it stays FIRE-AND-FORGET. The receipt goes to a FILE and nothing awaits the process —
+    that is not laziness, it is B1's scar: an arq timeout that abandoned a live billing
+    `claude -p` is how the worker wedged itself with ten 290MB children against a 2G cap.
+    """
+    from src.orchestrator import trigger
+
+    captured: dict[str, Any] = {}
+
+    class _Proc:
+        pid = 4242
+
+    async def _fake_exec(*args: Any, **kwargs: Any) -> _Proc:
+        captured["args"] = args
+        captured["stdout"] = kwargs.get("stdout")
+        return _Proc()
+
+    monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
+    monkeypatch.setattr(trigger, "RECEIPTS", tmp_path / "receipts")
+    await trigger._spawn_claude("/repo/demo", "wake up", job_dir="/home/x/.claude/jobs/abcd1234")
+
+    assert ("--output-format", "json") in _pairs(captured["args"]), "the CLI was not asked to price"
+    assert captured["stdout"] is not trigger.asyncio.subprocess.DEVNULL, "the receipt was binned"
+    assert (tmp_path / "receipts" / "abcd1234.json").exists()
 
 
 async def test_every_wake_lane_passes_the_allowed_tools(actions: Actions) -> None:
@@ -656,3 +706,37 @@ def test_the_wake_prompt_carries_a_literal_anchor_never_a_shell_variable() -> No
     rendered = _WAKE_PROMPT.format(repo="/repo/demo", job_dir="/tmp/osiris-wakes/jobs/wake-demo")
     assert 'job_dir="/tmp/osiris-wakes/jobs/wake-demo"' in rendered
     assert "$" not in rendered.split("mount(")[1].split(")")[0]
+
+
+async def test_the_DAILY_CEILING_stops_the_wake(actions: Actions) -> None:
+    """THE PRODUCER THIS CEILING WAS BUILT FOR.
+
+    A wake is not a token. It is an entire Claude session, with tools, in a repo, on the
+    operator's card. 463 of them were minted on projects he had not opened in days, and NOT ONE
+    was ever in the ledger — because the spawner threw the vendor's own receipt at /dev/null.
+
+    Every other guard on this path is a RATE (wakes per hour, attempts per message). AND A RATE
+    IS NOT A BOUND: the wake storm ran for days at a perfectly legal 5/hr, and every guard was
+    working exactly as designed while it happened. A rate limits how FAST you burn. Only a
+    ceiling limits how MUCH.
+    """
+    from src.ingest.providers import Usage
+    from src.ingest.usage import record_usage
+
+    spawned: list[Any] = []
+
+    async def _spawn(*a: Any, **kw: Any) -> None:
+        spawned.append(a)
+
+    await _agent_with_mail(actions)
+    for _ in range(12):                                  # $12 spent against a $10 ceiling
+        await record_usage(actions.pool, purpose="wake", usage=Usage(
+            model="claude-haiku-4-5-20251001", input_tokens=1, output_tokens=1,
+            cache_read_tokens=0, cache_creation_tokens=0, cost_usd=1.00))
+
+    rep = await trigger_mail_tick(
+        actions, settings=_settings(enabled=True, daily_usd=10.0), spawn=_spawn)
+
+    assert spawned == [], "the ceiling was reached and the trigger spawned anyway"
+    assert rep.get("refused") == 1
+    assert "CEILING REACHED" in str(rep.get("why", ""))

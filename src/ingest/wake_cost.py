@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import asyncpg
@@ -102,14 +104,47 @@ def _wake_files(root: Path) -> list[Path]:
         return []
 
 
+def _receipt(stem: str) -> float | None:
+    """The CLI's OWN price for this wake, if the spawner kept it (trigger.RECEIPTS).
+
+    THIS IS THE ONLY HONEST DOLLAR IN THE FILE. Everything else here is tokens — a fact, but not
+    a price — and the whole reason 257 wakes sit unpriced in the ledger is that the spawner used
+    to point its stdout at /dev/null and bin the envelope the vendor was handing it for free
+    (21a99136). New wakes drop it here. Old ones never will, and no amount of cleverness recovers
+    a number nobody wrote down.
+    """
+    from src.orchestrator.trigger import RECEIPTS
+    try:
+        with (RECEIPTS / f"{stem[:8]}.json").open(errors="replace") as fh:
+            env = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    cost = env.get("total_cost_usd")
+    return float(cost) if isinstance(cost, (int, float)) else None
+
+
+def _last_turn(path: Path) -> datetime | None:
+    """When this wake actually RAN — its transcript's last write.
+
+    A LEDGER MUST BE DATED BY THE EVENT, NEVER BY THE BOOKKEEPING. This meter is a BACKFILL: it
+    read 257 historical wakes in one pass, and stamping them `now()` filed A WEEK OF SPENDING
+    UNDER A SINGLE DAY. Harmless while nobody was counting — and fatal the moment a DAILY CEILING
+    reads this table, because it would refuse to spend a cent on a day that had cost nothing.
+    """
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, UTC)
+    except OSError:
+        return None
+
+
 async def meter_wakes(pool: asyncpg.Pool, root: Path, *, limit: int = BATCH) -> dict[str, int]:
     """Read every un-metered wake transcript into llm_usage. Free, deterministic, once each."""
     files = await asyncio.to_thread(_wake_files, root)
     if not files:
-        return {"metered": 0, "tokens": 0}
+        return {"metered": 0, "tokens": 0, "priced": 0}
     done = {r["key"] for r in await pool.fetch(
         "SELECT key FROM watermarks WHERE key LIKE $1", f"{_METERED}%")}
-    metered = tokens = 0
+    metered = tokens = priced = 0
     for path in files:
         if metered_key(path.stem) in done:
             continue
@@ -122,9 +157,14 @@ async def meter_wakes(pool: asyncpg.Pool, root: Path, *, limit: int = BATCH) -> 
         if got is None:
             continue
         _, usage = got
-        await record_usage(pool, purpose="wake", usage=usage)
+        cost = await asyncio.to_thread(_receipt, path.stem)
+        if cost is not None:
+            usage = replace(usage, cost_usd=cost)   # the vendor's word beats our arithmetic
+            priced += 1
+        ran = await asyncio.to_thread(_last_turn, path)
+        await record_usage(pool, purpose="wake", usage=usage, ran_at=ran)
         metered += 1
         tokens += usage.input_tokens + usage.output_tokens
         if metered >= limit:
             break
-    return {"metered": metered, "tokens": tokens}
+    return {"metered": metered, "tokens": tokens, "priced": priced}
