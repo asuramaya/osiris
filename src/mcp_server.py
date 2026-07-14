@@ -960,7 +960,7 @@ async def mount(
                             "who you are, so the fleet can DM you by name"}),
            # the count LEADS WITH WHAT IS ACTIONABLE (f9449d8d) — graded asks are named,
            # ungraded mail keeps the plain count rather than being guessed into a band
-           "mail": (f"{unread} unread ({asks} ask{'s' if asks != 1 else ''} something of "
+           "mail": (f"{unread} unread ({asks} ask{'s' if asks == 1 else ''} something of "
                     "you) — call inbox()" if asks else
                     f"{unread} unread — call inbox()") if unread else "none",
            "note": "linked — writes now attributed to you; call orient() next"}
@@ -1213,7 +1213,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
               if proj else 0)
     asks = (await unread_count(pool, proj, reader_agent=reader, lease_secs=lease,
                                grade="ask") if proj and unread else 0)
-    mail = (f"{unread} unread ({asks} ask{'s' if asks != 1 else ''} something of you) — "
+    mail = (f"{unread} unread ({asks} ask{'s' if asks == 1 else ''} something of you) — "
             "inbox()" if asks else f"{unread} unread — inbox()") if unread else "none"
     op_unread = await unread_count(pool, OPERATOR_ADDR, reader_agent=OPERATOR_ADDR,
                                    lease_secs=lease)
