@@ -206,6 +206,35 @@ def latest_model(lines: list[str]) -> str | None:
     return models[-1] if models else None
 
 
+def latest_model_at(lines: list[str]) -> tuple[str | None, datetime | None]:
+    """(model, timestamp) of the most recent assistant turn — the model AND the moment the
+    record that witnessed it was written. The transcript tail LAGS a /model command (no
+    assistant turn has run on the new model yet), so a tail read is evidence about a PAST
+    moment, not about now. The seam gate compares this clock against the graph's last
+    anchored stamp: an observation OLDER than the stamp it disagrees with is a stale tail
+    arguing with fresher testimony, never a seam (the TJMAX ping-pong, thread a3d49d91).
+    A SEAM MUST BE DATED BY THE EVIDENCE THAT WITNESSED IT."""
+    model: str | None = None
+    at: datetime | None = None
+    for raw in lines:
+        try:
+            d = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if not isinstance(d, dict):
+            continue
+        m = _model_of(d)
+        if not m:
+            continue
+        model = m
+        at = None
+        ts = d.get("timestamp")
+        if isinstance(ts, str):
+            with contextlib.suppress(ValueError):
+                at = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    return model, at
+
+
 # the harness records a /model invocation VERBATIM in a user entry — the operator's own hand,
 # on the record. This is what separates a deliberate swap from a rug-pull (operator complaint,
 # 2026-07-10: "a rug pull ... vs a direct /model swap on my part is different").

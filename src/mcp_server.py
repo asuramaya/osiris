@@ -45,6 +45,7 @@ from src.orchestrator import compositions as comp
 from src.orchestrator import dispose as dispose_seam
 from src.orchestrator.agents import (
     AgentIdentity,
+    _generation,
     read_project_model,
     register_agent,
     resolve_identity,
@@ -938,6 +939,11 @@ async def mount(
         "SELECT agent_id, cwd FROM agent_mounts WHERE project = $1 AND agent_id <> $2 "
         "AND last_seen > now() - interval '15 minutes' ORDER BY last_seen DESC LIMIT 8",
         ident.project, ident.agent_id) if ident.project else []
+    # ...but YOUR OWN LINEAGE IS NEVER ANOTHER HAND (thread cb2b0a09): a stale mount row
+    # naming a superseded generation reads live off transcript mtime, and every mind
+    # onboarded on 2026-07-14 was warned about its own ancestor. Cry-wolf kills the warning.
+    _mine = _generation(ident.agent_id)[0]
+    sibs = [s for s in sibs if _generation(s["agent_id"])[0] != _mine]
     out: dict[str, Any] = {"agent": ident.agent_id, "project": ident.project or "?",
            "model": ident.model or "unknown",
            **({"co_agents": {
@@ -1249,6 +1255,9 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             "SELECT agent_id, cwd FROM agent_mounts WHERE project = $1 AND agent_id <> $2 "
             "AND last_seen > now() - interval '15 minutes' ORDER BY last_seen DESC LIMIT 8",
             proj, ident.agent_id)
+        # your own lineage is never another hand (thread cb2b0a09) — same filter as mount()
+        _mine = _generation(ident.agent_id)[0]
+        sibs = [s for s in sibs if _generation(s["agent_id"])[0] != _mine]
         if sibs:
             co_agents = {
                 "live": [{"agent": s["agent_id"], "cwd": s["cwd"]} for s in sibs],
@@ -1413,6 +1422,11 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
         "  AND a.name='retired' "
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS retired, "
+        # a spawn the harness ANNOUNCED but nothing ever witnessed (no transcript, no act) —
+        # internal machinery (the compaction summarizer), never a seat (thread 26e1dc91)
+        " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='spawn_witnessed' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS witnessed, "
         " (SELECT max(m.last_seen) FROM agent_mounts m WHERE m.agent_id=o.canonical) "
         "  AS mount_seen, "
         " (SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
@@ -1434,7 +1448,14 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         return max(stamps) if stamps else None
 
     nodes: dict[str, dict[str, Any]] = {}
+    ghosts = 0
     for r in rows:
+        if r["witnessed"] == "false":
+            # announced-never-witnessed harness ephemera: they are in the record (the graph
+            # forgets nothing) but they are not FLEET — rendering them as live seats put 42
+            # phantoms in the tree in one night (2026-07-14). Counted, never shown.
+            ghosts += 1
+            continue
         ts = _ts(r)
         nodes[str(r["canonical"])] = {
             "model": r["model"], "project": r["project"], "parent": r["parent"],
@@ -1450,6 +1471,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     return {
         "connected_now": len(_agents),
         "count": len(nodes),
+        **({"ghosts": ghosts} if ghosts else {}),
         "live": sum(1 for n in nodes.values() if n["live"]),
         "swarm": sum(1 for n in nodes.values() if n["parent"]),
         "tree": render_fleet_tree(nodes, full=full),

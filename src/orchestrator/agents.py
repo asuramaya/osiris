@@ -22,6 +22,8 @@ from __future__ import annotations
 import hashlib
 import re
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,6 +36,7 @@ from src.ingest.sessions import (
     _job_id,
     _tail_lines,
     latest_model,
+    latest_model_at,
     locate_current_transcript,
     locate_transcript_by_cwd,
     model_of_transcript,
@@ -68,6 +71,13 @@ class AgentIdentity:
     # the operator's own /model command is on this transcript's record — any within-session
     # swap was CHOSEN, not suffered (a seam, never a sin; complaint 2026-07-10).
     model_deliberate: bool = False
+    # WHEN the anchored model observation was witnessed — the timestamp of the transcript
+    # record that carried it (None when unanchored, or the record was unstamped). The seam
+    # gate compares CLOCKS with this: the tail lags a /model until the next assistant turn,
+    # so an observation not fresher than the stamp it disagrees with is a stale read, never
+    # a seam (the TJMAX ping-pong, thread a3d49d91). source_model is stamped AT this moment
+    # too — a ledger dated by the event, never by the bookkeeping.
+    model_observed_at: datetime | None = None
     # False when identity fell back to a best-effort id (no session/job-id/transcript anchor). The
     # fallback is now DISTINCT per session — never the old shared `agent:unknown` sink — so distinct
     # actors can't merge; the flag lets the fleet digest surface an unresolved onboarding.
@@ -192,6 +202,11 @@ async def seat_holders(pool: asyncpg.Pool, house: str | None, seat: str) -> list
         "AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='project' "
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '') = COALESCE($2, '') "
+        # a healed phantom never HELD the seat (thread 6c99800a: TJMAX read X when ~VI minds
+        # ever acted). false_mint only — a RETIRED real holder still held it; filtering
+        # retired would renumber history.
+        "AND NOT EXISTS (SELECT 1 FROM current_assertions f WHERE f.object_id=o.id "
+        "  AND f.name='false_mint' AND f.value #>> '{}' = 'true') "
         "ORDER BY o.created_at", seat, house)]
 
 
@@ -423,6 +438,7 @@ def resolve_identity(
     confident = sid is not None  # a session/job_dir ANCHOR; the cwd-locate below is only a GUESS
     declared = model  # the agent's SELF-REPORT of its model (may be None) — the WEAK signal
     observed: str | None = None
+    observed_at: datetime | None = None  # when the record carrying the model was written
     method: str | None = None
     history: list[str] = []  # the transcript's model sequence — the swap history (job_dir path)
     deliberate = False       # a /model on the record makes any swap the operator's own hand
@@ -447,6 +463,8 @@ def resolve_identity(
             observed, history, deliberate = model_of_transcript(main)
             if observed is not None:
                 method = "job_dir"
+                # the moment the evidence was WITNESSED — the seam gate's clock
+                observed_at = latest_model_at(_tail_lines(main))[1]
     if sid is None and cwd:  # no job dir → find the session (and, if unseen, the model) by cwd
         path = locate_transcript_by_cwd(cwd, root=root)
         if path is not None:
@@ -490,7 +508,8 @@ def resolve_identity(
     return AgentIdentity(agent_id=f"agent:{sid}", session=sid, project=project, model=model,
                          cwd=cwd, model_method=method, model_declared=declared,
                          model_divergent=divergent, model_history=tuple(history),
-                         model_deliberate=deliberate, resolved=resolved)
+                         model_deliberate=deliberate, model_observed_at=observed_at,
+                         resolved=resolved)
 
 
 async def _link_once(
@@ -503,14 +522,16 @@ async def _link_once(
         await actions.create_link(frm, to, ltype, src, when, _CONF, evidence_class=_EC)
 
 
-async def _lineage_head(actions: Actions, canonical: str) -> str:
+async def lineage_head(pool: asyncpg.Pool, canonical: str) -> str:
     """Follow winning `succeeded_by` pointers to the newest generation. A session-keyed resolve
     always lands on the BASE id (the transcript knows nothing of minting); the lineage decides
-    who that name is NOW. Cycle-guarded; a missing object ends the walk."""
+    who that name is NOW. Cycle-guarded; a missing object ends the walk. Pool-based so the
+    liveness promotion (which has no Actions) can walk it too — a mount row must follow its
+    lineage head, or a superseded generation reads as a live co-agent of its own descendant."""
     seen = {canonical}
     cur = canonical
     for _ in range(64):
-        nxt = await actions.pool.fetchval(
+        nxt = await pool.fetchval(
             "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
             "WHERE o.canonical=$1 AND o.type='Agent' AND a.name='succeeded_by' "
             "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", cur)
@@ -519,6 +540,24 @@ async def _lineage_head(actions: Actions, canonical: str) -> str:
         seen.add(nxt)
         cur = str(nxt)
     return cur
+
+
+@asynccontextmanager
+async def mint_lock(pool: asyncpg.Pool, lineage_root: str) -> AsyncIterator[None]:
+    """Serialize generation-minting per LINEAGE (a pg advisory lock on the root). Two
+    concurrent seam observers minted Soundwave VI and VII in the SAME SECOND with identical
+    seam strings (2026-07-14): each walked the head, each minted, and the loser's head-walk
+    found the winner's fresh mint — so the race STACKED generations instead of converging.
+    The lock lives on one dedicated connection (advisory locks are session-scoped in PG);
+    the caller must re-read its evidence INSIDE the lock so the loser sees the winner's
+    write and concludes no-op."""
+    async with pool.acquire() as conn:
+        await conn.execute("SELECT pg_advisory_lock(hashtext($1))", f"mint:{lineage_root}")
+        try:
+            yield
+        finally:
+            await conn.execute(
+                "SELECT pg_advisory_unlock(hashtext($1))", f"mint:{lineage_root}")
 
 
 # For the source_model property, the resolution METHOD is the provenance, and (ruling 17516660)
@@ -539,17 +578,24 @@ _MODEL_EC = {
 }
 
 
-async def _last_anchored_model(actions: Actions, agent: uuid.UUID) -> str | None:
-    """The last ANCHORED source_model ever recorded for this Agent — direct_observation grade
-    only (a job_dir transcript probe), read off the raw assertions so a later weak-grade write
-    from the same source can't hide it behind supersession. This is the succession baseline:
-    only two anchored observations disagreeing can witness a seam; a cwd guess or self-report
-    on either side would be the cry-wolf (agent e71b408f's 'demoted to haiku')."""
-    return await actions.pool.fetchval(  # type: ignore[no-any-return]
-        "SELECT value #>> '{}' FROM assertions "
+async def _last_anchored_stamp(
+    actions: Actions, agent: uuid.UUID
+) -> tuple[str | None, datetime | None]:
+    """The last ANCHORED source_model ever recorded for this Agent, AND when it was observed —
+    direct_observation grade only (a job_dir transcript probe), read off the raw assertions so
+    a later weak-grade write from the same source can't hide it behind supersession. This is
+    the succession baseline: only two anchored observations disagreeing can witness a seam; a
+    cwd guess or self-report on either side would be the cry-wolf (agent e71b408f's 'demoted
+    to haiku'). The timestamp is the seam gate's clock: only an observation FRESHER than this
+    stamp may testify to a seam — the tail of a transcript is evidence about a PAST moment."""
+    row = await actions.pool.fetchrow(
+        "SELECT value #>> '{}' AS v, observed_at FROM assertions "
         "WHERE object_id=$1 AND name='source_model' AND evidence_class=$2 "
         "ORDER BY observed_at DESC, created_at DESC LIMIT 1",
         agent, EvidenceClass.DIRECT_OBSERVATION.value)
+    if row is None:
+        return None, None
+    return row["v"], row["observed_at"]
 
 
 async def mint_heir(
@@ -577,6 +623,15 @@ async def mint_heir(
     await actions.assert_property(ancestor_oid, "succeeded_by", heir, heir, now,
                                   confidence_for(do), evidence_class=do.value)
     await _link_once(actions, a, ancestor_oid, "succeeded_from", heir, now)
+    # THE HOUSE PASSES WITH THE BLOOD (thread 6c99800a): heartbeat-minted heirs got a project
+    # assertion later but never the works_in EDGE, so every lens that walks the edge missed
+    # them. Inherit both HERE, once, for every mint path — the register path re-stamps its
+    # own reading afterwards and the byte-dup skip absorbs the overlap.
+    house = await house_of(actions.pool, ancestor_id)
+    if house:
+        await actions.assert_property(a, "project", house, heir, now, _CONF, evidence_class=_EC)
+        proj = await actions.create_or_find_object("SoftwareProject", f"repo:{house}", heir)
+        await _link_once(actions, a, proj, "works_in", heir, now)
     # SEAT INHERITANCE (phase 2): the heir inherits the ancestor's human name — the seat
     # passes down the lineage, the generation (roman) ticks up. 'Anna' → 'Anna II'.
     inherited = await actions.pool.fetchval(
@@ -599,8 +654,8 @@ async def mint_heir(
         #
         # succeeds_seat is NOT succeeded_from (stamped above): that one chains ANCHORS — which
         # conversation spawned which — and this one chains HOLDERS of a job. Two relations
-        # wearing one name is the mistake that started all of this.
-        house = await house_of(actions.pool, ancestor_id)
+        # wearing one name is the mistake that started all of this. (`house` resolved above,
+        # where the heir inherited it.)
         holders = [h for h in await seat_holders(actions.pool, house, inherited) if h != heir]
         await actions.assert_property(a, "seat_generation", str(len(holders) + 1), heir, now,
                                       _CONF, evidence_class=_EC)
@@ -623,8 +678,30 @@ _SEAM_DEBOUNCE_SECS = 900
 _DEBOUNCE_SRC = "seam-debounce"
 
 
+async def agent_has_acted(
+    actions: Actions, agent_id: str, *, exclude: list[uuid.UUID],
+    settled_after: datetime | None,
+) -> bool:
+    """A MIND IS WITNESSED BY ITS ACTS (the debounce's law, b813e389): did this agent ever do
+    anything beyond its own mint/registration bookkeeping? Acts = assertions on objects other
+    than the excluded lineage pair, words sent, or mail SETTLED after the mint. NOT acts: the
+    display-name stamps registration writes onto the repo and principal objects (a greeting's
+    paperwork — the REGISTER path stamps those on every mount, and counting them made every
+    register-minted heir read as a mind, so the cross-path debounce could never heal one)."""
+    return bool(await actions.pool.fetchval(
+        "SELECT EXISTS (SELECT 1 FROM assertions x JOIN objects o ON o.id=x.object_id "
+        "         WHERE x.source_id=$1 AND NOT (x.object_id = ANY($2::uuid[])) "
+        "           AND NOT (o.type IN ('SoftwareProject','Person') AND x.name='name')) "
+        "  OR EXISTS (SELECT 1 FROM fleet_messages WHERE from_agent=$1) "
+        "  OR EXISTS (SELECT 1 FROM message_recipients "
+        "         WHERE agent_id=$1 AND read_at IS NOT NULL "
+        "           AND ($3::timestamptz IS NULL OR read_at > $3))",
+        agent_id, exclude, settled_after))
+
+
 async def _debounce_roundtrip(
-    actions: Actions, row: Any, observed: str, now: datetime,
+    actions: Actions, *, agent_id: str, observed: str, now: datetime,
+    job_dir: str | None = None,
 ) -> dict[str, Any] | None:
     """THE SEAM DEBOUNCE (Soundwave VII's wave-3 grievance, b813e389): the operator toggling
     /model there-and-back within a minute minted a generation — roman-numeral churn for
@@ -634,8 +711,15 @@ async def _debounce_roundtrip(
     nothing beyond its own mint stamps, sent nothing, and settled nothing — no mind ever
     existed; the mint heals as false (event-sourced, compensating, its record stays) and the
     ancestor takes its seat back, estate included. One witnessed act, and the heir stands:
-    a real mind passed through, however briefly. Returns the heal dict, or None (mint on)."""
-    cur = row["agent_id"]
+    a real mind passed through, however briefly. Returns the heal dict, or None (mint on).
+
+    SHARED BY BOTH MINT PATHS (thread a3d49d91): it originally lived only in the chrome
+    heartbeat and only healed heads minted 'live-swap' — so a round-trip whose return leg was
+    witnessed by a MOUNT (register_agent) could never heal, and the two observers ping-ponged
+    generations off each other's stamps (TJMAX VI→X, five mints in six minutes). `agent_id`
+    must be the LINEAGE HEAD; `job_dir` re-points that mount row when the caller has one,
+    else any row naming the healed heir follows the restored ancestor."""
+    cur = agent_id
     cur_oid = await actions.pool.fetchval(
         "SELECT id FROM objects WHERE canonical=$1 AND type='Agent' AND status='active'", cur)
     if cur_oid is None:
@@ -645,7 +729,9 @@ async def _debounce_roundtrip(
         "FROM current_assertions WHERE object_id=$1 "
         "AND name IN ('succeeded_from','minted_because','model_succession') "
         "ORDER BY name, confidence DESC, observed_at DESC", cur_oid)}
-    if meta.get("minted_because", (None, None))[0] != "live-swap":
+    # both MODEL-seam mints heal; a compaction/clear/reanimation mint is a context death,
+    # not model flapping — there is no 'left side' to return to
+    if meta.get("minted_because", (None, None))[0] not in ("live-swap", "model-succession"):
         return None
     ancestor, minted_at = meta.get("succeeded_from", (None, None))
     seam = meta.get("model_succession", ("", None))[0] or ""
@@ -659,16 +745,10 @@ async def _debounce_roundtrip(
         "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", ancestor)
     if ancestor_oid is None:
         return None
-    acted = await actions.pool.fetchval(
-        # acts = assertions beyond the lineage bookkeeping pair, words sent, or mail SETTLED
-        # after the mint (a lease/delivery is passive perception, never an act)
-        "SELECT EXISTS (SELECT 1 FROM assertions "
-        "         WHERE source_id=$1 AND object_id NOT IN ($2, $3)) "
-        "  OR EXISTS (SELECT 1 FROM fleet_messages WHERE from_agent=$1) "
-        "  OR EXISTS (SELECT 1 FROM message_recipients "
-        "         WHERE agent_id=$1 AND read_at IS NOT NULL AND read_at > $4)",
-        cur, cur_oid, ancestor_oid, minted_at)
-    if acted:
+    # acts = assertions beyond the lineage bookkeeping pair, words sent, or mail SETTLED
+    # after the mint (a lease/delivery is passive perception, never an act)
+    if await agent_has_acted(actions, cur, exclude=[cur_oid, ancestor_oid],
+                             settled_after=minted_at):
         return None
     do = EvidenceClass.DIRECT_OBSERVATION
     conf = confidence_for(do)
@@ -686,9 +766,14 @@ async def _debounce_roundtrip(
     await actions.pool.execute(
         "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
         ancestor, cur)
-    await actions.pool.execute(
-        "UPDATE agent_mounts SET agent_id=$2, model=$3, last_seen=now() WHERE job_dir=$1",
-        row["job_dir"], ancestor, observed)
+    if job_dir is not None:  # the heartbeat's caller holds the row — bump its pulse too
+        await actions.pool.execute(
+            "UPDATE agent_mounts SET agent_id=$2, model=$3, last_seen=now() WHERE job_dir=$1",
+            job_dir, ancestor, observed)
+    else:  # the register path: any row naming the healed heir follows the restored mind
+        await actions.pool.execute(
+            "UPDATE agent_mounts SET agent_id=$2, model=$3 WHERE agent_id=$1",
+            cur, ancestor, observed)
     return {"healed": cur, "restored": ancestor,
             "seam": f"{seam} → {observed} (round-trip within "
                     f"{_SEAM_DEBOUNCE_SECS // 60}m, no act — debounced, not a death)"}
@@ -711,57 +796,76 @@ async def live_succession(
         "WHERE job_dir LIKE '%/jobs/' || $1 ORDER BY last_seen DESC LIMIT 1", sid[:8])
     if row is None:
         return {"unchanged": True, "reason": "no mount"}
-    old = normalize_model(row["model"])
-    if old == observed:
+    if normalize_model(row["model"]) == observed:
         if row["model"] != observed:  # converge a bracket-stamped row to the canonical form
             await actions.pool.execute(
                 "UPDATE agent_mounts SET model=$2 WHERE job_dir=$1", row["job_dir"], observed)
         return {"unchanged": True}
-    if old is None:
-        await actions.pool.execute(
-            "UPDATE agent_mounts SET model=$2 WHERE job_dir=$1", row["job_dir"], observed)
-        return {"unchanged": True, "reason": "first stamp"}
-    now = datetime.now(UTC)
-    # a there-and-back /model toggle with no act between heals instead of minting again
-    healed = await _debounce_roundtrip(actions, row, observed, now)
-    if healed is not None:
-        return healed
-    # whose hand moved the model? A /model on THIS session's own transcript makes the seam
-    # the OPERATOR's deliberate act — the mint still happens (a death is a death, ruling
-    # a882b334) but the seam string carries the hand, so no downstream surface preaches.
-    deliberate = False
-    try:
-        main = locate_current_transcript(
-            Path.home() / ".claude/projects", row["job_dir"], anchored_only=True)
-        if main is not None:
-            _cur, _hist, deliberate = model_of_transcript(main)
-    except OSError:
+    async with mint_lock(actions.pool, _generation(row["agent_id"])[0]):
+        # RE-READ INSIDE THE LOCK: two concurrent heartbeats both read the pre-swap row and
+        # both minted — Soundwave VI and VII, identical seam strings, one second apart
+        # (2026-07-14). The loser now waits, re-reads, sees the winner's write, no-ops.
+        row = await actions.pool.fetchrow(
+            "SELECT job_dir, agent_id, project, model FROM agent_mounts "
+            "WHERE job_dir LIKE '%/jobs/' || $1 ORDER BY last_seen DESC LIMIT 1", sid[:8])
+        if row is None:
+            return {"unchanged": True, "reason": "no mount"}
+        old = normalize_model(row["model"])
+        if old == observed:
+            if row["model"] != observed:
+                await actions.pool.execute(
+                    "UPDATE agent_mounts SET model=$2 WHERE job_dir=$1",
+                    row["job_dir"], observed)
+            return {"unchanged": True}
+        if old is None:
+            await actions.pool.execute(
+                "UPDATE agent_mounts SET model=$2 WHERE job_dir=$1", row["job_dir"], observed)
+            return {"unchanged": True, "reason": "first stamp"}
+        now = datetime.now(UTC)
+        # seams run on the lineage HEAD — and the debounce judges the head, not the row,
+        # which may lag its own succession
+        head = await lineage_head(actions.pool, row["agent_id"])
+        # a there-and-back /model toggle with no act between heals instead of minting again
+        healed = await _debounce_roundtrip(actions, agent_id=head, observed=observed,
+                                           now=now, job_dir=row["job_dir"])
+        if healed is not None:
+            return healed
+        # whose hand moved the model? A /model on THIS session's own transcript makes the seam
+        # the OPERATOR's deliberate act — the mint still happens (a death is a death, ruling
+        # a882b334) but the seam string carries the hand, so no downstream surface preaches.
         deliberate = False
-    head = await _lineage_head(actions, row["agent_id"])
-    ancestor_oid = await actions.create_or_find_object("Agent", head, head)
-    seam = f"{old} → {observed}" + (" [operator /model]" if deliberate else "")
-    heir, heir_oid = await mint_heir(actions, head, ancestor_oid, because="live-swap",
-                                     succession=seam, now=now)
-    # the heartbeat's model is the harness's own word about a session it is rendering — as
-    # anchored as a job_dir transcript read, and the baseline the NEXT seam check runs against
-    # (without it, a later re-mount would see no anchored model on the heir and stay quiet).
-    do = EvidenceClass.DIRECT_OBSERVATION
-    await actions.assert_property(heir_oid, "source_model", observed, heir, now,
-                                  confidence_for(do), evidence_class=do.value)
-    if row["project"]:
-        await actions.assert_property(heir_oid, "project", row["project"], heir, now, _CONF,
+        try:
+            main = locate_current_transcript(
+                Path.home() / ".claude/projects", row["job_dir"], anchored_only=True)
+            if main is not None:
+                _cur, _hist, deliberate = model_of_transcript(main)
+        except OSError:
+            deliberate = False
+        ancestor_oid = await actions.create_or_find_object("Agent", head, head)
+        seam = f"{old} → {observed}" + (" [operator /model]" if deliberate else "")
+        heir, heir_oid = await mint_heir(actions, head, ancestor_oid, because="live-swap",
+                                         succession=seam, now=now)
+        # the heartbeat's model is the harness's own word about a session it is rendering — as
+        # anchored as a job_dir transcript read, and the baseline the NEXT seam check runs
+        # against (without it, a later re-mount would see no anchored model on the heir and
+        # stay quiet).
+        do = EvidenceClass.DIRECT_OBSERVATION
+        await actions.assert_property(heir_oid, "source_model", observed, heir, now,
+                                      confidence_for(do), evidence_class=do.value)
+        if row["project"]:
+            await actions.assert_property(heir_oid, "project", row["project"], heir, now, _CONF,
+                                          evidence_class=_EC)
+        sid_prop = _job_id(row["job_dir"]) or sid[:8]
+        await actions.assert_property(heir_oid, "session", sid_prop, heir, now, _CONF,
                                       evidence_class=_EC)
-    sid_prop = _job_id(row["job_dir"]) or sid[:8]
-    await actions.assert_property(heir_oid, "session", sid_prop, heir, now, _CONF,
-                                  evidence_class=_EC)
-    await actions.pool.execute(
-        "UPDATE agent_mounts SET agent_id=$2, model=$3, last_seen=now() WHERE job_dir=$1",
-        row["job_dir"], heir, observed)
-    handle = await actions.pool.fetchval(
-        "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='handle'",
-        heir_oid)
-    return {"minted": heir, "from": head, "succession": seam,
-            "seat": seat_label(heir, handle)}
+        await actions.pool.execute(
+            "UPDATE agent_mounts SET agent_id=$2, model=$3, last_seen=now() WHERE job_dir=$1",
+            row["job_dir"], heir, observed)
+        handle = await actions.pool.fetchval(
+            "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='handle'",
+            heir_oid)
+        return {"minted": heir, "from": head, "succession": seam,
+                "seat": seat_label(heir, handle)}
 
 
 async def _winning_retired(actions: Actions, agent: uuid.UUID) -> bool:
@@ -798,40 +902,71 @@ async def register_agent(
     with no model change at all (compaction, /clear): the weights survive but the memory the
     operator was talking to does not."""
     now = datetime.now(UTC)
-    # PHASE 0 — LINEAGE (ruling be292762): a session-keyed resolve lands on the BASE id; walk to
-    # the lineage HEAD first — the head is who this name is now. Seam checks run against the head.
-    head = await _lineage_head(actions, identity.agent_id)
-    if head != identity.agent_id:
-        identity.agent_id = head
-    src = identity.agent_id
-    a = await actions.create_or_find_object("Agent", identity.agent_id, src)
+    obs: str | None = None
+    # THE MINT LOCK (thread a3d49d91): phases 0–1 read-then-write the succession chain; two
+    # concurrent registrations (or a registration racing the heartbeat) must serialize per
+    # lineage, or the loser's head-walk finds the winner's mint and stacks a generation on it.
+    async with mint_lock(actions.pool, _generation(identity.agent_id)[0]):
+        # PHASE 0 — LINEAGE (ruling be292762): a session-keyed resolve lands on the BASE id;
+        # walk to the lineage HEAD first — the head is who this name is now. Seam checks run
+        # against the head.
+        head = await lineage_head(actions.pool, identity.agent_id)
+        if head != identity.agent_id:
+            identity.agent_id = head
+        src = identity.agent_id
+        a = await actions.create_or_find_object("Agent", identity.agent_id, src)
 
-    # PHASE 1 — SEAM DETECTION → MINT (the operator's ruling: the heir gets its OWN name).
-    mint_because: str | None = None
-    if await _winning_retired(actions, a):
-        # wearing a RETIRED face (bug #51 follow-up): under the mint ruling the retiree is never
-        # re-worn — the arriving context is an heir and gets minted below. The retirement stands.
-        mint_because = "reanimation-of-retired"
-    anchored = bool(identity.model) and identity.model_method == "job_dir"
-    if anchored:
-        # the succession seam: read the baseline BEFORE the new observation supersedes it.
-        # No witnessed-transition exemption (ruling a882b334): oscillation mints every time —
-        # the returning model is a THIRD mind, not the first one back. NORMALIZED comparison:
-        # a bracketed display variant of the same weights is the same mind, never a seam.
-        prior = normalize_model(await _last_anchored_model(actions, a))
-        obs = normalize_model(identity.model)
-        if prior is not None and prior != obs:
-            identity.model_succession = f"{prior} → {obs}"
-            mint_because = mint_because or "model-succession"
-    if mint_reason:
-        # a harness-reported context death (compaction, /clear) with no model seam of its own
-        mint_because = mint_because or mint_reason
-    if mint_because:
-        identity.succeeded_from = identity.agent_id
-        heir, a = await mint_heir(actions, identity.agent_id, a, because=mint_because,
-                                  succession=identity.model_succession, now=now)
-        identity.agent_id = heir
-        src = heir
+        # PHASE 1 — SEAM DETECTION → MINT (the operator's ruling: the heir gets its OWN name).
+        mint_because: str | None = None
+        if await _winning_retired(actions, a):
+            # wearing a RETIRED face (bug #51 follow-up): under the mint ruling the retiree is
+            # never re-worn — the arriving context is an heir and gets minted below. The
+            # retirement stands.
+            mint_because = "reanimation-of-retired"
+        anchored = bool(identity.model) and identity.model_method == "job_dir"
+        if anchored:
+            # the succession seam: read the baseline BEFORE the new observation supersedes it.
+            # No witnessed-transition exemption (ruling a882b334): oscillation mints every
+            # time — the returning model is a THIRD mind, not the first one back. NORMALIZED
+            # comparison: a bracketed display variant of the same weights is the same mind,
+            # never a seam.
+            prior_raw, prior_at = await _last_anchored_stamp(actions, a)
+            prior = normalize_model(prior_raw)
+            obs = normalize_model(identity.model)
+            if prior is not None and prior != obs:
+                # THE DATING GATE (thread a3d49d91): the transcript tail LAGS a /model — no
+                # assistant turn has run on the new model yet — so an observation not FRESHER
+                # than the stamp it disagrees with is an old newspaper arguing with today's,
+                # never a seam. (TJMAX VIII/IX: opposite seams, four seconds apart, minted
+                # off each other's stale reads.) An unstamped observation keeps the old
+                # behavior: the gate only ever SUPPRESSES a mint it can prove stale.
+                stale = (identity.model_observed_at is not None and prior_at is not None
+                         and identity.model_observed_at <= prior_at)
+                if not stale:
+                    identity.model_succession = f"{prior} → {obs}"
+                    mint_because = mint_because or "model-succession"
+        if mint_reason:
+            # a harness-reported context death (compaction, /clear) with no model seam of its
+            # own
+            mint_because = mint_because or mint_reason
+        if mint_because == "model-succession" and not mint_reason and obs is not None:
+            # a model seam ALONE may be settings flapping: try the heal before minting — the
+            # debounce must work whichever observer witnesses the return leg (it used to live
+            # only in the heartbeat, so a mount seeing the round-trip minted a phantom).
+            healed = await _debounce_roundtrip(actions, agent_id=identity.agent_id,
+                                               observed=obs, now=now)
+            if healed is not None:
+                identity.agent_id = str(healed["restored"])
+                src = identity.agent_id
+                a = await actions.create_or_find_object("Agent", identity.agent_id, src)
+                identity.model_succession = None
+                mint_because = None
+        if mint_because:
+            identity.succeeded_from = identity.agent_id
+            heir, a = await mint_heir(actions, identity.agent_id, a, because=mint_because,
+                                      succession=identity.model_succession, now=now)
+            identity.agent_id = heir
+            src = heir
     label = f"{identity.model or 'claude'} in {identity.project or '?'}"
     await actions.assert_property(a, "name", label, src, now, _CONF, evidence_class=_EC)
     await actions.assert_property(a, "session", identity.session, src, now, _CONF,
@@ -840,7 +975,11 @@ async def register_agent(
                                   evidence_class=_EC)
     if identity.model:
         ec = _MODEL_EC.get(identity.model_method or "", EvidenceClass.CO_OCCURRENCE)
-        await actions.assert_property(a, "source_model", identity.model, src, now,
+        # dated by the EVENT (the transcript record that carried the model), never by the
+        # bookkeeping — so the next seam check compares clocks honestly: a fresher heartbeat
+        # stamp beats this one, an older tail read loses to it.
+        await actions.assert_property(a, "source_model", identity.model, src,
+                                      identity.model_observed_at or now,
                                       confidence_for(ec), evidence_class=ec.value)
     if identity.model_divergent and identity.model_declared:
         # the agent self-reported a model that DISAGREES with the harness (ruling 17516660): keep

@@ -350,7 +350,12 @@ async def register_spawn(
         witnessed = bool(witnessed) or await asyncio.to_thread(transcript.is_file)
     if witnessed is not None:
         await prop("spawn_witnessed", witnessed)
-    if done:
+    if done and bool(witnessed):
+        # A HEARTBEAT MUST BE EARNED BY AN ACT, NEVER GRANTED BY A GREETING (ruling 06d28acb,
+        # thread 26e1dc91): a stop-announcement for a child NOTHING ever witnessed — no
+        # transcript materialized, no act observed — must not stamp life. 42 of the 44 spawns
+        # registered on 2026-07-14 were such ghosts (the compaction summarizer, one per seam),
+        # and the stamp made each render LIVE in the fleet tree for 15 minutes.
         await prop("last_active", now.isoformat())
     if parent_agent:
         p = await actions.create_or_find_object("Agent", parent_agent, _SOURCE)

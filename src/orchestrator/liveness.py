@@ -90,6 +90,23 @@ async def observe_liveness(pool: asyncpg.Pool, root: Path) -> int:
         "UPDATE agent_mounts m SET last_seen = GREATEST(m.last_seen, v.moved) "
         "FROM (SELECT * FROM unnest($1::text[], $2::timestamptz[]) AS t(sid, moved)) v "
         "WHERE m.job_dir LIKE '%' || v.sid AND (m.last_seen IS NULL OR v.moved > m.last_seen) "
-        "RETURNING m.agent_id",
+        "RETURNING m.job_dir, m.agent_id",
         [s[:8] for s, _ in seen], [t for _, t in seen])
+    # A PROMOTED ROW MUST FOLLOW ITS LINEAGE HEAD (thread cb2b0a09). Promotion is by mtime,
+    # and mtime knows nothing of succession — a row still naming a superseded generation reads
+    # as a live CO-AGENT of its own descendant (Ferryman IV beside Ferryman V, Anubis XII
+    # beside XIII: every mind onboarded on 2026-07-14 was warned about its own ancestor). The
+    # resolution layer already re-walks every call to the head; the registry was the one
+    # reader left behind. The guard on the old agent_id makes the re-point lose gracefully to
+    # any concurrent mount that already rewrote the row.
+    from src.orchestrator.agents import lineage_head
+    heads: dict[str, str] = {}
+    for r in rows:
+        cur = r["agent_id"]
+        if cur not in heads:
+            heads[cur] = await lineage_head(pool, cur)
+        if heads[cur] != cur:
+            await pool.execute(
+                "UPDATE agent_mounts SET agent_id=$2 WHERE job_dir=$1 AND agent_id=$3",
+                r["job_dir"], heads[cur], cur)
     return len(rows)

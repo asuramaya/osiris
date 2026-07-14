@@ -351,14 +351,23 @@ async def test_witnessed_swap_mints_under_the_mind_ruling(actions: Actions) -> N
     assert row["why"] == "model-succession"
 
 
-async def test_oscillation_mints_every_time(actions: Actions) -> None:
-    """Fork 1 of the ruling: fable → opus → fable is THREE minds, not the first one back — the
-    returning model re-instantiates over an inherited context, which is what a successor is
-    everywhere else. No same-as-grandfather exception."""
+async def test_oscillation_mints_every_time_a_mind_LIVED_in_the_middle(actions: Actions) -> None:
+    """Fork 1 of ruling a882b334 (fable → opus → fable is THREE minds, no same-as-grandfather
+    exception) — RECONCILED with the debounce ruling that later carved its one exception
+    (b813e389: an actless transient inside the window is settings churn, not a death) and
+    with the operator's 2026-07-14 word extending that exception to EVERY mint path (thread
+    a3d49d91 — the onboarding night burned thirteen numerals on exactly this). The returning
+    model is a third mind IF THE MIDDLE ONE EVER LIVED; a mind is witnessed by its acts. The
+    actless case is pinned in test_onboarding_seams (the heal), the LIVED case here."""
     await register_agent(actions, _anchored("claude-fable-5"), actor="analyst:operator")
     swap1 = _anchored("claude-opus-4-8", history=("claude-fable-5", "claude-opus-4-8"))
     await register_agent(actions, swap1, actor="analyst:operator")
     assert swap1.agent_id == "agent:0806072e-ii"
+    # the middle mind ACTS — a real mind passed through, however briefly (one witnessed act
+    # is the debounce's own line: it must stand as a generation forever)
+    t = await actions.create_or_find_object("Thread", "thread:oscwitness", swap1.agent_id)
+    await actions.assert_property(t, "status", "open", swap1.agent_id, datetime.now(UTC),
+                                  0.9, evidence_class="self_declared")
     back = _anchored("claude-fable-5",
                      history=("claude-fable-5", "claude-opus-4-8", "claude-fable-5"))
     a3 = await register_agent(actions, back, actor="analyst:operator")

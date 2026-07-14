@@ -221,7 +221,7 @@ async def seat_of_fork(pool: asyncpg.Pool, path: Path, *, root: Path) -> str | N
 
     So we ask reality instead of deriving: climb the fork chain and return the first ancestor the
     registry ALREADY has a seat for. That reuses the whole tested succession path (the caller's
-    `_lineage_head` then walks it forward to the current generation), and an ancestor nobody ever
+    `lineage_head` then walks it forward to the current generation), and an ancestor nobody ever
     seated simply contributes nothing. If no ancestor has a seat, this session is genuinely new:
     return None and let it be born.
     """
