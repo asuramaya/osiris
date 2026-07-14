@@ -266,7 +266,9 @@ async def test_spawned_wake_carries_a_durable_job_dir_anchor(actions: Actions) -
     assert f'job_dir="{jd}"' in prompt and "$CLAUDE_JOB_DIR" not in prompt
 
 
-async def test_spawn_claude_injects_claude_job_dir_into_child_env(monkeypatch: Any) -> None:
+async def test_spawn_claude_injects_claude_job_dir_into_child_env(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
     """_spawn_claude passes the synthesized job_dir as CLAUDE_JOB_DIR in the child's environment
     (inheriting ours), so the woken `claude -p` sees $CLAUDE_JOB_DIR and mounts with it."""
     from src.orchestrator import trigger
@@ -282,7 +284,13 @@ async def test_spawn_claude_injects_claude_job_dir_into_child_env(monkeypatch: A
         return _Proc()
 
     monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
+    # RECEIPTS must be patched on every direct _spawn_claude rehearsal: the spawner opens its
+    # receipt before the (mocked) exec, so an unpatched run drops a 0-byte envelope in the
+    # OPERATOR'S REAL HOME — that is where ~/.osiris/wake-receipts/wake-7.json came from, and a
+    # priced test envelope there would bill phantom dollars into llm_usage via meter_receipts.
+    monkeypatch.setattr(trigger, "RECEIPTS", tmp_path / "receipts")
     await trigger._spawn_claude("/repo/demo", "wake up", job_dir="/tmp/x/jobs/wake-7")
+    assert (tmp_path / "receipts" / "wake-7.json").exists()  # the rehearsal's receipt stayed home
     # by POSITION only where position is load-bearing: `claude -p` leads, and the PROMPT is last
     # (flags are appended between them). Pinning the prompt at index 2 broke the moment the wake
     # learned to keep its receipt — a test asserting an ARRANGEMENT rather than a REQUIREMENT.

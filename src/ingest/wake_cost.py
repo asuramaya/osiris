@@ -184,8 +184,10 @@ def receipt_key(stem: str) -> str:
 
 def _envelope(path: Path) -> Usage | None:
     """One CLI envelope → a Usage row: the vendor's own dollars AND this run's own token deltas.
-    None when the envelope is unreadable, unpriced, or empty (a 0-byte file from a spawn that
-    died before its first write — wake-7.json, 2026-07-14 — is a non-event, not a row)."""
+    None when the envelope is unreadable, unpriced, or empty. (The canonical empty file —
+    wake-7.json, 2026-07-14 — was NOT a dead spawn: a test rehearsed _spawn_claude without
+    patching RECEIPTS and dropped its receipt in the operator's real home. The test is fixed;
+    the skip stays, because an envelope with no price in it is a non-event whatever wrote it.)"""
     try:
         env = json.loads(path.read_text(errors="replace"))
     except (OSError, ValueError):
