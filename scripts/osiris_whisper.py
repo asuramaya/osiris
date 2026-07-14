@@ -91,9 +91,11 @@ def main() -> int:
                         "operator in your first reply.")
     mail = out.get("mail", 0)
     if mail:
-        bits.append(f"Your project has {mail} unread fleet message{'s' if mail != 1 else ''} "
-                    "→ inbox() (reading LEASES; settle by reply send(reply_to=<id>) or "
-                    "inbox(ack=[ids])).")
+        asks = out.get("mail_asks", 0)  # sender-graded asks lead the count (f9449d8d)
+        graded = (f" ({asks} ask{'s' if asks != 1 else ''} something of you)" if asks else "")
+        bits.append(f"Your project has {mail} unread fleet message{'s' if mail != 1 else ''}"
+                    f"{graded} → inbox() (reading LEASES; settle by reply "
+                    "send(reply_to=<id>) or inbox(ack=[ids])).")
     if out.get("away"):
         away = out["away"]
         n = len(away.get("threads") or [])

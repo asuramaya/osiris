@@ -925,6 +925,9 @@ async def mount(
                                     session_key=key)
     unread = (await unread_count(pool, ident.project, reader_agent=ident.agent_id,
                                  lease_secs=lease) if ident.project else 0)
+    asks = (await unread_count(pool, ident.project, reader_agent=ident.agent_id,
+                               lease_secs=lease, grade="ask")
+            if ident.project and unread else 0)
     op_unread = await unread_count(pool, OPERATOR_ADDR, reader_agent=OPERATOR_ADDR,
                                    lease_secs=lease)
     banner = swap_banner(classify_swap(
@@ -955,7 +958,11 @@ async def mount(
            **({"seat": seat} if seat else
               {"anonymous": "unnamed — claim_name('<pick a meaningful name>') when you know "
                             "who you are, so the fleet can DM you by name"}),
-           "mail": f"{unread} unread — call inbox()" if unread else "none",
+           # the count LEADS WITH WHAT IS ACTIONABLE (f9449d8d) — graded asks are named,
+           # ungraded mail keeps the plain count rather than being guessed into a band
+           "mail": (f"{unread} unread ({asks} ask{'s' if asks != 1 else ''} something of "
+                    "you) — call inbox()" if asks else
+                    f"{unread} unread — call inbox()") if unread else "none",
            "note": "linked — writes now attributed to you; call orient() next"}
     if op_unread:  # the fleet plays secretary: any session the human drives can relay this
         out["operator_mail"] = (f"{op_unread} unread at the operator's desk — "
@@ -1204,7 +1211,10 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
               "your writes are your own, the seat and its mail are your parent's"
     unread = (await unread_count(pool, proj, reader_agent=reader, lease_secs=lease)
               if proj else 0)
-    mail = f"{unread} unread — inbox()" if unread else "none"
+    asks = (await unread_count(pool, proj, reader_agent=reader, lease_secs=lease,
+                               grade="ask") if proj and unread else 0)
+    mail = (f"{unread} unread ({asks} ask{'s' if asks != 1 else ''} something of you) — "
+            "inbox()" if asks else f"{unread} unread — inbox()") if unread else "none"
     op_unread = await unread_count(pool, OPERATOR_ADDR, reader_agent=OPERATOR_ADDR,
                                    lease_secs=lease)
     op_mail = {"operator_mail": f"{op_unread} unread — inbox(project='operator') if the "
@@ -1489,6 +1499,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
 @mcp.tool()
 async def send(body: str, to: str | None = None, to_agent: str | None = None,
                reply_to: int | None = None, desk: str | None = None,
+               grade: str | None = None,
                subagent_id: str | None = None, subagent_type: str | None = None,
                session_anchor: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
@@ -1503,7 +1514,11 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     'decision' (a call only they can make) | 'hands' (blocked on their physical/authorization
     act) | 'fyi' (loop-closed status). The desk renders in those bands; an unclassified brief
     gets a heuristic guess. Same topic as an earlier brief of yours → reply_to it (the desk
-    thread-folds superseded briefs under your newest)."""
+    thread-folds superseded briefs under your newest).
+    PROJECT MAIL: pass `grade` — your own triage of what this message wants from its reader:
+    'ask' (needs a reply or an act from them) | 'fyi' (a notice; an ack settles it). Graded
+    asks are NAMED in the recipient's mount/orient unread count, so a seat can see "1 asks
+    something of you" without paying to read everything. Ungraded mail is never guessed."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a message must say who "
@@ -1517,7 +1532,7 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     try:
         res = await send_message(pool, from_agent=actor, from_project=ident.project,
                                  to_project=to, to_agent=to_agent, body=body, reply_to=reply_to,
-                                 desk_kind=desk)
+                                 desk_kind=desk, grade=grade)
     except ValueError as e:
         return {"error": str(e)}
     out: dict[str, Any] = {

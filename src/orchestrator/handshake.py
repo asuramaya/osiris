@@ -127,6 +127,11 @@ async def automount(
                 actions.pool, ident.project, exclude_job_dir=job_dir)
     mail = await unread_count(actions.pool, ident.project, reader_agent=ident.agent_id,
                               lease_secs=lease_secs) if ident.project else 0
+    # graded asks travel beside the total (f9449d8d) so the whisper can lead with what is
+    # actionable; ungraded mail keeps the plain count — never guessed into a band
+    mail_asks = (await unread_count(actions.pool, ident.project, reader_agent=ident.agent_id,
+                                    lease_secs=lease_secs, grade="ask")
+                 if ident.project and mail else 0)
     desk = await unread_count(actions.pool, OPERATOR_ADDR, reader_agent=OPERATOR_ADDR,
                               lease_secs=lease_secs)
     away = await mounts.while_away(actions.pool, ident.project, ident.agent_id, prev)
@@ -155,6 +160,7 @@ async def automount(
         "minted": ident.succeeded_from,
         "swap": ident.model_succession,
         "mail": mail,
+        "mail_asks": mail_asks,
         "desk": desk,
         "pulse": pulse,
         "away": away,

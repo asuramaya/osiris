@@ -98,7 +98,7 @@ async def send_message(
     pool: asyncpg.Pool, *, from_agent: str, from_project: str | None,
     to_project: str | None = None, to_agent: str | None = None, body: str,
     reply_to: int | None = None, dedup_window_secs: int = 600,
-    desk_kind: str | None = None,
+    desk_kind: str | None = None, grade: str | None = None,
 ) -> dict[str, Any]:
     """Post a BROADCAST (to_project) or a DM (to_agent). With `reply_to` and no explicit address,
     it routes by channel: a reply to a DM goes back to that sender as a DM; a reply to a broadcast
@@ -107,9 +107,14 @@ async def send_message(
     message for the replier (replying proves perception). An identical (sender, recipient, body)
     within the dedup window returns the EXISTING id. Raises ValueError on an unknown reply_to or
     an unroutable message. `desk_kind` is the sender's own triage of an operator brief
-    ('decision' | 'hands' | 'fyi') — which band of the desk it belongs to."""
+    ('decision' | 'hands' | 'fyi') — which band of the desk it belongs to. `grade` is the
+    SENDER'S OWN triage of what this message wants from its reader (thread f9449d8d):
+    'ask' (needs a reply or an act) | 'fyi' (a notice; an ack settles it). None is honest
+    ignorance — ungraded mail renders exactly as before, never guessed into a band."""
     if desk_kind is not None and desk_kind not in DESK_KINDS:
         raise ValueError(f"desk_kind must be one of {DESK_KINDS}")
+    if grade is not None and grade not in MAIL_GRADES:
+        raise ValueError(f"grade must be one of {MAIL_GRADES}")
     ref = None
     if reply_to is not None:
         ref = await pool.fetchrow(
@@ -163,23 +168,29 @@ async def send_message(
                 "thread_id": dup["thread_id"], "dedup": True}
     mid = await pool.fetchval(
         "INSERT INTO fleet_messages (from_agent, from_project, to_project, to_agent, body, "
-        "reply_to, thread_id, desk_kind) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
-        from_agent, from_project, to_p, to_a, body, reply_to, thread, desk_kind)
+        "reply_to, thread_id, desk_kind, grade) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) "
+        "RETURNING id",
+        from_agent, from_project, to_p, to_a, body, reply_to, thread, desk_kind, grade)
     return {"id": mid, "to": to_p, "to_agent": to_a, "thread_id": thread, "dedup": False}
 
 
 async def unread_count(
-    pool: asyncpg.Pool, reader_project: str, *, reader_agent: str, lease_secs: int = 900
+    pool: asyncpg.Pool, reader_project: str, *, reader_agent: str, lease_secs: int = 900,
+    grade: str | None = None,
 ) -> int:
     """How many DELIVERABLE messages await this reader — broadcasts to its project + DMs to it,
-    unsettled and not under its own live lease. The number mount()/orient() surface."""
+    unsettled and not under its own live lease. The number mount()/orient() surface.
+    `grade` narrows to one band ('ask' | 'fyi') — the count that leads with what is ACTIONABLE
+    (thread f9449d8d: a mailbox that cries wolf gets skimmed, and a skimmed mailbox is lost)."""
     q = ("SELECT count(*) FROM fleet_messages m "
          "LEFT JOIN message_recipients r ON r.message_id=m.id AND r.agent_id=$agent "
-         "WHERE " + _DELIVERABLE_TO_READER)
+         "WHERE " + _DELIVERABLE_TO_READER + (" AND m.grade = $5" if grade else ""))
     q = (q.replace("$agent", "$1").replace("$project", "$2").replace("$lease", "$3")
          .replace("$grace", "$4"))
-    return await pool.fetchval(  # type: ignore[no-any-return]
-        q, reader_agent, _norm(reader_project), lease_secs, _HOLD_GRACE_SECS)
+    args = [reader_agent, _norm(reader_project), lease_secs, _HOLD_GRACE_SECS]
+    if grade:
+        args.append(grade)
+    return await pool.fetchval(q, *args)  # type: ignore[no-any-return]
 
 
 async def read_inbox(
@@ -193,7 +204,7 @@ async def read_inbox(
     its own lease/settle."""
     proj = _norm(reader_project)
     q = ("SELECT m.id, m.from_agent, m.from_project, m.to_agent, m.body, m.created_at, "
-         "m.reply_to, m.thread_id, COALESCE(r.deliveries,0) AS deliveries "
+         "m.reply_to, m.thread_id, m.grade, COALESCE(r.deliveries,0) AS deliveries "
          "FROM fleet_messages m "
          "LEFT JOIN message_recipients r ON r.message_id=m.id AND r.agent_id=$agent "
          "WHERE " + _DELIVERABLE_TO_READER + " ORDER BY m.created_at LIMIT $limit")
@@ -211,6 +222,7 @@ async def read_inbox(
          "body": r["body"], "when": r["created_at"].isoformat(),
          "thread": r["thread_id"] or r["id"],
          **({"dm": True} if r["to_agent"] is not None else {}),
+         **({"grade": r["grade"]} if r["grade"] else {}),
          **({"reply_to": r["reply_to"]} if r["reply_to"] is not None else {}),
          **({"redelivered": True} if r["deliveries"] > 0 else {})}
         for r in rows
@@ -291,6 +303,12 @@ async def project_deliverable_count(
 # from owner='operator' threads — the graph is the record, the desk stops double-billing).
 
 DESK_KINDS = ("decision", "hands", "fyi")
+
+# The PROJECT-mail analogue of the desk bands (thread f9449d8d): the sender's own triage of
+# what the message wants from its reader. 'ask' needs a reply or an act; 'fyi' is a notice an
+# ack settles. NULL stays honest ignorance — never heuristically guessed, unlike desk briefs,
+# because a wrong "needs nothing" on a duty-bearing letter silences it.
+MAIL_GRADES = ("ask", "fyi")
 
 # same-story threshold: pg_trgm similarity MEASURED on the live desk (2026-07-11): the
 # model-divergence five pair at 0.32–0.44; the worst FALSE pair (two long technical briefs

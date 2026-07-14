@@ -418,3 +418,30 @@ async def test_an_agents_OWN_broadcast_is_not_its_mail(actions: Actions) -> None
     await ack_messages(p, "xxit", [m["id"]], reader_agent=peer)
     assert await project_deliverable_count(p, "xxit", lease_secs=0) == 0
     assert res["id"] > 0
+
+
+async def test_mail_grade_names_the_asks(actions: Actions) -> None:
+    """f9449d8d — MAIL SAYS WHAT IT WANTS. The sender grades its own letter ('ask' | 'fyi'),
+    the reader's count can lead with what is actionable, and ungraded mail is never guessed
+    into a band — a wrong "needs nothing" on a duty-bearing letter would silence it."""
+    p = actions.pool
+    await send_message(p, from_agent="agent:x", from_project="a", to_project="b",
+                       body="please review the seam plan", grade="ask")
+    await send_message(p, from_agent="agent:x", from_project="a", to_project="b",
+                       body="deploy landed, nothing needed", grade="fyi")
+    await send_message(p, from_agent="agent:x", from_project="a", to_project="b",
+                       body="legacy ungraded letter")
+    assert await unread_count(p, "b", reader_agent=R) == 3
+    assert await unread_count(p, "b", reader_agent=R, grade="ask") == 1
+    assert await unread_count(p, "b", reader_agent=R, grade="fyi") == 1
+    box = await read_inbox(p, "b", reader_agent=R)
+    by_body = {m["body"]: m for m in box}
+    assert by_body["please review the seam plan"]["grade"] == "ask"
+    assert by_body["deploy landed, nothing needed"]["grade"] == "fyi"
+    assert "grade" not in by_body["legacy ungraded letter"]  # honest ignorance, not a guess
+
+
+async def test_mail_grade_rejects_an_invented_band(actions: Actions) -> None:
+    with pytest.raises(ValueError):
+        await send_message(actions.pool, from_agent="agent:x", from_project="a",
+                           to_project="b", body="now", grade="urgent")
