@@ -178,6 +178,39 @@ async def automount(
     }
 
 
+async def session_end(
+    actions: Actions, *, session_id: str, jobs_home: Path | None = None,
+) -> dict[str, Any]:
+    """SessionEnd's server half — the ghost-seat fix (heinrich's filing, thread 1fe6811c): Stop
+    fires PER-TURN and cannot mean "closed"; SessionEnd is the harness's actual close signal.
+    Releases the ending session's durable mount row(s) THE SAME WAY retire()'s tool releases a
+    seat (`mounts.release_mounts`, exact `agent_id` — a successor that already overwrote the row
+    is never touched): the row stops answering `agent_liveness` / `project_last_seen` /
+    the trigger's `_owner_live` freshness probe THE INSTANT the tab closes, instead of lingering
+    live for up to `last_seen`'s 15-minute decay (the fleet carrying 277 stale ghosts this way).
+
+    Deliberately NOT retire(): no `retired=true` certificate is stamped, and no undisposed-pile
+    warning fires. retire() is a MIND's own deliberate, permanent farewell — it gates the RESUME
+    lane forever and warns of reanimation if the name is worn again. SessionEnd is only the
+    HARNESS observing that a process exited; the SAME session id can resume later
+    (`claude --resume`) and its automount re-earns the row from scratch, exactly as if this had
+    never fired. Only the SEAT (the durable mount row) is released — identity, lineage, and mail
+    are untouched.
+
+    Same anchor derivation as `automount` (`_derive_job_dir`: the harness's own
+    ~/.claude/jobs/<sid[:8]> scheme) — a session that was never mounted (no row: a phantom/spare
+    that never earned a pulse, or a session id too short to trust) is a silent, honest no-op,
+    never an error."""
+    job_dir = _derive_job_dir(session_id, jobs_home=jobs_home)
+    if job_dir is None:
+        return {"released": 0, "note": "session id too short to derive an anchor"}
+    row = await mounts.find_mount(actions.pool, job_dir=job_dir)
+    if row is None:
+        return {"released": 0, "note": "no durable mount for this session — nothing to release"}
+    released = await mounts.release_mounts(actions.pool, row.agent_id)
+    return {"agent": row.agent_id, "project": row.project, "released": released}
+
+
 async def _seat_of(actions: Actions, agent_id: str) -> str | None:
     from src.orchestrator.agents import seat_label
     row = await actions.pool.fetchrow(

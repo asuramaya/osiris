@@ -818,6 +818,62 @@ async def test_fleet_shows_claimed_names_beside_the_id(actions: Actions) -> None
     assert "seat" not in rows[anon]                      # never a guessed/empty field
 
 
+async def test_fleet_surfaces_os_bodies_and_the_ghost_gap(actions: Actions) -> None:
+    """heinrich's ghost-seat filing (thread 1fe6811c) made visible: the graph's mount registry
+    calls TWO agents live in 'ghosttown', but the (faked) OS census backs only ONE real
+    process — the gap IS the ghost, additive beside the untouched `live` count. 'quietplace'
+    has no gap: its one live mount is backed by a real body."""
+    from src import mcp_server as srv
+    from src.orchestrator import census, mounts
+
+    for i, project in enumerate(("ghosttown", "ghosttown", "quietplace")):
+        a = f"agent:census{i}"
+        obj = await actions.create_or_find_object("Agent", a, a)
+        await actions.assert_property(obj, "project", project, a, datetime.now(UTC), 0.9,
+                                      evidence_class=EvidenceClass.SELF_DECLARED.value)
+        await mounts.save_mount(actions.pool, job_dir=f"/j/{a}", agent_id=a, project=project,
+                                cwd="/x", model="claude-fable-5", session_key=a)
+
+    saved_pool, saved_census = srv._pool, census.live_bodies
+    srv._pool = actions.pool
+    census.live_bodies = lambda: {"ghosttown": [111], "quietplace": [222]}  # type: ignore
+    try:
+        out = await srv.fleet()
+    finally:
+        srv._pool = saved_pool
+        census.live_bodies = saved_census  # type: ignore
+
+    assert out["live"] == 3                              # UNCHANGED meaning — still the belief
+    assert out["os_bodies"] == {"ghosttown": 1, "quietplace": 1}
+    assert out["ghost_gap"] == {"ghosttown": 1}           # 2 live - 1 body = 1 ghost
+    assert "quietplace" not in out["ghost_gap"]           # 1 live - 1 body = 0: no gap
+    ghosttown_line = next(line for line in out["tree"].splitlines()
+                          if line.startswith("▸ ghosttown"))
+    assert "1 os body" in ghosttown_line and "⚠ 1 ghost" in ghosttown_line
+
+
+async def test_fleet_survives_a_census_that_fails(actions: Actions) -> None:
+    """The OS census is best-effort, never a hard dependency: if it raises for any reason,
+    fleet() must still answer — with the truth it can vouch for."""
+    from src import mcp_server as srv
+    from src.orchestrator import census
+
+    saved_pool, saved_census = srv._pool, census.live_bodies
+
+    def _boom() -> dict[str, list[int]]:
+        raise RuntimeError("no /proc on this box")
+
+    srv._pool = actions.pool
+    census.live_bodies = _boom  # type: ignore
+    try:
+        out = await srv.fleet()
+    finally:
+        srv._pool = saved_pool
+        census.live_bodies = saved_census  # type: ignore
+    assert out["os_bodies"] == {}
+    assert "ghost_gap" not in out or out["ghost_gap"] == {}
+
+
 def test_an_anchorless_bounce_names_its_own_cause() -> None:
     """A bounce that says only "mount first" is a mystery; one that names its cause is a bug
     report the next mind does not have to file again.

@@ -92,8 +92,15 @@ def _render_expanded(
         lines.append(f"{pad}○ swarm: {len(folded)} retired ({_tally(folded, nodes)})")
 
 
-def render_fleet_tree(nodes: dict[str, Node], *, full: bool = False) -> str:
-    """The glanceable fleet: one section per project, live expanded, retired collapsed."""
+def render_fleet_tree(
+    nodes: dict[str, Node], *, full: bool = False, os_bodies: dict[str, int] | None = None,
+) -> str:
+    """The glanceable fleet: one section per project, live expanded, retired collapsed.
+
+    `os_bodies` (heinrich's ghost-seat filing, thread 1fe6811c) is ADDITIVE and OPTIONAL: when
+    given, a project's line grows the OS-truth count beside its graph-belief `live` count, and
+    a `ghost` note when the graph claims more live than any real process backs — the gap made
+    visible, never a change to what `live` itself means (still `_any_live`, untouched)."""
     kids = _children_of(nodes)
     roots = kids.get(None, [])
     groups: dict[str, list[str]] = {}
@@ -107,6 +114,12 @@ def render_fleet_tree(nodes: dict[str, Node], *, full: bool = False) -> str:
         head = f"▸ {project} — {live_n} live · {len(proj_roots)} sessions"
         if swarm_n:
             head += f" · swarm {swarm_n}"
+        if os_bodies is not None:
+            bodies = os_bodies.get(project, 0)
+            head += f" · {bodies} os {'body' if bodies == 1 else 'bodies'}"
+            gap = live_n - bodies
+            if gap > 0:
+                head += f" · ⚠ {gap} ghost{'s' if gap != 1 else ''}"
         lines.append(head)
         expand = [r for r in proj_roots if full or _any_live(r, nodes, kids)]
         fold = [r for r in proj_roots if r not in expand]

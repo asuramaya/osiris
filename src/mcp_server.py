@@ -40,7 +40,7 @@ from src.ontology.resolution import (
     resolve_cross_base,
 )
 from src.ontology.schema import catalog
-from src.orchestrator import capture, digest, handshake, mailbox, mounts
+from src.orchestrator import capture, census, digest, handshake, mailbox, mounts
 from src.orchestrator import compositions as comp
 from src.orchestrator import dispose as dispose_seam
 from src.orchestrator.agents import (
@@ -1444,7 +1444,14 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     rows and shipping it cost more context than it could ever be worth. `full=True` gives you
     all of them; the counts (`count`/`live`/`swarm`) are always the whole truth. `seat` (e.g.
     "Soundwave XI") rides beside a canonical id wherever one is CLAIMED (dd47c1da: "fleet()
-    must print claimed names") — an anonymous agent renders exactly as before, id only."""
+    must print claimed names") — an anonymous agent renders exactly as before, id only.
+
+    `os_bodies` (heinrich's ghost-seat filing, thread 1fe6811c) is a per-project count of REAL
+    OS processes (`pgrep -x claude` + `/proc`) backing that project RIGHT NOW — ADDITIVE, and
+    it changes nothing about what `live` means (still the mount registry's belief, exactly as
+    before). `ghost_gap` is where the graph's `live` count exceeds it: a closed tab mid-decay,
+    or a phantom mount that registered identity but never backed an actual session — either way
+    invisible to a query that only ever asks the graph, visible here the instant you look."""
     pool = await _pool_get()
     rows = await pool.fetch(
         "SELECT o.canonical, "
@@ -1522,13 +1529,34 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     # The flat rows are the LIVE ones (or everything, if you deliberately asked) — the counts
     # below are always over the whole fleet, so nothing here undercounts, it only under-SHOWS.
     shown = {c: n for c, n in nodes.items() if full or n["live"]}
+    # THE GHOST GAP (heinrich's filing, thread 1fe6811c) — OS TRUTH beside the graph's belief,
+    # ADDITIVE only: `live` above is UNCHANGED, still exactly what it always was (the wake
+    # trigger reads agent_mounts.last_seen directly and never this dict — nothing here touches
+    # that). `census.live_bodies()` is a pure OS read (pgrep -x claude + /proc), independent of
+    # the mount registry; where the graph counts more live agents in a project than any real
+    # process backs, that project is carrying a ghost (a closed tab mid-decay) or a phantom
+    # mount (registered, never backed by an actual session) — invisible to any ping-window,
+    # visible the instant this is asked. Best-effort: an OS read that fails never breaks fleet().
+    try:
+        os_bodies = {p: len(pids) for p, pids in census.live_bodies().items()}
+    except Exception:  # noqa: BLE001
+        os_bodies = {}
+    mounts_live: dict[str, int] = {}
+    for n in nodes.values():
+        if n["live"]:
+            proj = n["project"] or "?"
+            mounts_live[proj] = mounts_live.get(proj, 0) + 1
+    ghost_gap = {p: gap for p, n_live in mounts_live.items()
+                if (gap := n_live - os_bodies.get(p, 0)) > 0}
     return {
         "connected_now": len(_agents),
         "count": len(nodes),
         **({"ghosts": ghosts} if ghosts else {}),
         "live": sum(1 for n in nodes.values() if n["live"]),
         "swarm": sum(1 for n in nodes.values() if n["parent"]),
-        "tree": render_fleet_tree(nodes, full=full),
+        "os_bodies": os_bodies,
+        **({"ghost_gap": ghost_gap} if ghost_gap else {}),
+        "tree": render_fleet_tree(nodes, full=full, os_bodies=os_bodies),
         "registered": [
             {"agent": c, "model": n["model"], "project": n["project"], "depth": n["depth"],
              "parent": n["parent"], "live": n["live"],
@@ -2082,6 +2110,29 @@ async def automount_route(request: Any) -> Any:
         _evict_stale_minds(out.get("minted"))
         return JSONResponse(out)
     except Exception as e:  # noqa: BLE001 — fail-open: the whisper degrades, never blocks
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
+@mcp.custom_route("/session-end", methods=["POST"])
+async def session_end_route(request: Any) -> Any:
+    """SessionEnd's server half (heinrich's ghost-seat filing, thread 1fe6811c): the harness's
+    real close signal — Stop fires per-turn and cannot mean this — posts {session_id} here so
+    the ending session's durable mount is released THE INSTANT the tab is gone, instead of
+    lingering live for `last_seen`'s 15-minute decay (the fleet's 277 stale ghosts at filing
+    time). Releases the SEAT only (`handshake.session_end` → `mounts.release_mounts`) — no
+    `retired=true` certificate; the same session id resuming later re-earns its row from a
+    fresh automount, same as it always could. Localhost-only, fail-open like the whisper: a
+    missed release costs at most one ghost window, never a blocked session close."""
+    from starlette.responses import JSONResponse
+
+    try:
+        body = await request.json()
+        session_id = str(body.get("session_id") or "")
+        if not session_id:
+            return JSONResponse({"error": "session_id required"}, status_code=400)
+        out = await handshake.session_end(Actions(await _pool_get()), session_id=session_id)
+        return JSONResponse(out)
+    except Exception as e:  # noqa: BLE001 — fail-open: a session must always be able to end
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 

@@ -122,3 +122,38 @@ def test_a_claimed_seat_names_the_latest_of_a_folded_past() -> None:
     }
     tree = render_fleet_tree(nodes)
     assert "(latest agent:old2 (Soundwave XI))" in tree
+
+
+def test_os_bodies_is_additive_and_absent_by_default() -> None:
+    """heinrich's ghost-seat filing (thread 1fe6811c): omitting `os_bodies` (every existing
+    caller, until fleet() is taught to pass it) must render EXACTLY as before — no new text,
+    no behavior change to what `live` means."""
+    nodes = {"agent:live1": _n(live=True, ts=T1)}
+    assert render_fleet_tree(nodes) == render_fleet_tree(nodes, os_bodies=None)
+    assert "os " not in render_fleet_tree(nodes)
+    assert "ghost" not in render_fleet_tree(nodes)
+
+
+def test_os_bodies_rides_beside_the_project_head_and_names_the_gap() -> None:
+    """The graph believes 2 are live in osiris; the OS backs only 1 — the gap IS the ghost
+    (a closed tab mid-decay, or a phantom mount that never backed a real session). sibling-one
+    has a real body backing its one live agent: no ghost note."""
+    nodes = {
+        "agent:live1": _n(live=True, ts=T1),
+        "agent:live2": _n(live=True, ts=T1),
+        "agent:h1": _n(project="sibling-one", live=True, ts=T1),
+    }
+    tree = render_fleet_tree(nodes, os_bodies={"osiris": 1, "sibling-one": 1})
+    osiris_line = tree.splitlines()[0]
+    assert osiris_line.startswith("▸ osiris — 2 live · 2 sessions")
+    assert "1 os body" in osiris_line and "⚠ 1 ghost" in osiris_line
+    sibling_line = next(line for line in tree.splitlines() if line.startswith("▸ sibling-one"))
+    assert "1 os body" in sibling_line and "ghost" not in sibling_line
+
+
+def test_os_bodies_defaults_an_unlisted_project_to_zero() -> None:
+    """A project census never even mentions (no real process, ever) still gets an honest '0 os
+    bodies' line rather than silently omitting the signal."""
+    nodes = {"agent:live1": _n(live=True, ts=T1)}
+    tree = render_fleet_tree(nodes, os_bodies={})
+    assert "0 os bodies" in tree and "⚠ 1 ghost" in tree

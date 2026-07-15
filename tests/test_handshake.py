@@ -218,3 +218,70 @@ async def test_automount_survives_a_sessionless_stranger(actions: Actions,
                           jobs_home=tmp_path / "jobs")
     assert out["agent"].startswith("agent:") and out["resolved"] is False
     assert out["mail"] == 0 and "desk" in out
+
+
+async def test_session_end_releases_the_seat_the_same_way_retire_does(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """The ghost-seat fix (heinrich's filing, thread 1fe6811c): SessionEnd is the harness's
+    REAL close signal (Stop fires per-turn and cannot mean this) — releasing the durable mount
+    row the instant the tab closes, instead of leaving it to age out of `last_seen`'s 15-minute
+    window."""
+    from src.orchestrator import mounts
+    from src.orchestrator.handshake import session_end
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/sibling-nine")
+    mounted = await automount(actions, session_id=SID, cwd="/w/sibling-nine",
+                              actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+    assert await mounts.find_mount(
+        actions.pool, job_dir=str(tmp_path / "jobs" / SID[:8])) is not None
+
+    out = await session_end(actions, session_id=SID, jobs_home=tmp_path / "jobs")
+
+    assert out["agent"] == mounted["agent"] and out["released"] == 1
+    assert await mounts.find_mount(actions.pool, job_dir=str(tmp_path / "jobs" / SID[:8])) is None
+    # NOT a retire(): no permanent certificate — the Agent object is untouched
+    assert await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='retired'", mounted["agent"]) is None
+
+
+async def test_session_end_lets_the_same_session_id_resume_clean(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """Deliberately not a farewell: the SAME session id resuming later (`claude --resume`) fires
+    SessionStart again, and its automount re-earns the row from scratch — no reanimation
+    warning, no succession seam, exactly as if session_end() had never fired."""
+    from src.orchestrator.handshake import session_end
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/sibling-nine")
+    first = await automount(actions, session_id=SID, cwd="/w/sibling-nine",
+                            actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+    await session_end(actions, session_id=SID, jobs_home=tmp_path / "jobs")
+
+    resumed = await automount(actions, session_id=SID, cwd="/w/sibling-nine",
+                              actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
+                              source="resume")
+
+    assert resumed["agent"] == first["agent"]         # same identity, no twin minted
+    assert resumed["minted"] is None and resumed["swap"] is None
+    # never retired, so the Agent carries no certificate a resume could reanimate
+    assert await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='retired'", first["agent"]) is None
+
+
+async def test_session_end_on_a_never_mounted_session_is_a_quiet_no_op(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """A session id nobody ever automounted (a phantom that never earned a row, or one this
+    server never saw) must not error — SessionEnd fires unconditionally at every close."""
+    from src.orchestrator.handshake import session_end
+
+    out = await session_end(actions, session_id="deadbeef0000", jobs_home=tmp_path / "jobs")
+    assert out["released"] == 0
+
+    out2 = await session_end(actions, session_id="short")  # too short to derive an anchor
+    assert out2["released"] == 0
