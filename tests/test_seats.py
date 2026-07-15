@@ -608,3 +608,40 @@ async def test_attach_refuses_a_visitor(actions: Actions) -> None:
     unused = await actions.pool.fetchrow(
         "SELECT used_at FROM seat_tokens WHERE token=$1", token)
     assert unused is not None and unused["used_at"] is None   # refusal wrote nothing
+
+
+# --- Phase D: a seated sid is never guessable ---
+
+
+async def test_a_seated_sid_is_claimed_even_when_stale(actions: Actions) -> None:
+    """The cwd-guess refuses sids held by LIVE mounts; Phase D extends the claim to SEATED
+    rows regardless of pulse — a holder dying must never make its identity guessable by an
+    anchorless stranger reading the hottest transcript. session_end releases the row, so a
+    deliberately-closed seat frees its sid the honest way."""
+    from src.orchestrator.mounts import live_claimed_sids, release_mounts
+
+    seat = await _bound(actions, "Duat", "agent:aead0001", "/jobs/aead0001")
+    assert seat["seat_id"]
+    # kill the pulse: the holder has been silent for an hour
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '1 hour' "
+        "WHERE job_dir='/jobs/aead0001'")
+
+    claimed = await live_claimed_sids(actions.pool, exclude_session_key=None,
+                                      within_secs=900)
+    assert "aead0001" in claimed            # stale, but SEATED — still claimed
+
+    # an unseated stale row frees its sid exactly as before
+    await _seated_agent(actions, "agent:aead0002", "/jobs/aead0002")
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '1 hour' "
+        "WHERE job_dir='/jobs/aead0002'")
+    claimed = await live_claimed_sids(actions.pool, exclude_session_key=None,
+                                      within_secs=900)
+    assert "aead0002" not in claimed
+
+    # ...and the honest release frees even a seated sid
+    await release_mounts(actions.pool, "agent:aead0001")
+    claimed = await live_claimed_sids(actions.pool, exclude_session_key=None,
+                                      within_secs=900)
+    assert "aead0001" not in claimed

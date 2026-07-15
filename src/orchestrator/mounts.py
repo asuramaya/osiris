@@ -142,10 +142,17 @@ async def live_claimed_sids(
     """Session handles currently HELD by a live mount on a DIFFERENT client session — the
     claimed-set the cwd-guess must refuse (two anchorless same-project sessions grabbing the
     hottest transcript would otherwise merge). Lineage-aware: a minted heir (agent:x-ii)
-    claims its base handle x too."""
+    claims its base handle x too.
+
+    A SEATED SID IS CLAIMED UNTIL RELEASED (Phase D, ruling 5cef856b): a mount row bound to
+    a Seat stays claimed regardless of pulse — its holder dying must never make its identity
+    GUESSABLE by an anchorless stranger reading the hottest transcript. The liveness window
+    guards the living; the binding guards the seated dead (session_end releases the row, so
+    a deliberately-closed seat frees its sid the honest way)."""
     rows = await pool.fetch(
         "SELECT agent_id, session_key FROM agent_mounts "
-        "WHERE last_seen > now() - make_interval(secs => $1)", within_secs)
+        "WHERE last_seen > now() - make_interval(secs => $1) OR seat_id IS NOT NULL",
+        within_secs)
     from src.orchestrator.agents import _generation
 
     out: set[str] = set()
