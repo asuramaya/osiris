@@ -1938,7 +1938,7 @@ async def ingest_reference(
 @mcp.tool()
 async def open_thread(
     summary: str, repo: str | None = None, kind: str | None = None,
-    owner: str | None = None, session_anchor: str | None = None,
+    owner: str | None = None, assignee: str | None = None, session_anchor: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, str]:
@@ -1955,16 +1955,40 @@ async def open_thread(
     and otherwise die with the context window. `owner` says WHOSE MOVE it is: 'operator' =
     blocked on the human, 'agent:<id>' = a specific mind, a project name = any hand there;
     unowned = anyone who reads it may act. orient sorts your wall by it — yours-to-act above
-    waiting-on-the-human."""
+    waiting-on-the-human.
+    `assignee` (alfred's ask 5, ruling dd47c1da §4.3 — "single-assignee leased
+    obligations") is the seat/agent THIS BUILD belongs to — one build, one assignee. It
+    stamps the SAME `owner` property (not a parallel field: `owner` already IS "whose move
+    it is"; orient's ranking needs no change). What's new is the LEASE: with `assignee` set,
+    a near-duplicate hit SURFACES THE EXISTING LEASE instead of just deduping silently —
+    `leased_to` names who already holds it. Asking again as the SAME assignee finds your own
+    open build; a DIFFERENT assignee asking for near-duplicate work surfaces it too, by
+    design — a double-assignment must be VISIBLE, never silent."""
     pool = await _pool_get()
     dup = await capture.find_near_duplicate_open_thread(pool, summary, repo=repo)
     if dup is not None:
-        return {"id": str(dup), "summary": summary, "status": "open", "deduped": "true"}
+        out: dict[str, str] = {"id": str(dup), "summary": summary, "status": "open",
+                               "deduped": "true"}
+        if assignee:
+            holder = await capture._current_owner(pool, dup)
+            claim = assignee.strip()
+            out["leased_to"] = holder or "(unowned)"
+            out["note"] = (
+                f"already leased to {holder} (thread {str(dup)[:8]}) — no new build minted"
+                if holder == claim else
+                f"existing lease on thread {str(dup)[:8]} is held by "
+                f"{holder or '(unowned)'!r}, not {claim!r} — surfaced instead of minting a "
+                "parallel build (a double-assignment must be visible, not silent)"
+            )
+        return out
     t = await capture.open_thread(
-        Actions(pool), summary, repo=repo, kind=kind, owner=owner,
+        Actions(pool), summary, repo=repo, kind=kind, owner=owner, assignee=assignee,
         source=await _actor_for(ctx, subagent_id, subagent_type)
     )
-    return {"id": str(t), "summary": summary, "status": "open"}
+    out = {"id": str(t), "summary": summary, "status": "open"}
+    if assignee:
+        out["assignee"] = assignee.strip()
+    return out
 
 
 @mcp.tool()

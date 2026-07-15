@@ -373,7 +373,7 @@ async def find_near_duplicate_open_thread(
 
 async def open_thread(
     actions: Actions, summary: str, *, repo: str | None = None, kind: str | None = None,
-    owner: str | None = None, source: str = _SOURCE,
+    owner: str | None = None, assignee: str | None = None, source: str = _SOURCE,
 ) -> uuid.UUID:
     """Open a thread at source — an unresolved question / next-step for the next session
     to inherit. Same shape as a mined Thread (props summary + status=open) so it appears in
@@ -388,8 +388,18 @@ async def open_thread(
     `owner` says WHOSE MOVE it is (two grievance witnesses: 'mine to act' vs 'waiting on
     the human' were illegible on the wall): 'operator' = blocked on the human's word or
     hands; 'agent:<id>' = a specific mind; a bare project name = any hand on that project.
-    Unowned = anyone who reads it may act. The lens sorts by it; the record just keeps it."""
+    Unowned = anyone who reads it may act. The lens sorts by it; the record just keeps it.
+
+    `assignee` (alfred's ask 5, ruling dd47c1da §4.3 — "single-assignee leased
+    obligations") is the seat/agent this BUILD belongs to, one build one assignee. It is
+    NOT a second field: `owner` already IS "whose move it is", and two properties naming
+    the same fact is the bug this avoids, so `assignee` stamps the SAME `owner` property
+    (assignee wins if both are given) — orient's sort-by-owner needs no change. What's new
+    is ENFORCEMENT, not storage: the caller (mcp_server.open_thread) checks
+    find_near_duplicate_open_thread BEFORE minting and, on a hit, surfaces the EXISTING
+    lease + its holder instead of minting a parallel build — see that tool's docstring."""
     observed = datetime.now(UTC)
+    effective_owner = assignee if assignee is not None else owner
     # ONE transaction (see record_decision): Thread + summary + status(+kind)(+repo) atomic —
     # never a status-less or summary-less thread husk from a mid-sequence death.
     async with actions.atomic() as a:
@@ -401,12 +411,23 @@ async def open_thread(
         if kind:
             await a.assert_property(t, "kind", kind, source, observed, _CONF,
                                     evidence_class=_EC)
-        if owner:
-            await a.assert_property(t, "owner", owner.strip(), source, observed, _CONF,
-                                    evidence_class=_EC)
+        if effective_owner:
+            await a.assert_property(t, "owner", effective_owner.strip(), source, observed,
+                                    _CONF, evidence_class=_EC)
         if repo:
             await link_repo(a, t, repo, observed, source=source, evidence_class=_EC)
     return t
+
+
+async def _current_owner(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | None:
+    """The WINNING `owner` value for a thread (grade DESC, then recency — the same
+    resolution `open_thread_wall` already reads). Used to NAME the holder of an existing
+    lease when a near-duplicate obligation surfaces instead of minting a parallel build."""
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        thread_id,
+    )
 
 
 async def _find_thread(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:

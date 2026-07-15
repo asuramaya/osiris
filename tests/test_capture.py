@@ -1091,3 +1091,92 @@ async def test_record_decision_tool_single_string_still_errors_on_a_miss(
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM current_assertions WHERE name='summary' AND "
         "value #>> '{}' = 'a ruling that cites a ghost thread'") == 0
+
+
+# --- single-assignee leased obligations (§4.3, alfred's ask 5, ruling dd47c1da) -----------
+
+async def test_open_thread_with_assignee_stamps_the_owner_property(actions: Actions) -> None:
+    """`assignee` is ENFORCEMENT on `owner`, not a parallel field: it stamps the SAME
+    property (owner already IS "whose move it is") so orient's sort needs no change."""
+    t = await open_thread(actions, "build the local BodyProvider's systemd-run wrapper",
+                          repo="leasetest", kind="obligation", assignee="agent:alfred")
+    props = await _props(actions.pool, t)
+    assert props["owner"] == "agent:alfred"
+    assert "assignee" not in props  # one property, not two
+
+
+async def test_assignee_wins_when_owner_is_also_given(actions: Actions) -> None:
+    t = await open_thread(actions, "a duty with both owner and assignee set",
+                          owner="operator", assignee="agent:alfred")
+    props = await _props(actions.pool, t)
+    assert props["owner"] == "agent:alfred"
+
+
+async def test_assignee_rides_the_wall_exactly_like_owner(actions: Actions) -> None:
+    """orient/briefing sort obligations by `owner` — a leased obligation opened via
+    `assignee` must surface there UNCHANGED, since it writes the same property."""
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:assigntest", "session")
+    await actions.assert_property(proj, "name", "assigntest", "session", now, 0.9)
+
+    await open_thread(actions, "an obligation leased to a specific seat",
+                      repo="assigntest", kind="obligation", assignee="agent:me",
+                      source="agent:me")
+    await seed_default_compositions(actions.pool)
+    scoped = await _project_briefing(actions.pool, "assigntest",
+                                     me=frozenset({"agent:me", "assigntest"}))
+    assert scoped is not None
+    wall = scoped["open_threads"]
+    assert wall[0]["owner"] == "agent:me"
+
+
+async def test_open_thread_same_assignee_near_dup_surfaces_the_existing_lease(
+    actions: Actions,
+) -> None:
+    """A repeat ask for near-duplicate work, from the SAME assignee, finds its own open
+    build instead of minting a twin — `leased_to` names the holder (itself)."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        first = await srv.open_thread(
+            "wire the daemon's PTY broker into the fleet rail", repo="leasewall",
+            kind="obligation", assignee="agent:alfred")
+        second = await srv.open_thread(
+            "Wire the daemon's PTY broker into the fleet rail.", repo="leasewall",
+            kind="obligation", assignee="agent:alfred")
+    finally:
+        srv._pool = saved_pool
+    assert second["id"] == first["id"]
+    assert second["deduped"] == "true"
+    assert second["leased_to"] == "agent:alfred"
+    assert "already leased" in second["note"]
+    n = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Thread'")
+    assert n == 1
+
+
+async def test_open_thread_different_assignee_near_dup_surfaces_the_holder(
+    actions: Actions,
+) -> None:
+    """A DIFFERENT assignee asking for near-duplicate work must see the SAME lease surfaced
+    — a double-assignment made visible, never silently doubled (the whole point of a
+    single-assignee leased obligation)."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        first = await srv.open_thread(
+            "wire the seat rebind primitive for house bytebye", repo="leasewall2",
+            kind="obligation", assignee="agent:alfred")
+        second = await srv.open_thread(
+            "Wire the seat rebind primitive for house bytebye.", repo="leasewall2",
+            kind="obligation", assignee="agent:maat")
+    finally:
+        srv._pool = saved_pool
+    assert second["id"] == first["id"]
+    assert second["leased_to"] == "agent:alfred"
+    assert "agent:maat" in second["note"] and "agent:alfred" in second["note"]
+    n = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Thread'")
+    assert n == 1
