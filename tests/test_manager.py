@@ -44,6 +44,7 @@ class _FakeProc:
 
 def _make_runner(
     *, units_json: str = "[]", cgroup_dir: Path | None = None, is_active: str = "inactive",
+    busctl_rc: int = 0,
 ) -> Any:
     """Answers every subprocess call this daemon can make: `list-units` (canned JSON),
     `show -p ControlGroup` (a fixture cgroup dir), `stop` (always succeeds), `is-active`
@@ -66,6 +67,8 @@ def _make_runner(
             return _FakeProc(is_active.encode())
         if argv and argv[0] == "notify-send":
             return _FakeProc(b"")
+        if argv and argv[0] == "busctl":
+            return _FakeProc(b"", returncode=busctl_rc)
         return _FakeProc(b"")
 
     runner.calls = calls  # type: ignore[attr-defined]
@@ -716,3 +719,57 @@ async def test_pty_spawn_with_seat_exports_identity_at_birth(
     finally:
         await manager.close()
         await pool.close()
+
+
+# --- the PTY envelope (the doctrine-3 gap, closed): a child is born bounded or not at all ---
+
+
+@requires_pty
+async def test_pty_spawn_moves_the_child_into_its_own_scope(tmp_path: Path) -> None:
+    """Every PTY child is ADOPTED into its own transient scope right after birth
+    (StartTransientUnit with PIDs= via busctl) — the spawn/wait/kill topology untouched,
+    only the cgroup membership changes. The busctl call carries the child's REAL pid and
+    the envelope (MemoryMax + IOWeight)."""
+    runner = _make_runner()
+    manager = Manager(socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
+                      runner=runner)
+    await manager.start()
+    try:
+        client = await _connect(tmp_path / "m.sock")
+        try:
+            out = await client.send({"op": "pty_spawn", "name": "bounded",
+                                     "argv": ["sh", "-c", "cat"]})
+            assert out.get("spawned") == "bounded"
+            session = manager._broker.get("bounded")
+            assert session is not None and session.pid > 0
+            busctl = [c for c in runner.calls if c and c[0] == "busctl"]
+            assert len(busctl) == 1
+            call = busctl[0]
+            assert "osiris-pty-bounded.scope" in call
+            assert str(session.pid) in call
+            assert "MemoryMax" in call and "IOWeight" in call and "PIDs" in call
+        finally:
+            await client.close()
+    finally:
+        await manager.close()
+
+
+@requires_pty
+async def test_pty_spawn_refuses_a_child_it_cannot_bound(tmp_path: Path) -> None:
+    """The strict half: a child whose scope adoption fails is CLOSED and the spawn refused —
+    under the sacred proc a child is born bounded or not at all, never left as a limb of
+    the daemon's own slice."""
+    manager = Manager(socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
+                      runner=_make_runner(busctl_rc=1))
+    await manager.start()
+    try:
+        client = await _connect(tmp_path / "m.sock")
+        try:
+            out = await client.send({"op": "pty_spawn", "name": "unbounded",
+                                     "argv": ["sh", "-c", "cat"]})
+            assert "could not be bounded" in out["error"]
+            assert manager._broker.get("unbounded") is None   # closed, not lingering
+        finally:
+            await client.close()
+    finally:
+        await manager.close()

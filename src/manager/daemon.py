@@ -69,6 +69,24 @@ _DEFAULT_WATCHDOG_INTERVAL = 10.0
 _NOTIFY_TIMEOUT = 5.0
 _PROBE_TIMEOUT = 2.0
 
+# THE PTY ENVELOPE (the Phase 1 doctrine gap, closed): a PTY child is a BODY, not a limb of
+# the sacred proc — left in the daemon's own cgroup, one heavy terminal tenant could pressure
+# the very process whose whole design is that nothing that can OOM lives in its slice
+# (doctrine 3: handles, never children). Every spawned child is MOVED into its own transient
+# scope right after birth (StartTransientUnit with PIDs= — adoption, so the proven
+# spawn/wait/killpg topology is untouched; only the cgroup membership changes). The default
+# ceiling is deliberately generous — the envelope bounds blast radius, it does not starve a
+# working session — and the kernel reclaims from the child before the daemon either way
+# (the unit's OOMScoreAdjust=-900 stands guard beneath this).
+_PTY_DEFAULT_RAM_BYTES = 8 * 1024**3
+_PTY_DEFAULT_IO_WEIGHT = 50
+
+
+def _pty_scope_unit(name: str) -> str:
+    """The transient scope a PTY child lives in — the session name, unit-name-safe."""
+    import re
+    return f"osiris-pty-{re.sub(r'[^a-zA-Z0-9:_.-]', '-', name)}.scope"
+
 
 def default_socket_path() -> Path:
     """$XDG_RUNTIME_DIR/osiris-manager.sock, falling back to ~/.osiris/manager.sock — a unix
@@ -466,10 +484,59 @@ class Manager:
             await self._broker.spawn(name, argv, cwd=cwd, env=env)
         except SessionExistsError as exc:
             return {"error": str(exc)}
+        # THE ENVELOPE (doctrine 3, the closed gap): the child moves into its own transient
+        # scope before this op returns. Born bounded or not at all — a child that cannot be
+        # scoped is closed and refused, never left as a limb of the sacred proc.
+        session = self._broker.get(name)
+        if session is not None:
+            ram = req.get("ram_bytes")
+            fail = await self._scope_pty_child(
+                name, session.pid,
+                ram_bytes=ram if isinstance(ram, int) and ram > 0 else _PTY_DEFAULT_RAM_BYTES,
+                io_weight=_PTY_DEFAULT_IO_WEIGHT)
+            if fail is not None:
+                await self._broker.close(name)
+                return {"error": f"pty child could not be bounded ({fail}) — under the "
+                                 "sacred proc a child is born bounded or not at all; "
+                                 "session closed"}
         out: dict[str, Any] = {"spawned": name}
         if seated is not None:
             out["seat_id"] = seated["seat_id"]
         return out
+
+    async def _scope_pty_child(
+        self, name: str, pid: int, *, ram_bytes: int, io_weight: int,
+    ) -> str | None:
+        """Adopt a just-spawned PTY child into its own transient scope (StartTransientUnit
+        with PIDs= — the D-Bus half of what `systemd-run --scope` does for a NEW process,
+        which the CLI cannot do for an existing pid). Adoption keeps the spawn/wait/killpg
+        topology exactly as tested; only the cgroup membership changes. Returns None on
+        success, else the error string (the caller refuses the birth)."""
+        argv = [
+            "busctl", "call", "--user", "org.freedesktop.systemd1",
+            "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager",
+            "StartTransientUnit", "ssa(sv)a(sa(sv))", _pty_scope_unit(name), "fail",
+            "5",
+            "PIDs", "au", "1", str(pid),
+            "MemoryMax", "t", str(ram_bytes),
+            "IOAccounting", "b", "true",
+            "IOWeight", "t", str(io_weight),
+            "CollectMode", "s", "inactive-or-failed",
+            "0",
+        ]
+        try:
+            proc = await self._runner(argv, stdout=asyncio.subprocess.PIPE,
+                                      stderr=asyncio.subprocess.PIPE)
+            out, err = await asyncio.wait_for(
+                proc.communicate(), timeout=_DEFAULT_SYSTEMCTL_TIMEOUT)
+        except TimeoutError:
+            return "busctl timed out"
+        except OSError as exc:
+            return str(exc)
+        if proc.returncode != 0:
+            detail = (err or out or b"").decode(errors="replace").strip()
+            return detail or f"busctl exited {proc.returncode}"
+        return None
 
     def _op_pty_list(self) -> dict[str, Any]:
         return {

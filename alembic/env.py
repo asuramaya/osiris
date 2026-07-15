@@ -16,7 +16,12 @@ from sqlalchemy import engine_from_config, pool
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: fileConfig's default silently DISABLES every logger
+    # already created in this process — in tests (conftest runs migrations in-process at
+    # session start) that killed the app's own loggers, and any assertion observing a log
+    # record went permanently dark (the parked PTY flood test, thread bbca30a9: force-detach
+    # FIRED, its warning was swallowed, three producer-side fixes chased the wrong layer).
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # No ORM models — schema is raw SQL DDL in the migration scripts.
 target_metadata = None
