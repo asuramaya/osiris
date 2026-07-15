@@ -283,6 +283,20 @@ def _load_receipt(path: Path) -> dict[str, Any] | None:
     return parsed
 
 
+class _Waitable(Protocol):
+    """What `_LiveBody.dissolve()` actually touches on `proc`: `.returncode` and an awaitable
+    `.wait()`. `asyncio.subprocess.Process` satisfies this structurally (the ordinary case, set
+    by `summon()`); RE-ADOPTION (the manager daemon, Phase 1 §4.0 — `docs/SPEC-agent-manager.md`)
+    supplies a systemctl-polling stand-in for a scope whose child handle belonged to a now-dead
+    daemon process — never a second implementation of the metering logic itself, only of the one
+    thing `proc` needs to answer when nobody here is that process's parent."""
+
+    @property
+    def returncode(self) -> int | None: ...
+
+    async def wait(self) -> int: ...
+
+
 @dataclass(frozen=True)
 class _LiveBody:
     """What LocalProvider needs at dissolve time — resolved once at summon (never re-queried
@@ -296,7 +310,7 @@ class _LiveBody:
     budget_usd: float | None
     ram_envelope_bytes: int
     started_at: datetime
-    proc: asyncio.subprocess.Process
+    proc: _Waitable
     cgroup: Path | None
 
 
@@ -323,6 +337,23 @@ class LocalProvider:
         # A hidden subdir beside the receipts: the meter agent iterates the receipts root for
         # *.json and must never mistake a raw snapshot for a minted receipt.
         return self._receipts_dir / ".stats" / f"{handle}.json"
+
+    def adopt(
+        self, handle: str, *, unit: str, kind: str, repo_ref: str, seat_anchor: str,
+        budget_usd: float | None, ram_envelope_bytes: int, started_at: datetime,
+        proc: _Waitable, cgroup: Path | None,
+    ) -> None:
+        """RE-ADOPTION (doctrine 3, `2ceb7ba0`: daemon-death is a normal event; state is
+        reconstructed, never trusted from memory): a body summoned by a now-DEAD daemon still
+        has a live systemd scope. Seeding it into `_live` makes `dissolve()` treat it exactly
+        like a body this instance summoned itself — same stats-file lookup, same cgroup
+        fallback, same receipt-before-dissolve mint. The caller (the manager daemon,
+        `src/manager/daemon.py`) supplies `proc` because THIS instance never held systemd-run's
+        real child handle; only that one seam differs."""
+        self._live[handle] = _LiveBody(
+            unit=unit, kind=kind, repo_ref=repo_ref, seat_anchor=seat_anchor,
+            budget_usd=budget_usd, ram_envelope_bytes=ram_envelope_bytes,
+            started_at=started_at, proc=proc, cgroup=cgroup)
 
     async def summon(
         self, kind: str, cores: int | None, ram_bytes: int, repo_ref: str, seat_anchor: str,

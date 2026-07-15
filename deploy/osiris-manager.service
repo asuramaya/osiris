@@ -1,0 +1,49 @@
+# Osiris manager (the sacred proc) — systemd USER unit. See docs/SPEC-agent-manager.md
+# §1 doctrine 3 (`2ceb7ba0`) and §4.0/§4.8, and src/manager/daemon.py's module docstring.
+#
+# What this is: the daemon that owns lifecycle for bodies (constitution #2, `f1803b4a` —
+# HANDS, ADMITTED AND GOVERNED). It holds HANDLES, never children: every body runs in its
+# own transient systemd-run scope (src/orchestrator/bodies.py), outside this unit's own
+# cgroup, with its own memory ceiling — so a body dying of OOM cannot take the daemon (or
+# anything else) down with it, the exact failure this whole doctrine exists to close
+# (`37fe6a09`, the Warp OOM canon). Daemon-death is itself a NORMAL event: on restart it
+# rebuilds its world from systemd + the receipts dir + the graph, never from memory — so
+# Restart=always is not a crutch, it is the design.
+#
+# OOMScoreAdjust=-900 + MemoryLow=64M: under system-wide memory pressure the kernel should
+# reclaim from bodies (their own scopes, ceilinged) long before it ever looks at the sacred
+# proc holding the handles.
+#
+# Install (a USER unit, like deploy/osiris-pulse.service and deploy/osiris-console.service —
+# runs AS the operator, against the operator's own dev instance; NOT the /opt system-unit
+# form deploy/osiris-{api,worker}.service use). DO NOT enable this on any box without the
+# reviewer's go — this file ships as plumbing, deployment is a separate act:
+#
+#   cp deploy/osiris-manager.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now osiris-manager
+#
+# Adjust WorkingDirectory / the venv path / the URLs to your box. systemd user units do NOT
+# inherit your shell PATH, so ExecStart and the venv must be absolute.
+[Unit]
+Description=Osiris manager (the sacred proc — body adoption, the control socket, the scream)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/code/osiris
+# Point at the dev instance (PG :5601 / Redis :6396), inline so the repo's .env is untouched;
+# systemd Environment= overrides pydantic's .env.
+Environment=DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris
+Environment=REDIS_URL=redis://127.0.0.1:6396/0
+ExecStart=%h/code/osiris/.venv/bin/python -m src.manager.daemon
+Restart=always
+RestartSec=2
+# The sacred proc survives what its bodies do not: protected against the OOM killer, and
+# guaranteed a floor of memory even when the box is under pressure from everything else.
+OOMScoreAdjust=-900
+MemoryLow=64M
+
+[Install]
+WantedBy=default.target
