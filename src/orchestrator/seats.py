@@ -152,6 +152,27 @@ async def reseed_binding(pool: asyncpg.Pool, *, agent_id: str, job_dir: str) -> 
     return str(seat)
 
 
+async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
+    """The Seat this mind actively holds, with its display facts — the 'who am I' half of
+    the binding (Phase B3): orient/mount tell a bound mind WHICH ROLE it sits in, whether
+    or not it ever claim_named itself in the assertion world. None when unbound."""
+    row = await pool.fetchrow(
+        "SELECT t.canonical AS seat_id, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=t.id "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS handle, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=t.id "
+        "   AND a.name='house' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS house "
+        "FROM links l JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
+        "WHERE f.canonical=$1 AND l.type='holds' AND t.type='Seat' AND t.status='active' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "ORDER BY l.first_seen DESC LIMIT 1", agent_id)
+    if row is None:
+        return None
+    return {"seat_id": row["seat_id"], "handle": row["handle"], "house": row["house"]}
+
+
 async def binding_of_handle(pool: asyncpg.Pool, name: str) -> dict[str, Any] | None:
     """The Seat-object world's answer to 'who is <name>?' (Phase B1): the UNIQUE living Seat
     carrying this handle, and its current holder via the ACTIVE holds link. None when the

@@ -1100,13 +1100,21 @@ async def seat_bearings(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='project' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS house "
         "FROM objects o WHERE o.canonical=$1", agent_id)
+    # THE BINDING IS PART OF WHO YOU ARE (Phase B3, 5cef856b): a mind that actively HOLDS a
+    # Seat object is told so — whether or not it ever claim_named itself in the assertion
+    # world. An attached-at-birth mind that reads its own orient() and sees nothing was the
+    # discovery gap all over again (Ra V's grievance, one layer down).
+    from src.orchestrator.seats import held_seat
+    bound = await held_seat(pool, agent_id)
+    binding = {"seat_binding": bound} if bound else {}
     if seat and seat["handle"]:
         gen = int(seat["gen"]) if seat["gen"] else None
-        return {"seat": seat_label(agent_id, seat["handle"], gen), "house": seat["house"]}
+        return {"seat": seat_label(agent_id, seat["handle"], gen), "house": seat["house"],
+                **binding}
 
     house = seat["house"] if seat else None
     if not house:
-        return {}
+        return binding
     # anonymous: what jobs does this house have, and is anyone sitting in them?
     names = [r["handle"] for r in await pool.fetch(
         "SELECT DISTINCT (SELECT a.value #>> '{}' FROM current_assertions a "
@@ -1126,8 +1134,8 @@ async def seat_bearings(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
             vacant.append({"seat": n, "holders": len(holders),
                            "last_held_by": holders[-1] if holders else None})
     if not vacant:
-        return {"house": house}
-    return {"house": house, "vacant_seats": vacant,
+        return {"house": house, **binding}
+    return {"house": house, "vacant_seats": vacant, **binding,
             "note": f"you are anonymous in the house of {house}. These seats are STANDING EMPTY — "
                     "claim_name('<seat>') INHERITS one (you become its next holder; the previous "
                     "holders' work stays theirs). A seat a LIVE mind holds is not vacant and will "

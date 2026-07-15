@@ -390,3 +390,29 @@ async def test_automount_reseeds_on_hand_resume(actions: Actions, tmp_path: Path
     assert resumed.get("attach") is None                      # no token this time
     assert resumed["seat_binding"] == seat["seat_id"]         # re-earned from the link
     assert await seat_of_mount(actions.pool, job_dir=resumed["job_dir"]) == seat["seat_id"]
+
+
+# --- Phase B3: the binding is part of who you are ---
+
+
+async def test_seat_bearings_carries_the_binding(actions: Actions) -> None:
+    """orient/mount tell a bound mind WHICH ROLE it sits in — even one that never
+    claim_named itself in the assertion world (attached at birth, still anonymous)."""
+    from src.orchestrator.agents import seat_bearings
+
+    seat = await ensure_seat(actions, house="osiris", handle="Nefer", source="test")
+    token = await mint_attach_token(actions.pool, seat_id=seat["seat_id"])
+    await _seated_agent(actions, "agent:mmmm0001", "/jobs/mmmm0001")
+    await attach_session(actions, seat_id=seat["seat_id"], token=token,
+                         job_dir="/jobs/mmmm0001", agent_id="agent:mmmm0001")
+
+    out = await seat_bearings(actions.pool, "agent:mmmm0001")
+
+    assert out["seat_binding"]["seat_id"] == seat["seat_id"]
+    assert out["seat_binding"]["handle"] == "Nefer"
+    assert out["seat_binding"]["house"] == "osiris"
+
+    # an unbound mind sees no phantom binding
+    await _seated_agent(actions, "agent:mmmm0002", "/jobs/mmmm0002")
+    bare = await seat_bearings(actions.pool, "agent:mmmm0002")
+    assert "seat_binding" not in bare
