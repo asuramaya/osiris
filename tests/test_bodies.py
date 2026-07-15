@@ -228,6 +228,8 @@ def _fake_runner(cgroup_dir: Path, payload_returncode: int = 0) -> Any:
 
 
 async def test_local_provider_summon_dissolve_round_trip(tmp_path: Path) -> None:
+    """The fake runner never writes a trampoline snapshot, so this round-trip exercises the
+    FALLBACK meter lane: numbers read straight off the (fixture) cgroup dir."""
     cgroup = tmp_path / "cgroup"
     cgroup.mkdir()
     (cgroup / "cpu.stat").write_text("usage_usec 500000\n")
@@ -245,6 +247,12 @@ async def test_local_provider_summon_dissolve_round_trip(tmp_path: Path) -> None
     # summon() sent exactly ONE systemd-run and ONE ControlGroup probe — no stop yet
     kinds = [c[0] for c in runner.calls]
     assert kinds == ["systemd-run", "systemctl"]
+    # the payload rides INSIDE the metering trampoline: python3 -c <code> <statsfile> <payload>
+    spawn = runner.calls[0]
+    assert spawn[-3:] == ["claude", "-p", "hi"]           # the payload, verbatim, at the tail
+    tramp = spawn[spawn.index("--") + 1:]
+    assert tramp[:2] == ["python3", "-c"]
+    assert tramp[3].endswith(f".stats/{handle}.json")     # the snapshot's landing path, by argv
 
     await provider.dissolve(handle)
     receipt = await provider.receipt(handle)
@@ -276,6 +284,109 @@ async def test_local_provider_maps_oom_kill_over_the_exit_code(tmp_path: Path) -
     receipt = await provider.receipt(handle)
     assert receipt is not None
     assert receipt["exit_cause"] == "oom-kill"   # memory.events wins, never the raw exit status
+
+
+async def test_local_provider_prefers_the_trampoline_snapshot(tmp_path: Path) -> None:
+    """You cannot meter a corpse: by dissolve time a naturally-exited scope's cgroup and unit
+    bookkeeping are BOTH gone (systemd 259, probed 2026-07-15), so the trampoline's inside-the-
+    body snapshot is the PRIMARY reading — the cgroup dir is only the fallback. Here both exist
+    with different numbers; the snapshot must win, and its wait_rc (the payload's true wait
+    status) must beat the wrapper's flattened exit code."""
+    cgroup = tmp_path / "cgroup"
+    cgroup.mkdir()
+    (cgroup / "cpu.stat").write_text("usage_usec 1\n")     # the WRONG numbers — must lose
+    (cgroup / "memory.peak").write_text("1\n")
+    (cgroup / "memory.events").write_text("oom_kill 0\n")
+
+    runner = _fake_runner(cgroup, payload_returncode=143)  # the wrapper's flattened signal exit
+    provider = LocalProvider(
+        runner=runner, cgroup_root=Path("/"), receipts_dir=tmp_path / "receipts")
+    handle = await provider.summon(
+        "claude", None, 10**8, "/repo/demo", "anchor", None, command=["claude"])
+    stats = tmp_path / "receipts" / ".stats" / f"{handle}.json"
+    stats.write_text(json.dumps({
+        "wait_rc": -15,                                    # the TRUE status: signalled
+        "cpu.stat": "usage_usec 750000\n",
+        "memory.peak": "2097152\n",
+        "memory.events": "oom_kill 0\n",
+    }))
+    await provider.dissolve(handle)
+    receipt = await provider.receipt(handle)
+    assert receipt is not None
+    assert receipt["core_seconds"] == pytest.approx(0.75)  # the snapshot's, not the fixture's
+    assert receipt["ram_peak_bytes"] == 2097152
+    assert receipt["exit_cause"] == "signal:15"            # wait_rc, not the wrapper's exit:143
+    assert not stats.exists()                              # scratch cleaned; the receipt remains
+
+
+def test_trampoline_snapshots_before_it_dies(tmp_path: Path) -> None:
+    """The trampoline's contract, exercised for REAL but without systemd: wraps the payload,
+    propagates its exit status, and fsync-renames a snapshot of its own cgroup as its last act.
+    (Under a scope the cgroup is the body's own; here it is the test session's — the mechanics
+    are identical.)"""
+    import subprocess
+
+    stats = tmp_path / "stats.json"
+    done = subprocess.run(
+        ["python3", "-c", bodies._TRAMPOLINE, str(stats), "sh", "-c", "exit 3"], timeout=30)
+    assert done.returncode == 3                            # the payload's status, passed through
+    snap = json.loads(stats.read_text())
+    assert snap["wait_rc"] == 3
+    assert "usage_usec" in snap["cpu.stat"]                # a real cgroup read, not a guess
+    assert not stats.with_suffix(".json.tmp").exists()     # renamed, never left partial
+
+
+def test_trampoline_keeps_the_true_signal_status(tmp_path: Path) -> None:
+    """A signalled payload exits the wrapper as 128+N (an exit code cannot go negative), but
+    the snapshot's wait_rc carries the REAL wait status — that is where signal:N comes from."""
+    import subprocess
+
+    stats = tmp_path / "stats.json"
+    done = subprocess.run(
+        ["python3", "-c", bodies._TRAMPOLINE, str(stats), "sh", "-c", "kill -TERM $$"],
+        timeout=30)
+    assert done.returncode == 143                          # 128 + SIGTERM, the flattened form
+    assert json.loads(stats.read_text())["wait_rc"] == -15  # the true form, kept for the receipt
+
+
+async def test_dissolve_stops_the_scope_not_a_phantom_service(tmp_path: Path) -> None:
+    """THE SILENT NO-OP STOP (caught live, 2026-07-15): `systemctl stop osiris-body-X` defaults
+    the suffix to `.service` — a unit that does not exist — and the "not loaded" complaint dies
+    in a DEVNULL'd stderr. The payload loops on, dissolve hangs on wait() forever. The stop must
+    name `.scope`, exactly as the ControlGroup probe already does."""
+    cgroup = tmp_path / "cgroup"
+    cgroup.mkdir()
+    (cgroup / "cpu.stat").write_text("usage_usec 100\n")
+    (cgroup / "memory.peak").write_text("1\n")
+    (cgroup / "memory.events").write_text("oom_kill 0\n")
+
+    calls: list[list[str]] = []
+    payload: list[Any] = []
+
+    async def runner(
+        argv: list[str], *, cwd: str | None = None, env: dict[str, str] | None = None,
+        stdout: int | None = None, stderr: int | None = None,
+    ) -> Any:
+        calls.append(argv)
+        if argv[:3] == ["systemctl", "--user", "show"]:
+            return _FakeCompletedProc(str(cgroup).encode())
+        if argv[:3] == ["systemctl", "--user", "stop"]:
+            payload[0].kill()  # what a CORRECTLY-ADDRESSED stop does; a .service stop would not
+            return _FakeCompletedProc()
+        proc = await asyncio.create_subprocess_exec(
+            "sleep", "30", stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        payload.append(proc)
+        return proc
+
+    provider = LocalProvider(
+        runner=runner, cgroup_root=Path("/"), receipts_dir=tmp_path / "receipts")
+    handle = await provider.summon(
+        "claude", None, 10**8, "/repo/demo", "anchor", None, command=["claude"])
+    await asyncio.wait_for(provider.dissolve(handle), 10)   # a phantom stop would hang here
+    stops = [c for c in calls if c[:3] == ["systemctl", "--user", "stop"]]
+    assert stops == [["systemctl", "--user", "stop", f"osiris-body-{handle}.scope"]]
+    receipt = await provider.receipt(handle)
+    assert receipt is not None and receipt["exit_cause"] == "signal:9"  # the kill, recorded
 
 
 async def test_local_provider_receipt_is_none_before_dissolve(tmp_path: Path) -> None:
@@ -349,6 +460,16 @@ async def test_spawn_in_body_seats_the_anchor_on_resume_when_there_is_no_job_dir
     assert "--resume" in call["command"] and "abcd1234-full-session-id" in call["command"]
 
 
+async def test_spawn_in_body_refuses_an_anchorless_summon() -> None:
+    """path=identity is the root bug (dd47c1da): with neither job_dir nor resume_session the
+    only anchor left would be the bare repo path — two bodies in one repo sharing an accounting
+    identity. Refused loudly, never defaulted."""
+    provider = _FakeBodyProvider()
+    with pytest.raises(ValueError, match="anchor"):
+        await _spawn_in_body("/repo/demo", "no anchor at all", provider=provider)
+    assert provider.calls == []  # refused BEFORE the summon, not after
+
+
 async def test_spawn_in_body_forwards_model_and_allowed_tools() -> None:
     provider = _FakeBodyProvider()
     await _spawn_in_body(
@@ -384,25 +505,58 @@ async def test_spawn_in_body_defaults_to_a_local_provider(monkeypatch: pytest.Mo
     assert handle == "h" and captured.get("provider_type") == "seen"
 
 
-# --- one live integration test, real systemd-run, skipped when unavailable ---
+# --- live integration tests, real systemd-run, skipped when unavailable ---
 
 _SYSTEMD_AVAILABLE = (
     shutil.which("systemd-run") is not None and shutil.which("systemctl") is not None)
 
 
+async def _loaded_body_units() -> str:
+    proc = await asyncio.create_subprocess_exec(
+        "systemctl", "--user", "list-units", "osiris-body-*", "--all", "--no-legend",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    out, _ = await proc.communicate()
+    return out.decode()
+
+
 @pytest.mark.skipif(not _SYSTEMD_AVAILABLE, reason="systemd-run/systemctl not on PATH")
-async def test_local_provider_against_real_systemd_run(tmp_path: Path) -> None:
-    """No monkeypatching of the runner: this is the actual product tier, end to end."""
+async def test_real_body_natural_exit_still_meters_cpu(tmp_path: Path) -> None:
+    """THE CORPSE-METERING PROOF (the review's hole): a body that exits NATURALLY, before
+    dissolve is ever called, must still produce non-zero CPU accounting — by dissolve time its
+    scope's cgroup and unit bookkeeping are both gone, so only the trampoline's inside-the-body
+    snapshot can carry the numbers out. A receipt asserting shape but not substance would have
+    passed with core_seconds == 0; this one cannot."""
     provider = LocalProvider(receipts_dir=tmp_path / "receipts")
+    burn = "import time\nt = time.time()\nwhile time.time() - t < 0.3:\n    pass"
     handle = await provider.summon(
-        "claude", None, 64 * 2**20, str(tmp_path), str(tmp_path), None,
-        command=["/bin/sh", "-c", "exit 0"])
+        "claude", None, 128 * 2**20, str(tmp_path), str(tmp_path), None,
+        command=["python3", "-c", burn])
+    await provider._live[handle].proc.wait()   # the body dies of natural causes, unobserved
     await provider.dissolve(handle)
     receipt = await provider.receipt(handle)
     assert receipt is not None
     assert set(receipt) == _RECEIPT_KEYS
-    assert receipt["provider"] == "local"
     assert receipt["exit_cause"] == "exit:0"
+    assert receipt["core_seconds"] > 0.1       # ~0.3s of real burn — NOT an honestly-zeroed corpse
+    assert receipt["ram_peak_bytes"] > 0
+    assert receipt["wall_seconds"] > 0.0
+    assert f"osiris-body-{handle}" not in await _loaded_body_units()  # no unit left loaded
+
+
+@pytest.mark.skipif(not _SYSTEMD_AVAILABLE, reason="systemd-run/systemctl not on PATH")
+async def test_real_body_dissolved_mid_flight(tmp_path: Path) -> None:
+    """The kill path: a long-running body stopped by dissolve() itself. The trampoline survives
+    the scope's SIGTERM just long enough to snapshot, so the receipt carries the true signal
+    and the CPU spent up to the stop."""
+    provider = LocalProvider(receipts_dir=tmp_path / "receipts")
+    handle = await provider.summon(
+        "claude", None, 128 * 2**20, str(tmp_path), str(tmp_path), None,
+        command=["python3", "-c", "import time\nwhile True:\n    time.sleep(0.05)"])
+    await asyncio.sleep(0.5)                   # let it live a little before the stop
+    await provider.dissolve(handle)
+    receipt = await provider.receipt(handle)
+    assert receipt is not None
+    assert receipt["exit_cause"] == "signal:15"   # systemctl stop's SIGTERM, honestly recorded
     assert receipt["core_seconds"] >= 0.0
-    assert receipt["wall_seconds"] >= 0.0
-    assert receipt["ram_envelope_bytes"] == 64 * 2**20
+    assert receipt["wall_seconds"] >= 0.4
+    assert f"osiris-body-{handle}" not in await _loaded_body_units()  # stop left nothing loaded

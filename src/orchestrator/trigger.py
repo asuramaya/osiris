@@ -535,10 +535,13 @@ async def _spawn_in_body(
         env["CLAUDE_JOB_DIR"] = job_dir
     cmd.append(prompt)
 
-    # The seat's durable anchor (§2's "identity at birth"): job_dir when minting, else the
-    # resumed session's own id — never the bare repo path, or two bodies in the same repo would
-    # share one accounting identity.
-    seat_anchor = job_dir or resume_session or repo
+    # The seat's durable anchor (§2's "identity at birth"): job_dir when minting, the resumed
+    # session's own id otherwise. NEVER the bare repo path — path=identity is the root bug this
+    # whole spec exists to kill (dd47c1da), and two bodies in one repo would share an accounting
+    # identity. A summon with no anchor is a caller error, refused loudly.
+    seat_anchor = job_dir or resume_session
+    if seat_anchor is None:
+        raise ValueError("_spawn_in_body needs an anchor: job_dir or resume_session")
     handle = await provider.summon(
         "claude", cores, ram_bytes, repo, seat_anchor, budget_usd, command=cmd, env=env)
     _log.info("trigger: bodied %s in %s (handle %s)",

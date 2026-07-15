@@ -13,6 +13,16 @@ died inside Warp's desktop cgroup and the OOM killer took the WHOLE fleet with i
 session borrowed its body from a scope nobody sized for it. A `LocalProvider` body gets its own
 transient scope with its own `MemoryMax`; one body dying starves nothing else.
 
+THE METER RIDES INSIDE THE BODY. You cannot meter a corpse: on systemd 259 a transient scope's
+unit bookkeeping (CPUUsageNSec, MemoryPeak, Result) and its cgroup directory are BOTH gone the
+instant its last process exits — `--collect` or not, natural exit or our own `systemctl stop`
+(probed 2026-07-15: `show` answers `[not set]` on every counter immediately after either).
+Reading the accounting after the fact was never an option, so the body's last living act is to
+read ITSELF: a stdlib trampoline wraps the payload, waits for it, snapshots the scope's own
+cgroup v2 files from inside (it IS the scope's last process — the cgroup cannot be collected
+under it), and fsync-renames the snapshot before dying. cgroup v2 is still the meter; the
+reading just happens at the only instant the meter is readable.
+
 RECEIPT-BEFORE-DISSOLVE (parity with the Xen tier's dom0-is-the-meter discipline, `15a41cf0`):
 `dissolve()` does not return until the receipt is minted and fsync'd. A body that is gone before
 its cost is recorded is a hand that spent and cannot be governed — the exact shape of the bug
@@ -95,12 +105,44 @@ def _cpu_list(cores: int) -> str:
     return "0" if cores <= 1 else f"0-{cores - 1}"
 
 
+# The body's dying act (see the module docstring: you cannot meter a corpse). Stdlib-only,
+# argv-passed (never string-formatted — a prompt in the payload must not be able to inject
+# code). `wait_rc` keeps the TRUE wait status — negative = signalled — which the wrapper's own
+# 8-bit exit code cannot carry. The SIGTERM handler makes a `systemctl stop` survivable for
+# exactly as long as the snapshot takes: handlers (unlike SIG_IGN) reset to default across
+# exec, so the payload still dies on the first TERM while the trampoline stays to take the
+# reading. /proc/self/cgroup's `0::` line is the pure-cgroup-v2 shape — the only one this
+# provider supports (same constraint as reading cpu.stat at all).
+_TRAMPOLINE = "\n".join((
+    "import json, os, signal, subprocess, sys",
+    "stats, cmd = sys.argv[1], sys.argv[2:]",
+    "signal.signal(signal.SIGTERM, lambda *a: None)",
+    "rc = subprocess.Popen(cmd).wait()",
+    "cg = '/sys/fs/cgroup' + open('/proc/self/cgroup').read().split('::', 1)[1].strip()",
+    "d = {'wait_rc': rc}",
+    "for name in ('cpu.stat', 'memory.peak', 'memory.events'):",
+    "    try:",
+    "        d[name] = open(cg + '/' + name).read()",
+    "    except OSError:",
+    "        d[name] = ''",
+    "fh = open(stats + '.tmp', 'w')",
+    "json.dump(d, fh)",
+    "fh.flush()",
+    "os.fsync(fh.fileno())",
+    "fh.close()",
+    "os.replace(stats + '.tmp', stats)",
+    "sys.exit(rc if rc >= 0 else 128 - rc)",
+))
+
+
 def _systemd_run_argv(
     unit: str, cores: int | None, ram_bytes: int, command: Sequence[str],
 ) -> list[str]:
-    """The exact invocation the spec names: a transient --user --scope, --collect (systemd
-    forgets it once it exits — nothing here depends on the unit lingering), a hard MemoryMax
-    and a 90%-of-it MemoryHigh soft throttle, optional core pinning, then the payload."""
+    """The exact invocation the spec names: a transient --user --scope, --collect (nothing
+    reads the unit post-mortem — the meter rides inside the body — and without it a FAILED
+    scope, e.g. an oom-killed one, would stay loaded forever: a unit leak per casualty), a
+    hard MemoryMax and a 90%-of-it MemoryHigh soft throttle, optional core pinning, then the
+    payload."""
     high = int(ram_bytes * _MEMORY_HIGH_FRACTION)
     argv = [
         "systemd-run", "--user", "--scope", f"--unit={unit}", "--collect",
@@ -112,27 +154,60 @@ def _systemd_run_argv(
     return argv
 
 
+def _parse_cpu_seconds(text: str) -> float:
+    for line in text.splitlines():
+        if line.startswith("usage_usec "):
+            with contextlib.suppress(ValueError, IndexError):
+                return int(line.split()[1]) / 1e6
+    return 0.0
+
+
+def _parse_peak_bytes(text: str) -> int:
+    with contextlib.suppress(ValueError):
+        return int(text.strip())
+    return 0
+
+
+def _parse_oom_kills(text: str) -> int:
+    for line in text.splitlines():
+        if line.startswith("oom_kill "):
+            with contextlib.suppress(ValueError, IndexError):
+                return int(line.split()[1])
+    return 0
+
+
 def _read_cgroup_stats(cgroup: Path) -> tuple[float, int, int]:
-    """(core_seconds, ram_peak_bytes, oom_kill_count) from cgroup v2 — the meter. A missing or
-    unreadable file degrades to zero rather than raising: a body whose cgroup vanished before we
-    could read it (already-collected scope, a kernel without memory.peak) still gets an HONEST
+    """(core_seconds, ram_peak_bytes, oom_kill_count) straight off a cgroup v2 dir — the
+    FALLBACK lane, for when the trampoline's snapshot never landed (a stop escalated to
+    SIGKILL, memory.oom.group taking the trampoline too). A missing or unreadable file
+    degrades to zero rather than raising: an already-collected scope still gets an HONEST
     receipt — zeroed, not fabricated — never a crash that loses the whole record."""
-    core_seconds = 0.0
-    with contextlib.suppress(OSError, ValueError, IndexError):
-        for line in (cgroup / "cpu.stat").read_text().splitlines():
-            if line.startswith("usage_usec "):
-                core_seconds = int(line.split()[1]) / 1e6
-                break
-    ram_peak = 0
-    with contextlib.suppress(OSError, ValueError):
-        ram_peak = int((cgroup / "memory.peak").read_text().strip())
-    oom_kill = 0
-    with contextlib.suppress(OSError, ValueError, IndexError):
-        for line in (cgroup / "memory.events").read_text().splitlines():
-            if line.startswith("oom_kill "):
-                oom_kill = int(line.split()[1])
-                break
-    return core_seconds, ram_peak, oom_kill
+    def read(name: str) -> str:
+        try:
+            return (cgroup / name).read_text()
+        except OSError:
+            return ""
+    return (_parse_cpu_seconds(read("cpu.stat")), _parse_peak_bytes(read("memory.peak")),
+            _parse_oom_kills(read("memory.events")))
+
+
+def _load_stats(path: Path) -> tuple[float, int, int, int | None] | None:
+    """The trampoline's snapshot → (core_seconds, ram_peak_bytes, oom_kills, wait_rc) — the
+    PRIMARY meter reading. None when the snapshot never landed; the caller falls back to
+    whatever the cgroup can still say."""
+    try:
+        d = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    rc = d.get("wait_rc")
+    return (
+        _parse_cpu_seconds(str(d.get("cpu.stat") or "")),
+        _parse_peak_bytes(str(d.get("memory.peak") or "")),
+        _parse_oom_kills(str(d.get("memory.events") or "")),
+        int(rc) if isinstance(rc, int) else None,
+    )
 
 
 def _exit_cause(returncode: int | None, oom_kill: int) -> str:
@@ -211,7 +286,8 @@ def _load_receipt(path: Path) -> dict[str, Any] | None:
 @dataclass(frozen=True)
 class _LiveBody:
     """What LocalProvider needs at dissolve time — resolved once at summon (never re-queried
-    after exit, when a --collect'd scope's bookkeeping may already be gone)."""
+    after exit, when the scope's bookkeeping is already gone). `cgroup` serves the FALLBACK
+    read only; the primary numbers come from the trampoline's snapshot."""
 
     unit: str
     kind: str
@@ -226,8 +302,10 @@ class _LiveBody:
 
 class LocalProvider:
     """The default product tier (`7ff54707`) — NOT a test double. `summon` spawns the payload
-    inside a transient `systemd-run --user --scope`; `dissolve` stops it (if still running),
-    reads its cgroup v2 accounting, and mints the receipt BEFORE returning."""
+    inside a transient `systemd-run --user --scope`, wrapped in the trampoline that snapshots
+    the body's own cgroup v2 accounting as its dying act; `dissolve` stops it (if still
+    running), reads that snapshot (falling back to the cgroup dir, then honest zeros), and
+    mints the receipt BEFORE returning."""
 
     def __init__(
         self, *, runner: ProcessRunner = _default_runner,
@@ -241,23 +319,36 @@ class LocalProvider:
         self._receipts_dir = receipts_dir if receipts_dir is not None else RECEIPTS
         self._live: dict[str, _LiveBody] = {}
 
+    def _stats_path(self, handle: str) -> Path:
+        # A hidden subdir beside the receipts: the meter agent iterates the receipts root for
+        # *.json and must never mistake a raw snapshot for a minted receipt.
+        return self._receipts_dir / ".stats" / f"{handle}.json"
+
     async def summon(
         self, kind: str, cores: int | None, ram_bytes: int, repo_ref: str, seat_anchor: str,
         budget_usd: float | None, *, command: Sequence[str], env: dict[str, str] | None = None,
     ) -> str:
         handle = uuid.uuid4().hex[:12]
         unit = f"osiris-body-{handle}"
-        argv = _systemd_run_argv(unit, cores, ram_bytes, command)
+        stats = self._stats_path(handle)
+        await asyncio.to_thread(stats.parent.mkdir, parents=True, exist_ok=True)
+        # The trampoline's ~10MB interpreter and ~30ms startup land INSIDE the envelope and on
+        # the meter — honest: metering from within is the harness's own cost of being metered.
+        wrapped = ["python3", "-c", _TRAMPOLINE, str(stats), *command]
+        argv = _systemd_run_argv(unit, cores, ram_bytes, wrapped)
+        # started_at is stamped AT the spawn — not after the cgroup-resolve poll below, which
+        # would clip the body's first ~100ms off the wall clock the envelope is billed on.
+        started = datetime.now(UTC)
         proc = await self._runner(
             argv, cwd=repo_ref, env=env,
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
         # Resolved NOW, while the scope is fresh — not at dissolve time, when a naturally-exited
-        # --collect'd unit may already be unloaded and unqueryable. See _resolve_cgroup.
+        # unit is already unloaded and unqueryable. See _resolve_cgroup.
         cgroup = await self._resolve_cgroup(unit)
         self._live[handle] = _LiveBody(
             unit=unit, kind=kind, repo_ref=repo_ref, seat_anchor=seat_anchor,
             budget_usd=budget_usd, ram_envelope_bytes=ram_bytes,
-            started_at=datetime.now(UTC), proc=proc, cgroup=cgroup)
+            started_at=started, proc=proc, cgroup=cgroup)
         return handle
 
     async def _resolve_cgroup(self, unit: str) -> Path | None:
@@ -282,29 +373,43 @@ class LocalProvider:
             return
         if live.proc.returncode is None:
             with contextlib.suppress(OSError):
+                # `.scope`, ALWAYS: a bare unit name defaults to `.service`, and systemctl's
+                # "not loaded" complaint lands in a DEVNULL'd stderr — a stop that silently
+                # stopped nothing, leaving the payload to loop forever (caught 2026-07-15).
                 stopper = await self._runner(
-                    ["systemctl", "--user", "stop", live.unit],
+                    ["systemctl", "--user", "stop", f"{live.unit}.scope"],
                     stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
                 await stopper.wait()
+        # THE SYNCHRONIZATION POINT: systemd-run (scope mode) outlives its child, and the
+        # trampoline fsync-renames its snapshot before exiting — so once wait() resolves, the
+        # stats file is complete or will never come. No polling, no race. A wedged trampoline
+        # is bounded by the scope's own TimeoutStopSec→SIGKILL escalation, never by us.
         returncode = await live.proc.wait()
         ended = datetime.now(UTC)
-        core_seconds: float = 0.0
-        ram_peak: int = 0
-        oom_kill: int = 0
-        if live.cgroup is not None:
-            core_seconds, ram_peak, oom_kill = await asyncio.to_thread(
-                _read_cgroup_stats, live.cgroup)
+        stats = await asyncio.to_thread(_load_stats, self._stats_path(handle))
+        if stats is not None:
+            core_seconds, ram_peak, oom_kill, wait_rc = stats
+            # the trampoline's wait_rc is the PAYLOAD's true status (negative = signalled);
+            # systemd-run's own exit code flattens a signal into 128+N and loses the fact
+            rc = wait_rc if wait_rc is not None else returncode
+        else:
+            core_seconds, ram_peak, oom_kill = (
+                await asyncio.to_thread(_read_cgroup_stats, live.cgroup)
+                if live.cgroup is not None else (0.0, 0, 0))
+            rc = returncode
         # RECEIPT-BEFORE-DISSOLVE: minted and fsync'd here, before this call returns — the caller
         # never observes a "dissolved" body with no receipt on disk.
         receipt = _build_receipt(
             handle=handle, provider="local", kind=live.kind,
             ram_envelope_bytes=live.ram_envelope_bytes,
-            exit_cause=_exit_cause(returncode, oom_kill),
+            exit_cause=_exit_cause(rc, oom_kill),
             started_at=live.started_at, ended_at=ended, seat_anchor=live.seat_anchor,
             repo_ref=live.repo_ref, budget_usd=live.budget_usd,
             core_seconds=core_seconds, ram_peak_bytes=ram_peak)
         await asyncio.to_thread(
             _write_receipt, self._receipts_dir / f"{handle}.json", receipt)
+        with contextlib.suppress(OSError):  # the receipt is the record; the snapshot is scratch
+            await asyncio.to_thread(self._stats_path(handle).unlink)
 
     async def receipt(self, handle: str) -> dict[str, Any] | None:
         return await asyncio.to_thread(_load_receipt, self._receipts_dir / f"{handle}.json")
