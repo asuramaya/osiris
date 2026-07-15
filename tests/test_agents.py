@@ -407,6 +407,26 @@ async def test_succession_needs_anchored_observations_on_both_sides(actions: Act
         assert seam is None
 
 
+async def test_a_recovered_from_unknown_model_is_not_a_seam(actions: Actions) -> None:
+    """Thread 065c374e (defense-in-depth for forks.py's lesson, mirrored here): a job_dir-
+    anchored mount whose OWN transcript read flaked — model=None, the ABSENCE of an
+    observation, never a value — followed by a LATER call that resolves the real model must
+    not read as a live-swap. 'We have not looked yet' is not a prior model to disagree with,
+    so the second call gets no baseline, no seam, and no spurious generation."""
+    flaked = AgentIdentity(agent_id="agent:33086f67", session="33086f67", project="osiris",
+                          model=None, cwd="/w/osiris", model_method="job_dir")
+    a = await register_agent(actions, flaked, actor="analyst:operator")
+    assert flaked.model_succession is None and flaked.succeeded_from is None
+    recovered = AgentIdentity(agent_id="agent:33086f67", session="33086f67", project="osiris",
+                              model="claude-fable-5", cwd="/w/osiris", model_method="job_dir",
+                              model_history=("claude-fable-5",))
+    a2 = await register_agent(actions, recovered, actor="analyst:operator")
+    assert recovered.model_succession is None      # no baseline was ever witnessed — not a seam
+    assert recovered.succeeded_from is None
+    assert a2 == a                                  # same object — no spurious generation minted
+    assert recovered.agent_id == "agent:33086f67"   # no -ii
+
+
 def test_unresolved_identities_do_not_conflate(tmp_path: Path) -> None:
     """Hardening: two agents that can't resolve a session id must NOT collapse into one shared
     agent:unknown sink (an accidental identity merge). Distinct anchors → distinct ids."""

@@ -838,6 +838,10 @@ async def live_succession(
                     "UPDATE agent_mounts SET model=$2 WHERE job_dir=$1",
                     row["job_dir"], observed)
             return {"unchanged": True}
+        # THE NULL-SEAM GATE (thread 065c374e, mirroring forks.py's lesson here as
+        # defense-in-depth): a row with no stored model was never OBSERVED, not observed-as-
+        # something-else — it can never "disagree with" the first real reading, so this is a
+        # first stamp, never a seam to mint against.
         if old is None:
             await actions.pool.execute(
                 "UPDATE agent_mounts SET model=$2 WHERE job_dir=$1", row["job_dir"], observed)
@@ -954,6 +958,10 @@ async def register_agent(
             prior_raw, prior_at = await _last_anchored_stamp(actions, a)
             prior = normalize_model(prior_raw)
             obs = normalize_model(identity.model)
+            # THE NULL-SEAM GATE (thread 065c374e, defense-in-depth for forks.py's lesson: a
+            # NULL/'unknown' prior is the ABSENCE of an observation, never a value — WE HAVE
+            # NOT LOOKED YET is not "the mind was someone else". A fresh reading can't disagree
+            # with a null, so `prior is not None` must gate every comparison below it.
             if prior is not None and prior != obs:
                 # THE DATING GATE (thread a3d49d91): the transcript tail LAGS a /model — no
                 # assistant turn has run on the new model yet — so an observation not FRESHER
