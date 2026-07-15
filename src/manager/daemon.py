@@ -431,11 +431,45 @@ class Manager:
             and all(isinstance(k, str) and isinstance(v, str) for k, v in env.items())
         ):
             return {"error": "'env' must be a dict of string to string if given"}
+        # IDENTITY AT BIRTH (spec §4.2, ruling 5cef856b): a spawn that names a seat gets the
+        # Seat resolved/minted and a ONE-TIME attach token exported into the child's
+        # environment before its first breath — the whisper presents them, the server binds.
+        # Refused loudly BEFORE any fd or child exists: a body summoned for a seat that
+        # cannot be minted must not be born unbound.
+        seat_req = req.get("seat")
+        seated: dict[str, Any] | None = None
+        if seat_req is not None:
+            if not (isinstance(seat_req, dict)
+                    and isinstance(seat_req.get("handle"), str) and seat_req["handle"]):
+                return {"error": "'seat' must be {'handle': str, 'house': str?} if given"}
+            house = seat_req.get("house")
+            if house is not None and not isinstance(house, str):
+                return {"error": "'seat.house' must be a string if given"}
+            if self._pool is None:
+                return {"error": "seat attach requires graph access and this daemon has no "
+                                 "pool — spawn without 'seat', or wire DATABASE_URL"}
+            from src.actions.core import Actions
+            from src.orchestrator.seats import ensure_seat, mint_attach_token
+            seated = await ensure_seat(Actions(self._pool), house=house,
+                                       handle=seat_req["handle"], anchor_cwd=cwd,
+                                       source="osiris-manager")
+            if seated.get("error"):
+                return {"error": f"seat refused: {seated['error']}"}
+            token = await mint_attach_token(self._pool, seat_id=seated["seat_id"],
+                                            minted_by="osiris-manager")
+            # base on the daemon's environ when none was given — the broker only applies
+            # that default for env=None, and a child with ONLY the two seat vars has no PATH
+            env = dict(env) if env is not None else dict(os.environ)
+            env["OSIRIS_SEAT_ID"] = seated["seat_id"]
+            env["OSIRIS_ATTACH_TOKEN"] = token
         try:
             await self._broker.spawn(name, argv, cwd=cwd, env=env)
         except SessionExistsError as exc:
             return {"error": str(exc)}
-        return {"spawned": name}
+        out: dict[str, Any] = {"spawned": name}
+        if seated is not None:
+            out["seat_id"] = seated["seat_id"]
+        return out
 
     def _op_pty_list(self) -> dict[str, Any]:
         return {

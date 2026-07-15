@@ -65,6 +65,7 @@ async def automount(
     expected_model: str | None = None, lease_secs: int = 900,
     root: Path | None = None, jobs_home: Path | None = None,
     project_label: str | None = None, source: str | None = None,
+    seat_id: str | None = None, attach_token: str | None = None,
 ) -> dict[str, Any]:
     """Mount a just-started session and return its whisper payload. Identical semantics to
     the mount() tool (same resolution, same registration, same durable row — idempotent on
@@ -125,6 +126,19 @@ async def automount(
             await settle_history_at_join(actions.pool, ident.project, ident.agent_id)
             prev = await mounts.project_prev_seen(
                 actions.pool, ident.project, exclude_job_dir=job_dir)
+    # THE ATTACH CEREMONY (identity core, 5cef856b): a spawner exported OSIRIS_SEAT_ID +
+    # OSIRIS_ATTACH_TOKEN into this session's environment before its first breath; the
+    # whisper carried them here. Verify and BIND — refusals are LOUD (an error the whisper
+    # prints) but the whisper itself never dies of one: the mount above stands either way,
+    # so a refused attach degrades to exactly today's inferred identity, plus a confession.
+    attach: dict[str, Any] | None = None
+    if seat_id and attach_token and job_dir:
+        from src.orchestrator.seats import attach_session
+        try:
+            attach = await attach_session(actions, seat_id=seat_id, token=attach_token,
+                                          job_dir=job_dir, agent_id=ident.agent_id)
+        except Exception as e:  # noqa: BLE001 — fail-open, loud in the payload
+            attach = {"error": f"ATTACH FAILED — {str(e)[:200]}; the mount stands, unbound"}
     mail = await unread_count(actions.pool, ident.project, reader_agent=ident.agent_id,
                               lease_secs=lease_secs) if ident.project else 0
     # graded asks travel beside the total (f9449d8d) so the whisper can lead with what is
@@ -175,6 +189,8 @@ async def automount(
         "seat": await _seat_of(actions, ident.agent_id),
         # thin=True → the whisper says plainly: YOUR project is young; the GRAPH is not.
         "thin": thin,
+        # the attach ceremony's verdict (None: no spawner-exported seat in this environment)
+        **({"attach": attach} if attach is not None else {}),
     }
 
 

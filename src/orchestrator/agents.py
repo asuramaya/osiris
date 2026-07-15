@@ -681,6 +681,12 @@ async def mint_heir(
         await actions.assert_property(a, "seat_generation", str(len(holders) + 1), heir, now,
                                       _CONF, evidence_class=_EC)
         await _link_once(actions, a, ancestor_oid, "succeeds_seat", heir, now)
+    # THE BINDING FOLLOWS THE HEAD (identity core, 5cef856b): every Seat OBJECT the ancestor
+    # actively holds re-links to the heir — the durable address must keep pointing at
+    # whoever the mind is NOW, or the first compaction after an attach would strand the
+    # seat on a corpse. The old link heals by valid_until; holder history stays walkable.
+    from src.orchestrator.seats import follow_binding
+    await follow_binding(actions, ancestor_oid=ancestor_oid, heir=heir, heir_oid=a, now=now)
     await actions.pool.execute(
         "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
         heir, ancestor_id)

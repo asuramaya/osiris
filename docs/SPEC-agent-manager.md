@@ -192,11 +192,32 @@ never children, per-body transient scopes, re-adoption on restart, reconstructib
 - **Seat rebind/migration primitive** — move a seat's anchor preserving identity, lineage,
   attribution, mail. **The operator is blocked on this** (alfred orphaned by a moved folder).
   **Pilot migration: house bytebye** (alfred volunteered — smallest case, pure office).
+- **DESIGN SETTLED (`5cef856b`, 2026-07-15): the Seat becomes an OBJECT.** New object type
+  `Seat` (canonical `seat:<uuid8>`), minted once, never re-keyed — natural keys rejected
+  (house and handle are both mutable; never key identity on a mutable fact). Assertions:
+  `handle`, `house`, `anchor_cwd`, `policy`. Link `holds` (Agent→Seat) names the current
+  holder; `mint_heir` re-links `holds` to the heir so the binding follows the lineage head.
+  Holder history stays the `succeeds_seat` chain. The lineage root was rejected as the durable
+  id: it is still a session id; a seat outlives lineages (Ptah holding Ra); and identity-at-
+  birth needs an identity that exists BEFORE the first session. Attribution stays per-mind
+  (never merged); the mind ruling `a882b334` is untouched — addressing re-keys on the Seat
+  precisely BECAUSE minds die. Phases: **A** additive (ontology + `seats.py` `ensure_seat` +
+  `seat_tokens` table + `agent_mounts.seat_id` + attach params + daemon export), **B** re-key
+  addressing (mail/leases/orient), **C** visitor class, **D** demote the cwd-guess for
+  daemon-managed sessions. Phase A changes nothing for sessions without the env vars.
 
 ### 4.2 Identity at birth
 
 - The daemon spawns every managed harness with the minted anchor in its environment (§2). The
   whisper's guess-path remains only for un-daemoned sessions.
+- **THE ATTACH CEREMONY (`5cef856b`)**: the spawner resolves/mints the Seat, mints a
+  **one-time attach token**, exports `OSIRIS_SEAT_ID` + `OSIRIS_ATTACH_TOKEN` into the child
+  env before the first token. The whisper presents `(session, seat, token)`; the server
+  verifies and BINDS (`agent_mounts.seat_id` + `holds` link); the token is marked used. A
+  token re-presented by a DIFFERENT session is **refused loudly** (`2294e95d` ask #1) — this
+  guards the env-inheritance leak (subagents inherit env, the `CLAUDE_JOB_DIR` lesson
+  `0344e536`). Once bound, re-attach after a bounce needs no token. Tokens live in a plain
+  table (hot secrets, revocable), never the append-only kernel.
 
 ### 4.3 Seats first-class + the visitor class
 
@@ -334,3 +355,6 @@ hunks, never `git add -A`, coordinate via `send(to='osiris')`.
 - `4fd54a06` — fold forward; the face of a lineage is the latest mind to talk to the operator.
 - `065c374e` (resolved) / thread `2294e95d` (open) — the seam race + the anchor-collision bug
   class Phase 1 §4.2 kills at the root.
+- `5cef856b` — the identity-core design: Seat as first-class object (`seat:<uuid8>`), the
+  attach ceremony (one-time token, refuse-loudly), addressing re-keyed on the Seat; the mind
+  layer keeps its seams. Phases A–D in §4.1.

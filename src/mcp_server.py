@@ -2104,7 +2104,11 @@ async def automount_route(request: Any) -> Any:
             actor=settings.osiris_actor, expected_model=settings.osiris_expected_model,
             lease_secs=settings.osiris_mail_lease_secs,
             project_label=(str(body.get("project") or "") or None),
-            source=(str(body.get("source") or "") or None))
+            source=(str(body.get("source") or "") or None),
+            # the attach ceremony (5cef856b): the spawner's exported seat + one-time token,
+            # carried by the whisper from the session's own environment
+            seat_id=(str(body.get("seat_id") or "") or None),
+            attach_token=(str(body.get("attach_token") or "") or None))
         # a mint rode this whisper (compact/clear): the ancestor's connection outlives it —
         # purge the dead mind from the hot cache so no tool call answers as it again
         _evict_stale_minds(out.get("minted"))

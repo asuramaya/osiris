@@ -141,6 +141,14 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                "Decision (which settles) or a Thread (which closes), a tension is HELD: the "
                "current lean is recorded but never auto-resolved or consolidated away; the lean "
                "history is the dance across sessions.", ("tension:",)),
+    ObjectType("Seat", "Software", "#ffd33d", "star",
+               "A durable ROLE in a house — the fleet's addressable identity (the identity "
+               "core, ruling 5cef856b). Minted ONCE as seat:<uuid8>, never re-keyed: handle, "
+               "house, and anchor_cwd are mutable ASSERTIONS on it, because the whole bug "
+               "class was keying identity on mutable facts (path, session). Minds (Agents) "
+               "hold it in succession via `holds`; the seat outlives them all — it exists "
+               "BEFORE its first session, which is what lets the daemon export it at birth.",
+               ("seat:",)),
     # Observables
     ObjectType("IPv4", "Observable", "#2dd4bf", "ellipse", "An IPv4 address observable."),
     ObjectType("TelegramChannel", "Observable", "#56a3ff", "ellipse",
@@ -232,6 +240,13 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "not shrink it). Healed by a compensating event (`valid_until`) when a repo drops "
              "off the charter — never DELETE, so a seat's shrinking rule stays a fact the graph "
              "remembers.", ("Agent",), ("SoftwareProject",)),
+    LinkType("holds", "THE BINDING (identity core, ruling 5cef856b): the mind currently "
+             "holding a durable Seat. Minted at attach (the ceremony: a one-time token the "
+             "spawner exported at birth), RE-LINKED to the heir at every mint so the binding "
+             "follows the lineage head; the old link heals by `valid_until`, never DELETE — "
+             "a seat's holder history stays walkable. Distinct from succeeds_seat (holder → "
+             "prior holder, mind-to-mind): holds is mind → ROLE.",
+             ("Agent",), ("Seat",)),
     LinkType("archived_snapshot", "A Wayback/archive snapshot of the target.", (), ("URL",)),
     LinkType("same_as", "Identity merge edge (loser → winner)."),
     LinkType("uses", "Actor/source employs this capability or technique."),

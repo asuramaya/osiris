@@ -41,6 +41,12 @@ def main() -> int:
     # generation from it, so the trigger must travel with the mount.
     if hook.get("source"):
         body["source"] = str(hook["source"])
+    # THE ATTACH CEREMONY (identity core, 5cef856b): a spawner (the manager daemon) exported
+    # this session's Seat + a one-time token into its environment before the first breath —
+    # carry them; the server verifies and binds. Absent env = the ordinary inferred path.
+    if os.environ.get("OSIRIS_SEAT_ID") and os.environ.get("OSIRIS_ATTACH_TOKEN"):
+        body["seat_id"] = os.environ["OSIRIS_SEAT_ID"]
+        body["attach_token"] = os.environ["OSIRIS_ATTACH_TOKEN"]
     try:
         req = urllib.request.Request(
             AUTOMOUNT, data=json.dumps(body).encode(),
@@ -77,6 +83,16 @@ def main() -> int:
                 + ") — after that this connection knows you. Any osiris call before that "
                 "mount will bounce with 'mount first'; after an MCP reconnect, mount the "
                 "same way again."]
+    if out.get("attach"):
+        att = out["attach"]
+        if att.get("error"):
+            # LOUD, per 2294e95d ask #1 — a refused attach is confessed, never swallowed
+            bits.append(f"⚠ SEAT ATTACH: {att['error']} You are mounted on the ordinary "
+                        "inferred path instead; tell the operator.")
+        else:
+            bits.append(f"You are SEATED: bound at birth to {att.get('handle') or '?'} "
+                        f"({att['attached']}), house {att.get('house') or '?'} — the seat "
+                        "is your durable identity; it survives compactions and swaps.")
     if out.get("minted"):
         bits.append(f"You were MINTED as this lineage's successor — ancestor {out['minted']}; "
                     "your first act: read orient()'s succession note.")
