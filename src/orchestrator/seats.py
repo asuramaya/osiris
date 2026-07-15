@@ -131,6 +131,53 @@ async def seat_of_mount(pool: asyncpg.Pool, *, job_dir: str) -> str | None:
         "SELECT seat_id FROM agent_mounts WHERE job_dir=$1", job_dir)
 
 
+async def reseed_binding(pool: asyncpg.Pool, *, agent_id: str, job_dir: str) -> str | None:
+    """THE HAND-RESUME FOLLOWS THE SEAT (Phase B4, the honest tail Phase A named): the holds
+    link is the binding's DURABLE half and survives session_end; the mount row does not. A
+    fresh row minted for a mind that actively holds a seat re-earns its `seat_id` from the
+    link — no token needed, because the graph already knows who holds what. Idempotent and
+    deliberately timid: only a row with NO binding is ever touched (an explicit attach, or a
+    surviving row, always outranks a re-derivation)."""
+    seat = await pool.fetchval(
+        "SELECT t.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id "
+        "WHERE f.canonical=$1 AND l.type='holds' AND t.type='Seat' AND t.status='active' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "ORDER BY l.first_seen DESC LIMIT 1", agent_id)
+    if seat is None:
+        return None
+    await pool.execute(
+        "UPDATE agent_mounts SET seat_id=$2 WHERE job_dir=$1 AND seat_id IS NULL",
+        job_dir, seat)
+    return str(seat)
+
+
+async def binding_of_handle(pool: asyncpg.Pool, name: str) -> dict[str, Any] | None:
+    """The Seat-object world's answer to 'who is <name>?' (Phase B1): the UNIQUE living Seat
+    carrying this handle, and its current holder via the ACTIVE holds link. None when the
+    seat world has no authoritative answer — no such seat, an ambiguous handle (two houses,
+    same name: the assertion path's liveness ranking arbitrates instead), a vacant seat, or
+    a holder that is retired/false-minted (a binding must never resolve into a grave)."""
+    seats = [r["canonical"] for r in await pool.fetch(
+        "SELECT o.canonical FROM objects o WHERE o.type='Seat' AND o.status='active' "
+        "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='handle' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1)", name)]
+    if len(seats) != 1:
+        return None
+    holder = await pool.fetchval(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND l.type='holds' AND f.type='Agent' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "AND NOT EXISTS (SELECT 1 FROM current_assertions r WHERE r.object_id=f.id "
+        "  AND r.name IN ('retired','false_mint') AND r.value #>> '{}' = 'true') "
+        "ORDER BY l.first_seen DESC LIMIT 1", seats[0])
+    if holder is None:
+        return None
+    return {"seat_id": seats[0], "holder": str(holder)}
+
+
 async def _seat_display(pool: asyncpg.Pool, seat_id: str) -> dict[str, Any]:
     row = await pool.fetchrow(
         "SELECT "

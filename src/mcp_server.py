@@ -934,6 +934,10 @@ async def mount(
             await mailbox.settle_history_at_join(pool, ident.project, ident.agent_id)
             prev = await mounts.project_prev_seen(pool, ident.project, exclude_job_dir=job_dir)
         _prev_seen[ident.agent_id] = prev  # this mount IS the re-entry: anchor the fold here
+        # THE HAND-RESUME FOLLOWS THE SEAT (Phase B4, ruling 5cef856b): a fresh row for a
+        # mind that actively holds a Seat re-earns its binding from the durable holds link.
+        from src.orchestrator.seats import reseed_binding
+        await reseed_binding(pool, agent_id=ident.agent_id, job_dir=job_dir)
         # THE BINDING (thread 33838160): a mount with a FOREIGN anchor is a mind deliberately
         # wearing a seat — its session's own row (session_anchor, hook-injected) is bound to
         # the resolved agent, so the whisper's next fire re-asserts the SEAT, never a hash twin.

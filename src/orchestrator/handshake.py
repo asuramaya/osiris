@@ -132,13 +132,26 @@ async def automount(
     # prints) but the whisper itself never dies of one: the mount above stands either way,
     # so a refused attach degrades to exactly today's inferred identity, plus a confession.
     attach: dict[str, Any] | None = None
+    binding: str | None = None
     if seat_id and attach_token and job_dir:
         from src.orchestrator.seats import attach_session
         try:
             attach = await attach_session(actions, seat_id=seat_id, token=attach_token,
                                           job_dir=job_dir, agent_id=ident.agent_id)
+            binding = attach.get("attached")
         except Exception as e:  # noqa: BLE001 — fail-open, loud in the payload
             attach = {"error": f"ATTACH FAILED — {str(e)[:200]}; the mount stands, unbound"}
+    elif job_dir:
+        # THE HAND-RESUME FOLLOWS THE SEAT (Phase B4): no spawner env here, but if this mind
+        # actively HOLDS a seat, its fresh mount row re-earns the binding from the durable
+        # holds link — session_end deleted the hot half, never the graph's memory of it.
+        from src.orchestrator.seats import reseed_binding, seat_of_mount
+        try:
+            binding = (await seat_of_mount(actions.pool, job_dir=job_dir)
+                       or await reseed_binding(actions.pool, agent_id=ident.agent_id,
+                                               job_dir=job_dir))
+        except Exception:  # noqa: BLE001 — the binding is a bonus; the whisper never dies
+            binding = None
     mail = await unread_count(actions.pool, ident.project, reader_agent=ident.agent_id,
                               lease_secs=lease_secs) if ident.project else 0
     # graded asks travel beside the total (f9449d8d) so the whisper can lead with what is
@@ -191,6 +204,8 @@ async def automount(
         "thin": thin,
         # the attach ceremony's verdict (None: no spawner-exported seat in this environment)
         **({"attach": attach} if attach is not None else {}),
+        # the durable binding this session sits in, however it got there (attach or reseed)
+        **({"seat_binding": binding} if binding else {}),
     }
 
 

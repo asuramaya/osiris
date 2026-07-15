@@ -257,3 +257,136 @@ async def test_automount_attach_refusal_is_loud_but_the_mount_stands(
     assert "REFUSED" in out["attach"]["error"]
     assert out["agent"] == f"agent:{SID[:8]}"     # mounted anyway, on the inferred path
     assert await seat_of_mount(actions.pool, job_dir=out["job_dir"]) is None
+
+
+# --- Phase B1: the binding outranks the inference ---
+
+
+async def test_resolve_seat_prefers_the_holds_binding_over_a_hotter_grave(
+    actions: Actions,
+) -> None:
+    """The grave-delivery shape, killed at the root: an old generation with a HOT mount row
+    outranked the true holder under the assertion path's liveness ranking. A declared binding
+    is not a guess — the bound holder wins outright."""
+    from src.orchestrator.agents import resolve_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="Payne", source="test")
+    # the impostor: carries the handle ASSERTION and a live pulse (the hotter grave)
+    from datetime import datetime as _dt
+    now = _dt.now(UTC)
+    ghost = await actions.create_or_find_object("Agent", "agent:iiii0001", "agent:iiii0001")
+    await actions.assert_property(ghost, "handle", "Payne", "agent:iiii0001", now, 0.9,
+                                  evidence_class="self_declared")
+    await save_mount(actions.pool, job_dir="/jobs/iiii0001", agent_id="agent:iiii0001",
+                     project="osiris", cwd="/w", model=None, session_key=None)
+    # the true holder: bound via the ceremony, mount released (not live)
+    token = await mint_attach_token(actions.pool, seat_id=seat["seat_id"])
+    await _seated_agent(actions, "agent:iiii0002", "/jobs/iiii0002")
+    await attach_session(actions, seat_id=seat["seat_id"], token=token,
+                         job_dir="/jobs/iiii0002", agent_id="agent:iiii0002")
+
+    out = await resolve_seat(actions, "Payne")
+
+    assert out["agent"] == "agent:iiii0002"       # the binding, not the hotter assertion
+    assert out["seat_id"] == seat["seat_id"]
+    assert out["live"] is True                    # its mount row is fresh (just saved)
+
+
+async def test_resolve_seat_falls_back_to_the_assertion_path(actions: Actions) -> None:
+    """No Seat object, no binding — the assertion path answers exactly as before (every
+    un-seated lineage keeps resolving; Phase B changes nothing for them)."""
+    from src.orchestrator.agents import resolve_seat
+
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:jjjj0001", "agent:jjjj0001")
+    await actions.assert_property(a, "handle", "Unbound", "agent:jjjj0001", now, 0.9,
+                                  evidence_class="self_declared")
+    await save_mount(actions.pool, job_dir="/jobs/jjjj0001", agent_id="agent:jjjj0001",
+                     project="osiris", cwd="/w", model=None, session_key=None)
+    out = await resolve_seat(actions, "Unbound")
+    assert out["agent"] == "agent:jjjj0001"
+    assert "seat_id" not in out
+
+
+async def test_resolve_seat_ambiguous_handle_falls_back(actions: Actions) -> None:
+    """Two houses, one handle: the seat world has no unique answer — the assertion path's
+    liveness ranking arbitrates instead of a coin-flip between seats."""
+    from src.orchestrator.agents import resolve_seat
+
+    await ensure_seat(actions, house="alpha", handle="Twin", source="test")
+    await ensure_seat(actions, house="beta", handle="Twin", source="test")
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:kkkk0001", "agent:kkkk0001")
+    await actions.assert_property(a, "handle", "Twin", "agent:kkkk0001", now, 0.9,
+                                  evidence_class="self_declared")
+    await save_mount(actions.pool, job_dir="/jobs/kkkk0001", agent_id="agent:kkkk0001",
+                     project="alpha", cwd="/w", model=None, session_key=None)
+    out = await resolve_seat(actions, "Twin")
+    assert out["agent"] == "agent:kkkk0001"       # assertion path answered
+    assert "seat_id" not in out
+
+
+async def test_a_vacant_seat_never_blocks_resolution(actions: Actions) -> None:
+    """A Seat with no active holder contributes nothing — the assertion path answers."""
+    from src.orchestrator.agents import resolve_seat
+
+    await ensure_seat(actions, house="osiris", handle="Vacant", source="test")
+    out = await resolve_seat(actions, "Vacant")
+    assert out["agent"] is None                   # nobody anywhere — honest empty
+
+
+# --- Phase B4: the hand-resume follows the seat ---
+
+
+async def test_reseed_binding_restores_a_session_ended_binding(actions: Actions) -> None:
+    """session_end deletes the mount row (the binding's hot half); the holds link is the
+    durable half. A fresh row for the same mind re-earns seat_id from the link."""
+    from src.orchestrator.mounts import release_mounts
+    from src.orchestrator.seats import reseed_binding
+
+    seat = await ensure_seat(actions, house="osiris", handle="Osar", source="test")
+    token = await mint_attach_token(actions.pool, seat_id=seat["seat_id"])
+    await _seated_agent(actions, "agent:llll0001", "/jobs/llll0001")
+    await attach_session(actions, seat_id=seat["seat_id"], token=token,
+                         job_dir="/jobs/llll0001", agent_id="agent:llll0001")
+    await release_mounts(actions.pool, "agent:llll0001")          # the tab closed
+    assert await seat_of_mount(actions.pool, job_dir="/jobs/llll0001") is None
+
+    # the hand-resume: a fresh row, no token anywhere
+    await save_mount(actions.pool, job_dir="/jobs/llll0001", agent_id="agent:llll0001",
+                     project="osiris", cwd="/w/osiris", model=None, session_key=None)
+    got = await reseed_binding(actions.pool, agent_id="agent:llll0001",
+                               job_dir="/jobs/llll0001")
+
+    assert got == seat["seat_id"]
+    assert await seat_of_mount(actions.pool, job_dir="/jobs/llll0001") == seat["seat_id"]
+    # timid: a row that already carries a binding is never overwritten
+    other = await ensure_seat(actions, house="osiris", handle="Osar2", source="test")
+    assert other["seat_id"] != seat["seat_id"]
+    again = await reseed_binding(actions.pool, agent_id="agent:llll0001",
+                                 job_dir="/jobs/llll0001")
+    assert again == seat["seat_id"]               # still the held seat, row untouched
+
+
+async def test_automount_reseeds_on_hand_resume(actions: Actions, tmp_path: Path) -> None:
+    """End to end: attach at birth, session ends, the SAME session hand-resumes with no env —
+    the whisper payload carries the re-earned binding."""
+    from src.orchestrator.handshake import session_end
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/osiris")
+    seat = await ensure_seat(actions, house="osiris", handle="Ptah", source="test")
+    token = await mint_attach_token(actions.pool, seat_id=seat["seat_id"])
+    born = await automount(actions, session_id=SID, cwd="/w/osiris",
+                           actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
+                           seat_id=seat["seat_id"], attach_token=token)
+    assert born["attach"]["attached"] == seat["seat_id"]
+    await session_end(actions, session_id=SID, jobs_home=tmp_path / "jobs")
+
+    resumed = await automount(actions, session_id=SID, cwd="/w/osiris",
+                              actor="analyst:operator", root=root,
+                              jobs_home=tmp_path / "jobs", source="resume")
+
+    assert resumed.get("attach") is None                      # no token this time
+    assert resumed["seat_binding"] == seat["seat_id"]         # re-earned from the link
+    assert await seat_of_mount(actions.pool, job_dir=resumed["job_dir"]) == seat["seat_id"]

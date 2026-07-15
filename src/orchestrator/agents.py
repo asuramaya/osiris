@@ -335,7 +335,29 @@ async def resolve_seat(actions: Actions, name: str) -> dict[str, Any]:
     agent id — an act of intent, not a banner a tired mind followed); a LIVE seat always wins; and
     among equals the LATEST GENERATION wins, because an heir outranks its ancestor. The whole
     picture is returned so the caller can warn LOUDLY instead of hiding it in a field.
+
+    THE BINDING OUTRANKS THE INFERENCE (Phase B1, ruling 5cef856b): when the Seat-OBJECT
+    world has an authoritative answer — a unique living Seat carrying this handle, with an
+    active holder — that holder wins outright, before any liveness ranking runs. The
+    assertion path below ranks GUESSES by heat, and a hotter mount row on a stale
+    generation is exactly the grave-delivery shape; a declared binding is not a guess.
+    The assertion path remains, whole, as the fallback for every un-seated lineage.
     """
+    from src.orchestrator.seats import binding_of_handle
+    bound = await binding_of_handle(actions.pool, name)
+    if bound is not None:
+        pulse = await actions.pool.fetchval(
+            "SELECT max(last_seen) FROM agent_mounts WHERE agent_id=$1", bound["holder"])
+        live = bool(pulse and (datetime.now(UTC) - pulse).total_seconds() < 900)
+        out_b: dict[str, Any] = {
+            "name": name, "agent": bound["holder"], "live": live,
+            "candidates": [bound["holder"]], "seat_id": bound["seat_id"],
+        }
+        if not live:
+            out_b["warning"] = (
+                f"NO LIVE SESSION holds '{name}' — {bound['holder']} is bound to "
+                f"{bound['seat_id']} but is NOT listening. This message may never be read.")
+        return out_b
     rows = await actions.pool.fetch(
         "SELECT o.canonical, m.last_seen, "
         " (m.last_seen > now() - interval '15 minutes') AS live, "

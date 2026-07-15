@@ -93,6 +93,10 @@ def main() -> int:
             bits.append(f"You are SEATED: bound at birth to {att.get('handle') or '?'} "
                         f"({att['attached']}), house {att.get('house') or '?'} — the seat "
                         "is your durable identity; it survives compactions and swaps.")
+    if out.get("seat_binding") and not out.get("attach"):
+        # the hand-resume reseed (Phase B4): the graph remembered the binding for us
+        bits.append(f"Your session sits in {out['seat_binding']} — the binding re-earned "
+                    "from the graph's holds link, no token needed.")
     if out.get("minted"):
         bits.append(f"You were MINTED as this lineage's successor — ancestor {out['minted']}; "
                     "your first act: read orient()'s succession note.")
