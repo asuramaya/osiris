@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import signal
 from collections.abc import Callable
@@ -15,6 +16,8 @@ from pathlib import Path
 
 import pytest
 from src.manager.pty_broker import (
+    _MAX_CHUNKS_PER_WAKEUP,
+    DEFAULT_ATTACH_QUEUE_CHUNKS,
     FRAME_TYPE_EXITED,
     FRAME_TYPE_INPUT,
     FRAME_TYPE_OUTPUT,
@@ -292,6 +295,136 @@ async def test_broker_spawn_get_list_close_and_name_collisions() -> None:
     assert session.returncode is not None  # broker.close() actually reaped it
 
     await broker.close("seat-1")  # unknown name: idempotent no-op, same as bodies.dissolve
+
+
+# --- backpressure: bounded queues + force-detach (doctrine 3 — nothing in the sacred proc ---
+# --- may grow without bound; a stalled face is disconnected, never accumulated)            ---
+
+
+@requires_pty
+async def test_attach_queues_are_bounded() -> None:
+    """The regression guard the whole backpressure discipline hangs on: `asyncio.Queue(0)` is
+    UNBOUNDED, so maxsize must be provably positive — asserted on the actual queue object a
+    real attach() hands out, not on a constant a refactor could silently disconnect from it."""
+    session = await PtySession.spawn(["sh", "-c", "cat"])
+    try:
+        replay, queue = session.attach()
+        assert queue.maxsize == DEFAULT_ATTACH_QUEUE_CHUNKS
+        assert queue.maxsize > 0
+        session.detach(queue)
+    finally:
+        await session.close()
+
+    with pytest.raises(ValueError):  # an unbounded queue must be unconstructable, not a default
+        await PtySession.spawn(["sh"], queue_maxsize=0)
+
+
+@requires_pty
+async def test_flooding_child_force_detaches_only_the_stalled_attachment() -> None:
+    """The daemon-OOM scenario, exactly: a chatty child (`yes`), one attachment that never
+    drains. The stalled queue must cap at maxsize and get force-detached ALONE — child alive,
+    sibling attachment streaming, and the ring replay waiting for the casualty's reattach.
+    queue_maxsize deliberately exceeds `_MAX_CHUNKS_PER_WAKEUP`: the per-wakeup drain budget is
+    what guarantees the well-behaved sibling gets scheduled between bursts and never overflows
+    alongside the guilty one — the margin below is that invariant, asserted."""
+    session = await PtySession.spawn(["sh", "-c", "yes"], queue_maxsize=32)
+    try:
+        assert 32 > _MAX_CHUNKS_PER_WAKEUP  # one burst can never fill a healthy queue outright
+        _, stalled = session.attach()  # never drained — the slow consumer
+        _, live = session.attach()  # well-behaved sibling
+        assert stalled.maxsize == 32
+        assert session.attach_count == 2
+
+        # event-driven wait: the flood always yields to the live queue, and each arrival is a
+        # chance for the fan-out to have tripped the stalled queue's bound
+        async with asyncio.timeout(5.0):
+            while session.attach_count == 2:
+                item = await live.get()
+                assert item is not None  # the live attachment never sees an end-marker here
+
+        # the stalled attachment, ALONE, was the casualty...
+        assert session.attach_count == 1
+        assert stalled.qsize() <= stalled.maxsize  # never grew past the bound
+        # ...its undeliverable backlog discarded, terminated with the end-marker
+        assert stalled.get_nowait() is None
+        # the child and the well-behaved sibling are untouched
+        assert session.returncode is None
+        async with asyncio.timeout(2.0):
+            more = await live.get()
+        assert more is not None and b"y" in more
+
+        # reattach after force-detach: the ring replay is the recovery path
+        replay, fresh = session.attach()
+        assert b"y" in replay
+        session.detach(fresh)
+        session.detach(live)
+    finally:
+        await session.close()
+
+
+@requires_pty
+async def test_serve_session_closes_the_socket_of_a_force_detached_client(
+    tmp_path: Path,
+) -> None:
+    """The full recovery loop over the wire: a client that connects and never reads parks the
+    server's pump in drain(); the session-side queue fills and force-detaches it; when the
+    client finally reads again it gets the buffered frames, then a clean EOF (no 'X' — the
+    child is alive); a reconnect gets the ring replay. Force-detach is detected via the
+    broker's own log line (event-driven — the warning IS the observable), which also proves
+    the honest-log requirement."""
+    detached = asyncio.Event()
+
+    class _DetachSignal(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            detached.set()  # emitted from the loop thread (fan-out runs in a reader callback)
+
+    handler = _DetachSignal()
+    logging.getLogger("osiris.pty_broker").addHandler(handler)
+
+    session = await PtySession.spawn(["sh", "-c", "yes"], queue_maxsize=8)
+    socket_path = str(tmp_path / "flood.sock")
+    server = await serve_session(session, socket_path)
+    try:
+        reader, writer = await asyncio.open_unix_connection(socket_path)
+        try:
+            writer.write(encode_hello("seat-flood", 24, 80))
+            await writer.drain()
+            # deliberately read NOTHING: kernel buffers fill, the pump parks in drain(),
+            # the queue caps out, the session force-detaches this attachment
+            async with asyncio.timeout(10.0):
+                await detached.wait()
+            assert session.attach_count == 0
+            assert session.returncode is None  # the child never paid for its client's stall
+
+            # the client resumes reading: buffered 'O' frames, then clean EOF — never an 'X'
+            # (the child is alive; the EOF is the force-detach notification)
+            async with asyncio.timeout(10.0):
+                while True:
+                    frame = await read_frame(reader)
+                    if frame is None:
+                        break
+                    assert frame[0] == FRAME_TYPE_OUTPUT
+        finally:
+            writer.close()
+            with contextlib.suppress(OSError):
+                await writer.wait_closed()
+
+        # recovery: reconnect, and the ring replay catches the face up
+        reader2, writer2 = await asyncio.open_unix_connection(socket_path)
+        try:
+            writer2.write(encode_hello("seat-flood", 24, 80))
+            await writer2.drain()
+            async with asyncio.timeout(5.0):
+                await _read_output_until(reader2, b"y")
+        finally:
+            writer2.close()
+            with contextlib.suppress(OSError):
+                await writer2.wait_closed()
+    finally:
+        logging.getLogger("osiris.pty_broker").removeHandler(handler)
+        server.close()
+        await server.wait_closed()
+        await session.close()
 
 
 # --- end-to-end: serve_session + the wire protocol, driven directly over asyncio streams -----

@@ -62,6 +62,7 @@ import asyncio
 import contextlib
 import fcntl
 import json
+import logging
 import os
 import signal
 import struct
@@ -71,11 +72,32 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+logger = logging.getLogger("osiris.pty_broker")
+
 # --- tunables ---------------------------------------------------------------------------
 
 DEFAULT_TERM = "xterm-256color"
 DEFAULT_RING_SIZE = 256 * 1024  # 256 KiB of scrollback replayed to a reattaching face
-_READ_CHUNK = 65536  # one read() worth, per wakeup — generous; a PTY rarely buffers more
+_READ_CHUNK = 65536  # one read() worth — generous; a PTY rarely buffers more per read
+
+# The synchronous drain budget, in chunks per reader wakeup: 16 * _READ_CHUNK = 1 MiB, then the
+# callback yields back to the event loop (the fd stays readable; level-triggered add_reader just
+# re-fires it next iteration). Two reasons, both doctrine 3 (`2ceb7ba0`): a flooding child
+# (`yes`, a runaway build log) must not wedge the SACRED PROC's event loop inside one callback,
+# and a single burst's fan-out must stay smaller than an attachment queue's bound so a
+# well-behaved consumer always gets scheduled to drain between bursts — without the cap, one
+# burst could overflow a HEALTHY attachment's queue before its reader ever ran, and the
+# force-detach below would punish the innocent.
+_MAX_CHUNKS_PER_WAKEUP = 16
+
+# Per-attachment queue bound, in CHUNKS. Each queued item is one os.read() result, so the hard
+# per-attachment ceiling is DEFAULT_ATTACH_QUEUE_CHUNKS * _READ_CHUNK = 256 * 64 KiB = 16 MiB —
+# and that worst case needs every chunk read at the full 64 KiB, which a PTY essentially never
+# delivers (the line discipline hands out ~4 KiB reads in practice, putting a full queue nearer
+# 1 MiB). The bound exists for doctrine 3 (`2ceb7ba0`): this broker lives inside the SACRED
+# PROC, and a consumer that stops reading must never become an unbounded sink that OOMs the
+# daemon — see PtySession's class docstring for what happens when the bound is hit.
+DEFAULT_ATTACH_QUEUE_CHUNKS = 256
 
 
 def _claim_controlling_tty() -> None:
@@ -135,17 +157,29 @@ class PtySession:
     `PtySession.spawn(...)`, never `PtySession(...)` directly — spawning needs a running event
     loop (for `add_reader`/the exit-watch task) and an already-open PTY pair, both of which the
     classmethod sets up before handing back a usable object.
+
+    BACKPRESSURE — tmux semantics all the way down (doctrine 3, `2ceb7ba0`: this object lives
+    inside the sacred proc, so NOTHING here may grow without bound): every attachment queue is
+    bounded at `queue_maxsize` chunks. A consumer that stops draining — a face that hung, a
+    dead peer whose socket never flushes — fills its queue and gets FORCE-DETACHED on the
+    overflowing chunk: dropped from the fan-out, its queue cleared and terminated with the
+    `None` end-marker, one honest log line. The session, the ring, and every OTHER attachment
+    are untouched, and the ring IS the casualty's recovery path: reattach, get the replay,
+    catch up — exactly what a killed `tmux attach` does.
     """
 
     def __init__(
         self, *, master_fd: int, proc: asyncio.subprocess.Process, rows: int, cols: int,
-        ring_size: int,
+        ring_size: int, queue_maxsize: int,
     ) -> None:
+        if queue_maxsize <= 0:  # 0 means UNBOUNDED to asyncio.Queue — the exact regression
+            raise ValueError(f"queue_maxsize must be positive, got {queue_maxsize}")
         self._master_fd = master_fd
         self._proc = proc
         self._rows = rows
         self._cols = cols
         self._ring = _RingBuffer(ring_size)
+        self._queue_maxsize = queue_maxsize
         self._attachments: set[asyncio.Queue[bytes | None]] = set()
         self._exited = asyncio.Event()
         self._closed = False
@@ -163,7 +197,7 @@ class PtySession:
     async def spawn(
         cls, argv: Sequence[str], *, env: dict[str, str] | None = None, cwd: str | None = None,
         term: str = DEFAULT_TERM, rows: int = 24, cols: int = 80,
-        ring_size: int = DEFAULT_RING_SIZE,
+        ring_size: int = DEFAULT_RING_SIZE, queue_maxsize: int = DEFAULT_ATTACH_QUEUE_CHUNKS,
     ) -> PtySession:
         """Opens a fresh PTY pair, sizes it BEFORE spawning (so the child never sees a 0x0
         window even for an instant), spawns `argv` with the slave wired to all three of its
@@ -171,6 +205,9 @@ class PtySession:
         across the fork, and a lingering parent-side copy would mean the slave never truly
         hangs up when the child exits (reads on the master would block/echo forever instead of
         raising EIO, which `_on_readable` depends on to notice a dead child)."""
+        if queue_maxsize <= 0:  # validated HERE, before the pty and child exist — the
+            raise ValueError(   # constructor's own check would fire too late and leak both
+                f"queue_maxsize must be positive, got {queue_maxsize}")
         master_fd, slave_fd = os.openpty()
         fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
@@ -186,7 +223,9 @@ class PtySession:
             os.close(slave_fd)  # the PARENT's copy only — see the docstring above
 
         os.set_blocking(master_fd, False)
-        return cls(master_fd=master_fd, proc=proc, rows=rows, cols=cols, ring_size=ring_size)
+        return cls(
+            master_fd=master_fd, proc=proc, rows=rows, cols=cols, ring_size=ring_size,
+            queue_maxsize=queue_maxsize)
 
     # --- read side: master fd -> ring + live attachments ----------------------------
 
@@ -194,30 +233,71 @@ class PtySession:
         if not self._drain_available():
             self._stop_reading()
 
-    def _drain_available(self) -> bool:
-        """Reads everything CURRENTLY buffered on the master, without blocking — a loop, not a
-        single `os.read()`, because a busy child can queue more than one chunk between wakeups
-        and leaving the rest for "next time" would just mean next time is now. Returns True
-        while the PTY is still open for reading (`BlockingIOError`: genuinely nothing left
-        *right now*, not hung up); False once it hangs up (EIO — see the module docstring; on
-        Linux this fires only once every already-buffered byte has been drained, never before,
-        so no output is ever lost to the race between "child exits" and "we get around to
-        reading")."""
+    def _drain_available(self, budget: int | None = _MAX_CHUNKS_PER_WAKEUP) -> bool:
+        """Reads what's CURRENTLY buffered on the master, without blocking — a loop, not a
+        single `os.read()`, because a busy child can queue more than one chunk between wakeups —
+        but a BUDGETED loop (`_MAX_CHUNKS_PER_WAKEUP`; see the constant's comment for why an
+        unbounded one is a doctrine-3 bug twice over). `budget=None` lifts the cap for
+        `close()`'s final sweep, where the child is dead, the leftovers are finite, and EIO is
+        the loop's natural floor. Returns True while the PTY is still open for reading (budget
+        spent, or `BlockingIOError`: genuinely nothing left *right now* — either way the fd
+        stays registered and the loop re-fires us); False once it hangs up (EIO — see the
+        module docstring; on Linux this fires only once every already-buffered byte has been
+        drained, never before, so no output is ever lost to the race between "child exits" and
+        "we get around to reading")."""
         try:
-            while True:
+            while budget is None or budget > 0:
                 data = os.read(self._master_fd, _READ_CHUNK)
                 if not data:  # EOF proper — not the common case (see EIO above) but honored
                     return False
                 self._ring.append(data)
                 self._fanout(data)
+                if budget is not None:
+                    budget -= 1
+            return True  # budget spent, fd possibly still readable — the loop re-invokes us
         except BlockingIOError:
             return True
         except OSError:
             return False
 
     def _fanout(self, data: bytes) -> None:
+        stalled: list[asyncio.Queue[bytes | None]] = []
         for queue in self._attachments:
-            queue.put_nowait(data)  # unbounded queues: this can never raise QueueFull
+            try:
+                queue.put_nowait(data)
+            except asyncio.QueueFull:  # this consumer stopped draining — it, alone, pays
+                stalled.append(queue)  # collected, not detached mid-iteration
+        for queue in stalled:
+            self._force_detach(queue)
+
+    def _force_detach(self, queue: asyncio.Queue[bytes | None]) -> None:
+        """The slow-consumer casualty path (see the class docstring's BACKPRESSURE note): drop
+        THIS attachment from the fan-out, discard its undeliverable backlog (the ring already
+        holds those bytes — replay-on-reattach is the recovery, so keeping 16 MiB of chunks a
+        dead peer will never read serves nobody), and terminate it with the `None` end-marker
+        so its pump learns the stream is over the moment it next reads."""
+        self._attachments.discard(queue)
+        with contextlib.suppress(asyncio.QueueEmpty):
+            while True:
+                queue.get_nowait()
+        queue.put_nowait(None)  # always fits: the queue was just cleared
+        logger.warning(
+            "pty attachment force-detached: consumer stalled at %d queued chunks "
+            "(child pid=%d, %d attachment(s) remain); its recovery is reattach + ring replay",
+            queue.maxsize, self._proc.pid, len(self._attachments))
+
+    @staticmethod
+    def _put_end_marker(queue: asyncio.Queue[bytes | None]) -> None:
+        """Land the `None` end-marker even on a queue sitting exactly at its bound — dropping
+        oldest chunks until it fits. The ring still holds every dropped byte (ring writes happen
+        before fan-out); the marker is the one thing that must not be lost."""
+        while True:
+            try:
+                queue.put_nowait(None)
+                return
+            except asyncio.QueueFull:
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    queue.get_nowait()
 
     def _stop_reading(self) -> None:
         if self._reader_installed:
@@ -279,9 +359,11 @@ class PtySession:
         every live chunk from THIS moment on, plus a single `None` sentinel the moment the
         child exits (immediately, if it already has: attaching to a corpse still tells you
         it's a corpse). Multiple simultaneous attachments are just multiple queues in the same
-        set — nothing about one affects another."""
+        set — nothing about one affects another, INCLUDING one of them stalling: the queue is
+        bounded (`queue_maxsize` chunks), and a consumer that lets it fill is force-detached
+        alone (class docstring, BACKPRESSURE) while its siblings stream on."""
         replay = self._ring.snapshot()
-        queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=self._queue_maxsize)
         self._attachments.add(queue)
         if self._exited.is_set():
             queue.put_nowait(None)
@@ -302,7 +384,7 @@ class PtySession:
         await self._proc.wait()
         self._exited.set()
         for queue in self._attachments:
-            queue.put_nowait(None)
+            self._put_end_marker(queue)  # lands even on a queue sitting exactly at its bound
 
     @property
     def returncode(self) -> int | None:
@@ -353,7 +435,9 @@ class PtySession:
                     os.killpg(self._proc.pid, signal.SIGKILL)
                 await self._proc.wait()
         await self._wait_task  # the exit fan-out (see _watch_exit) has definitely run by now
-        self._drain_available()  # a final sweep — harmless if _on_readable already caught EIO
+        # a final, UNBUDGETED sweep (the child is dead; leftovers are finite; EIO is the floor)
+        # — harmless if _on_readable already caught the EIO
+        self._drain_available(budget=None)
         self._stop_reading()
         self._stop_writing()
         with contextlib.suppress(OSError):
@@ -421,16 +505,27 @@ async def read_hello(reader: asyncio.StreamReader) -> dict[str, Any] | None:
 async def _pump_output(
     session: PtySession, queue: asyncio.Queue[bytes | None], writer: asyncio.StreamWriter,
 ) -> None:
-    """One attachment's live feed -> its socket, framed. Runs until the exited sentinel (which
-    it turns into the 'X' frame and then stops) or until it's cancelled by the connection
-    handler tearing down (client disconnected first)."""
+    """One attachment's live feed -> its socket, framed. Runs until the `None` end-marker or
+    until it's cancelled by the connection handler tearing down (client disconnected first).
+    The marker means one of two things, told apart by the session itself: the child EXITED
+    (returncode is set — send the 'X' frame, then close) or this attachment was FORCE-DETACHED
+    for stalling (child still alive — close with no 'X': the EOF is the message, and the
+    client's recovery is reconnect + ring replay). Either way the socket closes here, so the
+    client always sees a clean EOF instead of a connection that silently stopped speaking.
+
+    The per-frame `drain()` is THE backpressure link: it parks this pump when the client stops
+    reading, which lets the session-side bounded queue fill and trip the force-detach — without
+    it, the transport's own write buffer would just become the unbounded sink the queue bound
+    exists to prevent."""
     while True:
         item = await queue.get()
         if item is None:
-            payload = json.dumps({"returncode": session.returncode}).encode()
-            writer.write(pack_frame(FRAME_TYPE_EXITED, payload))
-            with contextlib.suppress(OSError):
-                await writer.drain()
+            if session.returncode is not None:
+                payload = json.dumps({"returncode": session.returncode}).encode()
+                writer.write(pack_frame(FRAME_TYPE_EXITED, payload))
+                with contextlib.suppress(OSError):
+                    await writer.drain()
+            writer.close()
             return
         writer.write(pack_frame(FRAME_TYPE_OUTPUT, item))
         with contextlib.suppress(OSError):
@@ -527,13 +622,14 @@ class PtyBroker:
     async def spawn(
         self, name: str, argv: Sequence[str], *, env: dict[str, str] | None = None,
         cwd: str | None = None, term: str = DEFAULT_TERM, rows: int = 24, cols: int = 80,
-        ring_size: int | None = None,
+        ring_size: int | None = None, queue_maxsize: int = DEFAULT_ATTACH_QUEUE_CHUNKS,
     ) -> PtySession:
         if name in self._sessions:
             raise SessionExistsError(f"a PTY session named {name!r} already exists")
         session = await PtySession.spawn(
             argv, env=env, cwd=cwd, term=term, rows=rows, cols=cols,
-            ring_size=ring_size if ring_size is not None else self._ring_size)
+            ring_size=ring_size if ring_size is not None else self._ring_size,
+            queue_maxsize=queue_maxsize)
         self._sessions[name] = session
         return session
 
