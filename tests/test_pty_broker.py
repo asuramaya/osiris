@@ -260,8 +260,21 @@ async def test_close_reaps_a_long_running_child() -> None:
 
 @requires_pty
 async def test_close_escalates_to_sigkill_when_the_child_ignores_sighup() -> None:
+    # The child echoes a marker AFTER installing its HUP trap; the test waits for it before
+    # signalling. Without this sync, close()'s SIGHUP can race ahead of the shell's `trap`
+    # and hit the DEFAULT action — the child dies with -SIGHUP (-1), not the -SIGKILL this
+    # test is about. A load-sensitive flake (reproduced ~11% under full-file load,
+    # 2026-07-15): the escalation logic was never wrong, the test was racing child readiness.
     session = await PtySession.spawn(
-        ["sh", "-c", "trap '' HUP; while true; do sleep 0.05; done"])
+        ["sh", "-c", "trap '' HUP; echo __trapped__; while true; do sleep 0.05; done"])
+    _, queue = session.attach()
+    async with asyncio.timeout(10.0):
+        buf = b""
+        while b"__trapped__" not in buf:
+            chunk = await queue.get()
+            if chunk is None:
+                break
+            buf += chunk
     await session.close(grace=0.3)
     assert session.returncode == -signal.SIGKILL
 
