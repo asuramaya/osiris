@@ -132,3 +132,102 @@ async def test_rebind_of_an_unmounted_bare_id_is_also_refused(
     out = await rebind_seat(actions, seat_or_agent="agent:never-existed",
                             new_cwd=str(tmp_path / "ghost"))
     assert "error" in out
+
+
+# --- the harness half (operator's arbitrary-move directive, 2026-07-15) ---
+
+
+def test_migrate_harness_metadata_moves_transcripts_and_rekeys_project_state(
+    tmp_path: Path,
+) -> None:
+    """mv + rebind = a complete non-event: the transcripts dir merges old→new (never
+    clobbering — both sides of a fracture may hold real sessions) and the .claude.json
+    project entry re-keys, atomically."""
+    import json as _json
+
+    from src.orchestrator.mounts import migrate_harness_metadata
+
+    root = tmp_path / "projects"
+    old = root / "-w-code-bytebye"
+    old.mkdir(parents=True)
+    (old / "aaaa.jsonl").write_text("{}\n")
+    (old / "bbbb.jsonl").write_text("{}\n")
+    (old / "subagents").mkdir()
+    (old / "subagents" / "child.jsonl").write_text("{}\n")
+    new = root / "-w-code-REPOS-ByeByte"
+    new.mkdir(parents=True)
+    (new / "bbbb.jsonl").write_text('{"other": true}\n')   # exists on BOTH sides — stays
+    cj = tmp_path / "claude.json"
+    cj.write_text(_json.dumps({"projects": {
+        "/w/code/bytebye": {"allowedTools": ["Bash"], "hasTrustDialogAccepted": True}}}))
+
+    out = migrate_harness_metadata("/w/code/bytebye", "/w/code/REPOS/ByeByte",
+                                   projects_root=root, claude_json=cj)
+
+    assert out["transcripts_moved"] == 2                   # aaaa.jsonl + subagents/child
+    assert out["transcripts_left_behind"] == 1             # bbbb.jsonl, never clobbered
+    assert (new / "aaaa.jsonl").is_file()
+    assert (new / "subagents" / "child.jsonl").is_file()
+    assert (new / "bbbb.jsonl").read_text() == '{"other": true}\n'
+    assert (old / "bbbb.jsonl").is_file()                  # the conflict stays put, honest
+    assert out["project_state"] == "re-keyed to the new path"
+    data = _json.loads(cj.read_text())
+    assert "/w/code/bytebye" not in data["projects"]
+    assert data["projects"]["/w/code/REPOS/ByeByte"]["hasTrustDialogAccepted"] is True
+
+
+def test_migrate_harness_metadata_never_overwrites_the_new_paths_own_state(
+    tmp_path: Path,
+) -> None:
+    import json as _json
+
+    from src.orchestrator.mounts import migrate_harness_metadata
+
+    cj = tmp_path / "claude.json"
+    cj.write_text(_json.dumps({"projects": {
+        "/w/old": {"allowedTools": ["Bash"]},
+        "/w/new": {"allowedTools": ["Bash", "Edit"]}}}))
+    out = migrate_harness_metadata("/w/old", "/w/new",
+                                   projects_root=tmp_path / "projects", claude_json=cj)
+    assert out["transcripts_moved"] == 0                   # no old dir: nothing to move
+    assert "left in place" in out["project_state"]
+    data = _json.loads(cj.read_text())
+    assert data["projects"]["/w/new"]["allowedTools"] == ["Bash", "Edit"]  # untouched
+    assert "/w/old" in data["projects"]                    # nothing silently dropped
+
+
+async def test_rebind_seat_carries_the_harness_half(actions: Actions, tmp_path: Path) -> None:
+    """The full receipt: graph half (label pinned, rows re-pointed) + harness half
+    (transcripts moved, project state re-keyed) in one act."""
+    import json as _json
+
+    from src.orchestrator.mounts import rebind_seat, save_mount
+
+    old_cwd = str(tmp_path / "office-old")
+    new_cwd = str(tmp_path / "office-new")
+    Path(old_cwd).mkdir()
+    (Path(old_cwd) / ".osiris").write_text('project = "movinghouse"\n')
+    a = await actions.create_or_find_object("Agent", "agent:wwww0001", "agent:wwww0001")
+    now = datetime.now(UTC)
+    await actions.assert_property(a, "project", "movinghouse", "agent:wwww0001", now, 0.9,
+                                  evidence_class="self_declared")
+    await save_mount(actions.pool, job_dir="/jobs/wwww0001", agent_id="agent:wwww0001",
+                     project="movinghouse", cwd=old_cwd, model=None, session_key=None)
+    root = tmp_path / "projects"
+    old_slug = root / old_cwd.replace("/", "-")
+    old_slug.mkdir(parents=True)
+    (old_slug / "sess.jsonl").write_text("{}\n")
+    cj = tmp_path / "claude.json"
+    cj.write_text(_json.dumps({"projects": {old_cwd: {"hasTrustDialogAccepted": True}}}))
+
+    out = await rebind_seat(actions, seat_or_agent="agent:wwww0001", new_cwd=new_cwd,
+                            actor="agent:test", projects_root=root, claude_json=cj)
+
+    assert out["project"] == "movinghouse"
+    assert out["mount_rows_updated"] == 1
+    assert out["harness"]["transcripts_moved"] == 1
+    assert out["harness"]["project_state"] == "re-keyed to the new path"
+    assert (root / new_cwd.replace("/", "-") / "sess.jsonl").is_file()
+    row = await actions.pool.fetchval(
+        "SELECT cwd FROM agent_mounts WHERE agent_id='agent:wwww0001'")
+    assert row == new_cwd

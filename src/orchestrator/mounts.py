@@ -14,6 +14,7 @@ lookup key: a reconnecting client gets a fresh session id, so it can't be one.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import tomllib
 from dataclasses import dataclass
@@ -297,13 +298,106 @@ def _write_osiris_file(new_cwd: str, project_label: str) -> str:
     return str(f)
 
 
+def _harness_slug(cwd: str) -> str:
+    """The harness's transcript-directory name for a cwd — mirrors the read side
+    (`src/ingest/sessions.py`'s cwd-locate): '/' → '-', nothing else."""
+    return cwd.replace("/", "-")
+
+
+def _merge_dir(old: Path, new: Path) -> tuple[int, int]:
+    """Move every entry old→new, NEVER clobbering (a transcript that exists on both sides
+    stays where it is — losing either would falsify the record); one level of recursion
+    merges subdirectories (the subagents/ tree). Returns (moved, left_behind)."""
+    moved = left = 0
+    new.mkdir(parents=True, exist_ok=True)
+    for entry in sorted(old.iterdir()):
+        target = new / entry.name
+        if not target.exists():
+            entry.rename(target)
+            moved += 1
+        elif entry.is_dir() and target.is_dir():
+            m, s = _merge_dir(entry, target)
+            moved += m
+            left += s
+            with contextlib.suppress(OSError):
+                entry.rmdir()
+        else:
+            left += 1
+    return moved, left
+
+
+def migrate_harness_metadata(
+    old_cwd: str, new_cwd: str, *, projects_root: Path | None = None,
+    claude_json: Path | None = None,
+) -> dict[str, Any]:
+    """The CLAUDE-CODE-ADAPTER half of a rebind (operator's directive, 2026-07-15: arbitrary
+    directory moves must be a NON-EVENT — 'the metadata and pointer has to move also'). The
+    harness keys two stores on the ABSOLUTE cwd, and a folder move orphans both:
+
+      * `~/.claude/projects/<slug>` — the transcripts. Orphaned, they break resume, the
+        whisper's cwd-locate, the fork archaeology, and the miner: the house's whole
+        harness-side memory strands at the dead path. MERGED old→new, never clobbering
+        (both sides of a fracture may hold real sessions — ByeByte did).
+      * `~/.claude.json`'s `projects` map — trust, allowedTools, MCP approvals. RE-KEYED
+        old→new only when the new path has no entry of its own (never overwrite state the
+        new path already earned); written atomically (tmp+rename) because the live harness
+        rewrites this file too.
+
+    Best-effort by design: every failure lands in the receipt as a string, never an
+    exception — the graph half of a rebind must not unwind because the harness half
+    stumbled. `projects_root`/`claude_json` are test seams."""
+    out: dict[str, Any] = {}
+    root = projects_root or (Path.home() / ".claude" / "projects")
+    old_dir = root / _harness_slug(old_cwd)
+    new_dir = root / _harness_slug(new_cwd)
+    try:
+        if old_dir.is_dir() and old_dir != new_dir:
+            moved, left = _merge_dir(old_dir, new_dir)
+            with contextlib.suppress(OSError):
+                old_dir.rmdir()  # only an EMPTIED husk is removed
+            out["transcripts_moved"] = moved
+            if left:
+                out["transcripts_left_behind"] = left
+        else:
+            out["transcripts_moved"] = 0
+    except OSError as e:
+        out["transcripts_error"] = str(e)[:200]
+    cj = claude_json or (Path.home() / ".claude.json")
+    try:
+        if cj.is_file():
+            data = json.loads(cj.read_text())
+            projects = data.get("projects")
+            if isinstance(projects, dict) and old_cwd in projects:
+                if new_cwd in projects:
+                    out["project_state"] = ("left in place — the new path already has its "
+                                            "own entry")
+                else:
+                    projects[new_cwd] = projects.pop(old_cwd)
+                    tmp = cj.parent / (cj.name + ".osiris-rebind-tmp")
+                    tmp.write_text(json.dumps(data, indent=2))
+                    tmp.replace(cj)
+                    out["project_state"] = "re-keyed to the new path"
+            else:
+                out["project_state"] = "no entry for the old path"
+    except (OSError, ValueError) as e:
+        out["project_state_error"] = str(e)[:200]
+    return out
+
+
 async def rebind_seat(
     actions: Actions, *, seat_or_agent: str, new_cwd: str, actor: str | None = None,
+    projects_root: Path | None = None, claude_json: Path | None = None,
 ) -> dict[str, Any]:
     """Move a seat's ANCHOR cwd, preserving identity, lineage, attribution, and mail (`dd47c1da`
     — the fold the operator is blocked on). MINTS NOTHING: no new Agent, no handle or lineage
     edge is touched here — this only re-points where a seat's rows live and re-pins the durable
     label a moved folder would otherwise silently detach from.
+
+    Since the operator's arbitrary-move directive (2026-07-15) this also carries the HARNESS
+    half (`migrate_harness_metadata`): the transcripts directory and the ~/.claude.json
+    project entry follow the move, so `mv` + `rebind_seat` together make a folder move a
+    complete non-event — graph, mail, attribution, resume, and the whisper's archaeology all
+    keep working from the new path.
 
     (a) resolve `seat_or_agent` — a claimed name (`resolve_handle`) or a raw agent id (the
         GRAVE RULE: an explicit id is intent, so a dead or unclaimed seat can still be moved).
@@ -348,6 +442,11 @@ async def rebind_seat(
         "UPDATE agent_mounts SET cwd=$2 WHERE agent_id=$1 OR agent_id LIKE $1 || '-%'",
         base, new_cwd)
     rows_updated = int(tag.rsplit(" ", 1)[-1])
+    # the HARNESS half — transcripts + the .claude.json project entry follow the move
+    # (best-effort: its failures land in the receipt, never unwind the graph half above)
+    harness = (migrate_harness_metadata(old_cwd, new_cwd, projects_root=projects_root,
+                                        claude_json=claude_json)
+               if old_cwd and old_cwd != new_cwd else {})
     now = datetime.now(UTC)
     a = await actions.create_or_find_object("Agent", agent_id, agent_id)
     await actions.assert_property(
@@ -356,6 +455,8 @@ async def rebind_seat(
     return {
         "agent": agent_id, "project": label, "old_cwd": old_cwd, "new_cwd": new_cwd,
         "mount_rows_updated": rows_updated, "osiris_written": osiris_path,
+        **({"harness": harness} if harness else {}),
         "note": f"{label}'s anchor moved to {new_cwd} — identity, lineage, attribution, and "
-                "mail all key on the label, untouched by this move",
+                "mail all key on the label, untouched by this move; the harness metadata "
+                "(transcripts, project state) moved with it",
     }
