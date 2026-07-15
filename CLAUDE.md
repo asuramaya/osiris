@@ -7,8 +7,9 @@ A memory carried in full into every context is cargo — recall is a bounded que
 
 ## What this is
 A self-hosted, provenance-first entity-graph engine — **"Palantir × Notion, composed by
-conversation."** Endgame: a prosthesis for Claude + a lens for asuramaya — a composition
-shape-shifter. The engine is the product; personas are compositions, never coded pages.
+conversation."** Endgame: agnostic memory primitives for agents — "MCP for memory" (ruling
+19f0e75b) — built on Osiris first, then adopted; a prosthesis for minds + a lens for
+asuramaya. The engine is the product; personas are compositions, never coded pages.
 
 ## Identity check (first, before anything)
 Sessions on this project run **Fable 5** by the operator's standing choice. Harness
@@ -29,8 +30,10 @@ model, SAY SO in your first reply. A rug-pull is confessed, never inherited blin
 
 ## Constitution (invariants — changing one is a ruling to record)
 1. Never auto-merge Person; identity merges are review-gated, always.
-2. Osiris has NO HANDS: it senses and remembers; it never mutates a repo or the world.
-   Claude is the intelligence (lens); the worker is the alarm clock (tripwire).
+2. Osiris HAS HANDS, admitted and governed (amended 2026-07-14, ruling f1803b4a): the
+   manager daemon owns lifecycle — every hand metered, ceilinged, cold-by-default,
+   membrane-audited. Unadmitted hands were the bug class (the ghost farm grew in the gap).
+   Claude remains the intelligence (lens); the daemon owns lifecycle facts, never thought.
 3. Event-sourced, append-only kernel: status/merges are projections of `object_events`;
    heal with compensating events, never DELETE.
 4. Every write goes through the Actions waist; object/link types are declared in

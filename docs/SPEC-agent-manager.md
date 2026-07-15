@@ -1,312 +1,336 @@
 # SPEC — Osiris as Terminal / Agent-Manager (the mind/body/face fold)
 
-**Status:** design locked, implementation not started. Written by Thoth XXXIII (osiris seat,
-2026-07-14) at the operator's word, for the successor to implement **end to end**.
+**Status:** design LOCKED — rev 2. The 2026-07-14 night design session settled every question
+rev 1 left open (hands, substrate, availability, sequencing, the face's container, the endgame).
+Written by Thoth XXXIII at the operator's word; revised by Thoth XXXIV after the operator's
+rulings. Implementation starts at Phase 0, end to end.
 **Authority:** this file is the implementation blueprint; the *why* lives in the graph as the
-rulings indexed at the bottom — read them with `consult_canon` / `search` before coding, and
-`record_decision` as you build. This file consolidates them into something you code from; it
-does not replace them.
+rulings indexed in §9 — read them (`consult_canon` / `search`) before coding, and
+`record_decision` as you build. This file consolidates; it never replaces the graph.
 
-> Constitution note (CLAUDE.md #10 forbids md dumps): this is a **work artifact**, an
-> implementation spec the operator explicitly asked for — not a knowledge dump. The durable
-> memory is still the graph. Keep it that way: when a decision changes, record it in the graph
-> and update this file to match; never let this file become the source of truth for *why*.
+> Constitution note (CLAUDE.md #10 forbids md dumps): a **work artifact** the operator asked
+> for, not a knowledge dump. When a decision changes, record it in the graph first, then update
+> this file to match.
 
 ---
 
 ## 0. The problem this solves
 
 The operator runs his fleet as ~16 Warp tabs, each a `claude` session in a repo. Three pains,
-all the same root:
+one root:
 
 1. **Warp OOM'd and took the whole fleet.** A 14.6 GB headless-Chrome child died inside Warp's
    systemd scope; the OOM killer failed the *entire scope* — every session, mid-flight work,
-   gone. The fleet has minds and a memory but **borrows its bodies from the operator's desktop
-   cgroup**. (ruling `37fe6a09`)
-2. **Reboot/crash → manual respawn.** Bodies and minds are the same thing in Warp; kill the tab,
-   kill the agent. No resurrection.
+   gone. The fleet has minds and a memory but **borrows its bodies from the desktop cgroup**.
+   (ruling `37fe6a09`)
+2. **Reboot/crash → manual respawn.** Bodies and minds are the same thing in Warp; kill the
+   tab, kill the agent. No resurrection.
 3. **Rug-pulls leave orphans.** A safety fallback / fork / model-swap mints a new session id;
-   Warp tracks the id; the old tab is orphaned and "the agent I was talking to gets lost."
+   Warp tracks the id; the old tab is orphaned — "the agent I was talking to gets lost."
 
-Plus the field diagnosis from the fleet (rulings `dd47c1da`): **`path = project = identity`** is
-a bug under all of it — the harness *and* Osiris key identity on the cwd string, so a moved
-folder orphans a session and a seat's house can't be a *set* of repos.
+Field diagnosis (ruling `dd47c1da`, plus thread `2294e95d` — a resumed mind handed a stale
+anchor and mounted into a *sibling's* seat): **`path = project = identity`** is the bug under
+all of it. The harness *and* Osiris key identity on the cwd string and reconstruct it after the
+fact, by guesswork.
+
+**Scale target (ruling `5cd5b7b6`):** this is the operator's cockpit for going from ~20 parallel
+projects to **200+**, on a $200 subscription instead of $200k in tokens — the human in the loop
+*is* the economics. Build for that, not for relief.
 
 ---
 
-## 1. Architecture — three concerns, three bottlenecks, NOT one language
+## 1. The doctrines (settled 2026-07-14 — these outrank convenience)
+
+1. **HANDS, ADMITTED AND GOVERNED** (`f1803b4a` — constitutional amendment; CLAUDE.md #2
+   rewritten). "No hands" collapsed under its own weight: the lifecycle was always owned by
+   *something* (Warp, the harness, manual respawns); every hands-shaped bug — the ghost farm's
+   463 mints — grew in the gap of unadmitted agency. The manager daemon owns lifecycle,
+   admittedly: every hand **metered** (receipts), **ceilinged** (spend + resource caps),
+   **cold-by-default** (nothing re-bodies without an attach or an explicit warm flag),
+   **membrane-audited** (never silent, never irreversible). The daemon is the trigger's
+   successor and inherits its scar tissue as design constraints.
+2. **PROVIDER-AGNOSTIC BODIES; PLAIN LINUX IS THE DEFAULT** (`7ff54707`). Never assume Xen or
+   rotten-apple. One `BodyProvider` interface — `summon(kind, cores, ram, repo_ref,
+   seat_anchor, budget) → handle` · `dissolve(handle)` · `receipt(handle)` — two tiers:
+   **local** (default: transient systemd user scopes, hard memory ceilings; **cgroup v2 is the
+   meter** — `cpu.stat` core-seconds, `memory.peak` ram-seconds, exit code) and **Ra/Xen**
+   (upgrade: PVH microVMs per `15a41cf0`, same interface, harder wall). Receipts are uniform
+   across tiers. **No Osiris feature may ever REQUIRE the hypervisor tier.**
+3. **AVAILABILITY: INTERTWINED, SCREAMING, SACRED** (`2ceb7ba0`). The fleet without its graph
+   is lobotomized — graph-down **SCREAMS** (OS-level, from the daemon, over DBus — face or no
+   face); it never quietly greys a panel. The graph gets hardened (redundancy/adaptive failover
+   is the named later fold). The daemon is the **sacred proc**: bulletproof by *segmentation*,
+   never hope — it holds **handles, never children**; everything heavy runs in its own transient
+   scope with its own ceiling; `Restart=always`, OOMScoreAdjust protection, MemoryLow
+   reservation; **daemon-death is a normal event** — state reconstructible from graph +
+   receipts + the scopes themselves (which outlive it); restart **re-adopts** running bodies.
+4. **NO BAND-AIDS; THE FACE IS THE MILESTONE** (`5cd5b7b6`). Interim-relief sequencing is
+   rejected. `osiris attach` exists as plumbing and a debug door, never pitched as the
+   deliverable. The unified face replacing Warp is the deliverable.
+5. **THE ENDGAME IS A PROTOCOL** (`19f0e75b`). Agnostic memory primitives for agents — "MCP
+   for memory": provenance-graded recall, identity/seats/lineage, graded mail, leased
+   obligations, receipts/metering — **built on Osiris first, then adopted**. Osiris is the
+   reference implementation, never a walled garden. Not competing with Claude Code desktop
+   (disjoint scopes; their face is a future adapter target). Foreign-harness adapters are built
+   by their own minds inside their own harnesses, way later; we build only Claude Code's.
+6. **THE CONTAINER** (`d6403d34`). One web artifact; a thin native shell; the browser demoted
+   to a token-gated door. Details in §5.
+
+---
+
+## 2. Architecture — three concerns, three bottlenecks, NOT one language
 
 (rulings `79fcaba0`, `34766bbf`)
 
 | Concern | Owner | Language | Why |
 |---|---|---|---|
-| **MIND** — graph, provenance, identity, mailbox, meter, ceiling, compositions, miners | Osiris (this repo) | **Python, keep 100%** | IO-bound (PG/Redis/HTTP/subprocess). Rust buys nothing but a multi-month rewrite of the one thing that must never lose memory. |
-| **BODIES** — hypervisor, microVM lifecycle, resource envelopes | Ra / rotten-apple | **Rust, already** | The metal. (ruling `15a41cf0`) |
-| **FACE** — the terminal/agent-manager window that replaces Warp | NEW | **Rust (a client)** | A terminal's hot path is keystroke→render latency; a native TUI has no Electron/Chrome cgroup to OOM. |
+| **MIND** — graph, provenance, identity, mailbox, meter, ceiling, compositions, miners, **the manager daemon** | Osiris (this repo) | **Python, keep 100%** | IO-bound. The 901-test moat is the asset. A port is a *priced option* that gets cheaper every year the tests stay green (the Bun Zig→Rust proof: frozen API + tests-as-spec = mechanical migration) — an option in the drawer, not a destiny. |
+| **BODIES** — substrate, lifecycle, envelopes | BodyProvider tiers: local systemd scopes (default) / Ra microVMs (upgrade) | Python client / **Rust (Ra)** | Doctrine 2. |
+| **FACE** — the cockpit that replaces Warp | NEW | **Web artifact in a thin Rust shell** | Doctrine 6, §5. |
 
-**Warp is the counter-proof to "unify on Rust": it *is* Rust and it died anyway** — Rust wrapped
-around Chrome carrying an agent farm's memory. Language was never the failure; topology was.
-Polyglot on purpose; the boundary between the three is **a socket**.
+**Warp is the counter-proof to "unify on Rust": it *is* Rust and died anyway** — Rust wrapping
+bundled Chrome that *owned the sessions*. Language was never the failure; topology was. The
+boundary between the three concerns is a socket.
 
 ### The load-bearing rule: the FACE owns NOTHING
 
-Warp's fatal flaw: the window owns the sessions, so window-death = agent-death. The fix:
+The **daemon** holds the fleet (summons bodies, holds handles, brokers PTYs); the **graph**
+holds the truth (who exists, lineage, mail, spend). The face is a pure client, as disposable as
+a body: crash it, reboot the box, open a new one — the fleet is intact. Multiple faces attach
+to one daemon-truth.
 
-- A **lifecycle-owning daemon** (Python, in this repo) holds the fleet — summons bodies, holds
-  handles, brokers PTYs.
-- The **graph** holds the truth (who exists, lineage, mail, spend).
-- The **face** is a pure client, as disposable as a body. Crash it, reboot the box, open a new
-  one — the fleet is intact. Multiple faces (desktop/phone/web) attach to one daemon-truth.
+### The two lanes (the inception rule)
 
-### The reframe that makes composer + manager ONE thing
+Inside the terminal runs Claude Code, Codex, vim — **whatever the user wants**. So:
 
-There was never a boundary. The composer is lenses over graph objects; **an agent is already a
-graph object** (a seat, a lineage, mail, a mount, spend). Warp gives it a terminal without
-knowing it's a node; Osiris knows it's a node without giving it a terminal. The unified face
-makes them the same node with two facets: the **live terminal** (agent acting, a PTY into its
-body) beside the **graph context** (agent remembered — lineage, graded mail, obligations,
-decisions, spend). Selecting a seat shows both.
+- **PTY lane — universal, dumb, faithful.** A real VT (full emulation, alternate screen, mouse,
+  SIGWINCH, scrollback). NEVER a chat widget parsing harness output; zero assumptions about the
+  tenant. This lane works for everyone, forever.
+- **Graph lane — opt-in enrichment.** The context panel is fed by what the mind inside *chooses
+  to tell the graph* (mount, decisions, mail, spend) via the harness adapter (whisper / MCP /
+  transcripts for Claude Code). Unknown harnesses get a terminal and a dim panel — never broken.
 
-### Two INDEPENDENT cures (the plan's leverage)
+The face never correlates lanes by reading terminal bytes; the join happens in the graph, keyed
+by the anchor.
 
-- **Daemon (Phase 1) = the continuity cure.** Reboots/face-crashes stop losing agents. **Needs
-  no metal** — works even with today's in-slice `claude -p` as an interim body, because the wins
-  come from the daemon+graph owning identity, not from the body being a microVM.
-- **microVM (Phase 3) = the OOM cure.** No agent can kill the box. Gated on Ra's temple.
+### Identity at birth (the root cure for the anchor bug class)
 
-Do not make one wait on the other.
+Today identity is *reconstructed* after the fact (whisper guesses, mount derives) — hence stale
+anchors, seat collisions (`2294e95d`), double generation ticks. In the new topology **the
+daemon is the spawner: it mints the seat's durable anchor and exports it into the child's
+environment before the harness's first breath**. The whisper stops guessing for managed seats;
+the collision class becomes structurally impossible. Phase 0's seam patches remain as defense
+for un-daemoned sessions.
+
+### tmux-with-a-graph
+
+The PTY broker holds per-PTY **screen state + scrollback**, not just an fd — a reattaching face
+repaints instantly. Detach/reattach semantics are tmux's, proven; we add a graph to them.
+
+### The inception is not a loop (constitution #7)
+
+Mind writes its own stratum (decisions/threads/mail); daemon writes lifecycle facts only
+(bodies, PTYs, receipts); face writes nothing. Three levels, each owning its layer — an agent
+watching its own graph context beside its own terminal is a mirror, not a cycle.
 
 ---
 
-## 2. Phase 0 — the Ra boundary + meter + small fixes (mine, now, no metal)
+## 3. Phase 0 — BodyProvider + meter + first wave (now, no metal)
 
-Everything here builds against a **stub orchestratord** so the Python side is green before Ra's
-hardware exists.
+### 0.1 The `BodyProvider` interface + the LOCAL provider
 
-### 0.1 `_spawn_in_body` — the body-spawn lane
-
-- In `src/orchestrator/trigger.py`, add a second spawn path beside `_spawn_claude`:
-  `_spawn_in_body(kind, cores, ram, repo, anchor, budget, *, spawn=<orchestratord client>)`.
-- It calls Ra's `summon(kind, cores, ram, repo_ref, seat_anchor, budget)` → `handle`; injects the
-  seat's durable anchor and the repo; runs the seat's `claude` inside the body; and registers the
-  handle so the receipt can be collected.
-- **The entire wake protocol is unchanged**: dark by default, scoped re-arms name their subjects
-  (`osiris_trigger_projects`), the meter reads the receipt event-dated, the ceiling watches spend.
-  Only the substrate changes.
-- **Stub for now:** a fake orchestratord client that returns a synthetic handle and writes a
-  canned receipt to a temp path. Interface must match §5 (Ra contract) exactly so the swap to real
-  orchestratord is a one-line client change.
+- Define the interface per doctrine 2. Implement the **local provider for real** (it is the
+  default product tier, not a test double): `systemd-run --user --scope` with hard
+  `MemoryMax`/`MemoryHigh`, optional CPU pinning; receipt minted from cgroup v2 (`cpu.stat`,
+  `memory.peak`, exit cause), written fsync'd at reap time.
+- In `src/orchestrator/trigger.py`, add `_spawn_in_body(...)` beside `_spawn_claude`, routing
+  through the provider. **The wake protocol is unchanged** — dark by default, scoped re-arms,
+  metered, ceilinged. Only the substrate changes.
+- A stub Ra client satisfying the same interface (canned receipt) keeps the Xen tier's tests
+  green before the metal exists (§6).
 
 ### 0.2 The meter's new dimension
 
-- `src/ingest/wake_cost.py`: extend the receipt envelope parse to record **hypervisor
-  resource-seconds** — `core_seconds` (domain cpu_time), `ram_seconds` (envelope × wall), and
-  `exit_cause` (shutdown code) — beside the vendor's `total_cost_usd`. Add columns to `llm_usage`
-  (migration) or a sibling `body_usage` table; event-dated by the receipt file's mtime, same
-  discipline as the resume-mode receipt fix (`eddb006`).
-- The ceiling reads both dimensions. "A hand you cannot cost is a hand you cannot govern" — the
-  microVM's envelope IS its cost accounting.
+- `src/ingest/wake_cost.py` + migration: record **resource-seconds** — `core_seconds`,
+  `ram_seconds`, `exit_cause` — beside the vendor's `total_cost_usd` (sibling `body_usage`
+  table or columns). Event-dated by the receipt, same discipline as `eddb006`. The ceiling
+  reads both dimensions.
 
-### 0.3 Four small fixes tonight surfaced
+### 0.3 Ask-4 ships early (alfred's dispatch blind spot)
 
-- **Statusline false-down** (`scripts/osiris_statusline.py`): the 1.0s `asyncpg.connect` timeout
-  flaps under load and prints `graph unreachable` when the graph is fine. Distinguish slow from
-  down (retry once, or widen the timeout, or show "graph slow" vs "graph down"). The graph was UP
-  the whole time it read down tonight.
-- **Seam-dating gate refuses a null** (`src/orchestrator/agents.py` / `forks.py`): a null/unknown
-  prior-model is the ABSENCE of an observation, not a prior value — a fresh model reading can never
-  be "fresher than" or "disagree with" a null, so it must not date a seam against it (forks.py
-  already carries this exact lesson for `model IS NULL`). Defense-in-depth even though tonight's
-  seam was a real fable→opus fallback. (thread `065c374e`, resolved as misdiagnosis but the
-  hardening stands)
-- **`open_thread` idempotency across a lineage restart** (dedup): the same fact minted twice across
-  a compaction/restart because the summary differed slightly. A "does a thread with a near-summary
-  already exist for this project?" check before minting. (Aegis + Maat both hit this.)
-- **The mount/orient identity race** (thrice-witnessed tonight — Thoth, Aegis, Maat): `mount()`
-  asserts a model-seam it isn't confident in; `orient()` tells the true story a beat later; a mind
-  acting on `mount()` alone confesses a rug-pull that never happened. **Fix: `orient()` is the
-  single source of truth for the seam, OR `mount()` stays silent on a seam it can't confidently
-  date.** (captured in `dd47c1da`)
+- `send(to_agent=NAME)` **echoes the resolved seat + lineage** and **hard-fails on unclaimed
+  names** (`require_seat=true`); `fleet()` prints claimed names. Small, daemon-independent,
+  committed to this wave.
+
+### 0.4 Four small fixes (all field-witnessed)
+
+- **Statusline false-down** (`scripts/osiris_statusline.py`): 1.0s connect timeout flaps under
+  load — distinguish slow from down.
+- **Null-seam gate** (`src/orchestrator/agents.py`/`forks.py`): a null prior-model is the
+  absence of an observation; never date a seam against it.
+- **`open_thread` dedup across lineage restarts**: near-summary check before minting (Aegis,
+  Maat).
+- **Mount/orient identity race** — now four-times witnessed (Thoth ×2 incl. the xxxiv→xxxv
+  double-tick at one compact, Aegis, Maat): `orient()` is the single source of truth for the
+  seam; `mount()` must not assert a seam it can't confidently date. Fold in `2294e95d`'s asks:
+  mount refuses loudly when the anchor contradicts the whisper's claim; an anchor is unique to
+  a MIND, not a tree; a dead session's anchor is never vended to the living; a dead lineage is
+  recoverable, never reassignable.
 
 ---
 
-## 3. Phase 1 — the manager daemon (Python) — the continuity cure, no metal
+## 4. Phase 1 — the manager daemon (the sacred proc; the continuity cure)
 
-A lifecycle-owning daemon (a new arq/systemd user unit, e.g. `osiris-manager`) holds the fleet.
+A new systemd user unit (`osiris-manager`), built to doctrine 3 from the first commit: handles
+never children, per-body transient scopes, re-adoption on restart, reconstructible state.
 
-### 3.1 Decouple identity from PATH — the root fix (ruling `dd47c1da`)
+### 4.1 Decouple identity from PATH — first, everything falls out of it (`dd47c1da`)
 
-`path = project = identity` is the bug under alfred's orphaning. The daemon must:
+- Seat keyed on a **durable id**; the folder is a **mutable anchor**, not the identity.
+- **CHARTER relation**: `seat → governs → [repos]` — a house is what a seat *rules*, not where
+  it sits (alfred's charter is six repos). `orient()` gains a charter-scoped mode.
+- **Seat rebind/migration primitive** — move a seat's anchor preserving identity, lineage,
+  attribution, mail. **The operator is blocked on this** (alfred orphaned by a moved folder).
+  **Pilot migration: house bytebye** (alfred volunteered — smallest case, pure office).
 
-- Key the **seat** on a durable id, never a cwd string. The folder becomes a **mutable anchor**,
-  not the identity.
-- Add a **CHARTER relation**: `seat → governs → [repos]`. A house is *what a seat rules*, not
-  *where it sits* (alfred's charter is six repos — ByeByte/RAMstein/kast/coldspot/phanspeed/gestalt
-  — no folder can express it). `orient()` gains a charter-scoped mode.
-- Provide a **seat rebind / migration primitive**: move a seat's anchor cwd while preserving
-  identity, lineage, attribution, and mail. **THE OPERATOR IS BLOCKED ON THIS** — he moved alfred's
-  folder and can't carry him across without it. Critical path.
+### 4.2 Identity at birth
 
-### 3.2 Seats as first-class objects (alfred's asks 1, 5, 6)
+- The daemon spawns every managed harness with the minted anchor in its environment (§2). The
+  whisper's guess-path remains only for un-daemoned sessions.
 
-- One claimed seat per house; **sessions ATTACH to a seat** (the `Name II` lineage machinery is
-  half of this already).
-- **Roster distinguishes holder from visitor.** A **VISITOR CLASS**: mounts carrying `subagent_id`
-  land under the parent's swarm, **never as project peers** (today two ephemeral builder-subagents
-  that mounted `cwd=ByeByte` were minted as first-class peers of the seat — a continuity fork on
-  the books). Consider refusing peer-mounts from known subagent transcripts.
-- **Work as single-assignee leased obligations:** `open_thread(kind='obligation', assignee=seat)`
-  with single-assignee enforcement — a double-assignment surfaces the existing lease instead of
-  minting a parallel build.
+### 4.3 Seats first-class + the visitor class
 
-### 3.3 Resurrection from the graph manifest
+- One claimed seat per house; sessions ATTACH to a seat. Roster distinguishes holder from
+  visitor; mounts carrying `subagent_id` land under the parent's swarm, never as project peers.
+  **Test fixtures: `ce348dc5`, `42bf712d`** (alfred's dead builder-orphans, donated).
+- Work as **single-assignee leased obligations** — a double-assignment surfaces the existing
+  lease instead of minting a parallel build.
 
-- On daemon start, read the fleet from the graph (`fleet()`), see which seats had live bodies,
-  and **re-body** them: summon via Ra (or in-slice interim body), resume the transcript by its
-  durable anchor, re-attach the PTY. **The graph IS the respawn manifest** — manual respawn stops
-  existing.
-- Governed by the **warm/cold policy** (operator's call, §6): re-body only warm seats at boot,
-  leave cold ones dormant and re-body on attach.
+### 4.4 Resurrection from the graph manifest
 
-### 3.4 PTY broker
+- On start, read the fleet from the graph and re-body per the **warm/cold policy** —
+  **cold-by-default** (doctrine 1; the operator's call on per-seat warm flags, §7). The graph
+  IS the respawn manifest; manual respawn stops existing.
 
-- `osiris attach <seat>` drops the operator into that seat's live terminal inside its body. This is
-  the one capability Warp has that the graph doesn't. The daemon brokers the PTY so the *face* can
-  attach/detach without owning the process.
+### 4.5 PTY broker
 
-### 3.5 Lineage-addressed control (the rug-pull cure)
+- Daemon-held PTYs with screen state (tmux semantics, §2). `osiris attach <seat>` is the
+  plumbing/debug door; the face is the deliverable (doctrine 4).
 
-- Everything keys on the **seat / `lineage_head`**, never a session id. A rug-pull/fallback/fork
-  moves the head; the UI follows it; "Thoth" is always the current mind and remnants collapse into
-  history beneath the head (the fleet tree already collapses retired generations). This dissolves
-  the "lost agent" orphan.
-- `send(to_agent=NAME)` must **echo the resolved seat + lineage** and **hard-fail on an unclaimed
-  name** (offer `require_seat=true`); `fleet()` must **print claimed names** (alfred's ask 4 — a
-  build order resolved silently to an id tonight, unverified). This one is small and can ship early,
-  independent of the daemon.
+### 4.6 Lineage-addressed control (the rug-pull cure)
 
-### 3.6 Batch-resolve (Maat)
+- Everything keys on the seat / `lineage_head`, never a session id. A rug-pull moves the head;
+  the UI follows; remnants collapse into history beneath it (fold-forward, `4fd54a06`).
 
-- `record_decision(resolves=…)` closes ONE thread. Add a **batch/pattern form** so a delegation
-  decision can name the SET of threads it supersedes and have the graph fold them — otherwise a
-  seat that hands off work keeps carrying open threads on its own briefing (manual archaeology).
+### 4.7 Batch-resolve (Maat)
 
-### 3.7 Keep what works
+- `record_decision(resolves=…)` gains a batch/pattern form so a delegation can fold the SET of
+  threads it supersedes.
 
-- The co-agent warning ("another live agent in this project cwd right now, don't `git add -A`")
-  **caught a real concurrent-edit tonight** — keep it and do more of that "here's what's actually
-  true about your environment right now." It's the smallest working instance of the daemon's whole
-  thesis.
+### 4.8 The scream
+
+- The daemon watches graph health; graph-down → **DBus desktop notification + face raise**,
+  loud, immediate, face-optional. Never silent (doctrine 3).
+
+### 4.9 Keep what works
+
+- The co-agent warning caught a real concurrent edit — keep it; more "here's what's actually
+  true about your environment right now."
 
 ---
 
-## 4. Phase 2 — the unified face (Rust TUI, additive, a socket client)
+## 5. Phase 2 — the unified face (the milestone)
 
-- The window that replaces Warp. Left rail = the fleet tree (`fleet()`). Select a seat → split
-  pane: **live terminal** (PTY via Phase 1) + **graph context** (lineage, graded mail, obligations,
-  recent rulings, spend-against-ceiling).
-- **Owns nothing.** Pure client of the daemon+graph over the existing socket (MCP socket +
-  automount:8790 + console:8011). Crash it, reboot, reopen: fleet intact. Multiple faces attach to
-  one daemon-truth.
-- The composer lenses that live at `:8011` today (desk, mail, fleet, decision-log) render natively
-  here instead of as chrome pages.
-- Proceeds **in parallel** the moment Phase 1 exposes the control surface over the socket.
+(rulings `34766bbf`, `d6403d34`)
 
----
-
-## 5. Phase 3 — the temple wiring (gated on Ra's metal) + the Ra contract
-
-(ruling `15a41cf0`, mail threads 497/498/507)
-
-Point the stub orchestratord at the real one. This is where the **microVM OOM cure** lands.
-
-### The body-lane contract (Ra owns the mechanism; Osiris conforms)
-
-- **Interface:** MCP tools on the rotten-apple server — `summon` / `dissolve` / `receipt_get`
-  beside `domain_*`, backed by orchestratord JSON-RPC `body.*` methods. No second control socket.
-- **Osiris hands:** `(kind, cores, ram, repo_ref, seat_anchor, budget)`. `summon` → `handle`.
-  Receipt lands at a known dom0 state-volume path AND via `receipt_get`.
-- **Mechanism:** a Xen PVH domU with **direct kernel boot** (no firmware, no qemu, no disk);
-  rootfs is an **initramfs in RAM** (the ThinDom0 trick one ring down). `dissolve` = domain
-  destroy, RAM home to Xen. Golden snapshot per kind = a `(kernel, initramfs, cmdline)` manifest —
-  no memory-image staleness; kind-updates are file swaps.
-- **Honest boot:** 1–2s summon-to-shell (NOT "~ms" — that was Firecracker marketing). Prices fine:
-  the ledger cares about the receipt, not the boot.
-- **Envelope (confirms the two-class split, ruling `30970d8f`):** hard `max_memkb`, vcpus pinned
-  to the E-core cpupool (phanspeed contract), **no balloon for bodies** (balloon is the TARGET
-  economy). Worst case is the body's own OOM eating the body; dom0 never notices. **Warp's OOM
-  becomes structurally impossible.**
-- **Receipt-before-dissolve:** dom0 IS the meter — exact `core_seconds` (cpu_time), `ram_seconds`
-  (envelope × wall, exact under fixed allocation), `exit_cause` (shutdown code). orchestratord
-  writes it fsync'd BEFORE destroy completes; a crashed body's death event still mints one.
-- **Egress — two holes, default-deny:** DESTINATION is **osiris-over-vsock with NO IP at all** (a
-  body with no IP can't reach what it has no standing to touch — the cross-project ACL seam
-  `2749d09f` made physical). `nft`-on-vif is the interim; gated on Ra's **vsock-auth (CRIT #11)**
-  closing first.
-
-### Two tenant classes — never conflate (ruling `30970d8f`)
-
-- **TARGETS** — long-lived full-OS domUs (Windows/macOS/Kali/whatever). Subjects of work, not
-  agents. Expensive to create, cheap to keep, **balloon-managed**, resumed. `instance_create` is
-  the target verb.
-- **BODIES** — ephemeral microVMs (this spec's lane). Cheap to boot, **never resumed**, state
-  disposable. `summon`/`dissolve` is the body verb. Keeping them separate IS constitution invariant
-  7 (an ownership boundary at design time).
-- The composition IS the temple: an ephemeral body operates AGAINST a long-lived target (a Kali
-  roller against a Windows target).
-
-### Sequencing (Ra's honesty, mail 498)
-
-Box still boots bare today (`running_under_xen: false` is correct). This session closed the
-guest-create blocker (a four-bug chain ending at CMA phantom memory, found in sim). **Boot #6 is
-queued with the operator.** Then: boot desktop under Xen → guest networking (#2) + vsock auth (#11)
-→ body-lane v1 → **first field test as specced** (one kind, one summon, one seat, hypervisor-priced
-receipt).
+- **One web artifact**: the composer's HTML lenses + xterm.js. Fleet rail (by lineage-head,
+  collapsed generations) → select a seat → split pane: **live terminal** (PTY lane) beside
+  **graph context** (lineage, graded mail, obligations, rulings, spend-against-ceiling). The
+  `:8011` lenses render here natively; composer and manager are one surface.
+- **Primary container: a thin Rust shell over the SYSTEM webview** (Tauri-class). Real window
+  identity (dock, global hotkey, OS notifications), never tab-throttled, loads only our UI,
+  speaks to the daemon over a **unix domain socket** — no TCP listener by default.
+- **The browser tab is a secondary door**: explicit token mint; it is the future remote/phone
+  lens, gated on a real auth design (§7). Origin checks + token on any TCP exposure, from the
+  first commit.
+- **Week-one validation spike** (before committing the container): Claude Code fullscreen in
+  xterm.js inside webkitgtk on the operator's box. Fallback: dedicated Chromium `--app` mode.
+  Evidence decides.
+- Render only visible PTYs (200-project scale); the daemon holds state for the rest.
+- **Why this isn't Warp**: no bundled engine, owns nothing. Warp's two fatal genes, both absent.
 
 ---
 
-## 6. Operator-gated — needs the human's hand or word
+## 6. Phase 3 — the Ra provider (the upgrade tier; gated on Ra's metal)
 
-- **Boot #6** — his reboot; unblocks the temple / Phase 3.
-- **Warm-vs-cold per seat** — decides what the daemon re-bodies at boot. *Recommendation:
-  cold-by-default (summon-on-attach in ~1–2s, the microVM payoff), with a `warm` flag only for
-  seats that must always run (a watcher, a long build).*
-- **Seat migration primitive (Phase 1 §3.1)** — he's blocked on it to move alfred, who is orphaned
-  now.
-- **coldspot signing key** — provision a hardware-backed SSH/FIDO2 key (`ssh-keygen -Y`, per
-  project) so coldspot's fail-closed auto-update has something to verify against.
-- **Thoth-side desk items alfred routed upstream** — durable project-id independent of path, a
-  seat-lease check on subagent spawn, documenting "mail is the only lane to a parked session."
+(ruling `15a41cf0`; reframed by `7ff54707` — one provider among tiers, same interface)
 
----
-
-## 7. Build order (what unblocks what)
-
-1. **Phase 0** — mine, now, no metal. Stub boundary + meter dimension + the four fixes. First
-   commit; makes the next `claude -p` already speak the body-lane's language.
-2. **Phase 1** — the manager daemon. The continuity cure. Identity-decoupling first (§3.1) because
-   the charter + migration + orphan-fix all fall out of it. Ships value with in-slice interim
-   bodies before the temple exists.
-3. **Phase 2** — the Rust face, in parallel once Phase 1 exposes the control surface.
-4. **Phase 3** — stub→real orchestratord swap when Ra pings that the metal's under Xen.
-
-Gates before every osiris commit (CLAUDE.md): `uv run pytest` (testcontainers, real PG) ·
-`uv run ruff check src tests` · `uv run mypy src` (--strict). Shared tree — stage your own hunks,
-never `git add -A`, coordinate via `send(to='osiris')`.
+- **Contract:** MCP tools on rotten-apple — `summon`/`dissolve`/`receipt_get` beside
+  `domain_*`, backed by orchestratord JSON-RPC `body.*`. Osiris hands `(kind, cores, ram,
+  repo_ref, seat_anchor, budget)`.
+- **Mechanism:** Xen PVH domU, direct kernel boot, initramfs-in-RAM; golden snapshot =
+  `(kernel, initramfs, cmdline)` manifest; honest 1–2s summon-to-shell. Hard `max_memkb`,
+  E-core cpupool pin, **no balloon for bodies** (balloon is the TARGET economy).
+- **Receipt-before-dissolve:** dom0 is the meter; fsync'd before destroy; a crashed body's
+  death event still mints one.
+- **Egress:** default-deny; destination = **osiris-over-vsock with NO IP** (the ACL seam
+  `2749d09f` made physical); nft-on-vif interim, gated on Ra's vsock-auth (CRIT #11).
+- **Two tenant classes, never conflated** (`30970d8f`): TARGETS (long-lived full-OS domUs,
+  ballooned, resumed, `instance_create`) vs BODIES (ephemeral, never resumed,
+  `summon`/`dissolve`). The composition IS the temple: a body operates AGAINST a target.
+- **Sequencing** (Ra, mail 498): boot #6 with the operator → desktop under Xen → guest
+  networking (#2) + vsock auth (#11) → body-lane v1 → first field test (one kind, one summon,
+  one seat, hypervisor-priced receipt).
 
 ---
 
-## 8. Graph rulings index (read these — the WHY)
+## 7. Operator-gated — needs the human's hand or word
 
+- **Boot #6** — unblocks the temple / Phase 3.
+- **Warm-vs-cold per seat** — recommendation: cold-by-default, `warm` flag for watchers.
+- **alfred's migration go** — the moment §4.1's primitive lands (bytebye pilot).
+- **Remote-face auth design** — before any face leaves localhost.
+- **coldspot signing key** — hardware-backed SSH/FIDO2 for fail-closed auto-update.
+- **Graph redundancy fold** — direction named in doctrine 3; scoping is his call, later.
+
+---
+
+## 8. Build order (what unblocks what)
+
+1. **Phase 0** — BodyProvider + local provider + meter dimension + ask-4 + the four fixes.
+   First commits; the next `claude -p` already speaks the body-lane's language.
+2. **Phase 1** — the daemon, identity-decoupling first (§4.1 — charter, migration, orphan-fix
+   all fall out of it). Ships continuity with local-tier bodies before the temple exists.
+3. **Phase 2** — the face; **webkitgtk spike in week one** alongside Phase 0; full build once
+   Phase 1 exposes the control surface. The face replacing Warp is the milestone.
+4. **Phase 3** — point the provider layer at real orchestratord when Ra pings.
+
+Gates before every commit (CLAUDE.md): `uv run pytest` (testcontainers, real PG) ·
+`uv run ruff check src tests` · `uv run mypy src` (--strict). Shared tree — stage your own
+hunks, never `git add -A`, coordinate via `send(to='osiris')`.
+
+---
+
+## 9. Graph rulings index (the WHY — read these)
+
+- `f1803b4a` — **constitutional amendment**: hands admitted and governed; the daemon is the
+  trigger's successor.
+- `7ff54707` — provider-agnostic bodies; plain-Linux default; cgroup-is-the-meter.
+- `2ceb7ba0` — availability doctrine: intertwined, screaming, sacred proc.
+- `5cd5b7b6` — endgame doctrine: no band-aids; the human is the economics; adapters stay
+  abstract.
+- `d6403d34` — the face's container: web artifact, thin native shell, browser demoted;
+  webkitgtk spike; the scream belongs to the daemon.
+- `19f0e75b` — the endgame is a protocol: memory primitives, agnostic, Osiris-first.
 - `37fe6a09` — the Warp OOM canon: the fleet must not live inside the desktop's cgroup.
-- `79fcaba0` — mind/body/face split by concern not language; don't port Osiris to Rust.
-- `34766bbf` — composer + agent-manager = one graph-first surface; the face owns nothing.
-- `30970d8f` — the temple's two tenant classes (targets vs bodies) are opposite; bodies are microVMs.
-- `15a41cf0` — the body lane's mechanism locked (PVH domU, initramfs-in-RAM, dom0-is-the-meter,
-  vsock-no-IP egress, division of labor).
-- `dd47c1da` — the fleet field-specced Phase 1 (alfred's six asks + Maat's fixes); `path=identity`
-  is the root bug; decouple identity from path.
-- `2749d09f` — the ACL seam (canon-bootstrap fallback + panopticon shelf lean on it); the body's
-  egress rules are its enforcement layer.
-- `4fd54a06` — the face of a lineage is the latest mind to talk to the operator; fold forward.
-- `065c374e` (resolved) — the mount/orient seam race + null-is-not-a-prior-model hardening.
+- `79fcaba0` — mind/body/face split by concern; don't port the mind (a port is a priced
+  option, not a destiny).
+- `34766bbf` — composer + manager = one graph-first surface; the face owns nothing.
+- `30970d8f` — two tenant classes (targets vs bodies), opposite lifecycles.
+- `15a41cf0` — the body lane's mechanism locked (PVH, initramfs-in-RAM, dom0-is-the-meter,
+  vsock-no-IP).
+- `dd47c1da` — the fleet field-specced Phase 1; `path=identity` is the root bug.
+- `2749d09f` — the ACL seam; the body's egress rules are its enforcement layer.
+- `4fd54a06` — fold forward; the face of a lineage is the latest mind to talk to the operator.
+- `065c374e` (resolved) / thread `2294e95d` (open) — the seam race + the anchor-collision bug
+  class Phase 1 §4.2 kills at the root.
