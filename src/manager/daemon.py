@@ -48,6 +48,7 @@ import redis.asyncio as aioredis
 from src.config.settings import get_settings
 from src.db.pool import create_pool
 from src.db.redis import create_redis
+from src.manager.pty_broker import PtyBroker, SessionExistsError, serve_attached
 from src.orchestrator.bodies import RECEIPTS as BODY_RECEIPTS
 from src.orchestrator.bodies import LocalProvider, ProcessRunner
 
@@ -225,6 +226,11 @@ class Manager:
         # unit-name/state, keyed by handle — the VISIBILITY registry ({"op":"bodies"} reads
         # this directly); the metering/dissolve state itself lives inside `self._provider`.
         self._registry: dict[str, dict[str, str]] = {}
+        # tmux-with-a-graph's "tmux" half (§4.5): one broker for the whole daemon, holding
+        # every named PTY session across however many faces attach/detach. Construction is
+        # side-effect-free (no fd, no child, no event-loop registration happens until
+        # `spawn()`), so it is safe to build here unconditionally, same as `self._provider`.
+        self._broker = PtyBroker()
         self._scream = ScreamState()
         self._started_at = datetime.now(UTC)
         self._server: asyncio.Server | None = None
@@ -331,6 +337,18 @@ class Manager:
                 line = await reader.readline()
                 if not line:
                     break
+                # "pty_attach" is the ONE op that does not answer with a single JSON line and
+                # move on — a successful attach SWITCHES this connection into the raw framed
+                # pty stream (§4.5) for as long as the peer stays attached, so it is peeled off
+                # before the generic line-in/JSON-out dispatch below ever sees it.
+                try:
+                    maybe_attach = json.loads(line)
+                except ValueError:
+                    maybe_attach = None
+                if isinstance(maybe_attach, dict) and maybe_attach.get("op") == "pty_attach":
+                    if await self._op_pty_attach(maybe_attach, reader, writer):
+                        return  # the connection now belongs to serve_attached; nothing left
+                    continue  # an {"error": ...} line was already written; stay in control mode
                 response = await self._handle_line(line)
                 writer.write((json.dumps(response) + "\n").encode())
                 await writer.drain()
@@ -355,6 +373,12 @@ class Manager:
             return self._op_bodies()
         if op == "dissolve":
             return await self._op_dissolve(req.get("handle"))
+        if op == "pty_spawn":
+            return await self._op_pty_spawn(req)
+        if op == "pty_list":
+            return self._op_pty_list()
+        if op == "pty_close":
+            return await self._op_pty_close(req.get("name"))
         return {"error": f"unknown op: {op!r}"}
 
     def _op_status(self) -> dict[str, Any]:
@@ -384,6 +408,82 @@ class Manager:
         await self._provider.dissolve(handle)
         self._registry.pop(handle, None)
         return {"dissolved": handle}
+
+    # --- the PTY broker (§4.5): tmux-with-a-graph, the daemon's half of the wire-up ---
+
+    async def _op_pty_spawn(self, req: dict[str, Any]) -> dict[str, Any]:
+        """{"op": "pty_spawn", "name": .., "argv": [..], "cwd": .., "env": {..}} — `cwd`/`env`
+        are optional. Name collisions surface as `SessionExistsError` from the broker itself
+        (never a silent replace); every other validation failure here is this op refusing
+        loudly on a malformed request, before a single fd or child is ever created."""
+        name = req.get("name")
+        if not isinstance(name, str) or not name:
+            return {"error": "pty_spawn requires a string 'name'"}
+        argv = req.get("argv")
+        if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
+            return {"error": "pty_spawn requires a non-empty list of string 'argv'"}
+        cwd = req.get("cwd")
+        if cwd is not None and not isinstance(cwd, str):
+            return {"error": "'cwd' must be a string if given"}
+        env = req.get("env")
+        if env is not None and not (
+            isinstance(env, dict)
+            and all(isinstance(k, str) and isinstance(v, str) for k, v in env.items())
+        ):
+            return {"error": "'env' must be a dict of string to string if given"}
+        try:
+            await self._broker.spawn(name, argv, cwd=cwd, env=env)
+        except SessionExistsError as exc:
+            return {"error": str(exc)}
+        return {"spawned": name}
+
+    def _op_pty_list(self) -> dict[str, Any]:
+        return {
+            "sessions": [
+                {"name": info.name, "alive": info.alive, "rows": info.rows, "cols": info.cols,
+                 "attach_count": info.attach_count}
+                for info in self._broker.list()
+            ]
+        }
+
+    async def _op_pty_close(self, name: object) -> dict[str, Any]:
+        if not isinstance(name, str) or not name:
+            return {"error": "pty_close requires a string 'name'"}
+        if self._broker.get(name) is None:
+            return {"error": f"unknown pty session: {name}"}
+        await self._broker.close(name)
+        return {"closed": name}
+
+    async def _op_pty_attach(
+        self, req: dict[str, Any], reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+    ) -> bool:
+        """{"op": "pty_attach", "name": .., "rows": .., "cols": ..} — on success, acks with
+        `{"attached": name}` and then hands the connection to `serve_attached` (the SAME
+        framing `serve_session` uses: O/X/I/R frames, `read_frame`/`pack_frame` — nothing
+        reinvented here), which owns it until the peer disconnects. Returns True in that case
+        (the caller must stop treating this connection as line-oriented JSON). An unknown or
+        missing name answers with one `{"error": ...}` line instead and returns False — loud,
+        never silent, and the connection stays in ordinary control mode."""
+        name = req.get("name")
+        if not isinstance(name, str) or not name:
+            await self._write_json(writer, {"error": "pty_attach requires a string 'name'"})
+            return False
+        session = self._broker.get(name)
+        if session is None:
+            await self._write_json(writer, {"error": f"unknown pty session: {name}"})
+            return False
+        rows_raw, cols_raw = req.get("rows"), req.get("cols")
+        rows = cols = None
+        with contextlib.suppress(TypeError, ValueError):
+            if rows_raw is not None and cols_raw is not None:
+                rows, cols = int(rows_raw), int(cols_raw)
+        await self._write_json(writer, {"attached": name})
+        await serve_attached(session, reader, writer, rows=rows, cols=cols)
+        return True
+
+    async def _write_json(self, writer: asyncio.StreamWriter, response: dict[str, Any]) -> None:
+        writer.write((json.dumps(response) + "\n").encode())
+        await writer.drain()
 
     # --- the watchdog (§4.8) ---
 

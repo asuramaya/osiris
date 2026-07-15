@@ -1,15 +1,21 @@
-"""`osiris attach <seat>` — the debug door, NEVER the deliverable (doctrine 4, `5cd5b7b6`: the
+"""`osiris attach <name>` — the debug door, NEVER the deliverable (doctrine 4, `5cd5b7b6`: the
 unified face replacing Warp is the milestone; this is plumbing so the PTY broker is testable and
 usable before that face exists). §4.5 names it explicitly for exactly this reason.
 
-WIRE PROTOCOL — server is `src.manager.pty_broker.serve_session`, this file is the client:
-  1. Connect to the unix socket at `<socket-path>`.
-  2. Send ONE newline-terminated JSON "hello": `{"name": <str>, "rows": <int>, "cols": <int>}`
-     (`pty_broker.encode_hello`) — the name of the session to attach to, and this client's
-     current terminal size.
-  3. Everything after the hello, BOTH directions, is a sequence of length-prefixed frames
-     (`pty_broker.pack_frame`/`read_frame`): 1 byte type tag + 4-byte big-endian length +
-     payload.
+WIRE PROTOCOL — server is the manager daemon's control socket (`src.manager.daemon.Manager`,
+`default_socket_path()`), which hands the framed half off to `src.manager.pty_broker.serve_
+attached` the instant a `pty_attach` request resolves; this file is the client:
+  1. Connect to the daemon's control socket (never a dedicated per-session socket — the daemon
+     is the one thing holding every named PTY, per §4.5).
+  2. Send ONE newline-terminated JSON control request, in the exact same style as every other
+     daemon op (`status`/`bodies`/`dissolve`):
+       `{"op": "pty_attach", "name": <str>, "rows": <int>, "cols": <int>}`
+  3. The daemon answers with ONE JSON line: `{"attached": <name>}` on success — the connection
+     now switches into the framed pty stream described below — or `{"error": <str>}` (missing
+     or unknown name), in which case this client prints it and exits; nothing further arrives.
+  4. From the `{"attached": ...}` line on, everything is a sequence of length-prefixed frames
+     (`pty_broker.pack_frame`/`read_frame`): 1 byte type tag + 4-byte big-endian length + that
+     many bytes of payload.
        'O' (server -> client): raw pty output — the replay first, then live, byte for byte.
        'X' (server -> client): sent once, JSON `{"returncode": int|null}` — the exited marker.
        'I' (client -> server): raw bytes to write to the pty (this client's stdin).
@@ -18,7 +24,7 @@ WIRE PROTOCOL — server is `src.manager.pty_broker.serve_session`, this file is
            tracks it.
   An 'O'/'I' payload is never JSON; an 'X'/'R' payload always is — the type tag makes the two
   structurally impossible to confuse, which is the whole reason the stream is framed at all
-  instead of staying fully raw after the hello.
+  instead of staying fully raw after the `{"attached": ...}` ack.
 
 This client is a plain byte bridge: stdin (raw mode — see `_run`) becomes 'I' frames out, 'O'
 frames become stdout, an 'X' frame prints a marker and exits. It does not parse the pty's
@@ -38,12 +44,12 @@ import sys
 import termios
 import tty
 
+from src.manager.daemon import default_socket_path
 from src.manager.pty_broker import (
     FRAME_TYPE_EXITED,
     FRAME_TYPE_INPUT,
     FRAME_TYPE_OUTPUT,
     FRAME_TYPE_RESIZE,
-    encode_hello,
     pack_frame,
     read_frame,
 )
@@ -54,8 +60,22 @@ _STDIN_READ_CHUNK = 65536
 async def _run(socket_path: str, name: str) -> int:
     reader, writer = await asyncio.open_unix_connection(socket_path)
     size = shutil.get_terminal_size()
-    writer.write(encode_hello(name, size.lines, size.columns))
+    req = {"op": "pty_attach", "name": name, "rows": size.lines, "cols": size.columns}
+    writer.write((json.dumps(req) + "\n").encode())
     await writer.drain()
+
+    ack_line = await reader.readline()
+    if not ack_line:
+        sys.stderr.write("osiris attach: daemon closed the connection before replying\n")
+        writer.close()
+        return 1
+    ack = json.loads(ack_line.decode())
+    if "error" in ack:
+        sys.stderr.write(f"osiris attach: {ack['error']}\n")
+        writer.close()
+        with contextlib.suppress(OSError):
+            await writer.wait_closed()
+        return 1
 
     loop = asyncio.get_running_loop()
     stdin_fd = sys.stdin.fileno()
@@ -111,10 +131,11 @@ async def _run(socket_path: str, name: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
-    if len(args) != 2:
-        print("usage: python -m src.manager.attach <socket-path> <name>", file=sys.stderr)
+    if len(args) != 1:
+        print("usage: python -m src.manager.attach <name>", file=sys.stderr)
         return 2
-    socket_path, name = args
+    name = args[0]
+    socket_path = str(default_socket_path())
     try:
         return asyncio.run(_run(socket_path, name))
     except KeyboardInterrupt:

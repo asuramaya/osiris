@@ -532,18 +532,28 @@ async def _pump_output(
             await writer.drain()
 
 
-async def _serve_one_client(
+async def serve_attached(
     session: PtySession, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+    *, rows: int | None = None, cols: int | None = None,
 ) -> None:
-    try:
-        hello = await read_hello(reader)
-    except ValueError:  # malformed hello — refuse this connection, never the broker/session
-        hello = None
-    if hello is None:
-        writer.close()
-        return
-    with contextlib.suppress(KeyError, ValueError, TypeError):
-        session.resize(int(hello["rows"]), int(hello["cols"]))
+    """One live attachment's full lifecycle over an ALREADY-OPEN connection: negotiate the
+    session's size (skipped if `rows`/`cols` is `None` — the caller had nothing valid to
+    offer), replay scrollback, stream live output, accept input/resize frames, and detach
+    cleanly when the peer disconnects. This is the framed half of the wire protocol (see the
+    "wire protocol" comment block above) factored out so BOTH servers that speak it share one
+    implementation: `_serve_one_client` below (this module's own hello-then-frames socket, used
+    by `serve_session`/`attach.py`'s tests) and `daemon.py`'s `pty_attach` control op (whose
+    connection already carries a JSON control line instead of a dedicated hello line — the
+    daemon parses `rows`/`cols` out of THAT and calls straight in here, never reimplementing the
+    frame loop).
+
+    Does NOT close `writer` — that responsibility (and its own connection-specific cleanup)
+    stays with the caller, since a control-socket connection that switched into this stream may
+    need to log or account for the hand-off differently than a dedicated pty socket does.
+    """
+    if rows is not None and cols is not None:
+        with contextlib.suppress(ValueError):
+            session.resize(rows, cols)
 
     replay, queue = session.attach()
     try:
@@ -568,6 +578,25 @@ async def _serve_one_client(
                 await pump
     finally:
         session.detach(queue)
+
+
+async def _serve_one_client(
+    session: PtySession, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+) -> None:
+    try:
+        hello = await read_hello(reader)
+    except ValueError:  # malformed hello — refuse this connection, never the broker/session
+        hello = None
+    if hello is None:
+        writer.close()
+        return
+    rows = cols = None
+    with contextlib.suppress(KeyError, ValueError, TypeError):
+        rows, cols = int(hello["rows"]), int(hello["cols"])
+
+    try:
+        await serve_attached(session, reader, writer, rows=rows, cols=cols)
+    finally:
         writer.close()
         with contextlib.suppress(OSError):
             await writer.wait_closed()

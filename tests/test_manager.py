@@ -12,10 +12,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
+import pytest
 from src.manager.daemon import Manager, ScreamState, watchdog_tick
+from src.manager.pty_broker import FRAME_TYPE_INPUT, FRAME_TYPE_OUTPUT, pack_frame, read_frame
+
+requires_pty = pytest.mark.skipif(
+    not hasattr(os, "openpty"), reason="os.openpty() is unavailable on this platform")
 
 # --- the fake ProcessRunner: the one seam both the daemon and LocalProvider share ---
 
@@ -90,6 +96,44 @@ class _Client:
 async def _connect(path: Path) -> _Client:
     reader, writer = await asyncio.open_unix_connection(path=str(path))
     return _Client(reader, writer)
+
+
+# --- a tiny client for the pty_attach handshake + the framed protocol it hands off into ---
+
+
+async def _attach(
+    path: Path, name: str, *, rows: int = 24, cols: int = 80,
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, dict[str, Any]]:
+    """Opens a FRESH connection (pty_attach is a one-shot switch, never shared with the JSON
+    control connection that requested it — see `daemon._op_pty_attach`), sends the request, and
+    returns the still-open (reader, writer) plus the one JSON ack line the daemon answers with
+    before handing the connection to the framed stream."""
+    reader, writer = await asyncio.open_unix_connection(path=str(path))
+    req = {"op": "pty_attach", "name": name, "rows": rows, "cols": cols}
+    writer.write((json.dumps(req) + "\n").encode())
+    await writer.drain()
+    ack: dict[str, Any] = json.loads(await reader.readline())
+    return reader, writer, ack
+
+
+async def _read_frames_until(reader: asyncio.StreamReader, needle: bytes) -> bytes:
+    """Reads framed 'O' output until `needle` shows up — bounded by the CALLER's own
+    `asyncio.timeout`, same discipline as `test_pty_broker.py`'s `_read_output_until`: an
+    event-driven wait on the next frame, never a sleep, never a fixed delay."""
+    buf = bytearray()
+    while needle not in buf:
+        frame = await read_frame(reader)
+        assert frame is not None
+        frame_type, payload = frame
+        assert frame_type == FRAME_TYPE_OUTPUT
+        buf.extend(payload)
+    return bytes(buf)
+
+
+async def _close_writer(writer: asyncio.StreamWriter) -> None:
+    writer.close()
+    with contextlib.suppress(OSError):
+        await writer.wait_closed()
 
 
 # --- status / bodies / dissolve round-trip ---
@@ -383,3 +427,218 @@ async def test_default_probe_reports_down_when_postgres_is_unreachable(
         await manager.close()
         await pool.close()
         await redis_client.aclose()
+
+
+# --- the PTY broker wired into the daemon's control socket (§4.5, tmux-with-a-graph) ---
+#
+# No fakes here — a real Manager, a real PtyBroker, real ptys/children (mirrors
+# test_pty_broker.py's own discipline: the whole point is proving a raw fd behaves like a
+# terminal end to end over THIS daemon's socket, which a fake subprocess cannot prove).
+# Synchronization is always on OBSERVABLE STATE — a marker the child itself echoes, or
+# `attach_count` read directly off the broker's own session object — never a sleep, never a
+# race against how fast a shell happens to start.
+
+
+@requires_pty
+async def test_pty_spawn_then_list_shows_it_and_rejects_a_name_collision(
+    tmp_path: Path,
+) -> None:
+    manager = Manager(
+        socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
+        runner=_make_runner())
+    await manager.start()
+    try:
+        client = await _connect(manager._socket_path)
+        try:
+            spawned = await client.send(
+                {"op": "pty_spawn", "name": "s1", "argv": ["sh", "-c", "cat"]})
+            assert spawned == {"spawned": "s1"}
+
+            # a name collision errors LOUDLY — never a silent replace of the live session.
+            collided = await client.send(
+                {"op": "pty_spawn", "name": "s1", "argv": ["sh", "-c", "cat"]})
+            assert "error" in collided
+            assert manager._broker.get("s1") is not None  # the original session, untouched
+
+            listed = await client.send({"op": "pty_list"})
+            assert listed == {
+                "sessions": [
+                    {"name": "s1", "alive": True, "rows": 24, "cols": 80, "attach_count": 0}]}
+
+            closed = await client.send({"op": "pty_close", "name": "s1"})
+            assert closed == {"closed": "s1"}
+            assert await client.send({"op": "pty_list"}) == {"sessions": []}
+        finally:
+            await client.close()
+    finally:
+        await manager.close()
+
+
+@requires_pty
+async def test_pty_spawn_rejects_a_malformed_request_without_touching_the_broker(
+    tmp_path: Path,
+) -> None:
+    manager = Manager(
+        socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
+        runner=_make_runner())
+    await manager.start()
+    try:
+        client = await _connect(manager._socket_path)
+        try:
+            no_name = await client.send({"op": "pty_spawn", "argv": ["sh"]})
+            assert "error" in no_name
+            no_argv = await client.send({"op": "pty_spawn", "name": "x"})
+            assert "error" in no_argv
+            empty_argv = await client.send({"op": "pty_spawn", "name": "x", "argv": []})
+            assert "error" in empty_argv
+            assert await client.send({"op": "pty_list"}) == {"sessions": []}
+        finally:
+            await client.close()
+    finally:
+        await manager.close()
+
+
+@requires_pty
+async def test_pty_attach_streams_output_over_the_daemon_socket_and_input_round_trips(
+    tmp_path: Path,
+) -> None:
+    manager = Manager(
+        socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
+        runner=_make_runner())
+    await manager.start()
+    try:
+        control = await _connect(manager._socket_path)
+        try:
+            spawned = await control.send(
+                {"op": "pty_spawn", "name": "a1",
+                 "argv": ["sh", "-c", "echo readymark; cat"]})
+            assert spawned == {"spawned": "a1"}
+
+            reader, writer, ack = await _attach(manager._socket_path, "a1")
+            try:
+                assert ack == {"attached": "a1"}
+                async with asyncio.timeout(5.0):
+                    await _read_frames_until(reader, b"readymark")
+
+                writer.write(pack_frame(FRAME_TYPE_INPUT, b"echo inputmark\n"))
+                await writer.drain()
+                async with asyncio.timeout(5.0):
+                    await _read_frames_until(reader, b"inputmark")
+            finally:
+                await _close_writer(writer)
+
+            closed = await control.send({"op": "pty_close", "name": "a1"})
+            assert closed == {"closed": "a1"}
+        finally:
+            await control.close()
+    finally:
+        await manager.close()
+
+
+@requires_pty
+async def test_two_attachments_to_one_session_both_receive_output(tmp_path: Path) -> None:
+    manager = Manager(
+        socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
+        runner=_make_runner())
+    await manager.start()
+    try:
+        control = await _connect(manager._socket_path)
+        try:
+            spawned = await control.send(
+                {"op": "pty_spawn", "name": "a2",
+                 "argv": ["sh", "-c", "echo readymark; cat"]})
+            assert spawned == {"spawned": "a2"}
+
+            reader1, writer1, ack1 = await _attach(manager._socket_path, "a2")
+            reader2, writer2, ack2 = await _attach(manager._socket_path, "a2")
+            try:
+                assert ack1 == {"attached": "a2"}
+                assert ack2 == {"attached": "a2"}
+                # both replays are guaranteed to carry "readymark": the ring holds it from the
+                # moment it was first observed, and ring writes happen before any fan-out —
+                # no race against how fast the shell started (see the section banner above).
+                async with asyncio.timeout(5.0):
+                    await _read_frames_until(reader1, b"readymark")
+                async with asyncio.timeout(5.0):
+                    await _read_frames_until(reader2, b"readymark")
+
+                # OBSERVABLE STATE, not a guess: the broker's own session object says two
+                # attachments are live before a single byte of the fan-out test is trusted.
+                session = manager._broker.get("a2")
+                assert session is not None
+                assert session.attach_count == 2
+
+                writer1.write(pack_frame(FRAME_TYPE_INPUT, b"echo fanoutmark\n"))
+                await writer1.drain()
+                async with asyncio.timeout(5.0):
+                    await _read_frames_until(reader1, b"fanoutmark")
+                async with asyncio.timeout(5.0):
+                    await _read_frames_until(reader2, b"fanoutmark")
+            finally:
+                await _close_writer(writer1)
+                await _close_writer(writer2)
+
+            closed = await control.send({"op": "pty_close", "name": "a2"})
+            assert closed == {"closed": "a2"}
+        finally:
+            await control.close()
+    finally:
+        await manager.close()
+
+
+@requires_pty
+async def test_pty_close_reaps_the_child_and_a_second_close_errors_loudly(
+    tmp_path: Path,
+) -> None:
+    manager = Manager(
+        socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
+        runner=_make_runner())
+    await manager.start()
+    try:
+        client = await _connect(manager._socket_path)
+        try:
+            spawned = await client.send(
+                {"op": "pty_spawn", "name": "a3", "argv": ["sh", "-c", "cat"]})
+            assert spawned == {"spawned": "a3"}
+            session = manager._broker.get("a3")
+            assert session is not None
+            assert session.returncode is None  # alive, before the close
+
+            closed = await client.send({"op": "pty_close", "name": "a3"})
+            assert closed == {"closed": "a3"}
+            assert manager._broker.get("a3") is None  # reaped out of the registry
+            assert session.returncode is not None  # the child was actually terminated
+
+            # unknown name (already closed): errors loudly, never a silent no-op — same
+            # discipline BUILD item 1 asks of every named-session op on this socket.
+            second_close = await client.send({"op": "pty_close", "name": "a3"})
+            assert "error" in second_close
+        finally:
+            await client.close()
+    finally:
+        await manager.close()
+
+
+@requires_pty
+async def test_pty_attach_to_an_unknown_name_errors_and_leaves_the_connection_usable(
+    tmp_path: Path,
+) -> None:
+    manager = Manager(
+        socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
+        runner=_make_runner())
+    await manager.start()
+    try:
+        reader, writer, ack = await _attach(manager._socket_path, "does-not-exist")
+        try:
+            assert "error" in ack
+
+            # the connection was NEVER switched into frame mode: it still speaks ordinary
+            # newline-JSON control, proving the error path never silently handed it off.
+            writer.write((json.dumps({"op": "status"}) + "\n").encode())
+            await writer.drain()
+            status = json.loads(await reader.readline())
+            assert "uptime_seconds" in status
+        finally:
+            await _close_writer(writer)
+    finally:
+        await manager.close()
