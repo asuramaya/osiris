@@ -42,6 +42,14 @@ def _short(model: str | None) -> str:
     return (model or "?").removeprefix("claude-")
 
 
+def _id_label(canon: str, nodes: dict[str, Node]) -> str:
+    """A canonical id, with its CLAIMED seat beside it — 'agent:c0ffee (Ra V)' — wherever one
+    is claimed (dd47c1da: "fleet() must print claimed names"). An anonymous agent (no `seat`
+    on its node) renders exactly as before: the id, alone."""
+    seat = nodes[canon].get("seat")
+    return f"{canon} ({seat})" if seat else canon
+
+
 def _tally(canons: list[str], nodes: dict[str, Node]) -> str:
     counts = Counter(_short(nodes[c].get("model")) for c in canons)
     return ", ".join(f"{m} ×{n}" for m, n in counts.most_common())
@@ -70,7 +78,7 @@ def _render_expanded(
     n = nodes[canon]
     prefix = "  " + "    " * indent + ("└─ " if indent else "")
     mark = "●" if n.get("live") else "○"
-    lines.append(f"{prefix}{mark} {canon}  {_short(n.get('model'))}".rstrip())
+    lines.append(f"{prefix}{mark} {_id_label(canon, nodes)}  {_short(n.get('model'))}".rstrip())
     children = kids.get(canon, [])
     if not children:
         return
@@ -106,7 +114,7 @@ def render_fleet_tree(nodes: dict[str, Node], *, full: bool = False) -> str:
             _render_expanded(r, 0, nodes, kids, lines, full=full)
         if fold:
             latest = _latest(fold, nodes)
-            note = f" (latest {latest})" if latest else ""
+            note = f" (latest {_id_label(latest, nodes)})" if latest else ""
             # THE GHOSTS (operator, 2026-07-12: "dead agents that were retired or abandoned
             # ungracefully"). This line used to read "N retired sessions" — but `fold` means
             # NOTHING MORE THAN 'not live'. Only 41 of 517 root minds (8%) ever signed a death

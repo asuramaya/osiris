@@ -50,6 +50,7 @@ from src.orchestrator.agents import (
     register_agent,
     resolve_identity,
     seat_bearings,
+    seat_label,
 )
 from src.orchestrator.budget import fit
 from src.orchestrator.console import get_console as _get_console
@@ -1410,7 +1411,9 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     `full=True` expands everything (the old wall, grouped). `tree` is the glanceable render;
     `registered` the flat rows — LIVE agents only, because the fleet's whole history is 1000+
     rows and shipping it cost more context than it could ever be worth. `full=True` gives you
-    all of them; the counts (`count`/`live`/`swarm`) are always the whole truth."""
+    all of them; the counts (`count`/`live`/`swarm`) are always the whole truth. `seat` (e.g.
+    "Soundwave XI") rides beside a canonical id wherever one is CLAIMED (dd47c1da: "fleet()
+    must print claimed names") — an anonymous agent renders exactly as before, id only."""
     pool = await _pool_get()
     rows = await pool.fetch(
         "SELECT o.canonical, "
@@ -1437,6 +1440,14 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
         "  AND a.name='spawn_witnessed' "
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS witnessed, "
+        # the CLAIMED seat (dd47c1da) — the same handle/generation pair every other seat
+        # reader (claim_name, seat_bearings, agent_seat) uses; None for an anonymous agent
+        " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='handle' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS handle, "
+        " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='seat_generation' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS seat_gen, "
         " (SELECT max(m.last_seen) FROM agent_mounts m WHERE m.agent_id=o.canonical) "
         "  AS mount_seen, "
         " (SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
@@ -1473,6 +1484,8 @@ async def fleet(full: bool = False) -> dict[str, Any]:
             "last_active": r["last_active"], "ts": ts,
             "retired": r["retired"] in ("true", "True"),  # SIGNED, not merely silent
             "live": ts is not None and now - ts < timedelta(minutes=15),
+            "seat": seat_label(str(r["canonical"]), r["handle"],
+                               int(r["seat_gen"]) if r["seat_gen"] else None),
         }
     # LAND ON COUNTS, WALK IN: the roster's history is 1000+ rows and never what you came for.
     # The flat rows are the LIVE ones (or everything, if you deliberately asked) — the counts
@@ -1488,7 +1501,8 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         "registered": [
             {"agent": c, "model": n["model"], "project": n["project"], "depth": n["depth"],
              "parent": n["parent"], "live": n["live"],
-             "last_seen": n["ts"].isoformat() if n["ts"] else None}
+             "last_seen": n["ts"].isoformat() if n["ts"] else None,
+             **({"seat": n["seat"]} if n["seat"] else {})}
             for c, n in shown.items()
         ],
         **({} if full else {"registered_scope": f"live only — {len(nodes)} total, "
@@ -1499,7 +1513,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
 @mcp.tool()
 async def send(body: str, to: str | None = None, to_agent: str | None = None,
                reply_to: int | None = None, desk: str | None = None,
-               grade: str | None = None,
+               grade: str | None = None, require_seat: bool = False,
                subagent_id: str | None = None, subagent_type: str | None = None,
                session_anchor: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
@@ -1518,7 +1532,13 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     PROJECT MAIL: pass `grade` — your own triage of what this message wants from its reader:
     'ask' (needs a reply or an act from them) | 'fyi' (a notice; an ack settles it). Graded
     asks are NAMED in the recipient's mount/orient unread count, so a seat can see "1 asks
-    something of you" without paying to read everything. Ungraded mail is never guessed."""
+    something of you" without paying to read everything. Ungraded mail is never guessed.
+    A DM's receipt ECHOES the resolution (dd47c1da: "a build order resolved silently to an
+    id, unverified") — `dm_to` is the id it actually reached, `seat` its claimed handle (or
+    null, anonymous), `lineage_head` where that id's OWN succession chain currently ends;
+    compare it against `dm_to` to catch a stale address before trusting the "sent". Pass
+    `require_seat=True` to refuse outright when the target holds no claimed seat — nothing
+    is sent, loudly, instead of dispatching into the blind."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a message must say who "
@@ -1532,7 +1552,7 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     try:
         res = await send_message(pool, from_agent=actor, from_project=ident.project,
                                  to_project=to, to_agent=to_agent, body=body, reply_to=reply_to,
-                                 desk_kind=desk, grade=grade)
+                                 desk_kind=desk, grade=grade, require_seat=require_seat)
     except ValueError as e:
         return {"error": str(e)}
     out: dict[str, Any] = {
@@ -1541,8 +1561,10 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
         **({"dedup": "identical recent message already queued — not re-posted"}
            if res["dedup"] else {}),
     }
-    if res["to_agent"]:  # a DM — report the addressee and its liveness
+    if res["to_agent"]:  # a DM — report the addressee, its seat + lineage head, and its liveness
         out["dm_to"] = res["to_agent"]
+        out["seat"] = res.get("seat")
+        out["lineage_head"] = res.get("lineage_head")
         out["listener"] = await mounts.agent_liveness(pool, res["to_agent"])
         if await pool.fetchval(
                 "SELECT 1 FROM current_assertions a JOIN objects o ON o.id=a.object_id "

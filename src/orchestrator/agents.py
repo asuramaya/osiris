@@ -376,6 +376,27 @@ async def resolve_handle(actions: Actions, name: str) -> str | None:
     return (await resolve_seat(actions, name))["agent"]  # type: ignore[no-any-return]
 
 
+async def agent_seat(pool: asyncpg.Pool, agent_id: str) -> str | None:
+    """The display seat for an ALREADY-RESOLVED agent id — 'Ra V', or None when this id is
+    anonymous (no claimed handle). Reads the WINNING handle + seat_generation off
+    current_assertions, the identical predicate seat_bearings/claim_name use — so a caller
+    checking "does this id hold a seat" (dd47c1da: send(to_agent=...) must HARD-FAIL on an
+    unclaimed target, require_seat=true) sees the same truth the roster and the claim guard
+    see. Unlike resolve_seat, this takes an id already in hand — it answers "who IS this",
+    never "which seat of a name is live" (that question is resolve_handle's)."""
+    row = await pool.fetchrow(
+        "SELECT "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS handle, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='seat_generation' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS gen "
+        "FROM objects o WHERE o.canonical=$1 AND o.type='Agent'", agent_id)
+    if row is None or not row["handle"]:
+        return None
+    return seat_label(agent_id, row["handle"], int(row["gen"]) if row["gen"] else None)
+
+
 def _read_osiris_key(cwd: str | None, key: str) -> str | None:
     """One key from the repo's `.osiris` file (TOML), walking up to the repo root."""
     if not cwd:

@@ -57,6 +57,20 @@ async def test_seat_display_carries_the_generation(actions: Actions) -> None:
     assert seat_label("agent:x", None) is None               # anonymous
 
 
+async def test_agent_seat_reads_an_already_resolved_id(actions: Actions) -> None:
+    """agent_seat answers "who IS this id" (not "which seat of a name is live" — resolve_handle's
+    question). dd47c1da needs exactly this: send(to_agent=<raw id>) skips resolve_handle
+    entirely, so the ONLY way to learn whether that id holds a claimed seat is to ask about the
+    id itself."""
+    from src.orchestrator.agents import agent_seat
+
+    await _agent(actions, "agent:seaty")
+    await claim_name(actions, "agent:seaty", "Nova", source="agent:seaty")
+    assert await agent_seat(actions.pool, "agent:seaty") == "Nova"
+    # an agent nobody ever claimed a name for — including one with no Agent object at all
+    assert await agent_seat(actions.pool, "agent:anonymous-0001") is None
+
+
 async def test_an_heir_inherits_the_seat(actions: Actions, tmp_path: Path) -> None:  # type: ignore[name-defined]
     """The seat passes down the lineage: a minted successor inherits the ancestor's name, the
     generation ticks up. Anna → Anna II."""

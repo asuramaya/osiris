@@ -11,9 +11,9 @@ T1 = datetime(2026, 7, 7, 13, 0, tzinfo=UTC)
 
 def _n(model: str | None = "claude-fable-5", project: str | None = "osiris",
        parent: str | None = None, live: bool = False, ts: datetime | None = None,
-       retired: bool = False) -> dict:
+       retired: bool = False, seat: str | None = None) -> dict:
     return {"model": model, "project": project, "parent": parent, "live": live, "ts": ts,
-            "retired": retired}
+            "retired": retired, "seat": seat}
 
 
 def test_groups_by_project_and_collapses_the_past() -> None:
@@ -99,3 +99,26 @@ def test_a_fleet_that_never_retires_never_says_retired() -> None:
     tree = render_fleet_tree({"agent:a": _n(ts=T0), "agent:b": _n(ts=T0)})
     assert "○ 2 past sessions" in tree
     assert "retired" not in tree
+
+
+def test_a_claimed_seat_rides_beside_its_id() -> None:
+    """dd47c1da: "fleet() must print claimed names" — wherever the tree renders an id, a
+    CLAIMED seat (dd47c1da) rides beside it; an anonymous agent renders exactly as before."""
+    nodes = {
+        "agent:live1": _n(live=True, ts=T1, seat="Ra V"),
+        "agent:live2": _n(live=True, ts=T1),  # anonymous — no seat key changes its render
+    }
+    tree = render_fleet_tree(nodes)
+    assert "● agent:live1 (Ra V)  fable-5" in tree
+    assert "● agent:live2  fable-5" in tree  # unchanged: no parenthetical for an anonymous agent
+
+
+def test_a_claimed_seat_names_the_latest_of_a_folded_past() -> None:
+    """The 'latest' pointer on a collapsed past-sessions line is still AN ID — the same rule
+    applies: a claimed seat rides beside it."""
+    nodes = {
+        "agent:old1": _n(ts=T0),
+        "agent:old2": _n(ts=T1, seat="Soundwave XI"),
+    }
+    tree = render_fleet_tree(nodes)
+    assert "(latest agent:old2 (Soundwave XI))" in tree

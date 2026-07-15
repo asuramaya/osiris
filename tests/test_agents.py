@@ -766,6 +766,38 @@ async def test_succeeds_seat_is_not_succeeded_from(actions: Actions) -> None:
     assert {"succeeded_from", "succeeds_seat"} <= types
 
 
+async def test_fleet_shows_claimed_names_beside_the_id(actions: Actions) -> None:
+    """dd47c1da: "fleet() must print claimed names" — the roster is braille without them; a
+    dispatcher scanning the tree for who to address should not have to cross-reference every
+    id against claim_name's ledger by hand. Anonymous agents render exactly as before."""
+    from src import mcp_server as srv
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import claim_name
+
+    named, anon = "agent:fleettest01", "agent:fleettest02"
+    for a in (named, anon):
+        obj = await actions.create_or_find_object("Agent", a, a)
+        await actions.assert_property(obj, "project", "bytebye", a, datetime.now(UTC), 0.9,
+                                      evidence_class=EvidenceClass.SELF_DECLARED.value)
+        await mounts.save_mount(actions.pool, job_dir=f"/j/{a.replace(':', '_')}", agent_id=a,
+                                project="bytebye", cwd="/x", model="claude-fable-5",
+                                session_key=a)
+    await claim_name(actions, named, "Ra", source=named)
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.fleet()
+    finally:
+        srv._pool = saved_pool
+
+    assert f"{named} (Ra)" in out["tree"]                # the claimed seat rides beside its id
+    assert anon in out["tree"] and f"{anon} (" not in out["tree"]  # anonymous: unchanged
+    rows = {r["agent"]: r for r in out["registered"]}
+    assert rows[named]["seat"] == "Ra"
+    assert "seat" not in rows[anon]                      # never a guessed/empty field
+
+
 def test_an_anchorless_bounce_names_its_own_cause() -> None:
     """A bounce that says only "mount first" is a mystery; one that names its cause is a bug
     report the next mind does not have to file again.

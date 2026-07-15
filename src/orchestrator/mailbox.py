@@ -99,6 +99,7 @@ async def send_message(
     to_project: str | None = None, to_agent: str | None = None, body: str,
     reply_to: int | None = None, dedup_window_secs: int = 600,
     desk_kind: str | None = None, grade: str | None = None,
+    require_seat: bool = False,
 ) -> dict[str, Any]:
     """Post a BROADCAST (to_project) or a DM (to_agent). With `reply_to` and no explicit address,
     it routes by channel: a reply to a DM goes back to that sender as a DM; a reply to a broadcast
@@ -110,11 +111,23 @@ async def send_message(
     ('decision' | 'hands' | 'fyi') — which band of the desk it belongs to. `grade` is the
     SENDER'S OWN triage of what this message wants from its reader (thread f9449d8d):
     'ask' (needs a reply or an act) | 'fyi' (a notice; an ack settles it). None is honest
-    ignorance — ungraded mail renders exactly as before, never guessed into a band."""
+    ignorance — ungraded mail renders exactly as before, never guessed into a band.
+
+    THE ECHO (ruling dd47c1da: "a build order resolved silently to an id, unverified"). A DM
+    addressed by RAW agent id skips resolve_handle's live-seat resolution entirely — the exact
+    gap alfred's dispatch fell into. So every DM's result now carries `seat` (the addressee's
+    claimed handle, e.g. "Soundwave XI", or None for an anonymous agent) and `lineage_head`
+    (where the addressed id's OWN succession chain currently ends) — a dispatcher reading the
+    receipt can see whether the id it named is still who it thinks it is, without this
+    function ever silently redirecting the address (an explicit id remains an act of intent,
+    same as resolve_seat's grave rule). `require_seat=True` refuses to send at all when the
+    resolved target carries no claimed handle — no message row is written; the ValueError
+    names what was tried and what it resolved to."""
     if desk_kind is not None and desk_kind not in DESK_KINDS:
         raise ValueError(f"desk_kind must be one of {DESK_KINDS}")
     if grade is not None and grade not in MAIL_GRADES:
         raise ValueError(f"grade must be one of {MAIL_GRADES}")
+    requested = to_agent  # what the caller actually named, before name→id resolution overwrites it
     ref = None
     if reply_to is not None:
         ref = await pool.fetchrow(
@@ -146,6 +159,23 @@ async def send_message(
     if not to_a and not to_p:
         raise ValueError("no recipient: pass to=<project>, to_agent=<agent>, or reply_to a "
                          "message whose sender is addressable")
+    # THE ECHO + THE GATE (dd47c1da) — resolved BEFORE any write, so a require_seat refusal
+    # never leaves a row behind. `to_a` may be a name already resolved above, OR a raw agent id
+    # that skipped resolution entirely (alfred's gap): either way, lineage_head reveals whether
+    # this id is still its lineage's newest generation, and agent_seat reveals whether it is a
+    # claimed seat at all — a dispatcher gets the truth, this function never guesses for it.
+    seat: str | None = None
+    lineage: str | None = None
+    if to_a:
+        from src.orchestrator.agents import agent_seat, lineage_head
+        lineage = await lineage_head(pool, to_a)
+        seat = await agent_seat(pool, to_a)
+        if require_seat and seat is None:
+            raise ValueError(
+                f"require_seat: '{requested or to_a}' resolved to {to_a}, which holds no "
+                "CLAIMED seat (no handle asserted) — refusing to dispatch blind. Check "
+                "fleet() for who actually holds a seat, or pass require_seat=False to send "
+                "anyway.")
     thread = (ref["thread_id"] or ref["id"]) if ref is not None else None
     # the reply IS the ack — settle the referenced message for the replier, if it was addressed
     # to them (a DM to me, or a broadcast to my project)
@@ -165,13 +195,15 @@ async def send_message(
         "ORDER BY id DESC LIMIT 1", from_agent, to_p, to_a, body, dedup_window_secs)
     if dup is not None:
         return {"id": dup["id"], "to": to_p, "to_agent": to_a,
-                "thread_id": dup["thread_id"], "dedup": True}
+                "thread_id": dup["thread_id"], "dedup": True,
+                **({"seat": seat, "lineage_head": lineage} if to_a else {})}
     mid = await pool.fetchval(
         "INSERT INTO fleet_messages (from_agent, from_project, to_project, to_agent, body, "
         "reply_to, thread_id, desk_kind, grade) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) "
         "RETURNING id",
         from_agent, from_project, to_p, to_a, body, reply_to, thread, desk_kind, grade)
-    return {"id": mid, "to": to_p, "to_agent": to_a, "thread_id": thread, "dedup": False}
+    return {"id": mid, "to": to_p, "to_agent": to_a, "thread_id": thread, "dedup": False,
+            **({"seat": seat, "lineage_head": lineage} if to_a else {})}
 
 
 async def unread_count(

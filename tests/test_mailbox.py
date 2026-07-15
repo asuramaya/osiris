@@ -224,12 +224,141 @@ async def test_send_warns_when_the_thread_peer_already_wrote(actions: Actions) -
     assert "crossed" not in out2
 
 
+async def test_send_tool_echoes_seat_and_lineage_head_and_honors_require_seat(
+        actions: Actions) -> None:
+    """The MCP surface (dd47c1da): send(to_agent=...) must echo the resolution through to the
+    caller, and require_seat must refuse a blind dispatch at the tool boundary too — mailbox
+    owns the semantics, mcp_server just has to pass `require_seat` through and not swallow the
+    new fields on the way out."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity, claim_name
+
+    held = "agent:c0ffee03"
+    a = await actions.create_or_find_object("Agent", held, held)
+    await actions.assert_property(a, "project", "bytebye", held,
+                                  __import__("datetime").datetime.now(
+                                      __import__("datetime").UTC), 0.9)
+    await claim_name(actions, held, "Kastellan", source=held)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:boss", session="boss0001", project="alpha", model=None, cwd=None)
+    try:
+        out = await srv.send("ship it", to_agent=held, ctx=ctx)
+        assert out["dm_to"] == held and out["seat"] == "Kastellan"
+        assert out["lineage_head"] == held
+
+        # require_seat=True refuses an unclaimed target, loudly, at the tool boundary
+        blind = await srv.send("ship it blind", to_agent="agent:anon-0003", ctx=ctx,
+                               require_seat=True)
+        assert "error" in blind and "CLAIMED seat" in blind["error"]
+        assert await actions.pool.fetchval(
+            "SELECT count(*) FROM fleet_messages WHERE to_agent=$1", "agent:anon-0003") == 0
+
+        # ...and succeeds when the target IS claimed
+        ok = await srv.send("ship it, verified", to_agent=held, ctx=ctx, require_seat=True)
+        assert ok["seat"] == "Kastellan"
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+
 async def test_reply_to_unknown_message_is_an_error(actions: Actions) -> None:
     with pytest.raises(ValueError, match="does not exist"):
         await send_message(actions.pool, from_agent="agent:x", from_project="a",
                            body="into the void", reply_to=999999)
     with pytest.raises(ValueError, match="no recipient"):
         await send_message(actions.pool, from_agent="agent:x", from_project="a", body="lost")
+
+
+async def test_dm_echoes_the_resolved_seat_and_lineage_head(actions: Actions) -> None:
+    """dd47c1da: alfred's build order resolved silently to a raw agent id, unverified. A DM's
+    receipt now names who it actually reached — the claimed seat, and where that id's own
+    succession chain currently ends — so a dispatcher can verify the order landed, not just
+    that a row was written."""
+    from src.orchestrator.agents import claim_name
+
+    held = "agent:c0ffee01"
+    a = await actions.create_or_find_object("Agent", held, held)
+    await actions.assert_property(a, "project", "bytebye", held,
+                                  __import__("datetime").datetime.now(
+                                      __import__("datetime").UTC), 0.9)
+    await claim_name(actions, held, "Soundwave", source=held)
+    dm = await send_message(actions.pool, from_agent="agent:boss", from_project="alpha",
+                            to_agent=held, body="ship the build")
+    assert dm["to_agent"] == held
+    assert dm["seat"] == "Soundwave"
+    assert dm["lineage_head"] == held  # no succession yet — the id IS its own lineage head
+
+
+async def test_dm_to_an_anonymous_agent_echoes_a_null_seat_and_still_sends(
+        actions: Actions) -> None:
+    """An unclaimed id is a valid DM target (today's behavior, byte-compatible) — the echo just
+    tells the truth about it: no seat, never a guess."""
+    dm = await send_message(actions.pool, from_agent="agent:boss", from_project="alpha",
+                            to_agent="agent:anon-0001", body="hello?")
+    assert dm["dedup"] is False
+    assert dm["to_agent"] == "agent:anon-0001"
+    assert dm["seat"] is None
+    assert dm["lineage_head"] == "agent:anon-0001"  # nothing to walk — the id stands alone
+
+
+async def test_require_seat_hard_fails_on_an_unclaimed_target_no_row_written(
+        actions: Actions) -> None:
+    """The gate half of dd47c1da: require_seat=True refuses to dispatch into the blind — and
+    the refusal must leave nothing behind for the addressee to (mis)read as a real order."""
+    with pytest.raises(ValueError, match="no CLAIMED seat"):
+        await send_message(actions.pool, from_agent="agent:boss", from_project="alpha",
+                           to_agent="agent:anon-0002", body="ship it", require_seat=True)
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM fleet_messages WHERE to_agent=$1", "agent:anon-0002") == 0
+
+
+async def test_require_seat_succeeds_on_a_claimed_target(actions: Actions) -> None:
+    from src.orchestrator.agents import claim_name
+
+    held = "agent:c0ffee02"
+    a = await actions.create_or_find_object("Agent", held, held)
+    await actions.assert_property(a, "project", "bytebye", held,
+                                  __import__("datetime").datetime.now(
+                                      __import__("datetime").UTC), 0.9)
+    await claim_name(actions, held, "Anubis", source=held)
+    dm = await send_message(actions.pool, from_agent="agent:boss", from_project="alpha",
+                            to_agent=held, body="ship it", require_seat=True)
+    assert dm["seat"] == "Anubis" and dm["dedup"] is False
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM fleet_messages WHERE to_agent=$1", held) == 1
+
+
+async def test_a_raw_id_send_reveals_a_stale_generation_via_lineage_head(
+        actions: Actions) -> None:
+    """The exact shape of alfred's incident: a DM addressed by a RAW agent id (not a name)
+    skips resolve_handle's seat resolution entirely, so an ancestor id superseded by mint_heir
+    was never caught. The echo makes it visible WITHOUT auto-redirecting the address (reaching
+    an explicit id remains an act of intent — resolve_seat's grave rule, test_a_grave_is_never_
+    a_delivery_target): `seat` alone would look fine (the ancestor still carries its own old
+    handle); `lineage_head` is what actually exposes the staleness."""
+    from src.orchestrator.agents import claim_name, mint_heir
+
+    ancestor = "agent:dead0001"
+    await claim_name(actions, ancestor, "Ptah", source=ancestor)
+    ancestor_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", ancestor)
+    heir, _ = await mint_heir(actions, ancestor, ancestor_oid, because="test-succession",
+                              succession=None)
+    dm = await send_message(actions.pool, from_agent="agent:boss", from_project="alpha",
+                            to_agent=ancestor, body="ship it")
+    assert dm["to_agent"] == ancestor          # sent exactly to the id named — no silent redirect
+    assert dm["seat"] == "Ptah"                # the ancestor still carries its own old handle
+    assert dm["lineage_head"] == heir          # ...but the echo reveals it is NOT current
+    assert dm["lineage_head"] != dm["to_agent"]
 
 
 async def test_inbox_is_scoped_and_normalized(actions: Actions) -> None:
