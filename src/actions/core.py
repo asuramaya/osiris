@@ -304,6 +304,49 @@ class Actions:
             )
             return new_id
 
+    # --- 3b. invalidate_link (compensating event; never DELETE) ----------
+
+    async def invalidate_link(
+        self,
+        from_id: uuid.UUID,
+        to_id: uuid.UUID,
+        type_: str,
+        actor: str,
+        when: datetime,
+        *,
+        case_id: uuid.UUID | None = None,
+    ) -> int:
+        """Deactivate every currently-active link on this (from, to, type) triple by stamping
+        `valid_until` — the column the schema has reserved since Phase 0 for exactly this
+        ('explicit deactivation, never delete') but that nothing had yet written to. A healed
+        link is never gone: it stops counting as current (readers filter on `valid_until IS
+        NULL OR valid_until > now()`), and its row stays exactly where it was created, in whose
+        name, and why. Idempotent — a triple with nothing active returns 0."""
+        check_link_type(type_)
+        async with self._tx() as conn:
+            tag = await conn.execute(
+                "UPDATE links SET valid_until=$4 WHERE from_id=$1 AND to_id=$2 AND type=$3 "
+                "AND valid_until IS NULL",
+                from_id,
+                to_id,
+                type_,
+                when,
+            )
+            n = int(tag.rsplit(" ", 1)[-1])
+            if n:
+                await self._audit(
+                    conn,
+                    "invalidate_link",
+                    actor,
+                    case_id,
+                    {"from_id": str(from_id), "to_id": str(to_id), "type": type_},
+                )
+                await self._outbox(
+                    conn, "link_invalidated", from_id, case_id,
+                    {"to_id": str(to_id), "type": type_},
+                )
+            return n
+
     # --- 4. merge_objects (event-sourced) --------------------------------
 
     async def merge_objects(

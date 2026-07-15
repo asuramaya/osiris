@@ -1244,6 +1244,11 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
                                    lease_secs=lease)
     op_mail = {"operator_mail": f"{op_unread} unread — inbox(project='operator') if the "
                                 "human is present"} if op_unread else {}
+    # THE CHARTER, MADE VISIBLE (Phase 1 §4.1, `dd47c1da`): a house is what a seat RULES, not
+    # where it sits — but a charter nobody can see is not an inheritance. No aggregation here
+    # (that's wave 2's charter-scoped briefing); just the fact, named.
+    from src.orchestrator.charter import charter_of
+    charter = await charter_of(pool, ident.agent_id) if ident else []
     # THE STANDING-CHOICE STANDDOWN (Metron IV, wave-2 fa918939): a repo whose model
     # choice is SETTLED — a .osiris file, or an intended_model property recorded on the
     # SoftwareProject — must not re-confront every successor with the fleet default.
@@ -1347,6 +1352,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             "mail": mail,
             **({"fleet_pulse": pulse} if pulse else {}),
             **op_mail,
+            **({"charter": charter} if charter else {}),
             **({"swap": swap} if swap else {}),
             **({"succession_note": inheritance} if inheritance else {}),
             **({"co_agents": co_agents} if co_agents else {}),
@@ -1384,6 +1390,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         "mail": mail,
         **({"fleet_pulse": pulse} if pulse else {}),
         **op_mail,
+        **({"charter": charter} if charter else {}),
         **({"swap": swap} if swap else {}),
         **({"succession_note": inheritance} if inheritance else {}),
         **({"co_agents": co_agents} if co_agents else {}),
@@ -1734,6 +1741,43 @@ async def claim_name(name: str, ctx: Context | None = None) -> dict[str, Any]:
                 "why": _anchorless(ctx)}
     from src.orchestrator.agents import claim_name as _claim
     return await _claim(Actions(await _pool_get()), ident.agent_id, name, source=ident.agent_id)
+
+
+@mcp.tool()
+async def charter(repos: list[str] | None = None, ctx: Context | None = None) -> dict[str, Any]:
+    """THE CHARTER (Phase 1 §4.1, ruling `dd47c1da`): a house is what a seat RULES, not where
+    it sits. With `repos`, DECLARE your seat's whole charter — the repo labels you govern from
+    this moment (self-declared, your own act); a repo you named before but drop now is healed
+    off (compensating event, never deleted), never mints twice. Without `repos`, just READ your
+    current charter back. Most seats have none — works_in already names their one home; a
+    charter is for a seat that rules several repos regardless of which one it happens to sit
+    in right now."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a charter names WHOSE seat rules which repos",
+                "why": _anchorless(ctx)}
+    from src.orchestrator.charter import charter_of, set_charter
+    pool = await _pool_get()
+    if repos is not None:
+        return await set_charter(Actions(pool), ident.agent_id, repos)
+    return {"agent": ident.agent_id, "charter": await charter_of(pool, ident.agent_id)}
+
+
+@mcp.tool()
+async def rebind_seat(seat: str, new_cwd: str, ctx: Context | None = None) -> dict[str, Any]:
+    """Move a seat's ANCHOR cwd, preserving identity, lineage, attribution, and mail (Phase 1
+    §4.1, ruling `dd47c1da` — the operator's own folder move orphaned alfred; this is the cure).
+    `seat` accepts a claimed name OR a raw agent id. Writes/refreshes `.osiris` in `new_cwd`
+    pinning the seat's DURABLE project label (unchanged by this call — mail and attribution key
+    on it), re-points the WHOLE LINEAGE's durable mount rows at the new path, and stamps the
+    move on the Agent's own record. Mints nothing: no new Agent, no handle/lineage edge is
+    touched. The returned receipt names exactly what moved. Refuses loudly on an unknown seat."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a rebind is a mind's act, and the graph must know whose",
+                "why": _anchorless(ctx)}
+    from src.orchestrator.mounts import rebind_seat as _rebind
+    return await _rebind(Actions(await _pool_get()), seat_or_agent=seat, new_cwd=new_cwd)
 
 
 @mcp.tool()

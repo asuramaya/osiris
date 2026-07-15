@@ -14,11 +14,21 @@ lookup key: a reconnecting client gets a fresh session id, so it can't be one.
 """
 from __future__ import annotations
 
+import json
+import tomllib
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import asyncpg
+
+from src.actions.core import Actions
+from src.parsers.base import EvidenceClass
+from src.parsers.evidence import confidence_for
+
+_EC = EvidenceClass.SELF_DECLARED.value
+_CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 
 
 @dataclass(frozen=True)
@@ -242,4 +252,96 @@ async def while_away(
                  "Nothing else moved in your name." if all_ghost else
                  "another hand may have worn your face here — read this before assuming you "
                  "know where you stand; the graph, not your memory, records these turns"),
+    }
+
+
+# ── SEAT REBIND ──────────────────────────────────────────────────────────────────────────
+# `path = project = identity` orphaned alfred when the operator moved his folder (ruling
+# dd47c1da) — the fleet's field diagnosis, and the operator is BLOCKED on the cure. A seat's
+# identity, lineage, attribution, and mail all key on its DURABLE PROJECT LABEL (the `project`
+# assertion; house_of reads it) — never on cwd. Moving the folder should be a non-event; today
+# it silently detaches the .osiris pin and strands every durable mount row at the old path.
+# Pilot: house bytebye — alfred's seat, a pure office with no code in it.
+
+
+def _write_osiris_file(new_cwd: str, project_label: str) -> str:
+    """Write/refresh `new_cwd/.osiris`, pinning `project_label` — the existing durable
+    mechanism (`agents.read_project_label`) that makes a folder rename stop mattering. Reads
+    ONLY the file already at `new_cwd` (never walks up — a parent repo's `.osiris` is not this
+    seat's business) so a `model =` line already declared there survives untouched; `project =`
+    is always overwritten to the label being pinned."""
+    d = Path(new_cwd)
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / ".osiris"
+    model: str | None = None
+    if f.is_file():
+        try:
+            value = tomllib.loads(f.read_text()).get("model")
+            model = str(value).strip() if value else None
+        except (OSError, tomllib.TOMLDecodeError, ValueError):
+            model = None
+    lines = [f"project = {json.dumps(project_label)}"]
+    if model:
+        lines.append(f"model = {json.dumps(model)}")
+    f.write_text("\n".join(lines) + "\n")
+    return str(f)
+
+
+async def rebind_seat(actions: Actions, *, seat_or_agent: str, new_cwd: str) -> dict[str, Any]:
+    """Move a seat's ANCHOR cwd, preserving identity, lineage, attribution, and mail (`dd47c1da`
+    — the fold the operator is blocked on). MINTS NOTHING: no new Agent, no handle or lineage
+    edge is touched here — this only re-points where a seat's rows live and re-pins the durable
+    label a moved folder would otherwise silently detach from.
+
+    (a) resolve `seat_or_agent` — a claimed name (`resolve_handle`) or a raw agent id (the
+        GRAVE RULE: an explicit id is intent, so a dead or unclaimed seat can still be moved).
+    (b) read the seat's DURABLE project label (`house_of` — the `project` assertion mail and
+        attribution key on). This value NEVER changes; a rebind that touched it would just be
+        the identity-fracture bug wearing a different hat.
+    (c) write/refresh `new_cwd/.osiris` pinning that label.
+    (d) re-point the WHOLE LINEAGE's durable `agent_mounts` rows (the `cwd` column) at
+        `new_cwd` — not just the live holder's, or an earlier generation's row resurrects at
+        the old path the instant anything reads it by job_dir.
+    (e) stamp a SELF_DECLARED `anchor_moved` assertion on the Agent — the move is on the
+        record, not only in the filesystem.
+
+    Refuses LOUDLY (an error dict, nothing written) when `seat_or_agent` resolves to nobody —
+    an unknown seat is never a silent no-op."""
+    seat_or_agent = (seat_or_agent or "").strip()
+    from src.orchestrator.agents import _generation, house_of, resolve_handle
+
+    agent_id = await resolve_handle(actions, seat_or_agent) if seat_or_agent else None
+    if agent_id is None and seat_or_agent:
+        # not a claimed name (or nobody holds it) — a RAW id is its own intent: accept it only
+        # if the Agent object genuinely exists (never invent one; that is mint territory).
+        exists = await actions.pool.fetchval(
+            "SELECT 1 FROM objects WHERE canonical=$1 AND type='Agent' AND status='active'",
+            seat_or_agent)
+        agent_id = seat_or_agent if exists else None
+    if agent_id is None:
+        return {"error": f"no such seat or agent: {seat_or_agent!r} — unknown to the graph; "
+                         "a rebind never silently no-ops on a name nobody holds"}
+    label = await house_of(actions.pool, agent_id)
+    if not label:
+        return {"error": f"{agent_id} has no durable project label to preserve — it has never "
+                         "been mounted in a project, so there is no anchor to move"}
+    base = _generation(agent_id)[0]
+    old_cwd = await actions.pool.fetchval(
+        "SELECT cwd FROM agent_mounts WHERE agent_id=$1 OR agent_id LIKE $1 || '-%' "
+        "ORDER BY last_seen DESC NULLS LAST LIMIT 1", base)
+    osiris_path = _write_osiris_file(new_cwd, label)
+    tag = await actions.pool.execute(
+        "UPDATE agent_mounts SET cwd=$2 WHERE agent_id=$1 OR agent_id LIKE $1 || '-%'",
+        base, new_cwd)
+    rows_updated = int(tag.rsplit(" ", 1)[-1])
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", agent_id, agent_id)
+    await actions.assert_property(
+        a, "anchor_moved", f"{old_cwd or '?'} → {new_cwd}", agent_id, now, _CONF,
+        evidence_class=_EC)
+    return {
+        "agent": agent_id, "project": label, "old_cwd": old_cwd, "new_cwd": new_cwd,
+        "mount_rows_updated": rows_updated, "osiris_written": osiris_path,
+        "note": f"{label}'s anchor moved to {new_cwd} — identity, lineage, attribution, and "
+                "mail all key on the label, untouched by this move",
     }

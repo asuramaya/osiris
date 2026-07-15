@@ -225,6 +225,13 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "walk it, mistook his live CONTEMPORARY for his own ghost, and asked to be merged "
              "with a stranger; the missing edge is what made that reading possible.",
              ("Agent",), ("Agent",)),
+    LinkType("governs", "THE CHARTER (Phase 1 §4.1, ruling dd47c1da): the repos a SEAT rules — "
+             "'a house is what a seat governs, not where it sits'. Distinct from works_in (the "
+             "durable mount's current home): governs is an explicit, self-declared charter that "
+             "survives a folder move (alfred's charter is six repos; a move to a new cwd does "
+             "not shrink it). Healed by a compensating event (`valid_until`) when a repo drops "
+             "off the charter — never DELETE, so a seat's shrinking rule stays a fact the graph "
+             "remembers.", ("Agent",), ("SoftwareProject",)),
     LinkType("archived_snapshot", "A Wayback/archive snapshot of the target.", (), ("URL",)),
     LinkType("same_as", "Identity merge edge (loser → winner)."),
     LinkType("uses", "Actor/source employs this capability or technique."),
