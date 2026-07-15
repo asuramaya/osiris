@@ -858,3 +858,42 @@ def test_an_anchorless_bounce_names_its_own_cause() -> None:
     assert "[unknown-anchor · TERMINAL]" in terminal
     assert "matches no mount" in terminal
     assert "do not simply retry" in terminal
+
+
+def test_mount_stays_silent_on_a_seam_it_cannot_confidently_date() -> None:
+    """Ruling dd47c1da (Maat's fix, adopted as direction): mount() minted gen-iv/haiku and told
+    the mind to 'confess a rug-pull' that gen-iii/sonnet's own very next orient() said never
+    happened. mount() must never assert a model-seam unless BOTH sides are KNOWN values
+    observed on THIS identity's own row (job_dir-anchored) — otherwise it stays silent and lets
+    orient() (untouched here) tell the story."""
+    from src.mcp_server import _seam_confidently_dated
+
+    anchored = AgentIdentity(agent_id="agent:x-ii", session="x", project="p",
+                             model="claude-fable-5", cwd="/w/x", model_method="job_dir",
+                             model_succession="claude-opus-4-8 → claude-fable-5")
+    assert _seam_confidently_dated(anchored) is True
+
+    # a pure reanimation makes no model claim at all — nothing to mis-date, trivially confident
+    no_seam = AgentIdentity(agent_id="agent:x-ii", session="x", project="p",
+                            model="claude-fable-5", cwd="/w/x", model_method="job_dir",
+                            model_succession=None)
+    assert _seam_confidently_dated(no_seam) is True
+
+    # NOT observed on this identity's own row — a cwd guess or a self-report is a neighbor's
+    # word, never a seam to speak from
+    unanchored = AgentIdentity(agent_id="agent:x-ii", session="x", project="p",
+                               model="claude-fable-5", cwd="/w/x", model_method="cwd",
+                               model_succession="claude-opus-4-8 → claude-fable-5")
+    assert _seam_confidently_dated(unanchored) is False
+
+    # the current model is not even known — nothing anchors the claim
+    no_model = AgentIdentity(agent_id="agent:x-ii", session="x", project="p", model=None,
+                             cwd="/w/x", model_method="job_dir",
+                             model_succession="claude-opus-4-8 → claude-fable-5")
+    assert _seam_confidently_dated(no_model) is False
+
+    # a malformed seam string (a missing side) is never confidently dated either
+    malformed = AgentIdentity(agent_id="agent:x-ii", session="x", project="p",
+                              model="claude-fable-5", cwd="/w/x", model_method="job_dir",
+                              model_succession=" → claude-fable-5")
+    assert _seam_confidently_dated(malformed) is False

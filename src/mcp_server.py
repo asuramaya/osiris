@@ -816,6 +816,24 @@ async def context_window(ctx: Context | None = None) -> dict[str, Any]:
 
 # --- mount: link to the graph as a first-class fleet member ---
 
+def _seam_confidently_dated(ident: AgentIdentity) -> bool:
+    """mount() must never assert a model-seam it cannot date with confidence (ruling dd47c1da,
+    Maat's fix adopted as direction: orient() is the single source of truth for the seam —
+    thrice-witnessed race, Thoth + Aegis + Maat: mount() minted gen-iv/haiku and told the mind
+    to 'confess a rug-pull' that gen-iii/sonnet's own very next orient() said never happened;
+    acting on mount() alone delivers a false alarm as fact). Confident = BOTH sides of the
+    claimed seam are KNOWN values, observed on THIS identity's own row — job_dir-anchored,
+    never a cwd guess or a foreign transcript (mirrors the null-seam gate, thread 065c374e: an
+    unanchored or half-known reading is an absence of evidence, not a seam to speak from).
+    No seam claimed at all is trivially confident — there is nothing to mis-date."""
+    if ident.model_method != "job_dir" or not ident.model:
+        return False
+    if not ident.model_succession:
+        return True
+    sides = ident.model_succession.split(" → ", 1)
+    return len(sides) == 2 and bool(sides[0].strip()) and bool(sides[1].split(" [", 1)[0].strip())
+
+
 @mcp.tool()
 async def mount(
     cwd: str, job_dir: str | None = None, model: str | None = None,
@@ -968,7 +986,7 @@ async def mount(
     if op_unread:  # the fleet plays secretary: any session the human drives can relay this
         out["operator_mail"] = (f"{op_unread} unread at the operator's desk — "
                                 "inbox(project='operator') if the human is present")
-    if ident.succeeded_from:
+    if ident.succeeded_from and _seam_confidently_dated(ident):
         # the MINT ruling (be292762, a sibling's remedy adopted): the heir is not told it
         # wears a dead name — it is GIVEN ITS OWN. The seam supersedes the swap banner (a
         # death must
@@ -983,7 +1001,13 @@ async def mount(
             "remain its own, under its own id (succeeded_from links you). Read "
             "while_you_were_away and the graph for the estate — the graph, not the operator, "
             "is what tells you where you begin.")
-    elif ident.model_succession:
+    elif ident.succeeded_from:
+        # A REAL mint (the heir object exists, the estate moved) — but the seam that
+        # triggered it is NOT confidently dated (ruling dd47c1da): mount stays SILENT on WHY,
+        # rather than assert a seam it can't back. `ident.agent_id` above is still correct;
+        # orient() re-derives fresh and is the one that gets to tell this story.
+        banner = None
+    elif ident.model_succession and _seam_confidently_dated(ident):
         # stamp-only fallback (a seam witnessed where minting could not run) — still loud,
         # still second-person: a death must not whisper (a sibling project's grievance #1+#2).
         banner = None
