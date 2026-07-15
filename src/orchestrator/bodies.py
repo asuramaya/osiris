@@ -56,6 +56,16 @@ _CGROUP_ROOT = Path("/sys/fs/cgroup")
 # spec's own number. int(), not round(): this is a throttle knob, not an accounting figure.
 _MEMORY_HIGH_FRACTION = 0.9
 
+# The I/O envelope (Warp's lesson taken as architecture, ruling 1460e590: the fleet on ONE
+# unmetered substrate saturates whatever it leans on — RAM was the OOM, tmpfs the scratch, the
+# SSD the 100%-util spike). A body's scope gets a LOW IOWeight so it YIELDS disk bandwidth to
+# the rest of the box under contention: it can use idle capacity freely, but it can never
+# STARVE the operator's foreground work — the same "one tenant's appetite is not the house's
+# problem" guarantee MemoryMax gives for RAM. Relative, device-agnostic (unlike an absolute
+# IOWriteBandwidthMax, which needs a per-device path and a hard number that does not travel);
+# the Ra tier caps I/O in the hypervisor instead. Default 50 (systemd's own default is 100).
+_BODY_DEFAULT_IO_WEIGHT = 50
+
 # A fresh scope needs a moment to register with the user manager before its ControlGroup is
 # queryable — polled, not slept-once, so the common case (already registered) costs nothing.
 _CGROUP_POLL_ATTEMPTS = 10
@@ -137,16 +147,19 @@ _TRAMPOLINE = "\n".join((
 
 def _systemd_run_argv(
     unit: str, cores: int | None, ram_bytes: int, command: Sequence[str],
+    io_weight: int = _BODY_DEFAULT_IO_WEIGHT,
 ) -> list[str]:
     """The exact invocation the spec names: a transient --user --scope, --collect (nothing
     reads the unit post-mortem — the meter rides inside the body — and without it a FAILED
     scope, e.g. an oom-killed one, would stay loaded forever: a unit leak per casualty), a
-    hard MemoryMax and a 90%-of-it MemoryHigh soft throttle, optional core pinning, then the
-    payload."""
+    hard MemoryMax and a 90%-of-it MemoryHigh soft throttle, optional core pinning, a low
+    IOWeight so the body yields disk bandwidth under contention (IOAccounting=yes turns the io
+    controller on for the scope so the weight actually bites), then the payload."""
     high = int(ram_bytes * _MEMORY_HIGH_FRACTION)
     argv = [
         "systemd-run", "--user", "--scope", f"--unit={unit}", "--collect",
         "-p", f"MemoryMax={ram_bytes}", "-p", f"MemoryHigh={high}",
+        "-p", "IOAccounting=yes", "-p", f"IOWeight={io_weight}",
     ]
     if cores:
         argv += ["-p", f"AllowedCPUs={_cpu_list(cores)}"]
@@ -324,6 +337,7 @@ class LocalProvider:
     def __init__(
         self, *, runner: ProcessRunner = _default_runner,
         cgroup_root: Path = _CGROUP_ROOT, receipts_dir: Path | None = None,
+        io_weight: int = _BODY_DEFAULT_IO_WEIGHT,
     ) -> None:
         self._runner = runner
         self._cgroup_root = cgroup_root
@@ -331,6 +345,9 @@ class LocalProvider:
         # argument) so tests can monkeypatch `bodies.RECEIPTS` exactly as test_trigger.py
         # patches `trigger.RECEIPTS` — never write a real receipt into the operator's home.
         self._receipts_dir = receipts_dir if receipts_dir is not None else RECEIPTS
+        # the I/O envelope, uniform across this provider's bodies (see _BODY_DEFAULT_IO_WEIGHT):
+        # per-body I/O tuning is a later refinement; a low weight for ALL bodies is the floor.
+        self._io_weight = io_weight
         self._live: dict[str, _LiveBody] = {}
 
     def _stats_path(self, handle: str) -> Path:
@@ -366,7 +383,7 @@ class LocalProvider:
         # The trampoline's ~10MB interpreter and ~30ms startup land INSIDE the envelope and on
         # the meter — honest: metering from within is the harness's own cost of being metered.
         wrapped = ["python3", "-c", _TRAMPOLINE, str(stats), *command]
-        argv = _systemd_run_argv(unit, cores, ram_bytes, wrapped)
+        argv = _systemd_run_argv(unit, cores, ram_bytes, wrapped, self._io_weight)
         # started_at is stamped AT the spawn — not after the cgroup-resolve poll below, which
         # would clip the body's first ~100ms off the wall clock the envelope is billed on.
         started = datetime.now(UTC)

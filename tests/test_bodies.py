@@ -51,6 +51,17 @@ def test_systemd_run_argv_carries_hard_and_soft_ceilings() -> None:
     assert argv[-4:] == ["--", "claude", "-p", "hi"]  # the payload trails the flags, unambiguous
 
 
+def test_systemd_run_argv_bounds_io_so_a_body_cannot_starve_the_box() -> None:
+    """Warp's lesson as architecture (1460e590): the envelope caps I/O, not just RAM+CPU. A
+    body's scope gets IOAccounting (turns the io controller on) and a LOW IOWeight so it yields
+    disk bandwidth under contention — it can never peg the SSD out from under foreground work."""
+    argv = _systemd_run_argv("osiris-body-io", None, 10**9, ["true"])
+    assert "IOAccounting=yes" in argv                 # the weight is inert without the controller
+    assert "IOWeight=50" in argv                      # below systemd's default 100 → yields first
+    # an override travels the whole way through (per-provider policy, LocalProvider(io_weight=))
+    assert "IOWeight=10" in _systemd_run_argv("osiris-body-io", None, 10**9, ["true"], 10)
+
+
 def test_systemd_run_argv_pins_cores_when_given() -> None:
     argv = _systemd_run_argv("osiris-body-x", 4, 10**9, ["true"])
     assert "-p" in argv and "AllowedCPUs=0-3" in argv   # first 4 logical CPUs, not a NUMA claim
