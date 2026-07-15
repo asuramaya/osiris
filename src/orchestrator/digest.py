@@ -362,6 +362,13 @@ async def _bodies(actions: Actions, since: datetime) -> dict[str, Any]:
     report shape, the meter's OTHER dimension. 'A hand you cannot cost is a hand you cannot
     govern.' This is visibility only: it invents no enforcement, the ceiling's dollar gate
     (orchestrator/ceiling.py) reads neither this stream nor this table."""
+    # totals come from an UNBOUNDED aggregate; `by` is a bounded top-10. exit_cause is an open
+    # set (exit:N for any N), so summing the limited groups would assert a prefix as the whole —
+    # the digest's oldest sin (see the COST stream's coverage note).
+    total = await actions.pool.fetchrow(
+        "SELECT count(*) AS n, coalesce(sum(core_seconds),0) AS core_seconds, "
+        " coalesce(sum(ram_gib_seconds),0) AS ram_gib_seconds "
+        "FROM body_usage WHERE receipt_mtime >= $1", since)
     rows = await actions.pool.fetch(
         "SELECT provider, exit_cause, count(*) AS n, "
         " coalesce(sum(core_seconds),0) AS core_seconds, "
@@ -373,9 +380,9 @@ async def _bodies(actions: Actions, since: datetime) -> dict[str, Any]:
            "ram_gib_seconds": round(float(r["ram_gib_seconds"]), 2)}
           for r in rows]
     return {
-        "count": sum(g["count"] for g in by),
-        "core_seconds": round(sum(g["core_seconds"] for g in by), 2),
-        "ram_gib_seconds": round(sum(g["ram_gib_seconds"] for g in by), 2),
+        "count": int(total["n"]) if total else 0,
+        "core_seconds": round(float(total["core_seconds"]), 2) if total else 0.0,
+        "ram_gib_seconds": round(float(total["ram_gib_seconds"]), 2) if total else 0.0,
         "by": by,
         "coverage": _BODY_COVERAGE,
     }

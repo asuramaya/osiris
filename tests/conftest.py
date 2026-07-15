@@ -29,7 +29,7 @@ _TABLES = (
     # A SHARED FIXTURE THAT FORGETS ONE TABLE DOES NOT FAIL — IT MAKES EVERY TEST'S RESULT DEPEND
     # ON WHO RAN BEFORE IT, which is the same class as everything else we killed this week: state
     # written at a seam and never reconciled.
-    "dev_pulses,console_state,search_vectors"
+    "dev_pulses,console_state,search_vectors,body_usage"
 )
 
 
