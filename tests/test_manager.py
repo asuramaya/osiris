@@ -642,3 +642,77 @@ async def test_pty_attach_to_an_unknown_name_errors_and_leaves_the_connection_us
             await _close_writer(writer)
     finally:
         await manager.close()
+
+
+# --- identity at birth (§4.2, ruling 5cef856b): pty_spawn naming a seat ---
+
+
+async def test_pty_spawn_with_seat_refuses_without_graph_access(tmp_path: Path) -> None:
+    """A body summoned for a seat that cannot be minted must not be born unbound — a daemon
+    with no pool refuses BEFORE any fd or child exists, and a malformed seat is refused the
+    same way."""
+    manager = Manager(socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
+                      runner=_make_runner())
+    await manager.start()
+    try:
+        client = await _connect(tmp_path / "m.sock")
+        try:
+            out = await client.send({"op": "pty_spawn", "name": "s1",
+                                     "argv": ["sh", "-c", "cat"],
+                                     "seat": {"handle": "Horus", "house": "osiris"}})
+            assert "graph access" in out["error"]
+            assert manager._broker.get("s1") is None  # refused before a child ever existed
+            malformed = await client.send({"op": "pty_spawn", "name": "s2",
+                                           "argv": ["sh", "-c", "cat"],
+                                           "seat": {"house": "osiris"}})
+            assert "'seat'" in malformed["error"]
+            assert manager._broker.get("s2") is None
+        finally:
+            await client.close()
+    finally:
+        await manager.close()
+
+
+@requires_pty
+async def test_pty_spawn_with_seat_exports_identity_at_birth(
+    pg_dsn: str, tmp_path: Path,
+) -> None:
+    """The ceremony's daemon half (§4.2): a spawn naming a seat gets the Seat minted in the
+    graph and OSIRIS_SEAT_ID + a ONE-TIME token exported into the child's environment before
+    its first breath — witnessed here by the child echoing both back through its own pty,
+    and by the token row sitting minted-but-unused (the whisper, not the daemon, spends it)."""
+    from src.db.pool import create_pool
+
+    pool = await create_pool(pg_dsn)
+    manager = Manager(socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
+                      pool=pool, runner=_make_runner())
+    await manager.start()
+    try:
+        client = await _connect(tmp_path / "m.sock")
+        try:
+            out = await client.send({
+                "op": "pty_spawn", "name": "seated",
+                "argv": ["sh", "-c", 'echo "B=$OSIRIS_SEAT_ID:$OSIRIS_ATTACH_TOKEN"; cat'],
+                "seat": {"handle": "Horus", "house": "osiris"}})
+            assert out.get("spawned") == "seated"
+            seat_id = out["seat_id"]
+            assert seat_id.startswith("seat:")
+            # the graph half: the Seat object exists; the token is minted and UNUSED
+            assert await pool.fetchval(
+                "SELECT 1 FROM objects WHERE canonical=$1 AND type='Seat'", seat_id)
+            row = await pool.fetchrow(
+                "SELECT token, used_at, minted_by FROM seat_tokens WHERE seat_id=$1", seat_id)
+            assert row is not None and row["used_at"] is None
+            assert row["minted_by"] == "osiris-manager"
+            # the child half: both vars crossed the exec boundary, witnessed on the pty
+            reader, writer, ack = await _attach(tmp_path / "m.sock", "seated")
+            assert ack.get("attached") == "seated"
+            async with asyncio.timeout(10):
+                seen = await _read_frames_until(reader, b"B=seat:")
+            assert row["token"].encode() in seen
+            await _close_writer(writer)
+        finally:
+            await client.close()
+    finally:
+        await manager.close()
+        await pool.close()
