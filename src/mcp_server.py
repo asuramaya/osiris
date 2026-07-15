@@ -1846,15 +1846,24 @@ async def open_thread(
 ) -> dict[str, str]:
     """Open a THREAD — an unresolved question or next-step you want the next session to pick
     up. Surfaces in run_composition('briefing') under open threads, beside mined ones. `repo`
-    files it under a SoftwareProject. Idempotent on the summary. This is how a session hands
-    off its loose ends instead of losing them. `kind='obligation'` marks a DUTY minted by an
-    action ('kernel changed → daemons need restart') — record those the moment they're minted;
-    they are neither rulings nor commits and otherwise die with the context window.
-    `owner` says WHOSE MOVE it is: 'operator' = blocked on the human, 'agent:<id>' = a
-    specific mind, a project name = any hand there; unowned = anyone who reads it may act.
-    orient sorts your wall by it — yours-to-act above waiting-on-the-human."""
+    files it under a SoftwareProject. Idempotent on the summary — and, with `repo`, ALSO on a
+    near-duplicate of it: two field witnesses (Aegis, Maat) minted the same fact twice across
+    a lineage restart because the second telling reworded the summary slightly. A near-hit on
+    that project's own open threads returns the EXISTING id (`deduped: "true"`) instead of
+    minting a twin — conservative on purpose, so a genuinely new thread is never swallowed.
+    This is how a session hands off its loose ends instead of losing them (or doubling them).
+    `kind='obligation'` marks a DUTY minted by an action ('kernel changed → daemons need
+    restart') — record those the moment they're minted; they are neither rulings nor commits
+    and otherwise die with the context window. `owner` says WHOSE MOVE it is: 'operator' =
+    blocked on the human, 'agent:<id>' = a specific mind, a project name = any hand there;
+    unowned = anyone who reads it may act. orient sorts your wall by it — yours-to-act above
+    waiting-on-the-human."""
+    pool = await _pool_get()
+    dup = await capture.find_near_duplicate_open_thread(pool, summary, repo=repo)
+    if dup is not None:
+        return {"id": str(dup), "summary": summary, "status": "open", "deduped": "true"}
     t = await capture.open_thread(
-        Actions(await _pool_get()), summary, repo=repo, kind=kind, owner=owner,
+        Actions(pool), summary, repo=repo, kind=kind, owner=owner,
         source=await _actor_for(ctx, subagent_id, subagent_type)
     )
     return {"id": str(t), "summary": summary, "status": "open"}

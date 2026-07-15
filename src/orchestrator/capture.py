@@ -32,6 +32,7 @@ import hashlib
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
+from difflib import SequenceMatcher
 
 import asyncpg
 
@@ -267,6 +268,79 @@ async def ingest_reference(
                 await a.create_link(ref, cited, "cites", source, observed, _CONF,
                                     evidence_class=_EC)
     return ref, canon
+
+
+# THE OPEN-THREAD DEDUP (two field witnesses, Aegis and Maat): the same fact got minted
+# TWICE across a lineage restart because the summary differed slightly the second telling —
+# `_canon`'s exact-hash idempotency only catches a byte-identical repeat. Conservative on
+# purpose: a false merge silently drops testimony (worse than a duplicate a human can fold).
+_DEDUP_SIM = 0.60  # first-pass estimate (no live desk to measure against, unlike mailbox.py's
+                    # calibrated 0.30 "same story" bar) — recalibrate if it over/under-fires.
+
+
+def _normalize_for_dedup(text: str) -> str:
+    """Case/punctuation/whitespace-flattened form — the miner's own near-dup guard
+    (`sessions.py::_normalized`), reused here so a trivial rewording (case, punctuation, a
+    trailing clause) is caught without even reaching the similarity check below."""
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", text.lower()).split())
+
+
+async def _pg_trgm_enabled(pool: asyncpg.Pool) -> bool:
+    """Is pg_trgm actually installed on THIS database? CHECK, don't assume: sessions.py's own
+    comment ('pg_trgm is not installed, so there is no trigram similarity to lean on') went
+    stale the day migration 0025 landed the extension — mailbox.py has used similarity() ever
+    since. A local catalog lookup, not a network round trip."""
+    return bool(await pool.fetchval(
+        "SELECT 1 FROM pg_extension WHERE extname='pg_trgm'"))
+
+
+async def find_near_duplicate_open_thread(
+    pool: asyncpg.Pool, summary: str, *, repo: str | None,
+) -> uuid.UUID | None:
+    """An existing OPEN thread on this project that is the SAME fact as `summary`, reworded —
+    or None. Checked BEFORE minting (open_thread's caller): a normalized exact match first
+    (case/punctuation/whitespace), then a conservative similarity check over that project's
+    open threads — pg_trgm's `similarity()` when the database has the extension, else a
+    Python-side ratio on the same small candidate set. No `repo` means no safe scope to dedup
+    against, so it stands down rather than guess fleet-wide."""
+    if not repo:
+        return None
+    proj = await _resolve_repo(pool, repo.removeprefix("repo:").strip())
+    if proj is None:
+        return None
+    rows = await pool.fetch(
+        "SELECT o.id, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS summary "
+        "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+        "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
+        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "   WHERE a.object_id=o.id AND a.name='status' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open'",
+        proj)
+    candidates = [(r["id"], r["summary"]) for r in rows if r["summary"]]
+    if not candidates:
+        return None
+    norm_new = _normalize_for_dedup(summary)
+    for tid, cand in candidates:
+        if _normalize_for_dedup(cand) == norm_new:
+            return uuid.UUID(str(tid))
+    if await _pg_trgm_enabled(pool):
+        ids = [tid for tid, _ in candidates]
+        bodies = [cand for _, cand in candidates]
+        hit = await pool.fetchval(
+            "WITH b AS (SELECT unnest($1::uuid[]) AS id, unnest($2::text[]) AS body) "
+            "SELECT id FROM b WHERE similarity(body, $3) > $4 "
+            "ORDER BY similarity(body, $3) DESC LIMIT 1",
+            ids, bodies, summary, _DEDUP_SIM)
+        return uuid.UUID(str(hit)) if hit is not None else None
+    best_id, best_ratio = None, 0.0
+    for tid, cand in candidates:
+        ratio = SequenceMatcher(None, norm_new, _normalize_for_dedup(cand)).ratio()
+        if ratio > best_ratio:
+            best_id, best_ratio = tid, ratio
+    return uuid.UUID(str(best_id)) if best_id is not None and best_ratio > _DEDUP_SIM else None
 
 
 async def open_thread(

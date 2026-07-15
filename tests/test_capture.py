@@ -13,6 +13,7 @@ from src.actions.core import Actions
 from src.ingest.mined import consolidate_memory
 from src.mcp_server import _project_briefing
 from src.orchestrator.capture import (
+    find_near_duplicate_open_thread,
     link_repo,
     open_thread,
     reclassify_thread,
@@ -117,6 +118,56 @@ async def test_resolve_thread_leaves_open_and_joins_resolved(actions: Actions) -
 
 async def test_resolve_thread_returns_none_when_nothing_matches(actions: Actions) -> None:
     assert await resolve_thread(actions, "no such thread anywhere") is None
+
+
+async def test_a_reworded_summary_dedups_to_the_existing_open_thread(actions: Actions) -> None:
+    """Two field witnesses (Aegis, Maat): the same fact minted twice across a lineage restart
+    because the second telling reworded the summary. A near-identical restatement on the SAME
+    project must resolve to the FIRST thread's id, never a twin."""
+    t = await open_thread(actions, "wire the daemon's receipt path into the meter",
+                          repo="dedupproj")
+    hit = await find_near_duplicate_open_thread(
+        actions.pool, "Wire the daemon's receipt path into the meter.", repo="dedupproj")
+    assert hit == t
+
+
+async def test_an_unrelated_summary_is_never_a_false_merge(actions: Actions) -> None:
+    """Conservative on purpose: a genuinely different thread on the same project must NOT
+    dedup — a false merge silently drops testimony, which costs more than a duplicate."""
+    await open_thread(actions, "wire the daemon's receipt path into the meter", repo="dedupproj")
+    hit = await find_near_duplicate_open_thread(
+        actions.pool, "the statusline flaps unreachable under load", repo="dedupproj")
+    assert hit is None
+
+
+async def test_dedup_never_crosses_a_project_boundary(actions: Actions) -> None:
+    """No `repo` (or a DIFFERENT one) is no safe scope to dedup against — an exact restatement
+    filed under a different project, or with none at all, must still mint its own thread."""
+    await open_thread(actions, "wire the daemon's receipt path into the meter", repo="dedupproj")
+    assert await find_near_duplicate_open_thread(
+        actions.pool, "wire the daemon's receipt path into the meter", repo="otherproj") is None
+    assert await find_near_duplicate_open_thread(
+        actions.pool, "wire the daemon's receipt path into the meter", repo=None) is None
+
+
+async def test_a_resolved_thread_is_never_a_dedup_target(actions: Actions) -> None:
+    """The dedup only ever answers for OPEN threads — a closed one is a different fact now
+    (it was answered), so a fresh telling of the same words must open its own thread, not
+    quietly reopen a resolved one."""
+    summary = "wire the daemon's receipt path into the meter"
+    await open_thread(actions, summary, repo="dedupproj")
+    await resolve_thread(actions, summary, because="shipped")
+    assert await find_near_duplicate_open_thread(
+        actions.pool, summary, repo="dedupproj") is None
+
+
+async def test_pg_trgm_is_enabled_in_this_database(actions: Actions) -> None:
+    """CHECK, don't assume (sessions.py's own '_near_same... pg_trgm is not installed' comment
+    went stale the day migration 0025 landed it): this test pins that the dev/test database
+    really does carry the extension, so the similarity branch above is the one actually
+    exercised here, not silently the Python fallback."""
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM pg_extension WHERE extname='pg_trgm'") == 1
 
 
 async def test_short_id_ref_beats_a_summary_that_quotes_it(actions: Actions) -> None:
