@@ -173,6 +173,32 @@ async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
     return {"seat_id": row["seat_id"], "handle": row["handle"], "house": row["house"]}
 
 
+async def holds(pool: asyncpg.Pool, agent_id: str, seat_id: str) -> bool:
+    """Does this mind actively hold this seat? The read side of seat-addressed mail
+    (Phase B2): a message to `seat:<id>` is deliverable to whoever this returns True for."""
+    return bool(await pool.fetchval(
+        "SELECT 1 FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id "
+        "WHERE f.canonical=$1 AND t.canonical=$2 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", agent_id, seat_id))
+
+
+async def seat_receipt(pool: asyncpg.Pool, seat_id: str) -> dict[str, Any] | None:
+    """The DM-receipt facts for a seat ADDRESS (Phase B2): its display handle/house and the
+    mind currently holding it (None while vacant — the mail waits; a seat address is never
+    a grave, its next holder reads it). None when no such living Seat exists."""
+    display = await _seat_display(pool, seat_id)
+    if not display:
+        return None
+    holder = await pool.fetchval(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND l.type='holds' AND f.type='Agent' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "ORDER BY l.first_seen DESC LIMIT 1", seat_id)
+    return {**display, "holder": str(holder) if holder else None}
+
+
 async def binding_of_handle(pool: asyncpg.Pool, name: str) -> dict[str, Any] | None:
     """The Seat-object world's answer to 'who is <name>?' (Phase B1): the UNIQUE living Seat
     carrying this handle, and its current holder via the ACTIVE holds link. None when the

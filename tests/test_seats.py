@@ -416,3 +416,133 @@ async def test_seat_bearings_carries_the_binding(actions: Actions) -> None:
     await _seated_agent(actions, "agent:mmmm0002", "/jobs/mmmm0002")
     bare = await seat_bearings(actions.pool, "agent:mmmm0002")
     assert "seat_binding" not in bare
+
+
+# --- Phase B2: the seat is the address; the holder is the reader ---
+
+
+async def _bound(actions: Actions, handle: str, agent: str, jobs: str) -> dict:
+    seat = await ensure_seat(actions, house="osiris", handle=handle, source="test")
+    token = await mint_attach_token(actions.pool, seat_id=seat["seat_id"])
+    await _seated_agent(actions, agent, jobs)
+    await attach_session(actions, seat_id=seat["seat_id"], token=token,
+                         job_dir=jobs, agent_id=agent)
+    return seat
+
+
+async def test_dm_by_name_to_a_bound_seat_stores_the_seat_address(actions: Actions) -> None:
+    """A name that resolves through a BINDING stores the SEAT as the address — it survives
+    every succession, so the mail reaches whoever holds the seat at READ time. The receipt
+    names the seat, its current holder, and the holder's lineage head."""
+    from src.orchestrator.mailbox import send_message
+
+    seat = await _bound(actions, "Iris", "agent:nnnn0001", "/jobs/nnnn0001")
+    out = await send_message(actions.pool, from_agent="agent:nnnn0099",
+                             from_project="elsewhere", to_agent="Iris",
+                             body="to the role, not the mind", require_seat=True)
+
+    assert out["to_agent"] == seat["seat_id"]
+    assert out["seat"] == "Iris"
+    assert out["holder"] == "agent:nnnn0001"
+    stored = await actions.pool.fetchval(
+        "SELECT to_agent FROM fleet_messages WHERE id=$1", out["id"])
+    assert stored == seat["seat_id"]
+
+
+async def test_seat_mail_reaches_the_holder_and_only_the_holder(actions: Actions) -> None:
+    from src.orchestrator.mailbox import ack_messages, read_inbox, send_message, unread_count
+
+    await _bound(actions, "Osec", "agent:oooo0001", "/jobs/oooo0001")
+    await _seated_agent(actions, "agent:oooo0002", "/jobs/oooo0002")  # same project, unbound
+    out = await send_message(actions.pool, from_agent="agent:oooo0099",
+                             from_project="elsewhere", to_agent="Osec", body="for the seat")
+
+    assert await unread_count(actions.pool, "osiris", reader_agent="agent:oooo0001") == 1
+    assert await unread_count(actions.pool, "osiris", reader_agent="agent:oooo0002") == 0
+    got = await read_inbox(actions.pool, "osiris", reader_agent="agent:oooo0001")
+    assert [m["id"] for m in got] == [out["id"]]
+    assert got[0]["dm"] is True
+    assert await ack_messages(actions.pool, "osiris", [out["id"]],
+                              reader_agent="agent:oooo0001") == 1
+    assert await unread_count(actions.pool, "osiris", reader_agent="agent:oooo0001") == 0
+
+
+async def test_seat_mail_survives_succession_without_estate_transfer(
+    actions: Actions,
+) -> None:
+    """THE POINT OF B2: a seat DM unread at the holder's death reaches the heir with NO
+    re-addressing — the row never changes; the heir holds the seat, therefore the heir
+    matches. mint_heir's estate-transfer UPDATE keeps covering agent-id mail only."""
+    from src.orchestrator.mailbox import read_inbox, send_message, unread_count
+
+    seat = await _bound(actions, "Sekhmet", "agent:pppp0001", "/jobs/pppp0001")
+    out = await send_message(actions.pool, from_agent="agent:pppp0099",
+                             from_project="elsewhere", to_agent="Sekhmet", body="in flight")
+    ancestor_oid = await actions.create_or_find_object(
+        "Agent", "agent:pppp0001", "agent:pppp0001")
+
+    heir, _ = await mint_heir(actions, "agent:pppp0001", ancestor_oid,
+                              because="compaction", succession=None,
+                              now=datetime.now(UTC))
+    await save_mount(actions.pool, job_dir="/jobs/pppp0001", agent_id=heir,
+                     project="osiris", cwd="/w/osiris", model=None, session_key=None)
+
+    assert await unread_count(actions.pool, "osiris", reader_agent=heir) == 1
+    got = await read_inbox(actions.pool, "osiris", reader_agent=heir)
+    assert [m["id"] for m in got] == [out["id"]]
+    stored = await actions.pool.fetchval(
+        "SELECT to_agent FROM fleet_messages WHERE id=$1", out["id"])
+    assert stored == seat["seat_id"]      # the row NEVER changed — no estate transfer ran
+
+
+async def test_raw_seat_address_is_an_act_of_intent(actions: Actions) -> None:
+    from src.orchestrator.mailbox import send_message
+
+    seat = await _bound(actions, "Wadjet", "agent:qqqq0001", "/jobs/qqqq0001")
+    out = await send_message(actions.pool, from_agent="agent:qqqq0099",
+                             from_project="elsewhere", to_agent=seat["seat_id"],
+                             body="raw seat address")
+    assert out["to_agent"] == seat["seat_id"]
+    assert out["holder"] == "agent:qqqq0001"
+
+    import pytest
+    with pytest.raises(ValueError, match="no such seat"):
+        await send_message(actions.pool, from_agent="agent:qqqq0099",
+                           from_project="elsewhere", to_agent="seat:deadbeef",
+                           body="into the void")
+
+
+async def test_reply_to_a_seat_dm_routes_back_and_settles(actions: Actions) -> None:
+    """The holder replying to seat mail: routes back to the sender as a DM (a DM 'to me'
+    includes a seat I hold) and settles the referenced message for the replier."""
+    from src.orchestrator.mailbox import send_message, unread_count
+
+    await _bound(actions, "Bastet", "agent:rrrr0001", "/jobs/rrrr0001")
+    dm = await send_message(actions.pool, from_agent="agent:rrrr0099",
+                            from_project="elsewhere", to_agent="Bastet", body="question")
+    assert await unread_count(actions.pool, "osiris", reader_agent="agent:rrrr0001") == 1
+
+    reply = await send_message(actions.pool, from_agent="agent:rrrr0001",
+                               from_project="osiris", reply_to=dm["id"], body="answer")
+
+    assert reply["to_agent"] == "agent:rrrr0099"          # routed back to the sender
+    assert reply["thread_id"] == dm["id"]                 # joined the thread
+    assert await unread_count(actions.pool, "osiris",
+                              reader_agent="agent:rrrr0001") == 0  # the reply IS the ack
+
+
+async def test_an_unbound_name_keeps_snapshot_addressing(actions: Actions) -> None:
+    """No Seat object → the live holder's AGENT id is stored, exactly as before (ruling
+    1e02e069's snapshot semantics; the estate transfer still covers these)."""
+    from src.orchestrator.mailbox import send_message
+
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:ssss0001", "agent:ssss0001")
+    await actions.assert_property(a, "handle", "Plain", "agent:ssss0001", now, 0.9,
+                                  evidence_class="self_declared")
+    await save_mount(actions.pool, job_dir="/jobs/ssss0001", agent_id="agent:ssss0001",
+                     project="osiris", cwd="/w", model=None, session_key=None)
+    out = await send_message(actions.pool, from_agent="agent:ssss0099",
+                             from_project="elsewhere", to_agent="Plain", body="old path")
+    assert out["to_agent"] == "agent:ssss0001"
+    assert "holder" not in out

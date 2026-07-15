@@ -51,8 +51,21 @@ _HOLD_GRACE_SECS = 3600
 # noise: the author's reflexive self-ack marked the broadcast SETTLED, which silenced the
 # wake for the real recipient. An agent's outbox is not its mail — the author is excluded
 # from its own broadcast's fan-out (the DM path always had this predicate).
+# A SEAT ADDRESS IS READ BY ITS CURRENT HOLDER (Phase B2, ruling 5cef856b): mail stored
+# with to_agent='seat:<id>' is deliverable to whichever mind ACTIVELY holds that Seat at
+# read time — the address never dies with a mind, so mint_heir's estate-transfer UPDATE is
+# simply unnecessary for it (the heir holds the seat, therefore the heir matches; nothing
+# to re-address). Agent-id DMs keep the exact-id match and the estate transfer, unchanged.
+_READER_HOLDS_ADDR = (
+    "(m.to_agent LIKE 'seat:%' AND EXISTS (SELECT 1 FROM links hl "
+    "  JOIN objects hf ON hf.id=hl.from_id JOIN objects ht ON ht.id=hl.to_id "
+    "  WHERE hf.canonical = $agent AND ht.canonical = m.to_agent AND hl.type='holds' "
+    "  AND (hl.valid_until IS NULL OR hl.valid_until > now())))"
+)
+
 _DELIVERABLE_TO_READER = (
     "((m.to_agent = $agent) "
+    " OR " + _READER_HOLDS_ADDR + " "
     " OR (m.to_project = $project AND m.to_agent IS NULL AND m.from_agent <> $agent)) "
     "AND m.read_at IS NULL "
     "AND r.read_at IS NULL "
@@ -62,6 +75,19 @@ _DELIVERABLE_TO_READER = (
     "         AND NOT EXISTS (SELECT 1 FROM agent_mounts lm WHERE lm.agent_id = $agent "
     "             AND lm.last_seen > now() - make_interval(secs => $lease))))"
 )
+
+
+async def _addressed_to_me(pool: asyncpg.Pool, to_agent: str | None, me: str) -> bool:
+    """Was a DM address MINE — my exact id, or a seat I actively hold? The Python-side twin
+    of the SQL predicate above, for reply routing and the reply-settles-the-referenced rule."""
+    if to_agent is None:
+        return False
+    if to_agent == me:
+        return True
+    if to_agent.startswith("seat:"):
+        from src.orchestrator.seats import holds
+        return await holds(pool, me, to_agent)
+    return False
 
 
 def _norm(project: str) -> str:
@@ -135,20 +161,31 @@ async def send_message(
             "FROM fleet_messages WHERE id=$1", reply_to)
         if ref is None:
             raise ValueError(f"reply_to message {reply_to} does not exist")
-    if to_agent and not to_agent.startswith("agent:"):
-        # a DM addressed by HUMAN NAME (a seat): resolve to the current live holder's id at
-        # send time (phase 2, ruling 1e02e069). Snapshot semantics — the rare in-flight edge
-        # (the seat succeeds between send and read) is documented, not handled.
+    if to_agent and to_agent.startswith("seat:"):
+        # a DM addressed to a RAW SEAT id — an act of intent, accepted only for a living Seat
+        # (never invented; a typo'd seat address must fail loudly, not park mail in a void)
+        exists = await pool.fetchval(
+            "SELECT 1 FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
+            to_agent)
+        if not exists:
+            raise ValueError(f"no such seat: '{to_agent}' — check fleet() or address by name")
+    elif to_agent and not to_agent.startswith("agent:"):
+        # a DM addressed by HUMAN NAME: when the name resolves through a BINDING (Phase B2,
+        # 5cef856b), the SEAT is the stored address — it survives every succession, so the
+        # mail reaches whoever holds the seat at READ time, not whoever held it at send time
+        # (the old snapshot semantics' documented in-flight edge, now closed for bound
+        # seats). An unbound name keeps the snapshot: the live holder's id, exactly as
+        # before (ruling 1e02e069).
         from src.actions.core import Actions
-        from src.orchestrator.agents import resolve_handle
-        holder = await resolve_handle(Actions(pool), to_agent)
-        if holder is None:
+        from src.orchestrator.agents import resolve_seat
+        resolved = await resolve_seat(Actions(pool), to_agent)
+        if resolved["agent"] is None:
             raise ValueError(f"no agent named '{to_agent}' — check the name or DM by agent id")
-        to_agent = holder
+        to_agent = resolved.get("seat_id") or resolved["agent"]
     if to_agent or to_project:  # explicit addressing wins
         to_a = to_agent
         to_p = _norm(to_project) if to_project else None
-    elif ref is not None and ref["to_agent"] == from_agent:
+    elif ref is not None and await _addressed_to_me(pool, ref["to_agent"], from_agent):
         to_a, to_p = ref["from_agent"], ref["from_project"]  # a DM to me → DM back to its sender
     elif ref is not None:  # a broadcast/own message → project routing (supersession lane)
         own = from_project and _norm(ref["from_project"] or "") == _norm(from_project)
@@ -166,7 +203,21 @@ async def send_message(
     # claimed seat at all — a dispatcher gets the truth, this function never guesses for it.
     seat: str | None = None
     lineage: str | None = None
-    if to_a:
+    holder: str | None = None
+    if to_a and to_a.startswith("seat:"):
+        # a SEAT address: the receipt names the seat's handle and its CURRENT holder (whose
+        # lineage head is the live truth a dispatcher wants); a vacant seat is not a grave —
+        # the mail waits for the next holder, and the receipt says holder=None honestly.
+        from src.orchestrator.agents import lineage_head
+        from src.orchestrator.seats import seat_receipt
+        sr = await seat_receipt(pool, to_a)
+        seat = (sr or {}).get("handle")
+        holder = (sr or {}).get("holder")
+        lineage = await lineage_head(pool, holder) if holder else None
+        if require_seat and sr is None:
+            raise ValueError(f"require_seat: '{requested or to_a}' is not a living Seat — "
+                             "refusing to dispatch blind.")
+    elif to_a:
         from src.orchestrator.agents import agent_seat, lineage_head
         lineage = await lineage_head(pool, to_a)
         seat = await agent_seat(pool, to_a)
@@ -180,7 +231,7 @@ async def send_message(
     # the reply IS the ack — settle the referenced message for the replier, if it was addressed
     # to them (a DM to me, or a broadcast to my project)
     if ref is not None and (
-        ref["to_agent"] == from_agent
+        await _addressed_to_me(pool, ref["to_agent"], from_agent)
         or (ref["to_agent"] is None and from_project
             and _norm(ref["to_project"] or "") == _norm(from_project))
     ):
@@ -196,14 +247,16 @@ async def send_message(
     if dup is not None:
         return {"id": dup["id"], "to": to_p, "to_agent": to_a,
                 "thread_id": dup["thread_id"], "dedup": True,
-                **({"seat": seat, "lineage_head": lineage} if to_a else {})}
+                **({"seat": seat, "lineage_head": lineage} if to_a else {}),
+                **({"holder": holder} if to_a and to_a.startswith("seat:") else {})}
     mid = await pool.fetchval(
         "INSERT INTO fleet_messages (from_agent, from_project, to_project, to_agent, body, "
         "reply_to, thread_id, desk_kind, grade) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) "
         "RETURNING id",
         from_agent, from_project, to_p, to_a, body, reply_to, thread, desk_kind, grade)
     return {"id": mid, "to": to_p, "to_agent": to_a, "thread_id": thread, "dedup": False,
-            **({"seat": seat, "lineage_head": lineage} if to_a else {})}
+            **({"seat": seat, "lineage_head": lineage} if to_a else {}),
+            **({"holder": holder} if to_a and to_a.startswith("seat:") else {})}
 
 
 async def unread_count(
@@ -292,7 +345,14 @@ async def ack_messages(
         "INSERT INTO message_recipients (message_id, agent_id, read_at) "
         "SELECT m.id, $3, now() FROM fleet_messages m "
         "WHERE m.id = ANY($1::bigint[]) "
-        "  AND ((m.to_agent = $3) OR (m.to_project = $2 AND m.to_agent IS NULL)) "
+        "  AND ((m.to_agent = $3) "
+        # ...or a SEAT the acking mind actively holds (Phase B2): settling seat mail is the
+        # holder's right exactly as reading it is
+        "   OR (m.to_agent LIKE 'seat:%' AND EXISTS (SELECT 1 FROM links hl "
+        "     JOIN objects hf ON hf.id=hl.from_id JOIN objects ht ON ht.id=hl.to_id "
+        "     WHERE hf.canonical = $3 AND ht.canonical = m.to_agent AND hl.type='holds' "
+        "     AND (hl.valid_until IS NULL OR hl.valid_until > now()))) "
+        "   OR (m.to_project = $2 AND m.to_agent IS NULL)) "
         "ON CONFLICT (message_id, agent_id) DO UPDATE SET read_at=COALESCE("
         "message_recipients.read_at, now()) "
         "WHERE message_recipients.read_at IS NULL RETURNING message_id",
