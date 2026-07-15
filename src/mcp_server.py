@@ -1777,7 +1777,8 @@ async def rebind_seat(seat: str, new_cwd: str, ctx: Context | None = None) -> di
         return {"error": "mount first — a rebind is a mind's act, and the graph must know whose",
                 "why": _anchorless(ctx)}
     from src.orchestrator.mounts import rebind_seat as _rebind
-    return await _rebind(Actions(await _pool_get()), seat_or_agent=seat, new_cwd=new_cwd)
+    return await _rebind(Actions(await _pool_get()), seat_or_agent=seat, new_cwd=new_cwd,
+                         actor=ident.agent_id)
 
 
 @mcp.tool()

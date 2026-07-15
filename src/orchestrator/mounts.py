@@ -268,26 +268,31 @@ def _write_osiris_file(new_cwd: str, project_label: str) -> str:
     """Write/refresh `new_cwd/.osiris`, pinning `project_label` — the existing durable
     mechanism (`agents.read_project_label`) that makes a folder rename stop mattering. Reads
     ONLY the file already at `new_cwd` (never walks up — a parent repo's `.osiris` is not this
-    seat's business) so a `model =` line already declared there survives untouched; `project =`
-    is always overwritten to the label being pinned."""
+    seat's business). Every top-level scalar key already declared there survives untouched
+    (`model =`, or anything a later fold adds — a rebind must never silently eat a key it
+    doesn't recognize); `project =` is always overwritten to the label being pinned. Honest
+    limit: TOML comments do not survive a rewrite — the parser never sees them."""
     d = Path(new_cwd)
     d.mkdir(parents=True, exist_ok=True)
     f = d / ".osiris"
-    model: str | None = None
+    kept: dict[str, Any] = {}
     if f.is_file():
         try:
-            value = tomllib.loads(f.read_text()).get("model")
-            model = str(value).strip() if value else None
+            kept = {k: v for k, v in tomllib.loads(f.read_text()).items()
+                    if k != "project" and isinstance(v, (str, int, float, bool))}
         except (OSError, tomllib.TOMLDecodeError, ValueError):
-            model = None
+            kept = {}
     lines = [f"project = {json.dumps(project_label)}"]
-    if model:
-        lines.append(f"model = {json.dumps(model)}")
+    for k, v in sorted(kept.items()):
+        # json string/number/bool literals are valid TOML values for these scalar types
+        lines.append(f"{k} = {json.dumps(v)}")
     f.write_text("\n".join(lines) + "\n")
     return str(f)
 
 
-async def rebind_seat(actions: Actions, *, seat_or_agent: str, new_cwd: str) -> dict[str, Any]:
+async def rebind_seat(
+    actions: Actions, *, seat_or_agent: str, new_cwd: str, actor: str | None = None,
+) -> dict[str, Any]:
     """Move a seat's ANCHOR cwd, preserving identity, lineage, attribution, and mail (`dd47c1da`
     — the fold the operator is blocked on). MINTS NOTHING: no new Agent, no handle or lineage
     edge is touched here — this only re-points where a seat's rows live and re-pins the durable
@@ -303,7 +308,9 @@ async def rebind_seat(actions: Actions, *, seat_or_agent: str, new_cwd: str) -> 
         `new_cwd` — not just the live holder's, or an earlier generation's row resurrects at
         the old path the instant anything reads it by job_dir.
     (e) stamp a SELF_DECLARED `anchor_moved` assertion on the Agent — the move is on the
-        record, not only in the filesystem.
+        record, not only in the filesystem, and in the MOVER'S name (`actor`, the mounted
+        caller): a rebind is a mind's act on another seat, so the record must say whose hand
+        moved it, never pretend the seat moved itself.
 
     Refuses LOUDLY (an error dict, nothing written) when `seat_or_agent` resolves to nobody —
     an unknown seat is never a silent no-op."""
@@ -337,7 +344,7 @@ async def rebind_seat(actions: Actions, *, seat_or_agent: str, new_cwd: str) -> 
     now = datetime.now(UTC)
     a = await actions.create_or_find_object("Agent", agent_id, agent_id)
     await actions.assert_property(
-        a, "anchor_moved", f"{old_cwd or '?'} → {new_cwd}", agent_id, now, _CONF,
+        a, "anchor_moved", f"{old_cwd or '?'} → {new_cwd}", actor or agent_id, now, _CONF,
         evidence_class=_EC)
     return {
         "agent": agent_id, "project": label, "old_cwd": old_cwd, "new_cwd": new_cwd,
