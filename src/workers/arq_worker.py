@@ -28,7 +28,7 @@ from src.db.pool import create_pool
 from src.db.redis import create_redis
 from src.ingest.orphans import find_orphans, mark_swept
 from src.ingest.sessions import adversary_pass, sense_sessions_tick
-from src.ingest.wake_cost import meter_receipts, meter_wakes
+from src.ingest.wake_cost import meter_bodies, meter_receipts, meter_wakes
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, expand_case, run_cascade
 from src.orchestrator.liveness import observe_liveness
@@ -212,9 +212,15 @@ async def meter_the_wakes(ctx: dict[str, Any]) -> int:
     carries its real tokens and its model. This reads them. Free, deterministic, once per session —
     an OBSERVATION, so it rides the observer's switch, not the adversary's.
     """
+    # the BODY lane first, on its OWN legs: a provider's receipts are the provider's source,
+    # not the observer's — they must not ride OSIRIS_TRANSCRIPTS (a switch shared across
+    # sources blinded the free observer for a day once; never again). Free, local, idempotent.
+    bodies = await meter_bodies(ctx["pool"])
+    if bodies["metered"]:
+        _log.info("body receipts metered: %s", bodies)
     root = get_settings().osiris_transcripts
     if not root:
-        return 0
+        return int(bodies["metered"])
     rep = await meter_wakes(ctx["pool"], Path(root))
     # the receipts pass: RESUME-mode wakes append to transcripts the once-ever watermark has
     # already walked, so their spend lives ONLY in the CLI envelope (found live: wake 819,
@@ -222,7 +228,7 @@ async def meter_the_wakes(ctx: dict[str, Any]) -> int:
     rep |= await meter_receipts(ctx["pool"])
     if rep["metered"] or rep.get("receipts_metered"):
         _log.info("wake spend metered: %s", rep)
-    return int(rep["metered"]) + int(rep.get("receipts_metered", 0))
+    return int(rep["metered"]) + int(rep.get("receipts_metered", 0)) + int(bodies["metered"])
 
 
 async def reap_orphans(ctx: dict[str, Any]) -> int:

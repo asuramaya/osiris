@@ -18,6 +18,7 @@ from pathlib import Path
 
 from src.actions.core import Actions
 from src.ingest.wake_cost import meter_bodies, meter_wakes, metered_key
+from src.orchestrator.bodies import StubRaProvider
 
 
 def _session(root: Path, sid: str, first: str, *, turns: int = 2) -> Path:
@@ -283,3 +284,28 @@ async def test_the_digest_surfaces_resource_seconds_beside_dollars(
     assert {b["exit_cause"] for b in dg["bodies"]["by"]} == {"exited", "oom_killed"}
     assert "visibility only" in dg["bodies"]["coverage"]
     assert dg["summary"]["body_core_seconds"] == 25.0
+
+
+async def test_a_provider_minted_receipt_round_trips_into_body_usage(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE SEAM TEST — binds the receipt's WRITER (bodies._build_receipt, Phase 0.1) to its
+    READER (_body_receipt, Phase 0.2), built by two different hands against one spec: a receipt
+    minted by a real BodyProvider dissolve() must sweep into body_usage unchanged. If either
+    side ever drifts from RECEIPT v1, this test says so before the field does."""
+    receipts = tmp_path / "body-receipts"
+    provider = StubRaProvider(receipts_dir=receipts)
+    handle = await provider.summon(
+        "claude", 1, 2 * 1024**3, "osiris", "/home/asuramaya/.claude/jobs/deadbeef", 0.25,
+        command=["true"])
+    await provider.dissolve(handle)
+    assert (await meter_bodies(actions.pool, receipts=receipts))["metered"] == 1
+    row = await actions.pool.fetchrow(
+        "SELECT provider, kind, project, seat_anchor, ram_envelope_bytes, exit_cause "
+        "FROM body_usage WHERE handle=$1", handle)
+    assert row is not None
+    assert row["provider"] == "ra-stub" and row["kind"] == "claude"
+    assert row["project"] == "osiris"                  # repo_ref lands in `project`
+    assert row["seat_anchor"] == "/home/asuramaya/.claude/jobs/deadbeef"
+    assert row["ram_envelope_bytes"] == 2 * 1024**3
+    assert row["exit_cause"] == "exit:0"
