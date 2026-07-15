@@ -988,3 +988,106 @@ async def test_resolves_is_idempotent(actions: Actions) -> None:
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE from_id=$1 AND to_id=$2 AND type='answers'", d, t)
     assert n == 1
+
+
+# --- batch-resolve (§4.7, Maat's ask): record_decision(resolves=[...]) folds a SET --------
+
+async def test_batch_resolves_closes_each_thread_independently(actions: Actions) -> None:
+    """A LIST folds the whole set a delegation supersedes, in one act — the fix for Maat's
+    grievance (ruling dd47c1da): thread ownership doesn't transfer with a delegation, so a
+    hand-off used to leave her hand-closing threads twice, by hand, across two sessions."""
+    t1 = await open_thread(actions, "wire the manager's charter relation")
+    t2 = await open_thread(actions, "wire the manager's seat rebind primitive")
+    d = await record_decision(actions, "delegating the manager daemon build to kast",
+                              kind="choice", resolves=[str(t1), str(t2)])
+    for t in (t1, t2):
+        status = await actions.pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+            "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", t)
+        assert status == "resolved"
+        answers_to = await actions.pool.fetchval(
+            "SELECT to_id FROM links WHERE from_id=$1 AND to_id=$2 AND type='answers'", d, t)
+        assert answers_to == t
+
+
+async def test_batch_resolves_a_miss_does_not_veto_the_rest(actions: Actions) -> None:
+    """Unlike the single-ref form, one typo inside a LIST must not sink the whole ruling —
+    the entries that DO match still close, and the decision still lands. Naming the miss is
+    the MCP tool's job (the membrane rule); capture only guarantees a bad ref never silently
+    drops the rest of the set."""
+    t1 = await open_thread(actions, "wire the manager's warm/cold resurrection policy")
+    d = await record_decision(
+        actions, "the resurrection policy ships cold-by-default",
+        kind="ruling", resolves=[str(t1), "no-such-thread-whatsoever"])
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", t1)
+    assert status == "resolved"
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE name='summary' AND "
+        "value #>> '{}' = 'the resurrection policy ships cold-by-default'") == 1
+    assert d is not None
+
+
+async def test_record_decision_tool_reports_batch_receipt_per_entry(actions: Actions) -> None:
+    """The MCP tool's response NAMES each entry — what closed (id + summary) or that it
+    matched nothing — never swallowing a miss (the membrane rule)."""
+    from src import mcp_server as srv
+
+    t1 = await open_thread(actions, "restart the daemons after the kernel change")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.record_decision(
+            "the kernel change ships behind a feature flag", kind="ruling",
+            resolves=[str(t1), "no-such-thread-anywhere"])
+    finally:
+        srv._pool = saved_pool
+    receipt = out["resolved_threads"]
+    assert len(receipt) == 2
+    hit = next(r for r in receipt if r["ref"] == str(t1))
+    assert hit["matched"] == "true" and hit["id"] == str(t1)[:8]
+    assert hit["summary"] == "restart the daemons after the kernel change"
+    miss = next(r for r in receipt if r["ref"] == "no-such-thread-anywhere")
+    assert miss["matched"] == "false" and "matched no thread" in miss["note"]
+    assert "resolved_thread" not in out  # the singular key stays the single-string shape
+
+
+async def test_record_decision_tool_single_string_resolves_is_byte_compatible(
+    actions: Actions,
+) -> None:
+    """A single string keeps the ORIGINAL shape — `resolved_thread`, singular, unchanged —
+    so the existing tool-level call sites see no diff."""
+    from src import mcp_server as srv
+
+    t = await open_thread(actions, "the composer needs a live socket for the fleet rail")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.record_decision(
+            "the fleet rail streams over the daemon's unix socket", kind="ruling",
+            resolves=str(t))
+    finally:
+        srv._pool = saved_pool
+    assert out["resolved_thread"] == f"{str(t)[:8]} — closed by this decision (answers edge)"
+    assert "resolved_threads" not in out
+
+
+async def test_record_decision_tool_single_string_still_errors_on_a_miss(
+    actions: Actions,
+) -> None:
+    """The single-string path keeps its all-or-nothing strictness: a miscited ref errors and
+    records nothing (unlike the list form, which reports a miss but still lands)."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.record_decision(
+            "a ruling that cites a ghost thread", resolves="not-a-real-thread")
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out and "resolves matched no thread" in out["error"]
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE name='summary' AND "
+        "value #>> '{}' = 'a ruling that cites a ghost thread'") == 0

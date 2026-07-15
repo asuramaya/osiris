@@ -1801,7 +1801,7 @@ async def record_decision(
     summary: str, kind: str = "ruling", rationale: str | None = None,
     repo: str | None = None, grounds: list[str] | None = None,
     protocol: str | None = None, supersedes: str | None = None,
-    resolves: str | None = None, subagent_id: str | None = None,
+    resolves: str | list[str] | None = None, subagent_id: str | None = None,
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -1821,11 +1821,20 @@ async def record_decision(
     unwindable. Renders in the `decision-log` composition beside mined decisions, graded
     SELF_DECLARED (higher trust). Attributed to you if you mount()ed. Idempotent on the
     summary.
-    `resolves` = the THREAD this decision ANSWERS (UUID, 8-char short id, or a summary
-    substring). It closes it in the same act. USE IT whenever your ruling settles an open
+    `resolves` = the THREAD(s) this decision ANSWERS (UUID, 8-char short id, or a summary
+    substring). It closes them in the same act. USE IT whenever your ruling settles an open
     question — otherwise the answer lands and the question stays lit, and the next mind (or
     the operator) is asked something you already decided. Naming the thread in your prose
-    does nothing; the graph does not read prose."""
+    does nothing; the graph does not read prose.
+    A LIST folds the whole SET a delegation supersedes in one act (§4.7, Maat's ask —
+    "thread ownership doesn't transfer with a delegation" left her hand-closing threads
+    twice, by hand, across two sessions, because the single form could only ever name one).
+    Each entry resolves INDEPENDENTLY: the response's `resolved_threads` names, per entry,
+    exactly what closed (id + summary) or that it matched NOTHING — a pattern that closes
+    zero threads is reported, never silently swallowed. Unlike a single string, an unmatched
+    entry inside a list does NOT abort the whole ruling (one typo must not veto the other
+    nine); a single STRING keeps the original strictness byte-for-byte — matches nothing →
+    the call errors and NOTHING is recorded."""
     pool = await _pool_get()
     gids: list[uuid.UUID] = []
     missing: list[str] = []
@@ -1838,21 +1847,41 @@ async def record_decision(
         if old is None:
             return {"error": f"supersedes matched no decision: {supersedes!r} — quote its "
                              "UUID, 8-char short id, or a summary substring"}
-    answered: uuid.UUID | None = None
-    if resolves:  # same strictness: a ruling that miscites its question has not settled it
-        answered = await capture._find_thread(pool, resolves)
-        if answered is None:
+    # resolve BEFORE recording, same discipline as supersedes — a single string keeps the
+    # original all-or-nothing strictness; a list resolves each entry independently and
+    # reports (never raises) on a miss, so one typo can't veto the rest of the set.
+    answered: list[uuid.UUID] = []
+    receipt: list[dict[str, str]] = []
+    if isinstance(resolves, list):
+        for ref in resolves:
+            tid = await capture._find_thread(pool, ref)
+            if tid is None:
+                receipt.append({"ref": ref, "matched": "false",
+                                "note": "matched no thread — quote its UUID, 8-char short "
+                                        "id, or a summary substring"})
+                continue
+            answered.append(tid)
+            summ = await capture._thread_summary(pool, tid)
+            receipt.append({"ref": ref, "matched": "true", "id": str(tid)[:8],
+                            "summary": summ or ""})
+    elif resolves:  # same strictness: a ruling that miscites its question has not settled it
+        single = await capture._find_thread(pool, resolves)
+        if single is None:
             return {"error": f"resolves matched no thread: {resolves!r} — quote its UUID, "
                              "8-char short id, or a summary substring"}
+        answered.append(single)
     d = await capture.record_decision(
         Actions(pool), summary, kind=kind, rationale=rationale, repo=repo,
         source=await _actor_for(ctx, subagent_id, subagent_type), grounds=gids,
         protocol=protocol, supersedes=str(old) if old else None,
-        resolves=str(answered) if answered else None,
+        resolves=[str(a) for a in answered] if isinstance(resolves, list) else
+                 (str(answered[0]) if answered else None),
     )
     out: dict[str, Any] = {"id": str(d), "kind": kind, "summary": summary}
-    if answered is not None:
-        out["resolved_thread"] = f"{str(answered)[:8]} — closed by this decision (answers edge)"
+    if isinstance(resolves, list):
+        out["resolved_threads"] = receipt
+    elif answered:
+        out["resolved_thread"] = f"{str(answered[0])[:8]} — closed by this decision (answers edge)"
     if old is not None:
         out["superseded"] = (
             "self (identical summary re-recorded) — nothing buried" if old == d else

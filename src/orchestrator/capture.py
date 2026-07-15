@@ -96,7 +96,7 @@ async def record_decision(
     actions: Actions, summary: str, *, kind: str = "ruling",
     rationale: str | None = None, repo: str | None = None, source: str = _SOURCE,
     grounds: list[uuid.UUID] | None = None, protocol: str | None = None,
-    supersedes: str | None = None, resolves: str | None = None,
+    supersedes: str | None = None, resolves: str | list[str] | None = None,
 ) -> uuid.UUID:
     """Capture a decision at the moment it is made — the WHY, declared, not mined.
 
@@ -129,7 +129,19 @@ async def record_decision(
     is the fleet's most common write; the close belongs INSIDE the answer, not beside it.
     A ruling that can name its question should not need a second verb to finish the sentence.
     Same strictness as `supersedes`: a ref that matches nothing raises, and NOTHING is
-    recorded — a ruling that miscites the question it settles has not settled it."""
+    recorded — a ruling that miscites the question it settles has not settled it.
+
+    `resolves` also takes a LIST (§4.7, Maat's ask, ruling dd47c1da): a delegation folds
+    the SET of threads it supersedes, not just one — "thread ownership doesn't transfer
+    with a delegation" left her hand-closing threads twice, across two sessions, because
+    the single-ref form could only ever name one. Each entry resolves INDEPENDENTLY through
+    the same matcher as the single-ref form. Unlike the single ref, a list entry that
+    matches nothing does NOT abort the call — it would defeat the point of folding a set to
+    have one typo veto the other nine — but it is never swallowed either: the caller (the
+    MCP tool) is the one that names, per entry, what closed and what didn't, since this
+    function's return stays a bare id (additive shape only — ~20 existing call sites bind
+    it as a plain UUID). A single STRING keeps the original strictness byte-for-byte:
+    matches nothing → raises, nothing recorded."""
     observed = datetime.now(UTC)
     old: uuid.UUID | None = None
     if supersedes:
@@ -137,12 +149,18 @@ async def record_decision(
         if old is None:
             raise ValueError(f"supersedes matched no decision: {supersedes!r} — quote its "
                              "UUID, 8-char short id, or a summary substring")
-    answered: uuid.UUID | None = None
-    if resolves:
-        answered = await _find_thread(actions.pool, resolves)
-        if answered is None:
+    answered: list[uuid.UUID] = []
+    if isinstance(resolves, list):
+        for thread_ref in resolves:
+            tid = await _find_thread(actions.pool, thread_ref)
+            if tid is not None:
+                answered.append(tid)
+    elif resolves:
+        single = await _find_thread(actions.pool, resolves)
+        if single is None:
             raise ValueError(f"resolves matched no thread: {resolves!r} — quote its UUID, "
                              "8-char short id, or a summary substring")
+        answered.append(single)
     # ONE transaction: the Decision, its summary/kind/rationale, and the repo link either all
     # land or none do — a process death mid-sequence can no longer leave a summary-less husk.
     async with actions.atomic() as a:
@@ -178,22 +196,23 @@ async def record_decision(
                                     source, observed, _CONF, evidence_class=_EC)
             await a.assert_property(d, "supersedes", str(old), source, observed, _CONF,
                                     evidence_class=_EC)
-        if answered is not None:
+        for thread_id in answered:
             # the ANSWER and the CLOSE in one transaction: a ruling that lands while its
             # question stays open is how the operator gets asked twice. Same shape the
             # resolve_thread verb writes (status/resolved_in/resolved_because), so every
-            # lens that already renders a resolved thread renders this one unchanged.
+            # lens that already renders a resolved thread renders this one unchanged. A
+            # batch just runs this once per thread in the set — same act, same transaction.
             exists = await a.pool.fetchval(
                 "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='answers'",
-                d, answered)
+                d, thread_id)
             if not exists:
-                await a.create_link(d, answered, "answers", source, observed, _CONF,
+                await a.create_link(d, thread_id, "answers", source, observed, _CONF,
                                     evidence_class=_EC)
-            await a.assert_property(answered, "status", "resolved", source, observed, _CONF,
+            await a.assert_property(thread_id, "status", "resolved", source, observed, _CONF,
                                     evidence_class=_EC)
-            await a.assert_property(answered, "resolved_in", source, source, observed, _CONF,
+            await a.assert_property(thread_id, "resolved_in", source, source, observed, _CONF,
                                     evidence_class=_EC)
-            await a.assert_property(answered, "resolved_because",
+            await a.assert_property(thread_id, "resolved_because",
                                     f"answered by decision {str(d)[:8]}: {summary[:200]}",
                                     source, observed, _CONF, evidence_class=_EC)
     return d
@@ -220,6 +239,15 @@ async def _find_decision(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
         "WHERE o.type='Decision' AND o.status='active' AND a.name='summary' "
         "AND a.value #>> '{}' ILIKE '%'||$1||'%' ORDER BY length(a.value #>> '{}') ASC LIMIT 1",
         ref,
+    )
+
+
+async def _thread_summary(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | None:
+    """The WINNING `summary` for a thread — used to name what a batch resolve closed."""
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        thread_id,
     )
 
 
