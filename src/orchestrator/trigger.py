@@ -28,6 +28,7 @@ import asyncpg
 from src.actions.core import Actions
 from src.config.settings import Settings, get_settings
 from src.ingest.sessions import locate_current_transcript
+from src.orchestrator.bodies import BodyProvider, LocalProvider
 from src.orchestrator.ceiling import may_spend
 from src.orchestrator.mailbox import OPERATOR_ADDR, send_message
 
@@ -493,6 +494,56 @@ async def _spawn_claude(
     _log.info("trigger: woke %s in %s (pid %s, receipt %s)",
               f"resume:{resume_session}" if resume_session else f"mint:{job_dir}",
               repo, proc.pid, receipt or "NONE — this wake will be invisible in the ledger")
+
+
+# The body lane's default envelope (doctrine 2's ceiling knob, no metering-policy attached
+# yet — §0.2 wires the daily ceiling into `budget_usd`). 2GiB: the same cap providers.py's
+# extractor already lives inside, so one wake body costs no more headroom than one extractor.
+_BODY_DEFAULT_RAM_BYTES = 2 * 2**30
+
+
+async def _spawn_in_body(
+    repo: str, prompt: str, *, job_dir: str | None = None, resume_session: str | None = None,
+    model: str | None = None, allowed_tools: str | None = None,
+    provider: BodyProvider | None = None, ram_bytes: int = _BODY_DEFAULT_RAM_BYTES,
+    cores: int | None = None, budget_usd: float | None = None,
+) -> str:
+    """The body-lane twin of `_spawn_claude` (doctrine 2, ruling `7ff54707`: LOCAL is the
+    default product tier, not a test double). SAME env/anchor discipline as `_spawn_claude` —
+    CLAUDE_JOB_DIR, --model, --allowedTools, --resume — only the substrate changes: the process
+    runs inside a metered `BodyProvider` body instead of a bare child of this one.
+
+    THE WAKE PROTOCOL ITSELF IS UNCHANGED: nothing calls this yet, and it does not replace
+    `_spawn_claude` — it sits beside it, dark, until Phase 1's daemon routes real wakes through
+    a body. Returns the body's HANDLE (not a pid): unlike `_spawn_claude`'s fire-and-forget, the
+    caller owns dissolve(handle) — that is where the receipt is minted, not here.
+
+    The CLI's own per-call dollar receipt (`_spawn_claude`'s `total_cost_usd` capture) is a
+    SEPARATE concern from the body's resource receipt (core/ram-seconds, minted by the provider
+    at dissolve) — folding the two into one ledger is §0.2's job, not this one's.
+    """
+    provider = provider or LocalProvider()
+    env = os.environ.copy()
+    cmd = ["claude", "-p", "--output-format", "json"]
+    if model:
+        cmd += ["--model", model]
+    if allowed_tools:
+        cmd += ["--allowedTools", allowed_tools]
+    if resume_session:
+        cmd += ["--resume", resume_session]
+    if job_dir:
+        env["CLAUDE_JOB_DIR"] = job_dir
+    cmd.append(prompt)
+
+    # The seat's durable anchor (§2's "identity at birth"): job_dir when minting, else the
+    # resumed session's own id — never the bare repo path, or two bodies in the same repo would
+    # share one accounting identity.
+    seat_anchor = job_dir or resume_session or repo
+    handle = await provider.summon(
+        "claude", cores, ram_bytes, repo, seat_anchor, budget_usd, command=cmd, env=env)
+    _log.info("trigger: bodied %s in %s (handle %s)",
+              f"resume:{resume_session}" if resume_session else f"mint:{job_dir}", repo, handle)
+    return handle
 
 
 async def trigger_mail_tick(
