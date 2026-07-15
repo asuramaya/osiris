@@ -162,11 +162,11 @@ def _link(text: str, anchor: str) -> str:
 
 async def _counts(
     project: str, session_id: str, model_id: str = "", model_raw: str = "",
-    window_size: int | None = None,
+    window_size: int | None = None, *, connect_timeout: float = 1.0,
 ) -> tuple[int, int, int, int, int, int]:
     import asyncpg
 
-    conn = await asyncpg.connect(DSN, timeout=1.0)
+    conn = await asyncpg.connect(DSN, timeout=connect_timeout)
     try:
         agent = None
         if session_id:
@@ -292,6 +292,25 @@ async def _counts(
         await conn.close()
 
 
+async def _fetch_counts(
+    project: str, session_id: str, model_id: str, model_raw: str, window_size: int | None,
+) -> tuple[tuple[int, int, int, int, int, int, int, int, list[str]], bool]:
+    """SLOW IS NOT DOWN (field-witnessed tonight: the 1.0s connect timeout flapped "graph
+    unreachable" under load while the graph was very much up). One retry, a wider budget,
+    on a TIMEOUT ONLY — a refused connection, a DNS failure, a real Postgres error is
+    actually down and gets no second knock; only a TIMEOUT earns one, because a timeout is
+    the one failure mode that means "maybe just slow." Returns (counts, slow) — slow=True
+    only when the FIRST attempt timed out and the retry succeeded; callers still see
+    "unreachable" when both attempts fail (the retry's own exception propagates)."""
+    try:
+        return await asyncio.wait_for(
+            _counts(project, session_id, model_id, model_raw, window_size), timeout=1.5), False
+    except TimeoutError:
+        return await asyncio.wait_for(
+            _counts(project, session_id, model_id, model_raw, window_size,
+                    connect_timeout=2.5), timeout=3.0), True
+
+
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
@@ -316,9 +335,8 @@ def main() -> None:
     window_size = int(window_size) if isinstance(window_size, (int, float)) else None
 
     try:
-        desk, mail, dm, flight, live, wakes, owed, owed_here, sick = asyncio.run(
-            asyncio.wait_for(_counts(project, session_id, model_id, model_raw, window_size),
-                             timeout=1.5))
+        (desk, mail, dm, flight, live, wakes, owed, owed_here, sick), slow = asyncio.run(
+            _fetch_counts(project, session_id, model_id, model_raw, window_size))
         # THE DEBT, NOT THE DOORBELL. `owe 5·13` = five open duties in THIS tree, thirteen
         # across the garden. Red only when you owe something HERE — a fleet-wide number you
         # can do nothing about from this directory is not an alarm, it is wallpaper, and
@@ -348,6 +366,10 @@ def main() -> None:
             _link(mail_s, "conversations"),
             _link(f"fleet {live}●", "fleet"),
             _link(f"wakes {wakes}/h", "wakes"),
+            # SLOW IS NOT DOWN: the first knock timed out but the retry got through — say so,
+            # instead of either lying "all clear" or crying "unreachable" over a graph that
+            # answered, just late (field-witnessed false-down, tonight, under load).
+            *([_link(f"{AMBER}graph slow{RESET}", "fleet")] if slow else []),
         ]
     except Exception:  # noqa: BLE001 — the graph being down is information, not an error
         parts = [f"◈ {project}", f"{DIM}graph unreachable{RESET}"]
