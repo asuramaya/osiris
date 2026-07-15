@@ -32,6 +32,7 @@ import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import asyncpg
 
@@ -242,3 +243,98 @@ async def meter_receipts(pool: asyncpg.Pool, *, receipts: Path | None = None) ->
         await record_usage(pool, purpose="wake", usage=usage, ran_at=ran)
         metered += 1
     return {"receipts_metered": metered}
+
+
+# ═══ THE OTHER DIMENSION — resource-seconds, beside the vendor's dollars (ruling 7ff54707) ═══
+#
+# llm_usage answers "what did the vendor charge?" A wake's REAL cost also includes the hand
+# that ran it — cores and RAM, metered by cgroup v2 (local tier) or dom0 (Ra tier), UNIFORM
+# across both so a body costs exactly as legibly whichever tier summoned it. body_usage is that
+# sibling ledger. "A hand you cannot cost is a hand you cannot govern."
+
+_BODY_RECEIPTS = Path.home() / ".osiris" / "body-receipts"
+
+# The RECEIPT v1 fields body_usage cannot go without. `ram_peak_bytes`/`seat_anchor`/`repo_ref`
+# are optional in the envelope (the table's NULL columns); `budget_usd` and any other unknown
+# key are tolerated and simply never stored — this parses exactly v1, nothing more.
+_BODY_REQUIRED = ("handle", "provider", "kind", "core_seconds", "wall_seconds",
+                  "ram_envelope_bytes", "ram_gib_seconds", "exit_cause", "started_at", "ended_at")
+
+
+def _body_receipt(path: Path) -> dict[str, Any] | None:
+    """One RECEIPT v1 body-provider envelope -> its fields, or None if unreadable/malformed.
+
+    Same tolerance as `_envelope` above (wake-7.json, 2026-07-14): a 0-byte or half-written
+    file is a body still dissolving, or a summon that died before its first write — not a bad
+    write, and not this sweep's business to diagnose. A receipt missing a required field, or
+    stamped a version other than 1, is simply not this parser's shape. Either way: skip, never
+    crash the sweep.
+    """
+    try:
+        text = path.read_text(errors="replace")
+        if not text.strip():
+            return None
+        rec = json.loads(text)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(rec, dict) or rec.get("v") != 1:
+        return None
+    if any(rec.get(k) is None for k in _BODY_REQUIRED):
+        return None
+    return rec
+
+
+def _body_ts(value: Any) -> datetime | None:
+    """Parse a RECEIPT v1 ISO-8601 instant. A naive string is assumed UTC (the receipt is
+    expected to always carry an offset); anything unparseable is a malformed field, not a crash."""
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
+async def meter_bodies(pool: asyncpg.Pool, *, receipts: Path | None = None) -> dict[str, int]:
+    """Sweep RECEIPT v1 body-provider receipts (~/.osiris/body-receipts/*.json) into body_usage.
+
+    Idempotent on `handle` (ON CONFLICT DO NOTHING): a body is dissolved once, so a receipt
+    swept twice — or by two ticks racing — costs nothing extra. Dated by the receipt FILE'S
+    OWN mtime, never the sweep's clock: the same eddb006 discipline as the wake receipts above
+    (`_last_turn`) — a ledger dated by the bookkeeping instead of the event misfiles a whole
+    body's runtime under whichever day the sweep happened to run. Malformed or zero-byte
+    receipts are skipped and counted, never allowed to crash the sweep.
+    """
+    root = (receipts or _BODY_RECEIPTS).expanduser()
+    try:
+        files = [p for p in root.iterdir() if p.suffix == ".json"]
+    except OSError:
+        return {"metered": 0, "skipped": 0}
+    metered = skipped = 0
+    for path in files:
+        rec = await asyncio.to_thread(_body_receipt, path)
+        if rec is None:
+            skipped += 1
+            continue
+        started, ended = _body_ts(rec["started_at"]), _body_ts(rec["ended_at"])
+        mtime = await asyncio.to_thread(_last_turn, path)
+        if started is None or ended is None or mtime is None:
+            skipped += 1
+            continue
+        got = await pool.fetchrow(
+            "INSERT INTO body_usage (handle, provider, kind, project, seat_anchor, "
+            "core_seconds, wall_seconds, ram_envelope_bytes, ram_peak_bytes, ram_gib_seconds, "
+            "exit_cause, started_at, ended_at, receipt_mtime) "
+            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) "
+            "ON CONFLICT (handle) DO NOTHING RETURNING id",
+            str(rec["handle"]), str(rec["provider"]), str(rec["kind"]),
+            str(rec["repo_ref"]) if rec.get("repo_ref") is not None else None,
+            str(rec["seat_anchor"]) if rec.get("seat_anchor") is not None else None,
+            float(rec["core_seconds"]), float(rec["wall_seconds"]),
+            int(rec["ram_envelope_bytes"]),
+            int(rec["ram_peak_bytes"]) if rec.get("ram_peak_bytes") is not None else None,
+            float(rec["ram_gib_seconds"]), str(rec["exit_cause"]), started, ended, mtime)
+        # a conflict (handle already metered) is NOT a skip — the receipt is well-formed, it was
+        # simply seen before. Only report it as newly `metered` when a row actually landed.
+        if got is not None:
+            metered += 1
+    return {"metered": metered, "skipped": skipped}

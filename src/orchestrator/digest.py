@@ -28,6 +28,10 @@ new writes:
   * COST — what the inference seam spent in the window (llm_usage): a `spend` head + a `costs`
     stream (per purpose/model/day). Rendered HONESTLY: only the session-miner's extract path is
     metered today, so a `coverage` note names exactly what is (and isn't) counted.
+  * BODIES — the meter's OTHER dimension (ruling 7ff54707): core-seconds/RAM-gib-seconds off
+    `body_usage`, grouped by provider/exit_cause, beside `costs` in the same report shape — the
+    hypervisor/cgroup receipt sitting next to the vendor's dollar. Visibility only; the ceiling's
+    dollar gate is untouched.
 
 Read-side by default; the window is either an explicit rolling `since` OR the stored OPERATOR
 WATERMARK ("what's new since I last looked"). Reading NEVER advances the watermark — advancing is
@@ -346,6 +350,37 @@ async def _costs(actions: Actions, since: datetime) -> dict[str, Any]:
     }
 
 
+_BODY_COVERAGE = ("body_usage rows arrive via meter_bodies (src/ingest/wake_cost.py), swept from "
+                  "~/.osiris/body-receipts — zero here until a BodyProvider mints receipts and "
+                  "a periodic tick sweeps them; visibility only, the daily $ ceiling is untouched")
+
+
+async def _bodies(actions: Actions, since: datetime) -> dict[str, Any]:
+    """The resource-second stream — body_usage aggregated over the window, grouped by
+    (provider, exit_cause), heaviest first. Ruling 7ff54707: hypervisor/cgroup receipts are
+    recorded UNIFORM across provider tiers, surfaced here beside `costs`' vendor dollars — same
+    report shape, the meter's OTHER dimension. 'A hand you cannot cost is a hand you cannot
+    govern.' This is visibility only: it invents no enforcement, the ceiling's dollar gate
+    (orchestrator/ceiling.py) reads neither this stream nor this table."""
+    rows = await actions.pool.fetch(
+        "SELECT provider, exit_cause, count(*) AS n, "
+        " coalesce(sum(core_seconds),0) AS core_seconds, "
+        " coalesce(sum(ram_gib_seconds),0) AS ram_gib_seconds "
+        "FROM body_usage WHERE receipt_mtime >= $1 "
+        "GROUP BY provider, exit_cause ORDER BY core_seconds DESC LIMIT 10", since)
+    by = [{"provider": r["provider"], "exit_cause": r["exit_cause"], "count": int(r["n"]),
+           "core_seconds": round(float(r["core_seconds"]), 2),
+           "ram_gib_seconds": round(float(r["ram_gib_seconds"]), 2)}
+          for r in rows]
+    return {
+        "count": sum(g["count"] for g in by),
+        "core_seconds": round(sum(g["core_seconds"] for g in by), 2),
+        "ram_gib_seconds": round(sum(g["ram_gib_seconds"] for g in by), 2),
+        "by": by,
+        "coverage": _BODY_COVERAGE,
+    }
+
+
 async def _retrieval(actions: Actions, since: datetime) -> dict[str, Any]:
     """Retrieval telemetry off search_log — the embeddings tripwire made visible: how often
     the fleet searched, how often it found NOTHING, and the queries that missed most. A memory
@@ -438,6 +473,7 @@ async def fleet_digest(
     laundering, disputes = await _credence_streams(actions, effective_since)
     conversations = await _conversations(actions, effective_since)
     costs = await _costs(actions, effective_since)
+    bodies = await _bodies(actions, effective_since)
     retrieval = await _retrieval(actions, effective_since)
     miner = await _miner(actions, effective_since)
     operator_inbox = await _operator_inbox(actions, lease_secs=lease_secs)
@@ -476,6 +512,8 @@ async def fleet_digest(
             "disputes": len(disputes), "conversations": len(conversations),
             "operator_unread": operator_inbox["unread"],
             "spend_tokens": costs["tokens"], "spend_usd": costs["usd"],
+            "body_core_seconds": bodies["core_seconds"],
+            "body_ram_gib_seconds": bodies["ram_gib_seconds"],
             "miner_errors": miner["errors"],
             # the graph has NO sighting of these minds, ever — neither a transcript stamp nor a
             # mount. Counted, never silently dropped. This is a CENSUS gap, not (yet) a ghost
@@ -495,6 +533,7 @@ async def fleet_digest(
         "disputes": disputes,
         "conversations": conversations,
         "costs": costs,
+        "bodies": bodies,
         "retrieval": retrieval,
         "miner": miner,
         "operator_inbox": operator_inbox,
