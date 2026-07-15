@@ -219,6 +219,10 @@ async def binding_of_handle(pool: asyncpg.Pool, name: str) -> dict[str, Any] | N
         "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "AND NOT EXISTS (SELECT 1 FROM current_assertions r WHERE r.object_id=f.id "
         "  AND r.name IN ('retired','false_mint') AND r.value #>> '{}' = 'true') "
+        # a VISITOR never resolves as a holder (Phase C — the attach guard makes this link
+        # shape impossible going forward; this is defense in depth for healed history)
+        "AND NOT EXISTS (SELECT 1 FROM links sl WHERE sl.from_id=f.id "
+        "  AND sl.type='spawned_by') "
         "ORDER BY l.first_seen DESC LIMIT 1", seats[0])
     if holder is None:
         return None
@@ -268,6 +272,15 @@ async def attach_session(
                          f"({row['used_by']}). A one-time token binds to its first "
                          "presenter; a second presentation is an inherited environment or a "
                          "collision, never a resume. Nothing was bound."}
+    # A VISITOR NEVER HOLDS A SEAT (Phase C, §4.3): a sub-agent works in its parent's name —
+    # binding one would seat a sidechain that dies with its task and never resumes.
+    spawner = await pool.fetchval(
+        "SELECT p.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects p ON p.id=l.to_id "
+        "WHERE f.canonical=$1 AND l.type='spawned_by' LIMIT 1", agent_id)
+    if spawner:
+        return {"error": f"ATTACH REFUSED — {agent_id} is a VISITOR (spawned_by {spawner}); "
+                         "a sub-agent never holds a seat. Nothing was bound."}
     fresh_use = row["used_at"] is None
     if fresh_use:
         holder = await pool.fetchrow(

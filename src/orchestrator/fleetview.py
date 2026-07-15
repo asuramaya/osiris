@@ -44,10 +44,14 @@ def _short(model: str | None) -> str:
 
 def _id_label(canon: str, nodes: dict[str, Node]) -> str:
     """A canonical id, with its CLAIMED seat beside it — 'agent:c0ffee (Ra V)' — wherever one
-    is claimed (dd47c1da: "fleet() must print claimed names"). An anonymous agent (no `seat`
-    on its node) renders exactly as before: the id, alone."""
+    is claimed (dd47c1da: "fleet() must print claimed names"), and its BINDING anchored
+    beside that — '(Ra V ⚓seat:ab12cd34)' — wherever the mind actively HOLDS a Seat object
+    (Phase B, 5cef856b: the declared identity beside the inferred one). An agent with
+    neither renders exactly as before: the id, alone."""
     seat = nodes[canon].get("seat")
-    return f"{canon} ({seat})" if seat else canon
+    bound = nodes[canon].get("bound")
+    tag = " ".join(x for x in (seat, f"⚓{bound}" if bound else None) if x)
+    return f"{canon} ({tag})" if tag else canon
 
 
 def _tally(canons: list[str], nodes: dict[str, Node]) -> str:

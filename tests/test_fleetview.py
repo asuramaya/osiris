@@ -157,3 +157,25 @@ def test_os_bodies_defaults_an_unlisted_project_to_zero() -> None:
     nodes = {"agent:live1": _n(live=True, ts=T1)}
     tree = render_fleet_tree(nodes, os_bodies={})
     assert "0 os bodies" in tree and "⚠ 1 ghost" in tree
+
+
+def test_the_binding_renders_anchored_beside_the_claimed_name() -> None:
+    """Phase B (5cef856b): a mind that actively HOLDS a Seat shows its binding in the tree —
+    the declared identity beside the inferred one; neither claimed nor bound renders bare."""
+    from datetime import UTC, datetime
+    now = datetime.now(UTC)
+    nodes = {
+        "agent:b0nd0001": {"model": "claude-fable-5", "project": "osiris", "parent": None,
+                           "depth": 0, "ts": now, "live": True, "retired": False,
+                           "seat": "Thoth XXXVIII", "bound": "seat:ab12cd34"},
+        "agent:b0nd0002": {"model": "claude-fable-5", "project": "osiris", "parent": None,
+                           "depth": 0, "ts": now, "live": True, "retired": False,
+                           "seat": None, "bound": "seat:ffee0011"},
+        "agent:b0nd0003": {"model": "claude-fable-5", "project": "osiris", "parent": None,
+                           "depth": 0, "ts": now, "live": True, "retired": False,
+                           "seat": None, "bound": None},
+    }
+    tree = render_fleet_tree(nodes)
+    assert "agent:b0nd0001 (Thoth XXXVIII ⚓seat:ab12cd34)" in tree
+    assert "agent:b0nd0002 (⚓seat:ffee0011)" in tree
+    assert "agent:b0nd0003 " in tree and "agent:b0nd0003 (" not in tree

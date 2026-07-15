@@ -207,6 +207,10 @@ async def seat_holders(pool: asyncpg.Pool, house: str | None, seat: str) -> list
         # retired would renumber history.
         "AND NOT EXISTS (SELECT 1 FROM current_assertions f WHERE f.object_id=o.id "
         "  AND f.name='false_mint' AND f.value #>> '{}' = 'true') "
+        # ...and a VISITOR never held it either (Phase C, §4.3): a spawn wearing a handle is
+        # the leak, not a holder — counting it would renumber every real generation after it.
+        "AND NOT EXISTS (SELECT 1 FROM links sl WHERE sl.from_id=o.id "
+        "  AND sl.type='spawned_by') "
         "ORDER BY o.created_at", seat, house)]
 
 
@@ -255,6 +259,18 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
     name = (name or "").strip()
     if not name or name.lower().startswith("agent:") or len(name) > 40:
         return {"error": "pick a short human name (not an id)"}
+    # A VISITOR MAY NOT CLAIM A SEAT (Phase C, ruling 5cef856b / spec §4.3 — alfred's dead
+    # builder-orphans ce348dc5/42bf712d were spawns that became project PEERS): a sub-agent
+    # works in its parent's name and returns its result; the seat, its mail, and its
+    # succession belong to the parent.
+    spawner = await actions.pool.fetchval(
+        "SELECT p.canonical FROM links l JOIN objects o ON o.id=l.from_id "
+        "JOIN objects p ON p.id=l.to_id "
+        "WHERE o.canonical=$1 AND l.type='spawned_by' LIMIT 1", agent_id)
+    if spawner:
+        return {"error": f"a VISITOR may not claim a seat: {agent_id} was spawned_by "
+                         f"{spawner} — a sub-agent works in its parent's name; the seat, "
+                         "its mail, and its succession belong to the parent."}
     bare = _SEAT_SUFFIX.sub("", name).strip()
     if bare and bare.lower() != name.lower():
         return {"error": f"'{name}' is a SEAT LABEL, not a name — the numeral is the generation, "
@@ -374,6 +390,10 @@ async def resolve_seat(actions: Actions, name: str) -> dict[str, Any]:
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1) "
         "AND NOT EXISTS (SELECT 1 FROM current_assertions r WHERE r.object_id=o.id "
         "  AND r.name IN ('retired','false_mint') AND r.value #>> '{}' = 'true') "
+        # a VISITOR never answers to a name (Phase C, §4.3): a spawn wearing a handle is a
+        # leak, and resolving mail into it buries the message in a sidechain nobody resumes
+        "AND NOT EXISTS (SELECT 1 FROM links sl WHERE sl.from_id=o.id "
+        "  AND sl.type='spawned_by') "
         "ORDER BY m.last_seen DESC NULLS LAST", name)
     if not rows:
         return {"name": name, "agent": None, "live": False, "candidates": []}

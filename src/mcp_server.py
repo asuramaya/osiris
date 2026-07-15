@@ -1490,6 +1490,12 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
         "  AND a.name='seat_generation' "
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS seat_gen, "
+        # the BINDING (Phase B, 5cef856b): the Seat object this mind actively HOLDS — the
+        # declared identity beside the claimed name, rendered as ⚓seat:<id> in the tree
+        " (SELECT ht.canonical FROM links hl JOIN objects ht ON ht.id=hl.to_id "
+        "  WHERE hl.from_id=o.id AND hl.type='holds' AND ht.type='Seat' "
+        "  AND (hl.valid_until IS NULL OR hl.valid_until > now()) "
+        "  ORDER BY hl.first_seen DESC LIMIT 1) AS bound_seat, "
         " (SELECT max(m.last_seen) FROM agent_mounts m WHERE m.agent_id=o.canonical) "
         "  AS mount_seen, "
         " (SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
@@ -1528,6 +1534,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
             "live": ts is not None and now - ts < timedelta(minutes=15),
             "seat": seat_label(str(r["canonical"]), r["handle"],
                                int(r["seat_gen"]) if r["seat_gen"] else None),
+            "bound": r["bound_seat"],
         }
     # LAND ON COUNTS, WALK IN: the roster's history is 1000+ rows and never what you came for.
     # The flat rows are the LIVE ones (or everything, if you deliberately asked) — the counts

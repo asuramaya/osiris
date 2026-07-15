@@ -546,3 +546,65 @@ async def test_an_unbound_name_keeps_snapshot_addressing(actions: Actions) -> No
                              from_project="elsewhere", to_agent="Plain", body="old path")
     assert out["to_agent"] == "agent:ssss0001"
     assert "holder" not in out
+
+
+# --- Phase C: a visitor may never claim, hold, count as, or resolve as a seat (§4.3) ---
+
+
+async def _visitor(actions: Actions, child: str, parent: str) -> None:
+    """The fixture shape alfred donated (ce348dc5/42bf712d, dead builder-orphans): a spawn
+    in the house — but WITH its spawned_by edge, the shape the stamped path now records."""
+    from datetime import datetime as _dt
+    now = _dt.now(UTC)
+    p = await actions.create_or_find_object("Agent", parent, parent)
+    c = await actions.create_or_find_object("Agent", child, child)
+    await actions.create_link(c, p, "spawned_by", child, now, 0.9,
+                              evidence_class="self_declared")
+    await actions.assert_property(c, "project", "osiris", child, now, 0.9,
+                                  evidence_class="self_declared")
+
+
+async def test_a_visitor_may_not_claim_a_seat(actions: Actions) -> None:
+    from src.orchestrator.agents import claim_name
+
+    await _visitor(actions, "agent:tttt0002", "agent:tttt0001")
+    out = await claim_name(actions, "agent:tttt0002", "Builder", source="agent:tttt0002")
+    assert "VISITOR" in out["error"] and "agent:tttt0001" in out["error"]
+
+
+async def test_a_visitor_never_resolves_or_counts_as_a_holder(actions: Actions) -> None:
+    """The old leak, replayed against the guards: a spawn wearing a handle assertion and a
+    hot mount row must not answer to the name, and must not renumber the seat's history."""
+    from src.orchestrator.agents import resolve_seat, seat_holders
+
+    await _visitor(actions, "agent:uuuu0002", "agent:uuuu0001")
+    now = datetime.now(UTC)
+    c = await actions.create_or_find_object("Agent", "agent:uuuu0002", "agent:uuuu0002")
+    await actions.assert_property(c, "handle", "Leaked", "agent:uuuu0002", now, 0.9,
+                                  evidence_class="self_declared")
+    await save_mount(actions.pool, job_dir="/jobs/uuuu0002", agent_id="agent:uuuu0002",
+                     project="osiris", cwd="/w", model=None, session_key=None)
+
+    resolved = await resolve_seat(actions, "Leaked")
+    assert resolved["agent"] is None                 # a leak, not a holder — honest empty
+    holders = await seat_holders(actions.pool, "osiris", "Leaked")
+    assert holders == []                             # and it never renumbers history
+
+
+async def test_attach_refuses_a_visitor(actions: Actions) -> None:
+    """A sidechain inherits its parent's environment — if it somehow presents a fresh valid
+    token first, the ceremony still refuses: a sub-agent never holds a seat."""
+    await _visitor(actions, "agent:vvvv0002", "agent:vvvv0001")
+    seat = await ensure_seat(actions, house="osiris", handle="Sphinx", source="test")
+    token = await mint_attach_token(actions.pool, seat_id=seat["seat_id"])
+    await save_mount(actions.pool, job_dir="/jobs/vvvv0002", agent_id="agent:vvvv0002",
+                     project="osiris", cwd="/w", model=None, session_key=None)
+
+    out = await attach_session(actions, seat_id=seat["seat_id"], token=token,
+                               job_dir="/jobs/vvvv0002", agent_id="agent:vvvv0002")
+
+    assert "REFUSED" in out["error"] and "VISITOR" in out["error"]
+    assert await seat_of_mount(actions.pool, job_dir="/jobs/vvvv0002") is None
+    unused = await actions.pool.fetchrow(
+        "SELECT used_at FROM seat_tokens WHERE token=$1", token)
+    assert unused is not None and unused["used_at"] is None   # refusal wrote nothing
