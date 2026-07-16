@@ -420,9 +420,25 @@ def render_mail_box(box: str, threads: list[dict[str, Any]]) -> str:
 
 # ── /fleet ───────────────────────────────────────────────────────────────────────────────
 
+def _row_rank(m: dict[str, Any]) -> tuple[int, float]:
+    """Which of one agent's mount rows testifies for the CARD (the fold below): a row an
+    agent's own MCP connection touched (sid:) outranks an untouched whisper row, which
+    outranks a mere window (view-of:/resume-of: — a tab's alias of a session that lives
+    elsewhere). Ties go to the fresher row. The alias is never the witness: it carries
+    the model/cwd stamped at ITS birth, stale the moment the real session swaps."""
+    key = m.get("session_key") or ""
+    if key.startswith("sid:"):
+        k = 0
+    elif key.startswith(("view-of:", "resume-of:")):
+        k = 2
+    else:
+        k = 1
+    return (k, float(m["age_secs"] or 1e9))
+
+
 async def fleet_data(pool: asyncpg.Pool, *, wake_budget: int = 0) -> dict[str, Any]:
-    mounts = [dict(r) for r in await pool.fetch(
-        "SELECT m.agent_id, m.project, m.model, m.cwd, m.last_seen, "
+    rows = [dict(r) for r in await pool.fetch(
+        "SELECT m.agent_id, m.project, m.model, m.cwd, m.last_seen, m.session_key, "
         " extract(epoch FROM (now() - m.last_seen)) AS age_secs, "
         " (SELECT a.value #>> '{}' FROM current_assertions a "
         "   JOIN objects o ON o.id=a.object_id "
@@ -432,11 +448,29 @@ async def fleet_data(pool: asyncpg.Pool, *, wake_budget: int = 0) -> dict[str, A
         "   JOIN objects o ON o.id=a.object_id "
         "   WHERE o.canonical=m.agent_id AND a.name='seat_generation' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS seat_gen "
-        "FROM agent_mounts m ORDER BY m.last_seen DESC LIMIT 60")]
-    for m in mounts:
+        "FROM agent_mounts m ORDER BY m.last_seen DESC LIMIT 240")]
+    for m in rows:
         gen = int(m["seat_gen"]) if m.get("seat_gen") else None
         m["seat"] = seat_label(m["agent_id"], m["handle"], gen)
         m["live"] = (m["age_secs"] or 1e9) < 900
+    # THE FOLD (operator ruling, 2026-07-16: "the agent hash should be a row"): one soul,
+    # one line. An agent legitimately holds MANY mount rows — its durable anchor, a tab
+    # viewing it, a resume sibling — and rendering rows drew the same seat twice ("why is
+    # there 2 thoth XL agents"). Group by agent: the realest row testifies for the card,
+    # the soul is as alive as its freshest body, and ×N confesses the extra bodies.
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for m in rows:
+        groups.setdefault(m["agent_id"], []).append(m)
+    mounts = []
+    for grp in groups.values():
+        top = min(grp, key=_row_rank)
+        best = dict(top)
+        best["live"] = any(g["live"] for g in grp)
+        best["age_secs"] = min(float(g["age_secs"] or 1e9) for g in grp)
+        best["sessions"] = len(grp)
+        mounts.append(best)
+    mounts.sort(key=lambda m: float(m["age_secs"] or 1e9))
+    mounts = mounts[:60]
     wakes = [dict(r) for r in await pool.fetch(
         "SELECT to_project, from_agent, message_id, mode, woke_at FROM agent_wakes "
         "ORDER BY woke_at DESC LIMIT 30")]
@@ -450,12 +484,15 @@ def render_fleet(data: dict[str, Any]) -> str:
     mounts = data["mounts"]
     live_n = sum(1 for m in mounts if m["live"])
     budget = (f' / {data["wake_budget"]}' if data.get("wake_budget") else "")
-    out = [f'<h2>seats <span class="pill">{live_n} live · {len(mounts)} mounted</span> '
+    out = [f'<h2>seats <span class="pill">{live_n} live · {len(mounts)} agents</span> '
            f'<span class="pill">wakes {data["wakes_hour"]}{budget}/h</span></h2>']
     rows = "".join(
         "<tr><td>" + ('<span class="live">●</span> ' if m["live"]
                       else '<span class="dim">○</span> ')
-        + f'{_e(m["seat"] or m["agent_id"])}</td>'
+        + f'{_e(m["seat"] or m["agent_id"])}'
+        + (f' <span class="dim">×{m["sessions"]}</span>'
+           if m.get("sessions", 1) > 1 else "")
+        + "</td>"
         f'<td><a href="/mail?box={_e(m["project"] or "?")}">{_e(m["project"] or "?")}</a></td>'
         f'<td class="dim">{_e((m["model"] or "?").removeprefix("claude-"))}</td>'
         f'<td class="dim">{_e(m["cwd"] or "")}</td>'

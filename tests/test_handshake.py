@@ -307,9 +307,10 @@ async def test_automount_adopts_a_tab_view_instead_of_minting_a_clone(
     assert out["agent"] == first["agent"]           # the window IS the soul it shows
     assert out["view_of"] == SID[:8]                # ...and the whisper confesses it
     row = await actions.pool.fetchrow(
-        "SELECT agent_id FROM agent_mounts WHERE job_dir=$1",
+        "SELECT agent_id, session_key FROM agent_mounts WHERE job_dir=$1",
         str(tmp_path / "jobs" / "ab12cd34"))
     assert row is not None and row["agent_id"] == first["agent"]   # alias row born bound
+    assert row["session_key"] == f"view-of:{SID[:8]}"   # ...and marked as the window it is
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Agent' AND canonical='agent:ab12cd34'") == 0
 

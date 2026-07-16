@@ -156,9 +156,13 @@ async def automount(
         # A HEARTBEAT MUST BE EARNED BY AN ACT, NEVER GRANTED BY A GREETING. A real session
         # certifies itself within seconds: its first Osiris call bumps this row, or its transcript
         # grows and observe_liveness stamps it. A spare does neither, forever.
+        # a VIEW's row is marked as one (view-of:<the viewed session's sid8>) so every
+        # renderer can rank it below the session's own rows — the alias is never the witness
+        skey = (f"view-of:{Path(transcript_path or '').name[:8]}" if viewed
+                else f"whisper:{session_id[:8]}")
         prev = await mounts.save_mount(
             actions.pool, job_dir=job_dir, agent_id=ident.agent_id, project=ident.project,
-            cwd=cwd, model=ident.model, session_key=f"whisper:{session_id[:8]}", alive=False)
+            cwd=cwd, model=ident.model, session_key=skey, alive=False)
         if prev is None:  # a fresh session: anchor the fold on the lineage's last life
             # ...and a JOINER inherits the room's collective settle-state (sibling-settled
             # broadcasts are not a newcomer's unread; truly-open mail still greets it)

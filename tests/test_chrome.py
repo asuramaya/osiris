@@ -152,10 +152,35 @@ def test_fleet_renders_live_dots_and_wake_ledger() -> None:
                    "mode": "mint", "woke_at": "2026-07-11 19:09:45"}],
         "wakes_hour": 21, "wake_budget": 30,
     })
-    assert "1 live · 2 mounted" in html and "wakes 21 / 30/h" in html
+    assert "1 live · 2 agents" in html and "wakes 21 / 30/h" in html
     assert "Thoth XX" in html and '<span class="live">●</span>' in html
     assert 'href="/mail?box=osiris"' in html    # a seat's project opens its mail
     assert "mint" in html and "msg 7" in html
+
+
+async def test_fleet_folds_one_soul_to_one_row(actions: Actions) -> None:
+    """THE FOLD (operator, 2026-07-16: 'why is there 2 thoth XL agents... the agent hash
+    should be a row'): an agent with many mount rows — its durable anchor plus a tab
+    viewing it — renders ONCE; the realest row testifies for the card (a view's stale
+    model label never wins over the session's own row), and ×N confesses the bodies."""
+    from src.api.chrome import fleet_data, render_fleet
+    from src.orchestrator.mounts import save_mount
+
+    p = actions.pool
+    # the real session's row: MCP-touched (sid:), model = the truth after a swap
+    await save_mount(p, job_dir="/jobs/aaaa0001", agent_id="agent:cafe99aa",
+                     project="osiris", cwd="/w/osiris", model="claude-opus-4-8",
+                     session_key="sid:realconn")
+    # the tab's window: marked view-of, carrying the stale model stamped at ITS birth
+    await save_mount(p, job_dir="/jobs/bbbb0002", agent_id="agent:cafe99aa",
+                     project="osiris", cwd="/w/osiris", model="claude-fable-5",
+                     session_key="view-of:aaaa0001")
+    data = await fleet_data(p)
+    mine = [m for m in data["mounts"] if m["agent_id"] == "agent:cafe99aa"]
+    assert len(mine) == 1                          # one soul, one row
+    assert mine[0]["model"] == "claude-opus-4-8"   # the real row testifies
+    assert mine[0]["sessions"] == 2 and mine[0]["live"] is True
+    assert "×2" in render_fleet(data)
 
 
 async def test_desk_and_fleet_data_round_trip_the_live_graph(actions: Actions) -> None:
