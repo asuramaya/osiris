@@ -335,7 +335,6 @@ async def _reattach(
         return None
     settings = get_settings()
     ident = resolve_identity(cwd=rec.cwd, job_dir=rec.job_dir)
-    from src.orchestrator.agents import _generation
     if _generation(rec.agent_id)[0] != _generation(ident.agent_id)[0]:
         # a BOUND session (thread 33838160): the row points at a deliberately-worn SEAT of a
         # different lineage — honor it. Re-deriving from the transcript here was the flap
@@ -936,7 +935,11 @@ async def mount(
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model,
                              claimed=claimed, fallback_seed=key)
     if bound is not None:
-        from src.orchestrator.agents import _generation
+        # NO local re-import of _generation here: a local import anywhere in a function
+        # shadows the module-level name for the WHOLE function, and this branch is
+        # conditional — every UNBOUND session (each anonymous mind, each fresh child)
+        # skipped it and died at the sibs filter below with UnboundLocalError. The whole
+        # fleet's claim path was down for a night (2026-07-16) on these two lines.
         if _generation(bound.agent_id)[0] != _generation(ident.agent_id)[0]:
             # THE BINDING (thread 33838160), the explicit-mount leg: the whisper tells every
             # minted heir "re-mount with THIS anchor", and automount left that very row BOUND

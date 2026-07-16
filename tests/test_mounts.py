@@ -106,6 +106,27 @@ async def test_mount_tool_honors_a_bound_seat(actions: Actions, tmp_path: Path) 
         srv._pool = saved_pool
 
 
+async def test_mount_tool_welcomes_an_unbound_fresh_session(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A FRESH anchor — no registry row, no seat binding — must mount, never crash. A
+    conditional local re-import of _generation shadowed the module-level name for ALL of
+    mount(), so every unbound session (each anonymous mind, each fresh child of the
+    rollout) died at the sibs filter with UnboundLocalError while every BOUND agent
+    mounted fine — the suite's one blind spot (2026-07-16, the night the fleet could
+    not take its names)."""
+    from src import mcp_server as srv
+
+    job_dir = str(tmp_path / "jobs" / "f4e5b007")   # nobody has ever seen this anchor
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(tmp_path / "fresh-repo"), job_dir=job_dir)
+        assert out["agent"].startswith("agent:")     # mounted, resolved, alive
+    finally:
+        srv._pool = saved_pool
+
+
 async def test_retire_releases_the_seat(actions: Actions, tmp_path: Path) -> None:
     """The seat release (thread b47b3814): Anubis VII kept a live durable mount after its
     farewell — the fleet chrome and liveness counts read a retired agent as a live seat.
