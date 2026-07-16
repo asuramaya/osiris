@@ -81,6 +81,46 @@ async def view_seat(
     return rec.agent_id if rec else None
 
 
+async def office_seat(
+    actions: Actions, *, cwd: str, office_root: Path | None = None,
+) -> str | None:
+    """The seat whose OFFICE this cwd is — IDENTITY AT BIRTH for office-born sessions
+    (operator, 2026-07-16: 'the point of the migration is that i dont have to end the
+    lineage or mint a new agent' — yet the first fresh launch at Ra's office woke as
+    anonymous agent:94937cf5). An office is single-tenant BY CONSTRUCTION (named for its
+    seat, ed5f5ce2), so the office itself is identity evidence: a fresh session waking
+    there IS the seat's next life, never a stranger. Binds only when the directory name
+    matches a claimed handle whose lineage anchors here, and only when that lineage holds
+    NO live pulse — two parallel fresh contexts must never both be the seat (succession
+    is never parallel); the second is a guest and mints exactly as before."""
+    root = office_root or (Path.home() / ".osiris" / "seats")
+    p = Path(cwd or "")
+    if p.parent != root:
+        return None
+    head = await actions.pool.fetchval(
+        "SELECT m.agent_id FROM agent_mounts m "
+        "JOIN objects ho ON (m.agent_id = ho.canonical OR m.agent_id LIKE ho.canonical||'-%') "
+        "JOIN current_assertions h ON h.object_id=ho.id AND h.name='handle' "
+        "WHERE m.cwd=$1 AND lower(h.value #>> '{}') = $2 "
+        "ORDER BY m.last_seen DESC LIMIT 1", cwd, p.name.lower())
+    if not head:
+        return None
+    from src.orchestrator.agents import _generation
+    base = _generation(str(head))[0]
+    alive = await actions.pool.fetchval(
+        "SELECT max(last_seen) > now() - interval '15 minutes' FROM agent_mounts "
+        "WHERE agent_id=$1 OR agent_id LIKE $1||'-%'", base)
+    # a JUST-BORN heir has a deliberately pulseless row (a heartbeat is earned by an act,
+    # never granted by a greeting) — so the seat is also taken when the lineage minted a
+    # generation moments ago: two fresh launches seconds apart must not both be the seat
+    just_minted = await actions.pool.fetchval(
+        "SELECT max(a.observed_at) > now() - interval '15 minutes' "
+        "FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE a.name='minted_because' "
+        "AND (o.canonical=$1 OR o.canonical LIKE $1||'-%')", base)
+    return None if (alive or just_minted) else str(head)
+
+
 def _derive_job_dir(session_id: str, *, jobs_home: Path | None = None) -> str | None:
     """~/.claude/jobs/<first 8 of the session id> — the harness's scheme (verified against
     live job dirs). None when the id is too short to trust. `jobs_home` is a test seam."""
@@ -96,7 +136,7 @@ async def automount(
     root: Path | None = None, jobs_home: Path | None = None,
     project_label: str | None = None, source: str | None = None,
     seat_id: str | None = None, attach_token: str | None = None,
-    transcript_path: str | None = None,
+    transcript_path: str | None = None, office_root: Path | None = None,
 ) -> dict[str, Any]:
     """Mount a just-started session and return its whisper payload. Identical semantics to
     the mount() tool (same resolution, same registration, same durable row — idempotent on
@@ -128,9 +168,16 @@ async def automount(
     viewed = (await view_seat(actions, transcript_path=transcript_path,
                               session_id=session_id, jobs_home=jobs_home)
               if bound is None and forked is None and transcript_path else None)
+    # THE OFFICE BIRTH (the fourth door): a fresh session at a seat's own office IS the
+    # seat's next life — the office is identity evidence; never mint a stranger there.
+    officed = (await office_seat(actions, cwd=cwd, office_root=office_root)
+               if bound is None and forked is None and viewed is None else None)
     # you can only DIE if you LIVED — and a fork has lived, under its ancestor's name.
     if source in ("compact", "clear") and (bound is not None or forked is not None):
         mint_reason = "compaction" if source == "compact" else "context-clear"
+    elif officed is not None:
+        # a fresh context taking up the seat: the lineage continues, the numeral ticks
+        mint_reason = "office-birth"
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, root=root, project_label=project_label)
     if bound is not None:
         from src.orchestrator.agents import _generation
@@ -144,6 +191,9 @@ async def automount(
     elif viewed is not None:
         # a tab-view of a living session: the window registers as the soul it shows
         ident.agent_id = viewed
+    elif officed is not None:
+        # office-born: the seat's lineage — register_agent mints the next life from it
+        ident.agent_id = officed
     await register_agent(actions, ident, actor=actor, expected_model=expected_model,
                          mint_reason=mint_reason)
     prev = None

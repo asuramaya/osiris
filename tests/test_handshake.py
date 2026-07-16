@@ -327,3 +327,46 @@ async def test_automount_never_adopts_a_sessions_own_transcript(
                           transcript_path=str(root / "-w-fresh-repo" / f"{SID}.jsonl"))
     assert out["agent"] == "agent:39fb22a2"         # minted as itself, exactly as before
     assert "view_of" not in out
+
+
+async def test_office_birth_is_the_seats_next_life(actions: Actions, tmp_path: Path) -> None:
+    """THE FOURTH DOOR (operator, 2026-07-16: the first fresh launch at Ra's office woke
+    as anonymous agent:94937cf5 — 'the point of the migration is that i dont have to end
+    the lineage or mint a new agent'). An office is single-tenant by construction, so a
+    fresh session waking there IS the seat's next life; a second fresh context while the
+    seat lives is a GUEST and mints exactly as before (succession is never parallel)."""
+    from src.orchestrator.mounts import save_mount
+
+    root = tmp_path / "projects"
+    offices = tmp_path / "seats"
+    office = offices / "offa"
+    office.mkdir(parents=True)
+    o = await actions.create_or_find_object("Agent", "agent:0ffab001", "agent:0ffab001")
+    from datetime import UTC, datetime
+    now = datetime.now(UTC)
+    await actions.assert_property(o, "handle", "Offa", "agent:0ffab001", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(o, "project", "offahouse", "agent:0ffab001", now, 0.9,
+                                  evidence_class="self_declared")
+    await save_mount(actions.pool, job_dir="/jobs/0ffab001", agent_id="agent:0ffab001",
+                     project="offahouse", cwd=str(office), model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '1 hour' "
+        "WHERE agent_id='agent:0ffab001'")   # the prior life is COLD — ended, not parallel
+
+    fresh_sid = "0f45b117-0000-4000-8000-000000000000"
+    out = await automount(actions, session_id=fresh_sid, cwd=str(office),
+                          actor="analyst:operator", root=root,
+                          jobs_home=tmp_path / "jobs", office_root=offices,
+                          source="startup")
+
+    assert out["agent"] == "agent:0ffab001-ii"       # the seat's NEXT LIFE, no stranger
+    assert out["minted"] == "agent:0ffab001"         # succession confessed
+    assert out["seat"] == "Offa II"                  # the numeral ticked
+    # a SECOND fresh context while Offa II's pulse is live: a guest, anonymous as before
+    guest_sid = "9ce57000-0000-4000-8000-000000000000"
+    guest = await automount(actions, session_id=guest_sid, cwd=str(office),
+                            actor="analyst:operator", root=root,
+                            jobs_home=tmp_path / "jobs", office_root=offices,
+                            source="startup")
+    assert guest["agent"] == "agent:9ce57000"        # never a parallel life of the seat
