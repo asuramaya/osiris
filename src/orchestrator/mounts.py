@@ -314,9 +314,35 @@ def _write_osiris_file(new_cwd: str, project_label: str) -> str:
 
 
 def _harness_slug(cwd: str) -> str:
-    """The harness's transcript-directory name for a cwd — mirrors the read side
-    (`src/ingest/sessions.py`'s cwd-locate): '/' → '-', nothing else."""
+    """The harness's transcript-directory name for a cwd. The CURRENT harness (witnessed
+    live, 2026-07-16, v2.1.211: ~/.osiris/seats/thoth → -home-asuramaya--osiris-seats-
+    thoth) replaces BOTH '/' and '.' with '-'; an earlier scheme kept the dot, and one
+    night's ceremonies parked estates under dot-form slugs the new harness cannot see —
+    `_legacy_slug` + `converge_legacy_slug` fold those home."""
+    return cwd.replace("/", "-").replace(".", "-")
+
+
+def _legacy_slug(cwd: str) -> str:
+    """The OLD scheme ('/' → '-', dots kept) — read-side only, for convergence."""
     return cwd.replace("/", "-")
+
+
+def converge_legacy_slug(cwd: str, *, projects_root: Path | None = None) -> int:
+    """Fold a cwd's legacy dot-form slug dir into its canonical one (never clobbering) —
+    the split-brain cure: content the ceremonies moved under the old scheme becomes
+    visible to the harness again. Idempotent; returns entries moved; 0 when the schemes
+    agree for this cwd or there is nothing legacy."""
+    root = projects_root or (Path.home() / ".claude" / "projects")
+    old_name, new_name = _legacy_slug(cwd), _harness_slug(cwd)
+    if old_name == new_name:
+        return 0
+    old_dir, new_dir = root / old_name, root / new_name
+    if not old_dir.is_dir():
+        return 0
+    moved, _left, _landed = _merge_dir(old_dir, new_dir)
+    with contextlib.suppress(OSError):
+        old_dir.rmdir()
+    return moved
 
 
 def _merge_dir(old: Path, new: Path) -> tuple[int, int, list[Path]]:
@@ -474,6 +500,10 @@ def heal_slug_transcripts(
     the seam a heal may use; deferred files converge on a later launch). Fail-soft per
     file: one unreadable transcript lands in the receipt, never blocks the rest."""
     root = projects_root or (Path.home() / ".claude" / "projects")
+    # the split-brain cure rides every launch: anything a legacy-scheme slug still holds
+    # for this cwd folds into the canonical dir before the sweep reads it
+    with contextlib.suppress(OSError):
+        converge_legacy_slug(cwd, projects_root=root)
     slug_dir = root / _harness_slug(cwd)
     if not slug_dir.is_dir():
         return {}
@@ -622,6 +652,10 @@ def migrate_harness_metadata(
     itself relocated, never a co-resident's."""
     out: dict[str, Any] = {}
     root = projects_root or (Path.home() / ".claude" / "projects")
+    # both sides converge from any legacy-scheme dir first, so a move reads whole truth
+    with contextlib.suppress(OSError):
+        converge_legacy_slug(old_cwd, projects_root=root)
+        converge_legacy_slug(new_cwd, projects_root=root)
     old_dir = root / _harness_slug(old_cwd)
     new_dir = root / _harness_slug(new_cwd)
     if only_sids is not None:

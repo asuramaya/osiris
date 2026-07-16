@@ -672,3 +672,30 @@ async def test_wholesale_rebind_repoints_the_co_residents_too(
     co = await actions.pool.fetchval(
         "SELECT cwd FROM agent_mounts WHERE agent_id='agent:cafe0002'")
     assert co == new                                    # the housemate moved with the house
+
+
+def test_harness_slug_matches_the_current_scheme_and_legacy_converges(tmp_path: Path) -> None:
+    """THE SPLIT-BRAIN (witnessed live 2026-07-16, harness v2.1.211): the current harness
+    slugs '.' to '-' too (~/.osiris/... → --osiris-...), while one night's ceremonies
+    parked estates under dot-form slugs the new harness cannot list. _harness_slug now
+    speaks the current scheme; converge_legacy_slug folds a legacy dir home, never
+    clobbering, idempotently."""
+    assert mounts._harness_slug("/home/u/.osiris/seats/ra") == "-home-u--osiris-seats-ra"
+    assert mounts._legacy_slug("/home/u/.osiris/seats/ra") == "-home-u-.osiris-seats-ra"
+    root = tmp_path / "projects"
+    legacy = root / "-home-u-.osiris-seats-ra"
+    canon = root / "-home-u--osiris-seats-ra"
+    legacy.mkdir(parents=True)
+    canon.mkdir(parents=True)
+    _jsonl(legacy / "aaaa1111-old.jsonl", "/home/u/.osiris/seats/ra")
+    _jsonl(canon / "bbbb2222-new.jsonl", "/home/u/.osiris/seats/ra")
+    _jsonl(legacy / "bbbb2222-new.jsonl", "/home/u/.osiris/seats/ra")   # both sides: stays
+
+    moved = mounts.converge_legacy_slug("/home/u/.osiris/seats/ra", projects_root=root)
+
+    assert moved == 1
+    assert (canon / "aaaa1111-old.jsonl").is_file()          # folded home
+    assert (legacy / "bbbb2222-new.jsonl").is_file()         # never clobbered
+    assert mounts.converge_legacy_slug("/home/u/.osiris/seats/ra", projects_root=root) == 0
+    # a dot-less cwd: schemes agree, nothing to do
+    assert mounts.converge_legacy_slug("/home/u/code/osiris", projects_root=root) == 0
