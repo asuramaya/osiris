@@ -231,3 +231,88 @@ async def test_rebind_seat_carries_the_harness_half(actions: Actions, tmp_path: 
     row = await actions.pool.fetchval(
         "SELECT cwd FROM agent_mounts WHERE agent_id='agent:wwww0001'")
     assert row == new_cwd
+
+
+# --- extraction mode (the seat-offices ruling, ed5f5ce2) ---
+
+
+async def test_extraction_takes_only_the_seats_own_lineage(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Moving a seat OUT of a shared cwd (into its Osiris office) takes only its own
+    lineage's transcripts — the co-resident repo sessions' history stays, their slug
+    survives, and the .claude.json entry for the old path is never touched (it is still
+    a living project)."""
+    import json as _json
+
+    from src.orchestrator.mounts import rebind_seat, save_mount
+
+    shared = str(tmp_path / "shared-repo")
+    office = str(tmp_path / "seats" / "butler")
+    Path(shared).mkdir()
+    (Path(shared) / ".osiris").write_text('project = "butlerhouse"\n')
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:cafe77aa", "agent:cafe77aa")
+    await actions.assert_property(a, "project", "butlerhouse", "agent:cafe77aa", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(a, "session", "cafe77aa", "agent:cafe77aa", now, 0.9,
+                                  evidence_class="self_declared")
+    await save_mount(actions.pool, job_dir="/jobs/cafe77aa", agent_id="agent:cafe77aa",
+                     project="butlerhouse", cwd=shared, model=None, session_key=None)
+    root = tmp_path / "projects"
+    slug = root / shared.replace("/", "-")
+    slug.mkdir(parents=True)
+    (slug / "cafe77aa-full-session-id.jsonl").write_text("{}\n")   # the seat's own
+    (slug / "aaaa1111-somebody-else.jsonl").write_text("{}\n")     # a co-resident repo session
+    cj = tmp_path / "claude.json"
+    cj.write_text(_json.dumps({"projects": {shared: {"hasTrustDialogAccepted": True}}}))
+
+    out = await rebind_seat(actions, seat_or_agent="agent:cafe77aa", new_cwd=office,
+                            actor="agent:test", projects_root=root, claude_json=cj,
+                            extract=True)
+
+    assert out["harness"]["mode"].startswith("extraction")
+    assert out["harness"]["transcripts_moved"] == 1
+    assert (root / office.replace("/", "-") / "cafe77aa-full-session-id.jsonl").is_file()
+    assert (slug / "aaaa1111-somebody-else.jsonl").is_file()       # the repo session STAYS
+    assert not (slug / "cafe77aa-full-session-id.jsonl").exists()
+    data = _json.loads(cj.read_text())
+    assert shared in data["projects"]                              # old path still a project
+    assert office not in data["projects"]                          # office earns its own later
+    assert (Path(office) / ".osiris").read_text().startswith('project = "butlerhouse"')
+    row = await actions.pool.fetchval(
+        "SELECT cwd FROM agent_mounts WHERE agent_id='agent:cafe77aa'")
+    assert row == office
+
+
+async def test_rebind_updates_the_held_seats_anchor(actions: Actions, tmp_path: Path) -> None:
+    """A rebound seat-holder's Seat OBJECT follows: anchor_cwd re-asserts to the new path —
+    the daemon summons at the office."""
+    from src.orchestrator.mounts import rebind_seat, save_mount
+    from src.orchestrator.seats import attach_session, ensure_seat, mint_attach_token
+
+    old = str(tmp_path / "old-office")
+    new = str(tmp_path / "new-office")
+    Path(old).mkdir()
+    (Path(old) / ".osiris").write_text('project = "anchorhouse"\n')
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:dddd77bb", "agent:dddd77bb")
+    await actions.assert_property(a, "project", "anchorhouse", "agent:dddd77bb", now, 0.9,
+                                  evidence_class="self_declared")
+    await save_mount(actions.pool, job_dir="/jobs/dddd77bb", agent_id="agent:dddd77bb",
+                     project="anchorhouse", cwd=old, model=None, session_key=None)
+    seat = await ensure_seat(actions, house="anchorhouse", handle="Jeeves",
+                             anchor_cwd=old, source="test")
+    token = await mint_attach_token(actions.pool, seat_id=seat["seat_id"])
+    await attach_session(actions, seat_id=seat["seat_id"], token=token,
+                         job_dir="/jobs/dddd77bb", agent_id="agent:dddd77bb")
+
+    await rebind_seat(actions, seat_or_agent="agent:dddd77bb", new_cwd=new,
+                      actor="agent:test", projects_root=tmp_path / "projects",
+                      claude_json=tmp_path / "cj.json")
+
+    anchor = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='anchor_cwd' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", seat["seat_id"])
+    assert anchor == new

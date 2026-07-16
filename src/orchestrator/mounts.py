@@ -328,7 +328,7 @@ def _merge_dir(old: Path, new: Path) -> tuple[int, int]:
 
 def migrate_harness_metadata(
     old_cwd: str, new_cwd: str, *, projects_root: Path | None = None,
-    claude_json: Path | None = None,
+    claude_json: Path | None = None, only_sids: set[str] | None = None,
 ) -> dict[str, Any]:
     """The CLAUDE-CODE-ADAPTER half of a rebind (operator's directive, 2026-07-15: arbitrary
     directory moves must be a NON-EVENT — 'the metadata and pointer has to move also'). The
@@ -345,11 +345,42 @@ def migrate_harness_metadata(
 
     Best-effort by design: every failure lands in the receipt as a string, never an
     exception — the graph half of a rebind must not unwind because the harness half
-    stumbled. `projects_root`/`claude_json` are test seams."""
+    stumbled. `projects_root`/`claude_json` are test seams.
+
+    `only_sids` is EXTRACTION MODE (the seat-offices ruling, ed5f5ce2): moving a SEAT out
+    of a SHARED cwd (into its Osiris office) must take only that seat's own lineage
+    transcripts — a wholesale slug move would steal the co-resident repo sessions' history
+    and break their resume mid-tab. Only top-level files whose name starts with one of the
+    sids move; everything else stays; the old dir is NEVER removed (it is still a living
+    project's slug); the ~/.claude.json entry is NOT re-keyed (the old path remains a real
+    working project — the office earns its own entry at first launch)."""
     out: dict[str, Any] = {}
     root = projects_root or (Path.home() / ".claude" / "projects")
     old_dir = root / _harness_slug(old_cwd)
     new_dir = root / _harness_slug(new_cwd)
+    if only_sids is not None:
+        out["mode"] = "extraction — the shared slug stays; only the seat's own moved"
+        out["transcripts_moved"] = 0
+        try:
+            if old_dir.is_dir() and old_dir != new_dir:
+                moved = left = 0
+                new_dir.mkdir(parents=True, exist_ok=True)
+                for entry in sorted(old_dir.iterdir()):
+                    if not (entry.is_file()
+                            and any(entry.name.startswith(s) for s in only_sids)):
+                        continue
+                    target = new_dir / entry.name
+                    if target.exists():
+                        left += 1
+                    else:
+                        entry.rename(target)
+                        moved += 1
+                out["transcripts_moved"] = moved
+                if left:
+                    out["transcripts_left_behind"] = left
+        except OSError as e:
+            out["transcripts_error"] = str(e)[:200]
+        return out
     try:
         if old_dir.is_dir() and old_dir != new_dir:
             moved, left = _merge_dir(old_dir, new_dir)
@@ -387,6 +418,7 @@ def migrate_harness_metadata(
 async def rebind_seat(
     actions: Actions, *, seat_or_agent: str, new_cwd: str, actor: str | None = None,
     projects_root: Path | None = None, claude_json: Path | None = None,
+    extract: bool = False,
 ) -> dict[str, Any]:
     """Move a seat's ANCHOR cwd, preserving identity, lineage, attribution, and mail (`dd47c1da`
     — the fold the operator is blocked on). MINTS NOTHING: no new Agent, no handle or lineage
@@ -442,12 +474,34 @@ async def rebind_seat(
         "UPDATE agent_mounts SET cwd=$2 WHERE agent_id=$1 OR agent_id LIKE $1 || '-%'",
         base, new_cwd)
     rows_updated = int(tag.rsplit(" ", 1)[-1])
+    # EXTRACTION (the seat-offices ruling, ed5f5ce2): moving a seat out of a SHARED cwd
+    # takes only its own lineage's sessions — sids from the lineage's session assertions
+    # plus its mount-row anchors (either alone can miss a member).
+    only_sids: set[str] | None = None
+    if extract:
+        srows = await actions.pool.fetch(
+            "SELECT DISTINCT a.value #>> '{}' AS sid FROM current_assertions a "
+            "JOIN objects o ON o.id=a.object_id WHERE a.name='session' AND o.type='Agent' "
+            "AND (o.canonical=$1 OR o.canonical LIKE $1 || '-%')", base)
+        jrows = await actions.pool.fetch(
+            "SELECT job_dir FROM agent_mounts WHERE agent_id=$1 OR agent_id LIKE $1 || '-%'",
+            base)
+        only_sids = ({str(r["sid"]) for r in srows if r["sid"]}
+                     | {Path(r["job_dir"]).name for r in jrows})
     # the HARNESS half — transcripts + the .claude.json project entry follow the move
     # (best-effort: its failures land in the receipt, never unwind the graph half above)
     harness = (migrate_harness_metadata(old_cwd, new_cwd, projects_root=projects_root,
-                                        claude_json=claude_json)
+                                        claude_json=claude_json, only_sids=only_sids)
                if old_cwd and old_cwd != new_cwd else {})
     now = datetime.now(UTC)
+    # the Seat OBJECT's anchor follows — the daemon summons at the office (5cef856b)
+    from src.orchestrator.seats import held_seat
+    bound = await held_seat(actions.pool, agent_id)
+    if bound:
+        soid = await actions.create_or_find_object("Seat", bound["seat_id"],
+                                                   actor or agent_id)
+        await actions.assert_property(soid, "anchor_cwd", new_cwd, actor or agent_id, now,
+                                      _CONF, evidence_class=_EC)
     a = await actions.create_or_find_object("Agent", agent_id, agent_id)
     await actions.assert_property(
         a, "anchor_moved", f"{old_cwd or '?'} → {new_cwd}", actor or agent_id, now, _CONF,

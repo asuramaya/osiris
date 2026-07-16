@@ -1803,21 +1803,28 @@ async def charter(repos: list[str] | None = None, ctx: Context | None = None) ->
 
 
 @mcp.tool()
-async def rebind_seat(seat: str, new_cwd: str, ctx: Context | None = None) -> dict[str, Any]:
+async def rebind_seat(seat: str, new_cwd: str, extract: bool = False,
+                      ctx: Context | None = None) -> dict[str, Any]:
     """Move a seat's ANCHOR cwd, preserving identity, lineage, attribution, and mail (Phase 1
     §4.1, ruling `dd47c1da` — the operator's own folder move orphaned alfred; this is the cure).
     `seat` accepts a claimed name OR a raw agent id. Writes/refreshes `.osiris` in `new_cwd`
     pinning the seat's DURABLE project label (unchanged by this call — mail and attribution key
-    on it), re-points the WHOLE LINEAGE's durable mount rows at the new path, and stamps the
-    move on the Agent's own record. Mints nothing: no new Agent, no handle/lineage edge is
-    touched. The returned receipt names exactly what moved. Refuses loudly on an unknown seat."""
+    on it), re-points the WHOLE LINEAGE's durable mount rows at the new path, stamps the
+    move on the Agent's own record, and carries the HARNESS metadata (transcripts, project
+    state) so resume and history survive the move. Mints nothing: no new Agent, no
+    handle/lineage edge is touched. Refuses loudly on an unknown seat.
+
+    `extract=True` is the SEAT-OFFICES move (ruling ed5f5ce2): the seat leaves a SHARED cwd
+    (e.g. into its ~/.osiris/seats/<handle>/ office) taking ONLY its own lineage's
+    transcripts — co-resident sessions' history stays; the old path remains a living
+    project. Use it whenever other minds also work at the old path."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a rebind is a mind's act, and the graph must know whose",
                 "why": _anchorless(ctx)}
     from src.orchestrator.mounts import rebind_seat as _rebind
     return await _rebind(Actions(await _pool_get()), seat_or_agent=seat, new_cwd=new_cwd,
-                         actor=ident.agent_id)
+                         actor=ident.agent_id, extract=extract)
 
 
 @mcp.tool()
