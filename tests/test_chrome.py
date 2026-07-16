@@ -279,7 +279,8 @@ async def test_fleet_folds_generations_under_the_living_head(actions: Actions) -
     assert mine[0]["agent_id"] == "agent:3e7a0001-iii"      # the living head is the face
     assert len(mine[0]["ancestors"]) == 2                   # the past lives fold under it
     html = render_fleet(data)
-    assert "2 past lives" in html
+    assert "life 3 of this seat" in html                    # the graph's depth, not the window's
+    assert "2 earlier lives" in html
     assert "SUPERSEDED, an earlier life of this seat" in html
 
 

@@ -538,22 +538,32 @@ def _fleet_row(m: dict[str, Any]) -> str:
     name = _e(m["seat"] or m["agent_id"])
     doors = m.get("doors") or []
     ancestors = m.get("ancestors") or []
+    # the seat's TRUE depth comes from the graph (its generation number), never from the
+    # registry window — 'Thoth XL' has 39 earlier lives even when only 3 hold recent rows
+    # (operator, 2026-07-16: "3 past lives for thoth xl is simply wrong, there should be
+    # 40 right?")
+    gen = int(m["seat_gen"]) if m.get("seat_gen") else None
+    lives_total = (gen - 1) if gen and gen > 1 else len(ancestors)
     if len(doors) > 1 or ancestors:
-        # one mind, several ways in and several LIVES BEHIND it: the row unfolds to
+        # one mind, several ways in and many LIVES BEHIND it: the row unfolds to
         # explain both, so nobody reads plumbing or history as population
         bits = []
         if len(doors) > 1:
             bits.append(f"{len(doors)} doors")
-        if ancestors:
+        if gen:
+            bits.append(f"life {gen} of this seat")
+        elif ancestors:
             bits.append(f"{len(ancestors)} past li{'ves' if len(ancestors) != 1 else 'fe'}")
         inner = "<br>".join("· " + _e(_door_label(d)) for d in doors)
         if ancestors:
+            head_line = (f"{lives_total} earlier li{'ves' if lives_total != 1 else 'fe'} — "
+                         f"{len(ancestors)} recent still in the registry window:")
             past = "<br>".join(
                 f'· {_e(str(a["seat"]))} — SUPERSEDED, an earlier life of this seat '
                 f'(last alive {_e(_age(a["age_secs"]))}, {a["doors"]} door'
                 f'{"s" if a["doors"] != 1 else ""})'
                 for a in ancestors)
-            inner = (inner + "<br>" if inner else "") + past
+            inner = (inner + "<br>" if inner else "") + _e(head_line) + "<br>" + past
         name_cell = (f"<details><summary>{dot}{name} "
                      f'<span class="dim">— 1 agent, {", ".join(bits)}</span></summary>'
                      f'<div class="dim">{inner}</div></details>')
