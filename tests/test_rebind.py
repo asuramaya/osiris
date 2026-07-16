@@ -584,3 +584,34 @@ def test_rewrite_aborts_when_the_file_changes_underfoot(tmp_path: Path) -> None:
 
     assert _cwds_of(p) == ["/w/former-home", "/w/former-home"]   # every word kept
     assert not list(tmp_path.glob(".*heal-tmp"))                 # no residue
+
+
+async def test_wholesale_rebind_repoints_the_co_residents_too(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A wholesale move moves EVERYONE (Werner's catch): when the directory itself has
+    moved, every row anchored there is stale, whatever its seat — co-residents' rows
+    follow. Extraction keeps today's law: the seat leaves, the co-residents stay."""
+    from src.orchestrator.mounts import rebind_seat, save_mount
+
+    old = str(tmp_path / "old-house")
+    new = str(tmp_path / "new-house")
+    Path(old).mkdir()
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:abbe0001", "agent:abbe0001")
+    await actions.assert_property(a, "project", "movers", "agent:abbe0001", now, 0.9,
+                                  evidence_class="self_declared")
+    await save_mount(actions.pool, job_dir="/jobs/abbe0001", agent_id="agent:abbe0001",
+                     project="movers", cwd=old, model=None, session_key=None)
+    await save_mount(actions.pool, job_dir="/jobs/cafe0002", agent_id="agent:cafe0002",
+                     project="movers", cwd=old, model=None, session_key=None)
+
+    out = await rebind_seat(actions, seat_or_agent="agent:abbe0001", new_cwd=new,
+                            actor="agent:test", projects_root=tmp_path / "projects",
+                            claude_json=tmp_path / "cj.json")
+
+    assert out["mount_rows_updated"] == 1
+    assert out["co_resident_rows_repointed"] == 1
+    co = await actions.pool.fetchval(
+        "SELECT cwd FROM agent_mounts WHERE agent_id='agent:cafe0002'")
+    assert co == new                                    # the housemate moved with the house

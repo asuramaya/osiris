@@ -720,6 +720,16 @@ async def rebind_seat(
         "UPDATE agent_mounts SET cwd=$2 WHERE agent_id=$1 OR agent_id LIKE $1 || '-%'",
         base, new_cwd)
     rows_updated = int(tag.rsplit(" ", 1)[-1])
+    # A WHOLESALE MOVE MOVES EVERYONE (Werner's catch, 2026-07-16): when the directory
+    # itself has moved or died, EVERY row anchored there is stale, whatever its seat —
+    # re-pointing only the target lineage left co-residents' rows aimed at the grave, and
+    # a housemate's co-agent panel rendered agent:98ab0ae8 as 'working from' the demolished
+    # husk. Extraction never does this: the seat leaves, the co-residents genuinely stay.
+    co_repointed = 0
+    if not extract and old_cwd and old_cwd != new_cwd:
+        tag2 = await actions.pool.execute(
+            "UPDATE agent_mounts SET cwd=$2 WHERE cwd=$1", old_cwd, new_cwd)
+        co_repointed = int(tag2.rsplit(" ", 1)[-1])
     # EXTRACTION (the seat-offices ruling, ed5f5ce2): moving a seat out of a SHARED cwd
     # takes only its own lineage's sessions — sids from the lineage's session assertions
     # plus its mount-row anchors (either alone can miss a member).
@@ -755,6 +765,7 @@ async def rebind_seat(
     return {
         "agent": agent_id, "project": label, "old_cwd": old_cwd, "new_cwd": new_cwd,
         "mount_rows_updated": rows_updated, "osiris_written": osiris_path,
+        **({"co_resident_rows_repointed": co_repointed} if co_repointed else {}),
         **({"harness": harness} if harness else {}),
         "note": f"{label}'s anchor moved to {new_cwd} — identity, lineage, attribution, and "
                 "mail all key on the label, untouched by this move; the harness metadata "
