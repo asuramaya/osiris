@@ -469,6 +469,52 @@ def heal_slug_transcripts(
     return out
 
 
+def resumed_anchor(job_dir: str, *, jobs_home: Path | None = None) -> str | None:
+    """The durable anchor a BRIDGED RESUME continues — read from the harness's own receipt.
+    The session-picker / daemon-backend resume (ctrl+a) mints a NEW job for the continued
+    conversation (state.json: sessionId=<new>, resumeSessionId=<old>, backend=daemon) and
+    presents the NEW anchor on every hook-stamped call — while the registry only ever knew
+    the old one, so each per-request re-attach from the resumed tab bounced TERMINAL
+    (witnessed live: alfred presented jobs/ceed2d2e over a registry that knew
+    jobs/838639d1, thread 90f0cb3a). jobs/<sid8>/state.json is the one place the harness
+    records the pair. Returns the RESUMED session's job_dir, or None (not a resume job,
+    or nothing legible — this is a hint, never a verdict)."""
+    p = Path(job_dir)
+    home = jobs_home or p.parent
+    try:
+        data = json.loads((home / p.name / "state.json").read_text())
+    except (OSError, ValueError):
+        return None
+    resumed = data.get("resumeSessionId")
+    if not isinstance(resumed, str) or len(resumed.strip()) < 8:
+        return None
+    return str(home / resumed.strip().lower()[:8])
+
+
+def stale_recollection(
+    job_dir: str, declared_cwd: str, row_cwd: str, *, projects_root: Path | None = None,
+) -> bool:
+    """Is a re-mount's declared cwd a STALE MEMORY of home? A resumed mind re-mounting
+    after a bounce quotes its own conversation history — and an address is exactly what a
+    move makes stale (alfred re-mounted himself at the demolished husk this way, 90f0cb3a).
+    TRANSCRIPT EVIDENCE decides, not the clock: the harness writes a session's transcript
+    under the slug of the directory it actually runs in (and the resume heal re-addresses
+    moved ones), so when the registry row's cwd holds this session's transcript and the
+    declared cwd's slug does not, the declaration is a recollection of a former home —
+    the harness's observation outranks the mind's memory. Conservative: every other
+    combination (both, neither, unreadable) returns False and the declaration stands."""
+    root = projects_root or (Path.home() / ".claude" / "projects")
+    sid8 = Path(job_dir).name
+    if not sid8 or not declared_cwd or not row_cwd:
+        return False
+    try:
+        declared_has = any((root / _harness_slug(declared_cwd)).glob(sid8 + "*.jsonl"))
+        row_has = any((root / _harness_slug(row_cwd)).glob(sid8 + "*.jsonl"))
+    except OSError:
+        return False
+    return row_has and not declared_has
+
+
 def _readdress(landed: list[Path], new_cwd: str) -> dict[str, Any]:
     """Re-address the transcripts a move just landed (per-file fail-soft, receipt honest)."""
     files = lines = 0

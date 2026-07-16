@@ -483,3 +483,84 @@ async def test_automount_heals_the_slug_it_mounts_into(
 
     assert out["transcripts_healed"]["healed"] == {"ffff6666": 1}
     assert _cwds_of(slug / "ffff6666-moved.jsonl") == [cwd]
+
+
+# --- the bridged resume + the recollection guard (thread 90f0cb3a) ---
+
+
+def test_resumed_anchor_reads_the_bridge_receipt(tmp_path: Path) -> None:
+    """A session-picker resume mints a new job whose state.json names resumeSessionId —
+    the harness's own receipt of the pair. resumed_anchor follows it; garbage is a None,
+    never a verdict."""
+    import json as _json
+
+    from src.orchestrator.mounts import resumed_anchor
+
+    jobs = tmp_path / "jobs"
+    (jobs / "ceed2d2e").mkdir(parents=True)
+    (jobs / "ceed2d2e" / "state.json").write_text(_json.dumps({
+        "sessionId": "ceed2d2e-2813-437d-92c9-8ad0d7a732cf",
+        "resumeSessionId": "838639d1-3f1b-4776-be63-c12fde60a75e",
+        "backend": "daemon"}))
+    (jobs / "aaaa0000").mkdir()
+    (jobs / "aaaa0000" / "state.json").write_text("{not json")
+    (jobs / "bbbb0000").mkdir()
+    (jobs / "bbbb0000" / "state.json").write_text(_json.dumps({"sessionId": "bbbb0000-x"}))
+
+    assert resumed_anchor(str(jobs / "ceed2d2e")) == str(jobs / "838639d1")
+    assert resumed_anchor(str(jobs / "aaaa0000")) is None      # illegible: a hint, never a guess
+    assert resumed_anchor(str(jobs / "bbbb0000")) is None      # not a resume job
+    assert resumed_anchor(str(jobs / "never-was")) is None
+
+
+async def test_automount_adopts_a_bridged_resume_instead_of_minting_a_twin(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The ctrl+a resume: a new sid with NO transcript of its own (appends continue in the
+    resumed file) used to mint a twin over a living seat — the job-state receipt now names
+    who it continues, and the whisper adopts."""
+    import json as _json
+
+    from src.orchestrator.handshake import automount
+    from src.orchestrator.mounts import save_mount
+
+    office = str(tmp_path / "office")
+    Path(office).mkdir()
+    root = tmp_path / "projects"
+    jobs = tmp_path / "jobs"
+    old_sid = "beef0001-2222-3333-4444-555566667777"
+    await save_mount(actions.pool, job_dir=str(jobs / "beef0001"), agent_id="agent:beef0001",
+                     project="bridgehouse", cwd=office, model=None, session_key=None)
+    new_sid = "feed9999-8888-7777-6666-555544443333"
+    (jobs / "feed9999").mkdir(parents=True)
+    (jobs / "feed9999" / "state.json").write_text(_json.dumps(
+        {"sessionId": new_sid, "resumeSessionId": old_sid, "backend": "daemon"}))
+
+    out = await automount(actions, session_id=new_sid, cwd=office, actor="whisper",
+                          root=root, jobs_home=jobs)
+
+    assert out["agent"] == "agent:beef0001"                    # the resumed mind, no twin
+    row = await actions.pool.fetchval(
+        "SELECT agent_id FROM agent_mounts WHERE job_dir=$1", str(jobs / "feed9999"))
+    assert row == "agent:beef0001"                             # the new anchor knows him too
+
+
+def test_stale_recollection_trusts_the_transcripts_address(tmp_path: Path) -> None:
+    """The recollection guard's evidence rule: the harness writes a session's transcript
+    under the directory it actually runs in — the row's cwd holding it while the declared
+    cwd does not marks the declaration as a stale memory. Everything else is conservative."""
+    from src.orchestrator.mounts import stale_recollection
+
+    root = tmp_path / "projects"
+    office = str(tmp_path / "office")
+    husk = str(tmp_path / "husk")
+    (root / office.replace("/", "-")).mkdir(parents=True)
+    (root / office.replace("/", "-") / "abcd1234-session.jsonl").write_text("{}\n")
+    (root / husk.replace("/", "-")).mkdir(parents=True)
+
+    job = str(tmp_path / "jobs" / "abcd1234")
+    assert stale_recollection(job, husk, office, projects_root=root) is True
+    assert stale_recollection(job, office, husk, projects_root=root) is False  # declared holds it
+    assert stale_recollection(job, husk, husk, projects_root=root) is False    # neither: stand
+    (root / husk.replace("/", "-") / "abcd1234-session.jsonl").write_text("{}\n")
+    assert stale_recollection(job, husk, office, projects_root=root) is False  # both: stand

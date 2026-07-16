@@ -320,6 +320,17 @@ async def _reattach(
     if job is None:
         return None
     rec = await mounts.find_mount(pool, job_dir=job)
+    adopted_from = None
+    if rec is None:
+        # THE BRIDGED RESUME (90f0cb3a): the session-picker resume presents a NEW anchor the
+        # registry never learned (jobs/<new>/state.json names resumeSessionId — the harness's
+        # own receipt of the pair). Follow it: adopt the resumed anchor's row, and below mint
+        # the presented anchor its own sibling row so the next request is a direct hit —
+        # without this, every call from a resumed tab bounced [unknown-anchor · TERMINAL].
+        prior = mounts.resumed_anchor(job)
+        rec = await mounts.find_mount(pool, job_dir=prior) if prior else None
+        if rec is not None:
+            adopted_from = rec.job_dir
     if rec is None:
         return None
     settings = get_settings()
@@ -338,6 +349,14 @@ async def _reattach(
     prev = await mounts.save_mount(pool, job_dir=rec.job_dir, agent_id=ident.agent_id,
                                    project=ident.project, cwd=rec.cwd, model=ident.model,
                                    session_key=key)
+    if adopted_from is not None and job != rec.job_dir:
+        # the presented anchor earns its own row (same mind, marked as the bridge's) — and
+        # the binding rides along, so Phase D guards the bridged sid like the durable one
+        await mounts.save_mount(pool, job_dir=job, agent_id=ident.agent_id,
+                                project=ident.project, cwd=rec.cwd, model=ident.model,
+                                session_key=f"resume-of:{Path(adopted_from).name}")
+        from src.orchestrator.seats import reseed_binding
+        await reseed_binding(pool, agent_id=ident.agent_id, job_dir=job)
     if prev is None:  # fresh lineage member: anchor on the project's last sign of life
         await mailbox.settle_history_at_join(pool, ident.project, ident.agent_id)
         prev = await mounts.project_prev_seen(pool, ident.project, exclude_job_dir=rec.job_dir)
@@ -896,9 +915,24 @@ async def mount(
     if job_dir is None:  # the cwd-guess path — refuse sids a LIVE mount already holds
         claimed = await mounts.live_claimed_sids(
             pool, exclude_session_key=key, within_secs=settings.osiris_owner_live_secs)
+    bound = await mounts.find_mount(pool, job_dir=job_dir) if job_dir else None
+    # THE RECOLLECTION GUARD (90f0cb3a): a resumed mind re-mounting after a bounce quotes
+    # its own history for `cwd` — and an address is exactly what a move makes stale (alfred
+    # re-mounted himself at the demolished husk this way, re-pointing his seated row). When
+    # the transcript evidence says the registry's cwd is where this session actually lives
+    # and the declared one is not, the harness's observation outranks the mind's memory.
+    cwd_note = None
+    if (bound is not None and bound.cwd and bound.cwd != cwd
+            and mounts.stale_recollection(job_dir or "", cwd, bound.cwd)):
+        cwd_note = {
+            "declared": cwd, "kept": bound.cwd,
+            "note": ("your declared cwd is a STALE MEMORY of a former home — this session's "
+                     "transcript lives at the kept path (it moved; your history did not). "
+                     "Mounted at the kept path; update your bearings (90f0cb3a)"),
+        }
+        cwd = bound.cwd
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model,
                              claimed=claimed, fallback_seed=key)
-    bound = await mounts.find_mount(pool, job_dir=job_dir) if job_dir else None
     if bound is not None:
         from src.orchestrator.agents import _generation
         if _generation(bound.agent_id)[0] != _generation(ident.agent_id)[0]:
@@ -986,6 +1020,7 @@ async def mount(
            "mail": (f"{unread} unread ({asks} ask{'s' if asks == 1 else ''} something of "
                     "you) — call inbox()" if asks else
                     f"{unread} unread — call inbox()") if unread else "none",
+           **({"cwd_corrected": cwd_note} if cwd_note else {}),
            "note": "linked — writes now attributed to you; call orient() next"}
     if op_unread:  # the fleet plays secretary: any session the human drives can relay this
         out["operator_mail"] = (f"{op_unread} unread at the operator's desk — "
@@ -1825,6 +1860,26 @@ async def rebind_seat(seat: str, new_cwd: str, extract: bool = False,
     from src.orchestrator.mounts import rebind_seat as _rebind
     return await _rebind(Actions(await _pool_get()), seat_or_agent=seat, new_cwd=new_cwd,
                          actor=ident.agent_id, extract=extract)
+
+
+@mcp.tool()
+async def establish_office(seat: str, ctx: Context | None = None) -> dict[str, Any]:
+    """THE OFFICE CEREMONY (ruling ed5f5ce2) — one act moves a seat into its Osiris-owned
+    home at ~/.osiris/seats/<handle>/: writes the seat's STANDING ORDERS (a per-seat
+    CLAUDE.md boot sector — identity, house, charter, the office model; never clobbers an
+    existing one), then rebind-extracts the seat there (.osiris pin, mount rows, its own
+    lineage's transcripts re-addressed so resume works in place — co-residents' history
+    stays). `seat` accepts a claimed name or a raw agent id. Refuses loudly on an unknown
+    seat and on an anonymous lineage (an office is named for its seat — claim_name first).
+    Idempotent: re-running converges on the same office. The receipt carries the launch
+    line to hand the operator."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — an office ceremony is a mind's act, and the graph "
+                         "must know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.offices import establish_office as _establish
+    return await _establish(Actions(await _pool_get()), seat_or_agent=seat,
+                            actor=ident.agent_id)
 
 
 @mcp.tool()

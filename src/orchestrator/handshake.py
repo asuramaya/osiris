@@ -45,7 +45,13 @@ async def fork_seat(
     base = root or (Path.home() / ".claude/projects")
     path = locate_current_transcript(base, job_dir, anchored_only=True)
     if path is None:
-        return None  # no transcript yet (a spare, or a session that has not written): not a fork
+        # THE BRIDGED RESUME (90f0cb3a): the session-picker resume mints a new sid that
+        # writes NO transcript of its own (appends continue in the resumed session's file),
+        # so the archaeology above finds nothing and this mind would be minted a twin. The
+        # harness's own job state names who it continues — adopt that seat.
+        prior = mounts.resumed_anchor(job_dir)
+        rec = await mounts.find_mount(actions.pool, job_dir=prior) if prior else None
+        return rec.agent_id if rec else None
     try:
         return await forks.seat_of_fork(actions.pool, path, root=base)
     except Exception:  # noqa: BLE001 — identity may degrade, but the whisper must never die
