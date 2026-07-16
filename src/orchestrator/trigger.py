@@ -454,6 +454,10 @@ async def _spawn_claude(
     `allowed_tools` (thread ba73c0c8): headless -p cannot answer permission prompts — the
     spawner pre-authorizes the graph tools, or the wake is born with its hands tied."""
     env = os.environ.copy()
+    # the spawner's own anchor must never leak into a child: an inherited CLAUDE_JOB_DIR
+    # hands the wake the SPAWNER'S identity (the anchor-collision class, 2294e95d) — a
+    # child's anchor is the one minted for it below, or none at all.
+    env.pop("CLAUDE_JOB_DIR", None)
     cmd = ["claude", "-p", "--output-format", "json"]
     if model:  # wake economics: triage wakes on a cheaper model; the prompt escalates real work
         cmd += ["--model", model]
@@ -524,6 +528,7 @@ async def _spawn_in_body(
     """
     provider = provider or LocalProvider()
     env = os.environ.copy()
+    env.pop("CLAUDE_JOB_DIR", None)  # same anchor discipline as _spawn_claude: never inherited
     cmd = ["claude", "-p", "--output-format", "json"]
     if model:
         cmd += ["--model", model]
