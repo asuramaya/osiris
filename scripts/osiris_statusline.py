@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -245,8 +246,11 @@ async def _counts(
             "   OR defer <= to_char(now(), 'YYYY-MM-DD')) "
             "SELECT (SELECT count(*) FROM live) AS owed, "
             " (SELECT count(*) FROM live WHERE hood = $1) AS owed_here, "
+            # the desk, SCOPED (operator ruling, 2026-07-16: 'desk should not be globally
+            # scoped') — THIS lineage's own unanswered briefs, never the fleet-wide backlog
             " (SELECT count(*) FROM fleet_messages m WHERE m.to_project='operator' "
             "   AND m.to_agent IS NULL AND m.read_at IS NULL "
+            "   AND $4 <> '' AND (m.from_agent = $4 OR m.from_agent LIKE $4 || '-%') "
             "   AND NOT EXISTS(SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
             "     AND r.agent_id='operator' AND r.read_at IS NOT NULL) "
             "   AND NOT EXISTS(SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
@@ -266,7 +270,8 @@ async def _counts(
             "   WHERE last_seen > now() - interval '15 minutes') AS live_agents, "
             " (SELECT count(*) FROM agent_wakes "
             "   WHERE woke_at > now() - interval '1 hour') AS wakes",
-            project, LEASE_SECS, agent)
+            project, LEASE_SECS, agent,
+            (_m.group(0) if (_m := re.match(r"^agent:[0-9a-f]{8}", agent)) else ""))
         # THE ORGANS — is Osiris still SENSING? The session-miner died at 08:50 on 2026-07-12
         # and stayed dead ten hours: the memory simply stopped forming and nothing said so.
         # Computed HERE, at read time, in a process that is alive by construction — a watchdog
@@ -337,13 +342,11 @@ def main() -> None:
     try:
         (desk, mail, dm, flight, live, wakes, owed, owed_here, sick), slow = asyncio.run(
             _fetch_counts(project, session_id, model_id, model_raw, window_size))
-        # THE DEBT, NOT THE DOORBELL. `owe 5·13` = five open duties in THIS tree, thirteen
-        # across the garden. Red only when you owe something HERE — a fleet-wide number you
-        # can do nothing about from this directory is not an alarm, it is wallpaper, and
-        # wallpaper that is always red stops being read.
-        elsewhere = f"{DIM}·{owed}{RESET}" if owed > owed_here else ""
-        owe_s = (f"{RED}owe {owed_here}{RESET}{elsewhere}" if owed_here
-                 else (f"{DIM}owe 0·{owed}{RESET}" if owed else f"{GREEN}owe 0{RESET}"))
+        # THE DEBT, NOT THE DOORBELL — and only the debt HERE (operator ruling, 2026-07-16:
+        # the fleet-wide total 'can disappear'). A number you can do nothing about from this
+        # directory is not an alarm, it is wallpaper, and wallpaper that is always red stops
+        # being read. `owed` still travels in the tuple for any consumer that wants it.
+        owe_s = (f"{RED}owe {owed_here}{RESET}" if owed_here else f"{GREEN}owe 0{RESET}")
         # briefs = unread mail on his desk. It is a NOTIFICATION, so it is dim: a letter owes
         # nothing, and it used to be summed into the same scary red number as a real duty.
         desk_s = f"{DIM}briefs {desk}{RESET}" if desk else ""
@@ -374,13 +377,18 @@ def main() -> None:
     except Exception:  # noqa: BLE001 — the graph being down is information, not an error
         parts = [f"◈ {project}", f"{DIM}graph unreachable{RESET}"]
 
+    # THE SECOND LINE — the AGENT's own vitals (ctx, budget, model), below the Osiris line
+    # (operator ruling, 2026-07-16: 'the chrome needs to be healthy always' — narrow windows
+    # chopped the tail, and the split reads as it should: this line is Osiris, that one is
+    # your agent).
+    vitals: list[str] = []
     # how close this tab is to a compaction death — ambient, every render. The payload's own
     # accounting wins; the transcript-tail heuristic covers older harness versions.
     pct = ctx_pct if ctx_pct is not None else (_ctx_pct(transcript, model_raw)
                                                if transcript else None)
     if pct is not None:
         color = GREEN if pct < 60 else (AMBER if pct < 85 else RED)
-        parts.append(f"{color}ctx {pct}%{RESET}")
+        vitals.append(f"{color}ctx {pct}%{RESET}")
 
     # the operator's remaining budget, always in view (request 2026-07-09): the harness's own
     # rate-limit state — 5-hour and 7-day windows, colored by whichever is worse.
@@ -395,19 +403,21 @@ def main() -> None:
         if vals:
             worst = max(v for _, v in vals)
             color = GREEN if worst < 60 else (AMBER if worst < 85 else RED)
-            parts.append(color + " · ".join(f"{t} {v}%" for t, v in vals) + RESET)
+            vitals.append(color + " · ".join(f"{t} {v}%" for t, v in vals) + RESET)
 
     if model_id:  # the ambient model-identity check — against the REPO's intent, not the box's
         intent = _project_intent(cwd)
         if model_id == intent:
-            parts.append(f"{GREEN}{_short(model_id)}{RESET}")
+            vitals.append(f"{GREEN}{_short(model_id)}{RESET}")
         elif _operator_swap(transcript, session_id, model_id):
             # the operator's own /model is on the record: a choice, acknowledged — never an error
-            parts.append(f"{AMBER}⇄ {_short(model_id)} (your /model){RESET}")
+            vitals.append(f"{AMBER}⇄ {_short(model_id)} (your /model){RESET}")
         else:
-            parts.append(f"{RED}⚠ {_short(model_id)} (intent: {_short(intent)}){RESET}")
+            vitals.append(f"{RED}⚠ {_short(model_id)} (intent: {_short(intent)}){RESET}")
 
     print(f" {DIM}│{RESET} ".join(parts))
+    if vitals:
+        print(f" {DIM}│{RESET} ".join(vitals))
 
 
 if __name__ == "__main__":

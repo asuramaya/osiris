@@ -574,3 +574,68 @@ async def test_mail_grade_rejects_an_invented_band(actions: Actions) -> None:
     with pytest.raises(ValueError):
         await send_message(actions.pool, from_agent="agent:x", from_project="a",
                            to_project="b", body="now", grade="urgent")
+
+
+# --- the cross-project return + the scoped desk (Werner's leak, 2026-07-16) ---
+
+
+async def test_cross_project_reply_returns_to_the_askers_seat_not_the_room(
+    actions: Actions,
+) -> None:
+    """Werner's leak: a reply to a foreign project's broadcast used to return to that
+    project's whole ROOM — gestalt's audit, addressed to 'whoever commissioned this',
+    landed in every bytebye reader's inbox. The seat is the address now: a seat-bound
+    asker gets the reply as a seat DM, invisible to housemates."""
+    from datetime import UTC, datetime
+
+    from src.orchestrator.agents import claim_name
+
+    p = actions.pool
+    asker = "agent:a5ce0001"
+    a = await actions.create_or_find_object("Agent", asker, asker)
+    await actions.assert_property(a, "project", "askhouse", asker,
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await claim_name(actions, asker, "Commissioner", source=asker)
+
+    ask = await send_message(p, from_agent=asker, from_project="askhouse",
+                             to_project="farhouse", body="audit the family")
+    rep = await send_message(p, from_agent="agent:fa40b001", from_project="farhouse",
+                             reply_to=ask["id"], body="audit done, exemptions listed")
+
+    assert rep["to_agent"] is not None and rep["to_agent"].startswith("seat:")
+    assert rep["to"] is None                              # never the room
+    mine = await read_inbox(p, "askhouse", reader_agent=asker)
+    assert any("audit done" in m["body"] for m in mine)   # the holder reads it
+    housemate = await read_inbox(p, "askhouse", reader_agent="agent:b7770002")
+    assert not any("audit done" in m["body"] for m in housemate)  # the housemate never sees it
+
+
+async def test_cross_project_reply_to_an_unbound_asker_keeps_the_room(
+    actions: Actions,
+) -> None:
+    """An unbound asker keeps the pre-seat law: the reply returns to the asker's project
+    room — a DM to a transient dead id would strand the mail; the room reaches the house."""
+    p = actions.pool
+    ask = await send_message(p, from_agent="agent:0abe4003", from_project="oldhouse",
+                             to_project="farhouse", body="anyone: check the gauge")
+    rep = await send_message(p, from_agent="agent:fa40b001", from_project="farhouse",
+                             reply_to=ask["id"], body="gauge checked")
+    assert rep["to"] == "oldhouse" and rep["to_agent"] is None
+
+
+async def test_desk_briefs_scope_to_the_senders_lineage(actions: Actions) -> None:
+    """The scoped desk (operator ruling, 2026-07-16): an agent's chrome counts ITS OWN
+    unanswered briefs — lineage-wide — never the fleet's backlog."""
+    from src.orchestrator.mailbox import desk_briefs_from
+
+    p = actions.pool
+    await send_message(p, from_agent="agent:ba5e0001-ii", from_project="x",
+                       to_project=OPERATOR_ADDR, body="my milestone brief")
+    await send_message(p, from_agent="agent:0abe4002", from_project="y",
+                       to_project=OPERATOR_ADDR, body="someone else's brief")
+
+    assert await desk_briefs_from(p, "agent:ba5e0001") == 1        # the base sees its line's
+    assert await desk_briefs_from(p, "agent:ba5e0001-iii") == 1    # any generation, same line
+    assert await desk_briefs_from(p, "agent:0abe4002") == 1
+    assert await desk_briefs_from(p, None) == 0                    # identity-less: nothing waits
+    assert await desk_briefs_from(p, "session") == 0

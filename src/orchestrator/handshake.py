@@ -24,7 +24,7 @@ from src.actions.core import Actions
 from src.ingest.sessions import locate_current_transcript
 from src.orchestrator import forks, mounts
 from src.orchestrator.agents import register_agent, resolve_identity
-from src.orchestrator.mailbox import OPERATOR_ADDR, settle_history_at_join, unread_count
+from src.orchestrator.mailbox import desk_briefs_from, settle_history_at_join, unread_count
 
 
 async def fork_seat(
@@ -181,8 +181,9 @@ async def automount(
     mail_asks = (await unread_count(actions.pool, ident.project, reader_agent=ident.agent_id,
                                     lease_secs=lease_secs, grade="ask")
                  if ident.project and mail else 0)
-    desk = await unread_count(actions.pool, OPERATOR_ADDR, reader_agent=OPERATOR_ADDR,
-                              lease_secs=lease_secs)
+    # the desk, SCOPED (operator ruling, 2026-07-16): this seat's own unanswered briefs,
+    # never the fleet-wide backlog — a number identical in every chrome informs nobody
+    desk = await desk_briefs_from(actions.pool, ident.agent_id)
     away = await mounts.while_away(actions.pool, ident.project, ident.agent_id, prev)
     try:
         pulse: str | None = await mounts.fleet_pulse(actions.pool, lease_secs=lease_secs)

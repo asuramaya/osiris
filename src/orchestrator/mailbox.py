@@ -22,6 +22,7 @@ to the sender as a DM; a reply to a broadcast routes to the thread's project.
 """
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -189,8 +190,24 @@ async def send_message(
         to_a, to_p = ref["from_agent"], ref["from_project"]  # a DM to me → DM back to its sender
     elif ref is not None:  # a broadcast/own message → project routing (supersession lane)
         own = from_project and _norm(ref["from_project"] or "") == _norm(from_project)
-        to_a = None
-        to_p = _norm(ref["to_project"] or "") if own else _norm(ref["from_project"] or "")
+        if own:
+            to_a, to_p = None, _norm(ref["to_project"] or "")
+        else:
+            # THE CROSS-PROJECT RETURN GOES TO THE SEAT (Werner's leak, 2026-07-16): a reply
+            # to a FOREIGN project's broadcast used to return to that project's whole ROOM —
+            # gestalt's audit reports, addressed to 'whoever commissioned this', broadcast
+            # into every bytebye reader's inbox because the commissioner's house was the only
+            # return address the pre-seat mailbox had. The seat IS the address now (B2,
+            # 5cef856b): a seat-bound asker gets the reply as a seat DM — durable across
+            # succession, invisible to housemates. An unbound asker keeps the room return
+            # (a DM to a transient dead id would strand the mail; the room at least reaches
+            # the house — exactly the old law, unchanged).
+            from src.orchestrator.seats import held_seat
+            bound = await held_seat(pool, ref["from_agent"])
+            if bound:
+                to_a, to_p = bound["seat_id"], None
+            else:
+                to_a, to_p = None, _norm(ref["from_project"] or "")
     else:
         to_a = to_p = None
     if not to_a and not to_p:
@@ -276,6 +293,24 @@ async def unread_count(
     if grade:
         args.append(grade)
     return await pool.fetchval(q, *args)  # type: ignore[no-any-return]
+
+
+async def desk_briefs_from(pool: asyncpg.Pool, agent_id: str | None) -> int:
+    """The DESK, scoped to ONE seat (operator ruling, 2026-07-16: 'desk should not be
+    globally scoped... only scope what is for or from the agent'): unread operator-desk
+    briefs sent by THIS agent's lineage — the agent's own words still awaiting the human's
+    eye, never the fleet-wide backlog (a number identical in every chrome informs nobody).
+    An identity-less or non-lineage caller scores 0 — nothing of theirs can be waiting."""
+    m = re.match(r"^agent:[0-9a-f]{8}", agent_id or "")
+    if not m:
+        return 0
+    base = m.group(0)
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT count(*) FROM fleet_messages m WHERE m.to_project=$2 "
+        "AND m.to_agent IS NULL AND m.read_at IS NULL "
+        "AND (m.from_agent = $1 OR m.from_agent LIKE $1 || '-%') "
+        "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
+        "  AND r.agent_id=$2 AND r.read_at IS NOT NULL)", base, OPERATOR_ADDR)
 
 
 async def read_inbox(

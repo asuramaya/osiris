@@ -987,8 +987,8 @@ async def mount(
     asks = (await unread_count(pool, ident.project, reader_agent=ident.agent_id,
                                lease_secs=lease, grade="ask")
             if ident.project and unread else 0)
-    op_unread = await unread_count(pool, OPERATOR_ADDR, reader_agent=OPERATOR_ADDR,
-                                   lease_secs=lease)
+    # the desk, SCOPED (operator ruling, 2026-07-16): this seat's own unanswered briefs
+    op_unread = await mailbox.desk_briefs_from(pool, ident.agent_id)
     banner = swap_banner(classify_swap(
         ident.model_history, ident.model,
         expected=await _expected_model(pool, cwd, ident.project),  # repo intent wins
@@ -1025,7 +1025,7 @@ async def mount(
            **({"cwd_corrected": cwd_note} if cwd_note else {}),
            "note": "linked — writes now attributed to you; call orient() next"}
     if op_unread:  # the fleet plays secretary: any session the human drives can relay this
-        out["operator_mail"] = (f"{op_unread} unread at the operator's desk — "
+        out["operator_mail"] = (f"{op_unread} of your briefs await the operator's eye — "
                                 "inbox(project='operator') if the human is present")
     if ident.succeeded_from and _seam_confidently_dated(ident):
         # the MINT ruling (be292762, a sibling's remedy adopted): the heir is not told it
@@ -1281,10 +1281,11 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
                                grade="ask") if proj and unread else 0)
     mail = (f"{unread} unread ({asks} ask{'s' if asks == 1 else ''} something of you) — "
             "inbox()" if asks else f"{unread} unread — inbox()") if unread else "none"
-    op_unread = await unread_count(pool, OPERATOR_ADDR, reader_agent=OPERATOR_ADDR,
-                                   lease_secs=lease)
-    op_mail = {"operator_mail": f"{op_unread} unread — inbox(project='operator') if the "
-                                "human is present"} if op_unread else {}
+    # the desk, SCOPED (operator ruling, 2026-07-16): this seat's own unanswered briefs
+    op_unread = await mailbox.desk_briefs_from(pool, ident.agent_id if ident else None)
+    op_mail = {"operator_mail": f"{op_unread} of your briefs await the operator's eye — "
+                                "inbox(project='operator') if the human is present"
+               } if op_unread else {}
     # THE CHARTER, MADE VISIBLE (Phase 1 §4.1, `dd47c1da`): a house is what a seat RULES, not
     # where it sits — but a charter nobody can see is not an inheritance. No aggregation here
     # (that's wave 2's charter-scoped briefing); just the fact, named.
