@@ -22,6 +22,7 @@ wearing a signature.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -128,6 +129,11 @@ async def fold_agent(
     for t in threads:
         await actions.assert_property(t["id"], "owner", head, actor, now, 0.9,
                                       evidence_class="self_declared")
+    # a standing proposal for this pair (either order) is answered by the act itself
+    await actions.pool.execute(
+        "UPDATE merge_candidates SET resolved='merged', resolved_by=$3, resolved_at=now() "
+        "WHERE resolved IS NULL AND (a_id, b_id) IN (($1,$2),($2,$1))",
+        by_label[dupe]["id"], by_label[into]["id"], actor)
     _log.info("fold: %s → %s (head %s): mail %d, rows %d, threads %d",
               dupe, into, head, mail_moved, rows_moved, len(threads))
     return {
@@ -139,3 +145,158 @@ async def fold_agent(
                  f"and open threads now belong to {head}. Reversible by compensating "
                  "event; nothing was deleted."),
     }
+
+async def find_agent_fold_candidates(
+    pool: asyncpg.Pool, *, projects_root: Path | None = None,
+    jobs_home: Path | None = None,
+) -> dict[str, Any]:
+    """THE ARCHAEOLOGIST (thread b975851b) — mine the registry and the disk for anonymous
+    agents that EVIDENCE says were never distinct minds, and queue them as review-gated
+    merge_candidates. PROPOSALS ONLY: nothing folds here; the operator judges the tray
+    (constitution #1's spirit — flag, never guess; the phantom-twin lint's law at census
+    scale). Two evidence classes this pass:
+
+    VIEW-ALIAS (score .9): an anonymous agent whose whole presence is a mount row with NO
+    transcript for its sid anywhere and no state.json in its jobs dir — a doorbell ring —
+    co-resident at the same cwd with a session that HAS a body. Propose fold into that
+    session's agent (the 10802085/bef1d349/d1848828 class, decoded live 2026-07-16).
+
+    RESTART-MINT (score .65): an anonymous agent mounted at a cwd where a NAMED lineage
+    anchors — the b86de6c1-beside-628ef839 class: a restart that minted a stranger in the
+    named seat's own home. Weaker (a genuine visitor could sit in a named repo), so the
+    lower score puts it behind the aliases in the tray.
+
+    Pairs already rejected or linked not_same_as are never re-proposed."""
+    from src.ontology.resolution import _suppressed
+    from src.orchestrator.agents import _generation
+
+    root = projects_root or Path.home() / ".claude" / "projects"
+    jobs = jobs_home or Path.home() / ".claude" / "jobs"
+    sup = await _suppressed(pool)
+
+    def _has_body(sid8: str) -> bool:
+        if not sid8 or not root.is_dir():
+            return False
+        return any(slug.is_dir() and any(slug.glob(sid8 + "*.jsonl"))
+                   for slug in root.iterdir())
+
+    anons = await pool.fetch(
+        "SELECT DISTINCT ON (o.canonical) o.id AS oid, o.canonical, m.cwd, m.job_dir "
+        "FROM objects o JOIN agent_mounts m ON m.agent_id = o.canonical "
+        "WHERE o.type='Agent' AND o.status='active' AND NOT EXISTS ("
+        "  SELECT 1 FROM current_assertions h JOIN objects ho ON ho.id=h.object_id "
+        "  WHERE h.name='handle' AND (ho.canonical=o.canonical "
+        "        OR o.canonical LIKE ho.canonical||'-%' OR ho.canonical LIKE o.canonical||'-%')) "
+        "ORDER BY o.canonical, m.last_seen DESC")
+    proposed: dict[str, int] = {"view-alias": 0, "restart-mint": 0}
+    for r in anons:
+        sid8 = Path(r["job_dir"]).name if r["job_dir"] else ""
+        cwd, mine = r["cwd"], str(r["canonical"])
+        target: str | None = None
+        cls, score, signals = "", 0.0, []
+        bodiless = bool(sid8) and not _has_body(sid8) and not (
+            jobs / sid8 / "state.json").exists()
+        if bodiless and cwd:
+            others = await pool.fetch(
+                "SELECT agent_id, job_dir FROM agent_mounts WHERE cwd=$1 AND agent_id<>$2 "
+                "ORDER BY last_seen DESC LIMIT 8", cwd, mine)
+            for o in others:
+                if _generation(str(o["agent_id"]))[0] == _generation(mine)[0]:
+                    continue
+                osid = Path(o["job_dir"]).name if o["job_dir"] else ""
+                if osid and _has_body(osid):
+                    target, cls, score = str(o["agent_id"]), "view-alias", 0.9
+                    signals = [f"no transcript for sid {sid8} anywhere under {root}",
+                               f"jobs/{sid8} holds no state.json (not a daemon session)",
+                               f"co-resident at {cwd} with {o['agent_id']}, whose sid "
+                               f"{osid} has a body"]
+                    break
+        if target is None and cwd:
+            named = await pool.fetchval(
+                "SELECT m2.agent_id FROM agent_mounts m2 WHERE m2.cwd=$1 "
+                "AND m2.agent_id<>$2 AND EXISTS ("
+                "  SELECT 1 FROM current_assertions h JOIN objects ho ON ho.id=h.object_id "
+                "  WHERE h.name='handle' AND (ho.canonical=m2.agent_id "
+                "        OR m2.agent_id LIKE ho.canonical||'-%')) "
+                "ORDER BY m2.last_seen DESC LIMIT 1", cwd, mine)
+            if named and _generation(str(named))[0] != _generation(mine)[0]:
+                target, cls, score = str(named), "restart-mint", 0.65
+                signals = [f"anonymous mount at {cwd}, the anchor of named lineage "
+                           f"{named} — the restart-mint class"]
+        if target is None:
+            continue
+        trow = await pool.fetchrow(
+            "SELECT id, status FROM objects WHERE canonical=$1 AND type='Agent'", target)
+        if trow is None or trow["status"] != "active":
+            continue
+        if frozenset((r["oid"], trow["id"])) in sup:
+            continue
+        # the table orders pairs by uuid (CHECK a_id < b_id) — the ROLES live in reasons
+        lo, hi = sorted((r["oid"], trow["id"]))
+        row = await pool.fetchrow(
+            "INSERT INTO merge_candidates (a_id, b_id, score, reasons) "
+            "VALUES ($1,$2,$3,$4) ON CONFLICT (a_id, b_id) DO NOTHING RETURNING id",
+            lo, hi, score,
+            {"kind": "agent-fold", "class": cls, "dupe": mine, "into": target,
+             "signals": signals})
+        if row is not None:
+            proposed[cls] += 1
+    pending = [dict(p) for p in await pool.fetch(
+        "SELECT c.id, c.score, c.reasons->>'class' AS class, "
+        "c.reasons->>'dupe' AS dupe, c.reasons->>'into' AS into_label, "
+        "c.reasons->'signals' AS signals "
+        "FROM merge_candidates c "
+        "WHERE c.resolved IS NULL AND c.reasons->>'kind'='agent-fold' "
+        "ORDER BY c.score DESC, c.id LIMIT 100")]
+    # labels the census can no longer resolve (folded meanwhile) would confuse the tray —
+    # they are stamped by fold_agent itself, so pending here is always actionable
+    return {"examined": len(anons), "proposed": proposed, "pending": pending,
+            "note": "proposals only — judge each with resolve_fold_candidate (merged | "
+                    "rejected); a rejection is remembered and never re-proposed"}
+
+
+async def resolve_fold_candidate(
+    actions: Actions, *, candidate_id: int, decision: str, actor: str,
+) -> dict[str, Any]:
+    """Judge one agent-fold proposal from the tray. 'merged' executes fold_agent — the
+    ESTATE-carrying fold, never the bare kernel merge (an agent folded without its mail,
+    rows, and threads is the orphan machine again). 'rejected' mints not_same_as both
+    ways and the pair is never re-proposed. Either way the candidate row is stamped with
+    the judge's name. The entity tray's twin (resolution.resolve_candidate) stays for
+    Person/Company — this one exists because agents have estates."""
+    row = await actions.pool.fetchrow(
+        "SELECT c.id, c.resolved, c.reasons FROM merge_candidates c WHERE c.id=$1",
+        candidate_id)
+    if row is None:
+        return {"error": f"candidate {candidate_id} not found"}
+    if row["resolved"] is not None:
+        return {"error": f"candidate {candidate_id} already {row['resolved']}"}
+    reasons = row["reasons"] or {}
+    if reasons.get("kind") != "agent-fold":
+        return {"error": f"candidate {candidate_id} is not an agent-fold proposal — "
+                         "judge it in the entity tray (resolution.resolve_candidate)"}
+    if decision == "merged":
+        # the pair's ROLES live in reasons — the table's columns are uuid-ordered
+        signals = "; ".join(reasons.get("signals") or []) or "approved from the tray"
+        out = await fold_agent(actions, dupe=str(reasons.get("dupe") or ""),
+                               into=str(reasons.get("into") or ""),
+                               evidence=f"approved candidate {candidate_id}: {signals}",
+                               actor=actor)
+        if "error" in out:
+            return out  # the row stays unresolved — a refused fold is not a judgment
+        return {**out, "candidate": candidate_id, "resolved": "merged"}
+    if decision == "rejected":
+        from datetime import UTC, datetime
+        a_oid = await actions.pool.fetchval(
+            "SELECT a_id FROM merge_candidates WHERE id=$1", candidate_id)
+        b_oid = await actions.pool.fetchval(
+            "SELECT b_id FROM merge_candidates WHERE id=$1", candidate_id)
+        now = datetime.now(UTC)
+        await actions.create_link(a_oid, b_oid, "not_same_as", actor, now, 1.0)
+        await actions.create_link(b_oid, a_oid, "not_same_as", actor, now, 1.0)
+        await actions.pool.execute(
+            "UPDATE merge_candidates SET resolved='rejected', resolved_by=$2, "
+            "resolved_at=now() WHERE id=$1", candidate_id, actor)
+        return {"candidate": candidate_id, "resolved": "rejected",
+                "note": "pair linked not_same_as — never re-proposed"}
+    return {"error": f"decision must be 'merged' or 'rejected', got {decision!r}"}

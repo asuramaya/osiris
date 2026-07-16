@@ -1891,6 +1891,40 @@ async def fold_agent(dupe: str, into: str, evidence: str,
 
 
 @mcp.tool()
+async def fold_candidates(ctx: Context | None = None) -> dict[str, Any]:
+    """THE ARCHAEOLOGIST'S TRAY (thread b975851b) — sweep the registry and disk for
+    anonymous agents that evidence says were never distinct minds (view-aliases: a mount
+    row with no transcript and no daemon receipt, co-resident with a session that has a
+    body; restart-mints: an anonymous mount in a named lineage's own home) and queue them
+    as review-gated merge candidates. PROPOSALS ONLY — nothing folds. Returns the pending
+    tray (score-ranked, each with its cited signals); judge each with resolve_fold.
+    Rejected pairs are remembered and never re-proposed."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first", "why": _anchorless(ctx)}
+    from src.orchestrator.folds import find_agent_fold_candidates
+    return await find_agent_fold_candidates(await _pool_get())
+
+
+@mcp.tool()
+async def resolve_fold(candidate_id: int, decision: str,
+                       ctx: Context | None = None) -> dict[str, Any]:
+    """Judge ONE agent-fold proposal from the tray (fold_candidates): decision='merged'
+    executes the ESTATE-carrying fold (mail, mount rows, threads land on the living
+    head); 'rejected' links the pair not_same_as, never re-proposed. OPERATOR-GATED: run
+    this only relaying the operator's explicit judgment — the tray exists so a human
+    reads the evidence; an agent judging its own proposals is the auto-merge the
+    constitution forbids."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first", "why": _anchorless(ctx)}
+    from src.orchestrator.folds import resolve_fold_candidate
+    return await resolve_fold_candidate(Actions(await _pool_get()),
+                                        candidate_id=candidate_id, decision=decision,
+                                        actor=ident.agent_id)
+
+
+@mcp.tool()
 async def establish_office(seat: str, ctx: Context | None = None) -> dict[str, Any]:
     """THE OFFICE CEREMONY (ruling ed5f5ce2) — one act moves a seat into its Osiris-owned
     home at ~/.osiris/seats/<handle>/: writes the seat's STANDING ORDERS (a per-seat

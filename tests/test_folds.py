@@ -140,3 +140,101 @@ async def test_living_head_reads_the_registry(actions: Actions) -> None:
     assert await living_head(p, "agent:12ab34cd") == "agent:12ab34cd-iii"
     assert await living_head(p, "agent:12ab34cd-ii") == "agent:12ab34cd-iii"
     assert await living_head(p, "agent:never5een") == "agent:never5een"
+
+
+async def test_archaeologist_proposes_a_view_alias(actions: Actions, tmp_path) -> None:
+    """The finder pairs a bodiless anonymous mount (no transcript, no daemon receipt)
+    with the co-resident session that HAS a body — proposal only, score .9."""
+    from src.orchestrator.folds import find_agent_fold_candidates, resolve_fold_candidate
+
+    p = actions.pool
+    root = tmp_path / "projects"
+    jobs = tmp_path / "jobs"
+    slug = root / "-w-alias-repo"
+    slug.mkdir(parents=True)
+    (slug / "rea1baaa-full-session.jsonl").write_text("{}\n")   # the REAL session's body
+    await _mk_agent(actions, "agent:a11a5000")                  # the doorbell ring
+    await _mk_agent(actions, "agent:rea1baaa")                  # the living original
+    await save_mount(p, job_dir=str(jobs / "a11a5000"), agent_id="agent:a11a5000",
+                     project="aliashouse", cwd="/w/alias-repo", model=None,
+                     session_key="whisper:a11a5000")
+    await save_mount(p, job_dir=str(jobs / "rea1baaa"), agent_id="agent:rea1baaa",
+                     project="aliashouse", cwd="/w/alias-repo", model=None,
+                     session_key="sid:conn")
+
+    out = await find_agent_fold_candidates(p, projects_root=root, jobs_home=jobs)
+
+    assert out["proposed"]["view-alias"] == 1
+    mine = [c for c in out["pending"] if c["dupe"] == "agent:a11a5000"]
+    assert mine and mine[0]["into_label"] == "agent:rea1baaa"
+    # judging it MERGED executes the estate-carrying fold and stamps the row
+    verdict = await resolve_fold_candidate(actions, candidate_id=mine[0]["id"],
+                                           decision="merged", actor="agent:operator-hand")
+    assert verdict["resolved"] == "merged" and verdict["folded"] == "agent:a11a5000"
+    st = await p.fetchval("SELECT status FROM objects WHERE canonical='agent:a11a5000'")
+    assert st == "merged"
+    # idempotent: a second sweep proposes nothing for the folded pair
+    again = await find_agent_fold_candidates(p, projects_root=root, jobs_home=jobs)
+    assert not [c for c in again["pending"] if c["dupe"] == "agent:a11a5000"]
+
+
+async def test_archaeologist_rejection_is_remembered(actions: Actions, tmp_path) -> None:
+    from src.orchestrator.folds import find_agent_fold_candidates, resolve_fold_candidate
+
+    p = actions.pool
+    root = tmp_path / "projects"
+    jobs = tmp_path / "jobs"
+    slug = root / "-w-rej-repo"
+    slug.mkdir(parents=True)
+    (slug / "0riginaa-full.jsonl").write_text("{}\n")
+    await _mk_agent(actions, "agent:0eadbea7")
+    await _mk_agent(actions, "agent:0riginaa")
+    await save_mount(p, job_dir=str(jobs / "0eadbea7"), agent_id="agent:0eadbea7",
+                     project="rejhouse", cwd="/w/rej-repo", model=None,
+                     session_key="whisper:0eadbea7")
+    await save_mount(p, job_dir=str(jobs / "0riginaa"), agent_id="agent:0riginaa",
+                     project="rejhouse", cwd="/w/rej-repo", model=None,
+                     session_key="sid:conn2")
+    out = await find_agent_fold_candidates(p, projects_root=root, jobs_home=jobs)
+    mine = [c for c in out["pending"] if c["dupe"] == "agent:0eadbea7"]
+    assert mine
+
+    verdict = await resolve_fold_candidate(actions, candidate_id=mine[0]["id"],
+                                           decision="rejected", actor="agent:operator-hand")
+    assert verdict["resolved"] == "rejected"
+    again = await find_agent_fold_candidates(p, projects_root=root, jobs_home=jobs)
+    assert not [c for c in again["pending"] if c["dupe"] == "agent:0eadbea7"]
+    st = await p.fetchval("SELECT status FROM objects WHERE canonical='agent:0eadbea7'")
+    assert st == "active"                       # a rejection folds nothing
+
+
+async def test_archaeologist_flags_a_restart_mint(actions: Actions, tmp_path) -> None:
+    """An anonymous agent WITH a body, mounted in a NAMED lineage's own home, is the
+    restart-mint class — proposed at the lower score, behind the aliases in the tray."""
+    from datetime import UTC, datetime
+
+    from src.orchestrator.folds import find_agent_fold_candidates
+
+    p = actions.pool
+    root = tmp_path / "projects"
+    jobs = tmp_path / "jobs"
+    slug = root / "-w-mint-repo"
+    slug.mkdir(parents=True)
+    (slug / "annon111-full.jsonl").write_text("{}\n")   # the anon HAS a body (not an alias)
+    await _mk_agent(actions, "agent:annon111")
+    await _mk_agent(actions, "agent:5eated00")
+    named = await actions.create_or_find_object("Agent", "agent:5eated00", "agent:5eated00")
+    await actions.assert_property(named, "handle", "Minty", "agent:5eated00",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await save_mount(p, job_dir=str(jobs / "annon111"), agent_id="agent:annon111",
+                     project="minthouse", cwd="/w/mint-repo", model=None,
+                     session_key="whisper:annon111")
+    await save_mount(p, job_dir=str(jobs / "5eated00"), agent_id="agent:5eated00",
+                     project="minthouse", cwd="/w/mint-repo", model=None,
+                     session_key="whisper:5eated00")
+
+    out = await find_agent_fold_candidates(p, projects_root=root, jobs_home=jobs)
+
+    mine = [c for c in out["pending"] if c["dupe"] == "agent:annon111"]
+    assert mine and mine[0]["into_label"] == "agent:5eated00"
+    assert float(mine[0]["score"]) < 0.9        # weaker class ranks behind aliases
