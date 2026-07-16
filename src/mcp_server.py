@@ -2187,7 +2187,10 @@ async def automount_route(request: Any) -> Any:
             # the attach ceremony (5cef856b): the spawner's exported seat + one-time token,
             # carried by the whisper from the session's own environment
             seat_id=(str(body.get("seat_id") or "") or None),
-            attach_token=(str(body.get("attach_token") or "") or None))
+            attach_token=(str(body.get("attach_token") or "") or None),
+            # the tab-view receipt (alias-clone cure): the hook's own statement of which
+            # conversation this session continues — automount adopts instead of cloning
+            transcript_path=(str(body.get("transcript_path") or "") or None))
         # a mint rode this whisper (compact/clear): the ancestor's connection outlives it —
         # purge the dead mind from the hot cache so no tool call answers as it again
         _evict_stale_minds(out.get("minted"))

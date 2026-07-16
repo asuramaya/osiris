@@ -285,3 +285,44 @@ async def test_session_end_on_a_never_mounted_session_is_a_quiet_no_op(
 
     out2 = await session_end(actions, session_id="short")  # too short to derive an anchor
     assert out2["released"] == 0
+
+
+async def test_automount_adopts_a_tab_view_instead_of_minting_a_clone(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """THE ALIAS-CLONE CURE (2026-07-16, the operator's '2 clones just spawned'): a tab
+    attached to a live session fires a whisper under the TAB's own sid — no state.json
+    receipt (the daemon's artifact), no transcript of its own — so every archaeology in
+    fork_seat found nobody and a fresh anonymous agent was minted beside the living
+    original. The hook's transcript_path names the conversation the tab continues:
+    adopt that session's soul; the window registers as the mind it shows."""
+    root = tmp_path / "projects"
+    _transcript(root, "/w/viewed-repo")   # the REAL session's transcript (sid SID)
+    first = await automount(actions, session_id=SID, cwd="/w/viewed-repo",
+                            actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+    tab_sid = "ab12cd34-0000-4000-8000-000000000000"
+    out = await automount(actions, session_id=tab_sid, cwd="/w/viewed-repo",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
+                          transcript_path=str(root / "-w-viewed-repo" / f"{SID}.jsonl"))
+    assert out["agent"] == first["agent"]           # the window IS the soul it shows
+    assert out["view_of"] == SID[:8]                # ...and the whisper confesses it
+    row = await actions.pool.fetchrow(
+        "SELECT agent_id FROM agent_mounts WHERE job_dir=$1",
+        str(tmp_path / "jobs" / "ab12cd34"))
+    assert row is not None and row["agent_id"] == first["agent"]   # alias row born bound
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' AND canonical='agent:ab12cd34'") == 0
+
+
+async def test_automount_never_adopts_a_sessions_own_transcript(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """A fresh session appending its OWN transcript is genuinely new — a transcript_path
+    naming the session's own sid must not suppress the mint."""
+    root = tmp_path / "projects"
+    _transcript(root, "/w/fresh-repo")
+    out = await automount(actions, session_id=SID, cwd="/w/fresh-repo",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
+                          transcript_path=str(root / "-w-fresh-repo" / f"{SID}.jsonl"))
+    assert out["agent"] == "agent:39fb22a2"         # minted as itself, exactly as before
+    assert "view_of" not in out

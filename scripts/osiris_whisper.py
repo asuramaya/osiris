@@ -47,6 +47,11 @@ def main() -> int:
     if os.environ.get("OSIRIS_SEAT_ID") and os.environ.get("OSIRIS_ATTACH_TOKEN"):
         body["seat_id"] = os.environ["OSIRIS_SEAT_ID"]
         body["attach_token"] = os.environ["OSIRIS_ATTACH_TOKEN"]
+    # THE TAB-VIEW RECEIPT (alias-clone cure, 2026-07-16): the hook names the transcript this
+    # session appends to. A tab attached to a live session fires under ITS OWN sid while the
+    # transcript belongs to the session it shows — the server adopts instead of minting a clone.
+    if hook.get("transcript_path"):
+        body["transcript_path"] = str(hook["transcript_path"])
     try:
         req = urllib.request.Request(
             AUTOMOUNT, data=json.dumps(body).encode(),

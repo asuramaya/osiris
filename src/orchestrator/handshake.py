@@ -58,6 +58,29 @@ async def fork_seat(
         return None
 
 
+async def view_seat(
+    actions: Actions, *, transcript_path: str, session_id: str,
+    jobs_home: Path | None = None,
+) -> str | None:
+    """The seat a VIEW continues — the alias-clone cure (2026-07-16). A live session
+    attached through a new tab fires a whisper under the TAB's sid: no state.json receipt
+    (that is the daemon's artifact), no transcript of its own (appends continue in the
+    real session's file) — every archaeology in fork_seat finds nobody and a clone row is
+    minted beside the living original. But the hook itself names the conversation it
+    continues: transcript_path. When that file belongs to ANOTHER session's sid and that
+    session holds a mount row, this tab is a window onto that mind — adopt it, mint
+    nothing. Returns None for a session appending its own transcript (genuinely fresh)."""
+    name = Path(transcript_path or "").name
+    if not name.endswith(".jsonl"):
+        return None
+    tsid = name[: -len(".jsonl")]
+    if len(tsid) < 8 or tsid[:8] == (session_id or "")[:8]:
+        return None
+    prior = _derive_job_dir(tsid, jobs_home=jobs_home)
+    rec = await mounts.find_mount(actions.pool, job_dir=prior) if prior else None
+    return rec.agent_id if rec else None
+
+
 def _derive_job_dir(session_id: str, *, jobs_home: Path | None = None) -> str | None:
     """~/.claude/jobs/<first 8 of the session id> — the harness's scheme (verified against
     live job dirs). None when the id is too short to trust. `jobs_home` is a test seam."""
@@ -73,6 +96,7 @@ async def automount(
     root: Path | None = None, jobs_home: Path | None = None,
     project_label: str | None = None, source: str | None = None,
     seat_id: str | None = None, attach_token: str | None = None,
+    transcript_path: str | None = None,
 ) -> dict[str, Any]:
     """Mount a just-started session and return its whisper payload. Identical semantics to
     the mount() tool (same resolution, same registration, same durable row — idempotent on
@@ -99,6 +123,11 @@ async def automount(
     # carries REWRITES every record's sessionId to the new one, so the fork swears it is newborn.
     # Ask its record uuids who its parent is before we mint it a second identity.
     forked = await fork_seat(actions, job_dir=job_dir, root=root) if bound is None else None
+    # THE TAB VIEW (the alias-clone class): neither a row nor a fork, but the hook's own
+    # transcript_path names the session this tab continues — adopt, never clone.
+    viewed = (await view_seat(actions, transcript_path=transcript_path,
+                              session_id=session_id, jobs_home=jobs_home)
+              if bound is None and forked is None and transcript_path else None)
     # you can only DIE if you LIVED — and a fork has lived, under its ancestor's name.
     if source in ("compact", "clear") and (bound is not None or forked is not None):
         mint_reason = "compaction" if source == "compact" else "context-clear"
@@ -112,6 +141,9 @@ async def automount(
         # the same mind, wearing a new session id. Adopt the ancestor's SEAT — never the
         # transcript's root sid, which would invent a third identity while curing a second.
         ident.agent_id = forked
+    elif viewed is not None:
+        # a tab-view of a living session: the window registers as the soul it shows
+        ident.agent_id = viewed
     await register_agent(actions, ident, actor=actor, expected_model=expected_model,
                          mint_reason=mint_reason)
     prev = None
@@ -231,6 +263,9 @@ async def automount(
         **({"seat_binding": binding} if binding else {}),
         # the resume heal's receipt (empty = nothing listed here needed re-addressing)
         **({"transcripts_healed": heal} if heal else {}),
+        # the tab-view adoption's confession: this whisper fired for a WINDOW onto the
+        # named session, and the window registered as that soul — no clone was minted
+        **({"view_of": Path(transcript_path or "").name[:8]} if viewed else {}),
     }
 
 
