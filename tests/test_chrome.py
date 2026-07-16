@@ -281,3 +281,33 @@ async def test_fleet_folds_generations_under_the_living_head(actions: Actions) -
     html = render_fleet(data)
     assert "2 past lives" in html
     assert "SUPERSEDED, an earlier life of this seat" in html
+
+
+async def test_fleet_folds_a_name_across_rebased_id_lineages(actions: Actions) -> None:
+    """A restart can re-mint the ID BASE mid-lineage (Metron IX rode a new base while
+    VIII and VII kept the old) — the NAME is the soul, so the fold spans bases when a
+    handle exists: one row, the freshest generation as the face."""
+    from datetime import UTC, datetime
+
+    from src.api.chrome import fleet_data
+    from src.orchestrator.mounts import save_mount
+
+    p = actions.pool
+    for agent, gen in (("agent:01d0ba5e", "7"), ("agent:4e60ba5e", "8")):
+        o = await actions.create_or_find_object("Agent", agent, agent)
+        await actions.assert_property(o, "handle", "Metrix", agent, datetime.now(UTC),
+                                      0.9, evidence_class="self_declared")
+        await actions.assert_property(o, "seat_generation", gen, agent,
+                                      datetime.now(UTC), 0.9,
+                                      evidence_class="self_declared")
+        await save_mount(p, job_dir=f"/jobs/{agent.removeprefix('agent:')}",
+                         agent_id=agent, project="metrixhouse", cwd="/w/mx", model=None,
+                         session_key=None)
+    await p.execute("UPDATE agent_mounts SET last_seen = now() - interval '3 days' "
+                    "WHERE agent_id='agent:01d0ba5e'")
+
+    data = await fleet_data(p)
+    mine = [m for m in data["mounts"] if (m.get("handle") == "Metrix")]
+    assert len(mine) == 1                              # one NAME, one row — across bases
+    assert mine[0]["agent_id"] == "agent:4e60ba5e"     # the freshest life is the face
+    assert len(mine[0]["ancestors"]) == 1              # the old base is a past life

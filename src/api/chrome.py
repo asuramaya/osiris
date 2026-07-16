@@ -461,16 +461,21 @@ async def fleet_data(pool: asyncpg.Pool, *, wake_budget: int = 0) -> dict[str, A
     # the soul is as alive as its freshest body, and ×N confesses the extra bodies.
     # THE SOUL is the LINEAGE, not the generation (operator, 2026-07-16: "metron ix,
     # viii, vii all show up as separate seats, but the mental model says the ancestors
-    # are superseded"): group by lineage base, the freshest generation is the face, and
-    # every superseded generation folds UNDER it as a past life — never beside it.
-    def _soul_key(agent_id: str) -> str:
-        m = re.match(r"^agent:[0-9a-f]{8}", agent_id or "")
-        return m.group(0) if m else (agent_id or "?")
+    # are superseded"): the freshest generation is the face and every superseded one
+    # folds UNDER it as a past life — never beside it. The NAME is the soul when one
+    # exists (a restart can re-mint the id base mid-lineage — Metron IX rode a new base
+    # while VIII and VII kept the old — but the seat's generations tick with the HANDLE,
+    # and 'one day there will be a thoth 400' counts by name, not by hash); the hex base
+    # groups only the anonymous.
+    def _soul_key(m: dict[str, Any]) -> str:
+        if m.get("handle"):
+            return "seat:" + str(m["handle"]).lower()
+        mt = re.match(r"^agent:[0-9a-f]{8}", m.get("agent_id") or "")
+        return mt.group(0) if mt else (m.get("agent_id") or "?")
 
     souls: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for m in rows:
-        souls.setdefault(_soul_key(m["agent_id"]), {}).setdefault(
-            m["agent_id"], []).append(m)
+        souls.setdefault(_soul_key(m), {}).setdefault(m["agent_id"], []).append(m)
     mounts = []
     for gens in souls.values():
         def _grp_age(gid: str, _g: dict[str, list[dict[str, Any]]] = gens) -> float:
