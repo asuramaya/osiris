@@ -13,6 +13,7 @@ Renderers are PURE (fixture-fed in tests); the routes in app.py feed them the li
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import asyncpg
@@ -458,19 +459,45 @@ async def fleet_data(pool: asyncpg.Pool, *, wake_budget: int = 0) -> dict[str, A
     # viewing it, a resume sibling — and rendering rows drew the same seat twice ("why is
     # there 2 thoth XL agents"). Group by agent: the realest row testifies for the card,
     # the soul is as alive as its freshest body, and ×N confesses the extra bodies.
-    groups: dict[str, list[dict[str, Any]]] = {}
+    # THE SOUL is the LINEAGE, not the generation (operator, 2026-07-16: "metron ix,
+    # viii, vii all show up as separate seats, but the mental model says the ancestors
+    # are superseded"): group by lineage base, the freshest generation is the face, and
+    # every superseded generation folds UNDER it as a past life — never beside it.
+    def _soul_key(agent_id: str) -> str:
+        m = re.match(r"^agent:[0-9a-f]{8}", agent_id or "")
+        return m.group(0) if m else (agent_id or "?")
+
+    souls: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for m in rows:
-        groups.setdefault(m["agent_id"], []).append(m)
+        souls.setdefault(_soul_key(m["agent_id"]), {}).setdefault(
+            m["agent_id"], []).append(m)
     mounts = []
-    for grp in groups.values():
-        grp.sort(key=_row_rank)
-        best = dict(grp[0])
-        best["live"] = any(g["live"] for g in grp)
-        best["age_secs"] = min(float(g["age_secs"] or 1e9) for g in grp)
-        best["sessions"] = len(grp)
-        # every door, realest first, each carrying what a renderer needs to EXPLAIN it
+    for gens in souls.values():
+        def _grp_age(gid: str, _g: dict[str, list[dict[str, Any]]] = gens) -> float:
+            return min(float(g["age_secs"] or 1e9) for g in _g[gid])
+        head_id = min(gens, key=_grp_age)
+        head = sorted(gens[head_id], key=_row_rank)
+        best = dict(head[0])
+        allrows = [g for grp in gens.values() for g in grp]
+        best["live"] = any(g["live"] for g in allrows)
+        best["age_secs"] = min(float(g["age_secs"] or 1e9) for g in allrows)
+        best["sessions"] = len(allrows)
+        # the head's doors, realest first — each carrying what the renderer EXPLAINS
         best["doors"] = [{"session_key": g.get("session_key"), "job_dir": g.get("job_dir"),
-                          "age_secs": g["age_secs"], "live": g["live"]} for g in grp]
+                          "age_secs": g["age_secs"], "live": g["live"]} for g in head]
+        # superseded generations, freshest first: past lives of the same seat
+        best["ancestors"] = sorted(
+            ({"seat": grp[0].get("seat") or gid, "age_secs": _grp_age(gid),
+              "doors": len(grp)}
+             for gid, grp in gens.items() if gid != head_id),
+            key=lambda a: a["age_secs"])
+        # a named lineage keeps its face even when the head row itself carries no label
+        if not best.get("seat"):
+            for a in best["ancestors"]:
+                if str(a["seat"]).startswith("agent:"):
+                    continue
+                best["seat"] = a["seat"]
+                break
         mounts.append(best)
     mounts.sort(key=lambda m: float(m["age_secs"] or 1e9))
     mounts = mounts[:60]
@@ -505,12 +532,25 @@ def _fleet_row(m: dict[str, Any]) -> str:
     dot = ('<span class="live">●</span> ' if m["live"] else '<span class="dim">○</span> ')
     name = _e(m["seat"] or m["agent_id"])
     doors = m.get("doors") or []
-    if len(doors) > 1:
-        # one mind, several ways in: the row UNFOLDS to explain each door, so nobody
-        # reads plumbing as population
+    ancestors = m.get("ancestors") or []
+    if len(doors) > 1 or ancestors:
+        # one mind, several ways in and several LIVES BEHIND it: the row unfolds to
+        # explain both, so nobody reads plumbing or history as population
+        bits = []
+        if len(doors) > 1:
+            bits.append(f"{len(doors)} doors")
+        if ancestors:
+            bits.append(f"{len(ancestors)} past li{'ves' if len(ancestors) != 1 else 'fe'}")
         inner = "<br>".join("· " + _e(_door_label(d)) for d in doors)
+        if ancestors:
+            past = "<br>".join(
+                f'· {_e(str(a["seat"]))} — SUPERSEDED, an earlier life of this seat '
+                f'(last alive {_e(_age(a["age_secs"]))}, {a["doors"]} door'
+                f'{"s" if a["doors"] != 1 else ""})'
+                for a in ancestors)
+            inner = (inner + "<br>" if inner else "") + past
         name_cell = (f"<details><summary>{dot}{name} "
-                     f'<span class="dim">— 1 agent, {len(doors)} doors</span></summary>'
+                     f'<span class="dim">— 1 agent, {", ".join(bits)}</span></summary>'
                      f'<div class="dim">{inner}</div></details>')
     else:
         name_cell = f"{dot}{name}"

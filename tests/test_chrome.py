@@ -245,3 +245,39 @@ async def test_a_miner_guess_is_never_debt(actions: Actions) -> None:
     html = render_desk(desk)
     assert "the miner thinks you may owe" in html              # shown, folded, never red
     assert "not counted as debt" in html
+
+
+async def test_fleet_folds_generations_under_the_living_head(actions: Actions) -> None:
+    """THE SOUL IS THE LINEAGE (operator, 2026-07-16: 'metron ix, viii, vii all show up
+    as separate seats, but the ancestors are superseded'): generations fold UNDER the
+    freshest one — the head is the face, ancestors render as past lives inside the
+    unfold, never as peer rows."""
+    from datetime import UTC, datetime
+
+    from src.api.chrome import fleet_data, render_fleet
+    from src.orchestrator.mounts import save_mount
+
+    p = actions.pool
+    for gen, handle_gen in (("agent:3e7a0001", 1), ("agent:3e7a0001-ii", 2),
+                            ("agent:3e7a0001-iii", 3)):
+        o = await actions.create_or_find_object("Agent", gen, gen)
+        await actions.assert_property(o, "handle", "Metra", gen, datetime.now(UTC), 0.9,
+                                      evidence_class="self_declared")
+        await actions.assert_property(o, "seat_generation", str(handle_gen), gen,
+                                      datetime.now(UTC), 0.9,
+                                      evidence_class="self_declared")
+        await save_mount(p, job_dir=f"/jobs/{gen.removeprefix('agent:')}", agent_id=gen,
+                         project="metrahouse", cwd="/w/metra", model=None,
+                         session_key=None)
+    # age the ancestors so -iii is unambiguously the head
+    await p.execute("UPDATE agent_mounts SET last_seen = now() - interval '2 days' "
+                    "WHERE agent_id IN ('agent:3e7a0001','agent:3e7a0001-ii')")
+
+    data = await fleet_data(p)
+    mine = [m for m in data["mounts"] if m["agent_id"].startswith("agent:3e7a0001")]
+    assert len(mine) == 1                                   # one lineage, ONE row
+    assert mine[0]["agent_id"] == "agent:3e7a0001-iii"      # the living head is the face
+    assert len(mine[0]["ancestors"]) == 2                   # the past lives fold under it
+    html = render_fleet(data)
+    assert "2 past lives" in html
+    assert "SUPERSEDED, an earlier life of this seat" in html
