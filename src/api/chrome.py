@@ -439,7 +439,7 @@ def _row_rank(m: dict[str, Any]) -> tuple[int, float]:
 async def fleet_data(pool: asyncpg.Pool, *, wake_budget: int = 0) -> dict[str, Any]:
     rows = [dict(r) for r in await pool.fetch(
         "SELECT m.agent_id, m.project, m.model, m.cwd, m.last_seen, m.session_key, "
-        " extract(epoch FROM (now() - m.last_seen)) AS age_secs, "
+        " m.job_dir, extract(epoch FROM (now() - m.last_seen)) AS age_secs, "
         " (SELECT a.value #>> '{}' FROM current_assertions a "
         "   JOIN objects o ON o.id=a.object_id "
         "   WHERE o.canonical=m.agent_id AND a.name='handle' "
@@ -463,11 +463,14 @@ async def fleet_data(pool: asyncpg.Pool, *, wake_budget: int = 0) -> dict[str, A
         groups.setdefault(m["agent_id"], []).append(m)
     mounts = []
     for grp in groups.values():
-        top = min(grp, key=_row_rank)
-        best = dict(top)
+        grp.sort(key=_row_rank)
+        best = dict(grp[0])
         best["live"] = any(g["live"] for g in grp)
         best["age_secs"] = min(float(g["age_secs"] or 1e9) for g in grp)
         best["sessions"] = len(grp)
+        # every door, realest first, each carrying what a renderer needs to EXPLAIN it
+        best["doors"] = [{"session_key": g.get("session_key"), "job_dir": g.get("job_dir"),
+                          "age_secs": g["age_secs"], "live": g["live"]} for g in grp]
         mounts.append(best)
     mounts.sort(key=lambda m: float(m["age_secs"] or 1e9))
     mounts = mounts[:60]
@@ -480,25 +483,70 @@ async def fleet_data(pool: asyncpg.Pool, *, wake_budget: int = 0) -> dict[str, A
             "wakes_hour": int(hourly or 0), "wake_budget": wake_budget}
 
 
+def _door_label(d: dict[str, Any]) -> str:
+    """One door, in PLAIN WORDS (operator, 2026-07-16: a ×N marker read as N agents —
+    'really they are doors, and the doors dont really explain what the doors are')."""
+    key = d.get("session_key") or ""
+    sid = (d.get("job_dir") or "").rsplit("/", 1)[-1] or "?"
+    when = _age(d.get("age_secs"))
+    if key.startswith("view-of:"):
+        viewed = key.removeprefix("view-of:")
+        return (f"a TAB viewing session {viewed} — a window onto the same mind, "
+                f"not a second agent (door {sid}, {when})")
+    if key.startswith("resume-of:"):
+        prior = key.removeprefix("resume-of:")
+        return f"a RESUME continuing session {prior} — same conversation, new door ({sid}, {when})"
+    if key.startswith("sid:"):
+        return f"the SESSION itself — its own live connection (door {sid}, {when})"
+    return f"the SESSION under its own id (door {sid}, whisper-mounted, {when})"
+
+
+def _fleet_row(m: dict[str, Any]) -> str:
+    dot = ('<span class="live">●</span> ' if m["live"] else '<span class="dim">○</span> ')
+    name = _e(m["seat"] or m["agent_id"])
+    doors = m.get("doors") or []
+    if len(doors) > 1:
+        # one mind, several ways in: the row UNFOLDS to explain each door, so nobody
+        # reads plumbing as population
+        inner = "<br>".join("· " + _e(_door_label(d)) for d in doors)
+        name_cell = (f"<details><summary>{dot}{name} "
+                     f'<span class="dim">— 1 agent, {len(doors)} doors</span></summary>'
+                     f'<div class="dim">{inner}</div></details>')
+    else:
+        name_cell = f"{dot}{name}"
+    return (
+        f"<tr><td>{name_cell}</td>"
+        f'<td><a href="/mail?box={_e(m["project"] or "?")}">{_e(m["project"] or "?")}</a></td>'
+        f'<td class="dim">{_e((m["model"] or "?").removeprefix("claude-"))}</td>'
+        f'<td class="dim">{_e(m["cwd"] or "")}</td>'
+        f'<td class="ts">{_e(_age(m["age_secs"]))}</td></tr>')
+
+
 def render_fleet(data: dict[str, Any]) -> str:
     mounts = data["mounts"]
     live_n = sum(1 for m in mounts if m["live"])
     budget = (f' / {data["wake_budget"]}' if data.get("wake_budget") else "")
-    out = [f'<h2>seats <span class="pill">{live_n} live · {len(mounts)} agents</span> '
+    # SOULS FIRST, DOORS NEVER (operator, 2026-07-16: "the 3x ra and 3x thoth is still
+    # there and very confusing"): a soul's extra mount rows are doorways — tabs, resumes —
+    # and a lens does not count plumbing, so the ×N marker is gone. Below the souls, the
+    # UNRECONCILED sink into one collapsed line: they are the fold tray's backlog, named
+    # as such, not paraded as peers of the named.
+    named = [m for m in mounts if m.get("seat")]
+    anon = [m for m in mounts if not m.get("seat")]
+    out = [f'<h2>seats <span class="pill">{live_n} live · '
+           f'{len(named)} soul{"s" if len(named) != 1 else ""} · '
+           f'{len(anon)} unreconciled</span> '
            f'<span class="pill">wakes {data["wakes_hour"]}{budget}/h</span></h2>']
-    rows = "".join(
-        "<tr><td>" + ('<span class="live">●</span> ' if m["live"]
-                      else '<span class="dim">○</span> ')
-        + f'{_e(m["seat"] or m["agent_id"])}'
-        + (f' <span class="dim">×{m["sessions"]}</span>'
-           if m.get("sessions", 1) > 1 else "")
-        + "</td>"
-        f'<td><a href="/mail?box={_e(m["project"] or "?")}">{_e(m["project"] or "?")}</a></td>'
-        f'<td class="dim">{_e((m["model"] or "?").removeprefix("claude-"))}</td>'
-        f'<td class="dim">{_e(m["cwd"] or "")}</td>'
-        f'<td class="ts">{_e(_age(m["age_secs"]))}</td></tr>'
-        for m in mounts) or '<tr><td class="dim">nothing mounted</td></tr>'
+    rows = "".join(_fleet_row(m) for m in named) or (
+        '<tr><td class="dim">nothing mounted</td></tr>')
     out.append(f"<table>{rows}</table>")
+    if anon:
+        arows = "".join(_fleet_row(m) for m in anon)
+        out.append(
+            f'<details><summary class="dim">{len(anon)} unreconciled session(s) — '
+            "anonymous doorbells and visits; fold proposals wait in the tray "
+            "(fold_candidates → resolve_fold)</summary>"
+            f"<table>{arows}</table></details>")
     wrows = "".join(
         f'<tr><td class="ts">{_e(str(w["woke_at"])[:16])}</td>'
         f'<td>{_e(w["to_project"])}</td><td class="dim">{_e(w["mode"] or "?")}</td>'

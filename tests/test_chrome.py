@@ -152,7 +152,7 @@ def test_fleet_renders_live_dots_and_wake_ledger() -> None:
                    "mode": "mint", "woke_at": "2026-07-11 19:09:45"}],
         "wakes_hour": 21, "wake_budget": 30,
     })
-    assert "1 live · 2 agents" in html and "wakes 21 / 30/h" in html
+    assert "1 live · 1 soul · 1 unreconciled" in html and "wakes 21 / 30/h" in html
     assert "Thoth XX" in html and '<span class="live">●</span>' in html
     assert 'href="/mail?box=osiris"' in html    # a seat's project opens its mail
     assert "mint" in html and "msg 7" in html
@@ -180,7 +180,12 @@ async def test_fleet_folds_one_soul_to_one_row(actions: Actions) -> None:
     assert len(mine) == 1                          # one soul, one row
     assert mine[0]["model"] == "claude-opus-4-8"   # the real row testifies
     assert mine[0]["sessions"] == 2 and mine[0]["live"] is True
-    assert "×2" in render_fleet(data)
+    html = render_fleet(data)
+    # the doors are EXPLAINED, never counted as population (operator, 2026-07-16):
+    # the row unfolds to say what each way-in IS, in plain words
+    assert "1 agent, 2 doors" in html
+    assert "a window onto the same mind" in html   # the view door, explained
+    assert "the SESSION itself" in html            # the real door, explained
 
 
 async def test_desk_and_fleet_data_round_trip_the_live_graph(actions: Actions) -> None:
