@@ -213,6 +213,17 @@ async def send_message(
     if not to_a and not to_p:
         raise ValueError("no recipient: pass to=<project>, to_agent=<agent>, or reply_to a "
                          "message whose sender is addressable")
+    # A FOLDED LABEL IS A FORWARDING ORDER, NOT A GRAVE (the reconciliation primitive,
+    # thread b975851b): a DM to an agent id whose object is status='merged' can never be
+    # read under that label — parking mail there re-creates the orphan machine the fold
+    # exists to end. This is NOT the silent redirection the grave rule forbids: the fold
+    # was review-gated (the operator signed it), and the receipt confesses the forward.
+    folded_from: str | None = None
+    if to_a and to_a.startswith("agent:"):
+        from src.orchestrator.folds import canonical_agent, living_head
+        canon = await canonical_agent(pool, to_a)
+        if canon != to_a:
+            folded_from, to_a = to_a, await living_head(pool, canon)
     # THE ECHO + THE GATE (dd47c1da) — resolved BEFORE any write, so a require_seat refusal
     # never leaves a row behind. `to_a` may be a name already resolved above, OR a raw agent id
     # that skipped resolution entirely (alfred's gap): either way, lineage_head reveals whether
@@ -265,7 +276,8 @@ async def send_message(
         return {"id": dup["id"], "to": to_p, "to_agent": to_a,
                 "thread_id": dup["thread_id"], "dedup": True,
                 **({"seat": seat, "lineage_head": lineage} if to_a else {}),
-                **({"holder": holder} if to_a and to_a.startswith("seat:") else {})}
+                **({"holder": holder} if to_a and to_a.startswith("seat:") else {}),
+                **({"folded_from": folded_from} if folded_from else {})}
     mid = await pool.fetchval(
         "INSERT INTO fleet_messages (from_agent, from_project, to_project, to_agent, body, "
         "reply_to, thread_id, desk_kind, grade) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) "
@@ -273,7 +285,8 @@ async def send_message(
         from_agent, from_project, to_p, to_a, body, reply_to, thread, desk_kind, grade)
     return {"id": mid, "to": to_p, "to_agent": to_a, "thread_id": thread, "dedup": False,
             **({"seat": seat, "lineage_head": lineage} if to_a else {}),
-            **({"holder": holder} if to_a and to_a.startswith("seat:") else {})}
+            **({"holder": holder} if to_a and to_a.startswith("seat:") else {}),
+            **({"folded_from": folded_from} if folded_from else {})}
 
 
 async def unread_count(

@@ -1869,6 +1869,28 @@ async def rebind_seat(seat: str, new_cwd: str, extract: bool = False,
 
 
 @mcp.tool()
+async def fold_agent(dupe: str, into: str, evidence: str,
+                     ctx: Context | None = None) -> dict[str, Any]:
+    """THE RECONCILIATION FOLD (thread b975851b) — declare two agent labels ONE MIND:
+    `dupe` folds into `into`. Append-only (a 'merge' event + the merged_into projection —
+    reversible by compensating event, nothing deleted), authorship untouched (the dupe's
+    words stay stamped with its id; provenance resolves at read time), and the ESTATE
+    follows: unread mail, mount rows, and open threads land on `into`'s living head.
+    REVIEW-GATED, ALWAYS: run this only on the operator's word or an approved
+    merge_candidate, and `evidence` must cite what proves one mind (transcripts, census,
+    timing) — it is recorded in the event. Refuses: same-lineage folds (that is
+    succession's job), an actively-seated dupe (transfer the seat first), unknown or
+    already-folded labels."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a fold is a mind's act, and the graph must know whose",
+                "why": _anchorless(ctx)}
+    from src.orchestrator.folds import fold_agent as _fold
+    return await _fold(Actions(await _pool_get()), dupe=dupe, into=into,
+                       evidence=evidence, actor=ident.agent_id)
+
+
+@mcp.tool()
 async def establish_office(seat: str, ctx: Context | None = None) -> dict[str, Any]:
     """THE OFFICE CEREMONY (ruling ed5f5ce2) — one act moves a seat into its Osiris-owned
     home at ~/.osiris/seats/<handle>/: writes the seat's STANDING ORDERS (a per-seat
