@@ -657,9 +657,18 @@ async def test_a_name_resolves_to_the_LIVE_seat_and_never_silently_to_a_grave(
     assert seat["live"] is False
     assert "may never be read" in seat["warning"]      # and it says so, LOUDLY
 
-    # a live seat always wins, whatever the generation ordering says
+    # A HOLDER IS NEVER SILENTLY OUTRANKED BY A WARM BODY (5cef856b superseded the old
+    # 'live always wins' here: liveness was itself a heat heuristic, and heat is exactly
+    # how the impostor shape won). The ancestor waking up does not take the seat back by
+    # breathing — resolution stays with the holder, still warning that nobody listens:
     await actions.pool.execute(
         "UPDATE agent_mounts SET last_seen = now() WHERE agent_id = $1", ancestor)
+    still = await resolve_seat(actions, "Quokka")
+    assert still["agent"] == heir and "warning" in still
+    # ...it takes the seat back by CLAIMING it — the explicit act, permitted because the
+    # holder is not live ('a seat a LIVE mind holds is not vacant'):
+    reclaim = await claim_name(actions, ancestor, "Quokka", source=ancestor)
+    assert "error" not in reclaim
     live = await resolve_seat(actions, "Quokka")
     assert live["agent"] == ancestor and live["live"] is True and "warning" not in live
 
@@ -707,7 +716,11 @@ async def test_a_fresh_mind_is_told_its_seat_or_which_seats_stand_empty(actions:
 
     held = await mind("agent:ff110000", "sibling-eight")
     await claim_name(actions, held, "Ra", source=held)
-    assert await seat_bearings(actions.pool, held) == {"seat": "Ra", "house": "sibling-eight"}
+    bearings = await seat_bearings(actions.pool, held)
+    assert bearings["seat"] == "Ra" and bearings["house"] == "sibling-eight"
+    # the claim minted AND bound the Seat object (the on-ramp) — the binding is part of
+    # who you are, and orient says so
+    assert bearings["seat_binding"]["handle"] == "Ra"
 
     # the mind Ra was worried about: fresh, anonymous, in a house whose seat is standing empty
     fresh = await mind("agent:ff220000", "sibling-eight")
@@ -811,7 +824,9 @@ async def test_fleet_shows_claimed_names_beside_the_id(actions: Actions) -> None
     finally:
         srv._pool = saved_pool
 
-    assert f"{named} (Ra)" in out["tree"]                # the claimed seat rides beside its id
+    # the claimed seat rides beside its id — with its BINDING anchored beside it, because
+    # the claim now mints and binds the Seat object (the on-ramp, 5cef856b)
+    assert f"{named} (Ra ⚓seat:" in out["tree"]
     assert anon in out["tree"] and f"{anon} (" not in out["tree"]  # anonymous: unchanged
     rows = {r["agent"]: r for r in out["registered"]}
     assert rows[named]["seat"] == "Ra"

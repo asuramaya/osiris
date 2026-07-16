@@ -105,7 +105,10 @@ async def test_dm_by_name_resolves_to_the_holder(actions: Actions) -> None:
     # ux DMs 'Wayland' by name — resolves to the holder's id
     dm = await send_message(actions.pool, from_agent="agent:ux", from_project="handlingtheloop",
                             to_agent="Wayland", body="the ESP layout changed")
-    assert dm["to_agent"] == "agent:engine-hash"  # resolved name → holder id
+    # the SEAT is the address (B2 + the claim on-ramp, 5cef856b): the name resolves to the
+    # durable seat — it survives succession — and the receipt names the current holder
+    assert dm["to_agent"].startswith("seat:")
+    assert dm["holder"] == "agent:engine-hash"
     assert await unread_count(actions.pool, "handlingtheloop",
                               reader_agent="agent:engine-hash") == 1
     (m,) = await read_inbox(actions.pool, "handlingtheloop", reader_agent="agent:engine-hash")

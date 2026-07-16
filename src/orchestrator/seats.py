@@ -173,6 +173,32 @@ async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
     return {"seat_id": row["seat_id"], "handle": row["handle"], "house": row["house"]}
 
 
+async def bind_holder(
+    actions: Actions, *, seat_id: str, agent_id: str, source: str | None = None,
+) -> None:
+    """Make `agent_id` the seat's ACTIVE holder — prior holders' `holds` links heal by
+    valid_until (never deleted, history walkable), one active link remains. The shared tail
+    of the two deliberate binding acts: the attach ceremony (token-gated, spawner-driven)
+    and a `claim_name` (guard-gated, the live mind's own act). Callers run their refusals
+    FIRST; this only writes."""
+    now = datetime.now(UTC)
+    src = source or agent_id
+    seat_oid = await actions.create_or_find_object("Seat", seat_id, src)
+    agent_oid = await actions.create_or_find_object("Agent", agent_id, src)
+    prior = [r["from_id"] for r in await actions.pool.fetch(
+        "SELECT DISTINCT l.from_id FROM links l JOIN objects f ON f.id=l.from_id "
+        "WHERE l.to_id=$1 AND l.type='holds' AND f.canonical <> $2 "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_oid, agent_id)]
+    for old in prior:
+        await actions.invalidate_link(old, seat_oid, "holds", src, now)
+    exists = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='holds' "
+        "AND (valid_until IS NULL OR valid_until > now()) LIMIT 1", agent_oid, seat_oid)
+    if not exists:
+        await actions.create_link(agent_oid, seat_oid, "holds", src, now, _CONF,
+                                  evidence_class=_EC)
+
+
 async def holds(pool: asyncpg.Pool, agent_id: str, seat_id: str) -> bool:
     """Does this mind actively hold this seat? The read side of seat-addressed mail
     (Phase B2): a message to `seat:<id>` is deliverable to whoever this returns True for."""
@@ -308,21 +334,7 @@ async def attach_session(
                          "binding needs the mount to exist first (automount runs it in "
                          "order). Nothing was bound."}
     # the holds link — the previous holder's heals (valid_until), never deleted
-    now = datetime.now(UTC)
-    seat_oid = await actions.create_or_find_object("Seat", seat_id, agent_id)
-    agent_oid = await actions.create_or_find_object("Agent", agent_id, agent_id)
-    prior = [r["from_id"] for r in await actions.pool.fetch(
-        "SELECT DISTINCT l.from_id FROM links l JOIN objects f ON f.id=l.from_id "
-        "WHERE l.to_id=$1 AND l.type='holds' AND f.canonical <> $2 "
-        "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_oid, agent_id)]
-    for old in prior:
-        await actions.invalidate_link(old, seat_oid, "holds", agent_id, now)
-    exists = await actions.pool.fetchval(
-        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='holds' "
-        "AND (valid_until IS NULL OR valid_until > now()) LIMIT 1", agent_oid, seat_oid)
-    if not exists:
-        await actions.create_link(agent_oid, seat_oid, "holds", agent_id, now, _CONF,
-                                  evidence_class=_EC)
+    await bind_holder(actions, seat_id=seat_id, agent_id=agent_id)
     return {"attached": seat_id, "handle": display.get("handle"),
             "house": display.get("house"), "agent": agent_id,
             "resumed": not fresh_use}

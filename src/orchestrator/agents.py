@@ -326,8 +326,23 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
         await actions.create_link(
             a, await actions.create_or_find_object("Agent", prior, source),
             "succeeds_seat", source, now, _CONF, evidence_class=_EC)
+    # THE SEAT-WORLD ON-RAMP (5cef856b — the designed-but-unshipped half, caught in the
+    # bytebye pilot: 'called at claim_name and daemon spawn' had only the daemon wired). A
+    # successful claim mints/finds the Seat OBJECT and binds the claimer as its holder — a
+    # claim is the assertion world's own deliberate binding act, and every guard above
+    # (visitor, live-sitter, other-house) already ran. Legacy seats enter the Seat world
+    # the moment they are next claimed; from there succession, mail, resolution, and
+    # resume all ride the durable binding.
+    from src.orchestrator.seats import bind_holder, ensure_seat
+    seat_world = await ensure_seat(actions, house=house, handle=name, source=source)
+    seat_id: str | None = None
+    if not seat_world.get("error"):
+        seat_id = seat_world["seat_id"]
+        await bind_holder(actions, seat_id=seat_world["seat_id"], agent_id=agent_id,
+                          source=source)
     return {"claimed": name, "seat": seat_label(agent_id, name, gen), "agent": agent_id,
-            "house": house, "generation": gen, "inherited_from": prior}
+            "house": house, "generation": gen, "inherited_from": prior,
+            **({"seat_id": seat_id} if seat_id else {})}
 
 
 async def resolve_seat(actions: Actions, name: str) -> dict[str, Any]:
@@ -835,6 +850,13 @@ async def _debounce_roundtrip(
     await actions.pool.execute(
         "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
         ancestor, cur)
+    # ...and so does THE BINDING (the seat world's estate, 5cef856b): mint_heir moved the
+    # holds link to the transient heir; a heal that leaves it there strands every
+    # seat-addressed DM on a false mint the read predicate still honors. The binding
+    # follows the head — and after a heal, the head IS the restored ancestor.
+    from src.orchestrator.seats import follow_binding
+    await follow_binding(actions, ancestor_oid=cur_oid, heir=ancestor,
+                         heir_oid=ancestor_oid, now=now)
     if job_dir is not None:  # the heartbeat's caller holds the row — bump its pulse too
         await actions.pool.execute(
             "UPDATE agent_mounts SET agent_id=$2, model=$3, last_seen=now() WHERE job_dir=$1",

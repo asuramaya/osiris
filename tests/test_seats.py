@@ -645,3 +645,35 @@ async def test_a_seated_sid_is_claimed_even_when_stale(actions: Actions) -> None
     claimed = await live_claimed_sids(actions.pool, exclude_session_key=None,
                                       within_secs=900)
     assert "aead0001" not in claimed
+
+
+# --- the claim_name on-ramp (the designed-but-unshipped half, caught in the pilot) ---
+
+
+async def test_claim_name_mints_and_binds_the_seat_object(actions: Actions) -> None:
+    """A successful claim is the assertion world's own deliberate binding act: the Seat
+    OBJECT mints (or is found) and the claimer becomes its active holder — legacy seats
+    enter the Seat world the moment they are next claimed."""
+    from src.orchestrator.agents import claim_name
+
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:xxxx0001", "agent:xxxx0001")
+    await actions.assert_property(a, "project", "osiris", "agent:xxxx0001", now, 0.9,
+                                  evidence_class="self_declared")
+    out = await claim_name(actions, "agent:xxxx0001", "Nut", source="agent:xxxx0001")
+
+    assert out["claimed"] == "Nut"
+    assert out["seat_id"].startswith("seat:")
+    assert await _active_holds(actions, "agent:xxxx0001", out["seat_id"])
+    from src.orchestrator.seats import binding_of_handle
+    bound = await binding_of_handle(actions.pool, "Nut")
+    assert bound == {"seat_id": out["seat_id"], "holder": "agent:xxxx0001"}
+
+    # a LATER lineage inheriting the vacant seat re-binds: one active holder, healed history
+    b = await actions.create_or_find_object("Agent", "agent:xxxx0002", "agent:xxxx0002")
+    await actions.assert_property(b, "project", "osiris", "agent:xxxx0002", now, 0.9,
+                                  evidence_class="self_declared")
+    again = await claim_name(actions, "agent:xxxx0002", "Nut", source="agent:xxxx0002")
+    assert again["seat_id"] == out["seat_id"]          # the SAME durable seat, found not minted
+    assert await _active_holds(actions, "agent:xxxx0002", out["seat_id"])
+    assert not await _active_holds(actions, "agent:xxxx0001", out["seat_id"])
