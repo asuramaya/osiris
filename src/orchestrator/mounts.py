@@ -372,12 +372,19 @@ def _transcript_cwd_probe(path: Path, *, max_lines: int = 50) -> str | None:
     return None
 
 
-def _rewrite_transcript_cwd(path: Path, new_cwd: str) -> int:
+def _rewrite_transcript_cwd(
+    path: Path, new_cwd: str, *, expect: tuple[int, int] | None = None,
+) -> int:
     """Re-address a transcript: point every line's top-level `cwd` at `new_cwd`, atomically
     (tmp + rename, so a crash mid-write never leaves a half-file). ONLY the routing field
     moves — content, trackingPath, and every other byte pass through verbatim: the graph is
     the history; the transcript's cwd is an ADDRESS, and a moved session's address is
-    wherever it now lives. Returns the number of lines rewritten."""
+    wherever it now lives. Returns the number of lines rewritten.
+
+    `expect` = (st_size, st_mtime_ns) from when the CALLER last looked: re-checked at the
+    last instant before the replace, and a file that changed since is left untouched
+    (OSError, tmp removed) — an off-the-rails live pen appending mid-rewrite must lose
+    NOTHING (the torn-write window shrinks from the whole rewrite to one syscall)."""
     tmp = path.with_name("." + path.name + ".heal-tmp")
     rewritten = 0
     try:
@@ -398,10 +405,16 @@ def _rewrite_transcript_cwd(path: Path, new_cwd: str) -> int:
                         rewritten += 1
                         continue
                 dst.write(line)
-        if rewritten:
-            tmp.replace(path)
-        else:
+        if not rewritten:
             tmp.unlink()
+            return 0
+        if expect is not None:
+            st = path.stat()
+            if (st.st_size, st.st_mtime_ns) != expect:
+                tmp.unlink()
+                raise OSError(f"{path.name} changed while being re-addressed — "
+                              "aborted; the live pen's words are untouched")
+        tmp.replace(path)
     except OSError:
         with contextlib.suppress(OSError):
             tmp.unlink()
@@ -449,10 +462,12 @@ def heal_slug_transcripts(
             if sid in skip_sids or any(sid.startswith(p) for p in skip_sid_prefixes if p):
                 skipped_live += 1
                 continue
-            if now - entry.stat().st_mtime < quiet_secs:
+            st = entry.stat()
+            if now - st.st_mtime < quiet_secs:
                 deferred_fresh += 1
                 continue
-            n = _rewrite_transcript_cwd(entry, cwd)
+            n = _rewrite_transcript_cwd(entry, cwd,
+                                        expect=(st.st_size, st.st_mtime_ns))
             if n:
                 healed[sid[:8]] = n
         except OSError as e:
@@ -521,7 +536,9 @@ def _readdress(landed: list[Path], new_cwd: str) -> dict[str, Any]:
     errors: list[str] = []
     for p in landed:
         try:
-            n = _rewrite_transcript_cwd(p, new_cwd)
+            st = p.stat()
+            n = _rewrite_transcript_cwd(p, new_cwd,
+                                        expect=(st.st_size, st.st_mtime_ns))
         except OSError as e:
             errors.append(f"{p.name}: {str(e)[:120]}")
             continue

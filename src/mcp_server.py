@@ -503,13 +503,15 @@ async def lap(ref: str, limit: int = 200) -> dict[str, Any]:
 
 @mcp.tool()
 async def graph_lint(stale_days: int = 14) -> dict[str, Any]:
-    """The graph audits ITSELF — report-only, never writes. Six checks, each a lived bug
+    """The graph audits ITSELF — report-only, never writes. The checks, each a lived bug
     made a standing tripwire: contradiction (near-tie multi-source winners — the resolver
     is coin-flipping a fact), laundering (an agent carrying a fact above its origin grade),
     lineage integrity (succession cycles, dangling heir pointers, heirs without ancestry,
     retired-yet-live agents, healed false mints), orphan links (live links into merged/
     retired objects), stale obligations (open duties older than `stale_days`), attribution
-    anomalies (writes from agent ids the graph never registered — the impersonation class).
+    anomalies (writes from agent ids the graph never registered — the impersonation class),
+    phantom twins (an anonymous un-spawned agent mounted at a Seat's office beside a
+    different holder lineage — a resumed soul wearing a second row).
     Findings are TESTIMONY for a mind to judge, not verdicts to auto-apply; heal with
     compensating events, never DELETE (constitution 3)."""
     pool = await _pool_get()

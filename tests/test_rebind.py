@@ -564,3 +564,23 @@ def test_stale_recollection_trusts_the_transcripts_address(tmp_path: Path) -> No
     assert stale_recollection(job, husk, husk, projects_root=root) is False    # neither: stand
     (root / husk.replace("/", "-") / "abcd1234-session.jsonl").write_text("{}\n")
     assert stale_recollection(job, husk, office, projects_root=root) is False  # both: stand
+
+
+def test_rewrite_aborts_when_the_file_changes_underfoot(tmp_path: Path) -> None:
+    """The torn-write guard: an off-the-rails live pen appending mid-rewrite must lose
+    NOTHING — the rewrite re-checks the caller's stat at the last instant and aborts,
+    leaving the original (appended words included) untouched."""
+    import pytest
+    from src.orchestrator.mounts import _rewrite_transcript_cwd
+
+    p = tmp_path / "t.jsonl"
+    _jsonl(p, "/w/former-home")
+    st = p.stat()
+    with p.open("a") as f:                               # the live pen strikes mid-heal
+        f.write('{"cwd": "/w/former-home", "type": "user"}\n')
+
+    with pytest.raises(OSError, match="changed while being re-addressed"):
+        _rewrite_transcript_cwd(p, "/w/office", expect=(st.st_size, st.st_mtime_ns))
+
+    assert _cwds_of(p) == ["/w/former-home", "/w/former-home"]   # every word kept
+    assert not list(tmp_path.glob(".*heal-tmp"))                 # no residue

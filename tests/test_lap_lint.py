@@ -308,3 +308,43 @@ async def test_lint_is_report_only_and_a_clean_graph_says_so(actions: Actions) -
                                  "lineage-cycle", "orphan-link", "stale-obligation",
                                  "attribution"}
     assert "report-only" in out["discipline"]
+
+
+async def test_lint_flags_the_phantom_twin_at_an_office(actions: Actions) -> None:
+    """PHANTOM-TWIN (90f0cb3a's residue): an anonymous, un-spawned, un-seated agent
+    mounted at a Seat's office beside a different holder lineage — the shape a bridged
+    resume mints when its receipts are missing. Flagged, never guessed at: seating is
+    deliberate or it is nothing."""
+    t = "agent:teller"
+    office = "/w/twin-office"
+    seat = await actions.create_or_find_object("Seat", "seat:0ffab001", t)
+    await actions.assert_property(seat, "anchor_cwd", office, t, NOW, 0.9,
+                                  evidence_class=_SD)
+    holder = await actions.create_or_find_object("Agent", "agent:ab1e0001", t)
+    await actions.create_link(holder, seat, "holds", t, NOW, 0.9, evidence_class=_SD)
+    # the holder's own seated row at the office — never a twin (seat-bound)
+    await mounts.save_mount(actions.pool, job_dir="/x/jobs/ab1e0001",
+                            agent_id="agent:ab1e0001", project="p", cwd=office,
+                            model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET seat_id='seat:0ffab001' WHERE agent_id='agent:ab1e0001'")
+    # THE SUSPECT: anonymous, un-spawned, un-seated, at the office, foreign lineage
+    await actions.create_or_find_object("Agent", "agent:facade01", t)
+    await mounts.save_mount(actions.pool, job_dir="/x/jobs/facade01",
+                            agent_id="agent:facade01", project="p", cwd=office,
+                            model=None, session_key="whisper:facade01")
+    # a NAMED agent at the office — a deliberate presence, not a phantom
+    named = await actions.create_or_find_object("Agent", "agent:0c0ffee1", t)
+    await actions.assert_property(named, "handle", "Visitor", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    await mounts.save_mount(actions.pool, job_dir="/x/jobs/0c0ffee1",
+                            agent_id="agent:0c0ffee1", project="p", cwd=office,
+                            model=None, session_key=None)
+
+    out = await _fn(actions, "lint", {})
+
+    twins = _by_check(out, "phantom-twin")
+    assert [f["subject"] for f in twins] == ["agent:facade01"]
+    assert twins[0]["severity"] == "warn"
+    assert "agent:ab1e0001" in twins[0]["detail"]        # names whose office it haunts
+    assert "never auto-merge" in twins[0]["detail"]      # constitution #1 in the finding

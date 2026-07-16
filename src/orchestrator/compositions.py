@@ -968,7 +968,9 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     ROT-CANDIDATE (info: open threads whose repo's later commits share their vocabulary —
     'probably resolved, confirm?' dealt to a mind's triage verbs, never auto-resolved),
     ATTRIBUTION (writes from agent ids the graph never registered — the impersonation
-    class, made a standing tripwire)."""
+    class, made a standing tripwire), PHANTOM-TWIN (an anonymous un-spawned agent mounted
+    at a Seat's office beside a different holder lineage — a resumed soul wearing a second
+    row; the one identity degradation that must never be silent)."""
     stale_days = max(1, min(int(args.get("stale_days") or 14), 365))
     eps = float(args.get("eps") or 0.05)          # "near-tie" on the confidence axis
     live_secs = int(args.get("live_secs") or 900)  # a mount seen this recently is LIVE
@@ -1243,6 +1245,41 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
          "detail": f"{r['writes']} write(s) from an agent id the graph never registered "
                    f"(last {r['last'].isoformat()[:19]}) — who wore this face?"}
         for r in ghosts])
+
+    # PHANTOM-TWIN — an ANONYMOUS, un-spawned, un-seated agent mounted at a cwd that is
+    # some Seat's anchor (an OFFICE — single-occupant by design, ed5f5ce2) while the seat's
+    # holder is a different lineage. The bridged-resume path mints exactly this shape when
+    # its receipts are missing (agent:6ebb4445 beside alfred, 2026-07-16): the same soul
+    # wearing a second registry row. Adoption cures the cases with evidence; this tripwire
+    # makes the evidence-less remainder LOUD — the one degradation that touches identity
+    # must never be silent. Flag, never guess (blind adoption-by-location was the cwd-guess
+    # bug class; seating is deliberate or it is nothing).
+    twins = await pool.fetch(
+        "SELECT m.agent_id AS suspect, m.cwd AS office, s.canonical AS seat, "
+        "  h.canonical AS holder, m.last_seen "
+        "FROM agent_mounts m "
+        "JOIN current_assertions a ON a.name='anchor_cwd' AND a.value #>> '{}' = m.cwd "
+        "JOIN objects s ON s.id=a.object_id AND s.type='Seat' "
+        "JOIN links l ON l.to_id=s.id AND l.type='holds' "
+        "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "JOIN objects h ON h.id=l.from_id AND h.type='Agent' "
+        "WHERE m.seat_id IS NULL "
+        "AND substring(m.agent_id from '^agent:[0-9a-f]{8}') "
+        "  <> substring(h.canonical from '^agent:[0-9a-f]{8}') "
+        "AND NOT EXISTS (SELECT 1 FROM current_assertions ha "
+        "  JOIN objects ao ON ao.id=ha.object_id "
+        "  WHERE ha.name='handle' AND ao.canonical = m.agent_id) "
+        "AND NOT EXISTS (SELECT 1 FROM links sp "
+        "  JOIN objects so ON so.id=sp.from_id "
+        "  WHERE sp.type='spawned_by' AND so.canonical = m.agent_id)")
+    land("phantom-twin", "warn", [
+        {"subject": r["suspect"], "office": r["office"], "seat": r["seat"],
+         "detail": f"anonymous agent {r['suspect']} mounted at {r['holder']}'s office "
+                   f"({r['seat']}, last seen "
+                   f"{r['last_seen'].isoformat()[:19] if r['last_seen'] else 'never'}) — "
+                   "likely the same soul wearing a second row (a bridged resume without "
+                   "its receipts). Verify and heal by hand; never auto-merge"}
+        for r in twins])
 
     findings.sort(key=lambda f: (_SEVERITY_RANK.get(str(f["severity"]), 9), str(f["check"])))
     capped = {c: n - _LINT_CAP for c, n in counts.items() if n > _LINT_CAP}
