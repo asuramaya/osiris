@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -43,6 +44,7 @@ from src.parsers.evidence import confidence_for
 # OWN source (not the agent's self-attribution, not the text-miner's DERIVED), keeping the
 # ownership boundary clean (rule #7): this observer only ever writes sub-agent Agent objects.
 _SOURCE = "fleet-observer"
+_log = logging.getLogger("osiris.lineage")
 # Lineage + model are read straight from the harness record — a DIRECT_OBSERVATION (the same
 # grade a job_dir transcript-probe earns in agents.py: better than a self-report, short of
 # provider attestation). Structural facts (depth, type) come from the same record, same grade.
@@ -364,7 +366,53 @@ async def register_spawn(
         if principal:
             person = await actions.create_or_find_object("Person", principal, _SOURCE)
             await _link_once(actions, a, person, "acts_for", now)
+        # THE PATRONYM (operator ruling, 2026-07-16): a hand wears its parent's own
+        # displayed name plus a birth ordinal — 'Thoth XL.1', 'Soundwave XIII.4' — so
+        # the NAME carries the provenance and a lost link can orphan nobody. A label,
+        # never a handle: minted as an assertion outside the claim namespace, once
+        # (register_spawn re-fires converge on the same child; the ordinal must not
+        # drift). An anonymous parent mints nothing — the backfill names those children
+        # the day their parent folds or claims.
+        try:
+            has = await actions.pool.fetchval(
+                "SELECT 1 FROM current_assertions ca WHERE ca.object_id=$1 "
+                "AND ca.name='patronym'", a)
+            if not has:
+                pat = await patronym_for(actions, parent_agent)
+                if pat:
+                    await prop("patronym", pat)
+                    await prop("name", f"{pat} · {agent_type}" if agent_type else pat)
+        except Exception:  # noqa: BLE001 — a name is a bonus; the spawn record never dies of one
+            _log.debug("patronym mint failed for %s", child, exc_info=True)
     return child
+
+
+async def patronym_for(actions: Actions, parent_agent: str) -> str | None:
+    """'<parent's displayed name>.<birth ordinal>' for that parent's NEXT child — the
+    roman numeral belongs to the parent, children ride it dotted (operator ruling,
+    2026-07-16). None when the parent's lineage holds no claimed handle. The ordinal is
+    the count of the parent's spawned_by edges (this child's own edge included, so it IS
+    this child's number); two spawns registering in the same instant can in principle
+    draw the same ordinal — a display collision the lint can renumber, never an identity
+    fact, so no lock is worth the contention here."""
+    from src.orchestrator.agents import seat_label
+
+    pool = actions.pool
+    handle = await pool.fetchval(
+        "SELECT a.value#>>'{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE a.name='handle' AND (o.canonical=$1 OR $1 LIKE o.canonical||'-%') "
+        "ORDER BY a.observed_at DESC LIMIT 1", parent_agent)
+    if not handle:
+        return None
+    gen = await pool.fetchval(
+        "SELECT a.value#>>'{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE a.name='seat_generation' AND o.canonical=$1 LIMIT 1", parent_agent)
+    label = seat_label(parent_agent, str(handle),
+                       int(gen) if gen and str(gen).isdigit() else None) or str(handle)
+    n = await pool.fetchval(
+        "SELECT count(*) FROM links l JOIN objects p ON p.id=l.to_id "
+        "WHERE l.type='spawned_by' AND p.canonical=$1", parent_agent)
+    return f"{label}.{max(int(n or 0), 1)}"
 
 
 async def sense_swarms(actions: Actions, root: Path) -> dict[str, int]:

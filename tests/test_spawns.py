@@ -272,3 +272,32 @@ async def test_while_away_names_your_spawns(actions: Actions) -> None:
     assert away is not None
     spawns = away.get("spawns") or []
     assert any(s["agent"] == "agent:kid00005" and s["type"] == "Plan" for s in spawns)
+
+
+async def test_register_spawn_mints_the_patronym(actions: Actions) -> None:
+    """THE PATRONYM (operator ruling, 2026-07-16): a hand wears its parent's own
+    displayed name plus a birth ordinal — 'Patro V.1', 'Patro V.2' — the roman numeral
+    belongs to the parent; children ride it dotted. Anonymous parents mint nothing, and
+    a re-fire never renumbers."""
+    parent = await actions.create_or_find_object("Agent", "agent:pa77e001", "agent:pa77e001")
+    await actions.assert_property(parent, "handle", "Patro", "agent:pa77e001", NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(parent, "seat_generation", "5", "agent:pa77e001", NOW,
+                                  0.9, evidence_class=_SD)
+
+    c1 = await register_spawn(Actions(actions.pool), "hand0001", agent_type="Explore",
+                              parent_agent="agent:pa77e001", project="demo")
+    c2 = await register_spawn(Actions(actions.pool), "hand0002",
+                              parent_agent="agent:pa77e001", project="demo")
+
+    assert await _prop(actions, c1, "patronym") == "Patro V.1"
+    assert await _prop(actions, c1, "name") == "Patro V.1 · Explore"
+    assert await _prop(actions, c2, "patronym") == "Patro V.2"
+    # a re-fire converges — the ordinal never drifts
+    await register_spawn(Actions(actions.pool), "hand0001", agent_type="Explore",
+                         parent_agent="agent:pa77e001", project="demo")
+    assert await _prop(actions, c1, "patronym") == "Patro V.1"
+    # an anonymous parent mints nothing — the backfill names those at fold/claim time
+    anon_kid = await register_spawn(Actions(actions.pool), "hand0003",
+                                    parent_agent="agent:ffff7777", project="demo")
+    assert await _prop(actions, anon_kid, "patronym") is None
