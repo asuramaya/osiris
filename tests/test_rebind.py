@@ -5,6 +5,7 @@ bytebye, alfred's seat, a pure office with no code in the folder.
 """
 from __future__ import annotations
 
+import time
 import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
@@ -316,3 +317,169 @@ async def test_rebind_updates_the_held_seats_anchor(actions: Actions, tmp_path: 
         "WHERE o.canonical=$1 AND a.name='anchor_cwd' "
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", seat["seat_id"])
     assert anchor == new
+
+
+# --- the resume heal (thread 39ea074c: the alfred transition test's catch) ---
+
+
+def _jsonl(path: Path, *cwds: str | None) -> None:
+    """A minimal transcript: one line per cwd (None = a summary line with no cwd)."""
+    import json as _json
+
+    lines = []
+    for i, c in enumerate(cwds):
+        obj: dict[str, object] = {"type": "user", "n": i}
+        if c is not None:
+            obj["cwd"] = c
+        lines.append(_json.dumps(obj))
+    path.write_text("\n".join(lines) + "\n")
+
+
+def _cwds_of(path: Path) -> list[str | None]:
+    import json as _json
+
+    out: list[str | None] = []
+    for line in path.read_text().splitlines():
+        if line.strip():
+            out.append(_json.loads(line).get("cwd"))
+    return out
+
+
+def test_moved_transcripts_get_readdressed(tmp_path: Path) -> None:
+    """A wholesale move re-addresses every transcript it lands: the harness validates
+    resume against the per-line cwd, so a moved file keeping its old address stays listed
+    but refuses to resume ('This conversation is from a different directory')."""
+    from src.orchestrator.mounts import migrate_harness_metadata
+
+    root = tmp_path / "projects"
+    old = root / "-w-old"
+    old.mkdir(parents=True)
+    # a wanderer: three historical cwds + a summary line with none (alfred's real shape)
+    _jsonl(old / "aaaa.jsonl", "/w/old", None, "/w/older-still", "/w/elsewhere")
+    new = root / "-w-new"
+    new.mkdir(parents=True)
+    _jsonl(new / "bbbb.jsonl", "/w/old")          # exists ONLY on the new side: co-resident
+    _jsonl(old / "bbbb.jsonl", "/w/old")          # conflict — stays put, never re-addressed
+
+    out = migrate_harness_metadata("/w/old", "/w/new", projects_root=root,
+                                   claude_json=tmp_path / "cj.json")
+
+    assert out["cwd_readdressed"] == {"files": 1, "lines": 3}
+    assert _cwds_of(new / "aaaa.jsonl") == ["/w/new", None, "/w/new", "/w/new"]
+    assert _cwds_of(new / "bbbb.jsonl") == ["/w/old"]   # co-resident: not this move's to touch
+    assert _cwds_of(old / "bbbb.jsonl") == ["/w/old"]   # the conflict stays, address intact
+
+
+def test_extraction_takes_sid_dirs_memory_and_readdresses(tmp_path: Path) -> None:
+    """Extraction takes the seat's WHOLE session estate: the .jsonl, the sid DIRECTORY
+    (subagents/ + tool-results/ — session state as much as the transcript), and the slug's
+    memory/ (the seat's knowledge; an office booting blind defeats the office) — and the
+    moved transcript is re-addressed. Co-residents stay, untouched."""
+    from src.orchestrator.mounts import migrate_harness_metadata
+
+    root = tmp_path / "projects"
+    old = root / "-w-shared"
+    (old / "838639d1-full-sid" / "subagents").mkdir(parents=True)
+    (old / "838639d1-full-sid" / "subagents" / "agent-x.jsonl").write_text("{}\n")
+    _jsonl(old / "838639d1-full-sid.jsonl", "/w/shared", "/w/somewhere-older")
+    _jsonl(old / "cccc-co-resident.jsonl", "/w/shared")
+    (old / "memory").mkdir()
+    (old / "memory" / "MEMORY.md").write_text("# the seat's knowledge\n")
+
+    out = migrate_harness_metadata("/w/shared", "/w/office", projects_root=root,
+                                   claude_json=tmp_path / "cj.json",
+                                   only_sids={"838639d1-full-sid"})
+
+    new = root / "-w-office"
+    assert out["transcripts_moved"] == 2                    # the .jsonl + the sid dir
+    assert out["memory"] == "moved with the seat"
+    assert out["cwd_readdressed"] == {"files": 1, "lines": 2}
+    assert (new / "838639d1-full-sid" / "subagents" / "agent-x.jsonl").is_file()
+    assert (new / "memory" / "MEMORY.md").is_file()
+    assert not (old / "memory").exists()
+    assert _cwds_of(new / "838639d1-full-sid.jsonl") == ["/w/office", "/w/office"]
+    assert (old / "cccc-co-resident.jsonl").is_file()       # the co-resident stays
+    assert _cwds_of(old / "cccc-co-resident.jsonl") == ["/w/shared"]
+
+
+def test_extraction_never_clobbers_the_destinations_own_memory(tmp_path: Path) -> None:
+    from src.orchestrator.mounts import migrate_harness_metadata
+
+    root = tmp_path / "projects"
+    old = root / "-w-shared"
+    old.mkdir(parents=True)
+    (old / "memory").mkdir()
+    (old / "memory" / "MEMORY.md").write_text("old\n")
+    new = root / "-w-office"
+    (new / "memory").mkdir(parents=True)
+    (new / "memory" / "MEMORY.md").write_text("the office's own\n")
+
+    out = migrate_harness_metadata("/w/shared", "/w/office", projects_root=root,
+                                   claude_json=tmp_path / "cj.json", only_sids={"dddd"})
+
+    assert out["memory"] == "left in place — the destination has its own"
+    assert (new / "memory" / "MEMORY.md").read_text() == "the office's own\n"
+    assert (old / "memory" / "MEMORY.md").read_text() == "old\n"
+
+
+def test_heal_slug_transcripts_converges_the_listed_directory(tmp_path: Path) -> None:
+    """The automount-time heal: a transcript LISTED here but ADDRESSED elsewhere is
+    rewritten to point here — unless it is the mounting session's own, a live-pulse sid's,
+    or still warm from an open tab's pen (deferred, converges on a later launch)."""
+    import os
+
+    from src.orchestrator.mounts import heal_slug_transcripts
+
+    root = tmp_path / "projects"
+    slug = root / "-w-office"
+    slug.mkdir(parents=True)
+    stale = time.time() - 3600
+    _jsonl(slug / "aaaa1111-moved.jsonl", "/w/former-home", "/w/former-home")
+    os.utime(slug / "aaaa1111-moved.jsonl", (stale, stale))
+    _jsonl(slug / "bbbb2222-converged.jsonl", "/w/office")
+    converged_before = (slug / "bbbb2222-converged.jsonl").read_text()
+    os.utime(slug / "bbbb2222-converged.jsonl", (stale, stale))
+    _jsonl(slug / "cccc3333-me.jsonl", "/w/former-home")     # the mounting session itself
+    os.utime(slug / "cccc3333-me.jsonl", (stale, stale))
+    _jsonl(slug / "dddd4444-live.jsonl", "/w/former-home")   # a live-pulse sid's
+    os.utime(slug / "dddd4444-live.jsonl", (stale, stale))
+    _jsonl(slug / "eeee5555-warm.jsonl", "/w/former-home")   # fresh mtime: an open tab's pen
+
+    out = heal_slug_transcripts("/w/office", projects_root=root,
+                                skip_sids={"cccc3333-me"}, skip_sid_prefixes={"dddd4444"})
+
+    assert out["healed"] == {"aaaa1111": 2}
+    assert out["skipped_live"] == 2
+    assert out["deferred_fresh"] == 1
+    assert _cwds_of(slug / "aaaa1111-moved.jsonl") == ["/w/office", "/w/office"]
+    assert (slug / "bbbb2222-converged.jsonl").read_text() == converged_before
+    assert _cwds_of(slug / "cccc3333-me.jsonl") == ["/w/former-home"]
+    assert _cwds_of(slug / "dddd4444-live.jsonl") == ["/w/former-home"]
+    assert _cwds_of(slug / "eeee5555-warm.jsonl") == ["/w/former-home"]
+    assert not list(slug.glob(".*heal-tmp"))                 # no residue, atomic all the way
+
+
+async def test_automount_heals_the_slug_it_mounts_into(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The whole loop, whisper-shaped: a session starting in a directory heals the moved
+    transcripts listed there — the operator's ruling made flesh (part of the system,
+    never a one-time patch)."""
+    import os
+
+    from src.orchestrator.handshake import automount
+
+    cwd = str(tmp_path / "office")
+    Path(cwd).mkdir()
+    root = tmp_path / "projects"
+    slug = root / cwd.replace("/", "-")
+    slug.mkdir(parents=True)
+    _jsonl(slug / "ffff6666-moved.jsonl", "/w/former-home")
+    stale = time.time() - 3600
+    os.utime(slug / "ffff6666-moved.jsonl", (stale, stale))
+
+    out = await automount(actions, session_id="9999aaaa-heal-test", cwd=cwd,
+                          actor="whisper", root=root, jobs_home=tmp_path / "jobs")
+
+    assert out["transcripts_healed"]["healed"] == {"ffff6666": 1}
+    assert _cwds_of(slug / "ffff6666-moved.jsonl") == [cwd]

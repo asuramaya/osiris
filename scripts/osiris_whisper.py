@@ -97,6 +97,14 @@ def main() -> int:
         # the hand-resume reseed (Phase B4): the graph remembered the binding for us
         bits.append(f"Your session sits in {out['seat_binding']} — the binding re-earned "
                     "from the graph's holds link, no token needed.")
+    if out.get("transcripts_healed"):
+        th = out["transcripts_healed"]
+        if th.get("healed"):
+            n = len(th["healed"])
+            bits.append(f"⟲ {n} moved transcript{'s' if n != 1 else ''} re-addressed to "
+                        "this directory — sessions listed here resume here now (39ea074c).")
+        if th.get("error"):
+            bits.append(f"⚠ {th['error']}")
     if out.get("minted"):
         bits.append(f"You were MINTED as this lineage's successor — ancestor {out['minted']}; "
                     "your first act: read orient()'s succession note.")

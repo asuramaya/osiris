@@ -16,6 +16,7 @@ session that never got whispered can always mount by hand.
 """
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -152,6 +153,21 @@ async def automount(
                                                job_dir=job_dir))
         except Exception:  # noqa: BLE001 — the binding is a bonus; the whisper never dies
             binding = None
+    # SELF-HEALING RESUME (thread 39ea074c, the operator's ruling: part of the system,
+    # never a one-time patch): any transcript LISTED under this cwd whose internal address
+    # (the per-line `cwd` the harness validates resume against) still names a former home
+    # is re-addressed to point here — a moved/extracted session resumes at the next launch
+    # with no hand on it. Guarded inside: never the mounting session's own file, never a
+    # live-pulse sid, never a file still warm from an open tab's pen. Fail-open loud.
+    heal: dict[str, Any] | None = None
+    try:
+        prefixes = await mounts.live_mount_sid_prefixes(actions.pool)
+        heal = await asyncio.to_thread(
+            mounts.heal_slug_transcripts, cwd, projects_root=root,
+            skip_sids={session_id}, skip_sid_prefixes=prefixes)
+    except Exception as e:  # noqa: BLE001 — the whisper never dies of a heal
+        heal = {"error": f"TRANSCRIPT HEAL FAILED — {str(e)[:200]}; the mount stands; "
+                         "moved sessions may still refuse to resume here"}
     mail = await unread_count(actions.pool, ident.project, reader_agent=ident.agent_id,
                               lease_secs=lease_secs) if ident.project else 0
     # graded asks travel beside the total (f9449d8d) so the whisper can lead with what is
@@ -206,6 +222,8 @@ async def automount(
         **({"attach": attach} if attach is not None else {}),
         # the durable binding this session sits in, however it got there (attach or reseed)
         **({"seat_binding": binding} if binding else {}),
+        # the resume heal's receipt (empty = nothing listed here needed re-addressing)
+        **({"transcripts_healed": heal} if heal else {}),
     }
 
 

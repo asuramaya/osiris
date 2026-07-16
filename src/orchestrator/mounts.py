@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import time
 import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -165,6 +166,20 @@ async def live_claimed_sids(
     return out
 
 
+async def live_mount_sid_prefixes(
+    pool: asyncpg.Pool, *, within_secs: int = 900,
+) -> set[str]:
+    """The sid[:8] prefixes of mounts with a LIVE pulse — the transcript heal's
+    do-not-touch set (the job_dir anchor is ~/.claude/jobs/<sid[:8]>, so its basename IS
+    the session prefix). Deliberately pulse-only, unlike `live_claimed_sids`: Phase D's
+    seated-forever claim guards identity GUESSING; the heal needs process-liveness — a
+    seated but CLOSED session is exactly the one whose transcript must stay healable."""
+    rows = await pool.fetch(
+        "SELECT job_dir FROM agent_mounts "
+        "WHERE last_seen > now() - make_interval(secs => $1)", within_secs)
+    return {Path(r["job_dir"]).name for r in rows if r["job_dir"]}
+
+
 async def fleet_pulse(
     pool: asyncpg.Pool, *, lease_secs: int = 900, live_secs: int = 900
 ) -> str:
@@ -304,26 +319,175 @@ def _harness_slug(cwd: str) -> str:
     return cwd.replace("/", "-")
 
 
-def _merge_dir(old: Path, new: Path) -> tuple[int, int]:
+def _merge_dir(old: Path, new: Path) -> tuple[int, int, list[Path]]:
     """Move every entry old→new, NEVER clobbering (a transcript that exists on both sides
     stays where it is — losing either would falsify the record); one level of recursion
-    merges subdirectories (the subagents/ tree). Returns (moved, left_behind)."""
+    merges subdirectories (the subagents/ tree). Returns (moved, left_behind, landed) —
+    `landed` is every .jsonl this merge itself moved, so the caller can re-address exactly
+    what it relocated and nothing co-resident."""
     moved = left = 0
+    landed: list[Path] = []
     new.mkdir(parents=True, exist_ok=True)
     for entry in sorted(old.iterdir()):
         target = new / entry.name
         if not target.exists():
             entry.rename(target)
             moved += 1
+            if target.is_file() and target.suffix == ".jsonl":
+                landed.append(target)
         elif entry.is_dir() and target.is_dir():
-            m, s = _merge_dir(entry, target)
+            m, s, sub = _merge_dir(entry, target)
             moved += m
             left += s
+            landed.extend(sub)
             with contextlib.suppress(OSError):
                 entry.rmdir()
         else:
             left += 1
-    return moved, left
+    return moved, left, landed
+
+
+_HEAL_QUIET_SECS = 300
+
+
+def _transcript_cwd_probe(path: Path, *, max_lines: int = 50) -> str | None:
+    """The first top-level `cwd` a transcript carries — the field the harness's resume
+    validator reads (witnessed live, thread 39ea074c: /resume refused a moved transcript
+    naming its FIRST recorded cwd, not the slug directory it was listed under). None when
+    the head carries no cwd at all (a summary-only stub, or unreadable)."""
+    try:
+        with path.open(encoding="utf-8", errors="replace") as f:
+            for _ in range(max_lines):
+                line = f.readline()
+                if not line:
+                    break
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(obj, dict) and isinstance(obj.get("cwd"), str):
+                    return str(obj["cwd"])
+    except OSError:
+        return None
+    return None
+
+
+def _rewrite_transcript_cwd(path: Path, new_cwd: str) -> int:
+    """Re-address a transcript: point every line's top-level `cwd` at `new_cwd`, atomically
+    (tmp + rename, so a crash mid-write never leaves a half-file). ONLY the routing field
+    moves — content, trackingPath, and every other byte pass through verbatim: the graph is
+    the history; the transcript's cwd is an ADDRESS, and a moved session's address is
+    wherever it now lives. Returns the number of lines rewritten."""
+    tmp = path.with_name("." + path.name + ".heal-tmp")
+    rewritten = 0
+    try:
+        with path.open(encoding="utf-8", errors="replace") as src, \
+                tmp.open("w", encoding="utf-8") as dst:
+            for line in src:
+                stripped = line.strip()
+                if stripped:
+                    try:
+                        obj = json.loads(stripped)
+                    except ValueError:
+                        obj = None
+                    if (isinstance(obj, dict) and isinstance(obj.get("cwd"), str)
+                            and obj["cwd"] != new_cwd):
+                        obj["cwd"] = new_cwd
+                        dst.write(json.dumps(obj, ensure_ascii=False,
+                                             separators=(",", ":")) + "\n")
+                        rewritten += 1
+                        continue
+                dst.write(line)
+        if rewritten:
+            tmp.replace(path)
+        else:
+            tmp.unlink()
+    except OSError:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
+    return rewritten
+
+
+def heal_slug_transcripts(
+    cwd: str, *, projects_root: Path | None = None,
+    skip_sids: set[str] | frozenset[str] = frozenset(),
+    skip_sid_prefixes: set[str] | frozenset[str] = frozenset(),
+    quiet_secs: int = _HEAL_QUIET_SECS,
+) -> dict[str, Any]:
+    """SELF-HEALING RESUME (the alfred transition test's catch, thread 39ea074c): the
+    harness LISTS a session under whichever slug directory its .jsonl sits in, but
+    validates RESUME against the `cwd` recorded inside its lines — so a transcript moved
+    between slugs (rebind, extraction, any hand) stays listed but refuses to resume
+    ('This conversation is from a different directory'). Runs at every automount: any
+    transcript listed under THIS cwd whose internal address disagrees is re-addressed to
+    point here. Drift converges at the next launch in the directory, however the drift
+    happened — the operator's ruling: part of the system, never a one-time patch.
+
+    GUARDS — a live session's transcript is its harness process's own pen, never write
+    under it: the mounting session itself (`skip_sids`, full session ids) and every sid a
+    live-pulse mount anchors (`skip_sid_prefixes`, the jobs/<sid[:8]> basenames) are
+    skipped; so is anything written within `quiet_secs` (an open tab appends — silence is
+    the seam a heal may use; deferred files converge on a later launch). Fail-soft per
+    file: one unreadable transcript lands in the receipt, never blocks the rest."""
+    root = projects_root or (Path.home() / ".claude" / "projects")
+    slug_dir = root / _harness_slug(cwd)
+    if not slug_dir.is_dir():
+        return {}
+    healed: dict[str, int] = {}
+    skipped_live = deferred_fresh = 0
+    errors: list[str] = []
+    now = time.time()
+    for entry in sorted(slug_dir.glob("*.jsonl")):
+        if not entry.is_file():
+            continue
+        sid = entry.name[: -len(".jsonl")]
+        try:
+            probe = _transcript_cwd_probe(entry)
+            if probe is None or probe == cwd:
+                continue  # converged (or addressless) — the common case, probe-cheap
+            if sid in skip_sids or any(sid.startswith(p) for p in skip_sid_prefixes if p):
+                skipped_live += 1
+                continue
+            if now - entry.stat().st_mtime < quiet_secs:
+                deferred_fresh += 1
+                continue
+            n = _rewrite_transcript_cwd(entry, cwd)
+            if n:
+                healed[sid[:8]] = n
+        except OSError as e:
+            errors.append(f"{entry.name}: {str(e)[:120]}")
+    out: dict[str, Any] = {}
+    if healed:
+        out["healed"] = healed
+    if skipped_live:
+        out["skipped_live"] = skipped_live
+    if deferred_fresh:
+        out["deferred_fresh"] = deferred_fresh
+    if errors:
+        out["errors"] = errors
+    return out
+
+
+def _readdress(landed: list[Path], new_cwd: str) -> dict[str, Any]:
+    """Re-address the transcripts a move just landed (per-file fail-soft, receipt honest)."""
+    files = lines = 0
+    errors: list[str] = []
+    for p in landed:
+        try:
+            n = _rewrite_transcript_cwd(p, new_cwd)
+        except OSError as e:
+            errors.append(f"{p.name}: {str(e)[:120]}")
+            continue
+        if n:
+            files += 1
+            lines += n
+    out: dict[str, Any] = {}
+    if files:
+        out["cwd_readdressed"] = {"files": files, "lines": lines}
+    if errors:
+        out["cwd_readdress_errors"] = errors
+    return out
 
 
 def migrate_harness_metadata(
@@ -350,10 +514,19 @@ def migrate_harness_metadata(
     `only_sids` is EXTRACTION MODE (the seat-offices ruling, ed5f5ce2): moving a SEAT out
     of a SHARED cwd (into its Osiris office) must take only that seat's own lineage
     transcripts — a wholesale slug move would steal the co-resident repo sessions' history
-    and break their resume mid-tab. Only top-level files whose name starts with one of the
-    sids move; everything else stays; the old dir is NEVER removed (it is still a living
-    project's slug); the ~/.claude.json entry is NOT re-keyed (the old path remains a real
-    working project — the office earns its own entry at first launch)."""
+    and break their resume mid-tab. Top-level entries (files AND directories — the sid dir
+    holds subagents/ + tool-results/, session state as much as the .jsonl) whose name
+    starts with one of the sids move, and the slug's memory/ follows the seat (39ea074c:
+    the auto-memory was the seat's knowledge; an office booting blind defeats the office —
+    a repo slug regrows repo-scoped memory if it ever needs its own); everything else
+    stays; the old dir is NEVER removed (it is still a living project's slug); the
+    ~/.claude.json entry is NOT re-keyed (the old path remains a real working project —
+    the office earns its own entry at first launch).
+
+    Every transcript EITHER MODE moves gets its per-line `cwd` re-addressed to `new_cwd`
+    (39ea074c: the harness validates resume against that field, so a moved file that keeps
+    its old address stays listed but refuses to resume) — exactly the files this move
+    itself relocated, never a co-resident's."""
     out: dict[str, Any] = {}
     root = projects_root or (Path.home() / ".claude" / "projects")
     old_dir = root / _harness_slug(old_cwd)
@@ -364,10 +537,10 @@ def migrate_harness_metadata(
         try:
             if old_dir.is_dir() and old_dir != new_dir:
                 moved = left = 0
+                landed: list[Path] = []
                 new_dir.mkdir(parents=True, exist_ok=True)
                 for entry in sorted(old_dir.iterdir()):
-                    if not (entry.is_file()
-                            and any(entry.name.startswith(s) for s in only_sids)):
+                    if not any(entry.name.startswith(s) for s in only_sids):
                         continue
                     target = new_dir / entry.name
                     if target.exists():
@@ -375,20 +548,30 @@ def migrate_harness_metadata(
                     else:
                         entry.rename(target)
                         moved += 1
+                        if target.is_file() and target.suffix == ".jsonl":
+                            landed.append(target)
+                mem_old, mem_new = old_dir / "memory", new_dir / "memory"
+                if mem_old.is_dir() and not mem_new.exists():
+                    mem_old.rename(mem_new)
+                    out["memory"] = "moved with the seat"
+                elif mem_old.is_dir():
+                    out["memory"] = "left in place — the destination has its own"
                 out["transcripts_moved"] = moved
                 if left:
                     out["transcripts_left_behind"] = left
+                out.update(_readdress(landed, new_cwd))
         except OSError as e:
             out["transcripts_error"] = str(e)[:200]
         return out
     try:
         if old_dir.is_dir() and old_dir != new_dir:
-            moved, left = _merge_dir(old_dir, new_dir)
+            moved, left, landed = _merge_dir(old_dir, new_dir)
             with contextlib.suppress(OSError):
                 old_dir.rmdir()  # only an EMPTIED husk is removed
             out["transcripts_moved"] = moved
             if left:
                 out["transcripts_left_behind"] = left
+            out.update(_readdress(landed, new_cwd))
         else:
             out["transcripts_moved"] = 0
     except OSError as e:
