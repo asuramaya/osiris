@@ -181,11 +181,11 @@ async def test_fleet_folds_one_soul_to_one_row(actions: Actions) -> None:
     assert mine[0]["model"] == "claude-opus-4-8"   # the real row testifies
     assert mine[0]["sessions"] == 2 and mine[0]["live"] is True
     html = render_fleet(data)
-    # the doors are EXPLAINED, never counted as population (operator, 2026-07-16):
-    # the row unfolds to say what each way-in IS, in plain words
-    assert "1 agent, 2 doors" in html
-    assert "a window onto the same mind" in html   # the view door, explained
-    assert "the SESSION itself" in html            # the real door, explained
+    # the doors are explained LEANLY (operator, 2026-07-16, third pass: '1 agent' is the
+    # invariant, never said; the life is the roman in the name, never repeated)
+    assert "— 2 doors" in html and "1 agent" not in html
+    assert "tab → aaaa0001" in html                # the view door, one short line
+    assert "session aaaa0001" in html              # the real door, one short line
 
 
 async def test_desk_and_fleet_data_round_trip_the_live_graph(actions: Actions) -> None:
@@ -279,9 +279,9 @@ async def test_fleet_folds_generations_under_the_living_head(actions: Actions) -
     assert mine[0]["agent_id"] == "agent:3e7a0001-iii"      # the living head is the face
     assert len(mine[0]["ancestors"]) == 2                   # the past lives fold under it
     html = render_fleet(data)
-    assert "life 3 of this seat" in html                    # the graph's depth, not the window's
-    assert "2 earlier lives" in html
-    assert "SUPERSEDED, an earlier life of this seat" in html
+    assert "life 3 of this seat" not in html                # the roman in the name says it
+    assert "2 earlier lives · 2 in window:" in html         # the graph's depth, inside the unfold
+    assert "Metra II — " in html                            # an ancestor: name and age, no sermon
 
 
 async def test_fleet_folds_a_name_across_rebased_id_lineages(actions: Actions) -> None:

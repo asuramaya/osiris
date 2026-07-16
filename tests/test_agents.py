@@ -568,7 +568,7 @@ async def test_the_house_the_seat_and_the_holders(actions: Actions) -> None:
         return canon
 
     first = await mind("agent:aaaa1111", "sibling-two")
-    assert (await claim_name(actions, first, "Soundwave", source=first))["seat"] == "Soundwave"
+    assert (await claim_name(actions, first, "Soundwave", source=first))["seat"] == "Soundwave I"
 
     # a SEAT LABEL is what the substrate says about you — never a name you may take
     heir_anchor = await mind("agent:bbbb2222", "sibling-two")
@@ -717,7 +717,7 @@ async def test_a_fresh_mind_is_told_its_seat_or_which_seats_stand_empty(actions:
     held = await mind("agent:ff110000", "sibling-eight")
     await claim_name(actions, held, "Ra", source=held)
     bearings = await seat_bearings(actions.pool, held)
-    assert bearings["seat"] == "Ra" and bearings["house"] == "sibling-eight"
+    assert bearings["seat"] == "Ra I" and bearings["house"] == "sibling-eight"
     # the claim minted AND bound the Seat object (the on-ramp) — the binding is part of
     # who you are, and orient says so
     assert bearings["seat_binding"]["handle"] == "Ra"
@@ -826,10 +826,10 @@ async def test_fleet_shows_claimed_names_beside_the_id(actions: Actions) -> None
 
     # the claimed seat rides beside its id — with its BINDING anchored beside it, because
     # the claim now mints and binds the Seat object (the on-ramp, 5cef856b)
-    assert f"{named} (Ra ⚓seat:" in out["tree"]
+    assert f"{named} (Ra I ⚓seat:" in out["tree"]
     assert anon in out["tree"] and f"{anon} (" not in out["tree"]  # anonymous: unchanged
     rows = {r["agent"]: r for r in out["registered"]}
-    assert rows[named]["seat"] == "Ra"
+    assert rows[named]["seat"] == "Ra I"
     assert "seat" not in rows[anon]                      # never a guessed/empty field
 
 

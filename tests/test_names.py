@@ -36,7 +36,7 @@ async def test_a_seat_belongs_to_one_house_and_is_inherited_inside_it(actions: A
     await _agent(actions, "agent:ccc", project="alpha")
 
     got = await claim_name(actions, "agent:aaa", "Wayland", source="agent:aaa")
-    assert got["claimed"] == "Wayland" and got["seat"] == "Wayland"   # holder 1 = bare name
+    assert got["claimed"] == "Wayland" and got["seat"] == "Wayland I"  # holder 1 wears I
 
     # a mind in ANOTHER HOUSE cannot take the seat (case-insensitive)
     refused = await claim_name(actions, "agent:bbb", "wayland", source="agent:bbb")
@@ -50,7 +50,7 @@ async def test_a_seat_belongs_to_one_house_and_is_inherited_inside_it(actions: A
 
 
 async def test_seat_display_carries_the_generation(actions: Actions) -> None:
-    assert seat_label("agent:x", "Anna") == "Anna"           # holder 1 → bare
+    assert seat_label("agent:x", "Anna") == "Anna I"         # holder 1 wears its numeral too
     assert seat_label("agent:x", "Anna", 5) == "Anna V"      # the HOLDER ordinal, when stamped
     assert seat_label("agent:x-ii", "Anna") == "Anna II"     # legacy fallback: the anchor numeral
     assert seat_label("agent:x-iv", "Anna") == "Anna IV"     # full roman (not the id's i/v/x set)
@@ -66,7 +66,7 @@ async def test_agent_seat_reads_an_already_resolved_id(actions: Actions) -> None
 
     await _agent(actions, "agent:seaty")
     await claim_name(actions, "agent:seaty", "Nova", source="agent:seaty")
-    assert await agent_seat(actions.pool, "agent:seaty") == "Nova"
+    assert await agent_seat(actions.pool, "agent:seaty") == "Nova I"
     # an agent nobody ever claimed a name for — including one with no Agent object at all
     assert await agent_seat(actions.pool, "agent:anonymous-0001") is None
 

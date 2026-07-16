@@ -516,21 +516,16 @@ async def fleet_data(pool: asyncpg.Pool, *, wake_budget: int = 0) -> dict[str, A
 
 
 def _door_label(d: dict[str, Any]) -> str:
-    """One door, in PLAIN WORDS (operator, 2026-07-16: a ×N marker read as N agents —
-    'really they are doors, and the doors dont really explain what the doors are')."""
+    """One door, one short line (operator, 2026-07-16, second pass: the plain words
+    taught the model; now the verbosity goes — 'tab → <sid>' says it all)."""
     key = d.get("session_key") or ""
     sid = (d.get("job_dir") or "").rsplit("/", 1)[-1] or "?"
     when = _age(d.get("age_secs"))
     if key.startswith("view-of:"):
-        viewed = key.removeprefix("view-of:")
-        return (f"a TAB viewing session {viewed} — a window onto the same mind, "
-                f"not a second agent (door {sid}, {when})")
+        return f"tab → {key.removeprefix('view-of:')} — {when}"
     if key.startswith("resume-of:"):
-        prior = key.removeprefix("resume-of:")
-        return f"a RESUME continuing session {prior} — same conversation, new door ({sid}, {when})"
-    if key.startswith("sid:"):
-        return f"the SESSION itself — its own live connection (door {sid}, {when})"
-    return f"the SESSION under its own id (door {sid}, whisper-mounted, {when})"
+        return f"resume → {key.removeprefix('resume-of:')} — {when}"
+    return f"session {sid} — {when}"
 
 
 def _fleet_row(m: dict[str, Any]) -> str:
@@ -538,34 +533,26 @@ def _fleet_row(m: dict[str, Any]) -> str:
     name = _e(m["seat"] or m["agent_id"])
     doors = m.get("doors") or []
     ancestors = m.get("ancestors") or []
-    # the seat's TRUE depth comes from the graph (its generation number), never from the
-    # registry window — 'Thoth XL' has 39 earlier lives even when only 3 hold recent rows
-    # (operator, 2026-07-16: "3 past lives for thoth xl is simply wrong, there should be
-    # 40 right?")
+    # LEAN LABELS (operator, 2026-07-16, third pass): '1 agent' is the fold's invariant —
+    # never said; the life number is already the roman in the name — never repeated. Only
+    # the doors earn a marker. The seat's true depth (from the graph, never the registry
+    # window) lives inside the unfold.
     gen = int(m["seat_gen"]) if m.get("seat_gen") else None
     lives_total = (gen - 1) if gen and gen > 1 else len(ancestors)
     if len(doors) > 1 or ancestors:
-        # one mind, several ways in and many LIVES BEHIND it: the row unfolds to
-        # explain both, so nobody reads plumbing or history as population
-        bits = []
-        if len(doors) > 1:
-            bits.append(f"{len(doors)} doors")
-        if gen:
-            bits.append(f"life {gen} of this seat")
-        elif ancestors:
-            bits.append(f"{len(ancestors)} past li{'ves' if len(ancestors) != 1 else 'fe'}")
+        marker = (f' <span class="dim">— {len(doors)} doors</span>'
+                  if len(doors) > 1 else "")
         inner = "<br>".join("· " + _e(_door_label(d)) for d in doors)
         if ancestors:
-            head_line = (f"{lives_total} earlier li{'ves' if lives_total != 1 else 'fe'} — "
-                         f"{len(ancestors)} recent still in the registry window:")
+            head_line = (f"{lives_total} earlier li{'ves' if lives_total != 1 else 'fe'} "
+                         f"· {len(ancestors)} in window:")
             past = "<br>".join(
-                f'· {_e(str(a["seat"]))} — SUPERSEDED, an earlier life of this seat '
-                f'(last alive {_e(_age(a["age_secs"]))}, {a["doors"]} door'
-                f'{"s" if a["doors"] != 1 else ""})'
-                for a in ancestors)
+                f'· {_e(str(a["seat"]))} — {_e(_age(a["age_secs"]))}' for a in ancestors)
             inner = (inner + "<br>" if inner else "") + _e(head_line) + "<br>" + past
-        name_cell = (f"<details><summary>{dot}{name} "
-                     f'<span class="dim">— 1 agent, {", ".join(bits)}</span></summary>'
+        # a STABLE id per soul: the poller restores open folds by id, so an unkeyed
+        # details snapped shut on every refresh (operator: 'hard to nav')
+        did = "f-" + re.sub(r"[^a-zA-Z0-9]", "", m.get("agent_id") or name)
+        name_cell = (f'<details id="{did}"><summary>{dot}{name}{marker}</summary>'
                      f'<div class="dim">{inner}</div></details>')
     else:
         name_cell = f"{dot}{name}"
@@ -598,9 +585,8 @@ def render_fleet(data: dict[str, Any]) -> str:
     if anon:
         arows = "".join(_fleet_row(m) for m in anon)
         out.append(
-            f'<details><summary class="dim">{len(anon)} unreconciled session(s) — '
-            "anonymous doorbells and visits; fold proposals wait in the tray "
-            "(fold_candidates → resolve_fold)</summary>"
+            f'<details id="f-unreconciled"><summary class="dim">{len(anon)} '
+            "unreconciled session(s) — fold proposals wait in the tray</summary>"
             f"<table>{arows}</table></details>")
     wrows = "".join(
         f'<tr><td class="ts">{_e(str(w["woke_at"])[:16])}</td>'

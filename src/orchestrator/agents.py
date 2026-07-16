@@ -232,7 +232,9 @@ def seat_label(canonical: str, handle: str | None, generation: int | None = None
     if not handle:
         return None
     gen = generation if generation is not None else _generation(canonical)[1]
-    return handle if gen == 1 else f"{handle} {_roman_display(gen)}"
+    # the FIRST life wears its numeral too — 'Alfred I', never bare (operator ruling,
+    # 2026-07-16: 'so there is continuity even at the first')
+    return f"{handle} {_roman_display(gen)}"
 
 
 # a trailing roman numeral is a SEAT, not a name ("Soundwave VIII" is what the substrate calls

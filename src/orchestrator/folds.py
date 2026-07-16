@@ -161,10 +161,11 @@ async def find_agent_fold_candidates(
     co-resident at the same cwd with a session that HAS a body. Propose fold into that
     session's agent (the 10802085/bef1d349/d1848828 class, decoded live 2026-07-16).
 
-    RESTART-MINT (score .65): an anonymous agent mounted at a cwd where a NAMED lineage
-    anchors — the b86de6c1-beside-628ef839 class: a restart that minted a stranger in the
-    named seat's own home. Weaker (a genuine visitor could sit in a named repo), so the
-    lower score puts it behind the aliases in the tray.
+    RESTART-MINT (score .75 single-seat / .55 multi-seat): an anonymous agent mounted at
+    a cwd where a NAMED lineage anchors — the b86de6c1-beside-628ef839 class. The
+    single-seat presumption (operator rule): in a one-seat project the anon is presumed
+    the seat's child or fold; where several seats share the project it is nuanced and
+    the low score says verify by hand.
 
     Pairs already rejected or linked not_same_as are never re-proposed."""
     from src.ontology.resolution import _suppressed
@@ -181,7 +182,8 @@ async def find_agent_fold_candidates(
                    for slug in root.iterdir())
 
     anons = await pool.fetch(
-        "SELECT DISTINCT ON (o.canonical) o.id AS oid, o.canonical, m.cwd, m.job_dir "
+        "SELECT DISTINCT ON (o.canonical) o.id AS oid, o.canonical, m.cwd, m.job_dir, "
+        "m.project "
         "FROM objects o JOIN agent_mounts m ON m.agent_id = o.canonical "
         "WHERE o.type='Agent' AND o.status='active' AND NOT EXISTS ("
         "  SELECT 1 FROM current_assertions h JOIN objects ho ON ho.id=h.object_id "
@@ -220,9 +222,27 @@ async def find_agent_fold_candidates(
                 "        OR m2.agent_id LIKE ho.canonical||'-%')) "
                 "ORDER BY m2.last_seen DESC LIMIT 1", cwd, mine)
             if named and _generation(str(named))[0] != _generation(mine)[0]:
-                target, cls, score = str(named), "restart-mint", 0.65
-                signals = [f"anonymous mount at {cwd}, the anchor of named lineage "
-                           f"{named} — the restart-mint class"]
+                # THE SINGLE-SEAT PRESUMPTION (operator rule, 2026-07-16): 'an anon agent
+                # in phanspeed — if the project only has one seat, we have to assume it
+                # was a child or a fold of the only agent there; for projects with 2 like
+                # xxit or monsterhouse, it's more nuanced.'
+                seats_here = await pool.fetchval(
+                    "SELECT count(DISTINCT h.value #>> '{}') FROM agent_mounts m2 "
+                    "JOIN objects ho2 ON (m2.agent_id = ho2.canonical "
+                    "     OR m2.agent_id LIKE ho2.canonical||'-%') "
+                    "JOIN current_assertions h ON h.object_id=ho2.id AND h.name='handle' "
+                    "WHERE m2.project = $1", r["project"]) or 0
+                target, cls = str(named), "restart-mint"
+                if int(seats_here) <= 1:
+                    score = 0.75
+                    signals = [f"anonymous mount at {cwd} — {named} is the project's "
+                               "ONLY seat, so this session is presumed its child or fold "
+                               "(the single-seat rule)"]
+                else:
+                    score = 0.55
+                    signals = [f"anonymous mount at {cwd}, the anchor of named lineage "
+                               f"{named} — but {seats_here} seats share this project; "
+                               "nuanced, verify by hand"]
         if target is None:
             continue
         trow = await pool.fetchrow(

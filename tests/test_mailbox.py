@@ -252,7 +252,7 @@ async def test_send_tool_echoes_seat_and_lineage_head_and_honors_require_seat(
         agent_id="agent:boss", session="boss0001", project="alpha", model=None, cwd=None)
     try:
         out = await srv.send("ship it", to_agent=held, ctx=ctx)
-        assert out["dm_to"] == held and out["seat"] == "Kastellan"
+        assert out["dm_to"] == held and out["seat"] == "Kastellan I"
         assert out["lineage_head"] == held
 
         # require_seat=True refuses an unclaimed target, loudly, at the tool boundary
@@ -264,7 +264,7 @@ async def test_send_tool_echoes_seat_and_lineage_head_and_honors_require_seat(
 
         # ...and succeeds when the target IS claimed
         ok = await srv.send("ship it, verified", to_agent=held, ctx=ctx, require_seat=True)
-        assert ok["seat"] == "Kastellan"
+        assert ok["seat"] == "Kastellan I"
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
@@ -294,7 +294,7 @@ async def test_dm_echoes_the_resolved_seat_and_lineage_head(actions: Actions) ->
     dm = await send_message(actions.pool, from_agent="agent:boss", from_project="alpha",
                             to_agent=held, body="ship the build")
     assert dm["to_agent"] == held
-    assert dm["seat"] == "Soundwave"
+    assert dm["seat"] == "Soundwave I"
     assert dm["lineage_head"] == held  # no succession yet — the id IS its own lineage head
 
 
@@ -332,7 +332,7 @@ async def test_require_seat_succeeds_on_a_claimed_target(actions: Actions) -> No
     await claim_name(actions, held, "Anubis", source=held)
     dm = await send_message(actions.pool, from_agent="agent:boss", from_project="alpha",
                             to_agent=held, body="ship it", require_seat=True)
-    assert dm["seat"] == "Anubis" and dm["dedup"] is False
+    assert dm["seat"] == "Anubis I" and dm["dedup"] is False
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM fleet_messages WHERE to_agent=$1", held) == 1
 
@@ -356,7 +356,7 @@ async def test_a_raw_id_send_reveals_a_stale_generation_via_lineage_head(
     dm = await send_message(actions.pool, from_agent="agent:boss", from_project="alpha",
                             to_agent=ancestor, body="ship it")
     assert dm["to_agent"] == ancestor          # sent exactly to the id named — no silent redirect
-    assert dm["seat"] == "Ptah"                # the ancestor still carries its own old handle
+    assert dm["seat"] == "Ptah I"              # the ancestor still carries its own old handle
     assert dm["lineage_head"] == heir          # ...but the echo reveals it is NOT current
     assert dm["lineage_head"] != dm["to_agent"]
 

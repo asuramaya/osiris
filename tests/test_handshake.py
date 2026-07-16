@@ -149,7 +149,7 @@ async def test_the_whisper_honors_a_bound_seat(actions: Actions, tmp_path: Path)
                           actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
                           source="resume")
     assert out["agent"] == "agent:0806072e"
-    assert out["seat"] == "Soundwave"
+    assert out["seat"] == "Soundwave I"
     # ...and a COMPACTION is a death of the SEAT's mind: the heir is Soundwave II, no twin
     reborn = await automount(actions, session_id=SID, cwd="/w/sibling-two",
                              actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
