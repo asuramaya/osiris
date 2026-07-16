@@ -372,6 +372,36 @@ def _transcript_cwd_probe(path: Path, *, max_lines: int = 50) -> str | None:
     return None
 
 
+def lineage_cwd_evidence(
+    sids: set[str], *, projects_root: Path | None = None,
+) -> str | None:
+    """Where a lineage's transcripts ACTUALLY live — the anchor authority when the mount
+    registry holds no row (a lineage older than the registry, or one that only ever
+    registered through per-session whisper rows). Sweeps the projects root for the
+    lineage's sid-prefixed transcripts and returns the freshest one's INTERNAL cwd — the
+    same doctrine as the recollection guard: transcript evidence decides an address,
+    never a remembered or inferred one. None when no sid has a transcript anywhere
+    (a truly bodiless lineage — nothing to carry, and nothing is guessed)."""
+    root = projects_root or (Path.home() / ".claude" / "projects")
+    best: tuple[float, Path] | None = None
+    if not root.is_dir():
+        return None
+    for slug in root.iterdir():
+        if not slug.is_dir():
+            continue
+        for sid in sids:
+            if not sid:
+                continue
+            for f in slug.glob(sid + "*.jsonl"):
+                try:
+                    mtime = f.stat().st_mtime
+                except OSError:
+                    continue
+                if best is None or mtime > best[0]:
+                    best = (mtime, f)
+    return _transcript_cwd_probe(best[1]) if best else None
+
+
 def _rewrite_transcript_cwd(
     path: Path, new_cwd: str, *, expect: tuple[int, int] | None = None,
 ) -> int:
@@ -744,6 +774,17 @@ async def rebind_seat(
             base)
         only_sids = ({str(r["sid"]) for r in srows if r["sid"]}
                      | {Path(r["job_dir"]).name for r in jrows})
+    # A REGISTRY-LESS LINEAGE STILL HAS A HOME (the children's rollout, 2026-07-16): a
+    # seat whose generations all predate the mount registry — or only ever registered as
+    # anonymous whisper rows — reads old_cwd=None here, and the harness half below would
+    # silently skip: an office minted while the whole mind stayed in the old slug (all
+    # five rollout children were this case). The transcripts themselves are the address
+    # authority: derive the anchor from where the lineage's sids actually live.
+    old_cwd_evidence = None
+    if extract and not old_cwd and only_sids:
+        old_cwd = lineage_cwd_evidence(only_sids, projects_root=projects_root)
+        if old_cwd:
+            old_cwd_evidence = "transcript-location (no mount row for the lineage)"
     # the HARNESS half — transcripts + the .claude.json project entry follow the move
     # (best-effort: its failures land in the receipt, never unwind the graph half above)
     harness = (migrate_harness_metadata(old_cwd, new_cwd, projects_root=projects_root,
@@ -765,6 +806,7 @@ async def rebind_seat(
     return {
         "agent": agent_id, "project": label, "old_cwd": old_cwd, "new_cwd": new_cwd,
         "mount_rows_updated": rows_updated, "osiris_written": osiris_path,
+        **({"old_cwd_evidence": old_cwd_evidence} if old_cwd_evidence else {}),
         **({"co_resident_rows_repointed": co_repointed} if co_repointed else {}),
         **({"harness": harness} if harness else {}),
         "note": f"{label}'s anchor moved to {new_cwd} — identity, lineage, attribution, and "

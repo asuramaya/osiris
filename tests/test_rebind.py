@@ -286,6 +286,63 @@ async def test_extraction_takes_only_the_seats_own_lineage(
     assert row == office
 
 
+async def test_extraction_carries_a_registry_less_lineage_by_transcript_evidence(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A lineage whose generations all predate the mount registry (no agent_mounts row
+    anywhere) still gets its estate carried: the anchor derives from where its sid
+    transcripts actually live — their internal cwd, the address authority — instead of
+    minting an office while the whole mind stays in the old slug (the children's-rollout
+    catch: all five rollout children were this case)."""
+    shared = str(tmp_path / "repo-home")
+    office = str(tmp_path / "seats" / "orphan")
+    Path(shared).mkdir()
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:beadfeed", "agent:beadfeed")
+    await actions.assert_property(a, "project", "orphanhouse", "agent:beadfeed", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(a, "session", "beadfeed", "agent:beadfeed", now, 0.9,
+                                  evidence_class="self_declared")
+    root = tmp_path / "projects"
+    slug = root / shared.replace("/", "-")
+    slug.mkdir(parents=True)
+    _jsonl(slug / "beadfeed-full-session-id.jsonl", shared, None, shared)
+    _jsonl(slug / "bbbb2222-somebody-else.jsonl", shared)
+
+    out = await rebind_seat(actions, seat_or_agent="agent:beadfeed", new_cwd=office,
+                            actor="agent:test", projects_root=root,
+                            claude_json=tmp_path / "cj.json", extract=True)
+
+    assert out["old_cwd"] == shared
+    assert out["old_cwd_evidence"].startswith("transcript-location")
+    assert out["harness"]["transcripts_moved"] == 1
+    moved = root / office.replace("/", "-") / "beadfeed-full-session-id.jsonl"
+    assert moved.is_file()
+    assert _cwds_of(moved) == [office, None, office]           # re-addressed to the office
+    assert (slug / "bbbb2222-somebody-else.jsonl").is_file()   # the co-resident stays
+
+
+def test_lineage_cwd_evidence_reads_the_freshest_transcript(tmp_path: Path) -> None:
+    """The freshest sid transcript's internal cwd decides; no transcript anywhere → None
+    (a bodiless lineage carries nothing, and nothing is guessed)."""
+    import os
+
+    root = tmp_path / "projects"
+    old_slug = root / "-old-home"
+    new_slug = root / "-new-home"
+    old_slug.mkdir(parents=True)
+    new_slug.mkdir(parents=True)
+    stale = old_slug / "feed0001-old.jsonl"
+    fresh = new_slug / "feed0002-new.jsonl"
+    _jsonl(stale, "/old/home")
+    _jsonl(fresh, "/new/home")
+    os.utime(stale, (1_000_000, 1_000_000))
+
+    assert mounts.lineage_cwd_evidence({"feed0001", "feed0002"},
+                                       projects_root=root) == "/new/home"
+    assert mounts.lineage_cwd_evidence({"beefbeef"}, projects_root=root) is None
+
+
 async def test_rebind_updates_the_held_seats_anchor(actions: Actions, tmp_path: Path) -> None:
     """A rebound seat-holder's Seat OBJECT follows: anchor_cwd re-asserts to the new path —
     the daemon summons at the office."""
