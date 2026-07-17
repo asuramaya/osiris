@@ -710,6 +710,17 @@ async def mint_heir(
     every compaction would orphan in-flight mail)."""
     now = now or datetime.now(UTC)
     heir = next_generation(ancestor_id)
+    # A MINT NEVER LANDS ON A GRAVE (Ra's resurrection, 2026-07-17): after a same-lineage
+    # fold, the next numeral may name a MERGED object — create_or_find would resurrect it
+    # and the estate transfer would drag the living head's unread mail onto a corpse
+    # (witnessed: 10 unread on merged 443cd9d4-iii within the hour of its folding). The
+    # numeral walks forward until it names either nothing or something still active.
+    for _ in range(64):
+        taken = await actions.pool.fetchval(
+            "SELECT status FROM objects WHERE canonical=$1 AND type='Agent'", heir)
+        if taken is None or taken == "active":
+            break
+        heir = next_generation(heir)
     a = await actions.create_or_find_object("Agent", heir, heir)
     do = EvidenceClass.DIRECT_OBSERVATION
     await actions.assert_property(a, "succeeded_from", ancestor_id, heir, now,

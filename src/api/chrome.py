@@ -343,7 +343,18 @@ def _dimmed_band(desk: dict[str, Any]) -> str:
 
 async def mail_overview(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     """Every mailbox with traffic, busiest-latest first. Unsettled = no intended recipient
-    has settled it (the same notion the wake dispatch uses)."""
+    has settled it (the same notion the wake dispatch uses).
+
+    LANES WEAR THEIR SOUL'S NAME (operator, 2026-07-17: 'more mailboxes than agents — who
+    do they belong to?'): a '@agent:<hash>' lane is an ADDRESS, and a long-lived seat
+    leaves one per generation. Each agent lane resolves through the living head and wears
+    the seat's label; a SUPERSEDED lane with nothing unsettled is history and folds into
+    one counted line (`historical` on the synthetic row). A superseded lane still holding
+    unsettled mail stays visible and says so — that is a sweep waiting to happen, never
+    something to hide. Rooms (project boxes) render exactly as before."""
+    from src.orchestrator.agents import seat_label
+    from src.orchestrator.folds import living_head
+
     rows = await pool.fetch(
         "SELECT COALESCE(m.to_project, '@' || m.to_agent) AS box, count(*) AS msgs, "
         " count(*) FILTER (WHERE m.read_at IS NULL AND NOT EXISTS "
@@ -351,7 +362,32 @@ async def mail_overview(pool: asyncpg.Pool) -> list[dict[str, Any]]:
         "    AND r.read_at IS NOT NULL)) AS unsettled, "
         " max(m.created_at) AS last_at "
         "FROM fleet_messages m GROUP BY 1 ORDER BY max(m.created_at) DESC LIMIT 60")
-    return [dict(r) for r in rows]
+    out: list[dict[str, Any]] = []
+    folded = 0
+    for r in rows:
+        d = dict(r)
+        box = str(d["box"])
+        if box.startswith("@agent:"):
+            lane = box[1:]
+            head = await living_head(pool, lane)
+            srow = await pool.fetchrow(
+                "SELECT max(a.value #>> '{}') FILTER (WHERE a.name='handle') AS handle, "
+                "       max(a.value #>> '{}') FILTER (WHERE a.name='seat_generation') AS g "
+                "FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+                "WHERE o.canonical=$1", head)
+            handle = srow["handle"] if srow else None
+            gen = (int(srow["g"]) if srow and srow["g"] and str(srow["g"]).isdigit()
+                   else None)
+            d["soul"] = seat_label(head, handle, gen) if handle else None
+            d["stale"] = head != lane
+            if d["stale"] and not d["unsettled"]:
+                folded += 1
+                continue  # a superseded address with nothing owed: history, one line below
+        out.append(d)
+    if folded:
+        out.append({"box": None, "msgs": None, "unsettled": 0, "last_at": None,
+                    "historical": folded})
+    return out
 
 
 async def mail_threads(pool: asyncpg.Pool, box: str) -> list[dict[str, Any]]:
@@ -386,8 +422,21 @@ def render_mail_overview(boxes: list[dict[str, Any]]) -> str:
         if b["unsettled"]:
             return f'<span class="amber">{b["unsettled"]} unsettled</span>'
         return '<span class="dim">settled</span>'
+    def label_cell(b: dict[str, Any]) -> str:
+        # an agent lane wears its soul's name; a superseded address confesses staleness
+        name = f"@{b['soul']}" if b.get("soul") else str(b["box"])
+        cell = f'<a href="/mail?box={_e(str(b["box"]))}">{_e(name)}</a>'
+        if b.get("soul"):
+            cell += f' <span class="dim">{_e(str(b["box"])[1:])}</span>'
+        if b.get("stale"):
+            cell += ' <span class="amber">stale address — sweep pending</span>'
+        return cell
     rows = "".join(
-        f'<tr><td><a href="/mail?box={_e(b["box"])}">{_e(b["box"])}</a></td>'
+        (f'<tr><td class="dim">· {b["historical"]} superseded address'
+         f'{"es" if b["historical"] != 1 else ""} — settled history, folded</td>'
+         f"<td></td><td></td><td></td></tr>")
+        if b.get("historical") else
+        f"<tr><td>{label_cell(b)}</td>"
         f'<td>{b["msgs"]} msgs</td>'
         f"<td>{unsettled_cell(b)}</td>"
         f'<td class="ts">{_e(str(b["last_at"])[:16])}</td></tr>'
