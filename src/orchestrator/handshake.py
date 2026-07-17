@@ -359,8 +359,17 @@ async def automount(
     elif ledgered is not None:
         # a known sid: the graph remembers who this session IS — rebind, never mint
         ident.agent_id = ledgered
-    await register_agent(actions, ident, actor=actor, expected_model=expected_model,
-                         mint_reason=mint_reason)
+    # THE OFFICE ADMITS NO STRANGERS AT THE GREETING (the fa4462d5 orphan, 2026-07-17):
+    # an unknown fresh session at an office either becomes the seat at its first act
+    # (office_claim) or was never anybody (plumbing, a guest window beside a live seat) —
+    # minting an anonymous object for its GREETING is the visitor-gate gap at the one
+    # threshold where identity is sacred. Row only; the object is earned by the act.
+    at_office = Path(cwd or "").parent == (office_root or
+                                           (Path.home() / ".osiris" / "seats"))
+    unknown = (bound is None and forked is None and viewed is None and ledgered is None)
+    if not (at_office and unknown):
+        await register_agent(actions, ident, actor=actor, expected_model=expected_model,
+                             mint_reason=mint_reason)
     # THE SESSION LEDGER, write side: a named binding is filed the moment it exists, so
     # no future registry accident can orphan this sid. Fail-open like the deed.
     try:

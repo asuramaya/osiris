@@ -363,12 +363,12 @@ async def mail_overview(pool: asyncpg.Pool) -> list[dict[str, Any]]:
         " max(m.created_at) AS last_at "
         "FROM fleet_messages m GROUP BY 1 ORDER BY max(m.created_at) DESC LIMIT 60")
     out: list[dict[str, Any]] = []
-    folded = 0
+    souls: dict[str, dict[str, Any]] = {}
     for r in rows:
         d = dict(r)
         box = str(d["box"])
+        head: str | None = None
         if box.startswith("@seat:"):
-            # a seat lane is DURABLE — it wears its current holder's name, never folds
             holder = await pool.fetchval(
                 "SELECT hf.canonical FROM links l "
                 "JOIN objects hf ON hf.id=l.from_id JOIN objects ht ON ht.id=l.to_id "
@@ -376,14 +376,17 @@ async def mail_overview(pool: asyncpg.Pool) -> list[dict[str, Any]]:
                 "AND (l.valid_until IS NULL OR l.valid_until > now()) "
                 "ORDER BY l.first_seen DESC NULLS LAST LIMIT 1", box[1:])
             if holder:
-                box = "@" + await living_head(pool, str(holder))
-                d["seat_lane"] = True
-            else:
-                out.append(d)
-                continue
-        if box.startswith("@agent:"):
-            lane = box[1:]
-            head = await living_head(pool, lane)
+                head = await living_head(pool, str(holder))
+        elif box.startswith("@agent:"):
+            head = await living_head(pool, box[1:])
+        if head is None:
+            out.append(d)
+            continue
+        # ONE SOUL, ONE ROW: every lane of a soul — each generation's address, each seat
+        # it holds — merges into a single line under the living head; the thread view
+        # matches soul-wide, so the row is fully navigable
+        s = souls.get(head)
+        if s is None:
             srow = await pool.fetchrow(
                 "SELECT max(a.value #>> '{}') FILTER (WHERE a.name='handle') AS handle, "
                 "       max(a.value #>> '{}') FILTER (WHERE a.name='seat_generation') AS g "
@@ -392,15 +395,15 @@ async def mail_overview(pool: asyncpg.Pool) -> list[dict[str, Any]]:
             handle = srow["handle"] if srow else None
             gen = (int(srow["g"]) if srow and srow["g"] and str(srow["g"]).isdigit()
                    else None)
-            d["soul"] = seat_label(head, handle, gen) if handle else None
-            d["stale"] = head != lane
-            if d["stale"] and not d["unsettled"]:
-                folded += 1
-                continue  # a superseded address with nothing owed: history, one line below
-        out.append(d)
-    if folded:
-        out.append({"box": None, "msgs": None, "unsettled": 0, "last_at": None,
-                    "historical": folded})
+            s = souls[head] = {
+                "box": "@" + head, "msgs": 0, "unsettled": 0, "last_at": None,
+                "soul": seat_label(head, handle, gen) if handle else None,
+            }
+            out.append(s)
+        s["msgs"] += int(d["msgs"] or 0)
+        s["unsettled"] += int(d["unsettled"] or 0)
+        s["last_at"] = max((t for t in (s["last_at"], d["last_at"]) if t is not None),
+                           default=None)
     return out
 
 
@@ -408,7 +411,20 @@ async def mail_threads(pool: asyncpg.Pool, box: str) -> list[dict[str, Any]]:
     """One mailbox's conversations, newest thread first, messages oldest-first within.
     A '@agent:...' box is the DM lane; a bare name is a project's group chat (both
     directions — the conversation, not just the inbound half)."""
-    if box.startswith("@"):
+    if box.startswith("@agent:"):
+        # THE SOUL'S WHOLE CONVERSATION: every generation's address plus every seat the
+        # lineage ever held — the overview folds lanes by soul, so its one row must open
+        # onto everything that row counted
+        from src.orchestrator.agents import _generation
+        cond = ("((m.to_agent = $1 OR m.to_agent LIKE $1 || '-%') "
+                " OR (m.from_agent = $1 OR m.from_agent LIKE $1 || '-%') "
+                " OR m.to_agent IN (SELECT ht.canonical FROM links l "
+                "     JOIN objects hf ON hf.id=l.from_id "
+                "     JOIN objects ht ON ht.id=l.to_id "
+                "     WHERE l.type='holds' AND ht.type='Seat' "
+                "     AND (hf.canonical=$1 OR hf.canonical LIKE $1 || '-%')))")
+        arg = _generation(box[1:])[0]
+    elif box.startswith("@"):
         cond, arg = "(m.to_agent=$1 OR m.from_agent=$1)", box[1:]
     else:
         cond, arg = "(m.to_project=$1 OR m.from_project=$1)", box

@@ -386,6 +386,10 @@ async def test_the_office_crowns_at_the_first_act_never_the_greeting(
     assert "office_of" not in guest                  # and no hint dangled at a taken seat
     assert await office_claim(actions, cwd=str(office), agent_id="agent:9ce57000",
                               office_root=offices) is None
+    # ...and the guest's GREETING minted no object either (the fa4462d5 orphan class)
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' "
+        "AND canonical='agent:9ce57000'") == 0
 
 
 async def test_a_stub_at_the_office_is_never_crowned(
@@ -416,10 +420,14 @@ async def test_a_stub_at_the_office_is_never_crowned(
                           source="startup")
     assert out["agent"] == "agent:cb083341"          # its own hash, nothing more
     assert out["office_of"] == "agent:deed0b01"      # the hint fired (deed path, no rows)
-    # the stub never acts — and the lineage never ticked
+    # the stub never acts — the lineage never ticked, AND no object was minted for a
+    # GREETING at an office (the fa4462d5 orphan class: identity is earned by the act)
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Agent' "
         "AND canonical LIKE 'agent:deed0b01-%'") == 0
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' "
+        "AND canonical='agent:cb083341'") == 0
     # a real mind acting from the same office still claims it (the deed alone suffices)
     claimed = await office_claim(actions, cwd=str(office), agent_id="agent:cb083341",
                                  office_root=offices)
