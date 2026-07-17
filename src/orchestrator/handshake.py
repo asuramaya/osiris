@@ -264,7 +264,8 @@ async def file_office_deed(
     if not handle or handle.lower() != p.name.lower():
         return False
     already = await actions.pool.fetchval(
-        "SELECT 1 FROM current_assertions d JOIN objects o ON o.id=d.object_id "
+        "SELECT 1 FROM current_assertions d "
+        "JOIN objects o ON o.id=d.object_id AND o.status='active' "
         "WHERE d.name='office' AND d.value #>> '{}' = $1 "
         "AND (o.canonical=$2 OR o.canonical LIKE $2||'-%') LIMIT 1", cwd, base)
     if already:
