@@ -1000,3 +1000,24 @@ async def test_lineage_head_never_lands_on_a_merged_generation(actions: Actions)
                                   "agent:11c0ffee", now, 0.9,
                                   evidence_class="self_declared")
     assert await lineage_head(actions.pool, "agent:11c0ffee") == "agent:11c0ffee-iv"
+
+
+async def test_lineage_head_resolves_a_merged_start_to_the_winner(
+    actions: Actions,
+) -> None:
+    """The resume-lane replay (2026-07-17): a row bound to a folded phantom fed the
+    phantom's canonical into the head-walk, and a merged START with no successors
+    testified for its own grave. The walk resolves merged_into FIRST — it comes home
+    to the winner, then walks forward."""
+    from src.orchestrator.agents import lineage_head
+
+    now = datetime.now(UTC)
+    b1 = await actions.create_or_find_object("Agent", "agent:22c0ffee", "agent:22c0ffee")
+    b2 = await actions.create_or_find_object("Agent", "agent:22c0ffee-ii",
+                                             "agent:22c0ffee-ii")
+    await actions.assert_property(b1, "succeeded_by", "agent:22c0ffee-ii",
+                                  "agent:22c0ffee", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.merge_objects(b1, b2, "false successor with no heirs", "agent:test")
+    # the folded node itself resolves to the winner, never to its own grave
+    assert await lineage_head(actions.pool, "agent:22c0ffee-ii") == "agent:22c0ffee"

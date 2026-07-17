@@ -612,9 +612,19 @@ async def lineage_head(pool: asyncpg.Pool, canonical: str) -> str:
     MERGED GENERATIONS ARE NOT HEADS (the phantom disposition, 2026-07-17): a false successor
     folded away by the operator keeps its succeeded_by pointer on the record (append-only),
     so the walk still traverses it — but the HEAD is the last generation still standing.
-    Without this, every resolution walked back into the graveyard the merge had just closed."""
-    seen = {canonical}
+    Without this, every resolution walked back into the graveyard the merge had just closed.
+    And a walk that STARTS on a merged node resolves through merged_into first — a row bound
+    to a folded phantom must come home to the winner, not testify for the grave."""
     cur = canonical
+    for _ in range(10):
+        winner = await pool.fetchval(
+            "SELECT w.canonical FROM objects o JOIN objects w ON w.id=o.merged_into "
+            "WHERE o.canonical=$1 AND o.type='Agent'", cur)
+        if not winner:
+            break
+        cur = str(winner)
+    canonical = cur
+    seen = {canonical}
     head = canonical
     for _ in range(64):
         nxt = await pool.fetchval(
