@@ -282,7 +282,11 @@ async def find_agent_fold_candidates(
                 "          OR fo.canonical LIKE ho.canonical||'-%'))", r["project"])
             souls: dict[str, set[str]] = {}
             for h in holders:
-                base = _generation(str(h["holder"]))[0]
+                # key souls by the LIVING head's base — a rebased lineage (Ra:
+                # c7ef52a9 -> 443cd9d4) is one soul, not two, and must not
+                # deflate the single-seat score
+                head_ = await living_head(pool, _generation(str(h["holder"]))[0])
+                base = _generation(head_)[0]
                 if base != _generation(mine)[0]:
                     souls.setdefault(base, set()).add(str(h["via"]))
             if not souls:
