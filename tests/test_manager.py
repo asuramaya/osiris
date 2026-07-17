@@ -790,6 +790,46 @@ async def test_pty_spawn_with_seat_exports_identity_at_birth(
         await pool.close()
 
 
+@requires_pty
+async def test_pty_spawn_warns_when_the_room_is_already_held(
+    pg_dsn: str, tmp_path: Path,
+) -> None:
+    """THE ROOM-BUSY ADVISORY (wake arc Stage E, alfred's spawn-lease gate — the advisory
+    half): a body spawned into a cwd where a LIVE session already works is told so in its
+    birth receipt, and the spawn PROCEEDS — warn, never refuse (the refusal semantics wait
+    on the room owner's field spec; an operator spawning over their own window is
+    legitimate). A quiet room's receipt carries no advisory."""
+    from src.db.pool import create_pool
+    from src.orchestrator.mounts import save_mount
+
+    pool = await create_pool(pg_dsn)
+    manager = Manager(socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
+                      pool=pool, runner=_make_runner())
+    await manager.start()
+    try:
+        room = tmp_path / "shared-room"
+        room.mkdir()
+        await save_mount(pool, job_dir="/x/jobs/ho1der01", agent_id="agent:ho1der01",
+                         project="shared", cwd=str(room), model=None, session_key=None)
+        client = await _connect(tmp_path / "m.sock")
+        try:
+            out = await client.send({"op": "pty_spawn", "name": "b1",
+                                     "argv": ["sh", "-c", "cat"], "cwd": str(room)})
+            assert out.get("spawned") == "b1"                      # advisory, never a block
+            assert out["room_busy"][0]["agent_id"] == "agent:ho1der01"
+            assert "advisory" in out["room_busy_note"]
+            quiet = tmp_path / "quiet-room"
+            quiet.mkdir()
+            out2 = await client.send({"op": "pty_spawn", "name": "b2",
+                                      "argv": ["sh", "-c", "cat"], "cwd": str(quiet)})
+            assert out2.get("spawned") == "b2" and "room_busy" not in out2
+        finally:
+            await client.close()
+    finally:
+        await manager.close()
+        await pool.close()
+
+
 # --- the PTY envelope (the doctrine-3 gap, closed): a child is born bounded or not at all ---
 
 

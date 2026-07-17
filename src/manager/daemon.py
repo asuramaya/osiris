@@ -522,6 +522,30 @@ class Manager:
         out: dict[str, Any] = {"spawned": name}
         if seated is not None:
             out["seat_id"] = seated["seat_id"]
+        # THE ROOM-BUSY ADVISORY (wake arc Stage E, alfred's spawn-lease gate — the
+        # advisory half; exclusive refusal waits on his field spec): a body spawned into
+        # a room where LIVE sessions already work is told so in its birth receipt — the
+        # spawner sees the contention BEFORE its child stomps a shared tree. Warn, never
+        # refuse: the operator spawning over their own window is legitimate, and a lease
+        # that can block the owner's own hand needs the owner's rules first. Fail-open
+        # without a pool (a bare daemon warns about nothing it cannot see).
+        if cwd and self._pool is not None:
+            try:
+                live = await self._pool.fetch(
+                    "SELECT agent_id, to_char(last_seen, 'HH24:MI:SS') AS at "
+                    "FROM agent_mounts WHERE cwd=$1 "
+                    "AND last_seen > now() - interval '15 minutes' "
+                    "ORDER BY last_seen DESC LIMIT 4", cwd)
+                if live:
+                    out["room_busy"] = [
+                        {"agent_id": str(r["agent_id"]), "last_seen": str(r["at"])}
+                        for r in live]
+                    out["room_busy_note"] = (
+                        "live session(s) already hold this room — advisory only (the "
+                        "lease gate's refusal semantics wait on the room owner's rules); "
+                        "coordinate before writing to a shared tree")
+            except Exception:  # noqa: BLE001 — an advisory must never break a birth
+                _log.debug("room-busy advisory failed for %s", cwd, exc_info=True)
         return out
 
     async def _scope_pty_child(
