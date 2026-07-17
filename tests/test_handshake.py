@@ -370,3 +370,69 @@ async def test_office_birth_is_the_seats_next_life(actions: Actions, tmp_path: P
                             jobs_home=tmp_path / "jobs", office_root=offices,
                             source="startup")
     assert guest["agent"] == "agent:9ce57000"        # never a parallel life of the seat
+
+
+async def test_office_birth_survives_the_seats_death(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """THE DEED (a2d06410, Ra's case): SessionEnd releases mount rows, so an ENDED seat
+    holds none anywhere — and death is exactly when the fourth door matters. The deed
+    is a graph fact and outlives every row: the door must open from the deed ALONE."""
+    from datetime import UTC, datetime
+
+    root = tmp_path / "projects"
+    offices = tmp_path / "seats"
+    office = offices / "deeda"
+    office.mkdir(parents=True)
+    o = await actions.create_or_find_object("Agent", "agent:deed0b01", "agent:deed0b01")
+    now = datetime.now(UTC)
+    await actions.assert_property(o, "handle", "Deeda", "agent:deed0b01", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(o, "project", "deedhouse", "agent:deed0b01", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(o, "office", str(office), "agent:deed0b01", now, 0.9,
+                                  evidence_class="direct_observation")
+    # NO mount row exists for this lineage — the seat died and SessionEnd took the rows
+
+    fresh_sid = "0dead117-0000-4000-8000-000000000000"
+    out = await automount(actions, session_id=fresh_sid, cwd=str(office),
+                          actor="analyst:operator", root=root,
+                          jobs_home=tmp_path / "jobs", office_root=offices,
+                          source="startup")
+    assert out["agent"] == "agent:deed0b01-ii"       # the dead seat's NEXT LIFE
+    assert out["minted"] == "agent:deed0b01"         # succession confessed
+    assert out["seat"] == "Deeda II"                 # the numeral ticked
+
+
+async def test_a_seat_walking_home_files_its_own_deed(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """A LIVE migration needs no ceremony (the Thoth pattern, 6886ca2a): a claimed seat
+    whose running session breathes at its own office self-files the deed at the whisper
+    door — so its NEXT death cannot orphan the office the way Ra's did."""
+    from datetime import UTC, datetime
+
+    from src.orchestrator.mounts import save_mount
+
+    root = tmp_path / "projects"
+    offices = tmp_path / "seats"
+    office = offices / "walka"
+    office.mkdir(parents=True)
+    o = await actions.create_or_find_object("Agent", "agent:0a1cafe1", "agent:0a1cafe1")
+    now = datetime.now(UTC)
+    await actions.assert_property(o, "handle", "Walka", "agent:0a1cafe1", now, 0.9,
+                                  evidence_class="self_declared")
+    sid = "0a1cafe1-0000-4000-8000-000000000000"
+    await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "0a1cafe1"),
+                     agent_id="agent:0a1cafe1", project="walkahouse",
+                     cwd=str(office), model=None, session_key=None)
+
+    await automount(actions, session_id=sid, cwd=str(office),
+                    actor="analyst:operator", root=root,
+                    jobs_home=tmp_path / "jobs", office_root=offices,
+                    source="startup")
+    deed = await actions.pool.fetchval(
+        "SELECT d.value #>> '{}' FROM current_assertions d "
+        "JOIN objects o2 ON o2.id=d.object_id "
+        "WHERE d.name='office' AND o2.canonical='agent:0a1cafe1'")
+    assert deed == str(office)                       # the seat walked home and deeded it

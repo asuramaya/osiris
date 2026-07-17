@@ -81,6 +81,17 @@ async def view_seat(
     return rec.agent_id if rec else None
 
 
+async def _lineage_handle(actions: Actions, base: str) -> str | None:
+    """The lineage's claimed handle, freshest generation's word — lineage-wide because
+    claims land on generation objects while the lineage is asked about as a whole."""
+    val = await actions.pool.fetchval(
+        "SELECT h.value #>> '{}' FROM current_assertions h "
+        "JOIN objects ho ON ho.id=h.object_id AND ho.type='Agent' "
+        "WHERE h.name='handle' AND (ho.canonical=$1 OR ho.canonical LIKE $1||'-%') "
+        "ORDER BY h.observed_at DESC LIMIT 1", base)
+    return str(val) if val else None
+
+
 async def office_seat(
     actions: Actions, *, cwd: str, office_root: Path | None = None,
 ) -> str | None:
@@ -89,23 +100,47 @@ async def office_seat(
     lineage or mint a new agent' — yet the first fresh launch at Ra's office woke as
     anonymous agent:94937cf5). An office is single-tenant BY CONSTRUCTION (named for its
     seat, ed5f5ce2), so the office itself is identity evidence: a fresh session waking
-    there IS the seat's next life, never a stranger. Binds only when the directory name
-    matches a claimed handle whose lineage anchors here, and only when that lineage holds
-    NO live pulse — two parallel fresh contexts must never both be the seat (succession
-    is never parallel); the second is a guest and mints exactly as before."""
+    there IS the seat's next life, never a stranger.
+
+    THE DEED IS THE AUTHORITY (a2d06410, Ra's case): office ownership is an identity
+    fact and lives in the GRAPH — an `office` assertion on the lineage. Mount rows are
+    MORTAL (SessionEnd releases them), so a seat that died holds none — yet death is
+    exactly when this door matters. The row match survives only as a fallback for
+    offices deeded before the deed existed. Either way the door binds only when the
+    directory name matches the lineage's claimed handle, and only when that lineage
+    holds NO live pulse — two parallel fresh contexts must never both be the seat
+    (succession is never parallel); the second is a guest and mints exactly as before."""
+    from src.orchestrator.agents import _generation
+
     root = office_root or (Path.home() / ".osiris" / "seats")
     p = Path(cwd or "")
     if p.parent != root:
         return None
-    head = await actions.pool.fetchval(
-        "SELECT m.agent_id FROM agent_mounts m "
-        "JOIN objects ho ON (m.agent_id = ho.canonical OR m.agent_id LIKE ho.canonical||'-%') "
-        "JOIN current_assertions h ON h.object_id=ho.id AND h.name='handle' "
-        "WHERE m.cwd=$1 AND lower(h.value #>> '{}') = $2 "
-        "ORDER BY m.last_seen DESC LIMIT 1", cwd, p.name.lower())
+    head: str | None = None
+    deeded = await actions.pool.fetchval(
+        "SELECT o.canonical FROM current_assertions d "
+        "JOIN objects o ON o.id=d.object_id AND o.type='Agent' AND o.status='active' "
+        "WHERE d.name='office' AND d.value #>> '{}' = $1 "
+        "ORDER BY d.observed_at DESC LIMIT 1", cwd)
+    if deeded:
+        base = _generation(str(deeded))[0]
+        handle = await _lineage_handle(actions, base)
+        if handle and handle.lower() == p.name.lower():
+            # the deed may sit on an older generation — the door opens for the FRESHEST
+            gens = [str(r["canonical"]) for r in await actions.pool.fetch(
+                "SELECT canonical FROM objects WHERE type='Agent' AND status='active' "
+                "AND (canonical=$1 OR canonical LIKE $1||'-%')", base)]
+            same = [c for c in gens if _generation(c)[0] == base]
+            head = max(same, key=lambda c: _generation(c)[1], default=str(deeded))
+    if head is None:
+        head = await actions.pool.fetchval(
+            "SELECT m.agent_id FROM agent_mounts m "
+            "JOIN objects ho ON (m.agent_id = ho.canonical OR m.agent_id LIKE ho.canonical||'-%') "
+            "JOIN current_assertions h ON h.object_id=ho.id AND h.name='handle' "
+            "WHERE m.cwd=$1 AND lower(h.value #>> '{}') = $2 "
+            "ORDER BY m.last_seen DESC LIMIT 1", cwd, p.name.lower())
     if not head:
         return None
-    from src.orchestrator.agents import _generation
     base = _generation(str(head))[0]
     alive = await actions.pool.fetchval(
         "SELECT max(last_seen) > now() - interval '15 minutes' FROM agent_mounts "
@@ -119,6 +154,44 @@ async def office_seat(
         "WHERE a.name='minted_because' "
         "AND (o.canonical=$1 OR o.canonical LIKE $1||'-%')", base)
     return None if (alive or just_minted) else str(head)
+
+
+async def file_office_deed(
+    actions: Actions, *, agent_id: str, cwd: str, actor: str,
+    office_root: Path | None = None,
+) -> bool:
+    """File the seat's OFFICE DEED — the durable graph fact office_seat reads (a2d06410).
+    A claimed seat standing in a directory named for itself, directly under the office
+    root, owns that office; the deed outlives every mount row (SessionEnd releases those,
+    and Ra's ended lineage held none — the door found nothing where its owner had lived).
+    Idempotent: an office already on the lineage's record files nothing. False whenever
+    this cwd is no office of this agent's — never an error, the caller is a doorway."""
+    from datetime import UTC, datetime
+
+    from src.orchestrator.agents import _generation
+
+    root = office_root or (Path.home() / ".osiris" / "seats")
+    p = Path(cwd or "")
+    if p.parent != root:
+        return False
+    base = _generation(agent_id)[0]
+    handle = await _lineage_handle(actions, base)
+    if not handle or handle.lower() != p.name.lower():
+        return False
+    already = await actions.pool.fetchval(
+        "SELECT 1 FROM current_assertions d JOIN objects o ON o.id=d.object_id "
+        "WHERE d.name='office' AND d.value #>> '{}' = $1 "
+        "AND (o.canonical=$2 OR o.canonical LIKE $2||'-%') LIMIT 1", cwd, base)
+    if already:
+        return False
+    obj = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Agent' AND status='active'",
+        agent_id)
+    if obj is None:
+        return False
+    await actions.assert_property(obj, "office", cwd, actor, datetime.now(UTC), 0.9,
+                                  evidence_class="direct_observation")
+    return True
 
 
 def _derive_job_dir(session_id: str, *, jobs_home: Path | None = None) -> str | None:
@@ -196,6 +269,15 @@ async def automount(
         ident.agent_id = officed
     await register_agent(actions, ident, actor=actor, expected_model=expected_model,
                          mint_reason=mint_reason)
+    # THE DEED SELF-FILES (a2d06410): a claimed seat breathing at its own office writes
+    # the durable fact the fourth door reads — a LIVE migration deeds itself the moment
+    # the seat walks home; the ceremony deeds the dead. Fail-open: a deed is a bonus at
+    # this door, never a blocker.
+    try:
+        await file_office_deed(actions, agent_id=ident.agent_id, cwd=cwd, actor=actor,
+                               office_root=office_root)
+    except Exception:  # noqa: BLE001 — the whisper must land whatever the deed does
+        pass
     prev = None
     if job_dir:
         # PROVISIONAL — seated, but with NO PULSE. The whisper fires for processes that are not

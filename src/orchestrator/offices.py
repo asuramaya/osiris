@@ -158,8 +158,18 @@ async def establish_office(
     rebind = await rebind_seat(
         actions, seat_or_agent=agent_id, new_cwd=str(office), actor=actor,
         projects_root=projects_root, claude_json=claude_json, extract=True)
+    # THE DEED (a2d06410): the ceremony records office ownership in the GRAPH — the
+    # fourth door must survive the seat's death, and mount rows don't (SessionEnd
+    # releases them; Ra's ended lineage held none, so every fresh launch at his own
+    # office minted a stranger). The deed is what office_seat reads first.
+    from src.orchestrator.handshake import file_office_deed
+
+    deeded = await file_office_deed(
+        actions, agent_id=agent_id, cwd=str(office),
+        actor=actor or "ceremony:establish-office", office_root=root)
     return {
         "office": str(office), "handle": handle, "house": house,
+        "office_deed": "filed" if deeded else "already on the lineage's record",
         "seat": bound["seat_id"] if bound else None,
         "charter": repos or "UNDECLARED — the standing orders instruct the seat to declare",
         "standing_orders": orders_state,

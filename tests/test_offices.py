@@ -69,6 +69,14 @@ async def test_establish_office_the_whole_ceremony(
     row = await actions.pool.fetchval(
         "SELECT cwd FROM agent_mounts WHERE agent_id=$1", agent)
     assert row == str(office)
+    # THE DEED (a2d06410): the ceremony records office ownership in the GRAPH, so the
+    # fourth door still opens after the seat's death takes its mount rows
+    assert out["office_deed"] == "filed"
+    deed = await actions.pool.fetchval(
+        "SELECT d.value #>> '{}' FROM current_assertions d "
+        "JOIN objects o2 ON o2.id=d.object_id "
+        "WHERE d.name='office' AND o2.canonical=$1", agent)
+    assert deed == str(office)
 
     # idempotent: the second ceremony converges, never clobbers the standing orders
     again = await establish_office(
@@ -76,6 +84,7 @@ async def test_establish_office_the_whole_ceremony(
         office_root=tmp_path / "seats", projects_root=tmp_path / "projects",
         claude_json=tmp_path / "cj.json")
     assert again["standing_orders"].startswith("left in place")
+    assert again["office_deed"] == "already on the lineage's record"
 
 
 async def test_establish_office_carries_a_declared_charter(
