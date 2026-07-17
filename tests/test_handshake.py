@@ -42,12 +42,13 @@ async def test_automount_is_a_durable_anchored_mount(actions: Actions, tmp_path:
     row = await actions.pool.fetchrow(
         "SELECT agent_id, project FROM agent_mounts WHERE agent_id='agent:39fb22a2'")
     assert row is not None and row["project"] == "sibling-eight"
-    # hook re-fire (session resume) is idempotent — same identity, no dup Agent
+    # hook re-fire (session resume) is idempotent — same identity, and under the full
+    # visitor gate NO greeting mints an object: the graph stays clean until the first act
     again = await automount(actions, session_id=SID, cwd="/w/sibling-eight",
                             actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
     assert again["agent"] == out["agent"]
     assert await actions.pool.fetchval(
-        "SELECT count(*) FROM objects WHERE type='Agent' AND canonical='agent:39fb22a2'") == 1
+        "SELECT count(*) FROM objects WHERE type='Agent' AND canonical='agent:39fb22a2'") == 0
 
 
 async def test_whisper_hands_back_the_durable_anchor_that_prevents_the_twin(
@@ -97,6 +98,12 @@ async def test_compaction_mints_the_next_mind(actions: Actions, tmp_path: Path) 
     out = await automount(actions, session_id=SID, cwd="/w/osiris", actor="analyst:operator",
                           root=root, jobs_home=tmp_path / "jobs", source="startup")
     assert out["agent"] == "agent:39fb22a2"
+    # the visitor gate holds at the greeting; the first ACT (mount's register) mints,
+    # then the mind claims its name — the production order
+    from src.orchestrator.agents import register_agent, resolve_identity
+    ident = resolve_identity(cwd="/w/osiris", job_dir=str(tmp_path / "jobs" / SID[:8]),
+                             root=root)
+    await register_agent(actions, ident, actor="analyst:operator")
     await claim_name(actions, "agent:39fb22a2", "Thoth", source="agent:39fb22a2")
 
     # the harness compacts the session — same sid, same transcript, same model: still a death
@@ -207,6 +214,50 @@ async def test_a_joiner_inherits_the_rooms_settle_state(actions: Actions,
     again = await automount(actions, session_id=sid2, cwd="/w/osiris",
                             actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
     assert again["mail"] == 1
+
+
+async def test_no_greeting_mints_an_object_anywhere(actions: Actions,
+                                                    tmp_path: Path) -> None:
+    """THE FULL VISITOR GATE (Phase 1b of ruling 120fcc81): the office rule extends to
+    every threshold — an unknown fresh session at an ORDINARY cwd gets a row and nothing
+    else, however many times its greeting re-fires; the object is earned at the first
+    authenticated act (mount()/_reattach's register)."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import register_agent, resolve_identity
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/anywhere")
+    out = await automount(actions, session_id=SID, cwd="/w/anywhere",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+    assert out["agent"] == "agent:39fb22a2"
+    # the greeting left NO object...
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='Agent' AND canonical=$1", out["agent"]) is None
+    # ...but the ROW (the address) is there, so mail and liveness have a door
+    assert await mounts.find_mount(
+        actions.pool, job_dir=str(tmp_path / "jobs" / SID[:8])) is not None
+    # a RE-FIRED greeting (hook refire, resume) still mints nothing — the row is the
+    # gate's own artifact, never evidence of a life
+    again = await automount(actions, session_id=SID, cwd="/w/anywhere",
+                            actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+    assert again["agent"] == out["agent"]
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='Agent' AND canonical=$1", out["agent"]) is None
+    # ...and a compact re-fire for a row-only stranger mints NO phantom heir either:
+    # you can only die if you lived, and a whisper row alone is not a life
+    compacted = await automount(actions, session_id=SID, cwd="/w/anywhere",
+                                actor="analyst:operator", root=root,
+                                jobs_home=tmp_path / "jobs", source="compact")
+    assert compacted["minted"] is None
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' AND canonical LIKE 'agent:39fb22a2%'",
+    ) == 0
+    # the first authenticated ACT mints it as itself (mount()/_reattach's register path)
+    ident = resolve_identity(cwd="/w/anywhere", job_dir=str(tmp_path / "jobs" / SID[:8]),
+                             root=root)
+    await register_agent(actions, ident, actor="analyst:operator")
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='Agent' AND canonical=$1", out["agent"]) == 1
 
 
 async def test_automount_survives_a_sessionless_stranger(actions: Actions,

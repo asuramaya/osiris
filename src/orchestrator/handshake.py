@@ -305,8 +305,9 @@ async def automount(
     `source` is the SessionStart trigger (startup|resume|clear|compact). Under the mind ruling
     (a882b334) a compaction or /clear is a DEATH — the weights survive but the memory the
     operator was talking to does not — so those sources mint the lineage's next generation.
-    Gated on a prior durable mount: you can only die if you lived (a stranger whose first-ever
-    whisper arrives at a compact boundary just mounts fresh, no phantom ancestor).
+    Gated on a prior LIFE IN THE GRAPH: you can only die if you lived (a stranger whose
+    first-ever whisper arrives at a compact boundary just mounts fresh, no phantom ancestor —
+    and post-gate, a whisper row alone is an address, never a life).
 
     THE BINDING (Soundwave V's complaint, thread 33838160): a session whose mind deliberately
     wears a SEAT (a mount with a foreign anchor — a new tab claiming its lineage's old anchor)
@@ -339,13 +340,27 @@ async def automount(
                    if bound is None and forked is None and viewed is None
                    and ledgered is None else None)
     # you can only DIE if you LIVED — a fork has lived under its ancestor's name, and a
-    # ledgered sid IS a lived mind whatever became of its registry row.
-    if source in ("compact", "clear") and (bound is not None or forked is not None
-                                           or ledgered is not None):
+    # ledgered sid IS a lived mind whatever became of its registry row. Post-gate, a
+    # whisper ROW alone is not a life: the row is the gate's own artifact (an address),
+    # so BOUND testifies only when the lineage actually exists in the graph — otherwise
+    # a row-only stranger's compact re-fire would mint a base AND a phantom heir in one
+    # greeting.
+    from src.orchestrator.agents import _generation
+    lived = forked is not None or ledgered is not None
+    if not lived and bound is not None:
+        _base = _generation(bound.agent_id)[0]
+        if _base != f"agent:{(session_id or '')[:8].lower()}":
+            # a DELIBERATE binding (adoption, attach, surgery): someone recorded this
+            # session as a soul — that record is a life, whatever the objects table says
+            lived = True
+        else:
+            lived = bool(await actions.pool.fetchval(
+                "SELECT 1 FROM objects WHERE type='Agent' AND (canonical=$1 "
+                "OR canonical LIKE $1 || '-%') LIMIT 1", _base))
+    if source in ("compact", "clear") and lived:
         mint_reason = "compaction" if source == "compact" else "context-clear"
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, root=root, project_label=project_label)
     if bound is not None:
-        from src.orchestrator.agents import _generation
         if _generation(bound.agent_id)[0] != _generation(ident.agent_id)[0]:
             # the deliberate binding wins: seams (swap/compaction) run on the SEAT's lineage
             ident.agent_id = bound.agent_id
@@ -359,15 +374,16 @@ async def automount(
     elif ledgered is not None:
         # a known sid: the graph remembers who this session IS — rebind, never mint
         ident.agent_id = ledgered
-    # THE OFFICE ADMITS NO STRANGERS AT THE GREETING (the fa4462d5 orphan, 2026-07-17):
-    # an unknown fresh session at an office either becomes the seat at its first act
-    # (office_claim) or was never anybody (plumbing, a guest window beside a live seat) —
-    # minting an anonymous object for its GREETING is the visitor-gate gap at the one
-    # threshold where identity is sacred. Row only; the object is earned by the act.
-    at_office = Path(cwd or "").parent == (office_root or
-                                           (Path.home() / ".osiris" / "seats"))
-    unknown = (bound is None and forked is None and viewed is None and ledgered is None)
-    if not (at_office and unknown):
+    # THE FULL VISITOR GATE (Phase 1b of ruling 120fcc81; extends the office gate
+    # f580762 to EVERY threshold): no greeting mints an object ANYWHERE. A stranger —
+    # no lived lineage, no viewed transcript — gets a registry row and nothing else;
+    # identity is earned at its first authenticated act (mount()/_reattach register
+    # there, and office_claim crowns a seat at its own office). Plumbing, title
+    # generators, and guest windows leave zero graph residue, however many times
+    # their greeting re-fires. One exception: a session carrying spawner credentials
+    # (seat_id + attach_token) was DECLARED somebody before its first breath —
+    # identity at birth is not a stranger's greeting.
+    if lived or viewed is not None or (seat_id and attach_token):
         await register_agent(actions, ident, actor=actor, expected_model=expected_model,
                              mint_reason=mint_reason)
     # THE SESSION LEDGER, write side: a named binding is filed the moment it exists, so
