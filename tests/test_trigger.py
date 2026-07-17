@@ -899,3 +899,27 @@ async def test_a_dm_pokes_the_addressees_own_window_lineage_wide(actions: Action
     assert rep["poked"] == 1 and pokes and pokes[0].startswith("dm:")
     assert await actions.pool.fetchval(
         "SELECT mode FROM agent_wakes ORDER BY id DESC LIMIT 1") == "dm-poke"
+
+
+async def test_a_mint_declares_its_parent_when_the_room_has_a_seat(
+    actions: Actions,
+) -> None:
+    """THE WAKE-ORPHAN CURE, the trigger's half: a mint into a room with a NAMED seat
+    carries spawn_parent (the seat's living head) — the child is born declared, never an
+    anonymous stranger. A seatless room's mint carries None (the visitor class)."""
+    from src.orchestrator.mounts import save_mount
+
+    await _agent_with_mail(actions)
+    a = await actions.create_or_find_object("Agent", "agent:demo", "session")
+    await actions.assert_property(a, "handle", "Demo", "session", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await save_mount(actions.pool, job_dir="/x/jobs/demodoor", agent_id="agent:demo",
+                     project="demo", cwd="/repo/demo", model=None,
+                     session_key="whisper:demodoor", alive=False)
+    seen: list[Any] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        seen.append(kw.get("spawn_parent"))
+
+    rep = await trigger_mail_tick(actions, settings=_settings(enabled=True), spawn=_spawn)
+    assert rep["woke"] == 1 and seen == ["agent:demo"]   # born declared, the seat's head

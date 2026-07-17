@@ -260,6 +260,47 @@ async def test_no_greeting_mints_an_object_anywhere(actions: Actions,
         "SELECT 1 FROM objects WHERE type='Agent' AND canonical=$1", out["agent"]) == 1
 
 
+async def test_a_declared_child_is_born_denominated(actions: Actions,
+                                                    tmp_path: Path) -> None:
+    """THE WAKE-ORPHAN CURE (operator ruling 2026-07-17: 'orphans like that are
+    structurally impossible going forward'): a spawner that declared parentage before the
+    child's first breath (OSIRIS_SPAWNED_BY → the whisper's spawned_by) gets a REGISTERED
+    CHILD — spawned_by edge, roman.arabic patronym — never an anonymous stranger."""
+    from datetime import UTC, datetime
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/wakehouse")
+    parent = await actions.create_or_find_object("Agent", "agent:dad0beef", "agent:dad0beef")
+    await actions.assert_property(parent, "handle", "Sower", "agent:dad0beef",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    out = await automount(actions, session_id=SID, cwd="/w/wakehouse",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
+                          spawned_by="agent:dad0beef", spawn_type="wake-triage")
+
+    assert out["agent"] == "agent:39fb22a2"          # the child IS the session's canonical
+    assert out["child_of"] == "agent:dad0beef"       # the birth receipt names the parent
+    row = await actions.pool.fetchrow(
+        "SELECT (SELECT 1 FROM links l JOIN objects p ON p.id=l.to_id "
+        "        JOIN objects c ON c.id=l.from_id "
+        "        WHERE l.type='spawned_by' AND c.canonical='agent:39fb22a2' "
+        "        AND p.canonical='agent:dad0beef') AS parented, "
+        "       (SELECT value #>> '{}' FROM current_assertions a "
+        "        JOIN objects o ON o.id=a.object_id "
+        "        WHERE o.canonical='agent:39fb22a2' AND a.name='patronym') AS patronym")
+    assert row["parented"] == 1                      # the edge exists from breath one
+    assert row["patronym"] and row["patronym"].startswith("Sower")  # roman.arabic
+    # a re-fired greeting converges on the SAME child — no twin, no stranger
+    again = await automount(actions, session_id=SID, cwd="/w/wakehouse",
+                            actor="analyst:operator", root=root,
+                            jobs_home=tmp_path / "jobs",
+                            spawned_by="agent:dad0beef")
+    assert again["agent"] == "agent:39fb22a2"
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' "
+        "AND canonical='agent:39fb22a2'") == 1
+
+
 async def test_automount_survives_a_sessionless_stranger(actions: Actions,
                                                          tmp_path: Path) -> None:
     # no transcript, junk session id → still a valid (unresolved) mount, never a crash:

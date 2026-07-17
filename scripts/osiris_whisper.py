@@ -47,6 +47,13 @@ def main() -> int:
     if os.environ.get("OSIRIS_SEAT_ID") and os.environ.get("OSIRIS_ATTACH_TOKEN"):
         body["seat_id"] = os.environ["OSIRIS_SEAT_ID"]
         body["attach_token"] = os.environ["OSIRIS_ATTACH_TOKEN"]
+    # THE DECLARED CHILD (the wake-orphan cure, 2026-07-17): a spawner (the trigger's mint
+    # lane) exported this session's PARENTAGE before its first breath — carry it; the server
+    # registers a denominated child (roman.arabic), never an anonymous stranger.
+    if os.environ.get("OSIRIS_SPAWNED_BY"):
+        body["spawned_by"] = os.environ["OSIRIS_SPAWNED_BY"]
+        if os.environ.get("OSIRIS_SPAWN_TYPE"):
+            body["spawn_type"] = os.environ["OSIRIS_SPAWN_TYPE"]
     # THE TAB-VIEW RECEIPT (alias-clone cure, 2026-07-16): the hook names the transcript this
     # session appends to. A tab attached to a live session fires under ITS OWN sid while the
     # transcript belongs to the session it shows — the server adopts instead of minting a clone.

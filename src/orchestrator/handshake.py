@@ -296,6 +296,7 @@ async def automount(
     project_label: str | None = None, source: str | None = None,
     seat_id: str | None = None, attach_token: str | None = None,
     transcript_path: str | None = None, office_root: Path | None = None,
+    spawned_by: str | None = None, spawn_type: str | None = None,
 ) -> dict[str, Any]:
     """Mount a just-started session and return its whisper payload. Identical semantics to
     the mount() tool (same resolution, same registration, same durable row — idempotent on
@@ -383,6 +384,25 @@ async def automount(
     # their greeting re-fires. One exception: a session carrying spawner credentials
     # (seat_id + attach_token) was DECLARED somebody before its first breath —
     # identity at birth is not a stranger's greeting.
+    # THE DECLARED CHILD (the wake-orphan cure, operator ruling 2026-07-17: 'orphans like
+    # that are structurally impossible going forward'): a spawner that exported
+    # OSIRIS_SPAWNED_BY declared this session's parentage BEFORE its first breath — the
+    # whisper registers it as a CHILD (spawned_by edge, patronym, the roman.arabic
+    # denomination) instead of leaving an anonymous stranger for the archaeologist. Same
+    # credentialed-birth class as the seat token: a declared identity is never a
+    # stranger's greeting.
+    spawn_child: str | None = None
+    if (not lived and viewed is None and not (seat_id and attach_token) and spawned_by):
+        from src.orchestrator.lineage import register_spawn
+        try:
+            spawn_child = await register_spawn(
+                actions, session_id[:8], agent_type=spawn_type or "wake-triage",
+                parent_agent=spawned_by, project=ident.project, session=session_id,
+                witnessed=True)  # the spawner's own declaration, not a harness announcement
+        except Exception:  # noqa: BLE001 — a failed child registration degrades to visitor
+            spawn_child = None
+        if spawn_child:
+            ident.agent_id = spawn_child
     if lived or viewed is not None or (seat_id and attach_token):
         await register_agent(actions, ident, actor=actor, expected_model=expected_model,
                              mint_reason=mint_reason)
@@ -532,6 +552,12 @@ async def automount(
             "office_note": "this office belongs to a seat with no live occupant — your "
                            "first osiris call (mount) seats you as its next life"}
            if office_hint else {}),
+        # the declared child's birth receipt: denominated under its parent from breath one
+        **({"child_of": spawned_by,
+            "child_note": "you are a DECLARED CHILD — registered spawned_by your parent "
+                          "at birth (roman.arabic denomination); your writes are your "
+                          "own, the seat and its succession are your parent's"}
+           if spawn_child else {}),
     }
 
 

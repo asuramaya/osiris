@@ -2319,7 +2319,11 @@ async def automount_route(request: Any) -> Any:
             attach_token=(str(body.get("attach_token") or "") or None),
             # the tab-view receipt (alias-clone cure): the hook's own statement of which
             # conversation this session continues — automount adopts instead of cloning
-            transcript_path=(str(body.get("transcript_path") or "") or None))
+            transcript_path=(str(body.get("transcript_path") or "") or None),
+            # the declared child (the wake-orphan cure): the spawner's exported parentage,
+            # carried by the whisper from the session's own environment
+            spawned_by=(str(body.get("spawned_by") or "") or None),
+            spawn_type=(str(body.get("spawn_type") or "") or None))
         # a mint rode this whisper (compact/clear): the ancestor's connection outlives it —
         # purge the dead mind from the hot cache so no tool call answers as it again
         _evict_stale_minds(out.get("minted"))

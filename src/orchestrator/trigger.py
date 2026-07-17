@@ -498,9 +498,28 @@ def _receipt_path(job_dir: str | None, resume_session: str | None) -> Path | Non
     return RECEIPTS / f"{stem}.json"
 
 
+async def _room_parent(pool: asyncpg.Pool, project: str) -> str | None:
+    """The seat a wake-child belongs to (operator ruling 2026-07-17: wake mints are
+    CHILDREN, denominated roman.arabic — 'orphans like that are structurally impossible
+    going forward'): the project's freshest NAMED lineage, resolved to its living head.
+    None in a seatless room — such a mint stays anonymous, and the archaeologist's
+    `seatless` key names the room for the visitor sweep."""
+    named = await pool.fetchval(
+        "SELECT m.agent_id FROM agent_mounts m WHERE m.project=$1 AND EXISTS ("
+        "  SELECT 1 FROM current_assertions h JOIN objects ho ON ho.id=h.object_id "
+        "  WHERE h.name='handle' AND (ho.canonical=m.agent_id "
+        "        OR m.agent_id LIKE ho.canonical||'-%')) "
+        "ORDER BY m.last_seen DESC NULLS LAST LIMIT 1", project)
+    if named is None:
+        return None
+    from src.orchestrator.folds import living_head
+    return await living_head(pool, str(named))
+
+
 async def _spawn_claude(
     repo: str, prompt: str, *, job_dir: str | None = None, resume_session: str | None = None,
     model: str | None = None, allowed_tools: str | None = None,
+    spawn_parent: str | None = None,
 ) -> None:
     """Wake an agent: a detached `claude -p` in the repo. RESUME lane: `--resume <session>`
     continues the owner's own session — it pays only for the new mail, not a fresh cosmology
@@ -522,6 +541,13 @@ async def _spawn_claude(
         cmd += ["--resume", resume_session]
     if job_dir:
         env["CLAUDE_JOB_DIR"] = job_dir
+    # THE DECLARED CHILD (the wake-orphan cure, operator ruling 2026-07-17): a MINT is
+    # born already claimed — the whisper reads this env and registers a denominated child
+    # (spawned_by the room's seat, roman.arabic), never an anonymous stranger the
+    # archaeologist must dig up later. A resume is not a birth; it exports nothing.
+    if spawn_parent and not resume_session:
+        env["OSIRIS_SPAWNED_BY"] = spawn_parent
+        env["OSIRIS_SPAWN_TYPE"] = "wake-triage"
     cmd.append(prompt)
 
     # THE RECEIPT (21a99136). This was `stdout=DEVNULL`, and so Osiris's single most expensive act
@@ -750,7 +776,8 @@ async def trigger_mail_tick(
         wake_anchor = _wake_job_dir(project)
         await spawn(repo_path, _WAKE_PROMPT.format(repo=repo_path, job_dir=wake_anchor),
                     job_dir=wake_anchor, model=st.osiris_wake_model or None,
-                    allowed_tools=st.osiris_wake_allowed_tools or None)
+                    allowed_tools=st.osiris_wake_allowed_tools or None,
+                    spawn_parent=await _room_parent(pool, project))
         report["woke"] += 1
 
     # THE DM LANE (fleet mail phase 3, task #61): DELIVER → RESUME → nothing. No mint, ever —
