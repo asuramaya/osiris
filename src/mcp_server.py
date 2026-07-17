@@ -1237,6 +1237,7 @@ async def candidates(project: str | None = None, limit: int = 50,
 @mcp.tool()
 async def dispose(admit: list[dict[str, Any]] | None = None,
                   drop: list[dict[str, Any]] | None = None,
+                  ask: list[dict[str, Any]] | None = None,
                   ctx: Context | None = None) -> dict[str, Any]:
     """SETTLE the miner's guesses — relevant or irrelevant, in your name, with a reason on each.
 
@@ -1255,18 +1256,23 @@ async def dispose(admit: list[dict[str, Any]] | None = None,
     Naming the class is what turns a dismissal into a DIAGNOSIS: the drop rate per class tells us
     which rule the extractor is still breaking.
 
+    `ask`: [{"id", "because"?, "owner"?}] — the guess is a real OPEN QUESTION, not a duty
+    (thread 4d01b076: admitting a question makes it read as a promise; dropping it buries
+    something real). Kept open, reclassified kind='question' in your name — on the wall AS
+    a question, ranked out of the work lanes.
+
     NOTHING IS DELETED. A drop is a compensating event carrying your name and your reason — the
     row stays readable and unwinds with one re-assert. THE RUG IS TRANSPARENT: you may shove
     anything under it, and the shape of what you shoved stays visible forever.
 
-    Returns your YIELD (admitted ÷ judged) — the adversary's licence. A producer that cannot
-    demonstrate use does not get to spend."""
+    Returns your YIELD ((admitted + asked) ÷ judged) — the adversary's licence. A producer that
+    cannot demonstrate use does not get to spend; a question kept on the wall IS use."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a disposition is a MIND'S WORD, and the graph must know "
                          "whose", "why": _anchorless(ctx)}
     return await dispose_seam.dispose(
-        Actions(await _pool_get()), source=ident.agent_id, admit=admit, drop=drop)
+        Actions(await _pool_get()), source=ident.agent_id, admit=admit, drop=drop, ask=ask)
 
 
 # THE ONE WALL LAW (ruling 923c380f): the graded wall lives in compositions.py now — one

@@ -251,3 +251,41 @@ async def test_the_gate_JUDGES_THE_PRODUCER_THAT_EXISTS_not_its_dead_predecessor
     assert lic["may_spend"] is True, "v2 was condemned for a crime its predecessor committed"
     assert lic["judged"] == 0                       # its own record starts at zero, and it earns it
     assert "given a real sample" in lic["reason"]
+
+
+async def test_ask_keeps_a_question_a_QUESTION_never_a_promise(actions: Actions) -> None:
+    """THE THIRD VERB (Ra V's taxonomy gap, thread 4d01b076): dispose could ADMIT (a duty,
+    mine) or DROP (never real) but not say 'this is a QUESTION'. Ra V admitted one question
+    (it now reads as a promise it isn't) and dropped another as 'other'. `ask` keeps it
+    open, kind='question', in the seat's name — the same grammar reclassify_thread speaks —
+    and it counts as USE in the yield: the miner surfaced something a seat judged real."""
+    t = await _mined(actions, "thread:xen-mesh",
+                     "should the Xen mesh be the north star for the machine broker?")
+
+    rep = await dispose(actions, source=SEAT, ask=[
+        {"id": str(t)[:8], "because": "a real open question, not a duty",
+         "owner": "operator"}])
+    assert rep["asked"] == 1 and rep["yield"] == 1.0
+
+    row = await actions.pool.fetchrow(
+        "SELECT (SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "        AND name='kind' ORDER BY confidence DESC LIMIT 1) AS kind, "
+        "       (SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "        AND name='status' ORDER BY confidence DESC LIMIT 1) AS status, "
+        "       (SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "        AND name='asked_by') AS asked_by, "
+        "       (SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "        AND name='owner') AS owner", t)
+    assert row["kind"] == "question"        # on the wall AS what it is
+    assert row["status"] == "open"          # never resolved, never retracted
+    assert row["asked_by"] == SEAT          # the seat's word, countable by the meter
+    assert row["owner"] == "operator"       # claimed in the same act
+
+    # signed by a mind -> no longer a candidate; and asking twice is a no-op
+    assert (await candidates(actions.pool))["count"] == 0
+    again = await dispose(actions, source=SEAT, ask=[{"id": str(t)[:8]}])
+    assert again["asked"] == 0 and again["skipped"][0]["why"] == "not a candidate"
+
+    # the licence meter counts the ask as use
+    m = await adversary_yield(actions.pool, current_producer_only=True)
+    assert m["asked"] == 1 and m["yield"] == 1.0

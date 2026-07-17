@@ -127,8 +127,10 @@ async def candidates(
                         "born": r["created_at"].date().isoformat(),
                         "summary": r["summary"]}
                        for r in rows if r["summary"]],
-        "how": "dispose(admit=[{id, because, owner?}], drop=[{id, why, because?}]) — "
-               f"why ∈ {sorted(DROP_CLASSES)}. A guess is not a duty: expect to drop ~9 in 10.",
+        "how": "dispose(admit=[{id, because, owner?}], drop=[{id, why, because?}], "
+               "ask=[{id, because?, owner?}]) — "
+               f"why ∈ {sorted(DROP_CLASSES)}. A guess is not a duty: expect to drop ~9 in 10; "
+               "a real open QUESTION is asked, never admitted into a promise.",
     }
     if total and len(out["candidates"]) < total:
         out["note"] = f"showing the oldest {len(out['candidates'])} of {total}"
@@ -160,6 +162,7 @@ async def dispose(
     actions: Actions, *, source: str,
     admit: list[dict[str, Any]] | None = None,
     drop: list[dict[str, Any]] | None = None,
+    ask: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Settle candidates — relevant or irrelevant, in your own name, with a reason on every one.
 
@@ -172,11 +175,19 @@ async def dispose(
     retracted with a compensating event (never deleted), stays readable, and unwinds with a
     single re-assert.
 
-    Returns what it did, plus this disposal's YIELD — admitted ÷ judged. That number is the
-    adversary's licence: a producer that cannot demonstrate use does not get to spend.
+    `ask`:   [{"id", "because"?, "owner"?}] — the guess is a real OPEN QUESTION, not a duty
+    (Ra V's taxonomy gap, thread 4d01b076: admitting a question makes it read as a promise;
+    dropping it as 'other' buries something real). The row is kept open, reclassified
+    kind='question' in your name — on the wall AS a question, ranked out of the work lanes,
+    exactly as reclassify_thread would do it.
+
+    Returns what it did, plus this disposal's YIELD — (admitted + asked) ÷ judged. That number
+    is the adversary's licence: a producer that cannot demonstrate use does not get to spend;
+    a question a seat found real enough to keep IS use.
     """
     now = datetime.now(UTC)
-    done: dict[str, Any] = {"admitted": 0, "dropped": 0, "skipped": [], "by_class": {}}
+    done: dict[str, Any] = {"admitted": 0, "dropped": 0, "asked": 0, "skipped": [],
+                            "by_class": {}}
 
     for item in admit or []:
         tid = await _resolve(actions.pool, str(item.get("id", "")))
@@ -228,11 +239,37 @@ async def dispose(
         done["dropped"] += 1
         done["by_class"][why] = done["by_class"].get(why, 0) + 1
 
-    judged = done["admitted"] + done["dropped"]
+    for item in ask or []:
+        tid = await _resolve(actions.pool, str(item.get("id", "")))
+        if tid is None:
+            done["skipped"].append({"id": item.get("id"), "why": "unknown id"})
+            continue
+        if not await _is_candidate(actions.pool, tid):
+            done["skipped"].append({"id": item.get("id"), "why": "not a candidate"})
+            continue
+        # A QUESTION IS NOT A PROMISE (thread 4d01b076): kept open, reclassified in the
+        # seat's name — the same grammar reclassify_thread speaks, so every lens that
+        # ranks questions out of the work wall already knows what to do with it.
+        await actions.assert_property(tid, "kind", "question", source, now, _CONF,
+                                      evidence_class=_EC)
+        await actions.assert_property(tid, "status", "open", source, now, _CONF,
+                                      evidence_class=_EC)
+        await actions.assert_property(tid, "asked_by", source, source, now, _CONF,
+                                      evidence_class=_EC)
+        if note := str(item.get("because") or "").strip():
+            await actions.assert_property(tid, "reclassified_because", note, source, now,
+                                          _CONF, evidence_class=_EC)
+        if owner := str(item.get("owner") or "").strip():
+            await actions.assert_property(tid, "owner", owner, source, now, _CONF,
+                                          evidence_class=_EC)
+        done["asked"] += 1
+
+    judged = done["admitted"] + done["dropped"] + done["asked"]
     if judged:
         # THE METER. Not "how much did it make" — how much was USED. The one number that can
-        # falsify a producer, and the one nobody was keeping.
-        done["yield"] = round(done["admitted"] / judged, 3)
+        # falsify a producer, and the one nobody was keeping. A question kept on the wall
+        # counts as use: the miner surfaced something a seat judged real.
+        done["yield"] = round((done["admitted"] + done["asked"]) / judged, 3)
     return done
 
 
@@ -267,17 +304,20 @@ async def adversary_yield(
         scope += _V2_ONLY
     row = await pool.fetchrow(
         "SELECT count(*) FILTER (WHERE a.name='admitted_because') AS admitted, "
-        "       count(*) FILTER (WHERE a.name='retracted_because') AS dropped "
+        "       count(*) FILTER (WHERE a.name='retracted_because') AS dropped, "
+        "       count(*) FILTER (WHERE a.name='asked_by') AS asked "
         "FROM current_assertions a "
         "WHERE a.evidence_class='self_declared' "
-        "  AND a.name IN ('admitted_because','retracted_because') "
+        "  AND a.name IN ('admitted_because','retracted_because','asked_by') "
         "  AND a.observed_at > now() - make_interval(days => $1) " + scope, *args)
     admitted, dropped = int(row["admitted"] or 0), int(row["dropped"] or 0)
-    judged = admitted + dropped
+    asked = int(row["asked"] or 0)
+    judged = admitted + dropped + asked
     out: dict[str, Any] = {"window_days": days, "project": project,
-                           "admitted": admitted, "dropped": dropped, "judged": judged}
+                           "admitted": admitted, "dropped": dropped, "asked": asked,
+                           "judged": judged}
     if judged:
-        out["yield"] = round(admitted / judged, 3)
+        out["yield"] = round((admitted + asked) / judged, 3)
         out["reads"] = ("admitted ÷ judged — the adversary's LICENCE. Osiris's own first pass "
                         "scored 0.098 (26 of 264). Below the floor, it does not get to spend.")
     else:
