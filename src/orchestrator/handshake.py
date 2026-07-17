@@ -156,6 +156,88 @@ async def office_seat(
     return None if (alive or just_minted) else str(head)
 
 
+async def office_claim(
+    actions: Actions, *, cwd: str, agent_id: str, office_root: Path | None = None,
+) -> str | None:
+    """THE FIRST ACT SEATS YOU (the title-generator incident, 16e3cee9): the office door
+    hands a fresh session NOTHING at the greeting — the whisper fires for plumbing
+    (bridge stubs, title generators, bg-spares) exactly as it fires for minds, and at
+    birth there is no evidence to tell them apart. Identity is earned by an act, never
+    granted by a greeting — the heartbeat law, extended to identity. Called from the ACT
+    sites (mount(), the re-attach): a still-anonymous session standing in a seat's office
+    at its first authenticated call IS the seat's next life; the caller mints with
+    mint_reason='office-birth'. A stub never calls, so it can never be crowned."""
+    from src.orchestrator.agents import _generation
+
+    root = office_root or (Path.home() / ".osiris" / "seats")
+    if Path(cwd or "").parent != root:
+        return None
+    base = _generation(agent_id)[0]
+    if await _lineage_handle(actions, base):
+        return None          # already somebody named — never re-earned through this door
+    return await office_seat(actions, cwd=cwd, office_root=office_root)
+
+
+async def ledger_seat(actions: Actions, *, sid_prefix: str) -> str | None:
+    """THE SESSION LEDGER, read side (16e3cee9): a sid, once bound to a soul, is a GRAPH
+    fact — the registry row was the only witness of jobs/a7e60257's owner, so one wrong
+    release orphaned a living mind and the office door crowned its own re-whisper as a
+    false successor. A KNOWN sid REBINDS — to its lineage's living head — and never
+    mints, whatever the registry says. Accepts a full sid or its 8-char anchor form."""
+    from src.orchestrator.agents import _generation
+
+    sid = (sid_prefix or "").strip().lower()
+    if len(sid) < 8:
+        return None
+    owner = await actions.pool.fetchval(
+        "SELECT o.canonical FROM current_assertions a "
+        "JOIN objects o ON o.id=a.object_id AND o.type='Agent' AND o.status='active' "
+        "WHERE a.name='anchor_sid' AND left(a.value #>> '{}', 8) = left($1, 8) "
+        "ORDER BY a.observed_at DESC LIMIT 1", sid)
+    if owner is None:
+        return None
+    base = _generation(str(owner))[0]
+    gens = [str(r["canonical"]) for r in await actions.pool.fetch(
+        "SELECT canonical FROM objects WHERE type='Agent' AND status='active' "
+        "AND (canonical=$1 OR canonical LIKE $1||'-%')", base)]
+    same = [c for c in gens if _generation(c)[0] == base]
+    return max(same, key=lambda c: _generation(c)[1], default=str(owner))
+
+
+async def record_session_anchor(
+    actions: Actions, *, agent_id: str, session_id: str, actor: str,
+) -> bool:
+    """THE SESSION LEDGER, write side: file the sid→soul fact whenever a session binds to
+    a NAMED identity the sid alone could not re-derive. Idempotent (a sid already on any
+    active agent's record files nothing); the self-evident anonymous case (canonical IS
+    the sid hash) is deliberately not written — the ledger holds only what a wiped
+    registry could not reconstruct."""
+    from datetime import UTC, datetime
+
+    from src.orchestrator.agents import _generation
+
+    sid = (session_id or "").strip().lower()
+    if len(sid) < 8:
+        return False
+    if _generation(agent_id)[0] == f"agent:{sid[:8]}":
+        return False          # sid-derived identity: the sid already testifies to itself
+    exists = await actions.pool.fetchval(
+        "SELECT 1 FROM current_assertions a "
+        "JOIN objects o ON o.id=a.object_id AND o.type='Agent' AND o.status='active' "
+        "WHERE a.name='anchor_sid' AND left(a.value #>> '{}', 8) = left($1, 8) LIMIT 1",
+        sid)
+    if exists:
+        return False
+    obj = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Agent' AND status='active'",
+        agent_id)
+    if obj is None:
+        return False
+    await actions.assert_property(obj, "anchor_sid", sid, actor, datetime.now(UTC), 0.9,
+                                  evidence_class="direct_observation")
+    return True
+
+
 async def file_office_deed(
     actions: Actions, *, agent_id: str, cwd: str, actor: str,
     office_root: Path | None = None,
@@ -241,16 +323,22 @@ async def automount(
     viewed = (await view_seat(actions, transcript_path=transcript_path,
                               session_id=session_id, jobs_home=jobs_home)
               if bound is None and forked is None and transcript_path else None)
-    # THE OFFICE BIRTH (the fourth door): a fresh session at a seat's own office IS the
-    # seat's next life — the office is identity evidence; never mint a stranger there.
-    officed = (await office_seat(actions, cwd=cwd, office_root=office_root)
-               if bound is None and forked is None and viewed is None else None)
-    # you can only DIE if you LIVED — and a fork has lived, under its ancestor's name.
-    if source in ("compact", "clear") and (bound is not None or forked is not None):
+    # THE SESSION LEDGER (16e3cee9): a sid the graph has bound to a soul REBINDS —
+    # a wiped registry row can no longer orphan a living mind into a fresh identity.
+    ledgered = (await ledger_seat(actions, sid_prefix=session_id)
+                if bound is None and forked is None and viewed is None else None)
+    # THE OFFICE (the fourth door, re-cut by 16e3cee9): the whisper no longer MINTS here —
+    # it fires for plumbing exactly as for minds, and a title-generator stub was crowned
+    # once. The greeting only HINTS whose office this is; the mint waits for the first
+    # ACT (office_claim at mount()/re-attach). Identity is earned, never granted.
+    office_hint = (await office_seat(actions, cwd=cwd, office_root=office_root)
+                   if bound is None and forked is None and viewed is None
+                   and ledgered is None else None)
+    # you can only DIE if you LIVED — a fork has lived under its ancestor's name, and a
+    # ledgered sid IS a lived mind whatever became of its registry row.
+    if source in ("compact", "clear") and (bound is not None or forked is not None
+                                           or ledgered is not None):
         mint_reason = "compaction" if source == "compact" else "context-clear"
-    elif officed is not None:
-        # a fresh context taking up the seat: the lineage continues, the numeral ticks
-        mint_reason = "office-birth"
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, root=root, project_label=project_label)
     if bound is not None:
         from src.orchestrator.agents import _generation
@@ -264,11 +352,18 @@ async def automount(
     elif viewed is not None:
         # a tab-view of a living session: the window registers as the soul it shows
         ident.agent_id = viewed
-    elif officed is not None:
-        # office-born: the seat's lineage — register_agent mints the next life from it
-        ident.agent_id = officed
+    elif ledgered is not None:
+        # a known sid: the graph remembers who this session IS — rebind, never mint
+        ident.agent_id = ledgered
     await register_agent(actions, ident, actor=actor, expected_model=expected_model,
                          mint_reason=mint_reason)
+    # THE SESSION LEDGER, write side: a named binding is filed the moment it exists, so
+    # no future registry accident can orphan this sid. Fail-open like the deed.
+    try:
+        await record_session_anchor(actions, agent_id=ident.agent_id,
+                                    session_id=session_id, actor=actor)
+    except Exception:  # noqa: BLE001 — the whisper must land whatever the ledger does
+        pass
     # THE DEED SELF-FILES (a2d06410): a claimed seat breathing at its own office writes
     # the durable fact the fourth door reads — a LIVE migration deeds itself the moment
     # the seat walks home; the ceremony deeds the dead. Fail-open: a deed is a bonus at
@@ -402,6 +497,12 @@ async def automount(
         # the tab-view adoption's confession: this whisper fired for a WINDOW onto the
         # named session, and the window registered as that soul — no clone was minted
         **({"view_of": Path(transcript_path or "").name[:8]} if viewed else {}),
+        # the office HINT (16e3cee9): this cwd is a seat's office and the seat is takeable
+        # — but the whisper crowns nobody; the session's first ACT seats it (office_claim)
+        **({"office_of": office_hint,
+            "office_note": "this office belongs to a seat with no live occupant — your "
+                           "first osiris call (mount) seats you as its next life"}
+           if office_hint else {}),
     }
 
 

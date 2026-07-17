@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 from src.actions.core import Actions
-from src.orchestrator.handshake import automount
+from src.orchestrator.handshake import automount, office_claim, record_session_anchor
 from src.orchestrator.mailbox import send_message
 
 SID = "39fb22a2-0000-4000-8000-000000000000"
@@ -329,12 +329,15 @@ async def test_automount_never_adopts_a_sessions_own_transcript(
     assert "view_of" not in out
 
 
-async def test_office_birth_is_the_seats_next_life(actions: Actions, tmp_path: Path) -> None:
-    """THE FOURTH DOOR (operator, 2026-07-16: the first fresh launch at Ra's office woke
-    as anonymous agent:94937cf5 — 'the point of the migration is that i dont have to end
-    the lineage or mint a new agent'). An office is single-tenant by construction, so a
-    fresh session waking there IS the seat's next life; a second fresh context while the
-    seat lives is a GUEST and mints exactly as before (succession is never parallel)."""
+async def test_the_office_crowns_at_the_first_act_never_the_greeting(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """THE FOURTH DOOR, re-cut (16e3cee9, the title-generator incident): the whisper
+    fires for plumbing exactly as for minds, so the GREETING mints nobody — it only
+    HINTS whose office this is. The session's first authenticated ACT (office_claim at
+    mount/re-attach) seats it as the seat's next life; and once the new life is minted,
+    a second claimant is refused (succession is never parallel)."""
+    from src.orchestrator.agents import register_agent, resolve_identity
     from src.orchestrator.mounts import save_mount
 
     root = tmp_path / "projects"
@@ -359,25 +362,37 @@ async def test_office_birth_is_the_seats_next_life(actions: Actions, tmp_path: P
                           actor="analyst:operator", root=root,
                           jobs_home=tmp_path / "jobs", office_root=offices,
                           source="startup")
+    assert out["agent"] == "agent:0f45b117"          # the greeting crowns NOBODY
+    assert out["office_of"] == "agent:0ffab001"      # ...but names whose office this is
 
-    assert out["agent"] == "agent:0ffab001-ii"       # the seat's NEXT LIFE, no stranger
-    assert out["minted"] == "agent:0ffab001"         # succession confessed
-    assert out["seat"] == "Offa II"                  # the numeral ticked
-    # a SECOND fresh context while Offa II's pulse is live: a guest, anonymous as before
+    # THE ACT: the session's first authenticated call claims the seat
+    ident = resolve_identity(cwd=str(office),
+                             job_dir=str(tmp_path / "jobs" / "0f45b117"))
+    claimed = await office_claim(actions, cwd=str(office), agent_id=ident.agent_id,
+                                 office_root=offices)
+    assert claimed == "agent:0ffab001"
+    ident.agent_id = claimed
+    await register_agent(actions, ident, actor="analyst:operator",
+                         mint_reason="office-birth")
+    assert ident.agent_id == "agent:0ffab001-ii"     # the numeral ticked AT THE ACT
+
+    # a SECOND claimant while the new life is just-minted: refused, stays anonymous
     guest_sid = "9ce57000-0000-4000-8000-000000000000"
     guest = await automount(actions, session_id=guest_sid, cwd=str(office),
                             actor="analyst:operator", root=root,
                             jobs_home=tmp_path / "jobs", office_root=offices,
                             source="startup")
     assert guest["agent"] == "agent:9ce57000"        # never a parallel life of the seat
+    assert "office_of" not in guest                  # and no hint dangled at a taken seat
+    assert await office_claim(actions, cwd=str(office), agent_id="agent:9ce57000",
+                              office_root=offices) is None
 
 
-async def test_office_birth_survives_the_seats_death(
+async def test_a_stub_at_the_office_is_never_crowned(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """THE DEED (a2d06410, Ra's case): SessionEnd releases mount rows, so an ENDED seat
-    holds none anywhere — and death is exactly when the fourth door matters. The deed
-    is a graph fact and outlives every row: the door must open from the deed ALONE."""
+    """The title-generator replay (16e3cee9): harness plumbing whispers at a dead seat's
+    office and never acts — however long it sits there, the lineage NEVER ticks."""
     from datetime import UTC, datetime
 
     root = tmp_path / "projects"
@@ -392,16 +407,75 @@ async def test_office_birth_survives_the_seats_death(
                                   evidence_class="self_declared")
     await actions.assert_property(o, "office", str(office), "agent:deed0b01", now, 0.9,
                                   evidence_class="direct_observation")
-    # NO mount row exists for this lineage — the seat died and SessionEnd took the rows
+    # NO mount row for this lineage — the seat is dead; the deed alone names the office
 
-    fresh_sid = "0dead117-0000-4000-8000-000000000000"
-    out = await automount(actions, session_id=fresh_sid, cwd=str(office),
+    stub_sid = "cb083341-0000-4000-8000-000000000000"
+    out = await automount(actions, session_id=stub_sid, cwd=str(office),
                           actor="analyst:operator", root=root,
                           jobs_home=tmp_path / "jobs", office_root=offices,
                           source="startup")
-    assert out["agent"] == "agent:deed0b01-ii"       # the dead seat's NEXT LIFE
-    assert out["minted"] == "agent:deed0b01"         # succession confessed
-    assert out["seat"] == "Deeda II"                 # the numeral ticked
+    assert out["agent"] == "agent:cb083341"          # its own hash, nothing more
+    assert out["office_of"] == "agent:deed0b01"      # the hint fired (deed path, no rows)
+    # the stub never acts — and the lineage never ticked
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' "
+        "AND canonical LIKE 'agent:deed0b01-%'") == 0
+    # a real mind acting from the same office still claims it (the deed alone suffices)
+    claimed = await office_claim(actions, cwd=str(office), agent_id="agent:cb083341",
+                                 office_root=offices)
+    assert claimed == "agent:deed0b01"
+
+
+async def test_a_known_sid_rebinds_from_the_ledger_never_minting(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """THE SESSION LEDGER (the g40-vi replay, 16e3cee9): a named session's registry row
+    is wiped by an accident; its next whisper REBINDS to its lineage from the graph —
+    it neither mints a hash twin nor crowns itself a false successor."""
+    from datetime import UTC, datetime
+
+    root = tmp_path / "projects"
+    o = await actions.create_or_find_object("Agent", "agent:1edece01", "agent:1edece01")
+    now = datetime.now(UTC)
+    await actions.assert_property(o, "handle", "Ledda", "agent:1edece01", now, 0.9,
+                                  evidence_class="self_declared")
+    sid = "77aa88bb-0000-4000-8000-000000000000"
+    wrote = await record_session_anchor(actions, agent_id="agent:1edece01",
+                                        session_id=sid, actor="agent:1edece01")
+    assert wrote is True
+    # the accident: NO mount row anywhere for this sid or this lineage
+
+    _transcript(root, "/w/ledda-repo")
+    out = await automount(actions, session_id=sid, cwd="/w/ledda-repo",
+                          actor="analyst:operator", root=root,
+                          jobs_home=tmp_path / "jobs", source="startup")
+    assert out["agent"] == "agent:1edece01"          # rebound from the ledger
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' "
+        "AND canonical='agent:77aa88bb'") == 0       # no twin was ever minted
+
+
+async def test_the_whisper_files_a_named_binding_on_the_ledger(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """THE SESSION LEDGER, write side: a session bound to a NAMED identity files its
+    sid→soul fact at the whisper, so no future registry accident can orphan it. The
+    self-evident anonymous case (canonical IS the sid hash) files nothing."""
+    from src.orchestrator.mounts import save_mount
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/bind-repo")
+    await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / SID[:8]),
+                     agent_id="agent:0ffab001", project="offahouse",
+                     cwd="/w/bind-repo", model=None, session_key=None)
+    await automount(actions, session_id=SID, cwd="/w/bind-repo",
+                    actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
+                    source="startup")
+    filed = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "JOIN objects o ON o.id=a.object_id "
+        "WHERE a.name='anchor_sid' AND o.canonical='agent:0ffab001'")
+    assert filed == SID                              # the binding is graph memory now
 
 
 async def test_a_seat_walking_home_files_its_own_deed(

@@ -340,8 +340,18 @@ async def _reattach(
         # different lineage — honor it. Re-deriving from the transcript here was the flap
         # that stomped a claimed seat back to its session hash on every silent reconnect.
         ident.agent_id = rec.agent_id
+    # THE FIRST ACT SEATS YOU (16e3cee9): a still-anonymous session standing in a seat's
+    # office earns the seat HERE — at its first authenticated call — never at the whisper
+    # (which fires for title-generator stubs exactly as it fires for minds).
+    mint_reason = None
+    claimed_office = await handshake.office_claim(
+        Actions(pool), cwd=rec.cwd, agent_id=ident.agent_id)
+    if claimed_office is not None:
+        ident.agent_id = claimed_office
+        mint_reason = "office-birth"
     await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
-                         expected_model=await _expected_model(pool, rec.cwd, ident.project))
+                         expected_model=await _expected_model(pool, rec.cwd, ident.project),
+                         mint_reason=mint_reason)
     if key is not None:
         _agents[key] = ident
         _agents_touched[key] = time.monotonic()
@@ -957,8 +967,33 @@ async def mount(
         forked = await handshake.fork_seat(Actions(pool), job_dir=job_dir)
         if forked is not None:
             ident.agent_id = forked
+        else:
+            # THE SESSION LEDGER (16e3cee9): the graph remembers whose sid this is even
+            # after a registry accident — a known anchor REBINDS, never mints a twin.
+            ledgered = await handshake.ledger_seat(
+                Actions(pool), sid_prefix=Path(job_dir).name)
+            if ledgered is not None:
+                ident.agent_id = ledgered
+    # THE FIRST ACT SEATS YOU (16e3cee9): a still-anonymous mind mounting from a seat's
+    # office IS the seat's next life — the mint happens at this act, never at the whisper.
+    mount_mint_reason = None
+    claimed_office = await handshake.office_claim(
+        Actions(pool), cwd=cwd, agent_id=ident.agent_id)
+    if claimed_office is not None:
+        ident.agent_id = claimed_office
+        mount_mint_reason = "office-birth"
     await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
-                         expected_model=await _expected_model(pool, cwd, ident.project))
+                         expected_model=await _expected_model(pool, cwd, ident.project),
+                         mint_reason=mount_mint_reason)
+    if job_dir:
+        # THE SESSION LEDGER, write side (16e3cee9): the anchor form (sid8) suffices —
+        # the ledger keys on the first 8 chars, the harness's own jobs scheme
+        try:
+            await handshake.record_session_anchor(
+                Actions(pool), agent_id=ident.agent_id,
+                session_id=Path(job_dir).name, actor=settings.osiris_actor)
+        except Exception:  # noqa: BLE001 — the ledger is a bonus; the mount never dies of it
+            pass
     if key is not None:
         _prune_agents()  # opportunistic: mount is where churn shows up
         _agents[key] = ident
