@@ -191,6 +191,44 @@ async def test_second_attach_gets_full_replay_while_first_stays_live() -> None:
 
 
 @requires_pty
+async def test_poke_types_one_bracketed_message_and_submits() -> None:
+    """THE POKE (the wake law): a multi-line prompt lands as ONE bracketed paste
+    (ESC[200~ … ESC[201~) followed by CR — the tty's echo puts the typed bytes in the
+    ring, so the poke is witnessed by the same scrollback every face replays."""
+    session = await PtySession.spawn(["sh", "-c", "echo ready; cat"])
+    try:
+        await _await_in_ring(session, b"ready")
+        session.poke("new mail waiting\ninbox() and settle it")
+        await _await_in_ring(session, b"settle it")
+        replay, queue = session.attach()
+        try:
+            # the echo renders ESC as caret notation (^[), so match the marker's tail —
+            # present either way: one paste envelope, not N separately-submitted lines
+            assert b"[200~" in replay and b"[201~" in replay
+            assert b"new mail waiting" in replay
+        finally:
+            session.detach(queue)
+    finally:
+        await session.close()
+
+
+@requires_pty
+async def test_idle_seconds_is_reset_by_output() -> None:
+    """The busy-signal for the poke gate: output (streaming, or the echo of typing) resets
+    the idle clock; silence grows it. Coarse bounds only — this is a clock, not a stopwatch."""
+    session = await PtySession.spawn(["sh", "-c", "echo hello; cat"])
+    try:
+        await _await_in_ring(session, b"hello")
+        await asyncio.sleep(0.6)
+        assert session.idle_seconds >= 0.5      # silence accrued
+        session.write(b"tick\n")
+        await _await_in_ring(session, b"tick")  # the echo is output — the clock resets
+        assert session.idle_seconds < 0.5
+    finally:
+        await session.close()
+
+
+@requires_pty
 async def test_detach_leaves_the_child_running() -> None:
     session = await PtySession.spawn(["sh", "-c", "echo hello; cat"])
     try:

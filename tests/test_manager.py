@@ -101,6 +101,21 @@ async def _connect(path: Path) -> _Client:
     return _Client(reader, writer)
 
 
+async def _await_marker(session: Any, needle: bytes) -> None:
+    """Waits for `needle` in a broker session's stream (or its replay) — the same
+    observable-state discipline as `test_pty_broker._await_in_ring`: never a sleep."""
+    replay, queue = session.attach()
+    try:
+        buf = bytearray(replay)
+        async with asyncio.timeout(2.0):
+            while needle not in buf:
+                chunk = await queue.get()
+                assert chunk is not None, "session exited before the marker appeared"
+                buf.extend(chunk)
+    finally:
+        session.detach(queue)
+
+
 # --- a tiny client for the pty_attach handshake + the framed protocol it hands off into ---
 
 
@@ -464,13 +479,67 @@ async def test_pty_spawn_then_list_shows_it_and_rejects_a_name_collision(
             assert manager._broker.get("s1") is not None  # the original session, untouched
 
             listed = await client.send({"op": "pty_list"})
-            assert listed == {
-                "sessions": [
-                    {"name": "s1", "alive": True, "rows": 24, "cols": 80, "attach_count": 0}]}
+            assert len(listed["sessions"]) == 1
+            row = listed["sessions"][0]
+            assert (row["name"], row["alive"], row["rows"], row["cols"],
+                    row["attach_count"]) == ("s1", True, 24, 80, 0)
+            assert row["idle_seconds"] >= 0  # the poke gate's busy-signal, always present
 
             closed = await client.send({"op": "pty_close", "name": "s1"})
             assert closed == {"closed": "s1"}
             assert await client.send({"op": "pty_list"}) == {"sessions": []}
+        finally:
+            await client.close()
+    finally:
+        await manager.close()
+
+
+@requires_pty
+async def test_pty_poke_types_a_turn_with_idle_gate_and_dedup(tmp_path: Path) -> None:
+    """THE WAKE LAW's op (Stage A+C of the wake arc): pty_poke types one message into the
+    EXISTING window. Policy lives at the daemon — `min_idle_secs` refuses a busy window
+    ('busy': true, so the trigger falls through its ladder instead of typing into someone's
+    sentence), `dedup` makes one mail-cause poke at most once per window, and the window's
+    metadata (job_dir, recorded at spawn) is what the trigger routes by."""
+    manager = Manager(
+        socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
+        runner=_make_runner())
+    await manager.start()
+    try:
+        client = await _connect(manager._socket_path)
+        try:
+            spawned = await client.send(
+                {"op": "pty_spawn", "name": "w1", "argv": ["sh", "-c", "echo ready; cat"],
+                 "job_dir": "/x/jobs/beefcafe"})
+            assert spawned == {"spawned": "w1"}
+            session = manager._broker.get("w1")
+            assert session is not None
+            await _await_marker(session, b"ready")
+
+            # the window's metadata rides pty_list — the trigger's routing table
+            listed = await client.send({"op": "pty_list"})
+            assert listed["sessions"][0]["job_dir"] == "/x/jobs/beefcafe"
+
+            # a window that just printed is BUSY under a strict idle gate — refused, flagged
+            busy = await client.send(
+                {"op": "pty_poke", "name": "w1", "text": "hold on", "min_idle_secs": 3600})
+            assert busy.get("busy") is True and "error" in busy
+
+            # without the gate the poke types the turn (witnessed by the ring's echo)...
+            poked = await client.send(
+                {"op": "pty_poke", "name": "w1", "text": "mail for you", "dedup": "msg:777"})
+            assert poked.get("poked") == "w1"
+            await _await_marker(session, b"mail for you")
+
+            # ...and the SAME cause never types twice, however often the tick re-fires
+            again = await client.send(
+                {"op": "pty_poke", "name": "w1", "text": "mail for you", "dedup": "msg:777"})
+            assert again == {"poked": "w1", "deduped": True}
+
+            # loud refusals: unknown window, empty text
+            assert "error" in await client.send(
+                {"op": "pty_poke", "name": "nope", "text": "x"})
+            assert "error" in await client.send({"op": "pty_poke", "name": "w1", "text": " "})
         finally:
             await client.close()
     finally:

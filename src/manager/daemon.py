@@ -36,6 +36,7 @@ import logging
 import os
 import shutil
 import signal
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -80,6 +81,9 @@ _PROBE_TIMEOUT = 2.0
 # (the unit's OOMScoreAdjust=-900 stands guard beneath this).
 _PTY_DEFAULT_RAM_BYTES = 8 * 1024**3
 _PTY_DEFAULT_IO_WEIGHT = 50
+
+# poke dedup keys remembered per window — enough for a day of mail causes; oldest pruned
+_POKE_DEDUP_KEEP = 256
 
 
 def _pty_scope_unit(name: str) -> str:
@@ -249,6 +253,13 @@ class Manager:
         # side-effect-free (no fd, no child, no event-loop registration happens until
         # `spawn()`), so it is safe to build here unconditionally, same as `self._provider`.
         self._broker = PtyBroker()
+        # WINDOW METADATA, keyed by pty name (the wake arc's Stage B): which seat/anchor a
+        # window hosts, recorded at pty_spawn so the trigger can route a poke to the right
+        # window. Policy state, deliberately here and not in the broker (mechanism only).
+        self._pty_meta: dict[str, dict[str, str]] = {}
+        # poke dedup, keyed by pty name → {dedup key: monotonic-when} — one poke per cause
+        # (a message id), bounded per window (_POKE_DEDUP_KEEP), pruned oldest-first.
+        self._poke_seen: dict[str, dict[str, float]] = {}
         self._scream = ScreamState()
         self._started_at = datetime.now(UTC)
         self._server: asyncio.Server | None = None
@@ -397,6 +408,8 @@ class Manager:
             return self._op_pty_list()
         if op == "pty_close":
             return await self._op_pty_close(req.get("name"))
+        if op == "pty_poke":
+            return self._op_pty_poke(req)
         return {"error": f"unknown op: {op!r}"}
 
     def _op_status(self) -> dict[str, Any]:
@@ -499,6 +512,17 @@ class Manager:
                 return {"error": f"pty child could not be bounded ({fail}) — under the "
                                  "sacred proc a child is born bounded or not at all; "
                                  "session closed"}
+        # WINDOW METADATA (Stage B of the wake arc): remember which anchor/seat this window
+        # hosts, so the trigger can route mail to the EXISTING window (pty_poke) instead of
+        # resuming a second process wearing the same session.
+        meta: dict[str, str] = {}
+        job_dir = req.get("job_dir")
+        if isinstance(job_dir, str) and job_dir:
+            meta["job_dir"] = job_dir
+        if seated is not None:
+            meta["seat_id"] = seated["seat_id"]
+        if meta:
+            self._pty_meta[name] = meta
         out: dict[str, Any] = {"spawned": name}
         if seated is not None:
             out["seat_id"] = seated["seat_id"]
@@ -542,7 +566,9 @@ class Manager:
         return {
             "sessions": [
                 {"name": info.name, "alive": info.alive, "rows": info.rows, "cols": info.cols,
-                 "attach_count": info.attach_count}
+                 "attach_count": info.attach_count,
+                 "idle_seconds": round(info.idle_seconds, 1),
+                 **self._pty_meta.get(info.name, {})}
                 for info in self._broker.list()
             ]
         }
@@ -553,7 +579,43 @@ class Manager:
         if self._broker.get(name) is None:
             return {"error": f"unknown pty session: {name}"}
         await self._broker.close(name)
+        self._pty_meta.pop(name, None)
+        self._poke_seen.pop(name, None)
         return {"closed": name}
+
+    def _op_pty_poke(self, req: dict[str, Any]) -> dict[str, Any]:
+        """{"op": "pty_poke", "name": .., "text": .., "dedup": ..?, "min_idle_secs": ..?} —
+        THE WAKE LAW's turn-in-the-existing-window: type `text` into the named window as its
+        next input (bracketed paste + CR; the broker owns the bytes). Policy lives HERE:
+        `min_idle_secs` refuses a busy window ('busy': true in the refusal, so the caller can
+        fall through its ladder instead of typing into someone's sentence), and `dedup` (a
+        message id) makes one cause poke at most once per window, ever — a re-fired trigger
+        tick answers `deduped` instead of double-typing."""
+        name = req.get("name")
+        if not isinstance(name, str) or not name:
+            return {"error": "pty_poke requires a string 'name'"}
+        text = req.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return {"error": "pty_poke requires a non-empty string 'text'"}
+        session = self._broker.get(name)
+        if session is None:
+            return {"error": f"unknown pty session: {name}"}
+        if session.returncode is not None:
+            return {"error": f"pty session {name} has exited", "exited": True}
+        dedup = req.get("dedup")
+        seen = self._poke_seen.setdefault(name, {})
+        if isinstance(dedup, str) and dedup and dedup in seen:
+            return {"poked": name, "deduped": True}
+        min_idle = req.get("min_idle_secs")
+        if isinstance(min_idle, int | float) and session.idle_seconds < float(min_idle):
+            return {"error": f"window busy — idle {session.idle_seconds:.0f}s < "
+                             f"required {float(min_idle):.0f}s", "busy": True}
+        if isinstance(dedup, str) and dedup:
+            seen[dedup] = time.monotonic()
+            while len(seen) > _POKE_DEDUP_KEEP:  # bounded memory: oldest cause forgotten
+                seen.pop(min(seen, key=seen.__getitem__))
+        session.poke(text)
+        return {"poked": name, "idle_seconds": round(session.idle_seconds, 1)}
 
     async def _op_pty_attach(
         self, req: dict[str, Any], reader: asyncio.StreamReader, writer: asyncio.StreamWriter,

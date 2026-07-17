@@ -67,6 +67,7 @@ import os
 import signal
 import struct
 import termios
+import time
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -186,6 +187,7 @@ class PtySession:
         self._out_buf = bytearray()
         self._reader_installed = False
         self._writer_installed = False
+        self._last_output_at = time.monotonic()  # birth counts as activity (idle starts at 0)
         self._loop = asyncio.get_running_loop()
         self._loop.add_reader(self._master_fd, self._on_readable)
         self._reader_installed = True
@@ -250,6 +252,7 @@ class PtySession:
                 data = os.read(self._master_fd, _READ_CHUNK)
                 if not data:  # EOF proper — not the common case (see EIO above) but honored
                     return False
+                self._last_output_at = time.monotonic()  # any output = the window is busy
                 self._ring.append(data)
                 self._fanout(data)
                 if budget is not None:
@@ -318,6 +321,17 @@ class PtySession:
         if not self._writer_installed:
             self._loop.add_writer(self._master_fd, self._on_writable)
             self._writer_installed = True
+
+    def poke(self, text: str) -> None:
+        """THE POKE (the wake law's turn-in-the-existing-window): type one message into the
+        session as its next input. Bracketed paste (ESC[200~ … ESC[201~) so a multi-line
+        prompt lands as ONE pasted block instead of N separately-submitted lines — every
+        modern line editor including claude's TUI honors it — then CR to submit. Pure
+        mechanism: WHO may poke WHEN (idle gates, dedup, budget) is the daemon's policy,
+        exactly like spawn ceilings."""
+        body = text.rstrip("\n").encode()
+        if body:
+            self.write(b"\x1b[200~" + body + b"\x1b[201~\r")
 
     def _on_writable(self) -> None:
         try:
@@ -413,6 +427,13 @@ class PtySession:
     @property
     def ring_bytes(self) -> int:
         return len(self._ring)
+
+    @property
+    def idle_seconds(self) -> float:
+        """Seconds since the child last produced output. Output is the honest busy-signal:
+        a streaming turn prints, and a human typing produces echo — both reset this. A
+        window whose idle is long is safe to poke without typing into anyone's sentence."""
+        return time.monotonic() - self._last_output_at
 
     async def close(self, *, grace: float = 2.0) -> None:
         """Terminates the child (SIGHUP, then SIGKILL after `grace` seconds if it ignored the
@@ -637,6 +658,7 @@ class SessionInfo:
     cols: int
     ring_bytes: int
     attach_count: int
+    idle_seconds: float
 
 
 class PtyBroker:
@@ -670,7 +692,8 @@ class PtyBroker:
             SessionInfo(
                 name=name, alive=session.returncode is None, rows=session.rows,
                 cols=session.cols, ring_bytes=session.ring_bytes,
-                attach_count=session.attach_count)
+                attach_count=session.attach_count,
+                idle_seconds=session.idle_seconds)
             for name, session in self._sessions.items()
         ]
 
