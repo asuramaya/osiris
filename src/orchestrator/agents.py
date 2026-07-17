@@ -603,23 +603,33 @@ async def _link_once(
 
 
 async def lineage_head(pool: asyncpg.Pool, canonical: str) -> str:
-    """Follow winning `succeeded_by` pointers to the newest generation. A session-keyed resolve
-    always lands on the BASE id (the transcript knows nothing of minting); the lineage decides
-    who that name is NOW. Cycle-guarded; a missing object ends the walk. Pool-based so the
-    liveness promotion (which has no Actions) can walk it too — a mount row must follow its
-    lineage head, or a superseded generation reads as a live co-agent of its own descendant."""
+    """Follow winning `succeeded_by` pointers to the newest ACTIVE generation. A session-keyed
+    resolve always lands on the BASE id (the transcript knows nothing of minting); the lineage
+    decides who that name is NOW. Cycle-guarded; a missing object ends the walk. Pool-based so
+    the liveness promotion (which has no Actions) can walk it too — a mount row must follow its
+    lineage head, or a superseded generation reads as a live co-agent of its own descendant.
+
+    MERGED GENERATIONS ARE NOT HEADS (the phantom disposition, 2026-07-17): a false successor
+    folded away by the operator keeps its succeeded_by pointer on the record (append-only),
+    so the walk still traverses it — but the HEAD is the last generation still standing.
+    Without this, every resolution walked back into the graveyard the merge had just closed."""
     seen = {canonical}
     cur = canonical
+    head = canonical
     for _ in range(64):
         nxt = await pool.fetchval(
             "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
             "WHERE o.canonical=$1 AND o.type='Agent' AND a.name='succeeded_by' "
             "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", cur)
         if not nxt or nxt in seen:
-            return cur
+            return head
         seen.add(nxt)
         cur = str(nxt)
-    return cur
+        active = await pool.fetchval(
+            "SELECT status='active' FROM objects WHERE canonical=$1 AND type='Agent'", cur)
+        if active:
+            head = cur
+    return head
 
 
 @asynccontextmanager

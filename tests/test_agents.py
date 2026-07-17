@@ -968,3 +968,35 @@ def test_mount_stays_silent_on_a_seam_it_cannot_confidently_date() -> None:
                               model="claude-fable-5", cwd="/w/x", model_method="job_dir",
                               model_succession=" → claude-fable-5")
     assert _seam_confidently_dated(malformed) is False
+
+
+async def test_lineage_head_never_lands_on_a_merged_generation(actions: Actions) -> None:
+    """The phantom disposition (2026-07-17): the operator merged false successors away,
+    but their succeeded_by pointers survive (append-only) — the walk must return the
+    last ACTIVE generation, never the graveyard's end. A merged generation mid-chain is
+    traversed but never returned."""
+    from src.orchestrator.agents import lineage_head
+
+    now = datetime.now(UTC)
+    a1 = await actions.create_or_find_object("Agent", "agent:11c0ffee", "agent:11c0ffee")
+    a2 = await actions.create_or_find_object("Agent", "agent:11c0ffee-ii",
+                                             "agent:11c0ffee-ii")
+    a3 = await actions.create_or_find_object("Agent", "agent:11c0ffee-iii",
+                                             "agent:11c0ffee-iii")
+    await actions.assert_property(a1, "succeeded_by", "agent:11c0ffee-ii",
+                                  "agent:11c0ffee", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(a2, "succeeded_by", "agent:11c0ffee-iii",
+                                  "agent:11c0ffee", now, 0.9,
+                                  evidence_class="self_declared")
+    assert await lineage_head(actions.pool, "agent:11c0ffee") == "agent:11c0ffee-iii"
+    # the operator folds the false successor away: the head walks back to the standing
+    await actions.merge_objects(a2, a3, "false successor (phantom disposition)",
+                                "agent:test")
+    assert await lineage_head(actions.pool, "agent:11c0ffee") == "agent:11c0ffee-ii"
+    # a merged generation mid-chain is traversed, never returned
+    await actions.create_or_find_object("Agent", "agent:11c0ffee-iv", "agent:11c0ffee-iv")
+    await actions.assert_property(a3, "succeeded_by", "agent:11c0ffee-iv",
+                                  "agent:11c0ffee", now, 0.9,
+                                  evidence_class="self_declared")
+    assert await lineage_head(actions.pool, "agent:11c0ffee") == "agent:11c0ffee-iv"
