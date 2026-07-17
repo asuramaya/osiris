@@ -922,7 +922,37 @@ async def mount(
     # by-the-book mount is durable + resolved instead of silently degrading to the cwd-guess
     # (a-sibling's first mount: unresolved identity, no registry row, invisible to the
     # trigger's owner-liveness — the wake lane would have minted a twin over a LIVE tab).
-    job_dir = _sane_job_dir(job_dir) or _job_hint(ctx)
+    passed = _sane_job_dir(job_dir)
+    own_anchor = _sane_job_dir(session_anchor)  # hook-injected: the caller's OWN session
+    # THE CONFLICT REFUSAL (thread 53b1f267, Ferryman V's collision): after a machine
+    # death the whisper vended a STALE anchor from a dead sibling's session, and the
+    # mount that followed seated one mind in another's history — writes interleaving
+    # into a sibling's lineage. A passed anchor that differs from the session's own is
+    # LEGITIMATE when wearing a seat (the binding, 33838160) — but when the ledger
+    # knows BOTH sids and they resolve to DIFFERENT souls, this is an identity
+    # collision, and the tool can say the sentence: refuse loudly with both names,
+    # never silently rebind. No writes happen on a refusal.
+    if (passed and own_anchor
+            and Path(passed).name[:8] != Path(own_anchor).name[:8]):
+        anchor_soul = await handshake.ledger_seat(
+            Actions(pool), sid_prefix=Path(passed).name)
+        own_soul = await handshake.ledger_seat(
+            Actions(pool), sid_prefix=Path(own_anchor).name)
+        if (anchor_soul and own_soul
+                and _generation(anchor_soul)[0] != _generation(own_soul)[0]):
+            return {
+                "error": "IDENTITY CONFLICT — mount refused",
+                "anchor_held_by": anchor_soul,
+                "you_are": own_soul,
+                "note": (f"the anchor you passed ({Path(passed).name[:8]}) is held by "
+                         f"{anchor_soul}, but this session's own ledger entry "
+                         f"({Path(own_anchor).name[:8]}) names {own_soul} — mounting "
+                         "would seat one mind in another's history. If you MEANT to "
+                         "wear that seat, the holder must release it (retire/fold) "
+                         "first; otherwise re-mount with your own anchor: "
+                         f"job_dir='{own_anchor}'"),
+            }
+    job_dir = passed or _job_hint(ctx)
     key = _conn_key(ctx)
     claimed = None
     if job_dir is None:  # the cwd-guess path — refuse sids a LIVE mount already holds

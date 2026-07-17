@@ -400,3 +400,42 @@ async def test_retire_will_not_let_the_pile_LEAVE_QUIETLY(actions: Actions, tmp_
     assert out["retired"] == "agent:leaver", "the farewell must ALWAYS be allowed to complete"
     assert out["undisposed"] == 1
     assert "not to the human" in out["you_are_leaving_a_pile"]
+
+
+async def test_mount_refuses_an_identity_conflict_loudly(actions: Actions,
+                                                         tmp_path) -> None:
+    """THE CONFLICT REFUSAL (thread 53b1f267, Ferryman V's collision): a mount whose
+    passed anchor is ledgered to ONE soul while the session's own anchor is ledgered to
+    ANOTHER would seat one mind in a sibling's history — refuse loudly with both names,
+    write nothing. A foreign anchor with an UNLEDGERED own sid stays legitimate (the
+    deliberate binding, 33838160)."""
+    from datetime import UTC, datetime
+
+    from src import mcp_server as srv
+
+    now = datetime.now(UTC)
+    ferry = await actions.create_or_find_object("Agent", "agent:fe44a001", "agent:fe44a001")
+    await actions.assert_property(ferry, "handle", "Ferry", "agent:fe44a001", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(ferry, "anchor_sid:aaaa1111", "aaaa1111", "agent:fe44a001",
+                                  now, 0.9, evidence_class="direct_observation")
+    halcy = await actions.create_or_find_object("Agent", "agent:ha1c0001", "agent:ha1c0001")
+    await actions.assert_property(halcy, "handle", "Halcy", "agent:ha1c0001", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(halcy, "anchor_sid:bbbb2222", "bbbb2222", "agent:ha1c0001",
+                                  now, 0.9, evidence_class="direct_observation")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(tmp_path),
+                              job_dir=str(tmp_path / "jobs" / "bbbb2222"),
+                              session_anchor=str(tmp_path / "jobs" / "aaaa1111"))
+    finally:
+        srv._pool = saved_pool
+    assert "IDENTITY CONFLICT" in out.get("error", "")
+    assert out["anchor_held_by"] == "agent:ha1c0001"     # the sentence names the holder
+    assert out["you_are"] == "agent:fe44a001"            # ...and the caller
+    assert "aaaa1111" in out["note"]                     # ...and the way home
+    # NO WRITES on a refusal: the sibling's anchor row was never touched or created
+    assert await mounts.find_mount(
+        actions.pool, job_dir=str(tmp_path / "jobs" / "bbbb2222")) is None
