@@ -344,14 +344,26 @@ async def follow_binding(
     actions: Actions, *, ancestor_oid: uuid.UUID, heir: str, heir_oid: uuid.UUID,
     now: datetime,
 ) -> None:
-    """The binding follows the lineage head (mint_heir's hook): every Seat the ancestor
+    """The binding follows the lineage head (mint_heir's hook): every Seat the LINEAGE
     actively holds re-links to the heir — the old link heals by valid_until, the seat's
     holder history stays walkable, and seat-addressed anything keeps reaching whoever the
-    mind is NOW. No seat, no-op."""
+    mind is NOW. No seat, no-op.
+
+    LINEAGE-WIDE (Ra's stranded seat, 2026-07-17): the churn can leave the active holds
+    link on a FOLDED SIBLING rather than the direct ancestor — the mint from the living
+    head then found nothing to move, and Atlas's DM to the seat rotted on a grave. Any
+    active holds link anywhere in the heir's lineage (or on the explicit ancestor, which
+    a cross-base succession may place outside it) re-links to the heir."""
+    from src.orchestrator.agents import _generation
+
+    base = _generation(heir)[0]
     seats = await actions.pool.fetch(
-        "SELECT l.to_id FROM links l WHERE l.from_id=$1 AND l.type='holds' "
-        "AND (l.valid_until IS NULL OR l.valid_until > now())", ancestor_oid)
+        "SELECT l.from_id, l.to_id FROM links l JOIN objects hf ON hf.id=l.from_id "
+        "WHERE l.type='holds' AND l.from_id <> $3 "
+        "AND (l.from_id=$1 OR hf.canonical=$2 OR hf.canonical LIKE $2 || '-%') "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())",
+        ancestor_oid, base, heir_oid)
     for r in seats:
-        await actions.invalidate_link(ancestor_oid, r["to_id"], "holds", heir, now)
+        await actions.invalidate_link(r["from_id"], r["to_id"], "holds", heir, now)
         await actions.create_link(heir_oid, r["to_id"], "holds", heir, now, _CONF,
                                   evidence_class=_EC)

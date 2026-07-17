@@ -46,16 +46,22 @@ async def _deliverable(project: str, session_id: str) -> tuple[int, list[str], i
             return 0, None
         # `m.from_agent <> $1` on the broadcast leg: THE SELF-ECHO (Metron V, msgs 444/446) —
         # without it this hook BLOCKED a turn to make an agent read its own outbound, six
-        # times in one night. Mirrors mailbox._DELIVERABLE_TO_READER; keep them in step.
+        # times in one night. Mirrors mailbox._DELIVERABLE_TO_READER; keep them in step —
+        # including THE ROLLUP: a DM parked on any generation of the reader's lineage is
+        # the reader's (the base strips a trailing roman suffix, agents._generation's rule).
+        me = str(row["agent_id"])
+        root, sep, suffix = me.rpartition("-")
+        base = root if sep and root and suffix and set(suffix) <= set("ivxlcdm") else me
         n_row = await conn.fetchrow(
             "SELECT count(*) AS n, array_agg(DISTINCT m.from_agent) AS senders "
             "FROM fleet_messages m "
             "LEFT JOIN message_recipients r ON r.message_id=m.id AND r.agent_id=$1 "
             "WHERE ((m.to_agent=$1) "
+            "   OR (m.to_agent = $4 OR m.to_agent LIKE $4 || '-%') "
             "   OR (m.to_project=$2 AND m.to_agent IS NULL AND m.from_agent <> $1)) "
             "AND m.read_at IS NULL AND r.read_at IS NULL "
             "AND (r.delivered_at IS NULL OR r.delivered_at < now() - make_interval(secs => $3))",
-            row["agent_id"], project, STOP_GRACE_SECS)
+            row["agent_id"], project, STOP_GRACE_SECS, base)
         n = int(n_row["n"]) if n_row else 0
         senders = [s for s in (n_row["senders"] or []) if s] if n_row else []
         return n, senders, row["context_window_size"]

@@ -209,7 +209,11 @@ async def fleet_pulse(
     chrome the operator can't see."""
     r = await pool.fetchrow(
         "SELECT "
-        " (SELECT count(*) FROM agent_mounts "
+        # SOULS, NOT DOORS (operator, 2026-07-17: 'fleet is showing 7 agents when really
+        # its 4 live'): a seat with three rows — its anchor, a tab-view, a resume bridge —
+        # is ONE agent; the pulse counts distinct lineage bases (the roman suffix strips)
+        " (SELECT count(DISTINCT regexp_replace(agent_id, '-[ivxlcdm]+$', '')) "
+        "   FROM agent_mounts "
         "   WHERE last_seen > now() - make_interval(secs => $2)) AS live, "
         " (SELECT count(*) FROM fleet_messages m WHERE m.to_project='operator' "
         "   AND m.to_agent IS NULL AND m.read_at IS NULL "

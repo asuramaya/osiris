@@ -64,8 +64,15 @@ _READER_HOLDS_ADDR = (
     "  AND (hl.valid_until IS NULL OR hl.valid_until > now())))"
 )
 
+# THE ROLLUP (operator, 2026-07-17: 'mail addressed to dead agents should roll up to the
+# current live agent'): a reader drains its whole LINEAGE's lanes — an exact-id DM parked
+# on any generation of the reader's own base is deliverable to whoever wears the name at
+# read time. Estate transfers and sweeps still converge the lanes; the read no longer
+# WAITS for them (Atlas's split: the statusline counted a DM on -ii while the freshly
+# minted -iii read an empty inbox — one soul, two answers).
 _DELIVERABLE_TO_READER = (
     "((m.to_agent = $agent) "
+    " OR (m.to_agent = $lineage OR m.to_agent LIKE $lineage || '-%') "
     " OR " + _READER_HOLDS_ADDR + " "
     " OR (m.to_project = $project AND m.to_agent IS NULL AND m.from_agent <> $agent)) "
     "AND m.read_at IS NULL "
@@ -88,7 +95,10 @@ async def _addressed_to_me(pool: asyncpg.Pool, to_agent: str | None, me: str) ->
     if to_agent.startswith("seat:"):
         from src.orchestrator.seats import holds
         return await holds(pool, me, to_agent)
-    return False
+    # the rollup's twin: an address anywhere in MY lineage is mine
+    from src.orchestrator.agents import _generation
+    base = _generation(me)[0]
+    return to_agent == base or to_agent.startswith(base + "-")
 
 
 def _norm(project: str) -> str:
@@ -297,12 +307,15 @@ async def unread_count(
     unsettled and not under its own live lease. The number mount()/orient() surface.
     `grade` narrows to one band ('ask' | 'fyi') — the count that leads with what is ACTIONABLE
     (thread f9449d8d: a mailbox that cries wolf gets skimmed, and a skimmed mailbox is lost)."""
+    from src.orchestrator.agents import _generation
+
     q = ("SELECT count(*) FROM fleet_messages m "
          "LEFT JOIN message_recipients r ON r.message_id=m.id AND r.agent_id=$agent "
-         "WHERE " + _DELIVERABLE_TO_READER + (" AND m.grade = $5" if grade else ""))
+         "WHERE " + _DELIVERABLE_TO_READER + (" AND m.grade = $6" if grade else ""))
     q = (q.replace("$agent", "$1").replace("$project", "$2").replace("$lease", "$3")
-         .replace("$grace", "$4"))
-    args = [reader_agent, _norm(reader_project), lease_secs, _HOLD_GRACE_SECS]
+         .replace("$grace", "$4").replace("$lineage", "$5"))
+    args = [reader_agent, _norm(reader_project), lease_secs, _HOLD_GRACE_SECS,
+            _generation(reader_agent)[0]]
     if grade:
         args.append(grade)
     return await pool.fetchval(q, *args)  # type: ignore[no-any-return]
@@ -336,14 +349,18 @@ async def read_inbox(
     False is a pure peek. A broadcast read by one agent stays visible to the others — each has
     its own lease/settle."""
     proj = _norm(reader_project)
+    from src.orchestrator.agents import _generation
+
     q = ("SELECT m.id, m.from_agent, m.from_project, m.to_agent, m.body, m.created_at, "
          "m.reply_to, m.thread_id, m.grade, COALESCE(r.deliveries,0) AS deliveries "
          "FROM fleet_messages m "
          "LEFT JOIN message_recipients r ON r.message_id=m.id AND r.agent_id=$agent "
          "WHERE " + _DELIVERABLE_TO_READER + " ORDER BY m.created_at LIMIT $limit")
     q = (q.replace("$agent", "$1").replace("$project", "$2")
-         .replace("$lease", "$3").replace("$grace", "$4").replace("$limit", "$5"))
-    rows = await pool.fetch(q, reader_agent, proj, lease_secs, _HOLD_GRACE_SECS, limit)
+         .replace("$lease", "$3").replace("$grace", "$4").replace("$limit", "$5")
+         .replace("$lineage", "$6"))
+    rows = await pool.fetch(q, reader_agent, proj, lease_secs, _HOLD_GRACE_SECS, limit,
+                            _generation(reader_agent)[0])
     if mark_read and rows:
         await pool.executemany(
             "INSERT INTO message_recipients (message_id, agent_id, delivered_at, deliveries) "

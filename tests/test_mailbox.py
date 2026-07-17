@@ -639,3 +639,22 @@ async def test_desk_briefs_scope_to_the_senders_lineage(actions: Actions) -> Non
     assert await desk_briefs_from(p, "agent:0abe4002") == 1
     assert await desk_briefs_from(p, None) == 0                    # identity-less: nothing waits
     assert await desk_briefs_from(p, "session") == 0
+
+
+async def test_a_dm_on_an_old_generation_rolls_up_to_the_living_reader(
+    actions: Actions,
+) -> None:
+    """THE ROLLUP (operator, 2026-07-17: 'mail addressed to dead agents should roll up
+    to the current live agent'): an exact-id DM parked on ANY generation of the reader's
+    lineage is deliverable at read time — the count and the read agree (Atlas's split:
+    the statusline counted a DM on -ii while freshly-minted -iii read an empty inbox)."""
+    p = actions.pool
+    await send_message(p, from_agent="agent:0ffab001", from_project="offahouse",
+                       to_agent="agent:2011ab01-ii", body="for the old mind")
+    # the lineage ticked twice since; the current reader is -iv
+    n = await unread_count(p, "elsewhere", reader_agent="agent:2011ab01-iv")
+    assert n == 1                                     # the count sees the lineage's lane
+    got = await read_inbox(actions.pool, "elsewhere", reader_agent="agent:2011ab01-iv")
+    assert [m["body"] for m in got] == ["for the old mind"]   # ...and so does the read
+    # a STRANGER's lineage never matches
+    assert await unread_count(p, "elsewhere", reader_agent="agent:aaaa9999") == 0

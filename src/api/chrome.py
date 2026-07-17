@@ -367,6 +367,20 @@ async def mail_overview(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     for r in rows:
         d = dict(r)
         box = str(d["box"])
+        if box.startswith("@seat:"):
+            # a seat lane is DURABLE — it wears its current holder's name, never folds
+            holder = await pool.fetchval(
+                "SELECT hf.canonical FROM links l "
+                "JOIN objects hf ON hf.id=l.from_id JOIN objects ht ON ht.id=l.to_id "
+                "WHERE l.type='holds' AND ht.canonical=$1 "
+                "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+                "ORDER BY l.first_seen DESC NULLS LAST LIMIT 1", box[1:])
+            if holder:
+                box = "@" + await living_head(pool, str(holder))
+                d["seat_lane"] = True
+            else:
+                out.append(d)
+                continue
         if box.startswith("@agent:"):
             lane = box[1:]
             head = await living_head(pool, lane)
@@ -425,6 +439,8 @@ def render_mail_overview(boxes: list[dict[str, Any]]) -> str:
     def label_cell(b: dict[str, Any]) -> str:
         # an agent lane wears its soul's name; a superseded address confesses staleness
         name = f"@{b['soul']}" if b.get("soul") else str(b["box"])
+        if b.get("seat_lane"):
+            name += " · seat"
         cell = f'<a href="/mail?box={_e(str(b["box"]))}">{_e(name)}</a>'
         if b.get("soul"):
             cell += f' <span class="dim">{_e(str(b["box"])[1:])}</span>'
