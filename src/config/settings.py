@@ -155,6 +155,11 @@ class Settings(BaseSettings):
     # full session (obligation + brief instead of grinding it in a haiku). Empty = the CLI's
     # default model (no --model flag passed).
     osiris_wake_model: str = ""
+    # THE POKE'S IDLE GATE (the wake law, Phase 2): mail routed to a manager-owned window is
+    # TYPED into it as its next turn — but never into a window whose output moved within this
+    # many seconds (a streaming turn, or the echo of the operator typing). A busy window's
+    # mail waits for the next tick; delivery (owner_live) covers the actively-working case.
+    osiris_poke_min_idle_secs: int = 600
     # Wake HANDS (thread ba73c0c8): a triggered `claude -p` is headless — it cannot answer a
     # permission prompt, so in a repo with no stored approval every mcp__osiris__* call is
     # silently DENIED: the wake dies blind, its mail never settles, redelivers, re-wakes (the

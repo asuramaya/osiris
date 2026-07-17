@@ -44,7 +44,7 @@ import sys
 import termios
 import tty
 
-from src.manager.daemon import default_socket_path
+from src.manager.client import default_socket_path
 from src.manager.pty_broker import (
     FRAME_TYPE_EXITED,
     FRAME_TYPE_INPUT,

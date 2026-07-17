@@ -49,6 +49,7 @@ import redis.asyncio as aioredis
 from src.config.settings import get_settings
 from src.db.pool import create_pool
 from src.db.redis import create_redis
+from src.manager.client import default_socket_path
 from src.manager.pty_broker import PtyBroker, SessionExistsError, serve_attached
 from src.orchestrator.bodies import RECEIPTS as BODY_RECEIPTS
 from src.orchestrator.bodies import LocalProvider, ProcessRunner
@@ -92,13 +93,8 @@ def _pty_scope_unit(name: str) -> str:
     return f"osiris-pty-{re.sub(r'[^a-zA-Z0-9:_.-]', '-', name)}.scope"
 
 
-def default_socket_path() -> Path:
-    """$XDG_RUNTIME_DIR/osiris-manager.sock, falling back to ~/.osiris/manager.sock — a unix
-    domain socket only (ruling `d6403d34`: NOTHING listens on TCP)."""
-    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
-    if runtime_dir:
-        return Path(runtime_dir) / "osiris-manager.sock"
-    return Path.home() / ".osiris" / "manager.sock"
+# default_socket_path's one authority lives in client.py (stdlib-only, so the trigger and
+# CLIs can import it without dragging this module's world); re-imported at the top here.
 
 
 async def _default_runner(

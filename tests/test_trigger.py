@@ -13,7 +13,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from src.actions.core import Actions
+from src.orchestrator import trigger as trigger_module
 from src.orchestrator.mailbox import OPERATOR_ADDR, read_inbox, send_message
 from src.orchestrator.trigger import _WAKE_PROMPT, should_wake, trigger_mail_tick, wake_status
 
@@ -42,7 +44,22 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
                            osiris_wake_message_attempts=attempts,
                            osiris_wake_allowed_tools="mcp__osiris",
                            osiris_daily_usd=daily_usd,
-                           osiris_trigger_projects=projects)
+                           osiris_trigger_projects=projects,
+                           osiris_poke_min_idle_secs=600)
+
+
+async def _no_windows() -> list[dict[str, Any]]:
+    """The poke lane's OFF position for tests that exercise the pre-poke ladder — a dark
+    manager (the production default until windows exist) is an empty roster."""
+    return []
+
+
+@pytest.fixture(autouse=True)
+def _dark_manager(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HERMETIC by default: no test in this module may consult a live daemon socket on the
+    dev box — the roster default resolves late, so darkening the module attribute covers
+    every tick that doesn't inject its own windows."""
+    monkeypatch.setattr(trigger_module, "_manager_windows", _no_windows)
 
 
 def test_should_wake_is_off_by_default_and_rate_capped() -> None:
@@ -774,3 +791,111 @@ async def test_the_DAILY_CEILING_stops_the_wake(actions: Actions) -> None:
     assert spawned == [], "the ceiling was reached and the trigger spawned anyway"
     assert rep.get("refused") == 1
     assert "CEILING REACHED" in str(rep.get("why", ""))
+
+
+async def test_poke_lane_types_into_the_open_window_before_any_resume(
+    actions: Actions,
+) -> None:
+    """THE WAKE LAW (Phase 2, Stage C): mail for a project whose session lives in a manager
+    window becomes a TURN in that window — typed, recorded mode='poke', no process spawned.
+    A poke already typed for the same cause (deduped) and still unsettled ESCALATES past
+    the window to the old resume/mint ladder."""
+    from src.orchestrator.mounts import save_mount
+
+    await _agent_with_mail(actions)
+    await save_mount(actions.pool, job_dir="/x/jobs/beefcafe", agent_id="agent:demo",
+                     project="demo", cwd="/repo/demo", model=None,
+                     session_key="whisper:beefcafe", alive=False)  # pulseless: not owner_live
+    wins = [{"name": "w-demo", "alive": True, "idle_seconds": 999.0,
+             "job_dir": "/x/jobs/beefcafe"}]
+    pokes: list[tuple[str, str, int]] = []
+    spawned: list[str] = []
+
+    async def _windows() -> list[dict[str, Any]]:
+        return wins
+
+    async def _poke(name: str, text: str, *, dedup: str, min_idle: int) -> dict[str, Any]:
+        pokes.append((name, dedup, min_idle))
+        return {"poked": name, "idle_seconds": 999.0}
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        spawned.append(repo)
+
+    rep = await trigger_mail_tick(actions, settings=_settings(enabled=True), spawn=_spawn,
+                                  windows=_windows, poke=_poke)
+    assert rep["poked"] == 1 and rep["woke"] == 1
+    assert spawned == []                                  # a turn, never a second process
+    assert pokes[0][0] == "w-demo" and pokes[0][1].startswith("msg:")
+    assert pokes[0][2] == 600                             # the idle gate rides the call
+    assert await actions.pool.fetchval(
+        "SELECT mode FROM agent_wakes ORDER BY id DESC LIMIT 1") == "poke"
+
+    # the SAME cause again: the daemon answers deduped; the ledger already knows the poke
+    # (mode='poke'), so the lane escalates PAST the window — sense="" makes that a mint
+    async def _poke_deduped(name: str, text: str, *, dedup: str,
+                            min_idle: int) -> dict[str, Any]:
+        return {"poked": name, "deduped": True}
+
+    rep2 = await trigger_mail_tick(actions, settings=_settings(enabled=True), spawn=_spawn,
+                                   windows=_windows, poke=_poke_deduped)
+    assert rep2["poked"] == 0 and spawned == ["/repo/demo"]  # escalated to the mint rung
+
+
+async def test_a_busy_window_defers_and_spends_nothing(actions: Actions) -> None:
+    """The idle gate's refusal is a DEFERRAL, not a wake: nothing recorded, nothing
+    spawned — the mail waits for the next tick or the window's own next osiris call."""
+    from src.orchestrator.mounts import save_mount
+
+    await _agent_with_mail(actions)
+    await save_mount(actions.pool, job_dir="/x/jobs/beefcafe", agent_id="agent:demo",
+                     project="demo", cwd="/repo/demo", model=None,
+                     session_key="whisper:beefcafe", alive=False)
+    spawned: list[str] = []
+
+    async def _windows() -> list[dict[str, Any]]:
+        return [{"name": "w-demo", "alive": True, "idle_seconds": 3.0,
+                 "job_dir": "/x/jobs/beefcafe"}]
+
+    async def _poke(name: str, text: str, *, dedup: str, min_idle: int) -> dict[str, Any]:
+        return {"error": "window busy", "busy": True}
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        spawned.append(repo)
+
+    rep = await trigger_mail_tick(actions, settings=_settings(enabled=True), spawn=_spawn,
+                                  windows=_windows, poke=_poke)
+    assert rep["window_busy"] == 1 and rep["woke"] == 0 and spawned == []
+    assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
+
+
+async def test_a_dm_pokes_the_addressees_own_window_lineage_wide(actions: Actions) -> None:
+    """The DM half: the addressee's own window — matched by ANY generation's anchor (the
+    lineage rollup's discipline) — gets the private prompt, recorded mode='dm-poke'."""
+    from src.orchestrator.mounts import save_mount
+
+    a = await actions.create_or_find_object("Agent", "agent:demo-ii", "session")
+    await actions.assert_property(a, "project", "demo", "session", NOW, 0.9)
+    await send_message(actions.pool, from_agent="agent:other", from_project="other",
+                       to_agent="agent:demo-ii", body="for your eyes")
+    # the lineage's LIVE window anchors on the BASE generation's old job_dir — still his
+    await save_mount(actions.pool, job_dir="/x/jobs/cafe0001", agent_id="agent:demo-ii",
+                     project="demo", cwd="/repo/demo", model=None,
+                     session_key="whisper:cafe0001", alive=False)
+    pokes: list[str] = []
+
+    async def _windows() -> list[dict[str, Any]]:
+        return [{"name": "w-demo-own", "alive": True, "idle_seconds": 999.0,
+                 "job_dir": "/x/jobs/cafe0001"}]
+
+    async def _poke(name: str, text: str, *, dedup: str, min_idle: int) -> dict[str, Any]:
+        pokes.append(dedup)
+        return {"poked": name}
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        raise AssertionError("a DM with a live window must never spawn")
+
+    rep = await trigger_mail_tick(actions, settings=_settings(enabled=True), spawn=_spawn,
+                                  windows=_windows, poke=_poke)
+    assert rep["poked"] == 1 and pokes and pokes[0].startswith("dm:")
+    assert await actions.pool.fetchval(
+        "SELECT mode FROM agent_wakes ORDER BY id DESC LIMIT 1") == "dm-poke"

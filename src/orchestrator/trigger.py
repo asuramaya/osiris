@@ -310,6 +310,61 @@ _DM_RESUME_PROMPT = (
 )
 
 
+# The POKE prompts are the resume prompts' cheaper cousins: the mind's context is LIVE in
+# its own window (nothing was resumed, nothing re-ingested) — the message only has to say
+# "check your box and settle", then hand the window back to whatever it was doing.
+_POKE_PROMPT = (
+    "[osiris] New mail for your project, delivered to your OPEN window — your context is "
+    "live, nothing was resumed. inbox(), act on what it asks, SETTLE each handled message "
+    "(send(reply_to=<id>) or inbox(ack=[ids])), then continue what you were doing. If "
+    "nothing needs doing, ack and continue."
+)
+
+_DM_POKE_PROMPT = (
+    "[osiris] A private DM is waiting for YOU, delivered to your OPEN window — your context "
+    "is live, nothing was resumed. inbox(), act on what it asks, SETTLE it "
+    "(send(reply_to=<id>) or inbox(ack=[ids])), then continue what you were doing."
+)
+
+
+async def _manager_windows() -> list[dict[str, Any]]:
+    """The manager's window roster ([{name, alive, idle_seconds, job_dir?, seat_id?}, ...]) —
+    [] when the daemon is down, absent, or slow: the poke lane fails OPEN into the resume
+    lane; the trigger never dies of the manager."""
+    from src.manager.client import manager_call
+    try:
+        out = await manager_call({"op": "pty_list"})
+    except (OSError, TimeoutError, ValueError):
+        return []
+    rows = out.get("sessions")
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
+async def _poke_window(name: str, text: str, *, dedup: str, min_idle: int) -> dict[str, Any]:
+    """One pty_poke through the control socket — the daemon owns the idle gate and the
+    dedup memory; failures come back as {'error': ...} instead of raising (the caller's
+    ladder falls through on anything that is not a clean 'poked')."""
+    from src.manager.client import manager_call
+    try:
+        return await manager_call({"op": "pty_poke", "name": name, "text": text,
+                                   "dedup": dedup, "min_idle_secs": min_idle})
+    except (OSError, TimeoutError, ValueError) as exc:
+        return {"error": f"manager unreachable: {exc}"}
+
+
+def _window_for(windows: list[dict[str, Any]], anchor_sids: set[str]) -> str | None:
+    """The first live window whose recorded anchor (job_dir, stamped at pty_spawn) belongs
+    to one of `anchor_sids` (8-char forms). None = no manager-hosted window for this
+    addressee; the ladder proceeds to resume."""
+    for w in windows:
+        job_dir = w.get("job_dir") or ""
+        name = w.get("name")
+        if (w.get("alive") and job_dir and isinstance(name, str)
+                and Path(job_dir).name[:8] in anchor_sids):
+            return name
+    return None
+
+
 async def _dms_with_unread(
     pool: asyncpg.Pool, lease_secs: int
 ) -> list[tuple[str, int, str | None]]:
@@ -555,18 +610,22 @@ async def _spawn_in_body(
 
 
 async def trigger_mail_tick(
-    actions: Actions, *, settings: Settings | None = None, spawn: Any = _spawn_claude
+    actions: Actions, *, settings: Settings | None = None, spawn: Any = _spawn_claude,
+    windows: Any = None, poke: Any = None,
 ) -> dict[str, int]:
-    """One trigger pass — the dispatch order is DELIVER → RESUME → MINT (thread 9f2ddb44):
-    a live owner just gets its mail (no spawn); a resumable owner is CONTINUED via its own
-    session (cheap — no re-ingestion, no twin, no succession seam); only otherwise is a fresh
-    twin minted (succession-stamped at mount, 88ca0a1). `spawn` is injected so tests assert
-    the DECISION without launching a process. The wake is RECORDED (with its mode) before the
+    """One trigger pass — the dispatch order is DELIVER → POKE → RESUME → MINT (thread
+    9f2ddb44 + the wake law): a live owner just gets its mail (no spawn); a manager-hosted
+    window already holding the addressee's session gets the mail TYPED INTO IT as its next
+    turn (the wake law — no second process ever resumes a session whose window is still
+    open); a resumable owner is CONTINUED via its own session (cheap — no re-ingestion, no
+    twin, no succession seam); only otherwise is a fresh twin minted (succession-stamped at
+    mount, 88ca0a1). `spawn`/`windows`/`poke` are injected so tests assert the DECISION
+    without launching a process or a daemon. The wake is RECORDED (with its mode) before the
     spawn — the ledger is the rate limiter, the chain, and the alternation guard."""
     st = settings or get_settings()
     pool = actions.pool
-    report = {"woke": 0, "resumed": 0, "skipped": 0, "owner_live": 0, "abandoned": 0,
-              "scoped_out": 0}
+    report = {"woke": 0, "resumed": 0, "poked": 0, "window_busy": 0, "skipped": 0,
+              "owner_live": 0, "abandoned": 0, "scoped_out": 0}
     # the re-arm scope: a non-empty allowlist names the ONLY projects this trigger may touch
     allow = {p.strip() for p in st.osiris_trigger_projects.split(",") if p.strip()}
 
@@ -586,6 +645,12 @@ async def trigger_mail_tick(
     # the fleet-wide hourly spend — the SAME number the chrome renders as 'wakes N/h'
     hourly = await pool.fetchval(
         "SELECT count(*) FROM agent_wakes WHERE woke_at > now() - interval '1 hour'")
+    # the manager's window roster, once per tick ([] when the daemon is dark — fail-open).
+    # None defaults resolve LATE (module attribute, not a bound default) so tests can
+    # darken the manager for the whole module with one monkeypatch.
+    windows = windows or _manager_windows
+    poke = poke or _poke_window
+    wins = await windows() if st.osiris_trigger_enabled else []
     for project, msg_id, sender, age in await _projects_with_unread(
             pool, st.osiris_mail_lease_secs):
         if not st.osiris_trigger_enabled:
@@ -623,6 +688,42 @@ async def trigger_mail_tick(
         if reason is not None:
             report["skipped"] += 1
             continue
+        # THE POKE LANE (the wake law, Phase 2): a manager-hosted window already holding a
+        # session of this project gets the mail AS A TURN — typed into the open window —
+        # instead of a second process resuming a session whose window is still live. The
+        # daemon owns the idle gate (never type into a streaming turn or over the
+        # operator's shoulder) and the dedup (one cause types at most once per window).
+        if wins:
+            sids = {Path(r["job_dir"]).name[:8] for r in await pool.fetch(
+                "SELECT job_dir FROM agent_mounts WHERE project=$1 "
+                "AND job_dir IS NOT NULL", project)}
+            wname = _window_for(wins, sids)
+            if wname is not None:
+                res = await poke(wname, _POKE_PROMPT, dedup=f"msg:{msg_id}",
+                                 min_idle=st.osiris_poke_min_idle_secs)
+                if res.get("poked") and not res.get("deduped"):
+                    await pool.execute(
+                        "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+                        "VALUES ($1,$2,$3,'poke')", project, sender, msg_id)
+                    report["poked"] += 1
+                    report["woke"] += 1
+                    continue
+                if res.get("busy"):
+                    # an ACTIVE window: its mail waits for the next tick (or its own next
+                    # osiris call) — never a wake recorded, because nothing was spent
+                    report["window_busy"] += 1
+                    continue
+                if res.get("deduped"):
+                    if await _last_wake_mode(pool, project, msg_id) != "poke":
+                        # the poke typed once but a crash lost its record — heal the
+                        # ledger instead of double-typing or double-spending
+                        await pool.execute(
+                            "INSERT INTO agent_wakes (to_project, from_agent, message_id, "
+                            "mode) VALUES ($1,$2,$3,'poke')", project, sender, msg_id)
+                        report["poked"] += 1
+                        continue
+                    # already poked for this cause and still unsettled — escalate past the
+                    # window (fall through to resume/mint, the pre-poke ladder)
         resume = None
         if await _last_wake_mode(pool, project, msg_id) != "resume":  # alternation guard
             resume = await _resumable_owner(pool, project, st)
@@ -681,6 +782,30 @@ async def trigger_mail_tick(
         if await _last_wake_mode(pool, project, msg_id) == "dm-resume":
             report["skipped"] += 1  # one attempt per DM — never a resume loop
             continue
+        # THE DM POKE (the wake law's private half): the addressee's OWN window — matched
+        # lineage-wide, any generation's anchor — gets the DM typed in as its next turn.
+        # Same discipline as the project lane; a deduped-and-still-unsettled DM falls
+        # through to the resume rung (its one attempt).
+        if wins:
+            from src.orchestrator.agents import _generation
+            base = _generation(agent_id)[0]
+            sids = {Path(r["job_dir"]).name[:8] for r in await pool.fetch(
+                "SELECT job_dir FROM agent_mounts WHERE (agent_id=$1 "
+                "OR agent_id LIKE $1 || '-%') AND job_dir IS NOT NULL", base)}
+            wname = _window_for(wins, sids)
+            if wname is not None:
+                res = await poke(wname, _DM_POKE_PROMPT, dedup=f"dm:{msg_id}",
+                                 min_idle=st.osiris_poke_min_idle_secs)
+                if res.get("poked") and not res.get("deduped"):
+                    await pool.execute(
+                        "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+                        "VALUES ($1,$2,$3,'dm-poke')", project, sender, msg_id)
+                    report["poked"] += 1
+                    report["woke"] += 1
+                    continue
+                if res.get("busy"):
+                    report["window_busy"] += 1
+                    continue
         resume = await _agent_resumable(pool, agent_id, st)
         if resume is None:
             report["skipped"] += 1
