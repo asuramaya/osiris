@@ -189,10 +189,13 @@ async def ledger_seat(actions: Actions, *, sid_prefix: str) -> str | None:
     sid = (sid_prefix or "").strip().lower()
     if len(sid) < 8:
         return None
+    # the assertion NAME carries the anchor (anchor_sid:<sid8>): current_assertions keeps
+    # ONE winner per (object, name), so a shared name would give a many-sid lineage
+    # amnesia — each sid must be its own fact (caught live at the first backfill)
     owner = await actions.pool.fetchval(
         "SELECT o.canonical FROM current_assertions a "
         "JOIN objects o ON o.id=a.object_id AND o.type='Agent' AND o.status='active' "
-        "WHERE a.name='anchor_sid' AND left(a.value #>> '{}', 8) = left($1, 8) "
+        "WHERE a.name = 'anchor_sid:' || left($1, 8) "
         "ORDER BY a.observed_at DESC LIMIT 1", sid)
     if owner is None:
         return None
@@ -224,8 +227,7 @@ async def record_session_anchor(
     exists = await actions.pool.fetchval(
         "SELECT 1 FROM current_assertions a "
         "JOIN objects o ON o.id=a.object_id AND o.type='Agent' AND o.status='active' "
-        "WHERE a.name='anchor_sid' AND left(a.value #>> '{}', 8) = left($1, 8) LIMIT 1",
-        sid)
+        "WHERE a.name = 'anchor_sid:' || left($1, 8) LIMIT 1", sid)
     if exists:
         return False
     obj = await actions.pool.fetchval(
@@ -233,7 +235,8 @@ async def record_session_anchor(
         agent_id)
     if obj is None:
         return False
-    await actions.assert_property(obj, "anchor_sid", sid, actor, datetime.now(UTC), 0.9,
+    await actions.assert_property(obj, f"anchor_sid:{sid[:8]}", sid, actor,
+                                  datetime.now(UTC), 0.9,
                                   evidence_class="direct_observation")
     return True
 

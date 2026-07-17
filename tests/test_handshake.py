@@ -474,8 +474,34 @@ async def test_the_whisper_files_a_named_binding_on_the_ledger(
     filed = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a "
         "JOIN objects o ON o.id=a.object_id "
-        "WHERE a.name='anchor_sid' AND o.canonical='agent:0ffab001'")
+        "WHERE a.name = 'anchor_sid:' || $1 AND o.canonical='agent:0ffab001'", SID[:8])
     assert filed == SID                              # the binding is graph memory now
+
+
+async def test_the_ledger_remembers_every_sid_of_a_lineage(actions: Actions) -> None:
+    """The first backfill's catch: current_assertions keeps ONE winner per (object,
+    name), so a shared 'anchor_sid' name gave a many-sid lineage amnesia — only the
+    last-filed sid survived. Namespaced names (anchor_sid:<sid8>) make each sid its own
+    fact: every door of a long life must stay resolvable."""
+    from datetime import UTC, datetime
+
+    o = await actions.create_or_find_object("Agent", "agent:9a9a0001", "agent:9a9a0001")
+    now = datetime.now(UTC)
+    await actions.assert_property(o, "handle", "Nine", "agent:9a9a0001", now, 0.9,
+                                  evidence_class="self_declared")
+    sid_a = "aaaa1111-0000-4000-8000-000000000000"
+    sid_b = "bbbb2222-0000-4000-8000-000000000000"
+    assert await record_session_anchor(actions, agent_id="agent:9a9a0001",
+                                       session_id=sid_a, actor="t") is True
+    assert await record_session_anchor(actions, agent_id="agent:9a9a0001",
+                                       session_id=sid_b, actor="t") is True
+    from src.orchestrator.handshake import ledger_seat
+    assert await ledger_seat(actions, sid_prefix=sid_a) == "agent:9a9a0001"
+    assert await ledger_seat(actions, sid_prefix=sid_b) == "agent:9a9a0001"
+    # idempotent per sid, and the 8-char anchor form resolves too
+    assert await record_session_anchor(actions, agent_id="agent:9a9a0001",
+                                       session_id=sid_a, actor="t") is False
+    assert await ledger_seat(actions, sid_prefix="bbbb2222") == "agent:9a9a0001"
 
 
 async def test_a_seat_walking_home_files_its_own_deed(
