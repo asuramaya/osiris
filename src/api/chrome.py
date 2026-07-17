@@ -362,7 +362,15 @@ async def mail_overview(pool: asyncpg.Pool) -> list[dict[str, Any]]:
         "    AND r.read_at IS NOT NULL)) AS unsettled, "
         " max(m.created_at) AS last_at "
         "FROM fleet_messages m GROUP BY 1 ORDER BY max(m.created_at) DESC LIMIT 60")
-    out: list[dict[str, Any]] = []
+    groups: dict[str, dict[str, Any]] = {}
+
+    def group(name: str) -> dict[str, Any]:
+        g = groups.get(name)
+        if g is None:
+            g = groups[name] = {"project": name, "room": None, "souls": [],
+                                "last_at": None}
+        return g
+
     souls: dict[str, dict[str, Any]] = {}
     for r in rows:
         d = dict(r)
@@ -380,16 +388,20 @@ async def mail_overview(pool: asyncpg.Pool) -> list[dict[str, Any]]:
         elif box.startswith("@agent:"):
             head = await living_head(pool, box[1:])
         if head is None:
-            out.append(d)
+            if box.startswith("@"):
+                group("unhoused")["souls"].append(d)   # an address nobody claims
+            else:
+                group(box)["room"] = d                 # a project's group chat
             continue
-        # ONE SOUL, ONE ROW: every lane of a soul — each generation's address, each seat
-        # it holds — merges into a single line under the living head; the thread view
-        # matches soul-wide, so the row is fully navigable
+        # ONE SOUL, ONE ROW, UNDER ITS HOUSE: every lane of a soul — each generation's
+        # address, each seat it holds — merges into a single line under the living head,
+        # nested under the soul's project (agent mailboxes belong to projects)
         s = souls.get(head)
         if s is None:
             srow = await pool.fetchrow(
                 "SELECT max(a.value #>> '{}') FILTER (WHERE a.name='handle') AS handle, "
-                "       max(a.value #>> '{}') FILTER (WHERE a.name='seat_generation') AS g "
+                "       max(a.value #>> '{}') FILTER (WHERE a.name='seat_generation') AS g, "
+                "       max(a.value #>> '{}') FILTER (WHERE a.name='project') AS project "
                 "FROM current_assertions a JOIN objects o ON o.id=a.object_id "
                 "WHERE o.canonical=$1", head)
             handle = srow["handle"] if srow else None
@@ -399,12 +411,20 @@ async def mail_overview(pool: asyncpg.Pool) -> list[dict[str, Any]]:
                 "box": "@" + head, "msgs": 0, "unsettled": 0, "last_at": None,
                 "soul": seat_label(head, handle, gen) if handle else None,
             }
-            out.append(s)
+            group(str(srow["project"]) if srow and srow["project"] else "unhoused")[
+                "souls"].append(s)
         s["msgs"] += int(d["msgs"] or 0)
         s["unsettled"] += int(d["unsettled"] or 0)
         s["last_at"] = max((t for t in (s["last_at"], d["last_at"]) if t is not None),
                            default=None)
-    return out
+    for g in groups.values():
+        stamps = [x["last_at"] for x in ([g["room"]] if g["room"] else []) + g["souls"]
+                  if x and x["last_at"] is not None]
+        g["last_at"] = max(stamps, default=None)
+        g["souls"].sort(key=lambda s: (s["last_at"] is not None, s["last_at"]),
+                        reverse=True)
+    return sorted(groups.values(),
+                  key=lambda g: (g["last_at"] is not None, g["last_at"]), reverse=True)
 
 
 async def mail_threads(pool: asyncpg.Pool, box: str) -> list[dict[str, Any]]:
@@ -447,32 +467,40 @@ async def mail_threads(pool: asyncpg.Pool, box: str) -> list[dict[str, Any]]:
     return sorted(threads.values(), key=lambda t: t["last_at"], reverse=True)
 
 
-def render_mail_overview(boxes: list[dict[str, Any]]) -> str:
+def render_mail_overview(groups: list[dict[str, Any]]) -> str:
+    """PROJECT → AGENT (operator, 2026-07-17: 'agent mailboxes belong to projects, so it
+    nests nicely'): each project's group chat leads its block, the house's souls indent
+    beneath it, and a room-less project (or a house-less soul) still gets its header."""
     def unsettled_cell(b: dict[str, Any]) -> str:
         if b["unsettled"]:
             return f'<span class="amber">{b["unsettled"]} unsettled</span>'
         return '<span class="dim">settled</span>'
-    def label_cell(b: dict[str, Any]) -> str:
-        # an agent lane wears its soul's name; a superseded address confesses staleness
+
+    def cells(b: dict[str, Any]) -> str:
+        return (f'<td>{b["msgs"]} msgs</td><td>{unsettled_cell(b)}</td>'
+                f'<td class="ts">{_e(str(b["last_at"])[:16])}</td>')
+
+    def soul_cell(b: dict[str, Any]) -> str:
         name = f"@{b['soul']}" if b.get("soul") else str(b["box"])
-        if b.get("seat_lane"):
-            name += " · seat"
         cell = f'<a href="/mail?box={_e(str(b["box"]))}">{_e(name)}</a>'
         if b.get("soul"):
             cell += f' <span class="dim">{_e(str(b["box"])[1:])}</span>'
-        if b.get("stale"):
-            cell += ' <span class="amber">stale address — sweep pending</span>'
         return cell
-    rows = "".join(
-        (f'<tr><td class="dim">· {b["historical"]} superseded address'
-         f'{"es" if b["historical"] != 1 else ""} — settled history, folded</td>'
-         f"<td></td><td></td><td></td></tr>")
-        if b.get("historical") else
-        f"<tr><td>{label_cell(b)}</td>"
-        f'<td>{b["msgs"]} msgs</td>'
-        f"<td>{unsettled_cell(b)}</td>"
-        f'<td class="ts">{_e(str(b["last_at"])[:16])}</td></tr>'
-        for b in boxes) or '<tr><td class="dim">no mail anywhere</td></tr>'
+
+    parts: list[str] = []
+    for g in groups:
+        room = g.get("room")
+        if room:
+            parts.append(
+                f'<tr><td><a href="/mail?box={_e(str(room["box"]))}">'
+                f'{_e(str(room["box"]))}</a></td>{cells(room)}</tr>')
+        else:
+            parts.append(f'<tr><td class="dim">{_e(str(g["project"]))}</td>'
+                         "<td></td><td></td><td></td></tr>")
+        for s in g["souls"]:
+            parts.append(
+                f'<tr><td style="padding-left:1.6em">{soul_cell(s)}</td>{cells(s)}</tr>')
+    rows = "".join(parts) or '<tr><td class="dim">no mail anywhere</td></tr>'
     return f"<h2>mailboxes</h2><table>{rows}</table>"
 
 

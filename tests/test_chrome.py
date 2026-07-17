@@ -117,12 +117,25 @@ def test_page_shell_carries_nav_poller_and_partial_contract() -> None:
 
 
 def test_mail_overview_links_boxes_and_flags_unsettled() -> None:
+    """PROJECT → AGENT nesting: the room leads its block, the house's souls indent
+    beneath it wearing their seat labels."""
     html = render_mail_overview([
-        {"box": "osiris", "msgs": 12, "unsettled": 0, "last_at": "2026-07-11 19:49:56"},
-        {"box": "sibling-two", "msgs": 54, "unsettled": 3, "last_at": "2026-07-11 10:00:00"},
+        {"project": "osiris",
+         "room": {"box": "osiris", "msgs": 12, "unsettled": 0,
+                  "last_at": "2026-07-11 19:49:56"},
+         "souls": [{"box": "@agent:ad1a1cb0-g40-iv", "soul": "Thoth XLI", "msgs": 3,
+                    "unsettled": 1, "last_at": "2026-07-11 19:50:00"}],
+         "last_at": "2026-07-11 19:50:00"},
+        {"project": "sibling-two",
+         "room": {"box": "sibling-two", "msgs": 54, "unsettled": 3,
+                  "last_at": "2026-07-11 10:00:00"},
+         "souls": [], "last_at": "2026-07-11 10:00:00"},
     ])
     assert '<a href="/mail?box=osiris">' in html
     assert "3 unsettled" in html and "settled" in html
+    assert "@Thoth XLI" in html                      # the soul wears its name...
+    assert 'box=%40agent%3Aad1a1cb0-g40-iv' in html or \
+        'box=@agent:ad1a1cb0-g40-iv' in html         # ...and links to its lane
 
 
 def test_mail_box_renders_threads_with_messages_inside() -> None:
@@ -206,7 +219,7 @@ async def test_desk_and_fleet_data_round_trip_the_live_graph(actions: Actions) -
     assert '<a href="/desk?p=osiris">' in html and "decide something" not in html
     assert "decide something" in render_desk_project(desk, "osiris")
     boxes = await mail_overview(p)
-    assert {b["box"] for b in boxes} == {"operator", "neo"}
+    assert {g["project"] for g in boxes} == {"operator", "neo"}
     html2 = render_mail_box("neo", await mail_threads(p, "neo"))
     assert "lateral note" in html2
     html3 = render_fleet(await fleet_data(p, wake_budget=30))
