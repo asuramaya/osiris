@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import time
 import tomllib
 from dataclasses import dataclass
@@ -459,10 +460,17 @@ def _rewrite_transcript_cwd(
     `expect` = (st_size, st_mtime_ns) from when the CALLER last looked: re-checked at the
     last instant before the replace, and a file that changed since is left untouched
     (OSError, tmp removed) — an off-the-rails live pen appending mid-rewrite must lose
-    NOTHING (the torn-write window shrinks from the whole rewrite to one syscall)."""
+    NOTHING (the torn-write window shrinks from the whole rewrite to one syscall).
+
+    THE MTIME IS PRESERVED (Atlas's blocked door, 2026-07-17): re-addressing is machinery,
+    not life — but a fresh mtime reads as a growing transcript to the liveness observer,
+    which stamped a just-ceremonied seat LIVE and its own office door then refused it as
+    occupied for the decay window. The heartbeat law extends to files: a pulse is earned
+    by words, never granted by a rewrite."""
     tmp = path.with_name("." + path.name + ".heal-tmp")
     rewritten = 0
     try:
+        orig_stat = path.stat()
         with path.open(encoding="utf-8", errors="replace") as src, \
                 tmp.open("w", encoding="utf-8") as dst:
             for line in src:
@@ -489,6 +497,7 @@ def _rewrite_transcript_cwd(
                 tmp.unlink()
                 raise OSError(f"{path.name} changed while being re-addressed — "
                               "aborted; the live pen's words are untouched")
+        os.utime(tmp, ns=(orig_stat.st_atime_ns, orig_stat.st_mtime_ns))
         tmp.replace(path)
     except OSError:
         with contextlib.suppress(OSError):

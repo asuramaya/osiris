@@ -114,6 +114,63 @@ def _ctx_pct(payload: dict, window: int | None) -> int | None:
     return None
 
 
+def _swap_confession(payload: dict) -> str | None:
+    """THE RUG-PULL CONFESSION (operator, 2026-07-17: 'atlas got rug pulled mid
+    conversation from fable to opus, and it will have no idea until i explicitly tell
+    it'). The classifier swaps the model mid-session and the MIND is the last to know —
+    the transcript records every assistant turn's model, so the swap is readable the
+    moment it lands. Detect the latest mid-session model change and confess it to the
+    agent ONCE per change (marker in the durable anchor dir), loudly, at the next turn
+    boundary. Variant suffixes ([1m]) are the same weights — never a swap. Fail-open."""
+    transcript = str(payload.get("transcript_path") or "")
+    sid = (payload.get("session_id") or "")[:8]
+    if not transcript or len(sid) < 8:
+        return None
+    try:
+        tp = Path(transcript)
+        with tp.open("rb") as fh:
+            fh.seek(max(0, tp.stat().st_size - 524_288))
+            tail = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    cur: str | None = None
+    prev: str | None = None
+    for line in reversed(tail.splitlines()):
+        if '"assistant"' not in line or '"model"' not in line:
+            continue
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if e.get("type") != "assistant" or e.get("isSidechain"):
+            continue
+        m = str((e.get("message") or {}).get("model") or "").split("[", 1)[0].strip()
+        if not m:
+            continue
+        if cur is None:
+            cur = m
+        elif m != cur:
+            prev = m
+            break
+    if not cur or not prev:
+        return None
+    marker = Path.home() / ".claude" / "jobs" / sid / ".osiris_swapseen"
+    pair = f"{prev} -> {cur}"
+    try:
+        if marker.exists() and marker.read_text().strip() == pair:
+            return None  # this swap is already confessed; a NEW swap confesses again
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(pair)
+    except OSError:
+        return None
+    return (f"Osiris model check: YOUR MODEL CHANGED mid-session — {pair}. If you did "
+            "not see the operator ask for this, it is a silent swap (the classifier "
+            "rug-pull class, ruling 057a0bbf): confess it to the operator in your next "
+            "reply, then continue. If the operator chose it (/model on the record), "
+            "acknowledge and continue. Either way: you are not the model you were a "
+            "few turns ago — say so out loud; never inherit a swap blind.")
+
+
 def _nag_due(session_id: str) -> bool:
     """True at most once per cooldown, tracked by a marker in the session's durable anchor
     dir (survives across turns; dies with the job dir)."""
@@ -139,6 +196,11 @@ def main() -> None:
         return
     if payload.get("stop_hook_active"):
         return  # we already continued once this turn — never loop on unsettleable mail
+    # IDENTITY OUTRANKS MAIL: a mind that changed models must know before anything else
+    confession = _swap_confession(payload)
+    if confession:
+        print(json.dumps({"decision": "block", "reason": confession}))
+        return
     cwd = payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     project = Path(cwd).name
     session_id = payload.get("session_id") or ""
