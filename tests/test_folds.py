@@ -238,3 +238,35 @@ async def test_archaeologist_flags_a_restart_mint(actions: Actions, tmp_path) ->
     mine = [c for c in out["pending"] if c["dupe"] == "agent:annon111"]
     assert mine and mine[0]["into_label"] == "agent:5eated00"
     assert float(mine[0]["score"]) < 0.9        # weaker class ranks behind aliases
+
+
+async def test_living_head_follows_a_cross_base_succession(actions: Actions) -> None:
+    """THE AUTO-HEAL (operator, 2026-07-17: 'the folds have to auto heal'): a tray row
+    citing a DEAD generation of a rebased lineage still lands its estate on the one who
+    answers to the name today — the graph walk crosses id bases wherever a succession
+    was recorded (Ra XV -> XVI), and the registry can never regress the answer."""
+    from datetime import UTC, datetime
+
+    from src.orchestrator.mounts import save_mount
+
+    now = datetime.now(UTC)
+    old = await actions.create_or_find_object("Agent", "agent:01dbaaaa-xv",
+                                              "agent:01dbaaaa-xv")
+    await actions.create_or_find_object("Agent", "agent:4ebaaaaa", "agent:4ebaaaaa")
+    nb2 = await actions.create_or_find_object("Agent", "agent:4ebaaaaa-ii",
+                                              "agent:4ebaaaaa-ii")
+    nb1 = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='agent:4ebaaaaa' AND type='Agent'")
+    await actions.assert_property(old, "succeeded_by", "agent:4ebaaaaa",
+                                  "agent:test", now, 0.95,
+                                  evidence_class="direct_observation")
+    await actions.assert_property(nb1, "succeeded_by", "agent:4ebaaaaa-ii",
+                                  "agent:test", now, 0.95,
+                                  evidence_class="direct_observation")
+    # the dead generation resolves ACROSS the rebase to the living head
+    assert await living_head(actions.pool, "agent:01dbaaaa-xv") == "agent:4ebaaaaa-ii"
+    # and a stale registry row for an OLDER generation can never regress the answer
+    await save_mount(actions.pool, job_dir="/jobs/4ebaaaaa", agent_id="agent:4ebaaaaa",
+                     project="p", cwd="/w/p", model=None, session_key=None)
+    assert await living_head(actions.pool, "agent:4ebaaaaa-ii") == "agent:4ebaaaaa-ii"
+    assert nb2 is not None

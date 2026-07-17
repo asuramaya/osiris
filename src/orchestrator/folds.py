@@ -33,17 +33,28 @@ _log = logging.getLogger("osiris.folds")
 
 
 async def living_head(pool: asyncpg.Pool, agent_id: str) -> str:
-    """The lineage's freshest generation — where a folded estate LANDS. The mount
-    registry decides (it is bumped by every act); an unregistered lineage's head is the
-    given label itself. Estate must never land on a dead generation: succession's own
-    transfer (mint_heir) would just have to move it again."""
-    from src.orchestrator.agents import _generation
+    """The lineage's living head — where a folded estate LANDS. THE GRAPH DECIDES
+    (auto-heal, operator 2026-07-17: 'the folds have to auto heal'): resolve the label
+    through the merge chain, then walk succeeded_by to the last ACTIVE generation — a
+    walk that crosses REBASED lineages wherever a succession was recorded (Ra XV →
+    XVI), so a tray row citing a dead generation still lands its estate on the one who
+    answers to the name today. The registry only breaks the tie for a label with no
+    succession record (an anonymous base), and its answer may never REGRESS to an
+    older generation than the graph's. Estate must never land on a dead generation:
+    succession's own transfer (mint_heir) would just have to move it again."""
+    from src.orchestrator.agents import _generation, lineage_head
 
-    base = _generation(agent_id)[0]
-    head = await pool.fetchval(
+    canon = await canonical_agent(pool, agent_id)
+    head = await lineage_head(pool, canon)
+    if head != canon:
+        return head
+    base = _generation(canon)[0]
+    row = await pool.fetchval(
         "SELECT agent_id FROM agent_mounts WHERE agent_id=$1 OR agent_id LIKE $1 || '-%' "
         "ORDER BY last_seen DESC NULLS LAST LIMIT 1", base)
-    return str(head) if head else agent_id
+    if row and _generation(str(row))[1] > _generation(canon)[1]:
+        return str(row)
+    return canon
 
 
 async def canonical_agent(pool: asyncpg.Pool, agent_id: str) -> str:
