@@ -178,6 +178,14 @@ async def find_agent_fold_candidates(
     the seat's child or fold; where several seats share the project it is nuanced and
     the low score says verify by hand.
 
+    CHARTER-MATCH (same scores, thread 3430c32b): when no named lineage anchors at the
+    anon's cwd — the office migrations moved every seat's mount row home to
+    ~/.osiris/seats/<handle>, stranding anons in the seats' OLD project rooms — the
+    room's seat is still a GRAPH fact: a named lineage holding a live works_in or
+    governs link to repo:<project>. Mount rows move house; the charter does not. A room
+    whose charter names NO seat proposes nothing (its anons are the visitor class —
+    demotion candidates for the visitor gate, never folds) and is counted in `seatless`.
+
     Pairs already rejected or linked not_same_as are never re-proposed."""
     from src.ontology.resolution import _suppressed
     from src.orchestrator.agents import _generation
@@ -201,7 +209,8 @@ async def find_agent_fold_candidates(
         "  WHERE h.name='handle' AND (ho.canonical=o.canonical "
         "        OR o.canonical LIKE ho.canonical||'-%' OR ho.canonical LIKE o.canonical||'-%')) "
         "ORDER BY o.canonical, m.last_seen DESC")
-    proposed: dict[str, int] = {"view-alias": 0, "restart-mint": 0}
+    proposed: dict[str, int] = {"view-alias": 0, "restart-mint": 0, "charter-match": 0}
+    seatless: dict[str, int] = {}
     for r in anons:
         sid8 = Path(r["job_dir"]).name if r["job_dir"] else ""
         cwd, mine = r["cwd"], str(r["canonical"])
@@ -254,6 +263,65 @@ async def find_agent_fold_candidates(
                     signals = [f"anonymous mount at {cwd}, the anchor of named lineage "
                                f"{named} — but {seats_here} seats share this project; "
                                "nuanced, verify by hand"]
+        if target is None and r["project"]:
+            # THE CHARTER MATCH (thread 3430c32b): nobody named anchors at this cwd —
+            # but the ROOM may still have a seat on the graph's record. Mount rows are
+            # mortal and move house (the office migrations); works_in/governs edges are
+            # the durable evidence of whose room this is.
+            holders = await pool.fetch(
+                "SELECT DISTINCT fo.canonical AS holder, l.type AS via "
+                "FROM links l "
+                "JOIN objects fo ON fo.id=l.from_id AND fo.type='Agent' "
+                "JOIN objects ro ON ro.id=l.to_id "
+                "WHERE ro.canonical = 'repo:' || $1 "
+                "  AND l.type IN ('works_in','governs') "
+                "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
+                "  AND EXISTS ("
+                "    SELECT 1 FROM current_assertions h JOIN objects ho ON ho.id=h.object_id "
+                "    WHERE h.name='handle' AND (ho.canonical=fo.canonical "
+                "          OR fo.canonical LIKE ho.canonical||'-%'))", r["project"])
+            souls: dict[str, set[str]] = {}
+            for h in holders:
+                base = _generation(str(h["holder"]))[0]
+                if base != _generation(mine)[0]:
+                    souls.setdefault(base, set()).add(str(h["via"]))
+            if not souls:
+                seatless[r["project"]] = seatless.get(r["project"], 0) + 1
+                continue
+            # the room's RESIDENT (works_in) outranks a supervising charter (governs) —
+            # an Alfred governs coldspot, but coldspot's anons presumptively belong to
+            # the seat that lives there
+            residents = sorted(b for b, via in souls.items() if "works_in" in via)
+            if len(souls) == 1:
+                base = next(iter(souls))
+            elif len(residents) == 1:
+                base = residents[0]
+            else:
+                pick = residents or sorted(souls)
+                recent = await pool.fetchval(
+                    "SELECT agent_id FROM agent_mounts "
+                    "WHERE agent_id LIKE ANY($1::text[]) "
+                    "ORDER BY last_seen DESC NULLS LAST LIMIT 1",
+                    [b for b in pick] + [b + "-%" for b in pick])
+                base = _generation(str(recent))[0] if recent else pick[0]
+            target = await living_head(pool, base)
+            cls = "charter-match"
+            if len(souls) == 1:
+                score = 0.75
+                signals = [f"anonymous mount in room '{r['project']}' at {cwd} — no "
+                           f"named lineage anchors there (the seat's row moved home at "
+                           f"the office migration), but the graph's charter answers: "
+                           f"{target} ({'/'.join(sorted(souls[base]))} "
+                           f"repo:{r['project']}) is the room's ONLY seat — the "
+                           "single-seat rule"]
+            else:
+                roster = ", ".join(f"{b} ({'/'.join(sorted(v))})"
+                                   for b, v in sorted(souls.items()))
+                score = 0.55
+                signals = [f"anonymous mount in room '{r['project']}' at {cwd} — no "
+                           f"named lineage anchors there; the charter names "
+                           f"{len(souls)} souls for this room [{roster}], resident "
+                           f"presumed: {target} — nuanced, verify by hand"]
         if target is None:
             continue
         trow = await pool.fetchrow(
@@ -282,8 +350,11 @@ async def find_agent_fold_candidates(
     # labels the census can no longer resolve (folded meanwhile) would confuse the tray —
     # they are stamped by fold_agent itself, so pending here is always actionable
     return {"examined": len(anons), "proposed": proposed, "pending": pending,
+            "seatless": seatless,
             "note": "proposals only — judge each with resolve_fold_candidate (merged | "
-                    "rejected); a rejection is remembered and never re-proposed"}
+                    "rejected); a rejection is remembered and never re-proposed; "
+                    "`seatless` counts anons in rooms whose charter names NO seat — "
+                    "visitor-gate demotion candidates, not folds"}
 
 
 async def resolve_fold_candidate(

@@ -240,6 +240,111 @@ async def test_archaeologist_flags_a_restart_mint(actions: Actions, tmp_path) ->
     assert float(mine[0]["score"]) < 0.9        # weaker class ranks behind aliases
 
 
+async def test_archaeologist_charter_match_finds_a_migrated_seat(
+    actions: Actions, tmp_path,
+) -> None:
+    """THE ARCHAEOLOGIST'S BLIND SPOT, cured (thread 3430c32b): the office migrations
+    moved every seat's mount row home to ~/.osiris/seats/<handle>, so an anon stranded
+    in the seat's OLD project room matches nothing by cwd. The room's seat is a GRAPH
+    fact — a live works_in edge to repo:<project> — and the charter does not move
+    house. Single seat on the charter → the single-seat presumption holds at .75."""
+    from src.orchestrator.folds import find_agent_fold_candidates
+
+    p = actions.pool
+    root = tmp_path / "projects"
+    jobs = tmp_path / "jobs"
+    slug = root / "-w-charter-repo"
+    slug.mkdir(parents=True)
+    (slug / "a10ne111-full.jsonl").write_text("{}\n")   # the anon has a body
+    await _mk_agent(actions, "agent:a10ne111", project="charterhouse")
+    seat = await actions.create_or_find_object("Agent", "agent:c4a97e01",
+                                               "agent:c4a97e01")
+    await actions.assert_property(seat, "handle", "Chartreuse", "agent:c4a97e01",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    room = await actions.create_or_find_object("SoftwareProject", "repo:charterhouse",
+                                               "repo:charterhouse")
+    await actions.create_link(seat, room, "works_in", "agent:c4a97e01",
+                              datetime.now(UTC), 0.9)
+    # the seat holds NO mount row anywhere — the ceremony-migrated case, rows died
+    await save_mount(p, job_dir=str(jobs / "a10ne111"), agent_id="agent:a10ne111",
+                     project="charterhouse", cwd="/w/charter-repo", model=None,
+                     session_key="whisper:a10ne111")
+
+    out = await find_agent_fold_candidates(p, projects_root=root, jobs_home=jobs)
+
+    mine = [c for c in out["pending"] if c["dupe"] == "agent:a10ne111"]
+    assert mine and mine[0]["into_label"] == "agent:c4a97e01"
+    assert mine[0]["class"] == "charter-match"
+    assert float(mine[0]["score"]) == 0.75      # the room's only seat
+
+
+async def test_archaeologist_leaves_a_seatless_room_alone(
+    actions: Actions, tmp_path,
+) -> None:
+    """A room whose charter names NO seat proposes nothing — its anons are the visitor
+    class (demotion candidates for the visitor gate), and folding them anywhere would
+    be a guess. The archaeologist counts them in `seatless` instead."""
+    from src.orchestrator.folds import find_agent_fold_candidates
+
+    p = actions.pool
+    root = tmp_path / "projects"
+    jobs = tmp_path / "jobs"
+    slug = root / "-w-orphan-repo"
+    slug.mkdir(parents=True)
+    (slug / "05eat111-full.jsonl").write_text("{}\n")
+    await _mk_agent(actions, "agent:05eat111", project="orphanage")
+    await save_mount(p, job_dir=str(jobs / "05eat111"), agent_id="agent:05eat111",
+                     project="orphanage", cwd="/w/orphan-repo", model=None,
+                     session_key="whisper:05eat111")
+
+    out = await find_agent_fold_candidates(p, projects_root=root, jobs_home=jobs)
+
+    assert not [c for c in out["pending"] if c["dupe"] == "agent:05eat111"]
+    assert out["seatless"].get("orphanage") == 1
+
+
+async def test_archaeologist_charter_match_prefers_the_resident(
+    actions: Actions, tmp_path,
+) -> None:
+    """When a room's charter names SEVERAL souls (a resident works_in beside a
+    supervising governs — the coldspot shape: Aegis lives there, Alfred governs it),
+    the anon is presumed the RESIDENT's, at the multi-seat score: nuanced, verify by
+    hand, both names in the signal."""
+    from src.orchestrator.folds import find_agent_fold_candidates
+
+    p = actions.pool
+    root = tmp_path / "projects"
+    jobs = tmp_path / "jobs"
+    slug = root / "-w-shared-repo"
+    slug.mkdir(parents=True)
+    (slug / "e5a12111-full.jsonl").write_text("{}\n")
+    await _mk_agent(actions, "agent:e5a12111", project="sharedroom")
+    room = await actions.create_or_find_object("SoftwareProject", "repo:sharedroom",
+                                               "repo:sharedroom")
+    resident = await actions.create_or_find_object("Agent", "agent:4e51den7",
+                                                   "agent:4e51den7")
+    await actions.assert_property(resident, "handle", "Resi", "agent:4e51den7",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await actions.create_link(resident, room, "works_in", "agent:4e51den7",
+                              datetime.now(UTC), 0.9)
+    boss = await actions.create_or_find_object("Agent", "agent:b055a1f4",
+                                               "agent:b055a1f4")
+    await actions.assert_property(boss, "handle", "Boss", "agent:b055a1f4",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await actions.create_link(boss, room, "governs", "agent:b055a1f4",
+                              datetime.now(UTC), 0.9)
+    await save_mount(p, job_dir=str(jobs / "e5a12111"), agent_id="agent:e5a12111",
+                     project="sharedroom", cwd="/w/shared-repo", model=None,
+                     session_key="whisper:e5a12111")
+
+    out = await find_agent_fold_candidates(p, projects_root=root, jobs_home=jobs)
+
+    mine = [c for c in out["pending"] if c["dupe"] == "agent:e5a12111"]
+    assert mine and mine[0]["into_label"] == "agent:4e51den7"
+    assert abs(float(mine[0]["score"]) - 0.55) < 1e-6  # several souls — hand-verify
+    assert "agent:b055a1f4" in str(mine[0]["signals"])  # the supervisor is named
+
+
 async def test_living_head_follows_a_cross_base_succession(actions: Actions) -> None:
     """THE AUTO-HEAL (operator, 2026-07-17: 'the folds have to auto heal'): a tray row
     citing a DEAD generation of a rebased lineage still lands its estate on the one who
