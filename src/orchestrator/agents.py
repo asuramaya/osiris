@@ -701,6 +701,7 @@ async def _last_anchored_stamp(
 async def mint_heir(
     actions: Actions, ancestor_id: str, ancestor_oid: uuid.UUID, *,
     because: str, succession: str | None, now: datetime | None = None,
+    minting_door: str | None = None,
 ) -> tuple[str, uuid.UUID]:
     """Mint the next generation of a lineage — ruling a882b334: a new MIND gets a new numeral,
     and the seams that count as a new mind include mid-session ones (live model swap,
@@ -727,6 +728,33 @@ async def mint_heir(
                                   confidence_for(do), evidence_class=do.value)
     await actions.assert_property(a, "minted_because", because, heir, now,
                                   confidence_for(do), evidence_class=do.value)
+    # THE PARALLEL-LIVES STAMP (thread 4bcd6541, invariant 3 of the guarantee cd35bb1d):
+    # rows are hot state — the pulse evidence at mint time must be captured AT THE MINT
+    # or it is gone by lint time. Stamp the predecessor lineage's freshest pulse; and
+    # when a DIFFERENT door than the one minting held a live pulse (view rows excluded —
+    # the alias is never the witness), stamp that door too. The graph_lint reads the
+    # stamps and alarms; the mint itself always proceeds (report-only downstream).
+    base = _generation(ancestor_id)[0]
+    m_door = Path(minting_door).name[:8] if minting_door else ""
+    pulse = await actions.pool.fetchrow(
+        "SELECT job_dir, last_seen FROM agent_mounts "
+        "WHERE (agent_id=$1 OR agent_id LIKE $1 || '-%') AND last_seen IS NOT NULL "
+        "ORDER BY last_seen DESC LIMIT 1", base)
+    if pulse is not None:
+        await actions.assert_property(a, "predecessor_last_seen",
+                                      pulse["last_seen"].isoformat(), heir, now,
+                                      confidence_for(do), evidence_class=do.value)
+        other = await actions.pool.fetchrow(
+            "SELECT job_dir, last_seen FROM agent_mounts "
+            "WHERE (agent_id=$1 OR agent_id LIKE $1 || '-%') AND last_seen IS NOT NULL "
+            "AND (session_key IS NULL OR session_key NOT LIKE 'view-of:%') "
+            "AND ($2 = '' OR job_dir IS NULL OR job_dir NOT LIKE '%/' || $2 || '%') "
+            "ORDER BY last_seen DESC LIMIT 1", base, m_door)
+        if (m_door and other is not None
+                and (now - other["last_seen"]).total_seconds() < 900):
+            o_door = Path(other["job_dir"]).name[:8] if other["job_dir"] else "?"
+            await actions.assert_property(a, "parallel_pulse_door", o_door, heir, now,
+                                          confidence_for(do), evidence_class=do.value)
     if succession:
         await actions.assert_property(a, "model_succession", succession, heir, now,
                                       confidence_for(do), evidence_class=do.value)
@@ -972,7 +1000,8 @@ async def live_succession(
         ancestor_oid = await actions.create_or_find_object("Agent", head, head)
         seam = f"{old} → {observed}" + (" [operator /model]" if deliberate else "")
         heir, heir_oid = await mint_heir(actions, head, ancestor_oid, because="live-swap",
-                                         succession=seam, now=now)
+                                         succession=seam, now=now,
+                                         minting_door=row["job_dir"])
         # the heartbeat's model is the harness's own word about a session it is rendering — as
         # anchored as a job_dir transcript read, and the baseline the NEXT seam check runs
         # against (without it, a later re-mount would see no anchored model on the heir and
@@ -1096,7 +1125,8 @@ async def register_agent(
         if mint_because:
             identity.succeeded_from = identity.agent_id
             heir, a = await mint_heir(actions, identity.agent_id, a, because=mint_because,
-                                      succession=identity.model_succession, now=now)
+                                      succession=identity.model_succession, now=now,
+                                      minting_door=identity.session)
             identity.agent_id = heir
             src = heir
     label = f"{identity.model or 'claude'} in {identity.project or '?'}"

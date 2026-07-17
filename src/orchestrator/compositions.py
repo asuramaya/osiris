@@ -970,7 +970,10 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     ATTRIBUTION (writes from agent ids the graph never registered — the impersonation
     class, made a standing tripwire), PHANTOM-TWIN (an anonymous un-spawned agent mounted
     at a Seat's office beside a different holder lineage — a resumed soul wearing a second
-    row; the one identity degradation that must never be silent)."""
+    row; the one identity degradation that must never be silent), PARALLEL-LIVES (a
+    generation minted while a different door of its own lineage held a live pulse — the
+    predecessor was not dead; reads the parallel_pulse_door stamp mint_heir writes at
+    the mint, thread 4bcd6541)."""
     stale_days = max(1, min(int(args.get("stale_days") or 14), 365))
     eps = float(args.get("eps") or 0.05)          # "near-tie" on the confidence axis
     live_secs = int(args.get("live_secs") or 900)  # a mount seen this recently is LIVE
@@ -1280,6 +1283,32 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                    "likely the same soul wearing a second row (a bridged resume without "
                    "its receipts). Verify and heal by hand; never auto-merge"}
         for r in twins])
+
+    # PARALLEL-LIVES (thread 4bcd6541, invariant 3 of the guarantee cd35bb1d) — a
+    # generation whose MINT captured a live pulse on a DIFFERENT door of its own lineage:
+    # the predecessor was not dead when the heir was crowned (g40-v/vi were minted while
+    # g40-iv worked; each would have tripped this within a minute). The evidence is the
+    # `parallel_pulse_door` stamp mint_heir writes AT the mint — rows are hot state and
+    # the pulse is gone by lint time, so the stamp is the only witness. Testimony for
+    # the fold tray; the seam may still have been real (verify), never auto-fold.
+    par = await pool.fetch(
+        "SELECT o.canonical AS heir, "
+        "  max(p.value #>> '{}') FILTER (WHERE p.name='parallel_pulse_door') AS door, "
+        "  max(p.value #>> '{}') FILTER (WHERE p.name='predecessor_last_seen') AS pulse_at, "
+        "  max(p.value #>> '{}') FILTER (WHERE p.name='minted_because') AS because "
+        "FROM objects o JOIN current_assertions p ON p.object_id=o.id "
+        "WHERE o.type='Agent' AND o.status='active' "
+        "AND p.name IN ('parallel_pulse_door','predecessor_last_seen','minted_because') "
+        "GROUP BY o.canonical "
+        "HAVING max(p.value #>> '{}') FILTER (WHERE p.name='parallel_pulse_door') "
+        "  IS NOT NULL")
+    land("parallel-lives", "warn", [
+        {"subject": r["heir"],
+         "detail": f"{r['heir']} was minted ({r['because'] or 'unknown seam'}) while "
+                   f"door {r['door']} of its own lineage held a live pulse (predecessor "
+                   f"last seen {r['pulse_at'] or '?'}) — a parallel life: the "
+                   "predecessor was not dead. Verify the seam; fold by hand if false"}
+        for r in par])
 
     findings.sort(key=lambda f: (_SEVERITY_RANK.get(str(f["severity"]), 9), str(f["check"])))
     capped = {c: n - _LINT_CAP for c, n in counts.items() if n > _LINT_CAP}

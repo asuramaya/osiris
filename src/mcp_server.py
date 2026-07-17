@@ -520,7 +520,9 @@ async def graph_lint(stale_days: int = 14) -> dict[str, Any]:
     retired objects), stale obligations (open duties older than `stale_days`), attribution
     anomalies (writes from agent ids the graph never registered — the impersonation class),
     phantom twins (an anonymous un-spawned agent mounted at a Seat's office beside a
-    different holder lineage — a resumed soul wearing a second row).
+    different holder lineage — a resumed soul wearing a second row), parallel lives (a
+    generation minted while a different door of its own lineage still pulsed — the
+    predecessor was not dead).
     Findings are TESTIMONY for a mind to judge, not verdicts to auto-apply; heal with
     compensating events, never DELETE (constitution 3)."""
     pool = await _pool_get()

@@ -348,3 +348,33 @@ async def test_lint_flags_the_phantom_twin_at_an_office(actions: Actions) -> Non
     assert twins[0]["severity"] == "warn"
     assert "agent:ab1e0001" in twins[0]["detail"]        # names whose office it haunts
     assert "never auto-merge" in twins[0]["detail"]      # constitution #1 in the finding
+
+
+async def test_lint_flags_a_parallel_life(actions: Actions) -> None:
+    """PARALLEL-LIVES (thread 4bcd6541, invariant 3 of the guarantee): a generation
+    minted while a DIFFERENT door of its own lineage still pulsed — the predecessor was
+    not dead. The stamp is written AT the mint (mint_heir; rows are hot state and the
+    pulse is gone by lint time); the lint reads the stamps and testifies. The phantom
+    generations g40-v/vi would each have tripped this within a minute."""
+    t = "agent:teller"
+    heir = await actions.create_or_find_object("Agent", "agent:para0001-ii", t)
+    await actions.assert_property(heir, "minted_because", "compaction", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(heir, "predecessor_last_seen", NOW.isoformat(), t,
+                                  NOW, 0.9, evidence_class=_SD)
+    await actions.assert_property(heir, "parallel_pulse_door", "a7e60257", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    # a CLEAN heir — stamped pulse, no parallel door: a legitimate seam, never flagged
+    clean = await actions.create_or_find_object("Agent", "agent:c1ean001-ii", t)
+    await actions.assert_property(clean, "minted_because", "compaction", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(clean, "predecessor_last_seen", NOW.isoformat(), t,
+                                  NOW, 0.9, evidence_class=_SD)
+
+    out = await _fn(actions, "lint", {})
+
+    par = _by_check(out, "parallel-lives")
+    assert [f["subject"] for f in par] == ["agent:para0001-ii"]
+    assert par[0]["severity"] == "warn"
+    assert "a7e60257" in par[0]["detail"]                # names the live door
+    assert "fold by hand" in par[0]["detail"]            # testimony, never a verdict

@@ -1021,3 +1021,40 @@ async def test_lineage_head_resolves_a_merged_start_to_the_winner(
     await actions.merge_objects(b1, b2, "false successor with no heirs", "agent:test")
     # the folded node itself resolves to the winner, never to its own grave
     assert await lineage_head(actions.pool, "agent:22c0ffee-ii") == "agent:22c0ffee"
+
+
+async def test_mint_stamps_the_parallel_pulse(actions: Actions) -> None:
+    """THE PARALLEL-LIVES STAMP (thread 4bcd6541): rows are hot state, so the pulse
+    evidence at mint time is captured AT the mint — predecessor_last_seen always, and
+    parallel_pulse_door only when a DIFFERENT door of the lineage was live at the seam
+    (one's own door never alarms; a view row is never the witness)."""
+    from src.orchestrator.agents import mint_heir
+    from src.orchestrator.mounts import save_mount
+
+    base = await actions.create_or_find_object("Agent", "agent:11fe0001", "agent:11fe0001")
+    # the lineage pulses on TWO doors: its own (the one compacting) and a foreign one
+    await save_mount(actions.pool, job_dir="/x/jobs/0eeed0a1", agent_id="agent:11fe0001",
+                     project="p", cwd="/w/p", model=None, session_key=None)
+    await save_mount(actions.pool, job_dir="/x/jobs/f0be1a2b", agent_id="agent:11fe0001",
+                     project="p", cwd="/w/p", model=None, session_key=None)
+    _heir, hoid = await mint_heir(actions, "agent:11fe0001", base, because="compaction",
+                                  succession=None, minting_door="/x/jobs/0eeed0a1")
+    got = {r["name"]: r["v"] for r in await actions.pool.fetch(
+        "SELECT a.name, a.value#>>'{}' AS v FROM current_assertions a "
+        "WHERE a.object_id=$1 "
+        "AND a.name IN ('predecessor_last_seen','parallel_pulse_door')", hoid)}
+    assert "predecessor_last_seen" in got                # the last breath is on record
+    assert got.get("parallel_pulse_door") == "f0be1a2b"  # the OTHER door was live
+
+    # a single-door lineage: its own pulse is the dying session's — never an alarm
+    b2 = await actions.create_or_find_object("Agent", "agent:50101112", "agent:50101112")
+    await save_mount(actions.pool, job_dir="/x/jobs/50101112", agent_id="agent:50101112",
+                     project="p", cwd="/w/p", model=None, session_key=None)
+    _heir2, hoid2 = await mint_heir(actions, "agent:50101112", b2, because="compaction",
+                                    succession=None, minting_door="/x/jobs/50101112")
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM current_assertions "
+        "WHERE object_id=$1 AND name='parallel_pulse_door'", hoid2) is None
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM current_assertions "
+        "WHERE object_id=$1 AND name='predecessor_last_seen'", hoid2) == 1
