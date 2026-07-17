@@ -392,6 +392,42 @@ async def test_automount_reseeds_on_hand_resume(actions: Actions, tmp_path: Path
     assert await seat_of_mount(actions.pool, job_dir=resumed["job_dir"]) == seat["seat_id"]
 
 
+async def test_session_end_releases_only_the_ending_door(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """THE DOOR-SCOPED RELEASE (the g40-v/g40-vi false-succession incident, 2026-07-17):
+    SessionEnd released EVERY row of the ending session's agent — so one closing
+    tab-view deleted the LIVING session's anchor, the emptied registry read as the
+    seat's death, and the office door minted false successors at thoth's own office.
+    Only the ending door's own rows may go; the seat-wide release is retire()'s."""
+    from src.orchestrator.handshake import session_end
+    from src.orchestrator.mounts import save_mount
+
+    await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "11ab5001"),
+                     agent_id="agent:11ab5001", project="p", cwd="/w/p",
+                     model=None, session_key="whisper:11ab5001")
+    tab_sid = "beef7777-0000-4000-8000-000000000000"
+    await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "beef7777"),
+                     agent_id="agent:11ab5001", project="p", cwd="/w/p",
+                     model=None, session_key="view-of:11ab5001")
+
+    out = await session_end(actions, session_id=tab_sid, jobs_home=tmp_path / "jobs")
+
+    assert out["released"] == 1                       # the tab's own row and nothing else
+    assert await actions.pool.fetchval(
+        "SELECT agent_id FROM agent_mounts WHERE job_dir=$1",
+        str(tmp_path / "jobs" / "11ab5001")) == "agent:11ab5001"   # the living anchor STANDS
+
+    # a resume's binding rides its ANCESTOR's job_dir, keyed sid:<its own id> — the
+    # resumed session's own end must find and release that row too
+    res_sid = "c0de9999-0000-4000-8000-000000000000"
+    await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "0e1d0b99"),
+                     agent_id="agent:11ab5001", project="p", cwd="/w/p",
+                     model=None, session_key="sid:" + res_sid.replace("-", ""))
+    out2 = await session_end(actions, session_id=res_sid, jobs_home=tmp_path / "jobs")
+    assert out2["released"] == 1
+
+
 # --- Phase B3: the binding is part of who you are ---
 
 

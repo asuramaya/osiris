@@ -94,6 +94,25 @@ async def release_mounts(pool: asyncpg.Pool, agent_id: str) -> int:
     return int(tag.rsplit(" ", 1)[-1])
 
 
+async def release_session_mounts(
+    pool: asyncpg.Pool, *, job_dir: str, session_id: str,
+) -> int:
+    """THE DOOR-SCOPED RELEASE (the g40-v/g40-vi false-succession incident, 2026-07-17):
+    SessionEnd releases the ENDING SESSION's rows — its own anchor row plus any row its
+    binding rode elsewhere (a resume anchors at its ancestor's job_dir, marked
+    session_key='sid:<its own id>') — and NEVER the whole seat. release_mounts(agent_id)
+    here let one closing tab-view delete a LIVING session's anchor row; the wrongly
+    emptied registry then read as the seat's death, and the office door — correct on its
+    own evidence — minted false successors at thoth's own office (a title-generator stub
+    nearly took the throne). A row is an ADDRESS: only the addressed door's death may
+    release it. Seat-wide release stays retire()'s — a mind's deliberate farewell."""
+    sid32 = (session_id or "").replace("-", "").strip().lower()
+    n = await pool.fetchval(
+        "WITH gone AS (DELETE FROM agent_mounts WHERE job_dir=$1 OR session_key=$2 "
+        "RETURNING 1) SELECT count(*) FROM gone", job_dir, f"sid:{sid32}")
+    return int(n or 0)
+
+
 async def find_mount(pool: asyncpg.Pool, *, job_dir: str) -> MountRecord | None:
     """The durable mount for a job_dir, or None (never mounted / no durable handle)."""
     r = await pool.fetchrow(

@@ -427,15 +427,24 @@ async def session_end(
     Same anchor derivation as `automount` (`_derive_job_dir`: the harness's own
     ~/.claude/jobs/<sid[:8]> scheme) — a session that was never mounted (no row: a phantom/spare
     that never earned a pulse, or a session id too short to trust) is a silent, honest no-op,
-    never an error."""
+    never an error.
+
+    DOOR-SCOPED (the g40-v/g40-vi false-succession incident, 2026-07-17): only the ENDING
+    session's own rows are released — its anchor row plus any row carrying its binding
+    (session_key='sid:<its id>', the resume lane's mark). Releasing by agent_id let one
+    closing tab-view delete a LIVING session's anchor; the emptied registry read as the
+    seat's death, and the office door minted false successors. A row is an ADDRESS — only
+    the addressed door's death releases it; the seat-wide release remains retire()'s."""
     job_dir = _derive_job_dir(session_id, jobs_home=jobs_home)
     if job_dir is None:
         return {"released": 0, "note": "session id too short to derive an anchor"}
     row = await mounts.find_mount(actions.pool, job_dir=job_dir)
-    if row is None:
+    released = await mounts.release_session_mounts(
+        actions.pool, job_dir=job_dir, session_id=session_id)
+    if released == 0:
         return {"released": 0, "note": "no durable mount for this session — nothing to release"}
-    released = await mounts.release_mounts(actions.pool, row.agent_id)
-    return {"agent": row.agent_id, "project": row.project, "released": released}
+    return {"agent": row.agent_id if row else None,
+            "project": row.project if row else None, "released": released}
 
 
 async def _seat_of(actions: Actions, agent_id: str) -> str | None:
