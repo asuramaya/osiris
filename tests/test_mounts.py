@@ -439,3 +439,86 @@ async def test_mount_refuses_an_identity_conflict_loudly(actions: Actions,
     # NO WRITES on a refusal: the sibling's anchor row was never touched or created
     assert await mounts.find_mount(
         actions.pool, job_dir=str(tmp_path / "jobs" / "bbbb2222")) is None
+
+
+# ───────────────────────────── the door sweep (operator ruling, 2026-07-17) ──────────────
+
+
+async def test_sweep_stale_doors_keeps_one_last_known_address(actions: Actions) -> None:
+    """THE PILE RULE: 23-door seats were leaked rows from kills that skipped SessionEnd.
+    Stale doors collapse to the freshest one per ACTIVE agent — the last-known address."""
+    p = actions.pool
+    await actions.create_or_find_object("Agent", "agent:deadbee1", "agent:deadbee1")
+    for jd, mins in (("/x/jobs/deadbee1", 20.0), ("/x/jobs/deadbee2", 60.0),
+                     ("/x/jobs/deadbee3", 120.0)):
+        await mounts.save_mount(p, job_dir=jd, agent_id="agent:deadbee1", project="pile",
+                                cwd="/repo/pile", model=None, session_key=None)
+        await p.execute(
+            "UPDATE agent_mounts SET last_seen = now() - make_interval(mins => $2) "
+            "WHERE job_dir=$1", jd, mins)
+    released = await mounts.sweep_stale_doors(p)
+    assert released == 2
+    left = [r["job_dir"] for r in await p.fetch("SELECT job_dir FROM agent_mounts")]
+    assert left == ["/x/jobs/deadbee1"]  # the freshest stale door survives as the address
+
+
+async def test_sweep_stale_doors_keeps_nothing_for_strangers_or_the_shadowed(
+    actions: Actions,
+) -> None:
+    """An objectless stranger holds no address at all; an agent with a FRESH door needs no
+    stale one kept — the fresh row already IS its address."""
+    p = actions.pool
+    # the stranger: no object behind the id
+    await mounts.save_mount(p, job_dir="/x/jobs/aaaa0001", agent_id="agent:aaaa0001",
+                            project="x", cwd="/r/x", model=None,
+                            session_key="whisper:aaaa0001")
+    # the seated agent: one fresh door, one stale
+    await actions.create_or_find_object("Agent", "agent:bbbb0001", "agent:bbbb0001")
+    for jd in ("/x/jobs/bbbb0001", "/x/jobs/bbbb0002"):
+        await mounts.save_mount(p, job_dir=jd, agent_id="agent:bbbb0001", project="y",
+                                cwd="/r/y", model=None, session_key=None)
+    await p.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '1 hour' "
+        "WHERE job_dir IN ('/x/jobs/aaaa0001', '/x/jobs/bbbb0002')")
+    released = await mounts.sweep_stale_doors(p)
+    assert released == 2
+    left = {r["job_dir"] for r in await p.fetch("SELECT job_dir FROM agent_mounts")}
+    assert left == {"/x/jobs/bbbb0001"}
+
+
+async def test_sweep_ghost_doors_releases_the_killed_tab_never_a_backed_door(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE GHOST RULE: a fresh row with no body at its cwd AND none in its project is a
+    killed tab's leak — released now. Either witness alone (the exact cwd, or the project
+    label anywhere) keeps the door: the double gate protects living sessions."""
+    p = actions.pool
+    alive = tmp_path / "alive"
+    alive.mkdir()
+    office = tmp_path / "office"
+    office.mkdir()
+    dead = tmp_path / "dead"
+    dead.mkdir()
+    for jd, cwd, proj in (("/x/jobs/cafe0001", str(alive), "alive"),
+                          ("/x/jobs/cafe0002", str(office), "alive"),
+                          ("/x/jobs/cafe0003", str(dead), "dead")):
+        await mounts.save_mount(p, job_dir=jd, agent_id="agent:cafe9999", project=proj,
+                                cwd=cwd, model=None, session_key=None)
+    await p.execute(  # inside the window, past the newborn grace
+        "UPDATE agent_mounts SET last_seen = now() - interval '5 minutes'")
+    released = await mounts.sweep_ghost_doors(
+        p, body_cwds={str(alive.resolve())}, body_projects={"alive"})
+    assert released == 1
+    left = {r["job_dir"] for r in await p.fetch("SELECT job_dir FROM agent_mounts")}
+    assert left == {"/x/jobs/cafe0001", "/x/jobs/cafe0002"}
+
+
+async def test_sweep_ghost_doors_grace_shields_the_newborn(actions: Actions) -> None:
+    """A row pulsed seconds ago is too new to judge — a session born after the /proc scan
+    must never be read as bodyless (its whisper wrote the row; the census predates it)."""
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/feed0001", agent_id="agent:feed0001",
+                            project="new", cwd="/r/new", model=None, session_key=None)
+    released = await mounts.sweep_ghost_doors(p, body_cwds=set(), body_projects=set())
+    assert released == 0
+    assert await p.fetchval("SELECT count(*) FROM agent_mounts") == 1

@@ -266,8 +266,17 @@ async def _counts(
             "   ON r.message_id=m.id WHERE m.to_project=$1 AND m.to_agent IS NULL "
             "   AND r.agent_id <> $3 AND r.read_at IS NULL AND r.delivered_at IS NOT NULL "
             "   AND r.delivered_at >= now() - make_interval(secs => $2)) AS flight, "
-            " (SELECT count(*) FROM agent_mounts "
-            "   WHERE last_seen > now() - interval '15 minutes') AS live_agents, "
+            # SEATED ONLY (operator, 2026-07-17: 'fleet 5 but there are only 3 agents up'):
+            # the fleet number counts deliberately-bound minds — a row whose agent is just
+            # the session id echoed back (the whisper's own artifact, no object behind it)
+            # is a stranger's door, not a fleet member. Same discriminator as the visitor
+            # gate: base differs from the sid-derived base, or an active object exists.
+            " (SELECT count(*) FROM agent_mounts m2 "
+            "   WHERE m2.last_seen > now() - interval '15 minutes' "
+            "   AND (substring(m2.agent_id from 7 for 8) IS DISTINCT FROM "
+            "        substring(split_part(coalesce(m2.session_key,''), ':', 2) from 1 for 8) "
+            "     OR EXISTS (SELECT 1 FROM objects o WHERE o.canonical = m2.agent_id "
+            "          AND o.status='active'))) AS live_agents, "
             " (SELECT count(*) FROM agent_wakes "
             "   WHERE woke_at > now() - interval '1 hour') AS wakes",
             project, LEASE_SECS, agent,

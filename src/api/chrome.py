@@ -557,7 +557,15 @@ async def fleet_data(pool: asyncpg.Pool, *, wake_budget: int = 0) -> dict[str, A
         " (SELECT a.value #>> '{}' FROM current_assertions a "
         "   JOIN objects o ON o.id=a.object_id "
         "   WHERE o.canonical=m.agent_id AND a.name='seat_generation' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS seat_gen "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS seat_gen, "
+        # SEATED (operator, 2026-07-17: 'fleet 5 but there are only 3 agents up') — the
+        # visitor gate's own discriminator, read not enforced: a row whose agent id is just
+        # the session id echoed back, with no active object behind it, is a stranger's door
+        # (a bg-pty host, a spare, a passing whisper) and must never count as fleet.
+        " (substring(m.agent_id from 7 for 8) IS DISTINCT FROM "
+        "    substring(split_part(coalesce(m.session_key,''), ':', 2) from 1 for 8) "
+        "  OR EXISTS (SELECT 1 FROM objects o WHERE o.canonical=m.agent_id "
+        "       AND o.status='active')) AS seated "
         "FROM agent_mounts m ORDER BY m.last_seen DESC LIMIT 240")]
     for m in rows:
         gen = int(m["seat_gen"]) if m.get("seat_gen") else None
@@ -594,6 +602,7 @@ async def fleet_data(pool: asyncpg.Pool, *, wake_budget: int = 0) -> dict[str, A
         best = dict(head[0])
         allrows = [g for grp in gens.values() for g in grp]
         best["live"] = any(g["live"] for g in allrows)
+        best["seated"] = any(g.get("seated") for g in allrows)
         best["age_secs"] = min(float(g["age_secs"] or 1e9) for g in allrows)
         best["sessions"] = len(allrows)
         # the head's doors, realest first — each carrying what the renderer EXPLAINS
@@ -675,7 +684,11 @@ def _fleet_row(m: dict[str, Any]) -> str:
 
 def render_fleet(data: dict[str, Any]) -> str:
     mounts = data["mounts"]
-    live_n = sum(1 for m in mounts if m["live"])
+    # the fleet number counts SEATED minds only (operator, 2026-07-17: 'fleet 5 but there
+    # are only 3 agents up') — a live stranger's session (a bg-pty host, a spare) is real,
+    # so it is confessed beside the number, never counted inside it.
+    live_n = sum(1 for m in mounts if m["live"] and m.get("seated", True))
+    vis_n = sum(1 for m in mounts if m["live"] and not m.get("seated", True))
     budget = (f' / {data["wake_budget"]}' if data.get("wake_budget") else "")
     # SOULS FIRST, DOORS NEVER (operator, 2026-07-16: "the 3x ra and 3x thoth is still
     # there and very confusing"): a soul's extra mount rows are doorways — tabs, resumes —
@@ -684,7 +697,8 @@ def render_fleet(data: dict[str, Any]) -> str:
     # as such, not paraded as peers of the named.
     named = [m for m in mounts if m.get("seat")]
     anon = [m for m in mounts if not m.get("seat")]
-    out = [f'<h2>seats <span class="pill">{live_n} live · '
+    vis = f" · {vis_n} visitor{'s' if vis_n != 1 else ''}" if vis_n else ""
+    out = [f'<h2>seats <span class="pill">{live_n} live{vis} · '
            f'{len(named)} soul{"s" if len(named) != 1 else ""} · '
            f'{len(anon)} unreconciled</span> '
            f'<span class="pill">wakes {data["wakes_hour"]}{budget}/h</span></h2>']

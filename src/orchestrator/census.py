@@ -11,19 +11,26 @@ a fresh `last_seen`. Two ways that belief outlives reality:
     whisper seats it unconditionally) but never backed an actual session: no transcript ever
     materialized. No ping-window catches this one, because there was never a pulse to decay.
 
-Both are invisible to a query that only ever asks the graph. This module asks the OS instead:
-`pgrep -x claude` is the verified live door (heinrich's census probe) — Claude Code rewrites
-argv to the bare literal `claude`, so no session id ever rides there, and the harness
-appends-and-closes its transcript fd rather than holding it open, so both `argv`-grep and
-`lsof`-on-a-held-fd are VERIFIED DEAD ENDS; do not resurrect them. `/proc/<pid>/cwd` is each
-body's project, exactly as `resolve_identity` derives one from a cwd (`read_project_label`'s
-`.osiris` walk, falling back to the folder's basename) — reused here, not reinvented, so a
-census label always matches a mount's. `/proc/<pid>/exe` is the second witness: it resolves to
-the packaged binary itself (`~/.local/share/claude/versions/<ver>`, verified live on this box —
-the installer replaces the file in place, so the running exe's directory shape is stable across
-version bumps even though the exact version string is not), which tells a real `claude` body
-apart from an unrelated process that happens to share the truncated 15-char `comm` field
-`pgrep -x` matches on.
+Both are invisible to a query that only ever asks the graph. This module asks the OS instead.
+Claude Code rewrites argv to the bare literal `claude`, so no session id ever rides there, and
+the harness appends-and-closes its transcript fd rather than holding it open, so both
+`argv`-grep and `lsof`-on-a-held-fd are VERIFIED DEAD ENDS; do not resurrect them. `pgrep -x
+claude` was the original door and it is a THIRD dead end (field-verified 2026-07-17): the
+harness daemon's pty-hosted sessions run with comm `2.1.212` — the version string, not
+`claude` — so a comm match misses every daemon-hosted body, and a sweep trusting it would
+release the doors of living sessions. The honest net is WIDE-THEN-NARROW: `pgrep -u <uid>`
+lists every process we own, and `/proc/<pid>/exe` — which resolves to the packaged binary
+itself (`~/.local/share/claude/versions/<ver>`; the installer replaces the file in place, so
+the directory shape is stable across version bumps even though the exact version string is
+not) — is the one discriminator that never lies about what a process is. `/proc/<pid>/cwd` is
+each body's project, exactly as `resolve_identity` derives one from a cwd
+(`read_project_label`'s `.osiris` walk, falling back to the folder's basename) — reused here,
+not reinvented, so a census label always matches a mount's.
+
+BLIND IS NOT EMPTY: a census that could not run (pgrep missing, timed out, errored) returns
+None from its pgrep seam, never []. `live_bodies` degrades a blind census to {} (it only ever
+ADDS a cross-check), but `live_bodies_by_cwd` propagates the None — its callers hold a DELETE
+verb, and "I could not look" must never be read as "nobody is home".
 
 Pure OS truth, no graph read here at all — `fleet()` is the one place that folds this against
 the mount registry's belief to make the gap visible. Every OS read is behind an injectable seam
@@ -31,6 +38,7 @@ so tests drive it with fakes, never a real `/proc` or a real `pgrep`.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from collections import defaultdict
 from collections.abc import Callable
@@ -38,19 +46,24 @@ from pathlib import Path
 
 from src.orchestrator.agents import read_project_label
 
-PgrepFn = Callable[[], list[int]]
+PgrepFn = Callable[[], "list[int] | None"]
 ReadFn = Callable[[int], "str | None"]
 
 
-def _pgrep_claude() -> list[int]:
-    """PIDs of every live `claude` body on the box — heinrich's verified census door. Absent
-    binary / any OS failure degrades to an empty census (never a raised error): this is a
-    best-effort cross-check, not a dependency anything else's correctness relies on."""
+def _pgrep_candidates() -> list[int] | None:
+    """Every PID this user owns — the wide net; `_is_claude_body`'s exe check is the narrow
+    one (comm-matching `pgrep -x claude` misses daemon-hosted bodies whose comm is the
+    version string — see the module doctrine). None means BLIND (pgrep itself failed: missing
+    binary, timeout, an error exit) as opposed to an honest empty list — pgrep's exit 1
+    ("no matches") stays an honest [], though for our own uid it cannot happen."""
     try:
         out = subprocess.run(
-            ["pgrep", "-x", "claude"], capture_output=True, text=True, timeout=2, check=False)
+            ["pgrep", "-u", str(os.getuid())],
+            capture_output=True, text=True, timeout=2, check=False)
     except (OSError, subprocess.SubprocessError):
-        return []
+        return None
+    if out.returncode > 1:
+        return None
     return [int(tok) for tok in out.stdout.split() if tok.isdigit()]
 
 
@@ -86,7 +99,7 @@ def _is_claude_body(exe: str | None) -> bool:
 
 def live_bodies(
     *,
-    pgrep: PgrepFn = _pgrep_claude,
+    pgrep: PgrepFn = _pgrep_candidates,
     read_cwd: ReadFn = _proc_cwd,
     read_exe: ReadFn = _proc_exe,
 ) -> dict[str, list[int]]:
@@ -101,11 +114,15 @@ def live_bodies(
     functions above are the real OS-facing default and are never exercised by a test directly.
 
     Best-effort at every layer, not just its own default `pgrep`: an INJECTED `pgrep` that
-    raises degrades to an empty census exactly the same as a missing binary — a census is a
-    cross-check, never a hard dependency the rest of the fleet's correctness needs."""
+    raises (or returns None — the blind census) degrades to an empty census exactly the same
+    as a missing binary — a census here is a cross-check, never a hard dependency the rest of
+    the fleet's correctness needs. A caller that would ACT on emptiness (the door sweep's
+    delete verb) must use `live_bodies_by_cwd`, where blindness stays distinguishable."""
     try:
         pids = pgrep()
     except Exception:  # noqa: BLE001
+        return {}
+    if pids is None:
         return {}
     out: dict[str, list[int]] = defaultdict(list)
     for pid in pids:
@@ -116,4 +133,34 @@ def live_bodies(
             continue
         project = read_project_label(cwd) or Path(cwd).name
         out[project].append(pid)
+    return dict(out)
+
+
+def live_bodies_by_cwd(
+    *,
+    pgrep: PgrepFn = _pgrep_candidates,
+    read_cwd: ReadFn = _proc_cwd,
+    read_exe: ReadFn = _proc_exe,
+) -> dict[str, list[int]] | None:
+    """{resolved cwd: [pid, ...]} — the door sweep's witness, cwd-grained where `live_bodies`
+    is project-grained: an office and the repo it governs can share one project label, and a
+    door may only be released on the word of the exact directory it opens into.
+
+    None means the census was BLIND (pgrep itself failed) — a caller holding a delete verb
+    must skip its tick entirely, never treat blindness as an empty box: releasing every fresh
+    door because we could not look would bounce every living session to 'mount first'."""
+    try:
+        pids = pgrep()
+    except Exception:  # noqa: BLE001
+        return None
+    if pids is None:
+        return None
+    out: dict[str, list[int]] = defaultdict(list)
+    for pid in pids:
+        if not _is_claude_body(read_exe(pid)):
+            continue
+        cwd = read_cwd(pid)
+        if not cwd:
+            continue
+        out[str(Path(cwd).resolve())].append(pid)
     return dict(out)

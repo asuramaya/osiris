@@ -114,6 +114,85 @@ async def release_session_mounts(
     return int(n or 0)
 
 
+_DOOR_WINDOW_SECS = 900  # the same 15-minute decay every liveness read in the fleet uses
+_GHOST_GRACE_SECS = 120  # a row pulsed this recently is too new for the ghost rule to judge
+
+
+def _normed(cwd: str | None) -> str:
+    """Pure-string path normalization (no IO — safe beside an event loop): body cwds arrive
+    kernel-resolved from /proc, and a symlinked row cwd that misses the cwd witness still
+    matches the PROJECT witness (both labels come from the same .osiris walk), so a living
+    door never hangs on symlink luck."""
+    return os.path.normpath(cwd) if cwd else ""
+
+
+async def sweep_stale_doors(pool: asyncpg.Pool) -> int:
+    """THE PILE RULE (operator ruling, 2026-07-17: 'the 20+ doors on some i also consider a
+    bug'): a row is an ADDRESS, and an agent has ONE last-known address — not a pile of
+    corpses back to the first week. SessionEnd deletes a door when it fires; every kill,
+    crash, and reboot skips the hook and leaks its row FOREVER, which is where 23-door seats
+    came from. This sweep is the standing broom: among rows past the liveness window, keep
+    exactly the freshest per agent as its last-known address — and keep even that only for an
+    agent the graph still calls active (a fresh row elsewhere already IS the address; a
+    demoted claimant, a retired seat, or an objectless stranger holds no address at all).
+    Pure SQL, no OS read — the ghost rule (`sweep_ghost_doors`) is the one that needs eyes.
+    Returns rows released."""
+    n = await pool.fetchval(
+        "WITH aged AS ("
+        "  SELECT job_dir, agent_id, row_number() OVER ("
+        "    PARTITION BY agent_id ORDER BY COALESCE(last_seen, mounted_at) DESC) AS rn"
+        "  FROM agent_mounts"
+        "  WHERE COALESCE(last_seen, mounted_at) < now() - make_interval(secs => $1)), "
+        "doomed AS ("
+        "  SELECT a.job_dir FROM aged a"
+        "  WHERE a.rn > 1"
+        "     OR EXISTS (SELECT 1 FROM agent_mounts f WHERE f.agent_id = a.agent_id"
+        "          AND COALESCE(f.last_seen, f.mounted_at) >= now() - make_interval(secs => $1))"
+        "     OR NOT EXISTS (SELECT 1 FROM objects o WHERE o.canonical = a.agent_id"
+        "          AND o.status = 'active')), "
+        "gone AS (DELETE FROM agent_mounts m USING doomed d WHERE m.job_dir = d.job_dir"
+        "  RETURNING 1) "
+        "SELECT count(*) FROM gone", float(_DOOR_WINDOW_SECS))
+    return int(n or 0)
+
+
+async def sweep_ghost_doors(
+    pool: asyncpg.Pool, *, body_cwds: set[str], body_projects: set[str],
+) -> int:
+    """THE GHOST RULE — the late SessionEnd, automated (queue item 5, ruled a bug by the
+    operator 2026-07-17: 'fleet 5 but there are only 3 agents up'): a terminal kill skips the
+    SessionEnd hook, so the dead tab's row stays 'live' for the full decay window and the
+    panel lies for fifteen minutes. The OS knows better RIGHT NOW: a fresh row whose cwd
+    holds no claude body AND whose project holds none anywhere (the double gate — an office
+    and its governed repo can share a label, and a label quirk must never cost a living
+    session its door) is a ghost, released on the spot.
+
+    THE CALLER OWNS THE BLINDNESS CHECK: `census.live_bodies_by_cwd()` returning None means
+    'could not look' and this function must simply not be called that tick. Two race guards:
+    a GRACE floor (rows pulsed within the last two minutes are too new to judge — a session
+    born after the /proc scan must never be read as bodyless), and the delete re-checks
+    `last_seen` unchanged, so a row re-pulsed after the fetch survives untouched. A killed
+    tab's door thus releases in ~2 minutes instead of decaying for 15. Returns rows
+    released."""
+    rows = await pool.fetch(
+        "SELECT job_dir, cwd, project, last_seen FROM agent_mounts "
+        "WHERE COALESCE(last_seen, mounted_at) >= now() - make_interval(secs => $1) "
+        "  AND COALESCE(last_seen, mounted_at) < now() - make_interval(secs => $2)",
+        float(_DOOR_WINDOW_SECS), float(_GHOST_GRACE_SECS))
+    released = 0
+    for r in rows:
+        cwd = _normed(r["cwd"])
+        project = r["project"] or (Path(cwd).name if cwd else "")
+        if cwd in body_cwds or (project and project in body_projects):
+            continue
+        n = await pool.fetchval(
+            "WITH gone AS (DELETE FROM agent_mounts WHERE job_dir = $1"
+            "  AND last_seen IS NOT DISTINCT FROM $2 RETURNING 1) "
+            "SELECT count(*) FROM gone", r["job_dir"], r["last_seen"])
+        released += int(n or 0)
+    return released
+
+
 async def find_mount(pool: asyncpg.Pool, *, job_dir: str) -> MountRecord | None:
     """The durable mount for a job_dir, or None (never mounted / no durable handle)."""
     r = await pool.fetchrow(

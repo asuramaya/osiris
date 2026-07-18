@@ -95,3 +95,37 @@ def test_the_real_os_facing_default_never_crashes() -> None:
     process table looks like, live_bodies() must return a plain dict, never raise."""
     out = live_bodies()
     assert isinstance(out, dict)
+
+
+def test_blindness_is_none_never_an_empty_box(tmp_path: Path) -> None:
+    """BLIND IS NOT EMPTY: pgrep failing (None, or raising) must stay distinguishable from
+    an honest zero — the door sweep deletes on the strength of 'nobody is home', which only
+    an honest census may say. `live_bodies` (a pure cross-check) degrades to {} instead."""
+    from src.orchestrator.census import live_bodies_by_cwd
+
+    def _boom() -> list[int] | None:
+        raise OSError("pgrep exploded")
+
+    assert live_bodies_by_cwd(
+        pgrep=lambda: None, read_cwd=lambda _: None, read_exe=lambda _: None) is None
+    assert live_bodies_by_cwd(
+        pgrep=_boom, read_cwd=lambda _: None, read_exe=lambda _: None) is None
+    assert live_bodies(
+        pgrep=lambda: None, read_cwd=lambda _: None, read_exe=lambda _: None) == {}
+
+
+def test_live_bodies_by_cwd_is_directory_grained(tmp_path: Path) -> None:
+    """The sweep's witness: same project label, two directories — an office and its governed
+    repo — stay distinct doors; the exe check still refuses the impostor."""
+    from src.orchestrator.census import live_bodies_by_cwd
+
+    a = tmp_path / "office"
+    a.mkdir()
+    b = tmp_path / "repo"
+    b.mkdir()
+    out = live_bodies_by_cwd(
+        pgrep=lambda: [1, 2, 3, 4],
+        read_cwd={1: str(a), 2: str(a), 3: str(b), 4: str(b)}.get,
+        read_exe={1: _versions_exe(), 2: _versions_exe(), 3: _versions_exe(),
+                  4: "/usr/bin/node"}.get)
+    assert out == {str(a.resolve()): [1, 2], str(b.resolve()): [3]}

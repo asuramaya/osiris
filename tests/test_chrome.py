@@ -325,3 +325,34 @@ async def test_fleet_folds_a_name_across_rebased_id_lineages(actions: Actions) -
     assert len(mine) == 1                              # one NAME, one row — across bases
     assert mine[0]["agent_id"] == "agent:4e60ba5e"     # the freshest life is the face
     assert len(mine[0]["ancestors"]) == 1              # the old base is a past life
+
+
+async def test_fleet_counts_seated_minds_never_passing_strangers(actions: Actions) -> None:
+    """SEATED ONLY (operator, 2026-07-17: 'chrome shows fleet 5 but there are only 3 agents
+    up'): the whisper's own echo — agent id derived from the session id, no active object
+    behind it (a bg-pty host, a spare) — is a stranger's door. Real, live, confessed beside
+    the number as a visitor; never counted inside it. A sid-derived id that EARNED an object
+    is seated (the visitor gate's other witness)."""
+    from src.api.chrome import fleet_data, render_fleet
+    from src.orchestrator.mounts import save_mount
+
+    p = actions.pool
+    # a seated mind: the bound base differs from the sid-derived base
+    await save_mount(p, job_dir="/jobs/beef0001", agent_id="agent:0af3c001",
+                     project="osiris", cwd="/w/osiris", model="claude-fable-5",
+                     session_key="whisper:beef0001")
+    # a passing stranger: id == sid base, no object behind it
+    await save_mount(p, job_dir="/jobs/feed0002", agent_id="agent:feed0002",
+                     project="atlas", cwd="/w/atlas", model=None,
+                     session_key="whisper:feed0002")
+    # the earned name: sid-derived base but a real active object — seated
+    await actions.create_or_find_object("Agent", "agent:ca11ab1e", "agent:ca11ab1e")
+    await save_mount(p, job_dir="/jobs/ca11ab1e", agent_id="agent:ca11ab1e",
+                     project="kast", cwd="/w/kast", model=None,
+                     session_key="whisper:ca11ab1e")
+    data = await fleet_data(p)
+    by_id = {m["agent_id"]: m for m in data["mounts"]}
+    assert by_id["agent:0af3c001"]["seated"] is True
+    assert by_id["agent:feed0002"]["seated"] is False
+    assert by_id["agent:ca11ab1e"]["seated"] is True
+    assert "2 live · 1 visitor" in render_fleet(data)

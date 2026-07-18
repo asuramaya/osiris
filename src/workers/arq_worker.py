@@ -31,6 +31,7 @@ from src.ingest.sessions import adversary_pass, sense_sessions_tick
 from src.ingest.wake_cost import meter_bodies, meter_receipts, meter_wakes
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, expand_case, run_cascade
+from src.orchestrator.census import live_bodies, live_bodies_by_cwd
 from src.orchestrator.liveness import observe_liveness
 from src.orchestrator.manifests import load_manifests
 from src.orchestrator.monitor import (
@@ -43,6 +44,7 @@ from src.orchestrator.monitor import (
     tick,
     write_heartbeat,
 )
+from src.orchestrator.mounts import sweep_ghost_doors, sweep_stale_doors
 from src.orchestrator.ratelimit import RateLimiter
 from src.orchestrator.runner import reap_stale_runs
 from src.orchestrator.trigger import trigger_mail_tick
@@ -153,6 +155,29 @@ async def sense_liveness(ctx: dict[str, Any]) -> int:
     if not root:
         return 0
     return await observe_liveness(ctx["pool"], Path(root))
+
+
+async def sweep_doors(ctx: dict[str, Any]) -> int:
+    """THE DOOR SWEEP (operator ruling, 2026-07-17: 'chrome shows fleet 5 but there are only
+    3 agents up' + 'the 20+ doors on some i also consider a bug'). Two rules, one tick:
+
+    THE GHOST RULE first — a fresh row whose cwd and project hold no claude body is a killed
+    tab's leak (terminal kill skips SessionEnd), released now instead of decaying for 15
+    minutes. The census runs BEFORE the row fetch (the sweep's grace floor covers the scan
+    gap), and a BLIND census (None — pgrep itself failed) skips the rule entirely: 'could not
+    look' must never read as 'nobody is home'. THE PILE RULE second — stale rows collapse to
+    one last-known address per active agent, none for the demoted or the objectless. Pure
+    reconciliation of hot state against OS truth; the graph's record of who lived is
+    elsewhere and untouched."""
+    pool = ctx["pool"]
+    released = 0
+    by_cwd = live_bodies_by_cwd()
+    if by_cwd is not None:
+        released += await sweep_ghost_doors(
+            pool, body_cwds=set(by_cwd),
+            body_projects=set(live_bodies()))
+    released += await sweep_stale_doors(pool)
+    return released
 
 
 _SENSE_BUDGET = 3  # LLM extract calls per tick — the tick's wall-clock is ~this many calls
@@ -422,6 +447,11 @@ class WorkerSettings:
         # is not read as DEAD (456960e5). No model, no money — it may run always, and it does NOT
         # ride the adversary's switch (killing the inferrer must never blind the observer).
         cron(watched(sense_liveness, every=60), minute=set(range(0, 60)), second={15},
+             run_at_startup=True),
+        # THE DOOR SWEEP, every 60s (operator ruling 2026-07-17): reconcile the mount
+        # registry's belief against OS truth — release killed tabs' doors in ~2 minutes
+        # instead of 15, and keep the door piles at one last-known address per agent.
+        cron(watched(sweep_doors, every=60), minute=set(range(0, 60)), second={45},
              run_at_startup=True),
         # THE ORPHAN LANE (B7): sessions that died with NO rite — a crash, a kill -9, a closed
         # laptop — left nobody holding the context. DETECTION is free (a stat + a watermark); each
