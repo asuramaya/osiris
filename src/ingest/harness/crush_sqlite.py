@@ -23,21 +23,34 @@ from src.ingest.harness import SessionLocator, TurnRow
 _PROJECTS_JSON = Path.home() / ".local" / "share" / "crush" / "projects.json"
 
 
+def _project_entries() -> list[dict[str, object]]:
+    """projects.json's entries, normalized. Crush has shipped BOTH shapes: a
+    {cwd: {data_dir}} mapping and (current on this box, field-verified 2026-07-19) a
+    LIST of {path, data_dir} records. Normalize either to [{path, data_dir}, ...] so
+    the two consumers below never care again."""
+    try:
+        data = json.loads(_PROJECTS_JSON.read_text()) if _PROJECTS_JSON.is_file() else {}
+    except (OSError, ValueError):
+        return []
+    projects = data.get("projects") if isinstance(data, dict) else None
+    if isinstance(projects, dict):
+        return [{"path": cwd, "data_dir": e.get("data_dir")}
+                for cwd, e in projects.items() if isinstance(e, dict)]
+    if isinstance(projects, list):
+        return [e for e in projects if isinstance(e, dict)]
+    return []
+
+
 def _resolve_data_dir(cwd: str | None) -> str | None:
     """Find Crush's SQLite DB for a cwd: projects.json mapping, else <cwd>/.crush/."""
     if cwd is None:
         return None
-    try:
-        data = json.loads(_PROJECTS_JSON.read_text()) if _PROJECTS_JSON.is_file() else {}
-    except (OSError, ValueError):
-        data = {}
-    projects = data.get("projects") if isinstance(data, dict) else None
-    if isinstance(projects, dict):
-        entry = projects.get(cwd)
-        if isinstance(entry, dict):
-            dd = entry.get("data_dir")
-            if isinstance(dd, str) and (Path(dd) / "crush.db").is_file():
-                return dd
+    for entry in _project_entries():
+        if entry.get("path") != cwd:
+            continue
+        dd = entry.get("data_dir")
+        if isinstance(dd, str) and (Path(dd) / "crush.db").is_file():
+            return dd
     local = Path(cwd) / ".crush" / "crush.db"
     return str(Path(cwd) / ".crush") if local.is_file() else None
 
@@ -102,25 +115,18 @@ class CrushSqliteAdapter:
 
         Walks projects.json for known cwds, plus ~/.osiris/seats/*/.crush/ (seat offices).
         Each crush.db holds many sessions; yield one locator per session."""
-        # 1. projects.json-registered cwds
-        try:
-            data = json.loads(_PROJECTS_JSON.read_text()) if _PROJECTS_JSON.is_file() else {}
-        except (OSError, ValueError):
-            data = {}
-        projects = data.get("projects") if isinstance(data, dict) else None
+        # 1. projects.json-registered cwds (either shape — see _project_entries)
         seen_dbs: set[str] = set()
-        if isinstance(projects, dict):
-            for cwd, entry in projects.items():
-                if not isinstance(entry, dict):
-                    continue
-                dd = entry.get("data_dir")
-                if not isinstance(dd, str):
-                    continue
-                db = Path(dd) / "crush.db"
-                if not db.is_file() or str(db) in seen_dbs:
-                    continue
-                seen_dbs.add(str(db))
-                yield from _sessions_in_db(db, cwd, Path(cwd).name if cwd else None)
+        for entry in _project_entries():
+            cwd, dd = entry.get("path"), entry.get("data_dir")
+            if not isinstance(dd, str):
+                continue
+            db = Path(dd) / "crush.db"
+            if not db.is_file() or str(db) in seen_dbs:
+                continue
+            seen_dbs.add(str(db))
+            cwd_s = cwd if isinstance(cwd, str) else None
+            yield from _sessions_in_db(db, cwd_s, Path(cwd_s).name if cwd_s else None)
         # 2. seat offices (~/.osiris/seats/<seat>/.crush/crush.db) — the per-seat Crush data
         seats_root = Path.home() / ".osiris" / "seats"
         if seats_root.is_dir():

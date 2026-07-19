@@ -106,6 +106,26 @@ def _norm(project: str) -> str:
     return project.removeprefix("repo:").strip()
 
 
+async def _dm_eligible(pool: asyncpg.Pool, agent_id: str) -> bool:
+    """May this id RECEIVE a DM? The resolver-eligibility law (thread 21596481): a
+    retired or false-mint agent is never a DM target — mail parked on a phantom lane is
+    a loss wearing a delivery receipt. Eligible = an active Agent object with neither
+    stamp. An id the graph doesn't know is ineligible by definition (a DM to a transient
+    dead id strands the mail)."""
+    row = await pool.fetchrow(
+        "SELECT "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='retired' ORDER BY a.observed_at DESC LIMIT 1) AS retired, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='false_mint' ORDER BY a.observed_at DESC LIMIT 1) AS false_mint "
+        "FROM objects o WHERE o.canonical=$1 AND o.type='Agent' AND o.status='active'",
+        agent_id)
+    if row is None:
+        return False
+    return (str(row["retired"]).lower() != "true"
+            and str(row["false_mint"]).lower() != "true")
+
+
 async def settle_history_at_join(
     pool: asyncpg.Pool, project: str | None, agent_id: str
 ) -> int:
@@ -217,7 +237,25 @@ async def send_message(
             if bound:
                 to_a, to_p = bound["seat_id"], None
             else:
-                to_a, to_p = None, _norm(ref["from_project"] or "")
+                # MAIL FOLLOWS THE MIND, NOT THE ROOM (operator ruling 2026-07-19, thread
+                # 07d64473: Atlas IV asked from the xxit room he was visiting; the reply
+                # landed on Metron, the room's resident — 'metron got the mail that was
+                # for you, thats a bug'). An unbound asker the GRAPH KNOWS gets the reply
+                # as a DM to their living head — since the lineage rollup (one soul, one
+                # inbox) a head DM is deliverable at read time across successions, so the
+                # old stranding fear only holds for ids the graph never registered. Those
+                # keep the room return (it at least reaches the house), as does a head the
+                # eligibility law refuses (retired/false_mint — never a DM target).
+                from src.orchestrator.folds import living_head
+                head: str | None = None
+                if str(ref["from_agent"] or "").startswith("agent:"):
+                    cand = await living_head(pool, ref["from_agent"])
+                    if cand and await _dm_eligible(pool, cand):
+                        head = cand
+                if head:
+                    to_a, to_p = head, None
+                else:
+                    to_a, to_p = None, _norm(ref["from_project"] or "")
     else:
         to_a = to_p = None
     if not to_a and not to_p:

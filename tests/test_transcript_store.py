@@ -309,6 +309,27 @@ def test_crush_enumerate_yields_all_sessions(
     assert anchors == ["aaaa1111", "bbbb2222", "cccc3333"]
 
 
+def test_crush_reads_the_list_shaped_projects_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Crush's CURRENT projects.json is a LIST of {path, data_dir} records (field-verified
+    2026-07-19 — the dict lane was silently dead on the live box); both shapes must read."""
+    dd = tmp_path / "p9" / ".crush"
+    _write_crush_db(dd / "crush.db", "dddd9999-aaaa-bbbb-cccc-dddddddddddd",
+                    [("assistant", "zai", "glm-5.2")])
+    import src.ingest.harness.crush_sqlite as mod
+    monkeypatch.setattr(mod, "_PROJECTS_JSON", tmp_path / "projects.json")
+    (tmp_path / "projects.json").write_text(json.dumps({"projects": [
+        {"path": str(tmp_path / "p9"), "data_dir": str(dd),
+         "last_accessed": "2026-07-19T00:00:00Z"},
+    ]}))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fakehome")
+    locs = list(CrushSqliteAdapter().enumerate())
+    assert [x.anchor_sid for x in locs] == ["dddd9999"]
+    loc = CrushSqliteAdapter().discover(cwd=str(tmp_path / "p9"), job_dir=None)
+    assert loc is not None and loc.anchor_sid == "dddd9999"
+
+
 # --- store backfill + usage reads -------------------------------------
 
 async def test_backfill_ingests_via_enumerate(store: TranscriptStore, tmp_path: Path) -> None:

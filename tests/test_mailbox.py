@@ -613,14 +613,52 @@ async def test_cross_project_reply_returns_to_the_askers_seat_not_the_room(
 async def test_cross_project_reply_to_an_unbound_asker_keeps_the_room(
     actions: Actions,
 ) -> None:
-    """An unbound asker keeps the pre-seat law: the reply returns to the asker's project
-    room — a DM to a transient dead id would strand the mail; the room reaches the house."""
+    """A TRANSIENT id (no object in the graph) keeps the pre-seat law: the reply returns
+    to the asker's project room — a DM to an id the graph never registered would strand
+    the mail; the room at least reaches the house."""
     p = actions.pool
     ask = await send_message(p, from_agent="agent:0abe4003", from_project="oldhouse",
                              to_project="farhouse", body="anyone: check the gauge")
     rep = await send_message(p, from_agent="agent:fa40b001", from_project="farhouse",
                              reply_to=ask["id"], body="gauge checked")
     assert rep["to"] == "oldhouse" and rep["to_agent"] is None
+
+
+async def test_cross_project_reply_follows_the_mind_not_the_room(
+    actions: Actions,
+) -> None:
+    """MAIL FOLLOWS THE MIND, NOT THE ROOM (operator ruling 2026-07-19, thread 07d64473:
+    Atlas asked from the xxit room he was visiting; the reply landed on Metron, the room's
+    resident). An unbound asker the GRAPH KNOWS — a registered, active agent — gets the
+    reply as a DM to their living head; the room's resident never inherits it. The
+    registered object is what separates a traveler from a transient id."""
+    p = actions.pool
+    traveler = "agent:a5ce9901"
+    await actions.create_or_find_object("Agent", traveler, traveler)
+    ask = await send_message(p, from_agent=traveler, from_project="visitedroom",
+                             to_project="farhouse", body="handing off the store build")
+    rep = await send_message(p, from_agent="agent:fa40b001", from_project="farhouse",
+                             reply_to=ask["id"], body="estate landed, thank you")
+    assert rep["to_agent"] == traveler and rep["to"] is None   # a DM to the mind
+    resident = await read_inbox(p, "visitedroom", reader_agent="agent:re51de99")
+    assert not any("estate landed" in m["body"] for m in resident)  # the room never sees it
+
+
+async def test_reply_to_a_retired_mind_keeps_the_room(actions: Actions) -> None:
+    """The eligibility law at the reply lane (thread 21596481): a retired head is never a
+    DM target — the room return is the honest fallback, exactly the old law."""
+    from datetime import UTC, datetime
+
+    p = actions.pool
+    gone = "agent:0dead901"
+    o = await actions.create_or_find_object("Agent", gone, gone)
+    await actions.assert_property(o, "retired", True, gone, datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+    ask = await send_message(p, from_agent=gone, from_project="oldroom",
+                             to_project="farhouse", body="one last ask")
+    rep = await send_message(p, from_agent="agent:fa40b001", from_project="farhouse",
+                             reply_to=ask["id"], body="answered late")
+    assert rep["to"] == "oldroom" and rep["to_agent"] is None
 
 
 async def test_desk_briefs_scope_to_the_senders_lineage(actions: Actions) -> None:
