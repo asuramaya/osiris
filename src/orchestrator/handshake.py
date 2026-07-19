@@ -517,6 +517,22 @@ async def automount(
                 "LIMIT 1", ident.project))
         except Exception:  # noqa: BLE001 — the flag must never break the whisper
             thin = False
+    # LIVE CO-AGENTS AT THE FIRST BREATH (task #40, thread 2b784653): the collision
+    # warning used to arrive only at mount() — after a session may already have touched
+    # the shared tree. The whisper carries it from breath one; the lease gate (12c225b)
+    # is the enforcement half, this is the awareness half. Awareness never blocks.
+    co_agents: list[str] = []
+    if ident.project and job_dir:
+        try:
+            co_rows = await actions.pool.fetch(
+                "SELECT DISTINCT agent_id FROM agent_mounts WHERE project=$1 "
+                "AND job_dir <> $2 AND last_seen > now() - make_interval(secs => 900)",
+                ident.project, job_dir)
+            for r in co_rows[:6]:
+                seat = await _seat_of(actions, str(r["agent_id"]))
+                co_agents.append(seat or str(r["agent_id"]))
+        except Exception:  # noqa: BLE001 — awareness must never break the whisper
+            co_agents = []
     return {
         "agent": ident.agent_id,
         "project": ident.project,
@@ -526,6 +542,7 @@ async def automount(
         "swap": ident.model_succession,
         "mail": mail,
         "mail_asks": mail_asks,
+        **({"co_agents": co_agents} if co_agents else {}),
         "desk": desk,
         "pulse": pulse,
         "away": away,

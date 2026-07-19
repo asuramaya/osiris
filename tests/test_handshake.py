@@ -392,6 +392,32 @@ async def test_session_end_on_a_never_mounted_session_is_a_quiet_no_op(
     assert out2["released"] == 0
 
 
+async def test_whisper_names_live_co_agents_at_first_breath(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """Task #40 (thread 2b784653): the shared-tree collision warning used to arrive at
+    mount() — AFTER a session may already have staged or pushed. The whisper payload now
+    carries live co-agents on the same project from breath one; a lone session carries
+    none (no wolf-crying on an uncontended tree)."""
+    from src.orchestrator.mounts import save_mount
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/sibling-nine")
+    # a live sibling on the same project, at a different door
+    await save_mount(actions.pool, job_dir="/x/jobs/c0a9e9e1",
+                     agent_id="agent:c0a9e9e1", project="sibling-nine",
+                     cwd="/w/sibling-nine", model=None, session_key=None)
+    out = await automount(actions, session_id=SID, cwd="/w/sibling-nine",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+    assert out.get("co_agents") == ["agent:c0a9e9e1"]
+    # ...and the sibling's own whisper sees us back; a project with no OTHER live door
+    # gets no key at all — absence, not an empty list
+    lone = await automount(actions, session_id="feed0002-0000-4000-8000-000000000000",
+                           cwd="/w/lonely", actor="analyst:operator",
+                           root=tmp_path / "empty", jobs_home=tmp_path / "jobs")
+    assert "co_agents" not in lone
+
+
 async def test_session_end_yields_to_a_fresh_greeting_the_resume_race(
     actions: Actions, tmp_path: Path
 ) -> None:

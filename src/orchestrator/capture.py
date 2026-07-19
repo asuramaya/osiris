@@ -612,6 +612,29 @@ async def record_tension(
     return t
 
 
+async def divergent_leans(pool: asyncpg.Pool) -> dict[str, str]:
+    """Tensions where two minds' CURRENT leans disagree — keyed by the tension's canonical,
+    valued with the confession line the lens must speak (task #53, from the tension-vs-
+    resolver audit c7041c53: the assertion set honestly keeps BOTH leans, but any single-
+    winner reader silently shows one — orient must say 'two minds lean apart' instead).
+    Per-source current lean = that source's latest; divergence = >1 distinct value among
+    them. Report-only: nothing here resolves anything (a Tension is HELD by design)."""
+    rows = await pool.fetch(
+        "WITH per_source AS ("
+        "  SELECT DISTINCT ON (a.object_id, a.source_id) "
+        "         a.object_id, a.source_id, a.value #>> '{}' AS lean "
+        "  FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "  WHERE o.type='Tension' AND o.status='active' AND a.name='lean' "
+        "  ORDER BY a.object_id, a.source_id, a.observed_at DESC) "
+        "SELECT (SELECT o2.canonical FROM objects o2 WHERE o2.id=p.object_id) AS canon, "
+        "       array_agg(p.source_id || ' leans ' || quote_literal(p.lean) "
+        "                 ORDER BY p.source_id) AS voices "
+        "FROM per_source p GROUP BY p.object_id "
+        "HAVING count(DISTINCT p.lean) > 1")
+    return {str(r["canon"]): "two minds lean apart: " + "; ".join(r["voices"][:4])
+            for r in rows}
+
+
 async def set_lifecycle(
     actions: Actions, project: str, lifecycle: str, *, because: str | None = None,
     source: str = _SOURCE,

@@ -1379,10 +1379,23 @@ async def _project_briefing(
         items = {}
     wall, echoes = await _open_thread_wall(pool, proj)
     shown, more = _rank_open_threads(wall, me)
+    tensions = [dict(r) for r in (items.get("tensions") or []) if r.get("pole_a")]
+    if tensions:
+        # TWO MINDS LEAN APART (task #53): the table shows one winner per property, but a
+        # held polarity may carry different CURRENT leans from different minds — the lens
+        # says so instead of silently picking (the record keeps both either way)
+        from src.orchestrator.capture import _canon, divergent_leans
+        div = await divergent_leans(pool)
+        for r in tensions:
+            key = _canon("tension",
+                         "||".join(sorted((str(r.get("pole_a") or ""),
+                                           str(r.get("pole_b") or "")))))
+            if key in div:
+                r["divergence"] = div[key]
     out: dict[str, Any] = {
         "open_threads": shown,
         "recent_decisions": [r for r in (items.get("recent_decisions") or []) if r.get("summary")],
-        "tensions": [r for r in (items.get("tensions") or []) if r.get("pole_a")],
+        "tensions": tensions,
     }
     if more > 0:  # trailing count so a capped wall never hides work silently (membrane, #6)
         out["open_threads_note"] = (

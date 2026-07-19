@@ -289,6 +289,36 @@ async def test_tension_surfaces_in_the_scoped_briefing(actions: Actions) -> None
     assert ("speed", "safety") in [(r["pole_a"], r["pole_b"]) for r in items["tensions"]]
 
 
+async def test_divergent_leans_say_two_minds_lean_apart(actions: Actions) -> None:
+    """Task #53 (from the tension-vs-resolver audit c7041c53): when two minds hold
+    DIFFERENT current leans on one held polarity, the scoped briefing must SAY so —
+    the record keeps both, and a single-winner table would silently show one."""
+    from src.orchestrator.capture import divergent_leans
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:demo", "session")
+    await actions.assert_property(proj, "name", "demo", "session", datetime.now(UTC), 0.9)
+    await record_tension(actions, "bounded recall", "complete memory",
+                         lean="bounded at the lens", repo="demo", source="agent:one")
+    await record_tension(actions, "bounded recall", "complete memory",
+                         lean="complete at the record", repo="demo", source="agent:two")
+    # an AGREEING pair on another tension must not be flagged
+    await record_tension(actions, "speed", "safety", lean="safety", source="agent:one")
+    await record_tension(actions, "speed", "safety", lean="safety", source="agent:two")
+    div = await divergent_leans(actions.pool)
+    assert len(div) == 1
+    line = next(iter(div.values()))
+    assert line.startswith("two minds lean apart: ")
+    assert "agent:one" in line and "agent:two" in line
+    # ...and orient's scoped briefing carries the confession on the right row
+    await seed_default_compositions(actions.pool)
+    briefing = await _project_briefing(actions.pool, "demo")
+    assert briefing is not None
+    flagged = [r for r in briefing["tensions"] if r.get("divergence")]
+    assert len(flagged) == 1
+    assert flagged[0]["pole_a"] == "bounded recall"
+    assert "agent:two" in flagged[0]["divergence"]
+
+
 async def test_orient_explicit_project_overrides_the_mount(actions: Actions) -> None:
     """sibling-one's verified bug: orient(project=X) silently returned the MOUNT's briefing instead
     of X's — a silent wrong-scope (the confound class the fleet exists to catch). An explicit

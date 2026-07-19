@@ -76,20 +76,31 @@ def main() -> int:
         return 0
 
     # THE HONESTY GATE (grievance survey 2026-07-11, two witnesses: Chlear #235, Metron IV
-    # #242): "ALREADY MOUNTED" is only TRUE when this session can re-attach per-request —
-    # the client's X-Osiris-Job header expands ${CLAUDE_JOB_DIR}, and an interactive tab
-    # has no such env, so the header arrives empty and the FIRST tool call bounces with
-    # 'mount first' despite the whisper's promise. A whisper must never testify above the
+    # #242; SHARPENED for task #40 / thread 2b784653): "ALREADY MOUNTED" is only TRUE when
+    # this session can re-attach per-request — the client's X-Osiris-Job header expands
+    # ${CLAUDE_JOB_DIR}, and re-attach finds the row by that EXACT value. An unset env
+    # sends an empty header; a SET env that differs from the anchor automount just seated
+    # (a lineage-inherited anchor, a bg job dir named for the job not the sid) sends a
+    # header that finds NOTHING — the whisper promised 'already mounted' on tonight's
+    # field case (env jobs/63cc21f8, seated anchor jobs/a7e60257) and the first orient()
+    # bounced. The claim now requires env == seated anchor: the one test that equals
+    # 'the header will actually find the row'. A whisper must never testify above the
     # connection's actual state (the one law, everywhere).
-    anchored = bool(os.environ.get("CLAUDE_JOB_DIR"))
+    env_job = os.environ.get("CLAUDE_JOB_DIR") or ""
+    anchored = bool(env_job) and env_job == str(out.get("job_dir") or "")
     who = (f"{out['agent']}" + (f" (project {out['project']}" if out.get("project") else "(")
            + (f", {out['model']})" if out.get("model") else ")"))
     if anchored:
         bits = [f"◈ OSIRIS — the fleet's shared memory. You are ALREADY MOUNTED as {who}"]
     else:
+        why = ("$CLAUDE_JOB_DIR is unset in interactive tabs, so the client's "
+               "X-Osiris-Job header expands empty")
+        if env_job:
+            why = (f"this session's $CLAUDE_JOB_DIR ({env_job}) is not its seated anchor "
+                   f"({out.get('job_dir') or '?'}), so the per-request header cannot "
+                   "find your door")
         bits = [f"◈ OSIRIS — the fleet's shared memory. It knows you as {who}, but this "
-                "session presents NO durable anchor per-request ($CLAUDE_JOB_DIR is unset "
-                "in interactive tabs, so the client's X-Osiris-Job header expands empty). "
+                f"session presents no usable per-request anchor ({why}). "
                 f"Your FIRST osiris call must be mount(cwd='{cwd}'"
                 + (f", job_dir='{out['job_dir']}'" if out.get("job_dir") else "")
                 + ") — after that this connection knows you. Any osiris call before that "
@@ -129,6 +140,13 @@ def main() -> int:
         else:
             bits.append(f"Model seam on your lineage: {out['swap']} — confess it to the "
                         "operator in your first reply.")
+    if out.get("co_agents"):
+        # the shared-tree warning, at the FIRST BREATH instead of the first mount (task
+        # #40): by mount time a session may already have staged or pushed
+        co = out["co_agents"]
+        bits.append(f"⚠ {len(co)} live co-agent{'s' if len(co) != 1 else ''} on this "
+                    f"project right now: {', '.join(co[:4])} — the tree is shared; stage "
+                    "only your own hunks, and announce before wide refactors.")
     mail = out.get("mail", 0)
     if mail:
         asks = out.get("mail_asks", 0)  # sender-graded asks lead the count (f9449d8d)
