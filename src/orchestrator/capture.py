@@ -489,8 +489,34 @@ async def reclassify_thread(
     return tid
 
 
+async def _find_artifact(pool: asyncpg.Pool, artifact: str) -> uuid.UUID | None:
+    """Resolve an artifact pointer to the graph object it names: an exact canonical
+    ('commit:abc123def456', 'decision:…'), an object UUID or 8-char short id (Decision or
+    Commit only — the closer types), or a bare git hash (prefix-matched on commit:).
+    None for free-form pointers (a file:line, a path) — the resolved_artifact property
+    alone carries those; a pointer that matches nothing must never block the close."""
+    a = artifact.strip()
+    oid = await pool.fetchval("SELECT id FROM objects WHERE canonical=$1", a)
+    if oid is not None:
+        return uuid.UUID(str(oid))  # exact canonical — any precisely-named type may close
+    if re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f-]{4,28})?", a.lower()):
+        rows = await pool.fetch(
+            "SELECT id FROM objects WHERE id::text LIKE $1 || '%' "
+            "AND type IN ('Decision', 'Commit') LIMIT 2", a.lower()[:8])
+        if len(rows) == 1:  # ambiguity → property-only, never a guessed edge
+            return uuid.UUID(str(rows[0]["id"]))
+    if re.fullmatch(r"[0-9a-f]{7,40}", a.lower()):
+        rows = await pool.fetch(
+            "SELECT id FROM objects WHERE type='Commit' "
+            "AND canonical LIKE 'commit:' || $1 || '%' LIMIT 2", a.lower())
+        if len(rows) == 1:
+            return uuid.UUID(str(rows[0]["id"]))
+    return None
+
+
 async def resolve_thread(
-    actions: Actions, ref: str, *, because: str | None = None, source: str = _SOURCE
+    actions: Actions, ref: str, *, because: str | None = None,
+    artifact: str | None = None, source: str = _SOURCE
 ) -> uuid.UUID | None:
     """Close a thread at source — the session marking a question answered, so it leaves the
     open list and joins the resolved section. Matches the miner's self-heal shape
@@ -498,7 +524,14 @@ async def resolve_thread(
     renders it, with `resolved_in='session'` recording that a session closed it rather than
     a later commit. `ref` is a Thread UUID or a summary substring. Event-sourced via a status
     assertion that supersedes the prior 'open' within-source — never a DELETE. Returns the
-    thread id, or None if `ref` matched nothing."""
+    thread id, or None if `ref` matched nothing.
+
+    `artifact` (thread 022bd24a, Ferryman II: `because` was being abused as a completion
+    essay because there was nowhere to put "here is what actually got built") is a POINTER
+    to the thing that closed the thread — a commit hash, a decision id, a file:line. It is
+    always kept as the resolved_artifact property, and when it names a graph object
+    (Decision, Commit, or any exact canonical) a resolved_by edge is minted too — the
+    strong closure witness the closure-miner almost never finds (e27f7c3)."""
     tid = await _find_thread(actions.pool, ref)
     if tid is None:
         return None
@@ -510,6 +543,15 @@ async def resolve_thread(
     if because:
         await actions.assert_property(tid, "resolved_because", because, source, observed,
                                       _CONF, evidence_class=_EC)
+    if artifact:
+        await actions.assert_property(tid, "resolved_artifact", artifact.strip(), source,
+                                      observed, _CONF, evidence_class=_EC)
+        target = await _find_artifact(actions.pool, artifact)
+        if target is not None and not await actions.pool.fetchval(
+                "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 "
+                "AND type='resolved_by' LIMIT 1", tid, target):
+            await actions.create_link(tid, target, "resolved_by", source, observed, _CONF,
+                                      evidence_class=_EC)
     return tid
 
 
@@ -610,6 +652,52 @@ async def record_tension(
         await link_repo(actions, t, repo, observed, source=source, evidence_class=_EC,
                         confidence=_CONF)
     return t
+
+
+async def record_blind_spot(
+    actions: Actions, surface: str, cannot_see: str, *, verify_with: str | None = None,
+    repo: str | None = None, source: str = _SOURCE,
+) -> uuid.UUID:
+    """Register a project's KNOWN BLIND SPOT — what this project's harness/rig CANNOT verify
+    from here, and where the real verification lives (thread 8e26cd10, Ferryman II: 459
+    headless-Chromium tests stayed green while every iPhone was broken; 'the most expensive
+    thing I re-derived was not a fact — it was the shape of my own ignorance'). A BlindSpot
+    is its own type, held like a Tension: a stable per-project fact that dedup and
+    grade-resolution structurally cannot flatten away, surfaced at orient() so a session
+    knows what it cannot see BEFORE it trusts a green harness. Idempotent per
+    (repo, surface) — re-record to sharpen the wording; the assertion history keeps every
+    telling. `surface` names the capability ('webkit-rendering', 'ios-touch'); `cannot_see`
+    states the gap; `verify_with` points at the rig or ritual that actually verifies."""
+    observed = datetime.now(UTC)
+    key = f"{(repo or '').removeprefix('repo:').strip()}||{surface.strip().lower()}"
+    b = await actions.create_or_find_object("BlindSpot", _canon("blindspot", key), source)
+    await actions.assert_property(b, "surface", surface.strip(), source, observed, _CONF,
+                                  evidence_class=_EC)
+    await actions.assert_property(b, "cannot_see", cannot_see, source, observed, _CONF,
+                                  evidence_class=_EC)
+    if verify_with:
+        await actions.assert_property(b, "verify_with", verify_with, source, observed, _CONF,
+                                      evidence_class=_EC)
+    if repo:
+        await link_repo(actions, b, repo, observed, source=source, evidence_class=_EC,
+                        confidence=_CONF)
+    return b
+
+
+# the words Ferryman listed (thread 022bd24a) plus the N/N shape — deliberately narrow:
+# a nag that fires on every ruling teaches everyone to ignore it
+_MEASUREMENT = re.compile(
+    r"(?i)\b(verified|verification|probe[ds]?|sweep(s|ed)?|swept|benchmark\w*|"
+    r"sampl(e[ds]?|ing)|threshold\w*|seed(ed|s)?)\b|\b\d+\s*/\s*\d+\b")
+
+
+def measurement_smell(text: str) -> bool:
+    """Does a decision's text read like a MEASUREMENT? (thread 022bd24a: `protocol` is
+    record_decision's best field and nothing asks for it — a verification recipe recorded
+    without its invocation is exactly the re-derivation class the field exists to kill.)
+    Used by the record_decision tool to NAG for an empty protocol — advice in the response,
+    never a gate: the decision records either way."""
+    return bool(_MEASUREMENT.search(text))
 
 
 async def divergent_leans(pool: asyncpg.Pool) -> dict[str, str]:

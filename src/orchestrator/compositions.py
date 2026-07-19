@@ -2275,6 +2275,19 @@ PROJECT_BRIEFING: dict[str, Any] = {
                         {"op": "select", "object_type": "Tension"},
                         {"op": "traverse", "from": {"op": "subject"}, "direction": "in",
                          "link_type": "in_repo", "hops": 1}]}}}}},
+        # the project's registered BLIND SPOTS — the shape of its own ignorance (8e26cd10):
+        # what the harness here cannot see, and where the real verification lives. Held like
+        # a Tension (its own type, never resolved away); orient speaks them so a session
+        # knows before it trusts a green harness.
+        {"title": "blind_spots", "body": {
+            "op": "take", "n": 10, "from": {
+                "op": "table", "columns": [{"property": "surface"}, {"property": "cannot_see"},
+                                           {"property": "verify_with"}],
+                "from": {"op": "order", "by": "recency", "dir": "desc", "from": {
+                    "op": "intersect", "sets": [
+                        {"op": "select", "object_type": "BlindSpot"},
+                        {"op": "traverse", "from": {"op": "subject"}, "direction": "in",
+                         "link_type": "in_repo", "hops": 1}]}}}}},
     ],
 }
 

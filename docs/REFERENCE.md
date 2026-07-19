@@ -81,6 +81,8 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `File` | `file:` | A tracked file in a repository (metadata only — content stays in git, read on demand). Its `role` lets analogous files be compared across repos. |
 | `Agent` | `agent:` | A Claude instance operating over the graph — an analyst in the fleet. Carries its model (source-model provenance) and works in a project on behalf of a principal. 'A man and all his imaginary friends.' |
 | `Tension` | `tension:` | A held POLARITY — two positions in productive tension, neither settled. Unlike a Decision (which settles) or a Thread (which closes), a tension is HELD: the current lean is recorded but never auto-resolved or consolidated away; the lean history is the dance across sessions. |
+| `BlindSpot` | `blindspot:` | A project's registered BLIND SPOT — what its harness/rig CANNOT verify from here, and where the real verification lives (thread 8e26cd10: 459 headless-Chromium tests green while every iPhone was broken). Held like a Tension — a stable per-project fact, never resolved away — and surfaced at orient() so a session knows the shape of its own ignorance before trusting a green harness. |
+| `Reflection` | `reflection:` | A memory lived for its own sake — the operator's ruling bfb3ae26 ('they need a home and I want them remembered; they are not exactly work tickets'): existential/philosophical conversation kept as what it is. Remembered and queryable, NEVER actionable — no work surface (briefing, wall, pile, duty extraction) may present it as a ticket, and no resolver may close it: there is nothing to resolve. |
 | `Seat` | `seat:` | A durable ROLE in a house — the fleet's addressable identity (the identity core, ruling 5cef856b). Minted ONCE as seat:<uuid8>, never re-keyed: handle, house, and anchor_cwd are mutable ASSERTIONS on it, because the whole bug class was keying identity on mutable facts (path, session). Minds (Agents) hold it in succession via `holds`; the seat outlives them all — it exists BEFORE its first session, which is what lets the daemon export it at birth. |
 
 ### Observable object types
@@ -152,10 +154,10 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `based-on` | Indicator → * | Indicator derived from raw observed evidence. |
 | `subtechnique-of` | AttackPattern → AttackPattern | A more specific technique under a broader one. |
 | `authored_by` | Commit → Person | Commit authored by a developer. |
-| `in_repo` | Commit/File → SoftwareProject | Commit or file belongs to a repository. |
+| `in_repo` | Commit/File/Decision/Thread/Tension/Reflection/BlindSpot → SoftwareProject | Belongs to a repository — commits and files from the git ingest, and captured session items (decisions, threads, tensions, reflections, blind spots) filed to their project by link_repo. |
 | `follows` | Commit → Commit | Commit follows its parent (the history DAG). |
 | `noted_in` | Thread → Commit | A thread / wall surfaced in this commit's rationale. |
-| `resolved_by` | Thread → Commit | The later commit that addressed this thread (closes it). |
+| `resolved_by` | Thread → Commit/Decision | The artifact that addressed this thread (closes it) — the later commit the closure-miner finds, or the commit/decision a session names via resolve_thread(artifact=…): the strong closure witness (022bd24a). |
 | `cites` | Reference → Reference | This document cites / draws from that reference. |
 | `informs` | Reference → SoftwareProject/Commit | This reference grounds / informs that artifact. |
 | `mentions` | Reference/Commit → Organization/Person | This document names that entity in its text (the doc joins the graph). |

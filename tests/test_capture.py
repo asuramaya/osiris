@@ -15,8 +15,10 @@ from src.mcp_server import _project_briefing
 from src.orchestrator.capture import (
     find_near_duplicate_open_thread,
     link_repo,
+    measurement_smell,
     open_thread,
     reclassify_thread,
+    record_blind_spot,
     record_decision,
     record_tension,
     resolve_thread,
@@ -287,6 +289,89 @@ async def test_tension_surfaces_in_the_scoped_briefing(actions: Actions) -> None
     items = (await run_composition(actions.pool, "project-briefing", proj))["items"]
     assert "tensions" in items
     assert ("speed", "safety") in [(r["pole_a"], r["pole_b"]) for r in items["tensions"]]
+
+
+async def test_blind_spot_registers_holds_and_is_idempotent(actions: Actions) -> None:
+    """Thread 8e26cd10: a blind spot is a stable per-project fact, held like a Tension —
+    idempotent per (project, surface), re-registered to sharpen the wording, and scoped so
+    two projects' same-named surfaces never merge."""
+    b1 = await record_blind_spot(actions, "webkit-rendering",
+                                 "headless Chromium ≠ WebKit; every iOS browser is WebKit",
+                                 verify_with="tests/e2e/webkit_ctm.js (the docker rig)",
+                                 repo="hector-vector")
+    props = await _props(actions.pool, b1)
+    assert props["surface"] == "webkit-rendering"
+    assert "headless Chromium" in props["cannot_see"]
+    assert "webkit_ctm" in props["verify_with"]
+    assert await actions.pool.fetchval("SELECT type FROM objects WHERE id=$1", b1) == "BlindSpot"
+    # re-register the same (project, surface) → the SAME object, sharpened
+    b2 = await record_blind_spot(actions, "Webkit-Rendering",  # case-insensitive surface key
+                                 "sharper: r=0 circles render as nothing in WebKit",
+                                 repo="hector-vector")
+    assert b2 == b1
+    assert "r=0 circles" in (await _props(actions.pool, b1))["cannot_see"]
+    # the same surface on ANOTHER project is its own spot — never a cross-project merge
+    b3 = await record_blind_spot(actions, "webkit-rendering", "different rig, different gap",
+                                 repo="osiris")
+    assert b3 != b1
+
+
+async def test_blind_spot_surfaces_in_the_scoped_briefing_and_orient(actions: Actions) -> None:
+    """The registry's whole point: orient() speaks the project's blind spots so a session
+    knows what it cannot see BEFORE it trusts a green harness — and a project with none
+    registered stays silent (no empty block)."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:demo", "session")
+    await actions.assert_property(proj, "name", "demo", "session", datetime.now(UTC), 0.9)
+    await record_blind_spot(actions, "ios-touch", "DevTools emulation is not a finger",
+                            verify_with="hand the phone to the operator", repo="demo")
+    await seed_default_compositions(actions.pool)
+    items = (await run_composition(actions.pool, "project-briefing", proj))["items"]
+    assert "blind_spots" in items
+    assert "ios-touch" in [r["surface"] for r in items["blind_spots"]]
+    briefing = await _project_briefing(actions.pool, "demo")
+    assert briefing is not None
+    assert [r["surface"] for r in briefing["blind_spots"]] == ["ios-touch"]
+    assert "before trusting" in briefing["blind_spots_note"] or "green run" in briefing[
+        "blind_spots_note"]
+    # a project with nothing registered gets NO block — orient stays lean
+    bare = await actions.create_or_find_object("SoftwareProject", "repo:bare", "session")
+    await actions.assert_property(bare, "name", "bare", "session", datetime.now(UTC), 0.9)
+    empty = await _project_briefing(actions.pool, "bare")
+    assert empty is not None and "blind_spots" not in empty
+
+
+async def test_resolve_thread_artifact_points_at_the_closer(actions: Actions) -> None:
+    """Thread 022bd24a: `because` was becoming a completion essay because there was nowhere
+    to put 'what actually got built'. The artifact pointer is that place — always kept as
+    resolved_artifact, and minted as a resolved_by edge when it names a graph object (the
+    strong closure witness the closure-miner almost never finds)."""
+    t1 = await open_thread(actions, "wire the doodad through the frobnicator")
+    d = await record_decision(actions, "the doodad rides the frobnicator now", kind="decision")
+    closed = await resolve_thread(actions, str(t1), because="built",
+                                  artifact=str(d)[:8])  # the 8-char short id names the Decision
+    assert closed == t1
+    props = await _props(actions.pool, t1)
+    assert props["resolved_artifact"] == str(d)[:8]
+    linked = await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='resolved_by'", t1)
+    assert linked == d
+    # a free-form pointer (file:line) keeps the property and mints NO guessed edge
+    t2 = await open_thread(actions, "teach the widget to sing")
+    await resolve_thread(actions, str(t2), artifact="src/widget/voice.py:42")
+    assert (await _props(actions.pool, t2))["resolved_artifact"] == "src/widget/voice.py:42"
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND type='resolved_by'", t2) is None
+
+
+def test_measurement_smell_nags_only_the_measurements() -> None:
+    """Thread 022bd24a: the protocol nag must fire on verification recipes (Ferryman's exact
+    words + the N/N shape) and stay QUIET on ordinary rulings — a nag that fires on every
+    decision teaches everyone to ignore it."""
+    assert measurement_smell("verified the walk: 498/498 lineages gapless, seed 42")
+    assert measurement_smell("the probe swept the candidates pile")
+    assert measurement_smell("graduation threshold holds at 0.15")
+    assert not measurement_smell("the mail chrome routes DMs through the seat ledger now")
+    assert not measurement_smell("adopt the three-layer identity model; handles are roles")
 
 
 async def test_divergent_leans_say_two_minds_lean_apart(actions: Actions) -> None:

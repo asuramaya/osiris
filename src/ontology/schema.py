@@ -141,6 +141,13 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                "Decision (which settles) or a Thread (which closes), a tension is HELD: the "
                "current lean is recorded but never auto-resolved or consolidated away; the lean "
                "history is the dance across sessions.", ("tension:",)),
+    ObjectType("BlindSpot", "Software", "#d29922", "octagon",
+               "A project's registered BLIND SPOT — what its harness/rig CANNOT verify from "
+               "here, and where the real verification lives (thread 8e26cd10: 459 headless-"
+               "Chromium tests green while every iPhone was broken). Held like a Tension — a "
+               "stable per-project fact, never resolved away — and surfaced at orient() so a "
+               "session knows the shape of its own ignorance before trusting a green harness.",
+               ("blindspot:",)),
     ObjectType("Reflection", "Software", "#b083f0", "ellipse",
                "A memory lived for its own sake — the operator's ruling bfb3ae26 ('they "
                "need a home and I want them remembered; they are not exactly work "
@@ -263,14 +270,19 @@ _LINK_TYPES: tuple[LinkType, ...] = (
     LinkType("subtechnique-of", "A more specific technique under a broader one.",
              ("AttackPattern",), ("AttackPattern",)),
     LinkType("authored_by", "Commit authored by a developer.", ("Commit",), ("Person",)),
-    LinkType("in_repo", "Commit or file belongs to a repository.",
-             ("Commit", "File"), ("SoftwareProject",)),
+    LinkType("in_repo", "Belongs to a repository — commits and files from the git ingest, "
+             "and captured session items (decisions, threads, tensions, reflections, blind "
+             "spots) filed to their project by link_repo.",
+             ("Commit", "File", "Decision", "Thread", "Tension", "Reflection", "BlindSpot"),
+             ("SoftwareProject",)),
     LinkType("follows", "Commit follows its parent (the history DAG).",
              ("Commit",), ("Commit",)),
     LinkType("noted_in", "A thread / wall surfaced in this commit's rationale.",
              ("Thread",), ("Commit",)),
-    LinkType("resolved_by", "The later commit that addressed this thread (closes it).",
-             ("Thread",), ("Commit",)),
+    LinkType("resolved_by", "The artifact that addressed this thread (closes it) — the "
+             "later commit the closure-miner finds, or the commit/decision a session names "
+             "via resolve_thread(artifact=…): the strong closure witness (022bd24a).",
+             ("Thread",), ("Commit", "Decision")),
     LinkType("cites", "This document cites / draws from that reference.",
              ("Reference",), ("Reference",)),
     LinkType("informs", "This reference grounds / informs that artifact.",

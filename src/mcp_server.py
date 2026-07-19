@@ -1445,6 +1445,12 @@ async def _project_briefing(
         "recent_decisions": [r for r in (items.get("recent_decisions") or []) if r.get("summary")],
         "tensions": tensions,
     }
+    blind_spots = [dict(r) for r in (items.get("blind_spots") or []) if r.get("surface")]
+    if blind_spots:  # the shape of this project's ignorance (8e26cd10) — absent stays silent
+        out["blind_spots"] = blind_spots
+        out["blind_spots_note"] = ("what this project's harness CANNOT verify from here — "
+                                   "check verify_with before trusting a green run on these "
+                                   "surfaces; register new ones with register_blind_spot()")
     if more > 0:  # trailing count so a capped wall never hides work silently (membrane, #6)
         out["open_threads_note"] = (
             f"showing {len(shown)} of {len(shown) + more} open threads (obligations first; "
@@ -2257,6 +2263,14 @@ async def record_decision(
                  (str(answered[0]) if answered else None),
     )
     out: dict[str, Any] = {"id": str(d), "kind": kind, "summary": summary}
+    if not protocol and capture.measurement_smell(f"{summary} {rationale or ''}"):
+        # thread 022bd24a: `protocol` is this tool's best field and nothing asked for it —
+        # advice in the receipt, never a gate (the decision is recorded either way)
+        out["protocol_nag"] = (
+            "this decision reads like a MEASUREMENT and its `protocol` is empty — record "
+            "the exact invocation (command line, seeds, thresholds, bucket edges) so a "
+            "successor RERUNS instead of re-deriving; re-run record_decision with the same "
+            "summary + protocol to enrich this same decision (idempotent)")
     if isinstance(resolves, list):
         out["resolved_threads"] = receipt
     elif answered:
@@ -2372,20 +2386,30 @@ async def open_thread(
 
 @mcp.tool()
 async def resolve_thread(
-    ref: str, because: str | None = None, subagent_id: str | None = None,
+    ref: str, because: str | None = None, artifact: str | None = None,
+    subagent_id: str | None = None,
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None
 ) -> dict[str, str]:
     """Close a THREAD you (or an earlier session) resolved — `ref` is its UUID or a summary
-    substring; `because` records why. It leaves briefing's open list and joins the resolved
-    section. Event-sourced (never deleted), so the close is auditable and reversible."""
+    substring; `because` records why (a short WHY, not a completion essay). It leaves
+    briefing's open list and joins the resolved section. Event-sourced (never deleted), so
+    the close is auditable and reversible.
+    `artifact` is the POINTER to what actually closed it — a commit hash, a decision id, a
+    file:line — kept as resolved_artifact; when it names a graph object (Commit/Decision)
+    a resolved_by edge is minted too, the strong closure witness the closure-miner almost
+    never finds (022bd24a). Put the evidence THERE and keep `because` short."""
     tid = await capture.resolve_thread(
-        Actions(await _pool_get()), ref, because=because,
+        Actions(await _pool_get()), ref, because=because, artifact=artifact,
         source=await _actor_for(ctx, subagent_id, subagent_type)
     )
     if tid is None:
         return {"error": f"no open thread matches {ref!r}"}
-    return {"id": str(tid), "status": "resolved"}
+    out = {"id": str(tid), "status": "resolved"}
+    if artifact:
+        out["artifact"] = (f"{artifact} — kept as resolved_artifact "
+                           "(+ resolved_by edge if it names an object)")
+    return out
 
 
 @mcp.tool()
@@ -2431,6 +2455,32 @@ async def hold_tension(
         source=await _actor_for(ctx, subagent_id, subagent_type),
     )
     return {"held": str(t), "poles": [pole_a, pole_b], "lean": lean}
+
+
+@mcp.tool()
+async def register_blind_spot(
+    surface: str, cannot_see: str, verify_with: str | None = None,
+    repo: str | None = None, subagent_id: str | None = None,
+    subagent_type: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Register your project's KNOWN BLIND SPOT — what the harness HERE cannot verify, and
+    where the real verification lives (thread 8e26cd10: 459 headless-Chromium tests stayed
+    green while every iPhone was broken, because nothing modeled 'this project targets an
+    engine your rig cannot see'). Surfaces at orient() under `blind_spots` for every session
+    on the project, BEFORE it trusts a green harness — the most expensive thing a session
+    re-derives is the shape of its own ignorance. `surface` names the capability
+    ('webkit-rendering', 'ios-touch'); `cannot_see` states the gap; `verify_with` points at
+    the rig or ritual that actually verifies (a test path, 'hand the phone to the operator').
+    Held like a Tension (its own type, never resolved away). Idempotent per
+    (project, surface) — re-register to sharpen the wording."""
+    ident = await _ident_for(ctx)
+    b = await capture.record_blind_spot(
+        Actions(await _pool_get()), surface, cannot_see, verify_with=verify_with,
+        repo=repo or (ident.project if ident else None),
+        source=await _actor_for(ctx, subagent_id, subagent_type),
+    )
+    return {"registered": str(b), "surface": surface,
+            "note": "held per (project, surface); orient() speaks it to every session here"}
 
 
 @mcp.tool()
