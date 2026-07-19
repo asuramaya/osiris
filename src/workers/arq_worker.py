@@ -157,6 +157,22 @@ async def sense_liveness(ctx: dict[str, Any]) -> int:
     return await observe_liveness(ctx["pool"], Path(root))
 
 
+async def backfill_transcripts(ctx: dict[str, Any]) -> int:
+    """THE STORE STAYS CURRENT ON THE OBSERVER'S SWITCH (task #19, the operator's word
+    2026-07-19). The transcript store is Osiris eating sessions from ANY harness; its
+    backfill is a free, deterministic sweep — the spend gate (9675fe4) makes an unchanged
+    transcript cost a stat and a row lookup, nothing more. So it runs on OSIRIS_TRANSCRIPTS
+    (the free observer, always on) and NEVER the miner's licence — killing the expensive
+    inferrer must not stale the store (the one-switch-one-cost law, 51000597). Returns
+    sessions touched."""
+    root = get_settings().osiris_transcripts
+    if not root:
+        return 0
+    from src.ingest.transcript_store import TranscriptStore
+    out = await TranscriptStore(ctx["pool"]).backfill()
+    return sum(out.values()) if out else 0
+
+
 async def sweep_doors(ctx: dict[str, Any]) -> int:
     """THE DOOR SWEEP (operator ruling, 2026-07-17: 'chrome shows fleet 5 but there are only
     3 agents up' + 'the 20+ doors on some i also consider a bug'). Two rules, one tick:
@@ -218,15 +234,9 @@ async def sense_sessions(ctx: dict[str, Any]) -> int:
         raise
     await miner_tick_ended(pool, secs=time.monotonic() - t0,
                            budget=_SENSE_BUDGET, report=report)
-    # THE HARNESS-AGNOSTIC TRANSCRIPT STORE (ruling be741d3e): eat every transcript the
-    # miner just swept into the normalized store too — keeps the store current for any
-    # harness (Claude, Crush, …) without requiring a mount. Idempotent; free beside the
-    # miner's own work. Fail-open: a store hiccup must never block the miner's yield.
-    try:
-        from src.ingest.transcript_store import TranscriptStore
-        await TranscriptStore(pool).backfill()
-    except Exception:  # noqa: BLE001 — the store is an index, not the miner's product
-        pass
+    # (the transcript-store backfill moved OFF this job to its own observer-keyed cron —
+    # backfill_transcripts below — per the one-switch-one-cost law: a free deterministic
+    # sweep must never wait on the miner's licence, task #19)
     if report["chunks"] or report["planted"]:
         _log.info("session sensing: %s", report)
     return report["chunks"]
@@ -457,6 +467,12 @@ class WorkerSettings:
         # ride the adversary's switch (killing the inferrer must never blind the observer).
         cron(watched(sense_liveness, every=60), minute=set(range(0, 60)), second={15},
              run_at_startup=True),
+        # THE STORE'S QUIET MEALS, every 10 min (task #19, operator's word 2026-07-19):
+        # eat new transcript turns from every harness into the normalized store. Rides
+        # the SAME observer switch as sense_liveness — free and deterministic under the
+        # spend gate (unchanged files cost a stat) — never the miner's licence.
+        cron(watched(backfill_transcripts, every=600), minute=set(range(8, 60, 10)),
+             second={30}, run_at_startup=True, timeout=300),
         # THE DOOR SWEEP, every 60s (operator ruling 2026-07-17): reconcile the mount
         # registry's belief against OS truth — release killed tabs' doors in ~2 minutes
         # instead of 15, and keep the door piles at one last-known address per agent.
