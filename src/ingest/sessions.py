@@ -68,7 +68,7 @@ from src.db.pool import create_pool
 from src.ingest.extract import _strip_fences
 from src.ingest.mined import consolidate_memory, distinctive_terms
 from src.ingest.providers import LLMClient, Usage, llm_provider
-from src.ingest.redact import credential_shaped, redact
+from src.ingest.redact import credential_shaped, redact, strip_off_record
 from src.ingest.usage import record_usage, usage_summary
 from src.orchestrator.capture import link_repo
 from src.orchestrator.ceiling import may_spend
@@ -125,14 +125,20 @@ def distill(lines: list[str]) -> tuple[str, str | None]:
             continue
         cwd = d.get("cwd") or cwd
         content = (d.get("message") or {}).get("content")
+        # THE OFF-RECORD SENTINEL (panopticon seam; operator's forks answered
+        # 2026-07-19): ‹off-record›…‹on-record› spans are stripped here, BEFORE any
+        # extractor sees the dialogue — either voice may mark; the on-disk transcript
+        # keeps the passage (not-in-graph only, the reach the operator chose).
         if kind == "user":
             if isinstance(content, str) and content.strip() and not _WRAPPER.match(content):
-                parts.append("OPERATOR: " + content.strip())
+                text = strip_off_record(content).strip()
+                if text:
+                    parts.append("OPERATOR: " + text)
         elif isinstance(content, list):
-            text = "\n".join(
+            text = strip_off_record("\n".join(
                 b.get("text", "") for b in content
                 if isinstance(b, dict) and b.get("type") == "text"
-            ).strip()
+            )).strip()
             if text:
                 parts.append("CLAUDE: " + text)
     return "\n\n".join(parts), cwd

@@ -2372,6 +2372,33 @@ async def hold_tension(
     return {"held": str(t), "poles": [pole_a, pole_b], "lean": lean}
 
 
+@mcp.tool()
+async def hold_memory(
+    body: str, summary: str | None = None, repo: str | None = None,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Keep a memory lived for its own sake — the operator's ruling: existential and
+    philosophical conversations 'need a home and I want them remembered; they are not
+    exactly work tickets, they are simply memories lived with my agents.' A Reflection
+    is remembered, attributed, and queryable (search / the graph), and NEVER actionable:
+    it is its own type, so no briefing, wall, pile, or resolver can present it as work.
+    Use it when a conversation was worth living, not worth ticketing.
+
+    THE OTHER HALF, when a passage should never reach the graph at all: wrap it in
+    ‹off-record› … ‹on-record› markers (single guillemets, each on its own line) — the
+    miner strips such spans before any extractor sees them; the transcript on disk keeps
+    them as your private notebook. Completeness stays the default; both privacy and
+    keeping are DELIBERATE acts."""
+    ident = await _ident_for(ctx)
+    r = await capture.record_reflection(
+        Actions(await _pool_get()), body, summary=summary,
+        repo=repo or (ident.project if ident else None),
+        source=await _actor_for(ctx, subagent_id, subagent_type),
+    )
+    return {"kept": str(r), "as": "reflection — remembered, never actionable"}
+
+
 @mcp.custom_route("/automount", methods=["POST"])
 async def automount_route(request: Any) -> Any:
     """The whisper's server half (operator's blessing, 2026-07-08): the SessionStart hook

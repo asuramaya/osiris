@@ -141,6 +141,13 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                "Decision (which settles) or a Thread (which closes), a tension is HELD: the "
                "current lean is recorded but never auto-resolved or consolidated away; the lean "
                "history is the dance across sessions.", ("tension:",)),
+    ObjectType("Reflection", "Software", "#b083f0", "ellipse",
+               "A memory lived for its own sake — the operator's ruling bfb3ae26 ('they "
+               "need a home and I want them remembered; they are not exactly work "
+               "tickets'): existential/philosophical conversation kept as what it is. "
+               "Remembered and queryable, NEVER actionable — no work surface (briefing, "
+               "wall, pile, duty extraction) may present it as a ticket, and no resolver "
+               "may close it: there is nothing to resolve.", ("reflection:",)),
     ObjectType("Seat", "Software", "#ffd33d", "star",
                "A durable ROLE in a house — the fleet's addressable identity (the identity "
                "core, ruling 5cef856b). Minted ONCE as seat:<uuid8>, never re-keyed: handle, "

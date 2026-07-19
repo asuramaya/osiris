@@ -564,6 +564,28 @@ async def defer_thread(
     return tid
 
 
+async def record_reflection(
+    actions: Actions, body: str, *, summary: str | None = None,
+    repo: str | None = None, source: str = _SOURCE,
+) -> uuid.UUID:
+    """Keep a memory lived for its own sake — the HOME the operator ruled for (bfb3ae26,
+    the panopticon seam's positive half): existential/philosophical conversation that is
+    'not exactly work tickets... simply memories lived with my agents.' A Reflection is
+    its OWN type, so every work surface structurally cannot present it as a ticket: it is
+    not a Thread (nothing to resolve), not a Decision (nothing settled), not a candidate
+    (the extractor's fourth rule already refuses first-person-about-the-speaker). It is
+    remembered, attributed, queryable — and never actionable. Idempotent on the body."""
+    observed = datetime.now(UTC)
+    r = await actions.create_or_find_object("Reflection", _canon("reflection", body), source)
+    await actions.assert_property(r, "body", body, source, observed, _CONF, evidence_class=_EC)
+    await actions.assert_property(r, "summary", summary or body[:160], source, observed,
+                                  _CONF, evidence_class=_EC)
+    if repo:
+        await link_repo(actions, r, repo, observed, source=source, evidence_class=_EC,
+                        confidence=_CONF)
+    return r
+
+
 async def record_tension(
     actions: Actions, pole_a: str, pole_b: str, *, lean: str | None = None,
     why: str | None = None, repo: str | None = None, source: str = _SOURCE,

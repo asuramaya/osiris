@@ -975,3 +975,35 @@ def test_the_whole_arc_is_read_or_the_elision_SAYS_SO(tmp_path: Path) -> None:
     assert out.startswith("A") and out.endswith("Z")        # head AND tail, never one end
     assert "ELIDED" in out and "Prefer silence to a guess" in out
     assert "M" * 100 not in out                             # the middle really is gone
+
+
+# --- the off-record sentinel (panopticon seam, operator's forks 2026-07-19) -------------
+
+def test_strip_off_record_spans_and_unclosed_tail() -> None:
+    from src.ingest.redact import strip_off_record
+    t = "keep this\n‹off-record›\nthe grief itself\n‹on-record›\nand keep this"
+    out = strip_off_record(t)
+    assert "keep this" in out and "and keep this" in out
+    assert "grief" not in out
+    # unclosed: runs to the end of THIS text, never beyond
+    assert strip_off_record("public\n‹off-record›\nprivate forever") == "public\n"
+    # two spans in one message both go
+    two = strip_off_record("a ‹off-record›x‹on-record› b ‹off-record›y‹on-record› c")
+    assert "x" not in two and "y" not in two and "a" in two and "c" in two
+    # unmarked text passes byte-identical
+    assert strip_off_record("nothing marked here") == "nothing marked here"
+
+
+def test_distill_honors_the_off_record_sentinel() -> None:
+    lines = [
+        _line("user", "on the record ask\n‹off-record›\nthe confession\n‹on-record›\nstill here"),
+        _line("assistant", [{"type": "text",
+                             "text": "reply\n‹off-record›\nmy own unrecorded thought"}]),
+        _line("user", "‹off-record›\nentirely private message"),
+    ]
+    text, _ = distill(lines)
+    assert "on the record ask" in text and "still here" in text
+    assert "confession" not in text
+    assert "reply" in text
+    assert "unrecorded thought" not in text      # the agent's voice may mark too
+    assert "entirely private" not in text        # a wholly-marked message yields nothing

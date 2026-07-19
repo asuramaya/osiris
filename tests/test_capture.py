@@ -1180,3 +1180,28 @@ async def test_open_thread_different_assignee_near_dup_surfaces_the_holder(
     assert "agent:maat" in second["note"] and "agent:alfred" in second["note"]
     n = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Thread'")
     assert n == 1
+
+
+async def test_record_reflection_is_kept_and_never_a_work_item(actions: Actions) -> None:
+    """The HOME (operator ruling bfb3ae26): remembered, queryable, never actionable —
+    a Reflection is its own type, so the briefing's open-thread section structurally
+    cannot surface it."""
+    from src.orchestrator.capture import record_reflection
+    r = await record_reflection(
+        actions, "the hunger to know and the shape of working alone — kept as lived",
+        summary="a conversation worth keeping, not ticketing", repo="osiris",
+        source="agent:test")
+    row = await actions.pool.fetchrow(
+        "SELECT type, canonical, status FROM objects WHERE id=$1", r)
+    assert row["type"] == "Reflection"
+    assert row["canonical"].startswith("reflection:")
+    assert row["status"] == "active"
+    # idempotent on the body
+    again = await record_reflection(
+        actions, "the hunger to know and the shape of working alone — kept as lived",
+        source="agent:test")
+    assert again == r
+    # never actionable: it is not a Thread, so no open-thread surface can list it
+    briefing = await actions.pool.fetch(
+        "SELECT o.id FROM objects o WHERE o.type='Thread' AND o.id=$1", r)
+    assert briefing == []

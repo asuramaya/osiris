@@ -58,3 +58,26 @@ def credential_shaped(value: str) -> bool:
     including a redaction marker (a summary BUILT AROUND a struck secret is still about
     the secret). Defense in depth behind `redact`."""
     return bool(_CRED_VALUE.search(value))
+
+
+# --- the off-record sentinel (the panopticon seam, operator's forks answered 2026-07-19) ---
+#
+# THE TRUST CAPABILITY (thread 6fc061a0, design e4b713fd): a passage between paired
+# ‹off-record› … ‹on-record› markers never becomes graph memory — stripped HERE, before
+# any extractor LLM sees the text, the same pipeline seat as credential redaction.
+# The operator's four rulings: BOTH operator and agents may mark; the reach is
+# NOT-IN-GRAPH ONLY (the on-disk transcript keeps the passage — private notebook, shared
+# record); paired markers at the finest grain; an UNCLOSED marker runs to the end of that
+# message only — fail-safe, it can never eat the rest of a session. The glyphs are
+# single-guillemet angle quotes (U+2039/U+203A), chosen because no code or prose produces
+# them by accident. Completeness stays the DEFAULT: silence is captured; privacy is a
+# deliberate act.
+
+_OFF_RECORD = re.compile(r"‹off-record›.*?(?:‹on-record›|\Z)", re.DOTALL)
+
+
+def strip_off_record(text: str) -> str:
+    """Remove every ‹off-record›…‹on-record› span (unclosed → to the end of this text).
+    Runs per message: cross-message spans are deliberately NOT honored — the fail-safe
+    outranks convenience, and each message re-marks its own privacy."""
+    return _OFF_RECORD.sub("", text)
