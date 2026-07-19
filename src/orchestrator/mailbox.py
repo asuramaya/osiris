@@ -106,12 +106,12 @@ def _norm(project: str) -> str:
     return project.removeprefix("repo:").strip()
 
 
-async def _dm_eligible(pool: asyncpg.Pool, agent_id: str) -> bool:
-    """May this id RECEIVE a DM? The resolver-eligibility law (thread 21596481): a
-    retired or false-mint agent is never a DM target — mail parked on a phantom lane is
-    a loss wearing a delivery receipt. Eligible = an active Agent object with neither
-    stamp. An id the graph doesn't know is ineligible by definition (a DM to a transient
-    dead id strands the mail)."""
+async def _dm_ineligibility(pool: asyncpg.Pool, agent_id: str) -> str | None:
+    """WHY may this id not receive a DM — or None if it may. The resolver-eligibility law
+    (thread 21596481): a retired or false-mint agent is never a DM target — mail parked
+    on a phantom lane is a loss wearing a delivery receipt. 'unknown' = no active Agent
+    object (ineligible for the RESOLVER lanes, but a direct DM to an id the graph merely
+    hasn't met yet stays deliverable — registration can lag a living mind)."""
     row = await pool.fetchrow(
         "SELECT "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -121,9 +121,19 @@ async def _dm_eligible(pool: asyncpg.Pool, agent_id: str) -> bool:
         "FROM objects o WHERE o.canonical=$1 AND o.type='Agent' AND o.status='active'",
         agent_id)
     if row is None:
-        return False
-    return (str(row["retired"]).lower() != "true"
-            and str(row["false_mint"]).lower() != "true")
+        return "unknown"
+    if str(row["retired"]).lower() == "true":
+        return "retired"
+    if str(row["false_mint"]).lower() == "true":
+        return "false_mint"
+    return None
+
+
+async def _dm_eligible(pool: asyncpg.Pool, agent_id: str) -> bool:
+    """The boolean face of _dm_ineligibility, for the resolver lanes (reply routing):
+    there, an id the graph doesn't know IS ineligible — a resolver must never park mail
+    on a lane it cannot vouch for."""
+    return await _dm_ineligibility(pool, agent_id) is None
 
 
 async def settle_history_at_join(
@@ -296,6 +306,19 @@ async def send_message(
     elif to_a:
         from src.orchestrator.agents import agent_seat, lineage_head
         lineage = await lineage_head(pool, to_a)
+        # THE ELIGIBILITY LAW ON THE DIRECT LANE (thread 21596481; the msg-192 fixture —
+        # a DM routed to a retired phantom lane): when the lineage's newest generation is
+        # KNOWN-dead (retired / false_mint), the mail can never be read under any of its
+        # addresses — fail LOUDLY, naming who was found and why, instead of parking it.
+        # An id the graph merely hasn't met stays deliverable (registration can lag).
+        if lineage:
+            why = await _dm_ineligibility(pool, lineage)
+            if why in ("retired", "false_mint"):
+                raise ValueError(
+                    f"undeliverable: '{requested or to_a}' resolves to {lineage}, whose "
+                    f"lineage head is {why} — no eligible living head exists, so this DM "
+                    "would park on a phantom lane forever. Check fleet() for who actually "
+                    "lives, or broadcast to the project room instead.")
         seat = await agent_seat(pool, to_a)
         if require_seat and seat is None:
             raise ValueError(

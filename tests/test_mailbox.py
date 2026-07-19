@@ -661,6 +661,45 @@ async def test_reply_to_a_retired_mind_keeps_the_room(actions: Actions) -> None:
     assert rep["to"] == "oldroom" and rep["to_agent"] is None
 
 
+async def test_a_dm_to_a_dead_lineage_fails_loudly_never_parks(actions: Actions) -> None:
+    """The eligibility law at the DIRECT lane (thread 21596481; the msg-192 misdelivery
+    is the fixture — a DM routed to a retired phantom lane): a lineage whose newest
+    generation is KNOWN-dead can never read the mail under any address — the send raises,
+    NAMING who was found and why, instead of parking it. A mid-generation address whose
+    HEAD lives keeps rolling up exactly as before, and an id the graph merely hasn't met
+    stays deliverable (registration can lag a living mind)."""
+    from datetime import UTC, datetime
+
+    p = actions.pool
+    # a whole lineage ended: base → -ii, and -ii (the head) is retired
+    base = await actions.create_or_find_object("Agent", "agent:0dead902", "test")
+    head = await actions.create_or_find_object("Agent", "agent:0dead902-ii", "test")
+    now = datetime.now(UTC)
+    await actions.assert_property(base, "succeeded_by", "agent:0dead902-ii", "test",
+                                  now, 0.9, evidence_class="self_declared")
+    await actions.assert_property(head, "retired", True, "test", now, 0.9,
+                                  evidence_class="self_declared")
+    with pytest.raises(ValueError, match="agent:0dead902-ii.*retired"):
+        await send_message(p, from_agent="agent:5e4de001", from_project="x",
+                           to_agent="agent:0dead902", body="into the void")
+    with pytest.raises(ValueError, match="phantom"):
+        await send_message(p, from_agent="agent:5e4de001", from_project="x",
+                           to_agent="agent:0dead902-ii", body="straight at the corpse")
+    # a LIVING head keeps the rollup: mid-generation address delivers, receipt names it
+    lb = await actions.create_or_find_object("Agent", "agent:a11ce001", "test")
+    lh = await actions.create_or_find_object("Agent", "agent:a11ce001-ii", "test")
+    assert lb is not None and lh is not None
+    await actions.assert_property(lb, "succeeded_by", "agent:a11ce001-ii", "test",
+                                  now, 0.9, evidence_class="self_declared")
+    ok = await send_message(p, from_agent="agent:5e4de001", from_project="x",
+                            to_agent="agent:a11ce001", body="to the living")
+    assert ok["lineage_head"] == "agent:a11ce001-ii"
+    # ...and an id the graph has never met is still deliverable, not refused
+    ok2 = await send_message(p, from_agent="agent:5e4de001", from_project="x",
+                             to_agent="agent:00fresh1", body="to a stranger")
+    assert ok2["to_agent"] == "agent:00fresh1"
+
+
 async def test_desk_briefs_scope_to_the_senders_lineage(actions: Actions) -> None:
     """The scoped desk (operator ruling, 2026-07-16): an agent's chrome counts ITS OWN
     unanswered briefs — lineage-wide — never the fleet's backlog."""
