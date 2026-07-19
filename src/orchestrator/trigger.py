@@ -651,7 +651,7 @@ async def trigger_mail_tick(
     st = settings or get_settings()
     pool = actions.pool
     report = {"woke": 0, "resumed": 0, "poked": 0, "window_busy": 0, "skipped": 0,
-              "owner_live": 0, "abandoned": 0, "scoped_out": 0}
+              "owner_live": 0, "abandoned": 0, "scoped_out": 0, "poke_only_held": 0}
     # the re-arm scope: a non-empty allowlist names the ONLY projects this trigger may touch
     allow = {p.strip() for p in st.osiris_trigger_projects.split(",") if p.strip()}
 
@@ -750,6 +750,11 @@ async def trigger_mail_tick(
                         continue
                     # already poked for this cause and still unsettled — escalate past the
                     # window (fall through to resume/mint, the pre-poke ladder)
+        if st.osiris_trigger_poke_only:
+            # THE POKE-ONLY ARM (operator, 2026-07-19): the ladder ends here — no resume,
+            # no mint, no new process. Held mail stays pull-only; the counter says so.
+            report["poke_only_held"] += 1
+            continue
         resume = None
         if await _last_wake_mode(pool, project, msg_id) != "resume":  # alternation guard
             resume = await _resumable_owner(pool, project, st)
@@ -833,6 +838,9 @@ async def trigger_mail_tick(
                 if res.get("busy"):
                     report["window_busy"] += 1
                     continue
+        if st.osiris_trigger_poke_only:
+            report["poke_only_held"] += 1  # the DM's resume rung is a spawn — held too
+            continue
         resume = await _agent_resumable(pool, agent_id, st)
         if resume is None:
             report["skipped"] += 1

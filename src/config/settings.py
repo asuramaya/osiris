@@ -160,6 +160,14 @@ class Settings(BaseSettings):
     # many seconds (a streaming turn, or the echo of the operator typing). A busy window's
     # mail waits for the next tick; delivery (owner_live) covers the actively-working case.
     osiris_poke_min_idle_secs: int = 600
+    # THE POKE-ONLY ARM (operator ruling, 2026-07-19: 'arm the poke ... but dont turn on the
+    # miners or critter background agents yet'): when true, the trigger's ladder ends at the
+    # poke — deliver to a live owner, type into an open window, and NOTHING ELSE. No resume,
+    # no mint, no new process on the operator's card, ever. Mail with no live owner and no
+    # open window stays pull-only until the spawning rungs get their own re-arm. This is a
+    # LANE switch, deliberately separate from osiris_trigger_enabled (the ladder's master)
+    # and from the miner's licence — three different levers, three different costs.
+    osiris_trigger_poke_only: bool = False
     # Wake HANDS (thread ba73c0c8): a triggered `claude -p` is headless — it cannot answer a
     # permission prompt, so in a repo with no stored approval every mcp__osiris__* call is
     # silently DENIED: the wake dies blind, its mail never settles, redelivers, re-wakes (the

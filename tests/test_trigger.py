@@ -26,7 +26,8 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
               lease: int = 900, grace: int = 0, live: int = 900,
               ceiling: int = 8_000_000, sense: str = "",
               wake_model: str = "", attempts: int = 0,
-              daily_usd: float = -1.0, projects: str = "") -> SimpleNamespace:
+              daily_usd: float = -1.0, projects: str = "",
+              poke_only: bool = False) -> SimpleNamespace:
     # grace defaults to 0 (disabled) so the rate-cap / lease tests exercise those bounds in
     # isolation; the wake-grace tests set it explicitly. sense="" → resume resolution looks at
     # ~/.claude/projects (no anchored transcript for the test ids there → mint), so the legacy
@@ -45,7 +46,8 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
                            osiris_wake_allowed_tools="mcp__osiris",
                            osiris_daily_usd=daily_usd,
                            osiris_trigger_projects=projects,
-                           osiris_poke_min_idle_secs=600)
+                           osiris_poke_min_idle_secs=600,
+                           osiris_trigger_poke_only=poke_only)
 
 
 async def _no_windows() -> list[dict[str, Any]]:
@@ -839,6 +841,77 @@ async def test_poke_lane_types_into_the_open_window_before_any_resume(
     rep2 = await trigger_mail_tick(actions, settings=_settings(enabled=True), spawn=_spawn,
                                    windows=_windows, poke=_poke_deduped)
     assert rep2["poked"] == 0 and spawned == ["/repo/demo"]  # escalated to the mint rung
+
+
+async def test_poke_only_arms_the_window_and_nothing_else(actions: Actions) -> None:
+    """THE POKE-ONLY ARM (operator, 2026-07-19: 'arm the poke ... but dont turn on the
+    miners or critter background agents yet'): with the lane switch on, the ladder ends at
+    the poke. (1) mail with NO window is HELD — never minted; (2) a poke already typed for
+    the same cause and still unsettled is HELD — never escalated to resume/mint; (3) an
+    open window still gets its turn, exactly as before."""
+    from src.orchestrator.mounts import save_mount
+
+    await _agent_with_mail(actions)
+    spawned: list[str] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        spawned.append(repo)
+
+    # (1) no window anywhere → held, not minted (the dark-manager autouse fixture rules)
+    rep = await trigger_mail_tick(actions, settings=_settings(enabled=True, poke_only=True),
+                                  spawn=_spawn)
+    assert spawned == [] and rep["woke"] == 0
+    assert rep["poke_only_held"] == 1
+    assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
+
+    # (3) an open window gets its turn — the poke lane itself is untouched by the switch
+    await save_mount(actions.pool, job_dir="/x/jobs/beefcafe", agent_id="agent:demo",
+                     project="demo", cwd="/repo/demo", model=None,
+                     session_key="whisper:beefcafe", alive=False)
+    wins = [{"name": "w-demo", "alive": True, "idle_seconds": 999.0,
+             "job_dir": "/x/jobs/beefcafe"}]
+
+    async def _windows() -> list[dict[str, Any]]:
+        return wins
+
+    async def _poke(name: str, text: str, *, dedup: str, min_idle: int) -> dict[str, Any]:
+        return {"poked": name}
+
+    rep2 = await trigger_mail_tick(actions, settings=_settings(enabled=True, poke_only=True),
+                                   spawn=_spawn, windows=_windows, poke=_poke)
+    assert rep2["poked"] == 1 and spawned == []
+
+    # (2) the same cause, deduped and still unsettled: the pre-poke ladder would escalate
+    # to a mint — poke-only HOLDS instead. No process, ever.
+    async def _poke_deduped(name: str, text: str, *, dedup: str,
+                            min_idle: int) -> dict[str, Any]:
+        return {"poked": name, "deduped": True}
+
+    rep3 = await trigger_mail_tick(actions, settings=_settings(enabled=True, poke_only=True),
+                                   spawn=_spawn, windows=_windows, poke=_poke_deduped)
+    assert spawned == [], "poke-only escalated to a spawn — the forbidden rung fired"
+    assert rep3["poke_only_held"] == 1 and rep3["resumed"] == 0
+
+
+async def test_poke_only_holds_the_dm_resume_rung_too(actions: Actions) -> None:
+    """The DM lane's resume is a spawn on the operator's card — poke-only holds it the
+    same way: a windowless addressee's DM stays pull-only, no process."""
+    a = await actions.create_or_find_object("Agent", "agent:demo-ii", "session")
+    await actions.assert_property(a, "project", "demo", "session", NOW, 0.9)
+    await send_message(actions.pool, from_agent="agent:other", from_project="other",
+                       to_agent="agent:demo-ii", body="for your eyes")
+    from src.orchestrator.mounts import save_mount
+    await save_mount(actions.pool, job_dir="/x/jobs/cafe0001", agent_id="agent:demo-ii",
+                     project="demo", cwd="/repo/demo", model=None,
+                     session_key="whisper:cafe0001", alive=False)
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        raise AssertionError("poke-only resumed a DM addressee — the forbidden rung fired")
+
+    rep = await trigger_mail_tick(actions, settings=_settings(enabled=True, poke_only=True),
+                                  spawn=_spawn)
+    assert rep["poke_only_held"] >= 1 and rep["resumed"] == 0
+    assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
 
 
 async def test_a_busy_window_defers_and_spends_nothing(actions: Actions) -> None:
