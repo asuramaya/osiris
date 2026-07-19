@@ -17,7 +17,8 @@ the store current without a mount. Until then, mount-time is the only ingest tri
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
+from pathlib import Path
 
 import asyncpg
 
@@ -29,6 +30,15 @@ from src.ingest.harness import (
 )
 
 _SYNTHETIC = "<synthetic>"
+
+
+def _mtime(source_path: str) -> datetime | None:
+    """The source's freshness witness (a bare stat, kept in a sync helper for the
+    blocking-call lint). None when the source vanished between discovery and here."""
+    try:
+        return datetime.fromtimestamp(Path(source_path).stat().st_mtime, tz=UTC)
+    except OSError:
+        return None
 
 
 def _reading_from_turns(
@@ -69,15 +79,41 @@ class TranscriptStore:
             ClaudeJsonlAdapter(), CrushSqliteAdapter(),
         ]
 
+    async def _freshness(
+        self, locator: SessionLocator,
+    ) -> tuple[bool, int, datetime | None]:
+        """(skip, since_idx, observed_mtime) — THE SPEND GATE (the house's oldest law:
+        every catastrophe is a spend catastrophe, and a store must never re-eat what it
+        already holds). skip=True means the source hasn't changed since the last ingest —
+        no read at all, serve the stored rows. Otherwise since_idx resumes after the turns
+        already ingested, and observed_mtime — taken BEFORE the read — becomes the new
+        last_ingested_at, so lines appended DURING a read are never skipped by the next
+        pass (stamping now() there would swallow them forever)."""
+        row = await self.pool.fetchrow(
+            "SELECT last_turn_idx, last_ingested_at FROM harness_sessions "
+            "WHERE harness=$1 AND anchor_sid=$2",
+            locator.harness, locator.anchor_sid)
+        mtime = _mtime(locator.source_path)
+        if row is None:
+            return (False, 0, mtime)
+        if (mtime is not None and row["last_ingested_at"] is not None
+                and mtime <= row["last_ingested_at"]):
+            return (True, int(row["last_turn_idx"]), mtime)
+        return (False, int(row["last_turn_idx"]), mtime)
+
     async def discover_and_ingest(
         self, *, cwd: str | None, job_dir: str | None,
         adapters: list[HarnessAdapter] | None = None,
     ) -> ModelReading | None:
         """Try each adapter; ingest from the first that discovers a session.
 
-        Returns the model reading for identity resolution (also stored for later async
-        queries by Slice 2 readers). None when no adapter recognizes the session — the
-        caller falls through to its legacy probe."""
+        INCREMENTAL by the spend gate: an unchanged source is never re-read (a stat and a
+        row lookup, nothing more), and a changed one is read from the last ingested turn
+        on. The reading always comes back from the STORE (full history, however this call's
+        delta landed) — never from the delta alone, which would amnesia the swap history.
+
+        Returns the model reading for identity resolution. None when no adapter recognizes
+        the session — the caller falls through to its legacy probe."""
         for adapter in (adapters or self._default_adapters):
             try:
                 locator = adapter.discover(cwd=cwd, job_dir=job_dir)
@@ -85,11 +121,18 @@ class TranscriptStore:
                 continue
             if locator is None:
                 continue
-            turns = list(adapter.read_turns(locator))
-            if not turns:
-                continue
-            await self._upsert(locator, turns)
-            return _reading_from_turns(turns, locator.harness, locator.anchor_sid)
+            skip, since, observed = await self._freshness(locator)
+            if skip:
+                stored = await self.model_of_session(locator.harness, locator.anchor_sid)
+                if stored is not None:
+                    return stored
+                skip, since = False, 0  # a session row without turns: eat it whole
+            turns = list(adapter.read_turns(locator, since_idx=since))
+            if turns:
+                await self._upsert(locator, turns, observed_at=observed)
+            elif since == 0:
+                continue  # nothing in the source at all — try the next adapter
+            return await self.model_of_session(locator.harness, locator.anchor_sid)
         return None
 
     async def model_of_session(
@@ -177,16 +220,25 @@ class TranscriptStore:
         turn). Returns per-adapter counts of sessions + turns ingested.
 
         `limit_per_adapter` caps each adapter's sweep (0 = unlimited) — a first run over
-        a fleet's whole history should not hog the loop. Free work, but bounded."""
+        a fleet's whole history should not hog the loop. Free work, but bounded.
+
+        INCREMENTAL by the spend gate: a session whose source hasn't changed since its
+        last ingest costs one stat + one row lookup and is never re-read — a steady-state
+        sweep over a quiet fleet does no file IO at all. Without this, every tick re-ate
+        every transcript on disk in full (the exact miner-walked-everything-forever shape
+        the house was burned by, thread 51000597)."""
         counts: dict[str, int] = {}
         for adapter in (adapters or self._default_adapters):
             sessions = 0
             for locator in adapter.enumerate():
-                turns = list(adapter.read_turns(locator))
-                if not turns:
-                    continue
                 try:
-                    await self._upsert(locator, turns)
+                    skip, since, observed = await self._freshness(locator)
+                    if skip:
+                        continue
+                    turns = list(adapter.read_turns(locator, since_idx=since))
+                    if not turns:
+                        continue
+                    await self._upsert(locator, turns, observed_at=observed)
                     sessions += 1
                 except Exception:  # noqa: BLE001 — one bad session must not abort the sweep
                     continue
@@ -197,16 +249,20 @@ class TranscriptStore:
 
     async def _upsert(
         self, locator: SessionLocator, turns: list[TurnRow],
+        *, observed_at: datetime | None = None,
     ) -> None:
+        """`observed_at` is the source mtime taken BEFORE the read — stamped as
+        last_ingested_at so the freshness gate compares against what was actually read,
+        not against a later clock that would hide same-moment appends."""
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
                     "INSERT INTO harness_sessions "
                     "   (anchor_sid, harness, session_id, cwd, project, source_path, "
                     "    last_ingested_at, last_turn_idx) "
-                    "VALUES ($1, $2, $3, $4, $5, $6, now(), $7) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, COALESCE($8, now()), $7) "
                     "ON CONFLICT (harness, anchor_sid) DO UPDATE "
-                    "   SET last_ingested_at = now(), "
+                    "   SET last_ingested_at = COALESCE($8, now()), "
                     "       last_turn_idx = GREATEST("
                     "           harness_sessions.last_turn_idx, EXCLUDED.last_turn_idx), "
                     "       cwd = COALESCE(EXCLUDED.cwd, harness_sessions.cwd), "
@@ -214,6 +270,7 @@ class TranscriptStore:
                     locator.anchor_sid, locator.harness, locator.session_id,
                     locator.cwd, locator.project, locator.source_path,
                     max((t.turn_idx for t in turns), default=0),
+                    observed_at,
                 )
                 # idempotent: ON CONFLICT skips turns already ingested (re-mount, re-probe)
                 await conn.executemany(

@@ -836,15 +836,28 @@ async def context_window(ctx: Context | None = None) -> dict[str, Any]:
     job = _job_hint(ctx) or (row["job_dir"] if row else None)
     if not job:
         return {"error": "no durable anchor on record — re-mount with the whisper's job_dir"}
-    # THE HARNESS-AGNOSTIC TRANSCRIPT STORE: try the store first (works for any harness the
-    # operator is running — Crush, Claude, …). Falls back to the JSONL path for a Claude
-    # session whose transcript hasn't been ingested (e.g. a fresh tab before the first tick).
+    # THE LIVE FILE FIRST (freshness law): the harness's own transcript is current to the
+    # last turn and compaction-aware — a store row is only as fresh as its last ingest, and
+    # the 85% write-back alarm must never sleep on a mount-time snapshot. The store serves
+    # the sessions the JSONL path cannot see (Crush, …), REFRESHED AT CALL TIME — the
+    # spend gate makes that a stat + a delta read, never a re-eat.
+    model_raw = row["model_raw"] if row else None
+    window_hint = row["context_window_size"] if row else None
+    path = locate_current_transcript(Path.home() / ".claude" / "projects", job,
+                                     anchored_only=True)
+    if path is not None:
+        out = context_lens.detail(path, model_raw, window_hint=window_hint)
+        out["agent"] = ident.agent_id
+        out["source"] = "transcript:claude-code"
+        return out
     from src.ingest.harness.claude_jsonl import ClaudeJsonlAdapter
     from src.ingest.harness.crush_sqlite import CrushSqliteAdapter
     from src.ingest.transcript_store import TranscriptStore
     store = TranscriptStore(pool)
-    model_raw = row["model_raw"] if row else None
-    window_hint = row["context_window_size"] if row else None
+    try:  # bring the store current for THIS session before reading it back
+        await store.discover_and_ingest(cwd=ident.cwd, job_dir=job)
+    except Exception:  # noqa: BLE001 — never block context_window on an ingest hiccup
+        pass
     for adapter in (ClaudeJsonlAdapter(), CrushSqliteAdapter()):
         try:
             locator = adapter.discover(cwd=ident.cwd, job_dir=job)
@@ -863,15 +876,7 @@ async def context_window(ctx: Context | None = None) -> dict[str, Any]:
         out["agent"] = ident.agent_id
         out["source"] = f"store:{locator.harness}"
         return out
-    # FALLBACK: the legacy JSONL path (Claude-only, compaction-aware)
-    path = locate_current_transcript(Path.home() / ".claude" / "projects", job,
-                                     anchored_only=True)
-    if path is None:
-        return {"error": "no transcript found for your anchor — nothing to measure"}
-    out = context_lens.detail(path, model_raw, window_hint=window_hint)
-    out["agent"] = ident.agent_id
-    out["source"] = "transcript:claude-code"
-    return out
+    return {"error": "no transcript found for your anchor — nothing to measure"}
 
 
 # --- mount: link to the graph as a first-class fleet member ---

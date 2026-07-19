@@ -454,3 +454,86 @@ def test_detail_from_usage_no_warning_when_assumed() -> None:
     assert d["window_assumed"] is True
     assert "warning" not in d
     assert "note" in d  # the assumed caveat
+
+
+# --- the spend gate (Thoth XLV's hardening) ----------------------------
+
+class _CountingAdapter(ClaudeJsonlAdapter):
+    """A fixed-locator adapter that counts source reads — the spend gate's witness."""
+
+    def __init__(self, locator: SessionLocator) -> None:
+        self._loc = locator
+        self.reads = 0
+
+    def discover(self, *, cwd=None, job_dir=None, root=None):  # type: ignore[override]
+        return self._loc
+
+    def enumerate(self, *, root=None):  # type: ignore[override]
+        yield self._loc
+
+    def read_turns(self, locator, *, since_idx: int = 0):  # type: ignore[override]
+        self.reads += 1
+        yield from super().read_turns(locator, since_idx=since_idx)
+
+
+def _counting_setup(tmp_path: Path) -> _CountingAdapter:
+    p = _write_claude_transcript(
+        tmp_path / "projects" / "-home-x-w" / "eeee5555-session.jsonl", "eeee5555",
+        [("user", None), ("assistant", "claude-fable-5")])
+    import os
+    os.utime(p, times=(1_000_000_000, 1_000_000_000))  # a fixed past mtime
+    return _CountingAdapter(SessionLocator(
+        anchor_sid="eeee5555", session_id="eeee5555-session", harness="claude-code",
+        source_path=str(p), cwd=None, project="w"))
+
+
+async def test_an_unchanged_source_is_never_reread(
+    store: TranscriptStore, tmp_path: Path,
+) -> None:
+    """THE SPEND GATE: the second discover_and_ingest costs a stat + a row lookup, zero
+    file reads — and still returns the FULL reading (from the store, never the delta)."""
+    adapter = _counting_setup(tmp_path)
+    r1 = await store.discover_and_ingest(cwd=None, job_dir=None, adapters=[adapter])
+    assert r1 is not None and r1.current == "claude-fable-5"
+    assert adapter.reads == 1
+    r2 = await store.discover_and_ingest(cwd=None, job_dir=None, adapters=[adapter])
+    assert r2 is not None and r2.current == "claude-fable-5"
+    assert adapter.reads == 1  # the gate held: no second read
+
+
+async def test_a_changed_source_is_read_from_the_delta_with_full_history(
+    store: TranscriptStore, tmp_path: Path,
+) -> None:
+    """An appended source re-reads (from since_idx), and the reading keeps the WHOLE model
+    history — the delta alone would amnesia the swap record."""
+    import os
+
+    adapter = _counting_setup(tmp_path)
+    await store.discover_and_ingest(cwd=None, job_dir=None, adapters=[adapter])
+    p = Path(adapter._loc.source_path)  # noqa: SLF001 — the test owns the fixture
+    _write_claude_transcript(
+        p, "eeee5555",
+        [("user", None), ("assistant", "claude-fable-5"), ("assistant", "glm-5.2")])
+    os.utime(p, times=(2_000_000_000, 2_000_000_000))  # newer than the last ingest stamp
+    r = await store.discover_and_ingest(cwd=None, job_dir=None, adapters=[adapter])
+    assert adapter.reads == 2
+    assert r is not None
+    assert r.current == "glm-5.2"
+    assert r.history == ("claude-fable-5", "glm-5.2")
+    n = await store.pool.fetchval(
+        "SELECT count(*) FROM harness_turns WHERE anchor_sid='eeee5555'")
+    assert n == 3  # no duplicate turns from the re-read
+
+
+async def test_backfill_skips_the_unchanged_and_eats_the_changed(
+    store: TranscriptStore, tmp_path: Path,
+) -> None:
+    """A steady-state sweep over a quiet fleet does no file IO at all (thread 51000597:
+    the miner-walked-everything-forever shape must never come back)."""
+    adapter = _counting_setup(tmp_path)
+    c1 = await store.backfill(adapters=[adapter])
+    assert c1 == {"claude-code": 1}
+    assert adapter.reads == 1
+    c2 = await store.backfill(adapters=[adapter])
+    assert c2 == {"claude-code": 0}
+    assert adapter.reads == 1  # unchanged source: stat only, no read
