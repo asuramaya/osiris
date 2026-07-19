@@ -127,6 +127,29 @@ async def test_lint_catches_the_lineage_sins(actions: Actions) -> None:
     assert [f["subject"] for f in _by_check(out, "false-mint")] == ["agent:0000dead"]
 
 
+async def test_lint_walks_through_a_historical_generation(actions: Actions) -> None:
+    """An archived (historical) heir is ANCESTRY, not absence (task #20, 2026-07-19: four
+    bases whose -ii heirs had been archived read as 'dangling' for two sessions). The walk
+    must not flag a pointer at a historical object — and must CONTINUE through it, so a
+    genuine void pointer deeper in the chain is still found and blamed on its true holder."""
+    t = "agent:teller"
+    base = await actions.create_or_find_object("Agent", "agent:aaaa1111", t)
+    mid = await actions.create_or_find_object("Agent", "agent:aaaa1111-ii", t)
+    await actions.assert_property(base, "succeeded_by", "agent:aaaa1111-ii", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(mid, "succeeded_from", "agent:aaaa1111", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(mid, "succeeded_by", "agent:aaaa1111-gone", t, NOW, 0.9,
+                                  evidence_class=_SD)   # the void, PAST the archive
+    await actions.pool.execute(
+        "UPDATE objects SET status='historical' WHERE id=$1", mid)
+    out = await _fn(actions, "lint", {})
+    dangle = {f["subject"]: f["detail"] for f in _by_check(out, "lineage-dangling")}
+    assert "agent:aaaa1111" not in dangle          # a historical heir is not a void
+    assert "agent:aaaa1111-ii" in dangle           # the walk continued and found the void
+    assert "agent:aaaa1111-gone" in dangle["agent:aaaa1111-ii"]
+
+
 async def test_lint_surfaces_coin_flip_winners(actions: Actions) -> None:
     """Two sources, same fact, different values, near-tie confidence: the resolver is
     deciding on recency alone — surfaced as a contradiction, never resolved."""
@@ -260,6 +283,27 @@ async def test_lint_orphan_links_stale_duties_and_ghosts(actions: Actions) -> No
     await actions.create_or_find_object("Agent", "agent:teller", t)
     out2 = await _fn(actions, "lint", {})
     assert "agent:teller" not in {f["subject"] for f in _by_check(out2, "attribution")}
+
+
+async def test_lint_attribution_sees_through_a_relay_annotation(actions: Actions) -> None:
+    """A registered writer that suffixes its id with a parenthetical provenance note is
+    NOT an impersonator (task #21, 2026-07-19: 338 of XLIV's relay writes — source_id
+    'agent:... (relaying operator bulk ruling ...)' — read as an unregistered ghost for
+    two sessions). The id is judged; the note rides along. A bare unregistered id still
+    flags."""
+    t = "agent:teller"
+    await actions.create_or_find_object("Agent", "agent:teller", t)
+    subj = await actions.create_or_find_object("Organization", "org:relayed", t)
+    await actions.assert_property(
+        subj, "hq", "Berlin", "agent:teller (relaying operator ruling, test fixture)",
+        NOW, 0.9, evidence_class=_SD)
+    await actions.assert_property(
+        subj, "founded", "1999", "agent:00nobody0 (relaying nothing real)", NOW, 0.9,
+        evidence_class=_SD)
+    out = await _fn(actions, "lint", {})
+    ghosts = {f["subject"] for f in _by_check(out, "attribution")}
+    assert not any(s.startswith("agent:teller") for s in ghosts)   # registered + annotated
+    assert "agent:00nobody0 (relaying nothing real)" in ghosts     # annotation ≠ amnesty
 
 
 async def test_lint_deals_rot_candidates_but_never_resolves(actions: Actions) -> None:

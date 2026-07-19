@@ -1071,11 +1071,18 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     land("laundering", "warn", laundering)
 
     # LINEAGE — the succession invariants the identity layer lives by (ruling a882b334).
+    # THE WALK COVERS EVERY GENERATION THE GRAPH EVER REGISTERED, whatever its status:
+    # lineage_head deliberately walks THROUGH inactive generations (a historical middle is
+    # ancestry, not absence), and a lint that loads active-only diverged from that law —
+    # four bases whose -ii heirs had been archived read as 'dangling' for two sessions
+    # (task #20, 2026-07-19: every flagged edge pointed at a real, historical object).
+    # `canons` (active-only) still scopes the OTHER checks below; only the walk widened.
     ag_rows = await pool.fetch(
-        "SELECT id, canonical FROM objects WHERE type='Agent' AND status='active'")
+        "SELECT id, canonical, status FROM objects WHERE type='Agent'")
     ag_ids = [r["id"] for r in ag_rows]
     canon_of = {r["id"]: r["canonical"] for r in ag_rows}
-    canons = set(canon_of.values())
+    known = set(canon_of.values())
+    canons = {r["canonical"] for r in ag_rows if r["status"] == "active"}
     props: dict[str, dict[str, str]] = {}
     if ag_ids:
         for r in await pool.fetch(
@@ -1093,12 +1100,13 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         walk = [start]
         walked = {start}
         while (nxt := succ_by.get(walk[-1])) is not None:
-            if nxt not in canons:
+            if nxt not in known:
                 if walk[-1] not in seen_dangling:
                     seen_dangling.add(walk[-1])
                     dangling.append({"subject": walk[-1],
                                      "detail": f"succeeded_by points at {nxt!r}, "
-                                               "which is not a registered Agent"})
+                                               "which no Agent object of any status "
+                                               "carries — a pointer into the void"})
                 break
             if nxt in walked:
                 members = frozenset(walk[walk.index(nxt):])
@@ -1234,6 +1242,10 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
 
     # ATTRIBUTION — writes stamped from an agent id that was never registered as an Agent:
     # the impersonation class (thread 33838160) as a standing tripwire, not a one-off hunt.
+    # THE MATCH SEES THROUGH AN ANNOTATION: a writer may suffix its id with a parenthetical
+    # provenance note — 'agent:<id> (relaying operator ruling ...)' — and 338 of XLIV's
+    # relay writes read as an unregistered impersonator for two sessions because the exact
+    # match couldn't (task #21, 2026-07-19). The id is judged; the note rides along.
     ghosts = await pool.fetch(
         "SELECT w.source_id, count(*) AS writes, max(w.at) AS last FROM ("
         "  SELECT source_id, observed_at AS at FROM assertions "
@@ -1241,7 +1253,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "  UNION ALL SELECT source_id, first_seen FROM links "
         "   WHERE source_id LIKE 'agent:%') w "
         "WHERE NOT EXISTS (SELECT 1 FROM objects o "
-        "  WHERE o.type='Agent' AND o.canonical = w.source_id) "
+        "  WHERE o.type='Agent' AND o.canonical = split_part(w.source_id, ' (', 1)) "
         "GROUP BY w.source_id ORDER BY count(*) DESC")
     land("attribution", "error", [
         {"subject": r["source_id"], "writes": int(r["writes"]),
