@@ -129,3 +129,45 @@ async def test_tag_object_is_additive(actions: Actions, case_id: str) -> None:
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM audit_log WHERE action='tag_object'"
     ) == 2
+
+
+async def test_find_never_returns_a_corpse(actions: Actions, case_id: str) -> None:
+    """THE CORPSE GATE (task #29): a canonical held by a MERGED object resolves to its
+    living head — 2410 in_repo/works_in links landed on merged repo:osiris because
+    find-or-create returned whatever row owned the name, status unread."""
+    corpse = await actions.create_or_find_object(
+        "SoftwareProject", "repo:corpse-gate", "analyst:test", case_id)
+    head = await actions.create_or_find_object(
+        "SoftwareProject", "repo:corpse-gate-head", "analyst:test", case_id)
+    await actions.merge_objects(head, corpse, "one project", "analyst:test", case_id)
+    found = await actions.create_or_find_object(
+        "SoftwareProject", "repo:corpse-gate", "analyst:test", case_id)
+    assert found == head  # the canonical's owner is merged — the find walks to the head
+
+
+async def test_unmerge_restores_the_loser(actions: Actions, case_id: str) -> None:
+    """The compensating act: unmerge writes an event, restores the projection, and
+    leaves the original merge event + same_as link as witnesses of the era."""
+    w = await actions.create_or_find_object("Person", "un-w", "analyst:test", case_id)
+    l_ = await actions.create_or_find_object("Person", "un-l", "analyst:test", case_id)
+    await actions.merge_objects(w, l_, "wrong direction", "analyst:test", case_id)
+    await actions.unmerge_objects(l_, "the direction was backwards", "analyst:test", case_id)
+    row = await actions.pool.fetchrow(
+        "SELECT status, merged_into FROM objects WHERE id=$1", l_)
+    assert row["status"] == "active" and row["merged_into"] is None
+    # the era's witnesses survive: merge event + same_as link + the new unmerge event
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM object_events WHERE event_type='merge' AND related_id=$1", l_) == 1
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM object_events WHERE event_type='unmerge' AND object_id=$1", l_) == 1
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='same_as'", l_) == 1
+    # and the pair can now merge the RIGHT way
+    await actions.merge_objects(l_, w, "right direction", "analyst:test", case_id)
+    assert await actions.resolve_object_id(w) == l_
+
+
+async def test_unmerge_guards(actions: Actions, case_id: str) -> None:
+    a = await actions.create_or_find_object("Person", "un-g", "analyst:test", case_id)
+    with pytest.raises(ActionError):  # not merged
+        await actions.unmerge_objects(a, "nothing to undo", "analyst:test", case_id)

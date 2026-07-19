@@ -143,6 +143,21 @@ class Actions:
                         "SELECT id FROM objects WHERE type=$1 AND canonical=$2", type_, canonical
                     ),
                 )
+                # THE CORPSE GATE (task #29's orphan-link write path): a canonical held
+                # by a MERGED object must resolve to its living head, never the corpse —
+                # 2410 in_repo/works_in links landed on merged repo:osiris because this
+                # find returned whatever row owned the name, status unread. Walk
+                # merged_into to the head so every canonical-keyed writer lands on the
+                # survivor the merge chose.
+                seen = {object_id}
+                while True:
+                    nxt = await conn.fetchval(
+                        "SELECT merged_into FROM objects WHERE id=$1 AND status='merged'",
+                        object_id)
+                    if nxt is None or nxt in seen:
+                        break
+                    seen.add(nxt)
+                    object_id = cast(uuid.UUID, nxt)
 
             if case_id is not None:
                 await conn.execute(
@@ -415,6 +430,53 @@ class Actions:
             )
             await self._outbox(
                 conn, "object_merged", winner_id, case_id, {"loser": str(loser_id)}
+            )
+
+    async def unmerge_objects(
+        self,
+        loser_id: uuid.UUID,
+        justification: str,
+        actor: str,
+        case_id: uuid.UUID | None = None,
+    ) -> None:
+        """The compensating act for a wrong merge (constitution §3: heal with events,
+        never delete). Restores the merged object to active and clears the projection;
+        the original merge event and its same_as link stay in the record as witnesses
+        of the era. First used for the repo:osiris↔repo:thoth direction defect (task
+        #29): the ruling said one project, one room — the execution buried the true
+        name under the day-old fracture label, and 2410 links landed on the corpse."""
+        async with self._tx() as conn:
+            row = await conn.fetchrow(
+                "SELECT status, merged_into FROM objects WHERE id=$1", loser_id)
+            if row is None:
+                raise ActionError("object does not exist")
+            if row["status"] != "merged":
+                raise ActionError("object is not merged — nothing to unmerge")
+            await conn.execute(
+                "INSERT INTO object_events "
+                "(event_type, object_id, related_id, payload, actor, case_id) "
+                "VALUES ('unmerge',$1,$2,$3,$4,$5)",
+                loser_id,
+                row["merged_into"],
+                {"justification": justification},
+                actor,
+                case_id,
+            )
+            await conn.execute(
+                "UPDATE objects SET status='active', merged_into=NULL WHERE id=$1",
+                loser_id,
+            )
+            await self._audit(
+                conn,
+                "unmerge_objects",
+                actor,
+                case_id,
+                {"restored": str(loser_id), "was_merged_into": str(row["merged_into"]),
+                 "justification": justification},
+            )
+            await self._outbox(
+                conn, "object_unmerged", loser_id, case_id,
+                {"was_merged_into": str(row["merged_into"])},
             )
 
     # --- 5. split_object (Phase 0 skeleton: records lineage) -------------
