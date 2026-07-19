@@ -212,14 +212,22 @@ class ClaudeCliClient:
         workdir = os.path.join(tempfile.gettempdir(), "osiris-extract")
         os.makedirs(workdir, exist_ok=True)
         async with _CLI_GATE:  # one hand out at a time, worker-wide
+            # THE PROMPT RIDES STDIN, NEVER ARGV (the adversary's first field summons,
+            # 2026-07-19): a whole-arc prompt from a large dying transcript blows Linux's
+            # ~2MB argument-list ceiling ([Errno 7] Argument list too long) — a limit the
+            # small-chunk crawl never met and the whole-arc reader hit on its very first
+            # real session. `claude -p` with no inline prompt reads it from stdin; argv
+            # keeps only the flags, which are bounded.
             proc = await asyncio.create_subprocess_exec(
-                self.binary, "-p", prompt, "--model", model, "--system-prompt", system,
+                self.binary, "-p", "--model", model, "--system-prompt", system,
                 "--output-format", "json", "--setting-sources", "",
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 cwd=workdir,
             )
             try:
-                out, err = await asyncio.wait_for(proc.communicate(), self.timeout)
+                out, err = await asyncio.wait_for(
+                    proc.communicate(input=prompt.encode()), self.timeout)
             except BaseException:
                 # BaseException, not Exception: CancelledError is the one that ACTUALLY happens
                 # here (arq's timeout, a worker shutdown) and it is not an Exception. Catching
