@@ -396,6 +396,36 @@ class TranscriptStore:
             "top": sessions[:top],
         }
 
+    async def rederive(self, harness: str, *, channel: str = "primary") -> int:
+        """One-time re-derivation after the schema grows a per-turn fact (the overhead
+        lens's reminders/is_compaction were NULL/false on every pre-lens row): forget the
+        derived turn rows of sessions whose SOURCE still exists on disk and reset their
+        ingest progress, so the next sweep re-eats them with the current extraction.
+
+        The store is a DERIVED index — the harness file is authoritative, so this loses
+        nothing that exists. The guard is the point: a session whose source has VANISHED
+        from disk keeps its rows untouched (they are the only record left; dropping them
+        would be the wake-meter's unknowable-ghost mistake again). Returns sessions
+        reset; the caller (or the next backfill tick) does the re-eating."""
+        rows = await self.pool.fetch(
+            "SELECT anchor_sid, source_path FROM harness_sessions "
+            "WHERE harness=$1 AND channel=$2", harness, channel)
+        reset = [r["anchor_sid"] for r in rows
+                 if _stat(r["source_path"])[0] is not None]
+        if not reset:
+            return 0
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "DELETE FROM harness_turns WHERE harness=$1 AND anchor_sid=ANY($2)",
+                    harness, reset)
+                await conn.execute(
+                    "UPDATE harness_sessions SET last_turn_idx=0, "
+                    "  last_ingested_at=to_timestamp(0) "
+                    "WHERE harness=$1 AND anchor_sid=ANY($2)",
+                    harness, reset)
+        return len(reset)
+
     async def backfill(
         self, *, adapters: list[HarnessAdapter] | None = None,
         limit_per_adapter: int = 0,

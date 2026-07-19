@@ -710,3 +710,37 @@ async def test_overhead_fleet_rolls_up_by_root(
     assert top["project"] == "widget"
     assert top["channel_files"] == 2
     assert top["multiplier"] == 1.3
+
+
+async def test_rederive_resets_and_reeats_with_new_facts(
+    store: TranscriptStore, tmp_path: Path,
+) -> None:
+    """rederive() forgets a session's derived rows and the next sweep re-eats them with
+    the current extraction — the post-schema-growth heal. A session whose source has
+    vanished keeps its rows (they are the only record left)."""
+    projects = tmp_path / "projects"
+    _write_channel_fixture(projects)
+    gone = _write_claude_transcript(
+        projects / "-home-x-code-widget" / "dead0002-s.jsonl",
+        "dead0002", [("assistant", "claude-fable-5")])
+
+    class _Rooted(ClaudeJsonlAdapter):
+        def enumerate(self, *, root=None):  # type: ignore[override]
+            yield from super().enumerate(root=projects)
+
+    await store.backfill(adapters=[_Rooted()])
+    # simulate the pre-lens era: blank the overhead facts the first eat recorded
+    await store.pool.execute(
+        "UPDATE harness_turns SET reminders=NULL, is_compaction=false")
+    gone.unlink()  # this session's source vanishes — its rows must survive the reset
+    n = await store.rederive("claude-code")
+    assert n == 1  # beef0001 reset; dead0002 guarded
+    assert await store.pool.fetchval(
+        "SELECT count(*) FROM harness_turns WHERE anchor_sid='dead0002'") == 1
+    assert await store.pool.fetchval(
+        "SELECT count(*) FROM harness_turns WHERE anchor_sid='beef0001'") == 0
+    counts = await store.backfill(adapters=[_Rooted()])
+    assert counts["claude-code"] >= 1  # the reset primary was re-eaten
+    oh = await store.overhead_of_session("claude-code", "beef0001")
+    assert oh is not None
+    assert oh["visible"]["total"] == 150  # the re-eat restored the full accounting
