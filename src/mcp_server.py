@@ -901,9 +901,9 @@ async def _overhead_glance(
             return {}
         return {"overhead": {
             "hidden_pct": oh["hidden_pct"], "multiplier": oh["multiplier"],
-            "sidechains": oh["sidechains"], "reminders": oh["reminders"],
-            "compactions": oh["compactions"], "cache_read_pct": oh["cache_read_pct"],
-            "basis": oh["basis"],
+            "sidechains": oh["sidechains"], "workflows": oh["workflows"],
+            "reminders": oh["reminders"], "compactions": oh["compactions"],
+            "cache_read_pct": oh["cache_read_pct"], "basis": oh["basis"],
         }}
     except Exception:  # noqa: BLE001 — the glance must never break the window reading
         return {}

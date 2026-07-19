@@ -144,22 +144,37 @@ class ClaudeJsonlAdapter:
     def _channels_of(
         self, primary: Path, parent_sid: str, project: str | None,
     ) -> Iterator[SessionLocator]:
-        """The hidden channels beside a primary — <stem>/subagents/agent-*.jsonl.
+        """The hidden channels beside a primary — <stem>/subagents/agent-*.jsonl, plus
+        <stem>/subagents/workflows/wf_*/agent-*.jsonl (the Workflow tool's fan-outs, a
+        channel shape the ancestor never knew).
 
-        Each Task-tool subagent writes its own transcript there (first line carries
-        isSidechain; the .meta.json sidecar names the agentType). These are the sessions
-        the operator never sees on screen — the overhead lens exists to price them.
-        anchor_sid is the subagent's own hex id (unique fleet-wide); parent_sid ties it
-        back to the primary it served."""
+        Each subagent writes its own transcript there (first line carries isSidechain;
+        the .meta.json sidecar names the agentType). These are the sessions the operator
+        never sees on screen — the overhead lens exists to price them. anchor_sid is the
+        subagent's own hex id (unique fleet-wide); parent_sid ties it back to the primary
+        it served."""
         sa_dir = primary.parent / primary.stem / "subagents"
         if not sa_dir.is_dir():
             return
-        for path in sorted(sa_dir.glob("*.jsonl")):
+        yield from self._channel_files(sa_dir, parent_sid, project, kind=None)
+        wf_root = sa_dir / "workflows"
+        if wf_root.is_dir():
+            for wf_dir in sorted(wf_root.iterdir()):
+                if wf_dir.is_dir() and not wf_dir.is_symlink():
+                    yield from self._channel_files(
+                        wf_dir, parent_sid, project, kind="workflow")
+
+    def _channel_files(
+        self, directory: Path, parent_sid: str, project: str | None, *, kind: str | None,
+    ) -> Iterator[SessionLocator]:
+        """One directory of channel transcripts. kind pins the channel name (workflow
+        fan-outs); None classifies per file (compaction by name, sidechain otherwise)."""
+        for path in sorted(directory.glob("*.jsonl")):
             if path.is_symlink():
                 continue
             stem = path.stem
             anchor = stem.removeprefix("agent-") or stem
-            channel = "compaction" if "compact" in stem else "sidechain"
+            channel = kind or ("compaction" if "compact" in stem else "sidechain")
             agent_type = None
             try:
                 meta = json.loads(path.with_suffix(".meta.json").read_text("utf-8"))

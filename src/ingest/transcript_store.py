@@ -141,6 +141,7 @@ def _overhead_shape(
         "reminders": sum(int(r["reminders"]) for r in primary + channels),
         "compactions": sum(int(r["compactions"]) for r in primary + channels),
         "sidechains": sum(1 for c in channels if c["channel"] == "sidechain"),
+        "workflows": sum(1 for c in channels if c["channel"] == "workflow"),
         "compaction_files": sum(1 for c in channels if c["channel"] == "compaction"),
     }
 

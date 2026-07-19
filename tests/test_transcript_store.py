@@ -610,8 +610,10 @@ def test_read_turns_carries_overhead_facts(tmp_path: Path) -> None:
 
 
 def _write_channel_fixture(projects: Path) -> None:
-    """A primary with one sidechain channel beside it, in the modern on-disk layout
-    (<project>/<stem>.jsonl + <project>/<stem>/subagents/agent-*.jsonl + .meta.json)."""
+    """A primary with one sidechain channel beside it and one workflow fan-out below it,
+    in the modern on-disk layout (<project>/<stem>.jsonl +
+    <stem>/subagents/agent-*.jsonl + .meta.json +
+    <stem>/subagents/workflows/wf_*/agent-*.jsonl)."""
     _write_claude_transcript(
         projects / "-home-x-code-widget" / "beef0001-s.jsonl",
         "beef0001", [("user", None), ("assistant", "claude-fable-5")])
@@ -623,6 +625,14 @@ def _write_channel_fixture(projects: Path) -> None:
                      "usage": {"input_tokens": 7, "output_tokens": 3}}}) + "\n")
     (sa / "agent-aaaa11112222333.meta.json").write_text(
         json.dumps({"agentType": "Explore"}))
+    wf = sa / "workflows" / "wf_test-1"
+    wf.mkdir(parents=True)
+    (wf / "agent-bbbb44445555666.jsonl").write_text(json.dumps(
+        {"type": "assistant", "isSidechain": True,
+         "message": {"model": "claude-fable-5",
+                     "usage": {"input_tokens": 20, "output_tokens": 10}}}) + "\n")
+    (wf / "agent-bbbb44445555666.meta.json").write_text(
+        json.dumps({"agentType": "general-purpose"}))
 
 
 def test_enumerate_yields_hidden_channels(tmp_path: Path) -> None:
@@ -632,13 +642,17 @@ def test_enumerate_yields_hidden_channels(tmp_path: Path) -> None:
     _write_channel_fixture(projects)
     locs = list(ClaudeJsonlAdapter().enumerate(root=projects))
     prim = [loc for loc in locs if loc.channel == "primary"]
-    chans = [loc for loc in locs if loc.channel != "primary"]
-    assert len(prim) == 1 and len(chans) == 1
-    c = chans[0]
-    assert c.channel == "sidechain"
+    sides = [loc for loc in locs if loc.channel == "sidechain"]
+    wfs = [loc for loc in locs if loc.channel == "workflow"]
+    assert len(prim) == 1 and len(sides) == 1 and len(wfs) == 1
+    c = sides[0]
     assert c.parent_sid == "beef0001"
     assert c.agent_type == "Explore"
     assert c.anchor_sid == "aaaa11112222333"
+    w = wfs[0]
+    assert w.parent_sid == "beef0001"
+    assert w.agent_type == "general-purpose"
+    assert w.anchor_sid == "bbbb44445555666"
 
 
 async def test_overhead_of_session_splits_channels(
@@ -654,18 +668,21 @@ async def test_overhead_of_session_splits_channels(
             yield from super().enumerate(root=projects)
 
     counts = await store.backfill(adapters=[_Rooted()])
-    assert counts == {"claude-code": 2}  # the primary AND its channel
+    assert counts == {"claude-code": 3}  # the primary AND both channels
     oh = await store.overhead_of_session("claude-code", "beef0001")
     assert oh is not None
     assert oh["visible"]["total"] == 150      # 100 in + 50 out
-    assert oh["hidden"]["total"] == 10        # 7 in + 3 out
-    assert oh["total_tokens"] == 160
+    assert oh["hidden"]["total"] == 40        # sidechain 10 + workflow 30
+    assert oh["total_tokens"] == 190
     assert oh["sidechains"] == 1
+    assert oh["workflows"] == 1
     assert oh["basis"] == "tokens"
-    assert oh["multiplier"] == 1.1
-    assert oh["hidden_pct"] == 6.2
-    assert oh["detail"][0]["agent_type"] == "Explore"
-    assert oh["detail"][0]["tokens"] == 10
+    assert oh["multiplier"] == 1.3
+    assert oh["hidden_pct"] == 21.1
+    # detail is sorted by tokens desc — the workflow fan-out leads
+    assert oh["detail"][0]["agent_type"] == "general-purpose"
+    assert oh["detail"][0]["tokens"] == 30
+    assert oh["detail"][1]["tokens"] == 10
     # bytes rode in from the ingest stat — the fallback basis is real, not fabricated
     assert oh["visible"]["bytes"] > 0 and oh["hidden"]["bytes"] > 0
 
@@ -684,12 +701,12 @@ async def test_overhead_fleet_rolls_up_by_root(
     await store.backfill(adapters=[_Rooted()])
     fleet = await store.overhead_fleet(top=5)
     t = fleet["totals"]
-    assert t["sessions"] == 1                 # the channel folded into its root
-    assert t["channel_files"] == 1
-    assert t["total_tokens"] == 160
-    assert t["hidden_tokens"] == 10
+    assert t["sessions"] == 1                 # the channels folded into their root
+    assert t["channel_files"] == 2
+    assert t["total_tokens"] == 190
+    assert t["hidden_tokens"] == 40
     top = fleet["top"][0]
     assert top["anchor_sid"] == "beef0001"
     assert top["project"] == "widget"
-    assert top["channel_files"] == 1
-    assert top["multiplier"] == 1.1
+    assert top["channel_files"] == 2
+    assert top["multiplier"] == 1.3
