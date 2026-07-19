@@ -3,9 +3,10 @@
 This is the EXISTING read path (sessions.py's _model_of / locate_current_transcript /
 model_of_transcript), extracted behind the adapter protocol. The code moves, the reads
 don't change — the same JSONL parsing that has been authoritative since the source-model
-provenance was introduced (ruling 17516660). Slice 2 migrates the callers onto the store;
-until then the old functions in sessions.py still serve the direct path and this adapter
-serves the store.
+provenance was introduced (ruling 17516660). Slice 2 (the JSONL-fallback removal, task
+#29) landed: every identity caller reads through the store now, and this adapter is the
+ONE place Claude Code transcripts are parsed for identity. sessions.py's functions remain
+for the adapter itself and the non-identity readers (the seam-hand probe, rebind).
 """
 from __future__ import annotations
 
@@ -92,6 +93,11 @@ class ClaudeJsonlAdapter:
     def discover(
         self, *, cwd: str | None, job_dir: str | None, root: Path | None = None,
     ) -> SessionLocator | None:
+        # anchored_only, MAIN transcript only — two scars, keep both: (1) a job_dir that
+        # matches no transcript must yield NOTHING, never the box-wide-hottest neighbor
+        # (the cry-wolf false swap); (2) never anchor on a hotter subagents/ transcript —
+        # a BACKGROUND child runs while the parent keeps calling, and the parent's writes
+        # got attributed to its hot child (provenance theft, thread 0344e536 / be580da).
         base = root or (Path.home() / ".claude" / "projects")
         path = locate_current_transcript(base, job_dir, anchored_only=True)
         if path is None:

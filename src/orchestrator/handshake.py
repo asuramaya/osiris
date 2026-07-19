@@ -22,6 +22,7 @@ from typing import Any
 
 from src.actions.core import Actions
 from src.ingest.sessions import locate_current_transcript
+from src.ingest.transcript_store import identity_reading
 from src.orchestrator import forks, mounts
 from src.orchestrator.agents import register_agent, resolve_identity
 from src.orchestrator.mailbox import desk_briefs_from, settle_history_at_join, unread_count
@@ -363,7 +364,12 @@ async def automount(
                 "OR canonical LIKE $1 || '-%') LIMIT 1", _base))
     if source in ("compact", "clear") and lived:
         mint_reason = "compaction" if source == "compact" else "context-clear"
-    ident = resolve_identity(cwd=cwd, job_dir=job_dir, root=root, project_label=project_label)
+    # the model reading rides THE STORE (sole lane since the JSONL-fallback removal, #29) —
+    # fail-open inside identity_reading: a store outage degrades the whisper to an
+    # unobserved-model mount, it never blocks the greeting
+    reading = await identity_reading(actions.pool, cwd=cwd, job_dir=job_dir, root=root)
+    ident = resolve_identity(cwd=cwd, job_dir=job_dir, root=root, project_label=project_label,
+                             store_reading=reading)
     if bound is not None:
         if _generation(bound.agent_id)[0] != _generation(ident.agent_id)[0]:
             # the deliberate binding wins: seams (swap/compaction) run on the SEAT's lineage

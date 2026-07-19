@@ -32,6 +32,7 @@ from src.ingest.edgar_formd import aim_form_d, expand_filings
 from src.ingest.etherscan import aim_address, screen_against_sanctions
 from src.ingest.gleif import aim_gleif
 from src.ingest.orgbook import aim_orgbook
+from src.ingest.transcript_store import identity_reading
 from src.ingest.wikidata import aim as wikidata_aim
 from src.ontology.resolution import (
     consolidate_companies,
@@ -334,7 +335,10 @@ async def _reattach(
     if rec is None:
         return None
     settings = get_settings()
-    ident = resolve_identity(cwd=rec.cwd, job_dir=rec.job_dir)
+    # the model reading rides THE STORE (sole lane since the JSONL-fallback removal, #29);
+    # fail-open — a store outage re-attaches with an unobserved model, never a bounce
+    reading = await identity_reading(pool, cwd=rec.cwd, job_dir=rec.job_dir)
+    ident = resolve_identity(cwd=rec.cwd, job_dir=rec.job_dir, store_reading=reading)
     if _generation(rec.agent_id)[0] != _generation(ident.agent_id)[0]:
         # a BOUND session (thread 33838160): the row points at a deliberately-worn SEAT of a
         # different lineage — honor it. Re-deriving from the transcript here was the flap
@@ -1037,17 +1041,11 @@ async def mount(
                      "Mounted at the kept path; update your bearings (90f0cb3a)"),
         }
         cwd = bound.cwd
-    # THE HARNESS-AGNOSTIC TRANSCRIPT STORE (ruling be741d3e): eat the current session's
-    # turns from whatever harness the operator is running (Claude Code, Crush, …), then
-    # hand the model reading to resolve_identity so non-Claude minds mount RESOLVED. The
-    # legacy JSONL probe stays as the fallback path inside resolve_identity.
-    from src.ingest.transcript_store import TranscriptStore
-    store_reading = None
-    try:
-        store_reading = await TranscriptStore(pool).discover_and_ingest(
-            cwd=cwd, job_dir=job_dir)
-    except Exception:  # noqa: BLE001 — a store failure must never block mount
-        pass
+    # THE HARNESS-AGNOSTIC TRANSCRIPT STORE (ruling be741d3e; sole model lane since the
+    # JSONL-fallback removal, #29): eat the current session's turns from whatever harness
+    # the operator is running (Claude Code, Crush, …), then hand the model reading to
+    # resolve_identity so non-Claude minds mount RESOLVED. Fail-open inside the helper.
+    store_reading = await identity_reading(pool, cwd=cwd, job_dir=job_dir)
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model,
                              claimed=claimed, fallback_seed=key,
                              store_reading=store_reading)

@@ -74,22 +74,23 @@ async def test_agent_seat_reads_an_already_resolved_id(actions: Actions) -> None
 async def test_an_heir_inherits_the_seat(actions: Actions, tmp_path: Path) -> None:  # type: ignore[name-defined]
     """The seat passes down the lineage: a minted successor inherits the ancestor's name, the
     generation ticks up. Anna → Anna II."""
+    from src.ingest.harness import ModelReading
+
     # ancestor claims a name
     await _agent(actions, "agent:seatx")
     await claim_name(actions, "agent:seatx", "Anna", source="agent:seatx")
-    # force a succession seam so register_agent MINTS an heir that inherits the handle
-    proj = tmp_path / "-x"
-    proj.mkdir()
-    (proj / "seatx-0000-4000-8000-000000000000.jsonl").write_text(
-        __import__("json").dumps({"type": "assistant",
-                                  "message": {"model": "claude-opus-4-8", "content": []}}) + "\n")
-    # stamp the ancestor's last anchored model as fable so a fresh opus read is a succession seam
+    # stamp the ancestor's last anchored model as fable so a fresh opus reading is a
+    # succession seam that makes register_agent MINT an heir inheriting the handle
     a = await actions.create_or_find_object("Agent", "agent:seatx", "seatx")
     from src.parsers.base import EvidenceClass
     await actions.assert_property(a, "source_model", "claude-fable-5", "seatx",
                                   __import__("datetime").datetime.now(__import__("datetime").UTC),
                                   0.8, evidence_class=EvidenceClass.DIRECT_OBSERVATION.value)
-    ident = resolve_identity(cwd="/x", job_dir="/j/jobs/seatx", root=tmp_path)
+    # an anchored store reading (the one observation lane since #29) carries the opus read
+    reading = ModelReading(current="claude-opus-4-8", history=("claude-opus-4-8",),
+                           deliberate=False, observed_at=None, method="claude-code",
+                           anchor_sid="seatx", anchored=True)
+    ident = resolve_identity(cwd="/x", job_dir="/j/jobs/seatx", store_reading=reading)
     heir = await register_agent(actions, ident, actor="analyst:operator",
                                 expected_model="claude-fable-5")
     handle = await actions.pool.fetchval(

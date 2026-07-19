@@ -5,8 +5,9 @@ every agent's writes collapse into the single `session` source — an undifferen
 This resolves each connecting agent into a distinct ACTOR and registers it in the graph:
 
   * project — from the agent's cwd (it always knows where it's working);
-  * model — probed off the agent's OWN transcript (the source-model provenance, authoritative
-    from the harness, not the lying system prompt), given its job dir;
+  * model — observed off the agent's OWN session record through the transcript store (the
+    source-model provenance, authoritative from the harness, not the lying system prompt),
+    anchored on its job dir;
   * session — the job/session id, the stable handle.
 
 An `Agent` object (canonical `agent:<session>`) is minted with those, linked `works_in` its
@@ -35,9 +36,6 @@ from src.actions.core import Actions
 from src.ingest.harness import ModelReading
 from src.ingest.sessions import (
     _job_id,
-    _tail_lines,
-    latest_model,
-    latest_model_at,
     locate_current_transcript,
     locate_transcript_by_cwd,
     model_of_transcript,
@@ -500,18 +498,16 @@ def resolve_identity(
     store_reading: ModelReading | None = None,
 ) -> AgentIdentity:
     """Resolve an agent's identity from what it can tell the server + what the harness RECORDS.
-    The project comes from its cwd; the session + model are OBSERVED off its own transcript. Two
-    probe paths: the CLAUDE_JOB_DIR anchor (precise), or — when absent — the cwd's project dir,
-    whose newest transcript is the active session. Ruling 17516660: OBSERVATION outranks the
-    agent's self-report (the harness doesn't lie; a swap is below the agent's own horizon), so a
-    passed `model` is used only when nothing can be observed, and a passed model that DISAGREES
-    with the observation is kept as `model_declared` + flagged `model_divergent`. `root` overrides
-    the transcript search dir (tests inject a tmp root; production reads ~/.claude/projects).
-
-    THE STORE (ruling be741d3e): a harness-agnostic transcript index, eaten by an adapter before
-    mount. `store_reading` is the result — it OUTRANKS the legacy JSONL probe because it works
-    for non-Claude harnesses (Crush, …) the JSONL path cannot see. The legacy path stays as the
-    fallback until Slice 2 migrates it fully onto the store.
+    The project comes from its cwd; the session + model are OBSERVED off its own record via THE
+    STORE (ruling be741d3e; sole lane since the JSONL-fallback removal, task #29): the caller
+    feeds `store_reading` from transcript_store.identity_reading(), harness-agnostic, so
+    non-Claude minds (Crush, …) resolve exactly like Claude ones. No reading → no observation:
+    the model honestly falls back to the agent's self-report. Ruling 17516660: OBSERVATION
+    outranks the agent's self-report (the harness doesn't lie; a swap is below the agent's own
+    horizon), so a passed `model` is used only when nothing was observed, and a passed model
+    that DISAGREES with the observation is kept as `model_declared` + flagged `model_divergent`.
+    `root` scopes the cwd sid-GUESS below (tests inject a tmp root; production reads
+    ~/.claude/projects) — the guess finds a session id, never a model.
 
     THE CLAIMED-SID GUARD (crunch residual): the cwd-locate grabs the HOTTEST transcript's sid —
     two concurrent same-project sessions without job_dirs would both grab the SAME one and merge.
@@ -529,41 +525,27 @@ def resolve_identity(
     method: str | None = None
     history: list[str] = []  # the transcript's model sequence — the swap history (job_dir path)
     deliberate = False       # a /model on the record makes any swap the operator's own hand
-    # THE STORE: harness-agnostic — try it FIRST so non-Claude minds resolve
+    # THE STORE — the ONLY observation lane since the JSONL-fallback removal (task #29;
+    # parity store-vs-legacy proven 351/0/0 before the cut). The reading's own `method` is
+    # the harness name; identity's downstream contract (the seam gates, _MODEL_EC) speaks
+    # the ANCHOR vocabulary, so translate: an anchored discovery is exactly what "job_dir"
+    # has always meant here (this session's OWN record, found by its own anchor — the
+    # adapters enforce anchored_only just as the deleted probe did), and an unanchored one
+    # is a hottest-guess that grades like the old cwd read (DERIVED, never seam-confessing).
+    # Without this translation a store reading graded CO_OCCURRENCE and anchored=False —
+    # the under-grade the store-first mount path shipped with (found during this removal).
     if store_reading and store_reading.current:
         observed = store_reading.current
         history = list(store_reading.history)
         deliberate = store_reading.deliberate
         observed_at = store_reading.observed_at
-        method = store_reading.method
-        # a store reading may carry the anchor the legacy path would also derive
-        if sid is None and store_reading.anchor_sid:
+        method = "job_dir" if store_reading.anchored else "cwd"
+        # an ANCHORED reading may carry the sid; an unanchored one must never claim it —
+        # adopting a hottest-guess sid as confident is the concurrent-session merge class
+        if sid is None and store_reading.anchor_sid and store_reading.anchored:
             sid = store_reading.anchor_sid
             confident = True
-    elif job_dir:
-        # anchored_only: a job_dir that does NOT match a real transcript (a synthesized wake dir,
-        # a malformed anchor) must yield NOTHING, never the box-wide-hottest neighbor — else the
-        # read grades 'job_dir' off a co-tenant's model and fires a false swap (cry-wolf).
-        base = root or (Path.home() / ".claude/projects")
-        main = locate_current_transcript(base, job_dir, anchored_only=True)
-        # NOTE: the old active_subagent() branch (be580da) anchored on a HOTTER subagents/
-        # transcript, meaning to catch a sub-agent that mounts under the parent's inherited
-        # CLAUDE_JOB_DIR. But it could not tell WHO was calling: a BACKGROUND sub-agent (the
-        # default now) runs concurrently while the PARENT keeps calling mount()/orient(), so
-        # the parent's own writes got attributed to its hot child (live repro: agent:ad1a1cb0
-        # → agent:<child>/haiku — thread 0344e536). That provenance theft (common) outweighs
-        # catching a sub-agent that mounts (rare — and the miner already registers sub-agents
-        # from disk with correct attribution, lineage.py). So we anchor ONLY on the parent's
-        # own transcript; a mounting sub-agent falls back to the miner's disk-side capture.
-        if main is not None:
-            # the harness's record — THIS session's model, swap history, and whether the
-            # operator's own /model is on it (deliberate vs rug-pull)
-            observed, history, deliberate = model_of_transcript(main)
-            if observed is not None:
-                method = "job_dir"
-                # the moment the evidence was WITNESSED — the seam gate's clock
-                observed_at = latest_model_at(_tail_lines(main))[1]
-    if sid is None and cwd:  # no job dir → find the session (and, if unseen, the model) by cwd
+    if sid is None and cwd:  # no anchor → GUESS the session by cwd (sid ONLY, never a model)
         path = locate_transcript_by_cwd(cwd, root=root)
         if path is not None:
             guess = path.stem.split("-")[0]  # the 8-char handle, matching the job-id scheme
@@ -571,10 +553,6 @@ def resolve_identity(
                 pass  # a LIVE mount already holds this sid — refusing it beats merging into it
             else:
                 sid = guess
-                if observed is None:
-                    observed = latest_model(_tail_lines(path))
-                    if observed is not None:
-                        method = "cwd"
     if observed is not None:                # the harness's word WINS over the agent's own
         model = observed
         divergent = bool(declared and declared != observed)  # self-report != observation = FLAG

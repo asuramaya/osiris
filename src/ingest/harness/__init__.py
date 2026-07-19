@@ -78,6 +78,11 @@ class SessionLocator:
     channel: str = "primary"
     parent_sid: str | None = None
     agent_type: str | None = None
+    # HOW this session was found: True = anchored on the caller's own job/session id (the
+    # identity-grade discovery), False = a hottest/newest heuristic (Crush's no-jid fallback).
+    # Identity translates this into its anchor vocabulary — an unanchored locator's reading
+    # must never confess a swap or claim a confident sid (the cry-wolf class).
+    anchored: bool = True
 
 
 @dataclass(frozen=True)
@@ -88,7 +93,9 @@ class ModelReading:
     model am I'). history is the distinct-model sequence (length > 1 = a swap).
     deliberate means the operator's own model-change command is on the record (a chosen
     swap, never a sin). method names the harness that produced the reading so the grade
-    is auditable. anchor_sid is the join key back to the store."""
+    is auditable. anchor_sid is the join key back to the store. anchored carries the
+    locator's discovery grade (see SessionLocator.anchored); a raw store read
+    (model_of_session) defaults False — only a discovery can testify to anchoring."""
 
     current: str | None
     history: tuple[str, ...]
@@ -96,6 +103,7 @@ class ModelReading:
     observed_at: datetime | None
     method: str
     anchor_sid: str | None
+    anchored: bool = False
 
 
 class HarnessAdapter(Protocol):

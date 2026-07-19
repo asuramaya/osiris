@@ -8,13 +8,31 @@ attributed to IT — hermetic against real Postgres.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 from src.actions.core import Actions
+from src.ingest.harness import ModelReading
+from src.ingest.harness.claude_jsonl import ClaudeJsonlAdapter
+from src.ingest.transcript_store import _reading_from_turns
 from src.orchestrator.agents import AgentIdentity, register_agent, resolve_identity
 from src.orchestrator.capture import record_decision
 from src.parsers.base import EvidenceClass
+
+
+def _store_reading(root: Path, job_dir: str) -> ModelReading | None:
+    """The production feed minus the DB round-trip: adapter discovery + parse → reading,
+    stamped with the locator's anchor grade exactly as discover_and_ingest stamps it (the
+    round-trip itself is test_transcript_store's to prove). Since the JSONL-fallback
+    removal (task #29) this is the ONE way a synthetic transcript reaches
+    resolve_identity — it no longer probes disk itself."""
+    loc = ClaudeJsonlAdapter().discover(cwd=None, job_dir=job_dir, root=root)
+    if loc is None:
+        return None
+    turns = list(ClaudeJsonlAdapter().read_turns(loc))
+    return replace(_reading_from_turns(turns, loc.harness, loc.anchor_sid),
+                   anchored=loc.anchored)
 
 
 def test_resolve_identity_derives_project_and_session(tmp_path: Path) -> None:
@@ -121,9 +139,10 @@ def test_observation_outranks_self_report_and_flags_divergence(tmp_path: Path) -
     proj.mkdir()
     _transcript(proj, "claude-opus-4-8")
     ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef",
-                             model="claude-fable-5", root=tmp_path)
+                             model="claude-fable-5",
+                             store_reading=_store_reading(tmp_path, "/j/jobs/deadbeef"))
     assert ident.model == "claude-opus-4-8"          # OBSERVATION wins over the self-report
-    assert ident.model_method == "job_dir"           # resolved by the harness probe
+    assert ident.model_method == "job_dir"           # an anchored store reading = the anchor grade
     assert ident.model_declared == "claude-fable-5"  # the agent's word is kept...
     assert ident.model_divergent is True             # ...and flagged as divergent
 
@@ -135,7 +154,8 @@ async def test_register_records_the_divergence_flag(actions: Actions, tmp_path: 
     proj.mkdir()
     _transcript(proj, "claude-opus-4-8")
     ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef",
-                             model="claude-fable-5", root=tmp_path)
+                             model="claude-fable-5",
+                             store_reading=_store_reading(tmp_path, "/j/jobs/deadbeef"))
     a = await register_agent(actions, ident, actor="analyst:operator")
     row = await actions.pool.fetchrow(
         "SELECT (SELECT value#>>'{}' FROM current_assertions x WHERE x.object_id=$1 "
@@ -166,7 +186,8 @@ def test_resolve_identity_captures_the_swap_history(tmp_path: Path) -> None:
     proj = tmp_path / "-home-x-code-osiris"
     proj.mkdir()
     _transcript_lines(proj, "claude-fable-5", "claude-opus-4-8")
-    ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef", root=tmp_path)
+    ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef",
+                             store_reading=_store_reading(tmp_path, "/j/jobs/deadbeef"))
     assert ident.model == "claude-opus-4-8"  # the latest turn
     assert ident.model_history == ("claude-fable-5", "claude-opus-4-8")  # the whole transition
     assert ident.model_deliberate is False   # no /model on the record → a rug-pull if swapped
@@ -186,7 +207,8 @@ def test_resolve_identity_sees_the_operators_own_model_command(tmp_path: Path) -
                     "message": {"model": "claude-haiku-4-5", "content": []}}),
     ]
     (proj / "deadbeef-1111-2222-3333-444455556666.jsonl").write_text("\n".join(lines) + "\n")
-    ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef", root=tmp_path)
+    ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef",
+                             store_reading=_store_reading(tmp_path, "/j/jobs/deadbeef"))
     assert ident.model_history == ("claude-fable-5", "claude-haiku-4-5")
     assert ident.model_deliberate is True
 
@@ -210,7 +232,8 @@ async def test_register_stamps_intent_and_the_swap(actions: Actions, tmp_path: P
     proj = tmp_path / "-home-x-code-osiris"
     proj.mkdir()
     _transcript_lines(proj, "claude-fable-5", "claude-opus-4-8")
-    ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef", root=tmp_path)
+    ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef",
+                             store_reading=_store_reading(tmp_path, "/j/jobs/deadbeef"))
     a = await register_agent(actions, ident, actor="analyst:operator",
                              expected_model="claude-fable-5")
     row = await actions.pool.fetchrow(
@@ -445,32 +468,43 @@ def test_unresolved_identities_do_not_conflate(tmp_path: Path) -> None:
 def test_cwd_located_identity_is_not_marked_resolved(tmp_path: Path) -> None:
     """#HIGH (audit): without a session/job_dir ANCHOR, resolve_identity GUESSES the session from
     the hottest cwd transcript — which concurrent same-project sessions would all grab, silently
-    merging. Mark it unresolved so the fleet digest SURFACES the ambiguity, not a false green."""
+    merging. Mark it unresolved so the fleet digest SURFACES the ambiguity, not a false green.
+    Since the JSONL-fallback removal (#29) the guess finds a SID only — never a model: with no
+    store reading the model honestly falls to the self-report."""
     proj = tmp_path / "-home-x-code-osiris"
     proj.mkdir()
     _transcript(proj, "claude-opus-4-8")
-    ident = resolve_identity(cwd="/home/x/code/osiris", root=tmp_path)  # no anchor → cwd guess
-    assert ident.model == "claude-opus-4-8"  # still reads a best-guess model (stays functional)
+    ident = resolve_identity(cwd="/home/x/code/osiris", root=tmp_path,  # no anchor → cwd guess
+                             model="claude-opus-4-8")
+    assert ident.session == "deadbeef"       # the sid guess still lands (the hottest stem)
+    assert ident.model == "claude-opus-4-8"  # the self-report fallback, honestly graded...
+    assert ident.model_method == "self_report"
     assert ident.project == "osiris"
-    assert ident.resolved is False           # but flagged NOT confident — the digest can see it
+    assert ident.resolved is False           # ...and flagged NOT confident — the digest can see it
 
 
 def test_cwd_fallback_neighbor_swap_does_not_cry_wolf(tmp_path: Path) -> None:
-    """The live cry-wolf (bonus bug, agent e71b408f): with no job_dir anchor, resolve_identity
-    reads the project dir's HOTTEST transcript — which may be a CONCURRENT NEIGHBOR's. If that
-    neighbor was warm-swapped (fable→haiku), a cwd-grade read must inform `model` but NEVER fire a
-    swap confession — a verified fable session was falsely told it had been 'demoted to haiku'."""
+    """The live cry-wolf (bonus bug, agent e71b408f): with no job_dir anchor, the hottest cwd
+    transcript may be a CONCURRENT NEIGHBOR's — if that neighbor was warm-swapped (fable→haiku),
+    its demotion must NEVER be confessed as ours. Since the JSONL-fallback removal (#29) the cure
+    is total: the cwd lane reads no model at all (the adapter refuses unanchored discovery too),
+    so there is nothing to cry wolf WITH — the sid guess lands, the model stays unobserved."""
     from src.orchestrator.swaps import classify_swap, swap_banner
 
     proj = tmp_path / "-home-x-code-osiris"
     proj.mkdir()
     _transcript_lines(proj, "claude-fable-5", "claude-haiku-4-5-20251001")  # a neighbor's swap
+    # the adapter is the new home of the refusal: an unmatched job_dir discovers NOTHING,
+    # never the box-wide-hottest neighbor
+    assert ClaudeJsonlAdapter().discover(
+        cwd="/home/x/code/osiris", job_dir="/j/jobs/beefbeef", root=tmp_path) is None
     ident = resolve_identity(cwd="/home/x/code/osiris", root=tmp_path)  # no job_dir → cwd guess
-    assert ident.model_method == "cwd"                       # a GUESS, not an anchor
-    assert ident.model == "claude-haiku-4-5-20251001"   # informs model (best-effort)...
-    assert ident.model_history == ()                    # ...but no swap history from a cwd read
+    assert ident.session == "deadbeef"                  # the sid guess still lands...
+    assert ident.model is None                          # ...but NO model rides it
+    assert ident.model_method is None
+    assert ident.model_history == ()
     assert ident.resolved is False
-    # the confession is GATED on a job_dir anchor → the neighbor's demotion is NOT confessed as ours
+    # and with nothing observed there is no swap to classify — the banner stays silent
     banner = swap_banner(classify_swap(ident.model_history, ident.model,
                                        expected="claude-fable-5",
                                        anchored=ident.model_method == "job_dir"))
@@ -507,9 +541,10 @@ def _write_transcript(path: Path, model: str, *, cwd: str = "/w/demo") -> None:
 def test_parent_mount_never_steals_a_hot_subagents_identity(tmp_path: Path) -> None:
     """Reversal of the old active_subagent behavior (thread 0344e536): anchoring on a HOTTER
     subagents/ transcript stole the PARENT's identity whenever a BACKGROUND sub-agent ran
-    concurrently (the parent keeps calling mount() while the child writes). resolve_identity now
-    anchors ONLY on the parent's own transcript — even with a hotter child, the mount resolves to
-    the PARENT. A sub-agent that mounts is captured by the miner from disk instead."""
+    concurrently (the parent keeps calling mount() while the child writes). The scar lives in
+    the ADAPTER now (the identity path's one discovery door since #29): it anchors ONLY on the
+    parent's own main transcript — even with a hotter child, the mount resolves to the PARENT.
+    A sub-agent that mounts is captured by the miner from disk instead."""
     import os
     import time as _t
 
@@ -521,7 +556,8 @@ def test_parent_mount_never_steals_a_hot_subagents_identity(tmp_path: Path) -> N
     _write_transcript(child, "claude-haiku-4-5-20251001")
     old = _t.time() - 3600
     os.utime(main, (old, old))  # child hotter than parent — the theft condition
-    ident = resolve_identity(cwd="/w/demo", job_dir=str(job), root=root)
+    ident = resolve_identity(cwd="/w/demo", job_dir=str(job),
+                             store_reading=_store_reading(root, str(job)))
     assert ident.agent_id == "agent:ab12cd34"   # the PARENT, never the hot child
     assert ident.model == "claude-fable-5" and ident.model_method == "job_dir"
 

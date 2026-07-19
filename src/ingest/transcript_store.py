@@ -6,10 +6,12 @@ authoritative (the adapter records source_ref per turn); the store is a DERIVED
 fast-read layer — one evidence grade lower than direct observation, so high-stakes
 verdicts (the swap banner shown to the operator) can re-probe the source on demand.
 
-MOUNT-TIME EAT (Slice 1): discover_and_ingest() is called from mount() before
-resolve_identity. It tries each adapter in order; the first that discovers a session
-ingests its turns and returns the model reading. resolve_identity consumes the reading
-preferentially over its own JSONL probe — non-Claude minds mount RESOLVED.
+MOUNT-TIME EAT (Slice 1, completed by Slice 2 — the JSONL-fallback removal, task #29):
+identity_reading() is called from every identity path (mount, _reattach, the automount
+whisper) before resolve_identity. It tries each adapter in order; the first that
+discovers a session ingests its turns and returns the model reading. This is the ONLY
+model-observation lane — resolve_identity no longer carries a JSONL probe of its own;
+non-Claude minds mount RESOLVED and a storeless call resolves no observed model.
 
 MINER-TICK BACKFILL (Slice 3): the miner will call ingest_since() on a schedule to keep
 the store current without a mount. Until then, mount-time is the only ingest trigger.
@@ -17,6 +19,7 @@ the store current without a mount. Until then, mount-time is the only ingest tri
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -31,6 +34,24 @@ from src.ingest.harness import (
 )
 
 _SYNTHETIC = "<synthetic>"
+
+
+async def identity_reading(
+    pool: asyncpg.Pool, *, cwd: str | None, job_dir: str | None,
+    root: Path | None = None,
+) -> ModelReading | None:
+    """The identity callers' one door to the store — discover_and_ingest, FAIL-OPEN.
+
+    mount(), _reattach() and the automount whisper all need the same thing: this
+    session's model reading if the store can produce one, and NO EXCEPTION otherwise —
+    a store failure must never block an identity path (the whisper's own law). Since
+    the JSONL-fallback removal (task #29) this is the ONLY observation lane; None
+    degrades resolve_identity honestly to the caller's self-report."""
+    try:
+        return await TranscriptStore(pool).discover_and_ingest(
+            cwd=cwd, job_dir=job_dir, root=root)
+    except Exception:  # noqa: BLE001 — identity must resolve even with the store down
+        return None
 
 
 def _stat(source_path: str) -> tuple[datetime | None, int | None]:
@@ -184,6 +205,7 @@ class TranscriptStore:
     async def discover_and_ingest(
         self, *, cwd: str | None, job_dir: str | None,
         adapters: list[HarnessAdapter] | None = None,
+        root: Path | None = None,
     ) -> ModelReading | None:
         """Try each adapter; ingest from the first that discovers a session.
 
@@ -192,11 +214,16 @@ class TranscriptStore:
         on. The reading always comes back from the STORE (full history, however this call's
         delta landed) — never from the delta alone, which would amnesia the swap history.
 
-        Returns the model reading for identity resolution. None when no adapter recognizes
-        the session — the caller falls through to its legacy probe."""
+        `root` overrides the adapters' on-disk search dir (tests inject a tmp root, the
+        same override resolve_identity's cwd sid-guess honors). The reading carries the
+        locator's `anchored` grade — identity's whole basis for trusting it.
+
+        Returns the model reading for identity resolution, or None when no adapter
+        recognizes the session — since the JSONL-fallback removal (task #29) there is no
+        legacy probe behind this: no reading means no observed model."""
         for adapter in (adapters or self._default_adapters):
             try:
-                locator = adapter.discover(cwd=cwd, job_dir=job_dir)
+                locator = adapter.discover(cwd=cwd, job_dir=job_dir, root=root)
             except Exception:  # noqa: BLE001 — an adapter failure must never block mount
                 continue
             if locator is None:
@@ -205,14 +232,15 @@ class TranscriptStore:
             if skip:
                 stored = await self.model_of_session(locator.harness, locator.anchor_sid)
                 if stored is not None:
-                    return stored
+                    return replace(stored, anchored=locator.anchored)
                 skip, since = False, 0  # a session row without turns: eat it whole
             turns = list(adapter.read_turns(locator, since_idx=since))
             if turns:
                 await self._upsert(locator, turns, observed_at=observed, source_bytes=size)
             elif since == 0:
                 continue  # nothing in the source at all — try the next adapter
-            return await self.model_of_session(locator.harness, locator.anchor_sid)
+            reading = await self.model_of_session(locator.harness, locator.anchor_sid)
+            return replace(reading, anchored=locator.anchored) if reading else None
         return None
 
     async def model_of_session(

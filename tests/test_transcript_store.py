@@ -227,24 +227,48 @@ async def test_store_ingest_is_idempotent(store: TranscriptStore, tmp_path: Path
 
 # --- resolve_identity wired to the store -------------------------------
 
-def test_resolve_identity_prefers_store_reading_over_legacy() -> None:
-    """A store reading (e.g. from Crush) resolves identity even with no JSONL transcript."""
+def test_an_anchored_store_reading_wears_the_anchor_grade() -> None:
+    """The translation contract (#29): identity's downstream gates (_MODEL_EC, the seam
+    confession) speak the ANCHOR vocabulary, not harness names — an anchored store reading
+    is exactly what "job_dir" has always meant there, whatever harness produced it. Without
+    the translation a store reading graded CO_OCCURRENCE and never confessed a swap (the
+    under-grade the store-first mount path shipped with, found during the removal)."""
     from src.ingest.harness import ModelReading
     reading = ModelReading(
         current="glm-5.2", history=("glm-5.2",), deliberate=False,
-        observed_at=None, method="crush", anchor_sid="cafef00d")
+        observed_at=None, method="crush", anchor_sid="cafef00d", anchored=True)
     ident = resolve_identity(
-        cwd="/home/asuramaya/.osiris/seats/atlas", job_dir=None,
+        cwd="/w/atlas-office", job_dir=None,
         store_reading=reading, root=Path("/nonexistent"),
     )
     assert ident.model == "glm-5.2"
-    assert ident.model_method == "crush"
+    assert ident.model_method == "job_dir"   # the anchor grade, harness-agnostic
     assert ident.model_history == ("glm-5.2",)
-    assert ident.resolved is True  # the store reading carried an anchor
+    assert ident.session == "cafef00d"       # an anchored reading may hand the sid
+    assert ident.resolved is True
 
 
-def test_resolve_identity_falls_back_when_no_store_reading(tmp_path: Path) -> None:
-    """No store reading → legacy JSONL path still works (Slice 2 hasn't migrated it yet)."""
+def test_an_unanchored_store_reading_grades_as_a_guess() -> None:
+    """Crush's newest-session fallback (no job id parsed) is a hottest-guess: it informs
+    the model at the cwd grade but must never hand a CONFIDENT sid (the concurrent-session
+    merge class) nor confess a swap."""
+    from src.ingest.harness import ModelReading
+    reading = ModelReading(
+        current="glm-5.2", history=("glm-5.2",), deliberate=False,
+        observed_at=None, method="crush", anchor_sid="cafef00d", anchored=False)
+    ident = resolve_identity(
+        cwd="/w/atlas-office", job_dir=None,
+        store_reading=reading, root=Path("/nonexistent"),
+    )
+    assert ident.model == "glm-5.2"          # the model still informs (best-effort)...
+    assert ident.model_method == "cwd"       # ...at the guess grade — never seam-confessing
+    assert ident.session != "cafef00d"       # the guessed sid is NOT adopted as ours
+    assert ident.resolved is False           # and the identity is honestly unresolved
+
+
+def test_resolve_identity_without_a_reading_is_self_report_only(tmp_path: Path) -> None:
+    """No store reading → NO observation (the legacy JSONL probe is gone, #29): the model
+    honestly falls back to the agent's own word, graded self_report."""
     ident = resolve_identity(
         cwd="/home/x/code/widget", job_dir="/home/x/.claude/jobs/aabbccdd",
         model="claude-opus-4-8", root=tmp_path, store_reading=None,

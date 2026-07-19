@@ -93,7 +93,10 @@ class CrushSqliteAdapter:
                     "ORDER BY created_at DESC LIMIT 1", (jid,),
                 ).fetchone()
                 sid = row[0] if row else None
+            anchored = sid is not None
             if sid is None:
+                # the newest-session guess — a co-tenant's session may be hotter; the
+                # locator confesses it so identity never grades this as an anchored read
                 row = conn.execute(
                     "SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1"
                 ).fetchone()
@@ -104,6 +107,7 @@ class CrushSqliteAdapter:
                 anchor_sid=sid[:8], session_id=sid, harness=self.name,
                 source_path=str(db), cwd=cwd,
                 project=Path(cwd).name if cwd else None,
+                anchored=anchored,
             )
         except sqlite3.Error:
             return None
