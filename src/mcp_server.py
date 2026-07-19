@@ -836,13 +836,41 @@ async def context_window(ctx: Context | None = None) -> dict[str, Any]:
     job = _job_hint(ctx) or (row["job_dir"] if row else None)
     if not job:
         return {"error": "no durable anchor on record — re-mount with the whisper's job_dir"}
+    # THE HARNESS-AGNOSTIC TRANSCRIPT STORE: try the store first (works for any harness the
+    # operator is running — Crush, Claude, …). Falls back to the JSONL path for a Claude
+    # session whose transcript hasn't been ingested (e.g. a fresh tab before the first tick).
+    from src.ingest.harness.claude_jsonl import ClaudeJsonlAdapter
+    from src.ingest.harness.crush_sqlite import CrushSqliteAdapter
+    from src.ingest.transcript_store import TranscriptStore
+    store = TranscriptStore(pool)
+    model_raw = row["model_raw"] if row else None
+    window_hint = row["context_window_size"] if row else None
+    for adapter in (ClaudeJsonlAdapter(), CrushSqliteAdapter()):
+        try:
+            locator = adapter.discover(cwd=ident.cwd, job_dir=job)
+        except Exception:  # noqa: BLE001 — never block context_window on an adapter
+            locator = None
+        if locator is None:
+            continue
+        usage_row = await store.last_usage_of_session(locator.harness, locator.anchor_sid)
+        if usage_row is None:
+            continue
+        usage = context_lens._usage_from_store(usage_row)  # noqa: SLF001 — pure adapter
+        if usage is None:
+            continue
+        out = context_lens.detail_from_usage(
+            usage, model_raw, window_hint=window_hint)
+        out["agent"] = ident.agent_id
+        out["source"] = f"store:{locator.harness}"
+        return out
+    # FALLBACK: the legacy JSONL path (Claude-only, compaction-aware)
     path = locate_current_transcript(Path.home() / ".claude" / "projects", job,
                                      anchored_only=True)
     if path is None:
         return {"error": "no transcript found for your anchor — nothing to measure"}
-    out = context_lens.detail(path, row["model_raw"] if row else None,
-                              window_hint=row["context_window_size"] if row else None)
+    out = context_lens.detail(path, model_raw, window_hint=window_hint)
     out["agent"] = ident.agent_id
+    out["source"] = "transcript:claude-code"
     return out
 
 
@@ -974,8 +1002,20 @@ async def mount(
                      "Mounted at the kept path; update your bearings (90f0cb3a)"),
         }
         cwd = bound.cwd
+    # THE HARNESS-AGNOSTIC TRANSCRIPT STORE (ruling be741d3e): eat the current session's
+    # turns from whatever harness the operator is running (Claude Code, Crush, …), then
+    # hand the model reading to resolve_identity so non-Claude minds mount RESOLVED. The
+    # legacy JSONL probe stays as the fallback path inside resolve_identity.
+    from src.ingest.transcript_store import TranscriptStore
+    store_reading = None
+    try:
+        store_reading = await TranscriptStore(pool).discover_and_ingest(
+            cwd=cwd, job_dir=job_dir)
+    except Exception:  # noqa: BLE001 — a store failure must never block mount
+        pass
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model,
-                             claimed=claimed, fallback_seed=key)
+                             claimed=claimed, fallback_seed=key,
+                             store_reading=store_reading)
     if bound is not None:
         # NO local re-import of _generation here: a local import anywhere in a function
         # shadows the module-level name for the WHOLE function, and this branch is

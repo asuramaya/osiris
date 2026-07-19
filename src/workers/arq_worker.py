@@ -218,6 +218,15 @@ async def sense_sessions(ctx: dict[str, Any]) -> int:
         raise
     await miner_tick_ended(pool, secs=time.monotonic() - t0,
                            budget=_SENSE_BUDGET, report=report)
+    # THE HARNESS-AGNOSTIC TRANSCRIPT STORE (ruling be741d3e): eat every transcript the
+    # miner just swept into the normalized store too — keeps the store current for any
+    # harness (Claude, Crush, …) without requiring a mount. Idempotent; free beside the
+    # miner's own work. Fail-open: a store hiccup must never block the miner's yield.
+    try:
+        from src.ingest.transcript_store import TranscriptStore
+        await TranscriptStore(pool).backfill()
+    except Exception:  # noqa: BLE001 — the store is an index, not the miner's product
+        pass
     if report["chunks"] or report["planted"]:
         _log.info("session sensing: %s", report)
     return report["chunks"]

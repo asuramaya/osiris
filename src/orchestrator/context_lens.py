@@ -89,16 +89,38 @@ def occupancy(usage: dict[str, int]) -> int:
     return usage["input"] + usage["cache_read"] + usage["cache_creation"]
 
 
+def _usage_from_store(row: dict[str, int | None]) -> dict[str, int] | None:
+    """Adapt a store last_usage row (keys may be None) to the {input,cache_*} shape
+    occupancy()/glance_from_usage() expect, or None when the row has no input token count."""
+    inp = row.get("input")
+    if inp is None:
+        return None
+    return {
+        "input": int(inp),
+        "cache_read": int(row.get("cache_read") or 0),
+        "cache_creation": int(row.get("cache_creation") or 0),
+        "output_last_turn": int(row.get("output") or 0),
+    }
+
+
+def glance_from_usage(
+    usage: dict[str, int], raw_model: str | None,
+) -> dict[str, Any]:
+    """The chrome one-liner off any usage dict (store-sourced or file-sourced).
+    Same shape as glance(), minus the file read — callers pick the source."""
+    used = occupancy(usage)
+    window, assumed = window_for(raw_model, used)
+    return {"used": used, "window": window, "pct": round(100 * used / window),
+            "assumed": assumed}
+
+
 def glance(path: Path, raw_model: str | None) -> dict[str, Any] | None:
     """The chrome's one-liner: {used, window, pct, assumed}. None when unreadable — the
     statusline omits the segment rather than lying."""
     u = last_usage(path)
     if u is None:
         return None
-    used = occupancy(u)
-    window, assumed = window_for(raw_model, used)
-    return {"used": used, "window": window, "pct": round(100 * used / window),
-            "assumed": assumed}
+    return glance_from_usage(u, raw_model)
 
 
 def detail(path: Path, raw_model: str | None,
@@ -154,6 +176,47 @@ def detail(path: Path, raw_model: str | None,
     if pct >= ALARM_PCT and not assumed:
         # the alarm fires on a KNOWN window only (Anubis VII's false eulogy, msg 127): a
         # death notice built on a guessed denominator erodes the trust the rite runs on.
+        out["warning"] = (
+            f"context {pct}% full — a compaction (a DEATH, ruling a882b334) can land any "
+            "turn. Write back NOW: record_decision / resolve_thread anything still only in "
+            "your head; what is not in the graph does not exist for your heir.")
+    elif assumed:
+        out["note"] = ("window is ASSUMED (no harness stamp) — pct is a guess; trust the "
+                       "chrome's ctx% or the operator's /context over this")
+    return out
+
+
+def detail_from_usage(
+    usage: dict[str, int], raw_model: str | None,
+    window_hint: int | None = None,
+    *,
+    assistant_turns: int | None = None,
+    compactions: int = 0,
+    last_compaction_at: str | None = None,
+) -> dict[str, Any]:
+    """The agent's full self-knowledge off a store-sourced usage row.
+
+    Same shape as detail(), but the inputs are pure data: a usage dict (from
+    TranscriptStore.last_usage_of_session) and optional counts the caller has separately.
+    Compaction tracking is Claude-specific (the harness's compact_boundary markers are not
+    per-turn rows in the store); non-Claude harnesses pass compactions=0 and the alarm
+    logic stays the same."""
+    used = occupancy(usage)
+    if window_hint:
+        window, assumed = window_hint, False
+    else:
+        window, assumed = window_for(raw_model, used)
+    pct = round(100 * used / window)
+    out: dict[str, Any] = {
+        "used": used, "window": window, "window_assumed": assumed, "pct": pct,
+        "remaining": max(0, window - used),
+        "breakdown": usage,
+        "compactions_this_session": compactions,
+        "last_compaction_at": last_compaction_at,
+    }
+    if assistant_turns is not None:
+        out["assistant_turns"] = assistant_turns
+    if pct >= ALARM_PCT and not assumed:
         out["warning"] = (
             f"context {pct}% full — a compaction (a DEATH, ruling a882b334) can land any "
             "turn. Write back NOW: record_decision / resolve_thread anything still only in "

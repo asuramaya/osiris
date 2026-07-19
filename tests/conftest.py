@@ -30,6 +30,9 @@ _TABLES = (
     # ON WHO RAN BEFORE IT, which is the same class as everything else we killed this week: state
     # written at a seam and never reconciled.
     "dev_pulses,console_state,search_vectors,body_usage"
+    # THE HARNESS-AGNOSTIC TRANSCRIPT STORE (ruling be741d3e): per-turn index fed by
+    # adapters; truncated like every other sidecar so tests start clean.
+    ",harness_sessions,harness_turns"
 )
 
 

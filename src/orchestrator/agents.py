@@ -32,6 +32,7 @@ from typing import Any
 import asyncpg
 
 from src.actions.core import Actions
+from src.ingest.harness import ModelReading
 from src.ingest.sessions import (
     _job_id,
     _tail_lines,
@@ -496,6 +497,7 @@ def resolve_identity(
     session: str | None = None, model: str | None = None, root: Path | None = None,
     claimed: set[str] | None = None, fallback_seed: str | None = None,
     project_label: str | None = None,
+    store_reading: ModelReading | None = None,
 ) -> AgentIdentity:
     """Resolve an agent's identity from what it can tell the server + what the harness RECORDS.
     The project comes from its cwd; the session + model are OBSERVED off its own transcript. Two
@@ -505,6 +507,11 @@ def resolve_identity(
     passed `model` is used only when nothing can be observed, and a passed model that DISAGREES
     with the observation is kept as `model_declared` + flagged `model_divergent`. `root` overrides
     the transcript search dir (tests inject a tmp root; production reads ~/.claude/projects).
+
+    THE STORE (ruling be741d3e): a harness-agnostic transcript index, eaten by an adapter before
+    mount. `store_reading` is the result — it OUTRANKS the legacy JSONL probe because it works
+    for non-Claude harnesses (Crush, …) the JSONL path cannot see. The legacy path stays as the
+    fallback until Slice 2 migrates it fully onto the store.
 
     THE CLAIMED-SID GUARD (crunch residual): the cwd-locate grabs the HOTTEST transcript's sid —
     two concurrent same-project sessions without job_dirs would both grab the SAME one and merge.
@@ -522,7 +529,18 @@ def resolve_identity(
     method: str | None = None
     history: list[str] = []  # the transcript's model sequence — the swap history (job_dir path)
     deliberate = False       # a /model on the record makes any swap the operator's own hand
-    if job_dir:
+    # THE STORE: harness-agnostic — try it FIRST so non-Claude minds resolve
+    if store_reading and store_reading.current:
+        observed = store_reading.current
+        history = list(store_reading.history)
+        deliberate = store_reading.deliberate
+        observed_at = store_reading.observed_at
+        method = store_reading.method
+        # a store reading may carry the anchor the legacy path would also derive
+        if sid is None and store_reading.anchor_sid:
+            sid = store_reading.anchor_sid
+            confident = True
+    elif job_dir:
         # anchored_only: a job_dir that does NOT match a real transcript (a synthesized wake dir,
         # a malformed anchor) must yield NOTHING, never the box-wide-hottest neighbor — else the
         # read grades 'job_dir' off a co-tenant's model and fires a false swap (cry-wolf).
