@@ -316,6 +316,9 @@ async def automount(
     re-deriving from the session id — it asserted a hash twin over a claimed seat in
     authoritative voice, and fleet writes landed on the wrong soul. When the session row's
     agent is a different lineage than the session would derive, the row IS the identity."""
+    # the greet ledger (the resume race): stamp BEFORE any slow work, so a SessionEnd
+    # racing this greeting sees the stamp however the awaits interleave
+    mounts.note_greeting(session_id)
     job_dir = _derive_job_dir(session_id, jobs_home=jobs_home)
     mint_reason = None
     bound = await mounts.find_mount(actions.pool, job_dir=job_dir) if job_dir else None
@@ -590,7 +593,21 @@ async def session_end(
     (session_key='sid:<its id>', the resume lane's mark). Releasing by agent_id let one
     closing tab-view delete a LIVING session's anchor; the emptied registry read as the
     seat's death, and the office door minted false successors. A row is an ADDRESS — only
-    the addressed door's death releases it; the seat-wide release remains retire()'s."""
+    the addressed door's death releases it; the seat-wide release remains retire()'s.
+
+    AND THE RESUME RACE YIELDS (Alfred's field report msgs 717/718, 2026-07-19): a resume
+    fires the predecessor's SessionEnd beside the successor's SessionStart, and when the
+    end landed second (automount 20:03:03, session-end 20:03:04, live) it deleted the door
+    the greeting had just seated — the window then read {live:false, last_seen:NULL} to
+    every probe and the poke lane skipped it while a build order sat unread. A greeting
+    within the grace means the session CONTINUES: the end signal is the old incarnation's
+    obituary, not the new one's, and it yields. Wrongly-kept doors are the census sweep's
+    to reap (~2 min); wrongly-killed doors blind the fleet until a human types."""
+    if mounts.greeted_within_grace(session_id):
+        return {"released": 0, "yielded": True,
+                "note": "a greeting for this session landed within the grace — the end "
+                        "yields to the resume (the sweep reaps the door if the window "
+                        "is truly gone)"}
     job_dir = _derive_job_dir(session_id, jobs_home=jobs_home)
     if job_dir is None:
         return {"released": 0, "note": "session id too short to derive an anchor"}

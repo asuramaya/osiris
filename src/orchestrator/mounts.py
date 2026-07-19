@@ -33,6 +33,40 @@ from src.parsers.evidence import confidence_for
 _EC = EvidenceClass.SELF_DECLARED.value
 _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 
+# THE GREET LEDGER (the resume race, Alfred's field report msgs 717/718, 2026-07-19):
+# a window resume fires the predecessor's SessionEnd and the successor's SessionStart
+# CONCURRENTLY, and when the end lands second (observed live: automount 20:03:03,
+# session-end 20:03:04) it deleted the door the greeting had just seated — the seat then
+# answered every probe {live:false, last_seen:NULL} until the next human act, and the
+# poke lane read the dead registry and skipped the window while a build order sat unread.
+# Both handlers live in one process, so the discriminator is this module-level stamp:
+# automount notes each greeting; session-end YIELDS when the same sid was greeted within
+# the grace. Yielding is the safe side of the asymmetry — a wrongly-kept door is reaped
+# by the census sweep within ~2 minutes; a wrongly-killed door blinds probes and pokes
+# until a human types into the window.
+_GREETS: dict[str, float] = {}
+_GREET_GRACE_SECS = 10.0
+
+
+def note_greeting(session_id: str) -> None:
+    """Stamp a session's greeting (automount's server half) for the resume-race yield."""
+    sid8 = (session_id or "").strip().lower()[:8]
+    if len(sid8) < 8:
+        return
+    now = time.monotonic()
+    _GREETS[sid8] = now
+    if len(_GREETS) > 256:  # bounded: anything past the grace is dead weight
+        for k, t in list(_GREETS.items()):
+            if now - t > _GREET_GRACE_SECS:
+                _GREETS.pop(k, None)
+
+
+def greeted_within_grace(session_id: str, *, grace: float = _GREET_GRACE_SECS) -> bool:
+    """Did a greeting for this sid land within the grace? session-end's yield check."""
+    sid8 = (session_id or "").strip().lower()[:8]
+    t = _GREETS.get(sid8)
+    return t is not None and (time.monotonic() - t) < grace
+
 
 @dataclass(frozen=True)
 class MountRecord:
@@ -250,10 +284,18 @@ async def find_mount(pool: asyncpg.Pool, *, job_dir: str) -> MountRecord | None:
 
 
 async def agent_liveness(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
-    """Is a SPECIFIC agent live right now (for a DM's send receipt)? Freshest mount by agent_id;
-    live = seen within 15 min. Lineage-aware falls to phase 2 — a bare agent_id match for now."""
+    """Is this MIND live right now (for a DM's send receipt)? Lineage-aware — phase 2
+    arriving on Alfred's field evidence (msg 718, 2026-07-19): a mount row is an ADDRESS,
+    and machinery legitimately re-points addresses between generations (the liveness
+    promotion follows the lineage head; greets rewrite agent_id) — so a probe for -iii
+    must not read dead because the row momentarily wears another numeral of the same
+    soul. The SOUL answers: freshest last_seen across every generation of the base.
+    live = seen within 15 min."""
+    from src.orchestrator.agents import _generation
+    base = _generation(agent_id)[0]
     v = await pool.fetchval(
-        "SELECT max(last_seen) FROM agent_mounts WHERE agent_id=$1", agent_id)
+        "SELECT max(last_seen) FROM agent_mounts "
+        "WHERE agent_id=$1 OR agent_id=$2 OR agent_id LIKE $2 || '-%'", agent_id, base)
     iso = v.isoformat() if v is not None else None
     from datetime import UTC, datetime, timedelta
     live = bool(v and datetime.now(UTC) - v < timedelta(minutes=15))

@@ -9,11 +9,22 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from src.actions.core import Actions
+from src.orchestrator import mounts as mounts_mod
 from src.orchestrator.handshake import automount, office_claim, record_session_anchor
 from src.orchestrator.mailbox import send_message
 
 SID = "39fb22a2-0000-4000-8000-000000000000"
+
+
+@pytest.fixture(autouse=True)
+def _fresh_greet_ledger() -> object:
+    """The greet ledger is process-global monotonic state; a stamp left by one test's
+    automount must not make another test's session_end yield (the resume-race grace)."""
+    mounts_mod._GREETS.clear()
+    yield
+    mounts_mod._GREETS.clear()
 
 
 def _transcript(root: Path, cwd: str, model: str = "claude-fable-5") -> None:
@@ -329,6 +340,7 @@ async def test_session_end_releases_the_seat_the_same_way_retire_does(
     assert await mounts.find_mount(
         actions.pool, job_dir=str(tmp_path / "jobs" / SID[:8])) is not None
 
+    mounts._GREETS.clear()  # a TRUE close: long after any greeting, not the resume race
     out = await session_end(actions, session_id=SID, jobs_home=tmp_path / "jobs")
 
     assert out["agent"] == mounted["agent"] and out["released"] == 1
@@ -351,6 +363,7 @@ async def test_session_end_lets_the_same_session_id_resume_clean(
     _transcript(root, "/w/sibling-nine")
     first = await automount(actions, session_id=SID, cwd="/w/sibling-nine",
                             actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+    mounts_mod._GREETS.clear()  # a TRUE close, not the resume race
     await session_end(actions, session_id=SID, jobs_home=tmp_path / "jobs")
 
     resumed = await automount(actions, session_id=SID, cwd="/w/sibling-nine",
@@ -377,6 +390,32 @@ async def test_session_end_on_a_never_mounted_session_is_a_quiet_no_op(
 
     out2 = await session_end(actions, session_id="short")  # too short to derive an anchor
     assert out2["released"] == 0
+
+
+async def test_session_end_yields_to_a_fresh_greeting_the_resume_race(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """THE RESUME RACE (Alfred's field report msgs 717/718, 2026-07-19): a window resume
+    fires the predecessor's SessionEnd beside the successor's SessionStart, and when the
+    end lands second (automount 20:03:03, session-end 20:03:04, observed live) it deleted
+    the door the greeting had just seated — Maat's window then answered every probe
+    {live:false, last_seen:NULL} and the poke lane skipped it while a build order sat
+    unread. An end arriving within the greeting's grace is the OLD incarnation's obituary,
+    not the new one's: it must yield and leave the door standing. A true close (long after
+    any greeting) still releases — the previous tests pin that half."""
+    from src.orchestrator.handshake import session_end
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/sibling-nine")
+    await automount(actions, session_id=SID, cwd="/w/sibling-nine",
+                    actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+
+    # the end lands one breath after the greeting — the observed race, exactly
+    out = await session_end(actions, session_id=SID, jobs_home=tmp_path / "jobs")
+
+    assert out["released"] == 0 and out.get("yielded") is True
+    assert await mounts_mod.find_mount(
+        actions.pool, job_dir=str(tmp_path / "jobs" / SID[:8])) is not None  # door stands
 
 
 async def test_automount_adopts_a_tab_view_instead_of_minting_a_clone(

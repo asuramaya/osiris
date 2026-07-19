@@ -35,6 +35,31 @@ async def test_save_find_upsert(actions: Actions) -> None:
     assert await p.fetchval("SELECT count(*) FROM agent_mounts") == 1
 
 
+async def test_agent_liveness_answers_for_the_soul_not_the_numeral(
+    actions: Actions,
+) -> None:
+    """Lineage-aware liveness (Alfred's msg 718, the null-then-live flap): machinery
+    legitimately re-points a mount row between generations of one soul (the liveness
+    promotion follows the head; greets rewrite) — a probe for -iii must not read dead
+    because the row momentarily wears -iv. The greet ledger's yield check is pinned
+    here beside its consumer."""
+    await mounts.save_mount(actions.pool, job_dir="/j/soulprobe",
+                            agent_id="agent:ab12cd34-iv", project="p", cwd="/w",
+                            model=None, session_key=None)
+    out = await mounts.agent_liveness(actions.pool, "agent:ab12cd34-iii")
+    assert out["live"] is True and out["last_seen"] is not None
+    # a different soul stays invisible — the rollup never crosses lineages
+    other = await mounts.agent_liveness(actions.pool, "agent:feed0001")
+    assert other["live"] is False and other["last_seen"] is None
+    # the greet ledger: a fresh stamp yields; expiry (or a short id) never does
+    mounts.note_greeting("cafe0123-4000-8000-0000-000000000000")
+    assert mounts.greeted_within_grace("cafe0123-4000-8000-0000-000000000000") is True
+    assert mounts.greeted_within_grace("cafe0123-4000-8000-0000-000000000000",
+                                       grace=0.0) is False
+    assert mounts.greeted_within_grace("short") is False
+    mounts._GREETS.clear()
+
+
 async def test_project_last_seen_feeds_the_listener_probe(actions: Actions) -> None:
     p = actions.pool
     assert await mounts.project_last_seen(p, "ghost-town") is None
