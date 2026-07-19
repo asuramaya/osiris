@@ -5,6 +5,7 @@ a wider budget; the retry's own success renders "graph slow", never a silent all
 never a false "unreachable"."""
 from __future__ import annotations
 
+import io
 import json
 import subprocess
 import sys
@@ -66,6 +67,29 @@ async def test_a_non_timeout_failure_is_never_retried(monkeypatch: pytest.Monkey
     with pytest.raises(ConnectionRefusedError):
         await sl._fetch_counts("proj", "deadbeef", "claude-fable-5", "claude-fable-5", None)
     assert calls == 1   # no second knock
+
+
+def test_a_dm_alone_rings_the_doorbell(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """DM-only traffic must light the mail segment BY ITSELF (the Alfred chain,
+    2026-07-19: seven DMs waiting, mail 0, flight 0 — and every window in the halted
+    chain rendered a dim 'mail 0' because the render condition forgot `dm`)."""
+    async def fake_fetch(
+        *a: object, **k: object,
+    ) -> tuple[tuple[int, int, int, int, int, int, int, int, list[str]], bool]:
+        return (0, 0, 7, 0, 16, 0, 25, 0, []), False
+
+    monkeypatch.setattr(sl, "_fetch_counts", fake_fetch)
+    monkeypatch.setattr(
+        sys, "stdin",
+        io.StringIO(json.dumps({"workspace": {"current_dir": "/tmp/x"},
+                                "session_id": "deadbeef0000",
+                                "model": {"id": "claude-fable-5"}})))
+    sl.main()
+    out = capsys.readouterr().out
+    assert "✉7" in out            # the doorbell — a DM waiting must be visible alone
+    assert "graph unreachable" not in out
 
 
 def test_end_to_end_refused_port_renders_unreachable_not_a_crash() -> None:

@@ -171,7 +171,7 @@ def _link(text: str, anchor: str) -> str:
 async def _counts(
     project: str, session_id: str, model_id: str = "", model_raw: str = "",
     window_size: int | None = None, *, connect_timeout: float = 1.0,
-) -> tuple[int, int, int, int, int, int]:
+) -> tuple[int, int, int, int, int, int, int, int, list[str]]:
     import asyncpg
 
     conn = await asyncpg.connect(DSN, timeout=connect_timeout)
@@ -210,8 +210,8 @@ async def _counts(
         from src.orchestrator import vitals
         from src.orchestrator.mailbox import desk_briefs_from, unread_split
 
-        desk = await desk_briefs_from(conn, agent or None)  # type: ignore[arg-type]
-        split = await unread_split(conn, project, reader_agent=agent or None,  # type: ignore[arg-type]
+        desk = await desk_briefs_from(conn, agent or None)
+        split = await unread_split(conn, project, reader_agent=agent or None,
                                    lease_secs=LEASE_SECS)
         debts = await vitals.operator_debts(conn, hood=project)
         souls = await vitals.live_souls(conn)
@@ -301,10 +301,13 @@ def main() -> None:
         # nothing, and it used to be summed into the same scary red number as a real duty.
         desk_s = f"{DIM}briefs {desk}{RESET}" if desk else ""
         # mail N(+M) ✉D — M = in flight (a sibling's live lease); ✉D = DMs addressed to YOU
-        # specifically (phase 4: a private message outranks group traffic visually)
+        # specifically (phase 4: a private message outranks group traffic visually).
+        # `dm` MUST light the segment by itself: the Alfred chain (2026-07-19) was pure
+        # DM traffic — mail 0, flight 0, seven DMs waiting — and this condition read
+        # (mail or flight), so every window in the halted chain rendered a dim "mail 0".
         flight_s = f"{AMBER}+{flight}{RESET}" if flight else ""
         dm_s = f" {RED}✉{dm}{RESET}" if dm else ""
-        mail_s = (f"mail {mail}{flight_s}{dm_s}" if (mail or flight)
+        mail_s = (f"mail {mail}{flight_s}{dm_s}" if (mail or flight or dm)
                   else f"{DIM}mail 0{RESET}")
         # DARK UNTIL IT MATTERS. Nothing is rendered while the body is well — an alarm that is
         # always lit is wallpaper. But if Osiris has stopped SENSING, that outranks every other
