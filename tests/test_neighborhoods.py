@@ -7,6 +7,8 @@ call, refreshed when the neighborhood moves, metered in llm_usage.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from src.actions.core import Actions
 from src.ingest.providers import Usage
 from src.orchestrator.capture import open_thread, record_decision
@@ -86,3 +88,44 @@ async def test_consolidate_pass_walks_both_memory_types(actions: Actions) -> Non
     out = await consolidate_pass(actions)
     assert set(out) == {"threads_merged", "threads_for_review",
                         "decisions_merged", "decisions_for_review"}
+
+
+# --- the disk census (thread 5e37630b) --------------------------------------------------
+
+async def test_census_trees_mints_the_unmodeled_and_paths_the_known(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """'A memory that doesn't know your ancestors cannot stop you reinventing them':
+    a repo on disk the graph never met becomes a SoftwareProject with on_disk_path and
+    discovered='disk-census'; a known project gains its path; nothing touches the watch
+    list. Idempotent: the second walk writes nothing."""
+    from src.orchestrator.neighborhoods import census_trees
+    (tmp_path / "code" / "ancient-evals" / ".git").mkdir(parents=True)
+    (tmp_path / "code" / "known-tree" / ".git").mkdir(parents=True)
+    (tmp_path / "code" / "not-a-repo").mkdir()
+    (tmp_path / "code" / "node_modules" / "dep" / ".git").mkdir(parents=True)
+    known = await actions.create_or_find_object(
+        "SoftwareProject", "repo:known-tree", "analyst:test")
+
+    out = await census_trees(actions, roots=[str(tmp_path / "code")])
+    assert out["minted"] == ["ancient-evals"]
+    assert out["known"] == 1
+    assert out["pathed"] == ["known-tree"]
+    row = await actions.pool.fetchrow(
+        "SELECT o.id, o.status, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='discovered' LIMIT 1) AS disc, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='on_disk_path' LIMIT 1) AS path "
+        "FROM objects o WHERE o.type='SoftwareProject' AND o.canonical='repo:ancient-evals'")
+    assert row is not None and row["status"] == "active"
+    assert row["disc"] == "disk-census"
+    assert row["path"] == str(tmp_path / "code" / "ancient-evals")
+    kpath = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "WHERE a.object_id=$1 AND a.name='on_disk_path' LIMIT 1", known)
+    assert kpath == str(tmp_path / "code" / "known-tree")
+
+    again = await census_trees(actions, roots=[str(tmp_path / "code")])
+    assert again["minted"] == [] and again["pathed"] == []
+    assert again["known"] == 2  # both now known; the unchanged disk writes nothing

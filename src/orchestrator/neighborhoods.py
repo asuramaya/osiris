@@ -107,6 +107,79 @@ async def discover_trees(
     return out
 
 
+_CENSUS_SKIP = {".claude", "node_modules", ".venv", "__pycache__"}
+
+
+def _git_dirs(roots: list[str], *, max_depth: int = 2) -> list[Path]:
+    """Every git repository under the census roots (bounded walk, sync disk IO).
+
+    Depth 2 covers the operator's layout (~/code/<repo> and ~/code/REPOS/<repo>) without
+    crawling the world; hidden dirs, tool caches, and worktree nests are skipped."""
+    found: list[Path] = []
+
+    def walk(d: Path, depth: int) -> None:
+        try:
+            if (d / ".git").exists():
+                found.append(d)
+                return  # a repo's SUBdirs are its own business (worktrees, vendored trees)
+            if depth >= max_depth:
+                return
+            for c in sorted(d.iterdir()):
+                if c.is_dir() and not c.name.startswith(".") and c.name not in _CENSUS_SKIP:
+                    walk(c, depth + 1)
+        except OSError:
+            return
+
+    for root in roots:
+        p = Path(root).expanduser()
+        if p.is_dir():
+            walk(p, 0)
+    return found
+
+
+async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
+    """THE DISK CENSUS (thread 5e37630b, Atlas II's costliest ask): the graph models what
+    it was TOLD about; the disk holds the operator's whole history — and 'a memory that
+    doesn't know your ancestors cannot stop you reinventing them' (he was one conversation
+    from rebuilding an eval harness he had already written). This walks the census roots
+    and makes 'exists on disk' a FIRST-CLASS graph fact: a repo the graph has never met
+    is minted as a SoftwareProject with its on_disk_path and discovered='disk-census';
+    a known project gains its path if the graph lacked one. OBSERVATION ONLY — nothing
+    here grows the pulse's watch list (that remains a deliberate act, discover_trees'
+    doctrine), and remote-only repos stay honestly out of scope (no network read).
+    Idempotent: an unchanged disk costs reads, never writes."""
+    from src.orchestrator.capture import _resolve_repo  # the one active-repo resolver
+
+    observed = datetime.now(UTC)
+    ec = EvidenceClass.DIRECT_OBSERVATION.value
+    minted: list[str] = []
+    pathed: list[str] = []
+    known = 0
+    for repo in _git_dirs(roots):
+        name = repo.name
+        existing = await _resolve_repo(actions.pool, name)
+        if existing is None:
+            obj = await actions.create_or_find_object(
+                "SoftwareProject", f"repo:{name}", "disk-census")
+            await actions.assert_property(obj, "name", name, "disk-census", observed,
+                                          0.9, evidence_class=ec)
+            await actions.assert_property(obj, "discovered", "disk-census", "disk-census",
+                                          observed, 0.9, evidence_class=ec)
+            await actions.assert_property(obj, "on_disk_path", str(repo), "disk-census",
+                                          observed, 0.9, evidence_class=ec)
+            minted.append(name)
+            continue
+        known += 1
+        current = await actions.pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a "
+            "WHERE a.object_id=$1 AND a.name='on_disk_path' LIMIT 1", existing)
+        if current != str(repo):
+            await actions.assert_property(existing, "on_disk_path", str(repo),
+                                          "disk-census", observed, 0.9, evidence_class=ec)
+            pathed.append(name)
+    return {"known": known, "minted": minted, "pathed": pathed}
+
+
 async def neighborhoods_of(
     pool: asyncpg.Pool, ids: list[Any],
 ) -> dict[Any, dict[str, Any]]:

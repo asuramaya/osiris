@@ -116,6 +116,12 @@ class Settings(BaseSettings):
     # the whole charter for a background critter: observe for nothing, infer only on a licence —
     # and never let them share a switch, or one day someone pulls the wrong one.
     osiris_transcripts: str = ""
+    # THE DISK-CENSUS ROOTS (thread 5e37630b): colon-separated dirs the census walks for
+    # git repos the graph has never met — 'exists on disk' becomes a first-class fact.
+    # Rides the OBSERVER's switch (census runs only when osiris_transcripts is set): a
+    # free deterministic disk read, the same class as the transcript sweep. Empty = the
+    # operator's layout.
+    osiris_census_roots: str = "~/code:~/code/REPOS"
     # The fleet TRIGGER-hook (mailbox → wake) — OFF by default. When on, the worker (the alarm
     # clock; never Osiris's own hands) spawns `claude -p` in a recipient project's repo when it
     # has unread mail, so an agent processes coordination without the operator hand-triggering it.
