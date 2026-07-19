@@ -299,8 +299,17 @@ async def fleet_pulse(
     briefs = await desk_briefs_total(pool)
     wakes = await wakes_hour(pool)
     vis = f"+{live['visitors']} " if live["visitors"] else ""
+    # THE PRICE ON THE PULSE (task #26's last mile, 2026-07-19): the ceiling has gated the
+    # spenders since 07-13, but its number was invisible — 'nobody has ever measured what
+    # a healthy Osiris costs per day' stays fixed only if the measurement is AMBIENT. One
+    # authority (ceiling.ceiling — the very read the gate itself uses), never a copy.
+    from src.config.settings import get_settings
+    from src.orchestrator.ceiling import ceiling
+    c = await ceiling(pool, cap=get_settings().osiris_daily_usd)
+    spend = "$∞" if c.unlimited else f"${c.spent:.2f}/${c.cap:.0f}"
+    blind = f" ⚠{c.blind} unpriced" if c.blind else ""
     return (f"{live['souls']} live {vis}· owed {owed} · briefs {briefs} "
-            f"· wakes {wakes}/h")
+            f"· wakes {wakes}/h · {spend} day{blind}")
 
 
 async def while_away(

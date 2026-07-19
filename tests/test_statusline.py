@@ -30,13 +30,13 @@ async def test_a_timeout_then_success_reports_slow_not_a_clean_line(
         budgets.append(connect_timeout)
         if len(budgets) == 1:
             raise TimeoutError
-        return (0, 0, 0, 0, 1, 0, 0, 0, [])
+        return (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0))
 
     monkeypatch.setattr(sl, "_counts", fake_counts)
     counts, slow = await sl._fetch_counts("proj", "deadbeef", "claude-fable-5",
                                           "claude-fable-5", None)
     assert slow is True
-    assert counts == (0, 0, 0, 0, 1, 0, 0, 0, [])
+    assert counts == (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0))
     assert budgets == [1.0, 2.5]   # the retry's own, wider budget — never a repeat of the first
 
 
@@ -78,7 +78,7 @@ def test_a_dm_alone_rings_the_doorbell(
     async def fake_fetch(
         *a: object, **k: object,
     ) -> tuple[tuple[int, int, int, int, int, int, int, int, list[str]], bool]:
-        return (0, 0, 7, 0, 16, 0, 25, 0, []), False
+        return (0, 0, 7, 0, 16, 0, 25, 0, [], (1.2, 10.0, 0)), False
 
     monkeypatch.setattr(sl, "_fetch_counts", fake_fetch)
     monkeypatch.setattr(
@@ -90,6 +90,35 @@ def test_a_dm_alone_rings_the_doorbell(
     out = capsys.readouterr().out
     assert "✉7" in out            # the doorbell — a DM waiting must be visible alone
     assert "graph unreachable" not in out
+
+
+def _strip_for(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+               ceil: tuple[float, float, int]) -> str:
+    """Render main() once with a given (spent, cap, blind) riding the counts."""
+    async def fake_fetch(*a: object, **k: object) -> tuple[tuple, bool]:
+        return (0, 0, 0, 0, 1, 0, 0, 0, [], ceil), False
+
+    monkeypatch.setattr(sl, "_fetch_counts", fake_fetch)
+    monkeypatch.setattr(
+        sys, "stdin",
+        io.StringIO(json.dumps({"workspace": {"current_dir": "/tmp/x"},
+                                "session_id": "deadbeef0000",
+                                "model": {"id": "claude-fable-5"}})))
+    sl.main()
+    return capsys.readouterr().out
+
+
+def test_the_price_is_dark_until_it_matters(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Task #26's last mile: a healthy day renders NO spend segment (the pulse carries the
+    ambient number); 60% of cap lights it; an unpriced call is loud on its own — never
+    silently scored as zero."""
+    assert "$" not in _strip_for(monkeypatch, capsys, (1.2, 10.0, 0))    # healthy: dark
+    out = _strip_for(monkeypatch, capsys, (6.5, 10.0, 0))                # 65%: lit
+    assert "$6.50/$10" in out
+    out2 = _strip_for(monkeypatch, capsys, (0.5, 10.0, 3))               # blind: loud
+    assert "3 unpriced" in out2
 
 
 def test_end_to_end_refused_port_renders_unreachable_not_a_crash() -> None:

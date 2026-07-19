@@ -343,7 +343,16 @@ async def test_fleet_pulse_is_one_honest_glance(actions: Actions) -> None:
                        to_project="operator", body="brief for the human")
     await p.execute("INSERT INTO agent_wakes (to_project, from_agent, message_id) "
                     "VALUES ('demo','agent:aaa',NULL)")
-    assert await mounts.fleet_pulse(p) == "1 live · owed 0 · briefs 1 · wakes 1/h"
+    # the price rides the pulse (task #26's last mile): an empty ledger reads $0.00 of
+    # the default cap — the ceiling's own read, never a copy
+    assert (await mounts.fleet_pulse(p)
+            == "1 live · owed 0 · briefs 1 · wakes 1/h · $0.00/$10 day")
+
+    # ...and an unpriced call is confessed BESIDE the number, never scored as zero
+    await p.execute(
+        "INSERT INTO llm_usage (purpose, model, cost_usd, ran_at) "
+        "VALUES ('test', 'x', NULL, now())")
+    assert (await mounts.fleet_pulse(p)).endswith("day ⚠1 unpriced")
 
 
 async def test_live_claimed_sids_sees_other_clients_lineage_aware(actions: Actions) -> None:

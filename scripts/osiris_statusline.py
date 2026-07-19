@@ -171,7 +171,8 @@ def _link(text: str, anchor: str) -> str:
 async def _counts(
     project: str, session_id: str, model_id: str = "", model_raw: str = "",
     window_size: int | None = None, *, connect_timeout: float = 1.0,
-) -> tuple[int, int, int, int, int, int, int, int, list[str]]:
+) -> tuple[int, int, int, int, int, int, int, int, list[str],
+           tuple[float, float, int]]:
     import asyncpg
 
     conn = await asyncpg.connect(DSN, timeout=connect_timeout)
@@ -208,6 +209,7 @@ async def _counts(
         # the mail predicate predated the lineage rollup and the hold grace; the fleet
         # number counted seated ROWS where the chrome counted seated SOULS.
         from src.orchestrator import vitals
+        from src.orchestrator.ceiling import ceiling
         from src.orchestrator.mailbox import desk_briefs_from, unread_split
 
         desk = await desk_briefs_from(conn, agent or None)
@@ -216,6 +218,10 @@ async def _counts(
         debts = await vitals.operator_debts(conn, hood=project)
         souls = await vitals.live_souls(conn)
         wakes = await vitals.wakes_hour(conn)
+        # the daily ceiling — the gate's own read (task #26's last mile); rendered dark
+        # until spend approaches the cap, so the strip stays quiet on a healthy day
+        from src.config.settings import get_settings
+        ceil = await ceiling(conn, cap=get_settings().osiris_daily_usd)
         flight = await conn.fetchval(
             "SELECT count(*) FROM fleet_messages m JOIN message_recipients r "
             "  ON r.message_id=m.id WHERE m.to_project=$1 AND m.to_agent IS NULL "
@@ -242,14 +248,16 @@ async def _counts(
             if age > 3 * every:  # three cadences missed is not a blip
                 sick.append(j["key"][4:])
         return (desk, split["mail"], split["dm"], int(flight or 0), souls["souls"],
-                wakes, debts["owed"], debts["owed_here"], sick)
+                wakes, debts["owed"], debts["owed_here"], sick,
+                (ceil.spent, ceil.cap, ceil.blind))
     finally:
         await conn.close()
 
 
 async def _fetch_counts(
     project: str, session_id: str, model_id: str, model_raw: str, window_size: int | None,
-) -> tuple[tuple[int, int, int, int, int, int, int, int, list[str]], bool]:
+) -> tuple[tuple[int, int, int, int, int, int, int, int, list[str],
+                 tuple[float, float, int]], bool]:
     """SLOW IS NOT DOWN (field-witnessed tonight: the 1.0s connect timeout flapped "graph
     unreachable" under load while the graph was very much up). One retry, a wider budget,
     on a TIMEOUT ONLY — a refused connection, a DNS failure, a real Postgres error is
@@ -290,7 +298,8 @@ def main() -> None:
     window_size = int(window_size) if isinstance(window_size, (int, float)) else None
 
     try:
-        (desk, mail, dm, flight, live, wakes, owed, owed_here, sick), slow = asyncio.run(
+        ((desk, mail, dm, flight, live, wakes, owed, owed_here, sick,
+          (spent, cap, blind)), slow) = asyncio.run(
             _fetch_counts(project, session_id, model_id, model_raw, window_size))
         # THE DEBT, NOT THE DOORBELL — and only the debt HERE (operator ruling, 2026-07-16:
         # the fleet-wide total 'can disappear'). A number you can do nothing about from this
@@ -314,9 +323,20 @@ def main() -> None:
         # number here: the graph is not forming memory, and everything else on this line is a
         # reading off a record that has quietly stopped growing.
         sick_s = (f"{RED}⚠ not sensing: {','.join(sick[:2])}{RESET}" if sick else "")
+        # THE PRICE, DARK UNTIL IT MATTERS (task #26's last mile): a healthy day renders
+        # nothing — the pulse and the desk carry the ambient number. The strip speaks only
+        # when spend crosses 60% of the cap (amber; red at 85%) or a call went UNPRICED
+        # (spend the ceiling cannot see — never silently scored as zero).
+        spend_s = ""
+        if blind:
+            spend_s = f"{RED}⚠ {blind} unpriced call(s){RESET}"
+        elif cap > 0 and spent >= 0.6 * cap:
+            c = RED if spent >= 0.85 * cap else AMBER
+            spend_s = f"{c}${spent:.2f}/${cap:.0f}{RESET}"
         parts = [
             _link(f"◈ {project}", "desk"),
             *([_link(sick_s, "fleet")] if sick_s else []),
+            *([_link(spend_s, "desk")] if spend_s else []),
             _link(owe_s, "desk"),
             *([_link(desk_s, "desk")] if desk_s else []),
             _link(mail_s, "conversations"),
