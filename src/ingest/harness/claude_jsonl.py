@@ -10,6 +10,7 @@ serves the store.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +24,31 @@ from src.ingest.sessions import (
 
 # Re-exported from sessions.py — the per-line model extractor.
 _SYNTHETIC = "<synthetic>"
+
+# THE OVERHEAD EYE (neo's, task #34): a system-reminder is a complete tagged block the
+# harness injected into a user message. Counted per turn at ingest so the store can answer
+# "what does the harness itself cost you" without re-reading a byte.
+_REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.IGNORECASE | re.DOTALL)
+
+
+def _text_chunks(content: Any) -> Iterator[str]:
+    """Every string in a message content tree. The modern harness nests reminder text
+    inside tool_result items' own content lists, so a top-level-only walk (the ancestor's)
+    undercounts — recurse."""
+    if isinstance(content, str):
+        yield content
+    elif isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict):
+                for key in ("text", "content"):
+                    yield from _text_chunks(item.get(key))
+
+
+def _reminders_of_line(d: dict[str, Any]) -> int:
+    total = 0
+    for chunk in _text_chunks((d.get("message") or {}).get("content")):
+        total += len(_REMINDER_RE.findall(chunk))
+    return total
 
 
 def _model_of_line(d: dict[str, Any]) -> str | None:
@@ -113,6 +139,39 @@ class ClaudeJsonlAdapter:
                     anchor_sid=anchor, session_id=stem, harness=self.name,
                     source_path=str(path), cwd=None, project=project,
                 )
+                yield from self._channels_of(path, anchor, project)
+
+    def _channels_of(
+        self, primary: Path, parent_sid: str, project: str | None,
+    ) -> Iterator[SessionLocator]:
+        """The hidden channels beside a primary — <stem>/subagents/agent-*.jsonl.
+
+        Each Task-tool subagent writes its own transcript there (first line carries
+        isSidechain; the .meta.json sidecar names the agentType). These are the sessions
+        the operator never sees on screen — the overhead lens exists to price them.
+        anchor_sid is the subagent's own hex id (unique fleet-wide); parent_sid ties it
+        back to the primary it served."""
+        sa_dir = primary.parent / primary.stem / "subagents"
+        if not sa_dir.is_dir():
+            return
+        for path in sorted(sa_dir.glob("*.jsonl")):
+            if path.is_symlink():
+                continue
+            stem = path.stem
+            anchor = stem.removeprefix("agent-") or stem
+            channel = "compaction" if "compact" in stem else "sidechain"
+            agent_type = None
+            try:
+                meta = json.loads(path.with_suffix(".meta.json").read_text("utf-8"))
+                if isinstance(meta, dict) and isinstance(meta.get("agentType"), str):
+                    agent_type = meta["agentType"]
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                pass
+            yield SessionLocator(
+                anchor_sid=anchor, session_id=stem, harness=self.name,
+                source_path=str(path), cwd=None, project=project,
+                channel=channel, parent_sid=parent_sid, agent_type=agent_type,
+            )
 
     def read_turns(
         self, locator: SessionLocator, *, since_idx: int = 0,
@@ -140,6 +199,11 @@ class ClaudeJsonlAdapter:
                 continue
             model = _model_of_line(d)
             usage = _usage_of_line(d) if role == "assistant" else {}
+            summary = bool(d.get("isCompactSummary") or d.get("isMeta"))
+            # reminders only on live user turns: a compact summary QUOTES the past, and
+            # counting its quoted reminders again after every compaction would inflate
+            # the very churn number the lens exists to measure honestly
+            reminders = _reminders_of_line(d) if role == "user" and not summary else None
             yield TurnRow(
                 turn_idx=idx, role=role, model=model,
                 tokens_in=usage.get("tokens_in"),
@@ -147,8 +211,10 @@ class ClaudeJsonlAdapter:
                 cache_read=usage.get("cache_read"),
                 cache_write=usage.get("cache_write"),
                 recorded_at=_ts(ln),
-                is_summary=bool(d.get("isCompactSummary") or d.get("isMeta")),
+                is_summary=summary,
                 swap_deliberate=deliberate if role == "assistant" else None,
                 source_ref=f"line:{idx}",
+                reminders=reminders,
+                is_compaction=bool(d.get("isCompactSummary")),
             )
             idx += 1

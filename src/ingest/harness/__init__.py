@@ -47,6 +47,13 @@ class TurnRow:
     is_summary: bool = False
     swap_deliberate: bool | None = None
     source_ref: str | None = None
+    # THE OVERHEAD FACTS (neo's eye, task #34): reminders = system-reminder blocks the
+    # harness injected into this user turn (None = not measured — a harness that doesn't
+    # carry them must never read as zero); is_compaction marks the compact-summary line
+    # itself, distinct from is_summary (which also covers isMeta and so can't COUNT
+    # compactions).
+    reminders: int | None = None
+    is_compaction: bool = False
 
 
 @dataclass(frozen=True)
@@ -64,6 +71,13 @@ class SessionLocator:
     source_path: str
     cwd: str | None
     project: str | None
+    # THE CHANNEL TAXONOMY (neo's, kept whole): 'primary' is the operator-visible window;
+    # 'sidechain' a Task-tool subagent's own transcript (agent_type from its meta.json);
+    # 'compaction' the ancestor's separate-file layout, kept for old transcripts. A channel
+    # names its primary via parent_sid; a primary carries neither.
+    channel: str = "primary"
+    parent_sid: str | None = None
+    agent_type: str | None = None
 
 
 @dataclass(frozen=True)

@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import asyncpg
 
@@ -32,13 +33,16 @@ from src.ingest.harness import (
 _SYNTHETIC = "<synthetic>"
 
 
-def _mtime(source_path: str) -> datetime | None:
-    """The source's freshness witness (a bare stat, kept in a sync helper for the
-    blocking-call lint). None when the source vanished between discovery and here."""
+def _stat(source_path: str) -> tuple[datetime | None, int | None]:
+    """The source's freshness witness + on-disk size (one bare stat, kept in a sync
+    helper for the blocking-call lint). (None, None) when the source vanished between
+    discovery and here. The size feeds the overhead lens's byte fallback — neo's honest
+    proxy for a channel that reports no token usage."""
     try:
-        return datetime.fromtimestamp(Path(source_path).stat().st_mtime, tz=UTC)
+        st = Path(source_path).stat()
+        return datetime.fromtimestamp(st.st_mtime, tz=UTC), st.st_size
     except OSError:
-        return None
+        return None, None
 
 
 def _reading_from_turns(
@@ -66,6 +70,81 @@ def _reading_from_turns(
     )
 
 
+# The overhead lens's turn aggregates. Token sums take live assistant turns only (a
+# summary line quotes the past; counting it would double-bill every compaction);
+# reminders ride user turns (NULL elsewhere); compactions count the compact-summary
+# lines themselves.
+_TURN_FILTER = "role='assistant' AND NOT is_summary"
+_TURN_AGG_SQL = (
+    "SELECT harness, anchor_sid, "
+    f"       COALESCE(SUM(tokens_in)   FILTER (WHERE {_TURN_FILTER}), 0) AS tin, "
+    f"       COALESCE(SUM(tokens_out)  FILTER (WHERE {_TURN_FILTER}), 0) AS tout, "
+    f"       COALESCE(SUM(cache_read)  FILTER (WHERE {_TURN_FILTER}), 0) AS cread, "
+    f"       COALESCE(SUM(cache_write) FILTER (WHERE {_TURN_FILTER}), 0) AS cwrite, "
+    f"       COUNT(*) FILTER (WHERE {_TURN_FILTER} AND tokens_in IS NOT NULL) AS calls, "
+    "       COALESCE(SUM(reminders), 0) AS reminders, "
+    "       COUNT(*) FILTER (WHERE is_compaction) AS compactions "
+    "FROM harness_turns"
+)
+_T_FILTER = "t.role='assistant' AND NOT t.is_summary"
+_OVERHEAD_SQL = (
+    "SELECT s.anchor_sid, s.channel, s.agent_type, s.session_id, s.source_bytes, "
+    f"       COALESCE(SUM(t.tokens_in)   FILTER (WHERE {_T_FILTER}), 0) AS tin, "
+    f"       COALESCE(SUM(t.tokens_out)  FILTER (WHERE {_T_FILTER}), 0) AS tout, "
+    f"       COALESCE(SUM(t.cache_read)  FILTER (WHERE {_T_FILTER}), 0) AS cread, "
+    f"       COALESCE(SUM(t.cache_write) FILTER (WHERE {_T_FILTER}), 0) AS cwrite, "
+    f"       COUNT(*) FILTER (WHERE {_T_FILTER} AND t.tokens_in IS NOT NULL) AS calls, "
+    "       COALESCE(SUM(t.reminders), 0) AS reminders, "
+    "       COUNT(*) FILTER (WHERE t.is_compaction) AS compactions "
+    "FROM harness_sessions s "
+    "LEFT JOIN harness_turns t ON t.harness=s.harness AND t.anchor_sid=s.anchor_sid"
+)
+
+
+def _overhead_shape(
+    primary: list[dict[str, Any]], channels: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Pure: neo's session math over per-channel aggregates. Visible = the primary
+    window; hidden = every channel beside it. Multiplier and hidden share come from
+    reported tokens when anything carries usage, on-disk bytes otherwise — the basis is
+    named, and no companion figure is fabricated for the lane that wasn't measured."""
+    def tok(rows: list[dict[str, Any]]) -> dict[str, int]:
+        tin = sum(int(r["tin"]) for r in rows)
+        tout = sum(int(r["tout"]) for r in rows)
+        cread = sum(int(r["cread"]) for r in rows)
+        cwrite = sum(int(r["cwrite"]) for r in rows)
+        return {
+            "fresh": tin + cwrite + tout, "cache_read": cread,
+            "total": tin + cwrite + cread + tout,
+            "calls": sum(int(r["calls"]) for r in rows),
+            "bytes": sum(int(r["source_bytes"] or 0) for r in rows),
+        }
+
+    vis, hid = tok(primary), tok(channels)
+    total = vis["total"] + hid["total"]
+    total_bytes = vis["bytes"] + hid["bytes"]
+    basis = "tokens" if total > 0 else "bytes"
+    if basis == "tokens":
+        multiplier = round(total / max(vis["total"], 1), 1)
+        hidden_pct = round(hid["total"] / max(total, 1) * 100, 1)
+    else:
+        multiplier = round(total_bytes / max(vis["bytes"], 1), 1)
+        hidden_pct = round(hid["bytes"] / max(total_bytes, 1) * 100, 1)
+    return {
+        "visible": vis, "hidden": hid,
+        "total_tokens": total, "total_bytes": total_bytes,
+        "fresh_tokens": vis["fresh"] + hid["fresh"],
+        "cache_read_tokens": vis["cache_read"] + hid["cache_read"],
+        "cache_read_pct": round(
+            (vis["cache_read"] + hid["cache_read"]) / max(total, 1) * 100, 1),
+        "hidden_pct": hidden_pct, "multiplier": multiplier, "basis": basis,
+        "reminders": sum(int(r["reminders"]) for r in primary + channels),
+        "compactions": sum(int(r["compactions"]) for r in primary + channels),
+        "sidechains": sum(1 for c in channels if c["channel"] == "sidechain"),
+        "compaction_files": sum(1 for c in channels if c["channel"] == "compaction"),
+    }
+
+
 class TranscriptStore:
     """The normalized transcript index, fed by adapters, read by identity."""
 
@@ -81,25 +160,25 @@ class TranscriptStore:
 
     async def _freshness(
         self, locator: SessionLocator,
-    ) -> tuple[bool, int, datetime | None]:
-        """(skip, since_idx, observed_mtime) — THE SPEND GATE (the house's oldest law:
-        every catastrophe is a spend catastrophe, and a store must never re-eat what it
-        already holds). skip=True means the source hasn't changed since the last ingest —
-        no read at all, serve the stored rows. Otherwise since_idx resumes after the turns
-        already ingested, and observed_mtime — taken BEFORE the read — becomes the new
-        last_ingested_at, so lines appended DURING a read are never skipped by the next
-        pass (stamping now() there would swallow them forever)."""
+    ) -> tuple[bool, int, datetime | None, int | None]:
+        """(skip, since_idx, observed_mtime, observed_bytes) — THE SPEND GATE (the house's
+        oldest law: every catastrophe is a spend catastrophe, and a store must never re-eat
+        what it already holds). skip=True means the source hasn't changed since the last
+        ingest — no read at all, serve the stored rows. Otherwise since_idx resumes after
+        the turns already ingested, and observed_mtime — taken BEFORE the read — becomes
+        the new last_ingested_at, so lines appended DURING a read are never skipped by the
+        next pass (stamping now() there would swallow them forever)."""
         row = await self.pool.fetchrow(
             "SELECT last_turn_idx, last_ingested_at FROM harness_sessions "
             "WHERE harness=$1 AND anchor_sid=$2",
             locator.harness, locator.anchor_sid)
-        mtime = _mtime(locator.source_path)
+        mtime, size = _stat(locator.source_path)
         if row is None:
-            return (False, 0, mtime)
+            return (False, 0, mtime, size)
         if (mtime is not None and row["last_ingested_at"] is not None
                 and mtime <= row["last_ingested_at"]):
-            return (True, int(row["last_turn_idx"]), mtime)
-        return (False, int(row["last_turn_idx"]), mtime)
+            return (True, int(row["last_turn_idx"]), mtime, size)
+        return (False, int(row["last_turn_idx"]), mtime, size)
 
     async def discover_and_ingest(
         self, *, cwd: str | None, job_dir: str | None,
@@ -121,7 +200,7 @@ class TranscriptStore:
                 continue
             if locator is None:
                 continue
-            skip, since, observed = await self._freshness(locator)
+            skip, since, observed, size = await self._freshness(locator)
             if skip:
                 stored = await self.model_of_session(locator.harness, locator.anchor_sid)
                 if stored is not None:
@@ -129,7 +208,7 @@ class TranscriptStore:
                 skip, since = False, 0  # a session row without turns: eat it whole
             turns = list(adapter.read_turns(locator, since_idx=since))
             if turns:
-                await self._upsert(locator, turns, observed_at=observed)
+                await self._upsert(locator, turns, observed_at=observed, source_bytes=size)
             elif since == 0:
                 continue  # nothing in the source at all — try the next adapter
             return await self.model_of_session(locator.harness, locator.anchor_sid)
@@ -209,6 +288,113 @@ class TranscriptStore:
             "cache_creation": int(row["cache_creation"]),
         }
 
+    async def overhead_of_session(
+        self, harness: str, anchor_sid: str,
+    ) -> dict[str, Any] | None:
+        """THE OVERHEAD LENS, per session (neo's eye, task #34): what the harness itself
+        cost this window — the visible primary vs the hidden channels (subagent
+        sidechains, compactions), system-reminder injections, compaction churn, and the
+        cache-vs-fresh split that decides the price of all of it.
+
+        Token math is neo's, kept honest: multiplier and hidden share come from
+        API-reported usage when any channel carries it; the on-disk byte sizes are the
+        fallback basis when none does, and no companion figure is ever fabricated.
+        None when the store has never eaten this session."""
+        rows = await self.pool.fetch(
+            _OVERHEAD_SQL + " WHERE s.harness=$1 AND (s.anchor_sid=$2 OR s.parent_sid=$2) "
+            "GROUP BY s.anchor_sid, s.channel, s.agent_type, s.session_id, s.source_bytes",
+            harness, anchor_sid,
+        )
+        if not rows:
+            return None
+        primary = [dict(r) for r in rows if r["channel"] == "primary"]
+        channels = [dict(r) for r in rows if r["channel"] != "primary"]
+        out = _overhead_shape(primary, channels)
+        out["harness"] = harness
+        out["anchor_sid"] = anchor_sid
+        out["detail"] = [
+            {"channel": c["channel"], "agent_type": c["agent_type"],
+             "session_id": c["session_id"],
+             "tokens": int(c["tin"] + c["cwrite"] + c["tout"] + c["cread"]),
+             "bytes": int(c["source_bytes"] or 0)}
+            for c in sorted(
+                channels,
+                key=lambda c: -(c["tin"] + c["cwrite"] + c["tout"] + c["cread"]))
+        ]
+        return out
+
+    async def overhead_fleet(self, *, top: int = 15) -> dict[str, Any]:
+        """THE OVERHEAD LENS, fleet-wide: totals across every eaten session plus the
+        top-N sessions by total tokens — the chrome's /overhead page reads this. Bounded:
+        the top list is capped, the totals are aggregates (land on counts, walk in)."""
+        rows = await self.pool.fetch(
+            "WITH ta AS (" + _TURN_AGG_SQL + " GROUP BY harness, anchor_sid) "
+            "SELECT s.harness, COALESCE(s.parent_sid, s.anchor_sid) AS root_sid, "
+            "       MAX(s.project) FILTER (WHERE s.channel='primary') AS project, "
+            "       COUNT(*) FILTER (WHERE s.channel <> 'primary') AS channel_files, "
+            "       COALESCE(SUM(s.source_bytes), 0) AS bytes, "
+            "       COALESCE(SUM(s.source_bytes) "
+            "                 FILTER (WHERE s.channel='primary'), 0) AS visible_bytes, "
+            "       COALESCE(SUM(ta.tin), 0) AS tin, "
+            "       COALESCE(SUM(ta.tout), 0) AS tout, "
+            "       COALESCE(SUM(ta.cread), 0) AS cread, "
+            "       COALESCE(SUM(ta.cwrite), 0) AS cwrite, "
+            "       COALESCE(SUM(ta.tin + ta.cwrite + ta.tout + ta.cread) "
+            "                 FILTER (WHERE s.channel='primary'), 0) AS visible_tokens, "
+            "       COALESCE(SUM(ta.tin + ta.cwrite + ta.tout + ta.cread) "
+            "                 FILTER (WHERE s.channel <> 'primary'), 0) AS hidden_tokens, "
+            "       COALESCE(SUM(ta.calls), 0) AS calls, "
+            "       COALESCE(SUM(ta.reminders), 0) AS reminders, "
+            "       COALESCE(SUM(ta.compactions), 0) AS compactions "
+            "FROM harness_sessions s "
+            "LEFT JOIN ta ON ta.harness=s.harness AND ta.anchor_sid=s.anchor_sid "
+            "GROUP BY s.harness, COALESCE(s.parent_sid, s.anchor_sid)",
+        )
+        sessions = []
+        for r in rows:
+            total = int(r["tin"] + r["cwrite"] + r["tout"] + r["cread"])
+            visible = int(r["visible_tokens"])
+            basis = "tokens" if total > 0 else "bytes"
+            vis_b, tot_b = int(r["visible_bytes"]), int(r["bytes"])
+            sessions.append({
+                "harness": r["harness"], "anchor_sid": r["root_sid"],
+                "project": r["project"], "channel_files": int(r["channel_files"]),
+                "total_tokens": total, "hidden_tokens": int(r["hidden_tokens"]),
+                "fresh_tokens": int(r["tin"] + r["cwrite"] + r["tout"]),
+                "cache_read_tokens": int(r["cread"]),
+                "cache_read_pct": round(int(r["cread"]) / max(total, 1) * 100, 1),
+                "hidden_pct": (round(int(r["hidden_tokens"]) / max(total, 1) * 100, 1)
+                               if basis == "tokens"
+                               else round((tot_b - vis_b) / max(tot_b, 1) * 100, 1)),
+                "multiplier": (round(total / max(visible, 1), 1) if basis == "tokens"
+                               else round(tot_b / max(vis_b, 1), 1)),
+                "basis": basis, "bytes": tot_b, "calls": int(r["calls"]),
+                "reminders": int(r["reminders"]),
+                "compactions": int(r["compactions"]),
+            })
+        sessions.sort(key=lambda s: (-s["total_tokens"], -s["bytes"]))
+        tok_total = sum(s["total_tokens"] for s in sessions)
+        tok_hidden = sum(s["hidden_tokens"] for s in sessions)
+        tok_cread = sum(s["cache_read_tokens"] for s in sessions)
+        byt_total = sum(s["bytes"] for s in sessions)
+        return {
+            "totals": {
+                "sessions": len(sessions),
+                "sessions_with_usage": sum(1 for s in sessions if s["total_tokens"]),
+                "channel_files": sum(s["channel_files"] for s in sessions),
+                "total_tokens": tok_total, "hidden_tokens": tok_hidden,
+                "fresh_tokens": sum(s["fresh_tokens"] for s in sessions),
+                "cache_read_tokens": tok_cread,
+                "cache_read_pct": round(tok_cread / max(tok_total, 1) * 100, 1),
+                "hidden_pct": round(tok_hidden / max(tok_total, 1) * 100, 1),
+                "total_bytes": byt_total,
+                "calls": sum(s["calls"] for s in sessions),
+                "reminders": sum(s["reminders"] for s in sessions),
+                "compactions": sum(s["compactions"] for s in sessions),
+            },
+            "top": sessions[:top],
+        }
+
     async def backfill(
         self, *, adapters: list[HarnessAdapter] | None = None,
         limit_per_adapter: int = 0,
@@ -232,13 +418,14 @@ class TranscriptStore:
             sessions = 0
             for locator in adapter.enumerate():
                 try:
-                    skip, since, observed = await self._freshness(locator)
+                    skip, since, observed, size = await self._freshness(locator)
                     if skip:
                         continue
                     turns = list(adapter.read_turns(locator, since_idx=since))
                     if not turns:
                         continue
-                    await self._upsert(locator, turns, observed_at=observed)
+                    await self._upsert(locator, turns, observed_at=observed,
+                                       source_bytes=size)
                     sessions += 1
                 except Exception:  # noqa: BLE001 — one bad session must not abort the sweep
                     continue
@@ -249,43 +436,56 @@ class TranscriptStore:
 
     async def _upsert(
         self, locator: SessionLocator, turns: list[TurnRow],
-        *, observed_at: datetime | None = None,
+        *, observed_at: datetime | None = None, source_bytes: int | None = None,
     ) -> None:
         """`observed_at` is the source mtime taken BEFORE the read — stamped as
         last_ingested_at so the freshness gate compares against what was actually read,
-        not against a later clock that would hide same-moment appends."""
+        not against a later clock that would hide same-moment appends. `source_bytes`
+        rides from the same stat (the overhead lens's byte fallback)."""
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
                     "INSERT INTO harness_sessions "
                     "   (anchor_sid, harness, session_id, cwd, project, source_path, "
-                    "    last_ingested_at, last_turn_idx) "
-                    "VALUES ($1, $2, $3, $4, $5, $6, COALESCE($8, now()), $7) "
+                    "    last_ingested_at, last_turn_idx, channel, parent_sid, "
+                    "    agent_type, source_bytes) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, COALESCE($8, now()), $7, "
+                    "        $9, $10, $11, $12) "
                     "ON CONFLICT (harness, anchor_sid) DO UPDATE "
                     "   SET last_ingested_at = COALESCE($8, now()), "
                     "       last_turn_idx = GREATEST("
                     "           harness_sessions.last_turn_idx, EXCLUDED.last_turn_idx), "
                     "       cwd = COALESCE(EXCLUDED.cwd, harness_sessions.cwd), "
-                    "       project = COALESCE(EXCLUDED.project, harness_sessions.project)",
+                    "       project = COALESCE(EXCLUDED.project, harness_sessions.project), "
+                    "       channel = EXCLUDED.channel, "
+                    "       parent_sid = COALESCE(EXCLUDED.parent_sid, "
+                    "                             harness_sessions.parent_sid), "
+                    "       agent_type = COALESCE(EXCLUDED.agent_type, "
+                    "                             harness_sessions.agent_type), "
+                    "       source_bytes = COALESCE(EXCLUDED.source_bytes, "
+                    "                               harness_sessions.source_bytes)",
                     locator.anchor_sid, locator.harness, locator.session_id,
                     locator.cwd, locator.project, locator.source_path,
                     max((t.turn_idx for t in turns), default=0),
-                    observed_at,
+                    observed_at, locator.channel, locator.parent_sid,
+                    locator.agent_type, source_bytes,
                 )
                 # idempotent: ON CONFLICT skips turns already ingested (re-mount, re-probe)
                 await conn.executemany(
                     "INSERT INTO harness_turns "
                     "   (anchor_sid, harness, turn_idx, role, model, provider, "
                     "    tokens_in, tokens_out, cache_read, cache_write, cost_usd, "
-                    "    duration_ms, recorded_at, is_summary, swap_deliberate, source_ref) "
+                    "    duration_ms, recorded_at, is_summary, swap_deliberate, source_ref, "
+                    "    reminders, is_compaction) "
                     "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, "
-                    "        $15, $16) "
+                    "        $15, $16, $17, $18) "
                     "ON CONFLICT (harness, anchor_sid, turn_idx) DO NOTHING",
                     [
                         (locator.anchor_sid, locator.harness, t.turn_idx, t.role,
                          t.model, t.provider, t.tokens_in, t.tokens_out,
                          t.cache_read, t.cache_write, t.cost_usd, t.duration_ms,
-                         t.recorded_at, t.is_summary, t.swap_deliberate, t.source_ref)
+                         t.recorded_at, t.is_summary, t.swap_deliberate, t.source_ref,
+                         t.reminders, t.is_compaction)
                         for t in turns
                     ],
                 )

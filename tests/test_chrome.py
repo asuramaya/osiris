@@ -356,3 +356,56 @@ async def test_fleet_counts_seated_minds_never_passing_strangers(actions: Action
     assert by_id["agent:feed0002"]["seated"] is False
     assert by_id["agent:ca11ab1e"]["seated"] is True
     assert "2 live · 1 visitor" in render_fleet(data)
+
+
+# --- /overhead (neo's eye, task #34) ---------------------------------------------------
+
+def _overhead_data() -> dict:
+    return {
+        "totals": {
+            "sessions": 2, "sessions_with_usage": 1, "channel_files": 3,
+            "total_tokens": 1_600_000, "hidden_tokens": 400_000,
+            "fresh_tokens": 200_000, "cache_read_tokens": 1_400_000,
+            "cache_read_pct": 87.5, "hidden_pct": 25.0, "total_bytes": 4096,
+            "calls": 120, "reminders": 42, "compactions": 3,
+        },
+        "top": [
+            {"harness": "claude-code", "anchor_sid": "beef0001", "project": "widget",
+             "channel_files": 3, "total_tokens": 1_600_000, "hidden_tokens": 400_000,
+             "fresh_tokens": 200_000, "cache_read_tokens": 1_400_000,
+             "cache_read_pct": 87.5, "hidden_pct": 25.0, "multiplier": 1.3,
+             "basis": "tokens", "bytes": 2048, "calls": 120, "reminders": 42,
+             "compactions": 3},
+            {"harness": "claude-code", "anchor_sid": "cafe0002",
+             "project": "<script>x</script>", "channel_files": 0, "total_tokens": 0,
+             "hidden_tokens": 0, "fresh_tokens": 0, "cache_read_tokens": 0,
+             "cache_read_pct": 0.0, "hidden_pct": 0.0, "multiplier": 1.0,
+             "basis": "bytes", "bytes": 2048, "calls": 0, "reminders": 0,
+             "compactions": 0},
+        ],
+    }
+
+
+def test_render_overhead_totals_and_rows() -> None:
+    from src.api.chrome import render_overhead
+    html = render_overhead(_overhead_data())
+    assert "1.6M tokens" in html
+    assert "25.0% hidden" in html
+    assert "42 reminders" in html
+    assert "beef0001" in html
+    assert "1.3×" in html
+    # the usage-less session falls back to bytes, and says so
+    assert "2KB" in html and "(bytes)" in html
+    # untrusted project names are escaped, never rendered live
+    assert "<script>" not in html
+
+
+def test_render_overhead_empty_store() -> None:
+    from src.api.chrome import render_overhead
+    html = render_overhead({
+        "totals": {"sessions": 0, "sessions_with_usage": 0, "channel_files": 0,
+                   "total_tokens": 0, "hidden_tokens": 0, "fresh_tokens": 0,
+                   "cache_read_tokens": 0, "cache_read_pct": 0.0, "hidden_pct": 0.0,
+                   "total_bytes": 0, "calls": 0, "reminders": 0, "compactions": 0},
+        "top": []})
+    assert "eaten nothing yet" in html

@@ -122,7 +122,8 @@ async function tick(){
 setInterval(tick,4000);
 </script>"""
 
-_TABS = (("desk", "/desk"), ("mail", "/mail"), ("fleet", "/fleet"), ("membrane", "/membrane"))
+_TABS = (("desk", "/desk"), ("mail", "/mail"), ("fleet", "/fleet"),
+         ("overhead", "/overhead"), ("membrane", "/membrane"))
 
 
 def page(title: str, active: str, inner: str, *, actions: bool = False) -> str:
@@ -718,4 +719,61 @@ def render_fleet(data: dict[str, Any]) -> str:
         "</tr>"
         for w in data["wakes"]) or '<tr><td class="dim">no wakes yet</td></tr>'
     out.append(f"<h2>wake ledger</h2><table>{wrows}</table>")
+    return "".join(out)
+
+
+# ── /overhead ────────────────────────────────────────────────────────────────────────────
+
+def _fmt_tok(n: int) -> str:
+    """neo's token formatter: 1.2M reads, 1234567 doesn't."""
+    if n >= 1_000_000_000:
+        return f"{n / 1_000_000_000:.1f}B"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return str(int(n))
+
+
+def render_overhead(data: dict[str, Any]) -> str:
+    """THE OVERHEAD LENS (neo's eye, task #34): what the harness itself costs — the
+    hidden channels beside every visible window, the cache-vs-fresh split, the
+    system-reminder drip, the compaction churn. Read from the transcript store, which
+    the observer's backfill keeps ~10 min current; a session the store hasn't eaten
+    isn't here, and the page says so rather than estimating."""
+    t = data["totals"]
+    out = [
+        f'<h2>harness overhead <span class="pill">{t["sessions"]} sessions · '
+        f'{t["channel_files"]} hidden channels</span> '
+        f'<span class="pill">{_fmt_tok(t["total_tokens"])} tokens · '
+        f'{t["hidden_pct"]}% hidden · {t["cache_read_pct"]}% cache-read</span> '
+        f'<span class="pill">{t["reminders"]} reminders · '
+        f'{t["compactions"]} compactions</span></h2>',
+        '<p class="dim">what the harness itself costs: subagent sidechains the screen '
+        "never shows, cache re-reads vs fresh computation, system-reminder injections, "
+        "compaction churn. tokens are API-reported from the transcripts the store has "
+        "eaten; a session with no reported usage falls back to on-disk bytes (basis "
+        "column names which). the ancestor lens: github.com/asuramaya/neo.</p>",
+    ]
+    def _size_cell(s: dict[str, Any]) -> str:
+        if s["basis"] == "tokens":
+            return _fmt_tok(s["total_tokens"])
+        return f'{s["bytes"] / 1024:.0f}KB <span class="dim">(bytes)</span>'
+
+    hrows = "".join(
+        f'<tr><td>{_e(s["anchor_sid"])}</td>'
+        f'<td><a href="/mail?box={_e(s["project"] or "?")}">'
+        f'{_e(s["project"] or "?")}</a></td>'
+        f"<td>{_size_cell(s)}</td>"
+        f'<td>{s["hidden_pct"]}%</td><td class="dim">{s["multiplier"]}×</td>'
+        f'<td class="dim">{s["cache_read_pct"]}%</td>'
+        f'<td class="dim">{s["channel_files"]}</td>'
+        f'<td class="dim">{s["reminders"]}</td>'
+        f'<td class="dim">{s["compactions"]}</td></tr>'
+        for s in data["top"]) or '<tr><td class="dim">the store has eaten nothing yet</td></tr>'
+    out.append(
+        "<h2>top sessions</h2><table>"
+        "<tr><th>session</th><th>project</th><th>total</th><th>hidden</th>"
+        "<th>×</th><th>cache</th><th>channels</th><th>reminders</th>"
+        f"<th>compactions</th></tr>{hrows}</table>")
     return "".join(out)

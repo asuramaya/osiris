@@ -843,16 +843,17 @@ async def context_window(ctx: Context | None = None) -> dict[str, Any]:
     # spend gate makes that a stat + a delta read, never a re-eat.
     model_raw = row["model_raw"] if row else None
     window_hint = row["context_window_size"] if row else None
+    from src.ingest.harness.claude_jsonl import ClaudeJsonlAdapter
+    from src.ingest.harness.crush_sqlite import CrushSqliteAdapter
+    from src.ingest.transcript_store import TranscriptStore
     path = locate_current_transcript(Path.home() / ".claude" / "projects", job,
                                      anchored_only=True)
     if path is not None:
         out = context_lens.detail(path, model_raw, window_hint=window_hint)
         out["agent"] = ident.agent_id
         out["source"] = "transcript:claude-code"
+        out.update(await _overhead_glance(pool, ident.cwd, job))
         return out
-    from src.ingest.harness.claude_jsonl import ClaudeJsonlAdapter
-    from src.ingest.harness.crush_sqlite import CrushSqliteAdapter
-    from src.ingest.transcript_store import TranscriptStore
     store = TranscriptStore(pool)
     try:  # bring the store current for THIS session before reading it back
         await store.discover_and_ingest(cwd=ident.cwd, job_dir=job)
@@ -875,8 +876,37 @@ async def context_window(ctx: Context | None = None) -> dict[str, Any]:
             usage, model_raw, window_hint=window_hint)
         out["agent"] = ident.agent_id
         out["source"] = f"store:{locator.harness}"
+        out.update(await _overhead_glance(pool, ident.cwd, job))
         return out
     return {"error": "no transcript found for your anchor — nothing to measure"}
+
+
+async def _overhead_glance(
+    pool: asyncpg.Pool, cwd: str | None, job: str | None,
+) -> dict[str, Any]:
+    """A bounded overhead block for context_window (neo's eye, task #34): THIS session's
+    hidden-channel share, reminder drip, and cache split, read from the store (the
+    observer's backfill keeps the channel rows ~10 min current). Empty when the store
+    hasn't eaten the session — an absence, never an estimate. The full per-channel
+    detail stays on the chrome's /overhead page; a mind wants the shape, not the ledger."""
+    try:
+        from src.ingest.harness.claude_jsonl import ClaudeJsonlAdapter
+        from src.ingest.transcript_store import TranscriptStore
+        locator = ClaudeJsonlAdapter().discover(cwd=cwd, job_dir=job)
+        if locator is None:
+            return {}
+        oh = await TranscriptStore(pool).overhead_of_session(
+            locator.harness, locator.anchor_sid)
+        if oh is None:
+            return {}
+        return {"overhead": {
+            "hidden_pct": oh["hidden_pct"], "multiplier": oh["multiplier"],
+            "sidechains": oh["sidechains"], "reminders": oh["reminders"],
+            "compactions": oh["compactions"], "cache_read_pct": oh["cache_read_pct"],
+            "basis": oh["basis"],
+        }}
+    except Exception:  # noqa: BLE001 — the glance must never break the window reading
+        return {}
 
 
 # --- mount: link to the graph as a first-class fleet member ---

@@ -558,3 +558,138 @@ async def test_backfill_skips_the_unchanged_and_eats_the_changed(
     c2 = await store.backfill(adapters=[adapter])
     assert c2 == {"claude-code": 0}
     assert adapter.reads == 1  # unchanged source: stat only, no read
+
+
+# --- the overhead lens (neo's eye, task #34) ---------------------------
+
+def test_reminders_counted_in_nested_content() -> None:
+    """The modern harness nests reminder text inside tool_result content lists — the
+    counter walks the whole tree (the ancestor's top-level walk undercounted here)."""
+    from src.ingest.harness.claude_jsonl import _reminders_of_line
+    line = {
+        "type": "user",
+        "message": {"role": "user", "content": [
+            {"type": "text", "text": "<system-reminder>a</system-reminder>"},
+            {"type": "tool_result", "content": [
+                {"type": "text",
+                 "text": "x <system-reminder>b</system-reminder> y"}]},
+        ]},
+    }
+    assert _reminders_of_line(line) == 2
+    assert _reminders_of_line({"type": "user", "message": {"content": "plain"}}) == 0
+
+
+def test_read_turns_carries_overhead_facts(tmp_path: Path) -> None:
+    """Reminders ride live user turns only (a compact summary QUOTES the past — counting
+    its reminders again after every compaction would inflate the churn number), and the
+    compact-summary line itself is flagged is_compaction."""
+    path = tmp_path / "p" / "cafe1234-s.jsonl"
+    path.parent.mkdir(parents=True)
+    lines = [
+        {"type": "user", "message": {
+            "role": "user",
+            "content": "<system-reminder>hi</system-reminder> question"}},
+        {"type": "assistant", "message": {
+            "model": "claude-fable-5",
+            "usage": {"input_tokens": 10, "output_tokens": 5}}},
+        {"type": "user", "isCompactSummary": True, "message": {
+            "role": "user",
+            "content": "<system-reminder>quoted</system-reminder> summary"}},
+    ]
+    path.write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+    loc = SessionLocator(
+        anchor_sid="cafe1234", session_id="cafe1234-s", harness="claude-code",
+        source_path=str(path), cwd=None, project=None)
+    turns = list(ClaudeJsonlAdapter().read_turns(loc))
+    assert turns[0].reminders == 1
+    assert turns[1].reminders is None       # assistant turns carry no reminders
+    assert turns[2].reminders is None       # the summary's quotes are not re-counted
+    assert turns[2].is_compaction is True
+    assert turns[2].is_summary is True
+    assert turns[0].is_compaction is False
+
+
+def _write_channel_fixture(projects: Path) -> None:
+    """A primary with one sidechain channel beside it, in the modern on-disk layout
+    (<project>/<stem>.jsonl + <project>/<stem>/subagents/agent-*.jsonl + .meta.json)."""
+    _write_claude_transcript(
+        projects / "-home-x-code-widget" / "beef0001-s.jsonl",
+        "beef0001", [("user", None), ("assistant", "claude-fable-5")])
+    sa = projects / "-home-x-code-widget" / "beef0001-s" / "subagents"
+    sa.mkdir(parents=True)
+    (sa / "agent-aaaa11112222333.jsonl").write_text(json.dumps(
+        {"type": "assistant", "isSidechain": True,
+         "message": {"model": "claude-fable-5",
+                     "usage": {"input_tokens": 7, "output_tokens": 3}}}) + "\n")
+    (sa / "agent-aaaa11112222333.meta.json").write_text(
+        json.dumps({"agentType": "Explore"}))
+
+
+def test_enumerate_yields_hidden_channels(tmp_path: Path) -> None:
+    """enumerate() walks the subagents dir beside each primary: channel='sidechain',
+    parent_sid ties it home, agent_type comes off the meta.json sidecar."""
+    projects = tmp_path / "projects"
+    _write_channel_fixture(projects)
+    locs = list(ClaudeJsonlAdapter().enumerate(root=projects))
+    prim = [loc for loc in locs if loc.channel == "primary"]
+    chans = [loc for loc in locs if loc.channel != "primary"]
+    assert len(prim) == 1 and len(chans) == 1
+    c = chans[0]
+    assert c.channel == "sidechain"
+    assert c.parent_sid == "beef0001"
+    assert c.agent_type == "Explore"
+    assert c.anchor_sid == "aaaa11112222333"
+
+
+async def test_overhead_of_session_splits_channels(
+    store: TranscriptStore, tmp_path: Path,
+) -> None:
+    """The lens's core claim: visible = the primary window, hidden = the channels
+    beside it, multiplier honest from reported tokens."""
+    projects = tmp_path / "projects"
+    _write_channel_fixture(projects)
+
+    class _Rooted(ClaudeJsonlAdapter):
+        def enumerate(self, *, root=None):  # type: ignore[override]
+            yield from super().enumerate(root=projects)
+
+    counts = await store.backfill(adapters=[_Rooted()])
+    assert counts == {"claude-code": 2}  # the primary AND its channel
+    oh = await store.overhead_of_session("claude-code", "beef0001")
+    assert oh is not None
+    assert oh["visible"]["total"] == 150      # 100 in + 50 out
+    assert oh["hidden"]["total"] == 10        # 7 in + 3 out
+    assert oh["total_tokens"] == 160
+    assert oh["sidechains"] == 1
+    assert oh["basis"] == "tokens"
+    assert oh["multiplier"] == 1.1
+    assert oh["hidden_pct"] == 6.2
+    assert oh["detail"][0]["agent_type"] == "Explore"
+    assert oh["detail"][0]["tokens"] == 10
+    # bytes rode in from the ingest stat — the fallback basis is real, not fabricated
+    assert oh["visible"]["bytes"] > 0 and oh["hidden"]["bytes"] > 0
+
+
+async def test_overhead_fleet_rolls_up_by_root(
+    store: TranscriptStore, tmp_path: Path,
+) -> None:
+    """The chrome's reading: channels fold into their root session; totals speak."""
+    projects = tmp_path / "projects"
+    _write_channel_fixture(projects)
+
+    class _Rooted(ClaudeJsonlAdapter):
+        def enumerate(self, *, root=None):  # type: ignore[override]
+            yield from super().enumerate(root=projects)
+
+    await store.backfill(adapters=[_Rooted()])
+    fleet = await store.overhead_fleet(top=5)
+    t = fleet["totals"]
+    assert t["sessions"] == 1                 # the channel folded into its root
+    assert t["channel_files"] == 1
+    assert t["total_tokens"] == 160
+    assert t["hidden_tokens"] == 10
+    top = fleet["top"][0]
+    assert top["anchor_sid"] == "beef0001"
+    assert top["project"] == "widget"
+    assert top["channel_files"] == 1
+    assert top["multiplier"] == 1.1
