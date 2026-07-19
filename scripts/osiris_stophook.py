@@ -32,13 +32,18 @@ DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/
 STOP_GRACE_SECS = 3600
 
 
-async def _deliverable(project: str, session_id: str) -> tuple[int, list[str], int | None]:
-    """(deliverable mail count, its senders, KNOWN window size or None) for THIS session —
-    mail mirrors mailbox.unread_count exactly (per-recipient, migration 0021); the window
-    comes from the mount row's context_window_size, stamped by the chrome from the harness's
-    own accounting. An unmounted session has no inbox → (0, [], None). The SENDERS ride along
-    because a notification that omits them forces a read to discover whether a read was
-    warranted (Metron V, msg 444)."""
+async def _deliverable(
+    project: str, session_id: str,
+) -> tuple[int, list[str], int | None, dict[str, int]]:
+    """(deliverable mail count, its senders, KNOWN window size or None, grade bands) for
+    THIS session — mail mirrors mailbox.unread_count exactly (per-recipient, migration
+    0021); the window comes from the mount row's context_window_size, stamped by the
+    chrome from the harness's own accounting. An unmounted session has no inbox →
+    (0, [], None, {}). The SENDERS ride along because a notification that omits them
+    forces a read to discover whether a read was warranted (Metron V, msg 444) — and the
+    GRADE BANDS ride for the same reason (thread f9449d8d: an FYI wearing a duty's
+    authority teaches the reader to skim, and a skimmed mailbox is lost; the nag says
+    which of the pile actually asks something, without guessing the ungraded)."""
     import asyncpg
 
     conn = await asyncpg.connect(DSN, timeout=1.0)
@@ -52,7 +57,7 @@ async def _deliverable(project: str, session_id: str) -> tuple[int, list[str], i
             # (the old `return 0, None` here was a 2-tuple against a 3-tuple signature —
             # the unmounted path "worked" only because the caller's fail-open ate the
             # unpack error; now it declines honestly)
-            return 0, [], None
+            return 0, [], None, {}
         # `m.from_agent <> $1` on the broadcast leg: THE SELF-ECHO (Metron V, msgs 444/446) —
         # without it this hook BLOCKED a turn to make an agent read its own outbound, six
         # times in one night. Mirrors mailbox._DELIVERABLE_TO_READER; keep them in step —
@@ -62,7 +67,9 @@ async def _deliverable(project: str, session_id: str) -> tuple[int, list[str], i
         root, sep, suffix = me.rpartition("-")
         base = root if sep and root and suffix and set(suffix) <= set("ivxlcdm") else me
         n_row = await conn.fetchrow(
-            "SELECT count(*) AS n, array_agg(DISTINCT m.from_agent) AS senders "
+            "SELECT count(*) AS n, array_agg(DISTINCT m.from_agent) AS senders, "
+            " count(*) FILTER (WHERE m.grade='ask') AS asks, "
+            " count(*) FILTER (WHERE m.grade='fyi') AS fyis "
             "FROM fleet_messages m "
             "LEFT JOIN message_recipients r ON r.message_id=m.id AND r.agent_id=$1 "
             "WHERE ((m.to_agent=$1) "
@@ -73,7 +80,9 @@ async def _deliverable(project: str, session_id: str) -> tuple[int, list[str], i
             row["agent_id"], project, STOP_GRACE_SECS, base)
         n = int(n_row["n"]) if n_row else 0
         senders = [s for s in (n_row["senders"] or []) if s] if n_row else []
-        return n, senders, row["context_window_size"]
+        bands = ({"ask": int(n_row["asks"] or 0), "fyi": int(n_row["fyis"] or 0)}
+                 if n_row else {})
+        return n, senders, row["context_window_size"], bands
     finally:
         await conn.close()
 
@@ -225,18 +234,29 @@ def main() -> None:
     project = Path(cwd).name
     session_id = payload.get("session_id") or ""
     try:
-        n, senders, window = asyncio.run(
+        n, senders, window, bands = asyncio.run(
             asyncio.wait_for(_deliverable(project, session_id), timeout=1.5))
     except Exception:  # noqa: BLE001 — graph down = allow the stop; the chrome still shows it
         return
     if n:
         who = f" (from {', '.join(senders[:4])})" if senders else ""
+        # the bands, spoken without guessing (thread f9449d8d): asks lead, fyis are named
+        # as the ack-and-move-on class, ungraded stays exactly what it is — unknown
+        graded = []
+        if bands.get("ask"):
+            graded.append(f"{bands['ask']} ask(s) something of you")
+        if bands.get("fyi"):
+            graded.append(f"{bands['fyi']} fyi (an ack settles)")
+        rest = n - sum(bands.values())
+        if graded and rest:
+            graded.append(f"{rest} ungraded")
+        shape = f" — {', '.join(graded)}" if graded else ""
         print(json.dumps({
             "decision": "block",
-            "reason": (f"Osiris: {n} deliverable message(s) for {project}{who} — call inbox(), "
-                       "act on what carries new work, SETTLE each handled message (reply with "
-                       "send(reply_to=<id>) or ack with inbox(ack=[ids])), then finish. If a "
-                       "message needs nothing, ack it."),
+            "reason": (f"Osiris: {n} deliverable message(s) for {project}{who}{shape} — call "
+                       "inbox(), act on what carries new work, SETTLE each handled message "
+                       "(reply with send(reply_to=<id>) or ack with inbox(ack=[ids])), then "
+                       "finish. If a message needs nothing, ack it."),
         }))
         return
     # THE MORTALITY NAG (death rites, ruling a882b334): past NAG_PCT a compaction — a DEATH —
