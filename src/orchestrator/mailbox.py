@@ -526,15 +526,27 @@ async def in_flight(
 
 async def ack_messages(
     pool: asyncpg.Pool, reader_project: str, ids: list[int], *, reader_agent: str
-) -> int:
-    """Settle messages FOR THIS READER — only ones addressed to it (a DM to it, or a broadcast to
-    its project). Returns how many newly settled (idempotent). Another reader acking the same
-    broadcast settles only ITS own copy."""
+) -> dict[str, Any]:
+    """Settle messages FOR THIS READER — a DM to it OR TO ANY GENERATION OF ITS LINEAGE
+    (the rollup: what a reader may READ it may SETTLE — Alfred's fixture, msg 666: four
+    DMs addressed to his -iii were readable by -iv but the ack's exact-id match no-oped
+    silently, so twice-acked mail redelivered forever), a seat it actively holds, or a
+    broadcast to its project. Returns {settled: [ids], skipped: {id: why}} — an ack that
+    did nothing must SAY SO AND SAY WHY; an empty response indistinguishable from success
+    is how the same mail gets acked three times. Idempotent: re-acking the settled lands
+    in skipped as 'already settled by you'. Another reader acking the same broadcast
+    settles only ITS own copy."""
+    from src.orchestrator.agents import _generation
+
+    base = _generation(reader_agent)[0]
     rows = await pool.fetch(
         "INSERT INTO message_recipients (message_id, agent_id, read_at) "
         "SELECT m.id, $3, now() FROM fleet_messages m "
         "WHERE m.id = ANY($1::bigint[]) "
         "  AND ((m.to_agent = $3) "
+        # THE ROLLUP (kept in step with _DELIVERABLE_TO_READER and _addressed_to_me — the
+        # read and reply-settle sides learned it long before this ack side did)
+        "   OR (m.to_agent = $4 OR m.to_agent LIKE $4 || '-%') "
         # ...or a SEAT the acking mind actively holds (Phase B2): settling seat mail is the
         # holder's right exactly as reading it is
         "   OR (m.to_agent LIKE 'seat:%' AND EXISTS (SELECT 1 FROM links hl "
@@ -545,8 +557,27 @@ async def ack_messages(
         "ON CONFLICT (message_id, agent_id) DO UPDATE SET read_at=COALESCE("
         "message_recipients.read_at, now()) "
         "WHERE message_recipients.read_at IS NULL RETURNING message_id",
-        ids, _norm(reader_project), reader_agent)
-    return len(rows)
+        ids, _norm(reader_project), reader_agent, base)
+    settled = sorted(int(r["message_id"]) for r in rows)
+    skipped: dict[int, str] = {}
+    missing = [i for i in ids if i not in set(settled)]
+    if missing:
+        info = await pool.fetch(
+            "SELECT m.id, m.to_agent, m.to_project, (r.read_at IS NOT NULL) AS already "
+            "FROM fleet_messages m LEFT JOIN message_recipients r "
+            "  ON r.message_id=m.id AND r.agent_id=$2 "
+            "WHERE m.id = ANY($1::bigint[])", missing, reader_agent)
+        known = {int(r["id"]): r for r in info}
+        for i in missing:
+            r = known.get(i)
+            if r is None:
+                skipped[i] = "unknown id"
+            elif r["already"]:
+                skipped[i] = "already settled by you"
+            else:
+                skipped[i] = (f"not addressed to you (to_agent={r['to_agent']}, "
+                              f"to_project={r['to_project']})")
+    return {"settled": settled, "skipped": skipped}
 
 
 async def project_deliverable_count(

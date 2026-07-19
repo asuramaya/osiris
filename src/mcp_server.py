@@ -1872,14 +1872,21 @@ async def inbox(project: str | None = None, peek: bool = False,
     # the operator desk, whose reader is the human ('operator'): an agent only peeks it, never
     # settles it as itself.
     reader = OPERATOR_ADDR if proj == OPERATOR_ADDR else (ident.agent_id if ident else proj)
-    settled = await ack_messages(pool, proj, ack, reader_agent=reader) if ack else 0
+    # an ack ALWAYS answers with what it settled and what it skipped-and-why (Alfred's
+    # fixture, msg 666: a silent zero-settle was indistinguishable from success, so the
+    # same four DMs were acked three times and redelivered anyway)
+    ack_out = await ack_messages(pool, proj, ack, reader_agent=reader) if ack else None
+    ack_keys: dict[str, Any] = {}
+    if ack_out is not None:
+        ack_keys["settled"] = ack_out["settled"]
+        if ack_out["skipped"]:
+            ack_keys["skipped"] = ack_out["skipped"]
     if proj == OPERATOR_ADDR:
         # THE ORGANIZED DESK (operator direction 2026-07-11): always peek-shaped — reading
         # the human's desk never leases; bands (needs_decision / needs_hands / fyi) ·
         # thread + same-story folds · dimmed moot annotations · the derived your_queue.
         desk = await read_desk(pool)
-        return {"project": OPERATOR_ADDR, **desk,
-                **({"settled": settled} if settled else {})}
+        return {"project": OPERATOR_ADDR, **desk, **ack_keys}
     msgs = await read_inbox(pool, proj, reader_agent=reader, mark_read=not peek,
                             lease_secs=st.osiris_mail_lease_secs)
     flight = await in_flight(pool, proj, reader_agent=reader,
@@ -1903,7 +1910,7 @@ async def inbox(project: str | None = None, peek: bool = False,
                  + ", ".join(sorted({f['leased_by'] for f in flight})) + ")")
     return {"project": proj.removeprefix("repo:").strip(), "messages": msgs,
             **({"in_flight": flight} if flight else {}),
-            **({"settled": settled} if settled else {}), "note": note}
+            **ack_keys, "note": note}
 
 
 @mcp.tool()

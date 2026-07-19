@@ -498,8 +498,8 @@ async def test_seat_mail_reaches_the_holder_and_only_the_holder(actions: Actions
     got = await read_inbox(actions.pool, "osiris", reader_agent="agent:oooo0001")
     assert [m["id"] for m in got] == [out["id"]]
     assert got[0]["dm"] is True
-    assert await ack_messages(actions.pool, "osiris", [out["id"]],
-                              reader_agent="agent:oooo0001") == 1
+    assert (await ack_messages(actions.pool, "osiris", [out["id"]],
+                               reader_agent="agent:oooo0001"))["settled"] == [out["id"]]
     assert await unread_count(actions.pool, "osiris", reader_agent="agent:oooo0001") == 0
 
 

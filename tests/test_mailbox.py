@@ -45,10 +45,11 @@ async def test_ack_settles_for_good(actions: Actions) -> None:
     res = await send_message(p, from_agent="agent:x", from_project="a", to_project="b",
                              body="handle me")
     (msg,) = await read_inbox(p, "b", reader_agent=R)
-    assert await ack_messages(p, "b", [msg["id"]], reader_agent=R) == 1
+    assert (await ack_messages(p, "b", [msg["id"]], reader_agent=R))["settled"] == [msg["id"]]
     assert await unread_count(p, "b", reader_agent=R, lease_secs=0) == 0
     assert await read_inbox(p, "b", reader_agent=R, lease_secs=0) == []
-    assert await ack_messages(p, "b", [res["id"]], reader_agent=R) == 0  # idempotent
+    again = await ack_messages(p, "b", [res["id"]], reader_agent=R)  # idempotent — and it SAYS so
+    assert again["settled"] == [] and "already settled" in again["skipped"][res["id"]]
 
 
 async def test_ack_is_scoped_to_the_recipient(actions: Actions) -> None:
@@ -56,8 +57,33 @@ async def test_ack_is_scoped_to_the_recipient(actions: Actions) -> None:
     res = await send_message(p, from_agent="agent:x", from_project="a", to_project="b",
                              body="b's mail")
     # a reader in another project can't settle b's broadcast (it isn't addressed to them)
-    assert await ack_messages(p, "c", [res["id"]], reader_agent="agent:c") == 0
+    foreign = await ack_messages(p, "c", [res["id"]], reader_agent="agent:c")
+    assert foreign["settled"] == [] and "not addressed to you" in foreign["skipped"][res["id"]]
     assert await unread_count(p, "b", reader_agent=R) == 1
+
+
+async def test_ack_learns_the_rollup_a_reader_may_settle_what_it_may_read(
+    actions: Actions,
+) -> None:
+    """ALFRED'S FIXTURE (msg 666, 2026-07-19): DMs addressed to his -iii were READABLE by
+    -iv (the rollup) but the ack's exact-id match silently no-oped — twice-acked mail
+    redelivered forever, and the empty response was indistinguishable from success. The
+    law: what a reader may READ it may SETTLE — an ack from any generation of the
+    addressed lineage lands, and the receipt names it."""
+    p = actions.pool
+    dm = await send_message(p, from_agent="agent:c1b99f6e-ii", from_project="ByeByte",
+                            to_agent="agent:a1f4ed01-iii", body="report for the old head")
+    # the living -iv reads it via the rollup...
+    (m,) = await read_inbox(p, "alfred", reader_agent="agent:a1f4ed01-iv")
+    assert m["id"] == dm["id"]
+    # ...and may now ACK it — the fix; before, this returned empty and the mail haunted
+    out = await ack_messages(p, "alfred", [dm["id"]], reader_agent="agent:a1f4ed01-iv")
+    assert out["settled"] == [dm["id"]] and out["skipped"] == {}
+    assert await unread_count(p, "alfred", reader_agent="agent:a1f4ed01-iv",
+                              lease_secs=0) == 0  # settled for good — no redelivery
+    # an unknown id in the same call is named, not swallowed
+    out2 = await ack_messages(p, "alfred", [999999], reader_agent="agent:a1f4ed01-iv")
+    assert out2["settled"] == [] and out2["skipped"][999999] == "unknown id"
 
 
 async def test_a_broadcast_is_a_group_chat_both_agents_see_it(actions: Actions) -> None:

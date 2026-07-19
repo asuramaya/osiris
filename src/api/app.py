@@ -814,8 +814,9 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         mind to run inbox(ack=[…]) for him. His hand, his signature."""
         from src.orchestrator.mailbox import OPERATOR_ADDR, ack_messages
         ids = body.ids[:200]
-        n = await ack_messages(p, OPERATOR_ADDR, ids, reader_agent=OPERATOR_ADDR)
-        return {"settled": n, "asked": len(ids), "by": "operator",
+        out = await ack_messages(p, OPERATOR_ADDR, ids, reader_agent=OPERATOR_ADDR)
+        return {"settled": len(out["settled"]), "asked": len(ids), "by": "operator",
+                **({"skipped": out["skipped"]} if out["skipped"] else {}),
                 "note": "dismissed by the human's own click"}
 
     # ---- the shared console cursor (real-time Claude↔front sync) -------------
