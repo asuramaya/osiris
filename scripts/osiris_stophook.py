@@ -17,6 +17,11 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
+
+# repo root on sys.path — the hook runs from arbitrary cwds and imports the shared
+# authorities (mounts.find_session_row); same pattern as the statusline
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/osiris")
 # The HOOK's patience window, deliberately longer than the mailbox lease (900s): a message
@@ -38,12 +43,16 @@ async def _deliverable(project: str, session_id: str) -> tuple[int, list[str], i
 
     conn = await asyncpg.connect(DSN, timeout=1.0)
     try:
-        row = await conn.fetchrow(
-            "SELECT agent_id, context_window_size FROM agent_mounts "
-            "WHERE job_dir LIKE '%/jobs/' || $1 "
-            "ORDER BY last_seen DESC LIMIT 1", (session_id or "")[:8])
+        # the ONE session→row lookup (mounts.find_session_row, task #33) — this hook's
+        # inline anchor-name match was the mail arc's silent half: a re-anchored window
+        # was never nagged, so its mail sat while the session lived
+        from src.orchestrator.mounts import find_session_row
+        row = await find_session_row(conn, session_id or "")
         if row is None or not row["agent_id"]:
-            return 0, None
+            # (the old `return 0, None` here was a 2-tuple against a 3-tuple signature —
+            # the unmounted path "worked" only because the caller's fail-open ate the
+            # unpack error; now it declines honestly)
+            return 0, [], None
         # `m.from_agent <> $1` on the broadcast leg: THE SELF-ECHO (Metron V, msgs 444/446) —
         # without it this hook BLOCKED a turn to make an agent read its own outbound, six
         # times in one night. Mirrors mailbox._DELIVERABLE_TO_READER; keep them in step —
@@ -73,7 +82,7 @@ NAG_PCT = 85          # occupancy at which the mortality nag arms (ruling a882b3
 NAG_COOLDOWN = 1800   # at most one nag per half hour — pressure, not torture
 
 
-def _ctx_pct(payload: dict, window: int | None) -> int | None:
+def _ctx_pct(payload: dict[str, Any], window: int | None) -> int | None:
     """Occupancy % against a KNOWN window only (the Anubis VII false-eulogy bug, msg 127:
     the death rite fired 99% on a mind at 20% because the denominator was an assumed 200k).
     The window, strongest first: the payload's own accounting, the mount row's harness-stamped
@@ -120,7 +129,7 @@ def _ctx_pct(payload: dict, window: int | None) -> int | None:
     return None
 
 
-def _swap_confession(payload: dict) -> str | None:
+def _swap_confession(payload: dict[str, Any]) -> str | None:
     """THE RUG-PULL CONFESSION (operator, 2026-07-17: 'atlas got rug pulled mid
     conversation from fable to opus, and it will have no idea until i explicitly tell
     it'). The classifier swaps the model mid-session and the MIND is the last to know —

@@ -329,6 +329,33 @@ def test_sane_job_dir_rejects_unexpanded_literals() -> None:
     assert srv._sane_job_dir("") is None and srv._sane_job_dir(None) is None
 
 
+async def test_find_session_row_covers_both_lanes(actions: Actions) -> None:
+    """THE ONE LOOKUP (task #33, thread a61b6bc7): (1) the anchor named for the sid — the
+    whisper's derive scheme; (2) the session ledger (anchor_sid) for a window whose
+    durable anchor wears another name; (3) an unknown sid resolves to nothing — and the
+    MCP connection id in session_key never serves the lookup."""
+    p = actions.pool
+    # lane 1: jobs/<sid8> — session_key deliberately carries an UNRELATED conn id
+    await mounts.save_mount(p, job_dir="/x/jobs/beadfeed", agent_id="agent:beadfeed",
+                            project="demo", cwd="/w", model=None,
+                            session_key="sid:99887766554433221100aabbccddeeff")
+    row = await mounts.find_session_row(p, "beadfeed-1111-2222-3333-444455556666")
+    assert row is not None and row["agent_id"] == "agent:beadfeed"
+    # lane 2: the ledger — an active Agent carries anchor_sid:<sid8>, its lineage's
+    # freshest row answers although the anchor is named for the LINEAGE, not this sid
+    oid = await actions.create_or_find_object("Agent", "agent:cafe0002-ii", "test")
+    await actions.assert_property(oid, "anchor_sid:11223344",
+                                  "11223344-aaaa-bbbb-cccc-ddddeeeeffff", "test",
+                                  datetime.now(UTC), 0.9,
+                                  evidence_class="direct_observation")
+    await mounts.save_mount(p, job_dir="/x/jobs/cafe0002", agent_id="agent:cafe0002-ii",
+                            project="demo", cwd="/w2", model=None, session_key=None)
+    row2 = await mounts.find_session_row(p, "11223344-aaaa-bbbb-cccc-ddddeeeeffff")
+    assert row2 is not None and row2["agent_id"] == "agent:cafe0002-ii"
+    # (3) honesty about absence
+    assert await mounts.find_session_row(p, "0dead000-none-anywhere") is None
+
+
 async def test_fleet_pulse_is_one_honest_glance(actions: Actions) -> None:
     """The orient fold — SAME WORD, SAME NUMBER (operator ruling 2026-07-19): every figure
     comes from the shared authorities, so the pulse, the statusline, and the chrome desk

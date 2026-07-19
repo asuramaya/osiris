@@ -114,6 +114,50 @@ async def release_session_mounts(
     return int(n or 0)
 
 
+async def find_session_row(
+    db: Any, session_id: str,
+) -> Any | None:
+    """THE ONE LOOKUP from a harness session id to its mount row (thread a61b6bc7, task
+    #33): every per-window surface — statusline, stop hook, live_succession — resolves a
+    window's identity through THIS, never its own copy (the vitals law: a copy is a fork
+    that forgets it is one). Returns the row (job_dir, agent_id, project, model,
+    context_window_size) or None.
+
+    Two lanes, strongest evidence first:
+      1. THE ANCHOR NAMED FOR THE SID — the whisper derives ~/.claude/jobs/<sid8> for
+         every session it greets, so this covers first lives, resumes, and forks alike.
+      2. THE SESSION LEDGER — anchor_sid:<sid8> assertions (handshake.record_session_anchor
+         files sid→soul at every whisper for identities the sid alone could not re-derive);
+         the owner's lineage's freshest row answers for a window whose durable anchor
+         wears another name (a mount(job_dir=<inherited anchor>) session).
+    DEAD END, verified 2026-07-19 and recorded so nobody re-walks it: agent_mounts.
+    session_key's 'sid:<hex>' is the MCP CONNECTION id (Mcp-Session-Id), never the harness
+    sid — it cannot serve this lookup. `db` is any fetchrow-capable handle (pool or
+    connection), so the hook scripts can pass their own single connection."""
+    sid = (session_id or "").strip().lower()
+    if len(sid) < 8:
+        return None
+    cols = "job_dir, agent_id, project, model, context_window_size"
+    row = await db.fetchrow(
+        f"SELECT {cols} FROM agent_mounts WHERE job_dir LIKE '%/jobs/' || $1 "
+        "ORDER BY last_seen DESC NULLS LAST LIMIT 1", sid[:8])
+    if row is not None:
+        return row
+    owner = await db.fetchval(
+        "SELECT o.canonical FROM current_assertions a "
+        "JOIN objects o ON o.id=a.object_id AND o.type='Agent' AND o.status='active' "
+        "WHERE a.name = 'anchor_sid:' || $1 "
+        "ORDER BY a.observed_at DESC LIMIT 1", sid[:8])
+    if owner is None:
+        return None
+    from src.orchestrator.agents import _generation
+    base = _generation(str(owner))[0]
+    return await db.fetchrow(
+        f"SELECT {cols} FROM agent_mounts "
+        "WHERE agent_id = $1 OR agent_id LIKE $1 || '-%' "
+        "ORDER BY last_seen DESC NULLS LAST LIMIT 1", base)
+
+
 _DOOR_WINDOW_SECS = 900  # the same 15-minute decay every liveness read in the fleet uses
 _GHOST_GRACE_SECS = 120  # a row pulsed this recently is too new for the ghost rule to judge
 

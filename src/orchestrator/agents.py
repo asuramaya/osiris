@@ -961,9 +961,10 @@ async def live_succession(
     observed = normalize_model(observed_model)
     if len(sid) < 8 or not observed:
         return {"unchanged": True, "reason": "no anchor"}
-    row = await actions.pool.fetchrow(
-        "SELECT job_dir, agent_id, project, model FROM agent_mounts "
-        "WHERE job_dir LIKE '%/jobs/' || $1 ORDER BY last_seen DESC LIMIT 1", sid[:8])
+    # the ONE session→row lookup (mounts.find_session_row, task #33) — an inline copy
+    # here once meant a swap in a re-anchored window went unwitnessed
+    from src.orchestrator.mounts import find_session_row
+    row = await find_session_row(actions.pool, sid)
     if row is None:
         return {"unchanged": True, "reason": "no mount"}
     if normalize_model(row["model"]) == observed:
@@ -975,9 +976,7 @@ async def live_succession(
         # RE-READ INSIDE THE LOCK: two concurrent heartbeats both read the pre-swap row and
         # both minted — Soundwave VI and VII, identical seam strings, one second apart
         # (2026-07-14). The loser now waits, re-reads, sees the winner's write, no-ops.
-        row = await actions.pool.fetchrow(
-            "SELECT job_dir, agent_id, project, model FROM agent_mounts "
-            "WHERE job_dir LIKE '%/jobs/' || $1 ORDER BY last_seen DESC LIMIT 1", sid[:8])
+        row = await find_session_row(actions.pool, sid)
         if row is None:
             return {"unchanged": True, "reason": "no mount"}
         old = normalize_model(row["model"])

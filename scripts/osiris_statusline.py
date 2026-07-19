@@ -189,12 +189,19 @@ async def _counts(
             # NORMALIZED id: the payload decorates variants (claude-opus-4-8[1m] = the same
             # weights at 1M context) that transcripts record bare — same mind, never a seam
             bare = model_id.split("[", 1)[0].strip()
-            row0 = await conn.fetchrow(
-                "UPDATE agent_mounts SET last_seen=now(), "
-                "model=COALESCE(model, NULLIF($2,'')), model_raw=NULLIF($3,''), "
-                "context_window_size=COALESCE($4, context_window_size) "
-                "WHERE job_dir LIKE '%/jobs/' || $1 RETURNING agent_id, model",
-                session_id[:8], bare, model_raw, window_size)
+            # the ONE session→row lookup (mounts.find_session_row, task #33): the old
+            # inline anchor-name match missed any window whose durable anchor wears
+            # another name — that window rendered identity-less (dm 0, desk 0)
+            from src.orchestrator.mounts import find_session_row
+            found = await find_session_row(conn, session_id)
+            row0 = None
+            if found is not None:
+                row0 = await conn.fetchrow(
+                    "UPDATE agent_mounts SET last_seen=now(), "
+                    "model=COALESCE(model, NULLIF($2,'')), model_raw=NULLIF($3,''), "
+                    "context_window_size=COALESCE($4, context_window_size) "
+                    "WHERE job_dir = $1 RETURNING agent_id, model",
+                    found["job_dir"], bare, model_raw, window_size)
             agent = row0["agent_id"] if row0 else None
             stored = row0["model"] if row0 else None
             if agent and bare and stored and stored.split("[", 1)[0].strip() != bare:
