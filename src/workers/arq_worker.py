@@ -168,9 +168,13 @@ async def backfill_transcripts(ctx: dict[str, Any]) -> int:
     root = get_settings().osiris_transcripts
     if not root:
         return 0
+    from src.ingest.telemetry import TelemetryStore
     from src.ingest.transcript_store import TranscriptStore
     out = await TranscriptStore(ctx["pool"]).backfill()
-    return sum(out.values()) if out else 0
+    # the retained-telemetry sweep rides the same observer switch (task #35): the same
+    # free-deterministic class, the same spend gate, the same one-switch-one-cost law
+    tel = await TelemetryStore(ctx["pool"]).backfill()
+    return (sum(out.values()) if out else 0) + tel
 
 
 async def sweep_doors(ctx: dict[str, Any]) -> int:

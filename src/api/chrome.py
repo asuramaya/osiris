@@ -735,7 +735,7 @@ def _fmt_tok(n: int) -> str:
     return str(int(n))
 
 
-def render_overhead(data: dict[str, Any]) -> str:
+def render_overhead(data: dict[str, Any], telemetry: dict[str, Any] | None = None) -> str:
     """THE OVERHEAD LENS (neo's eye, task #34): what the harness itself costs — the
     hidden channels beside every visible window, the cache-vs-fresh split, the
     system-reminder drip, the compaction churn. Read from the transcript store, which
@@ -776,4 +776,20 @@ def render_overhead(data: dict[str, Any]) -> str:
         "<tr><th>session</th><th>project</th><th>total</th><th>hidden</th>"
         "<th>×</th><th>cache</th><th>channels</th><th>reminders</th>"
         f"<th>compactions</th></tr>{hrows}</table>")
+    if telemetry:
+        t2 = telemetry
+        span = ""
+        if t2.get("oldest") and t2.get("newest"):
+            span = f' · {str(t2["oldest"])[:10]} → {str(t2["newest"])[:10]}'
+        tops = ", ".join(
+            f'{_e(e["event"].removeprefix("tengu_"))} ×{e["n"]}'
+            for e in t2.get("top_events", []))
+        out.append(
+            f'<h2>retained telemetry <span class="pill">{t2["events"]} events · '
+            f'{t2["files"]} files · {t2["bytes"] / 1024:.0f}KB</span> '
+            f'<span class="pill">{t2["sessions"]} sessions · '
+            f'{t2["devices"]} device id{"s" if t2["devices"] != 1 else ""}</span></h2>'
+            f'<p class="dim">failed-to-send telemetry Claude Code keeps at '
+            f"~/.claude/telemetry — nothing reads or prunes it; this is what it "
+            f"remembers about you{_e(span)}. top events: {tops or '—'}.</p>")
     return "".join(out)

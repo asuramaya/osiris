@@ -33,6 +33,8 @@ _TABLES = (
     # THE HARNESS-AGNOSTIC TRANSCRIPT STORE (ruling be741d3e): per-turn index fed by
     # adapters; truncated like every other sidecar so tests start clean.
     ",harness_sessions,harness_turns"
+    # THE TELEMETRY READER (task #35): the retained-events sidecar, same law.
+    ",harness_telemetry,harness_telemetry_files"
 )
 
 

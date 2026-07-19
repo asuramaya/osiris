@@ -409,3 +409,20 @@ def test_render_overhead_empty_store() -> None:
                    "total_bytes": 0, "calls": 0, "reminders": 0, "compactions": 0},
         "top": []})
     assert "eaten nothing yet" in html
+
+
+def test_render_overhead_telemetry_band() -> None:
+    from src.api.chrome import render_overhead
+    html = render_overhead(_overhead_data(), telemetry={
+        "events": 4242, "sessions": 39, "devices": 1, "event_kinds": 12,
+        "oldest": "2026-07-02T23:00:00+00:00", "newest": "2026-07-16T10:58:00+00:00",
+        "files": 39, "bytes": 2_400_000,
+        "top_events": [{"event": "tengu_api_success", "n": 900},
+                       {"event": "tengu_<b>x</b>", "n": 1}]})
+    assert "retained telemetry" in html
+    assert "4242 events" in html
+    assert "2026-07-02" in html and "2026-07-16" in html
+    assert "api_success ×900" in html          # the tengu_ prefix is noise, dropped
+    assert "<b>x</b>" not in html              # event names are escaped
+    # without a summary the band is absent, not zero-filled
+    assert "retained telemetry" not in render_overhead(_overhead_data(), None)

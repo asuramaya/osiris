@@ -1039,10 +1039,12 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     ) -> Response:
         """THE OVERHEAD LENS (neo's eye, task #34): what the harness itself costs —
         hidden channels, cache vs fresh, reminder injections, compaction churn — read
-        from the transcript store."""
+        from the transcript store. Below it, the retained-telemetry forensics (task #35)."""
+        from src.ingest.telemetry import TelemetryStore
         from src.ingest.transcript_store import TranscriptStore
         data = await TranscriptStore(p).overhead_fleet(top=20)
-        inner = chrome.render_overhead(data)
+        telemetry = await TelemetryStore(p).summary()
+        inner = chrome.render_overhead(data, telemetry)
         return Response(inner if partial else chrome.page("overhead", "overhead", inner),
                         media_type="text/html")
 
