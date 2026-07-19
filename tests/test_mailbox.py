@@ -696,3 +696,46 @@ async def test_a_dm_on_an_old_generation_rolls_up_to_the_living_reader(
     assert [m["body"] for m in got] == ["for the old mind"]   # ...and so does the read
     # a STRANGER's lineage never matches
     assert await unread_count(p, "elsewhere", reader_agent="agent:aaaa9999") == 0
+
+
+async def test_desk_briefs_count_folds_threads_and_skips_the_dimmed(
+    actions: Actions,
+) -> None:
+    """THE BRIEFS NUMBER FOLDS AS THE PAGE FOLDS (operator ruling 2026-07-19: the pulse
+    counted every unread row while the desk page thread-folded and dimmed — same word,
+    different number). A superseding brief in a thread speaks for it; a moot-dimmed brief
+    carries no count."""
+    from src.orchestrator.mailbox import desk_briefs_from, desk_briefs_total
+
+    p = actions.pool
+    first = await send_message(p, from_agent="agent:ab12ef01", from_project="x",
+                               to_project=OPERATOR_ADDR, body="milestone v1")
+    await send_message(p, from_agent="agent:ab12ef01", from_project="x",
+                       to_project=OPERATOR_ADDR, body="milestone v2 — supersedes v1",
+                       reply_to=first["id"])
+    await send_message(p, from_agent="agent:0abe5502", from_project="y",
+                       to_project=OPERATOR_ADDR, body="a separate brief")
+    total = await desk_briefs_total(p)
+    assert total == 2  # v2 speaks for its thread; v1 rides under it
+    assert await desk_briefs_from(p, "agent:ab12ef01") == 1
+    assert await desk_briefs_from(p, "agent:0abe5502") == 1
+    await p.execute(
+        "UPDATE fleet_messages SET moot_note='landed already', moot_by='agent:x' "
+        "WHERE body LIKE 'a separate brief%'")
+    assert await desk_briefs_total(p) == 1  # dimmed briefs carry no count
+
+
+async def test_unread_split_sums_to_unread_count(actions: Actions) -> None:
+    """The statusline's two segments are the SAME predicate as orient's one number —
+    split by lane, never a second formula (the copy-drift that made mail disagree)."""
+    p = actions.pool
+    me = "agent:ab12aa77"
+    await send_message(p, from_agent="agent:aaa", from_project="elsewhere",
+                       to_project="myroom", body="a broadcast for the room")
+    await send_message(p, from_agent="agent:aaa", from_project="elsewhere",
+                       to_agent=me, body="a dm for me")
+    from src.orchestrator.mailbox import unread_split
+    split = await unread_split(p, "myroom", reader_agent=me)
+    total = await unread_count(p, "myroom", reader_agent=me)
+    assert split == {"mail": 1, "dm": 1}
+    assert split["mail"] + split["dm"] == total

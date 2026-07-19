@@ -330,8 +330,10 @@ def test_sane_job_dir_rejects_unexpanded_literals() -> None:
 
 
 async def test_fleet_pulse_is_one_honest_glance(actions: Actions) -> None:
-    """The orient fold: 'N live · desk M · wakes K/h' — the same numbers the statusline
-    shows, for agents whose chrome the operator can't see. One round trip."""
+    """The orient fold — SAME WORD, SAME NUMBER (operator ruling 2026-07-19): every figure
+    comes from the shared authorities, so the pulse, the statusline, and the chrome desk
+    can never disagree again. 'owed' is the desk page's red number; 'briefs' counts
+    undismissed desk cards with the page's own fold."""
     from src.orchestrator.mailbox import send_message
 
     p = actions.pool
@@ -341,7 +343,7 @@ async def test_fleet_pulse_is_one_honest_glance(actions: Actions) -> None:
                        to_project="operator", body="brief for the human")
     await p.execute("INSERT INTO agent_wakes (to_project, from_agent, message_id) "
                     "VALUES ('demo','agent:aaa',NULL)")
-    assert await mounts.fleet_pulse(p) == "1 live · desk 1 · wakes 1/h"
+    assert await mounts.fleet_pulse(p) == "1 live · owed 0 · briefs 1 · wakes 1/h"
 
 
 async def test_live_claimed_sids_sees_other_clients_lineage_aware(actions: Actions) -> None:

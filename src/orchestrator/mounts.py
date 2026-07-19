@@ -282,29 +282,25 @@ async def live_mount_sid_prefixes(
 async def fleet_pulse(
     pool: asyncpg.Pool, *, lease_secs: int = 900, live_secs: int = 900
 ) -> str:
-    """One glance line for orient — 'N live · desk M · wakes K/h'. One round trip; the
-    caller omits the key on any failure (the pulse must never slow or crash orient). The
-    statusline shows the same numbers per-render; this is the same glance for agents whose
-    chrome the operator can't see."""
-    r = await pool.fetchrow(
-        "SELECT "
-        # SOULS, NOT DOORS (operator, 2026-07-17: 'fleet is showing 7 agents when really
-        # its 4 live'): a seat with three rows — its anchor, a tab-view, a resume bridge —
-        # is ONE agent; the pulse counts distinct lineage bases (the roman suffix strips)
-        " (SELECT count(DISTINCT regexp_replace(agent_id, '-[ivxlcdm]+$', '')) "
-        "   FROM agent_mounts "
-        "   WHERE last_seen > now() - make_interval(secs => $2)) AS live, "
-        " (SELECT count(*) FROM fleet_messages m WHERE m.to_project='operator' "
-        "   AND m.to_agent IS NULL AND m.read_at IS NULL "
-        "   AND NOT EXISTS (SELECT 1 FROM message_recipients r "
-        "     WHERE r.message_id=m.id AND r.agent_id='operator' AND r.read_at IS NOT NULL) "
-        "   AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
-        "     AND r.agent_id='operator' AND r.delivered_at >= now() "
-        "       - make_interval(secs => $1))) AS desk, "
-        " (SELECT count(*) FROM agent_wakes "
-        "   WHERE woke_at > now() - interval '1 hour') AS wakes",
-        lease_secs, live_secs)
-    return f"{r['live']} live · desk {r['desk']} · wakes {r['wakes']}/h"
+    """One glance line for orient — 'N live · owed X · briefs Y · wakes K/h'. The caller
+    omits the key on any failure (the pulse must never slow or crash orient).
+
+    SAME WORD, SAME NUMBER (operator ruling 2026-07-19: 'the chrome and the harness
+    disagree on briefs, mail, owe'): every figure here comes from the shared authorities —
+    `live` counts seated SOULS (vitals.live_souls — the visitor gate's discriminator, the
+    chrome pill's exact number); `owed` is the desk page's red YOU-OWE (vitals.
+    operator_debts); `briefs` counts undismissed desk cards with the page's own fold
+    (mailbox.desk_briefs_total). The old inline copies drifted three ways; they are gone."""
+    from src.orchestrator.mailbox import desk_briefs_total
+    from src.orchestrator.vitals import live_souls, operator_debts, wakes_hour
+
+    live = await live_souls(pool, live_secs=live_secs)
+    owed = (await operator_debts(pool))["owed"]
+    briefs = await desk_briefs_total(pool)
+    wakes = await wakes_hour(pool)
+    vis = f"+{live['visitors']} " if live["visitors"] else ""
+    return (f"{live['souls']} live {vis}· owed {owed} · briefs {briefs} "
+            f"· wakes {wakes}/h")
 
 
 async def while_away(

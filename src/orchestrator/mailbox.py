@@ -359,22 +359,85 @@ async def unread_count(
     return await pool.fetchval(q, *args)  # type: ignore[no-any-return]
 
 
+async def unread_split(
+    pool: asyncpg.Pool, reader_project: str | None, *, reader_agent: str | None,
+    lease_secs: int = 900,
+) -> dict[str, int]:
+    """{mail, dm} — unread_count's number SPLIT by lane (broadcasts to the project vs DMs
+    to the reader), same `_DELIVERABLE_TO_READER` predicate, so the statusline's two
+    segments always sum to what mount()/orient() report (operator ruling 2026-07-19: the
+    statusline carried its own stale COPY of this predicate — no lineage rollup, no hold
+    grace — and its mail number quietly diverged from orient's).
+
+    An IDENTITY-LESS reader (no mount row yet) has no receipts, so per-reader semantics
+    would re-count the project's whole settled history; it falls back to PROJECT-OPEN
+    semantics — broadcasts NOBODY settled, dm 0 — exactly the statusline's old honest
+    fallback, now housed with the authority."""
+    from src.orchestrator.agents import _generation
+
+    if not reader_agent:
+        if not reader_project:
+            return {"mail": 0, "dm": 0}
+        n = await pool.fetchval(
+            "SELECT count(*) FROM fleet_messages m "
+            "WHERE m.to_project=$1 AND m.to_agent IS NULL AND m.read_at IS NULL "
+            "AND NOT EXISTS (SELECT 1 FROM message_recipients r2 WHERE r2.message_id=m.id "
+            "  AND r2.read_at IS NOT NULL)", _norm(reader_project))
+        return {"mail": int(n or 0), "dm": 0}
+    q = ("SELECT count(*) FILTER (WHERE m.to_agent IS NULL) AS mail, "
+         "       count(*) FILTER (WHERE m.to_agent IS NOT NULL) AS dm "
+         "FROM fleet_messages m "
+         "LEFT JOIN message_recipients r ON r.message_id=m.id AND r.agent_id=$agent "
+         "WHERE " + _DELIVERABLE_TO_READER)
+    q = (q.replace("$agent", "$1").replace("$project", "$2").replace("$lease", "$3")
+         .replace("$grace", "$4").replace("$lineage", "$5"))
+    row = await pool.fetchrow(
+        q, reader_agent, _norm(reader_project or ""), lease_secs, _HOLD_GRACE_SECS,
+        _generation(reader_agent)[0])
+    return {"mail": int(row["mail"] or 0), "dm": int(row["dm"] or 0)}
+
+
+# A BRIEF THE DESK STILL SHOWS — the one predicate behind every briefs number (operator
+# ruling 2026-07-19, the chrome/harness disagreement): an unread, un-dismissed operator
+# brief that is NOT moot-dimmed and IS its thread's lead (the desk thread-folds — an
+# earlier brief superseded by a newer one in its thread rides under it and is not a
+# second debt; the count must fold exactly as the page folds). Placeholders $op / the
+# alias m are fixed; callers add their own scoping clauses.
+_DESK_BRIEF_ROW = (
+    "m.to_project=$op AND m.to_agent IS NULL AND m.read_at IS NULL "
+    "AND m.moot_note IS NULL "
+    "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
+    "  AND r.agent_id=$op AND r.read_at IS NOT NULL) "
+    "AND NOT EXISTS (SELECT 1 FROM fleet_messages nl WHERE "
+    "  COALESCE(nl.thread_id, nl.id) = COALESCE(m.thread_id, m.id) AND nl.id > m.id "
+    "  AND nl.to_project=$op AND nl.to_agent IS NULL AND nl.read_at IS NULL "
+    "  AND NOT EXISTS (SELECT 1 FROM message_recipients r2 WHERE r2.message_id=nl.id "
+    "    AND r2.agent_id=$op AND r2.read_at IS NOT NULL))"
+)
+
+
+async def desk_briefs_total(pool: asyncpg.Pool) -> int:
+    """The whole desk's undismissed briefs — the fleet pulse's number, counted with the
+    SAME fold the desk page renders (lead-per-thread, moot-dimmed excluded)."""
+    q = ("SELECT count(*) FROM fleet_messages m WHERE "
+         + _DESK_BRIEF_ROW).replace("$op", "$1")
+    return await pool.fetchval(q, OPERATOR_ADDR)  # type: ignore[no-any-return]
+
+
 async def desk_briefs_from(pool: asyncpg.Pool, agent_id: str | None) -> int:
     """The DESK, scoped to ONE seat (operator ruling, 2026-07-16: 'desk should not be
     globally scoped... only scope what is for or from the agent'): unread operator-desk
     briefs sent by THIS agent's lineage — the agent's own words still awaiting the human's
     eye, never the fleet-wide backlog (a number identical in every chrome informs nobody).
-    An identity-less or non-lineage caller scores 0 — nothing of theirs can be waiting."""
-    m = re.match(r"^agent:[0-9a-f]{8}", agent_id or "")
-    if not m:
+    An identity-less or non-lineage caller scores 0 — nothing of theirs can be waiting.
+    Same fold as the page and the pulse (_DESK_BRIEF_ROW), plus the lineage scope."""
+    mt = re.match(r"^agent:[0-9a-f]{8}", agent_id or "")
+    if not mt:
         return 0
-    base = m.group(0)
-    return await pool.fetchval(  # type: ignore[no-any-return]
-        "SELECT count(*) FROM fleet_messages m WHERE m.to_project=$2 "
-        "AND m.to_agent IS NULL AND m.read_at IS NULL "
-        "AND (m.from_agent = $1 OR m.from_agent LIKE $1 || '-%') "
-        "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
-        "  AND r.agent_id=$2 AND r.read_at IS NOT NULL)", base, OPERATOR_ADDR)
+    base = mt.group(0)
+    q = ("SELECT count(*) FROM fleet_messages m WHERE " + _DESK_BRIEF_ROW
+         + " AND (m.from_agent = $2 OR m.from_agent LIKE $2 || '-%')").replace("$op", "$1")
+    return await pool.fetchval(q, OPERATOR_ADDR, base)  # type: ignore[no-any-return]
 
 
 async def read_inbox(
@@ -698,8 +761,12 @@ async def read_desk(pool: asyncpg.Pool, *, limit: int = 100) -> dict[str, Any]:
     # trust is a count he learns to ignore — which is how the desk reached a scary red 11.
     queue = [t for t in everything if not t["guessed"]]
     guessed = [t for t in everything if t["guessed"]]
+    # the COUNT comes from the authority, never from len(a-capped-display-fetch) — the
+    # chrome and the statusline must show the same red number (vitals, 2026-07-19)
+    from src.orchestrator.vitals import operator_debts
+    owed = (await operator_debts(pool))["owed"]
     return {
-        "owed": len(queue),
+        "owed": owed,
         "letters": len(bands["fyi"]),
         "needs_decision": bands["decision"],
         "needs_hands": bands["hands"],

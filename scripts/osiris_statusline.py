@@ -15,10 +15,17 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+
+# THE ONE-AUTHORITY IMPORTS (operator ruling 2026-07-19: 'the chrome and the harness
+# disagree on briefs, mail, owe'): this script used to carry its own COPIES of every
+# count's SQL, and copies drift — its mail predicate predated the lineage rollup and the
+# hold grace; its fleet number counted rows where the chrome counted souls. The formulas
+# now live in src/orchestrator/{mailbox,vitals} and this script CALLS them; the hooks run
+# us by absolute path from arbitrary cwds, so the repo root rides sys.path explicitly.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/osiris")
 EXPECTED = os.environ.get("OSIRIS_EXPECTED_MODEL", "claude-fable-5")
@@ -192,95 +199,29 @@ async def _counts(
             if agent and bare and stored and stored.split("[", 1)[0].strip() != bare:
                 agent = _succession(session_id, bare) or agent
         agent = agent or ""
-        # counts are PER-RECIPIENT now (migration 0021): desk = operator's own unread, mail =
-        # THIS agent's broadcasts+DMs unread, flight = a SIBLING's live lease on shared broadcasts.
-        # An IDENTITY-LESS render (no session in the payload, or no mount row yet) must not
-        # count as a phantom '' reader — that reader has no receipts, so it re-counts the
-        # project's whole settled history (the operator's 'mail 5' ghost). It falls back to
-        # PROJECT-OPEN semantics instead: broadcasts NOBODY has settled.
-        mail_sub = (
-            "(SELECT count(*) FROM fleet_messages m LEFT JOIN message_recipients r "
-            "   ON r.message_id=m.id AND r.agent_id=$3 "
-            "   WHERE ((m.to_agent=$3) OR (m.to_project=$1 AND m.to_agent IS NULL)) "
-            "   AND m.read_at IS NULL AND r.read_at IS NULL "
-            "   AND (r.delivered_at IS NULL "
-            "     OR r.delivered_at < now() - make_interval(secs => $2)))"
-            if agent else
-            "(SELECT count(*) FROM fleet_messages m "
-            "   WHERE m.to_project=$1 AND m.to_agent IS NULL AND m.read_at IS NULL AND $3='' "
-            "   AND NOT EXISTS(SELECT 1 FROM message_recipients r2 WHERE r2.message_id=m.id "
-            "     AND r2.read_at IS NOT NULL))"
-        )
-        # WHAT YOU OWE, WHERE YOU STAND (operator, 2026-07-11: "attack the chrome with the same
-        # mentality"). `desk` counted NOTIFICATIONS — unread briefs, letters and eulogies mixed
-        # in with real asks — and it read the same from every directory, which is the opposite
-        # of contextual. The honest number is the DEBT: open threads owned by the human, minus
-        # the ones he deferred. Split by NEIGHBORHOOD (the garden's primitive) so the chrome
-        # answers the question he actually has standing in a repo: what do I owe HERE, and how
-        # much is waiting everywhere else?
-        row = await conn.fetchrow(
-            "WITH ops AS (SELECT o.id, "
-            "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-            "    AND a.name='deferred_until' "
-            "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS defer, "
-            "  (SELECT replace(p.canonical,'repo:','') FROM links l JOIN objects p ON p.id=l.to_id "
-            "    WHERE l.from_id=o.id AND l.type='in_repo' AND p.type='SoftwareProject' "
-            "    ORDER BY l.created_at DESC LIMIT 1) AS hood "
-            "  FROM objects o WHERE o.type='Thread' AND o.status='active' "
-            "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-            "    AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-            "    = 'operator' "
-            # THE MINER MAY NOTICE, BUT MUST NEVER OBLIGE. A DERIVED thread is an LLM's
-            # INFERENCE that the human owes something — five of the six debts on this desk were
-            # exactly that, and two were provably false (a "mid-flight" rsync that had landed a
-            # day earlier; a review queue of 17 that held one resolved row). A guess that wears
-            # the red number spends the only currency the number has. Guesses live on the desk,
-            # in their own band (mailbox.read_desk → miner_guesses); they are not DEBT.
-            "  AND COALESCE((SELECT a.evidence_class FROM current_assertions a "
-            "    WHERE a.object_id=o.id AND a.name='summary' "
-            "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'') <> 'derived' "
-            "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
-            "    WHERE a.object_id=o.id AND a.name='status' "
-            "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open') = 'open'), "
-            " live AS (SELECT * FROM ops WHERE defer IS NULL "
-            "   OR defer <= to_char(now(), 'YYYY-MM-DD')) "
-            "SELECT (SELECT count(*) FROM live) AS owed, "
-            " (SELECT count(*) FROM live WHERE hood = $1) AS owed_here, "
-            # the desk, SCOPED (operator ruling, 2026-07-16: 'desk should not be globally
-            # scoped') — THIS lineage's own unanswered briefs, never the fleet-wide backlog
-            " (SELECT count(*) FROM fleet_messages m WHERE m.to_project='operator' "
-            "   AND m.to_agent IS NULL AND m.read_at IS NULL "
-            "   AND $4 <> '' AND (m.from_agent = $4 OR m.from_agent LIKE $4 || '-%') "
-            "   AND NOT EXISTS(SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
-            "     AND r.agent_id='operator' AND r.read_at IS NOT NULL) "
-            "   AND NOT EXISTS(SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
-            "     AND r.agent_id='operator' AND r.delivered_at >= now() "
-            "       - make_interval(secs => $2))) AS desk, "
-            f" {mail_sub} AS mail, "
-            " (SELECT count(*) FROM fleet_messages m LEFT JOIN message_recipients r "
-            "   ON r.message_id=m.id AND r.agent_id=$3 "
-            "   WHERE m.to_agent=$3 AND m.to_agent <> '' AND m.read_at IS NULL "
-            "   AND r.read_at IS NULL AND (r.delivered_at IS NULL "
-            "     OR r.delivered_at < now() - make_interval(secs => $2))) AS dm, "
-            " (SELECT count(*) FROM fleet_messages m JOIN message_recipients r "
-            "   ON r.message_id=m.id WHERE m.to_project=$1 AND m.to_agent IS NULL "
-            "   AND r.agent_id <> $3 AND r.read_at IS NULL AND r.delivered_at IS NOT NULL "
-            "   AND r.delivered_at >= now() - make_interval(secs => $2)) AS flight, "
-            # SEATED ONLY (operator, 2026-07-17: 'fleet 5 but there are only 3 agents up'):
-            # the fleet number counts deliberately-bound minds — a row whose agent is just
-            # the session id echoed back (the whisper's own artifact, no object behind it)
-            # is a stranger's door, not a fleet member. Same discriminator as the visitor
-            # gate: base differs from the sid-derived base, or an active object exists.
-            " (SELECT count(*) FROM agent_mounts m2 "
-            "   WHERE m2.last_seen > now() - interval '15 minutes' "
-            "   AND (substring(m2.agent_id from 7 for 8) IS DISTINCT FROM "
-            "        substring(split_part(coalesce(m2.session_key,''), ':', 2) from 1 for 8) "
-            "     OR EXISTS (SELECT 1 FROM objects o WHERE o.canonical = m2.agent_id "
-            "          AND o.status='active'))) AS live_agents, "
-            " (SELECT count(*) FROM agent_wakes "
-            "   WHERE woke_at > now() - interval '1 hour') AS wakes",
-            project, LEASE_SECS, agent,
-            (_m.group(0) if (_m := re.match(r"^agent:[0-9a-f]{8}", agent)) else ""))
+        # ONE AUTHORITY PER FACT (operator ruling 2026-07-19: 'the chrome and the harness
+        # disagree on briefs, mail, owe'): every number below comes from the shared
+        # formulas in src/orchestrator/{mailbox,vitals} — the same functions orient, the
+        # pulse, and the chrome desk call, so the same word always shows the same number.
+        # This script owns NO count SQL anymore except `flight` (statusline-only: a
+        # sibling's live lease on shared broadcasts). The old inline copies had drifted:
+        # the mail predicate predated the lineage rollup and the hold grace; the fleet
+        # number counted seated ROWS where the chrome counted seated SOULS.
+        from src.orchestrator import vitals
+        from src.orchestrator.mailbox import desk_briefs_from, unread_split
+
+        desk = await desk_briefs_from(conn, agent or None)  # type: ignore[arg-type]
+        split = await unread_split(conn, project, reader_agent=agent or None,  # type: ignore[arg-type]
+                                   lease_secs=LEASE_SECS)
+        debts = await vitals.operator_debts(conn, hood=project)
+        souls = await vitals.live_souls(conn)
+        wakes = await vitals.wakes_hour(conn)
+        flight = await conn.fetchval(
+            "SELECT count(*) FROM fleet_messages m JOIN message_recipients r "
+            "  ON r.message_id=m.id WHERE m.to_project=$1 AND m.to_agent IS NULL "
+            "  AND r.agent_id <> $3 AND r.read_at IS NULL AND r.delivered_at IS NOT NULL "
+            "  AND r.delivered_at >= now() - make_interval(secs => $2)",
+            project, LEASE_SECS, agent)
         # THE ORGANS — is Osiris still SENSING? The session-miner died at 08:50 on 2026-07-12
         # and stayed dead ten hours: the memory simply stopped forming and nothing said so.
         # Computed HERE, at read time, in a process that is alive by construction — a watchdog
@@ -300,8 +241,8 @@ async def _counts(
             age = (datetime.now(UTC) - datetime.fromisoformat(ok)).total_seconds()
             if age > 3 * every:  # three cadences missed is not a blip
                 sick.append(j["key"][4:])
-        return (row["desk"], row["mail"], row["dm"], row["flight"], row["live_agents"],
-                row["wakes"], row["owed"], row["owed_here"], sick)
+        return (desk, split["mail"], split["dm"], int(flight or 0), souls["souls"],
+                wakes, debts["owed"], debts["owed_here"], sick)
     finally:
         await conn.close()
 
