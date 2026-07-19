@@ -188,6 +188,62 @@ async def test_retire_releases_the_seat(actions: Actions, tmp_path: Path) -> Non
     assert heir is not None and heir.agent_id == "agent:anubis-viii"
 
 
+async def test_retire_preflight_refuses_while_duties_name_you(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """Task #48: the leftovers speak BEFORE the death — the old shape stamped retired=true
+    first and listed the pile in the receipt, when the one mind with standing had already
+    lost its seat. An open thread naming the dying lineage as owner makes the first
+    retire() refuse with the list and stamp NOTHING; acknowledge_leftovers=True is the
+    deliberate bequest and proceeds."""
+    from datetime import UTC
+    from datetime import datetime as dt
+
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    job_dir = str(tmp_path / "jobs" / "moriturus")
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:aaaa4d1e-ii",
+                            project="p", cwd=str(tmp_path), model=None, session_key=None)
+    th = await actions.create_or_find_object("Thread", "thread:owed-duty", "agent:aaaa4d1e-ii")
+    now = dt.now(UTC)
+    for n, v in (("summary", "the unhanded duty"), ("status", "open"),
+                 ("owner", "agent:aaaa4d1e-ii")):
+        await actions.assert_property(th, n, v, "agent:aaaa4d1e-ii", now, 0.9,
+                                      evidence_class="self_declared")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:aaaa4d1e-ii", session="moriturus", project="p",
+        model=None, cwd=None)
+    try:
+        first = await srv.retire(reason="farewell", ctx=ctx)
+        assert first["retired"] is None and "preflight" in first
+        assert [t["summary"] for t in first["yours"]] == ["the unhanded duty"]
+        # NOTHING stamped, the seat stands
+        assert await actions.pool.fetchval(
+            "SELECT value #>> '{}' FROM current_assertions a "
+            "JOIN objects o ON o.id=a.object_id "
+            "WHERE o.canonical='agent:aaaa4d1e-ii' AND a.name='retired'") is None
+        assert await mounts.find_mount(actions.pool, job_dir=job_dir) is not None
+        # the deliberate bequest proceeds
+        srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+            agent_id="agent:aaaa4d1e-ii", session="moriturus", project="p",
+            model=None, cwd=None)
+        second = await srv.retire(reason="farewell", acknowledge_leftovers=True, ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert second["retired"] == "agent:aaaa4d1e-ii"
+    assert await mounts.find_mount(actions.pool, job_dir=job_dir) is None
+
+
 def test_evict_stale_minds_purges_the_dead_ancestor() -> None:
     """A compaction kills the mind but not the MCP connection: the conn-keyed hot cache kept
     answering as the dead ancestor minutes after the whisper minted the heir. A mint evicts

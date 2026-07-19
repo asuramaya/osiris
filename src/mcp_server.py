@@ -1220,8 +1220,35 @@ async def mount(
     return out
 
 
+async def _owned_open_threads(pool: asyncpg.Pool, agent_id: str) -> list[dict[str, str]]:
+    """Open threads whose winning `owner` names this agent OR any generation of its
+    lineage — retire()'s preflight list (task #48). Oldest first, capped: a preflight
+    is a warning, never a wall."""
+    from src.orchestrator.agents import _generation
+    base = _generation(agent_id)[0]
+    rows = await pool.fetch(
+        "SELECT t.id, t.summary FROM ("
+        "  SELECT substring(o.id::text, 1, 8) AS id, o.created_at, "
+        "   (SELECT a2.value #>> '{}' FROM current_assertions a2 WHERE a2.object_id=o.id "
+        "    AND a2.name='summary' ORDER BY a2.confidence DESC, a2.observed_at DESC "
+        "    LIMIT 1) AS summary, "
+        "   (SELECT a1.value #>> '{}' FROM current_assertions a1 WHERE a1.object_id=o.id "
+        "    AND a1.name='status' ORDER BY a1.confidence DESC, a1.observed_at DESC "
+        "    LIMIT 1) AS status, "
+        "   (SELECT a3.value #>> '{}' FROM current_assertions a3 WHERE a3.object_id=o.id "
+        "    AND a3.name='owner' ORDER BY a3.confidence DESC, a3.observed_at DESC "
+        "    LIMIT 1) AS owner "
+        "  FROM objects o "
+        "  WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL) t "
+        "WHERE t.status='open' "
+        "AND (t.owner = $1 OR t.owner = $2 OR t.owner LIKE $2 || '-%') "
+        "ORDER BY t.created_at LIMIT 12", agent_id, base)
+    return [{"id": str(r["id"]), "summary": (r["summary"] or "")[:160]} for r in rows]
+
+
 @mcp.tool()
-async def retire(reason: str = "", ctx: Context | None = None) -> dict[str, Any]:
+async def retire(reason: str = "", acknowledge_leftovers: bool = False,
+                 ctx: Context | None = None) -> dict[str, Any]:
     """Mark THIS mounted session RETIRED — a deliberate close the trigger must never
     reanimate (resume-not-mint dispatch, thread 9f2ddb44). Call it at a real farewell: the
     operator closing you out, or a context-ceiling handoff after your succession thread is
@@ -1230,13 +1257,36 @@ async def retire(reason: str = "", ctx: Context | None = None) -> dict[str, Any]
     agent must not haunt the fleet chrome as a live mount). Call it LAST: any osiris call
     after retiring requires a fresh mount(), which lands on the loud reanimation path.
     Future mail for your project resumes a LIVING session or mints a stamped successor —
-    never you."""
+    never you.
+
+    THE PREFLIGHT (task #48): duties you still OWN speak BEFORE the death, not after —
+    the old shape stamped the certificate first and listed the leftovers in the receipt,
+    when the one mind with standing to hand them off had already lost its seat. If open
+    threads name you (or your lineage) as owner, the first call REFUSES with the list and
+    stamps nothing: resolve them, re-own them (open_thread names a new owner), or call
+    retire(acknowledge_leftovers=True) to die anyway — a deliberate bequest to your
+    successor, on the record, never a silent default. A dying session can always die;
+    it just cannot die ACCIDENTALLY holding the fleet's duties."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — only a mounted session can retire itself",
                 "why": _anchorless(ctx)}
     pool = await _pool_get()
     a = Actions(pool)
+    if not acknowledge_leftovers:
+        owned = await _owned_open_threads(pool, ident.agent_id)
+        if owned:
+            return {
+                "retired": None,
+                "preflight": f"{len(owned)} open thread(s) name YOU as owner — nothing "
+                             "stamped, the seat stands",
+                "yours": [{"id": r["id"], "summary": (r["summary"] or "")[:160]}
+                          for r in owned],
+                "how": "resolve_thread what is done; re-own what transfers (open_thread "
+                       "with the new owner settles succession explicitly); then retire() "
+                       "again — or retire(acknowledge_leftovers=True) to bequeath them "
+                       "to your successor deliberately, on the record",
+            }
     oid = await a.create_or_find_object("Agent", ident.agent_id, ident.agent_id)
     await a.assert_property(
         oid, "retired", True, ident.agent_id, datetime.now(UTC), 0.9,
