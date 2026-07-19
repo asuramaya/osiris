@@ -489,6 +489,16 @@ class Manager:
             env = dict(env) if env is not None else dict(os.environ)
             env["OSIRIS_SEAT_ID"] = seated["seat_id"]
             env["OSIRIS_ATTACH_TOKEN"] = token
+        # THE LEASE GATE (Alfred's field spec, msg 637; wake arc Stage E's second half):
+        # refusal BEFORE the birth — a child never exists to be killed. Dark until the
+        # operator ratifies (osiris_lease_refuse); the room-busy advisory below stands
+        # either way.
+        lease_note: dict[str, Any] | None = None
+        if cwd and self._pool is not None:
+            refusal, lease_note = await self._lease_gate(
+                cwd=cwd, seated=seated, override=bool(req.get("lease_override")))
+            if refusal is not None:
+                return refusal
         try:
             await self._broker.spawn(name, argv, cwd=cwd, env=env)
         except SessionExistsError as exc:
@@ -522,6 +532,8 @@ class Manager:
         out: dict[str, Any] = {"spawned": name}
         if seated is not None:
             out["seat_id"] = seated["seat_id"]
+        if lease_note:
+            out.update(lease_note)  # an override rode through — the receipt says so
         # THE ROOM-BUSY ADVISORY (wake arc Stage E, alfred's spawn-lease gate — the
         # advisory half; exclusive refusal waits on his field spec): a body spawned into
         # a room where LIVE sessions already work is told so in its birth receipt — the
@@ -547,6 +559,68 @@ class Manager:
             except Exception:  # noqa: BLE001 — an advisory must never break a birth
                 _log.debug("room-busy advisory failed for %s", cwd, exc_info=True)
         return out
+
+    async def _lease_gate(
+        self, *, cwd: str, seated: dict[str, Any] | None, override: bool,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """THE LEASE GATE — Alfred's field spec (msg 637, thread fd921b7d), built whole,
+        armed only by the operator's ratification (osiris_lease_refuse; default off keeps
+        the advisory as the entire gate). The spec, kept faithful:
+
+          * exclusivity belongs to the RESIDENT SEAT only — a cwd that is some Seat's
+            anchor_cwd is that seat's charter room; every other cwd stays advisory-only;
+          * the lease is LINEAGE-SHARED and PULSE-EXPIRED: any live session of the
+            resident seat's holder lineage holds it, and a dead holder's claim expires
+            with its pulse (the liveness window) — there is NO handoff verb, by design;
+          * a FOREIGN body summoned into a leased room is REFUSED, not warned — the
+            failure class this kills is UNATTRIBUTED PRESENCE;
+          * the operator's own hand passes with lease_override=true, and the override is
+            LOGGED loudly — never silent, never refused.
+
+        Returns (refusal, receipt_note): refusal set → the birth does not happen; note
+        set → an override rode through and the receipt says so. Fail-open on any error —
+        a broken gate must not brick every spawn; the advisory still fires behind it."""
+        if not get_settings().osiris_lease_refuse:
+            return None, None
+        try:
+            assert self._pool is not None  # caller guards; keep mypy honest
+            room = await self._pool.fetchrow(
+                "SELECT s.canonical AS seat, hf.canonical AS holder "
+                "FROM current_assertions a "
+                "JOIN objects s ON s.id=a.object_id AND s.type='Seat' "
+                "JOIN links l ON l.to_id=s.id AND l.type='holds' "
+                "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
+                "JOIN objects hf ON hf.id=l.from_id "
+                "WHERE a.name='anchor_cwd' AND a.value #>> '{}' = $1 LIMIT 1", cwd)
+            if room is None:
+                return None, None          # not a charter room — advisory territory
+            from src.orchestrator.agents import _generation
+            base = _generation(str(room["holder"]))[0]
+            live = await self._pool.fetch(
+                "SELECT agent_id, to_char(last_seen, 'HH24:MI:SS') AS at "
+                "FROM agent_mounts WHERE cwd=$1 "
+                "AND (agent_id = $2 OR agent_id LIKE $2 || '-%') "
+                "AND last_seen > now() - interval '15 minutes' "
+                "ORDER BY last_seen DESC LIMIT 4", cwd, base)
+            if not live:
+                return None, None          # the pulse expired; the lease died with it
+            if seated is not None and str(seated.get("seat_id")) == str(room["seat"]):
+                return None, None          # the resident's own child — lineage-shared
+            holders = ", ".join(f"{r['agent_id']} (last seen {r['at']})" for r in live)
+            if override:
+                _log.warning("LEASE OVERRIDE at %s: the operator's hand spawns past "
+                             "%s's live lease (holders: %s)", cwd, room["seat"], holders)
+                return None, {"lease_override_logged": True,
+                              "room_leased_to": str(room["seat"])}
+            return {"error": (
+                f"ROOM LEASED — {cwd} is the charter room of {room['seat']} and its "
+                f"holder's lineage is LIVE there ({holders}). A foreign body in a leased "
+                "room is unattributed presence. Spawn with the resident's seat, wait for "
+                "the pulse to expire, or pass lease_override=true (the operator's hand, "
+                "logged).")}, None
+        except Exception:  # noqa: BLE001 — a broken gate must never brick every birth
+            _log.debug("lease gate failed open for %s", cwd, exc_info=True)
+            return None, None
 
     async def _scope_pty_child(
         self, name: str, pid: int, *, ram_bytes: int, io_weight: int,

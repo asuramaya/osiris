@@ -791,6 +791,122 @@ async def test_pty_spawn_with_seat_exports_identity_at_birth(
 
 
 @requires_pty
+async def test_the_lease_gate_refuses_foreign_bodies_when_ratified(
+    pg_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE LEASE GATE (Alfred's field spec, msg 637 → task #22), armed via
+    OSIRIS_LEASE_REFUSE: (1) a foreign body summoned into a Seat's charter room while the
+    resident lineage's pulse is live is REFUSED before birth; (2) the resident seat's own
+    child passes (lineage-shared); (3) an expired pulse releases the lease (no handoff
+    verb — the pulse IS the claim); (4) lease_override=true passes and the receipt carries
+    the logged override; (5) unratified (default), the same spawn only warns."""
+    from src.actions.core import Actions
+    from src.db.pool import create_pool
+    from src.orchestrator.mounts import save_mount
+    from src.orchestrator.seats import ensure_seat
+
+    monkeypatch.setenv("OSIRIS_LEASE_REFUSE", "1")
+    pool = await create_pool(pg_dsn)
+    manager = Manager(socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
+                      pool=pool, runner=_make_runner())
+    await manager.start()
+    try:
+        office = tmp_path / "office-alfred"
+        office.mkdir()
+        actions = Actions(pool)
+        seated = await ensure_seat(actions, house=None, handle="Alfred",
+                                   anchor_cwd=str(office), source="test")
+        holder = await actions.create_or_find_object("Agent", "agent:a1fred01-ii", "test")
+        assert holder is not None
+        await pool.execute(
+            "INSERT INTO links (from_id, to_id, type, source_id, first_seen, confidence) "
+            "SELECT o.id, s.id, 'holds', 'test', now(), 0.9 FROM objects o, objects s "
+            "WHERE o.canonical='agent:a1fred01-ii' AND s.canonical=$1",
+            seated["seat_id"])
+        await save_mount(pool, job_dir="/x/jobs/a1fred01", agent_id="agent:a1fred01-ii",
+                         project="alfred", cwd=str(office), model=None, session_key=None)
+        client = await _connect(tmp_path / "m.sock")
+        try:
+            # (1) a foreign, seatless body: refused before any child exists
+            out = await client.send({"op": "pty_spawn", "name": "intruder",
+                                     "argv": ["sh", "-c", "cat"], "cwd": str(office)})
+            assert "ROOM LEASED" in out.get("error", "")
+            assert "agent:a1fred01-ii" in out["error"]        # the holder is NAMED
+            assert "lease_override" in out["error"]           # and the door out is named
+            # (4) the operator's hand: override passes, loudly, on the receipt
+            out2 = await client.send({"op": "pty_spawn", "name": "op-hand",
+                                      "argv": ["sh", "-c", "cat"], "cwd": str(office),
+                                      "lease_override": True})
+            assert out2.get("spawned") == "op-hand"
+            assert out2.get("lease_override_logged") is True
+            assert out2.get("room_leased_to") == seated["seat_id"]
+            # (3) the pulse expires → the lease dies with it; the foreigner may enter
+            await pool.execute(
+                "UPDATE agent_mounts SET last_seen = now() - interval '1 hour' "
+                "WHERE agent_id='agent:a1fred01-ii'")
+            out3 = await client.send({"op": "pty_spawn", "name": "after-pulse",
+                                      "argv": ["sh", "-c", "cat"], "cwd": str(office)})
+            assert out3.get("spawned") == "after-pulse"
+            # (5) unratified: the identical foreign spawn warns and proceeds
+            await pool.execute(
+                "UPDATE agent_mounts SET last_seen = now() "
+                "WHERE agent_id='agent:a1fred01-ii'")
+            monkeypatch.setenv("OSIRIS_LEASE_REFUSE", "0")
+            out4 = await client.send({"op": "pty_spawn", "name": "advisory-era",
+                                      "argv": ["sh", "-c", "cat"], "cwd": str(office)})
+            assert out4.get("spawned") == "advisory-era"
+            assert "advisory" in out4.get("room_busy_note", "")
+        finally:
+            await client.close()
+    finally:
+        await manager.close()
+        await pool.close()
+
+
+@requires_pty
+async def test_the_lease_is_lineage_shared_for_the_residents_own_child(
+    pg_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(2) of the spec: a spawn that NAMES the resident seat is the lineage's own child —
+    the lease never refuses its holder's house."""
+    from src.actions.core import Actions
+    from src.db.pool import create_pool
+    from src.orchestrator.mounts import save_mount
+    from src.orchestrator.seats import ensure_seat
+
+    monkeypatch.setenv("OSIRIS_LEASE_REFUSE", "1")
+    pool = await create_pool(pg_dsn)
+    manager = Manager(socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
+                      pool=pool, runner=_make_runner())
+    await manager.start()
+    try:
+        office = tmp_path / "office-maat"
+        office.mkdir()
+        actions = Actions(pool)
+        seated = await ensure_seat(actions, house=None, handle="Maat",
+                                   anchor_cwd=str(office), source="test")
+        await actions.create_or_find_object("Agent", "agent:0maat001", "test")
+        await pool.execute(
+            "INSERT INTO links (from_id, to_id, type, source_id, first_seen, confidence) "
+            "SELECT o.id, s.id, 'holds', 'test', now(), 0.9 FROM objects o, objects s "
+            "WHERE o.canonical='agent:0maat001' AND s.canonical=$1", seated["seat_id"])
+        await save_mount(pool, job_dir="/x/jobs/0maat001", agent_id="agent:0maat001",
+                         project="maat", cwd=str(office), model=None, session_key=None)
+        client = await _connect(tmp_path / "m.sock")
+        try:
+            out = await client.send({"op": "pty_spawn", "name": "maat-child",
+                                     "argv": ["sh", "-c", "cat"], "cwd": str(office),
+                                     "seat": {"handle": "Maat"}})
+            assert out.get("spawned") == "maat-child", out
+            assert "lease_override_logged" not in out   # its own room needs no override
+        finally:
+            await client.close()
+    finally:
+        await manager.close()
+        await pool.close()
+
+
+@requires_pty
 async def test_pty_spawn_warns_when_the_room_is_already_held(
     pg_dsn: str, tmp_path: Path,
 ) -> None:

@@ -160,6 +160,13 @@ class Settings(BaseSettings):
     # many seconds (a streaming turn, or the echo of the operator typing). A busy window's
     # mail waits for the next tick; delivery (owner_live) covers the actively-working case.
     osiris_poke_min_idle_secs: int = 600
+    # THE LEASE GATE'S REFUSAL (Alfred's field spec, msg 637 → task #22; thread fd921b7d).
+    # OFF = today's advisory-only birth receipt. ON = a foreign body summoned into a Seat's
+    # charter room while the resident lineage's pulse is live is REFUSED, not warned —
+    # the failure class this kills is UNATTRIBUTED PRESENCE. The build is complete either
+    # way; the flag exists because THE OPERATOR RATIFIES refusal semantics before they can
+    # block anyone's hand (a lease that can block the owner needs the owner's word).
+    osiris_lease_refuse: bool = False
     # THE POKE-ONLY ARM (operator ruling, 2026-07-19: 'arm the poke ... but dont turn on the
     # miners or critter background agents yet'): when true, the trigger's ladder ends at the
     # poke — deliver to a live owner, type into an open window, and NOTHING ELSE. No resume,
