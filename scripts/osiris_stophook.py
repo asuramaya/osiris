@@ -151,7 +151,12 @@ def _swap_confession(payload: dict) -> str | None:
         if e.get("type") != "assistant" or e.get("isSidechain"):
             continue
         m = str((e.get("message") or {}).get("model") or "").split("[", 1)[0].strip()
-        if not m:
+        # "<synthetic>" is the harness's own stamp on lines no model produced ("No response
+        # requested.", API-error retries) — every reader in the house filters it (sessions.
+        # _model_of, the store's _reading_from_turns) and this one forgot: a synthetic tail
+        # line read as 'claude-sonnet-5 -> <synthetic>' and cried rug-pull at an innocent
+        # window (field sighting, Deckard's office, 2026-07-19).
+        if not m or m == "<synthetic>":
             continue
         if cur is None:
             cur = m
