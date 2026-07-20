@@ -246,12 +246,15 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         # semantics AND every term, so a keyword BAG ('Hector background skills experience
         # projects') needs all of them in ONE document — zero by construction, and the
         # docstring promises bags work. When strict-AND finds nothing and the query is a
-        # plain multi-word bag, retry as ANY-term OR. Ranking still sorts the
-        # best-covered hits to the top.
+        # plain multi-word bag, retry as ANY-term — RARITY-WEIGHTED (thread 15b976ce):
+        # plain ts_rank over an OR query ranked flat, so a common word ('set') outranked
+        # a distinctive one ('HTL') on every bag. Each candidate now scores the SUMMED
+        # idf of the words it matches — one rare word beats three ubiquitous ones, and a
+        # word in every document contributes exactly zero.
         or_q = " OR ".join(words)
         if await pool.fetchval(
                 "SELECT websearch_to_tsquery('english', $1)::text", or_q):
-            rows = await pool.fetch(_SQL, or_q, limit)
+            rows = await pool.fetch(_RELAX_SQL, [w.lower() for w in words], or_q, limit)
             relaxed = bool(rows)
     if not rows and plain_bag:
         # THE TRIGRAM DOOR (max-level, a0cfcca1): a misspelled word survives no tsquery —
@@ -301,6 +304,41 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
             **({"note": "exact matches found nothing — these are spelling-tolerant "
                         "(trigram) matches"} if fuzzy else {}),
             **({"note": "no hits — logged; the zero-hit rate is watched"} if not hits else {})}
+
+
+# THE RARITY-WEIGHTED RELAXATION (thread 15b976ce): the ANY-term retry's rank is the sum
+# of ln(N/df) over the query words each candidate matches — df computed against the same
+# corpus the door searches, in the same statement (the corpus CTE materializes once, and
+# this leg only runs when strict-AND found nothing). Stopwords parse to empty tsqueries
+# and drop out; a word present in EVERY document scores ln(1)=0 by construction. The
+# snippet still headlines with the OR query, and grade × recency weigh exactly as the
+# strict door does.
+_RELAX_SQL = (
+    "WITH words AS (SELECT DISTINCT lower(w) AS w FROM unnest($1::text[]) AS w), "
+    "corpus AS ("
+    "  SELECT o.id, o.type, o.canonical, a.name AS field, "
+    "   a.value #>> '{}' AS text, a.source_id, a.evidence_class, a.observed_at, "
+    "   to_tsvector('english', a.value #>> '{}') AS tv, " + _GRADE_W + " AS gw "
+    "  FROM current_assertions a JOIN objects o ON o.id = a.object_id "
+    "   AND o.status = 'active' "
+    "  WHERE a.name IN ('name','summary','rationale')), "
+    "n AS (SELECT count(*)::float + 1 AS total FROM corpus), "
+    "df AS (SELECT w.w, count(*) + 1 AS d FROM words w "
+    "       JOIN corpus c ON c.tv @@ plainto_tsquery('english', w.w) GROUP BY w.w), "
+    "cand AS ("
+    "  SELECT DISTINCT ON (c.id) c.id, c.type, c.canonical, c.field, c.text, "
+    "   c.source_id, c.evidence_class, c.observed_at, "
+    "   ((SELECT sum(ln(n.total / df.d)) FROM df, n "
+    "     WHERE c.tv @@ plainto_tsquery('english', df.w)) * c.gw * "
+    "    (1.0 / (1.0 + EXTRACT(epoch FROM (now() - c.observed_at)) / 7776000.0)))::real "
+    "     AS rank "
+    "  FROM corpus c "
+    "  WHERE EXISTS (SELECT 1 FROM df WHERE c.tv @@ plainto_tsquery('english', df.w)) "
+    "  ORDER BY c.id, rank DESC), "
+    "top AS (SELECT * FROM cand ORDER BY rank DESC LIMIT $3) "
+    "SELECT top.*, ts_headline('english', top.text, websearch_to_tsquery('english', $2), "
+    "         'MaxWords=20, MinWords=8, MaxFragments=1') AS snippet "
+    "FROM top ORDER BY top.rank DESC")
 
 
 _TRGM_SQL = (

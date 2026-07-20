@@ -99,6 +99,27 @@ async def test_a_keyword_bag_relaxes_to_any_term(actions: Actions) -> None:
     assert row is not None and row["hits"] >= 2
 
 
+async def test_relaxation_ranks_rarity_over_ubiquity(actions: Actions) -> None:
+    """Thread 15b976ce (hector-vector msg 237): the ANY-term retry ranked flat, so a
+    common word outranked a distinctive one on every multi-term bag. The relaxed leg now
+    scores by summed idf — the one document holding the RARE word must beat every
+    document that merely repeats the ubiquitous one."""
+    # 'harness' is everywhere; 'chronohorn' lives in exactly one document
+    for i in range(6):
+        await _decision(actions, f"decision:common-{i}",
+                        f"the harness harness harness note number {i}",
+                        "agent:a", EvidenceClass.SELF_DECLARED.value)
+    await _decision(actions, "decision:rare",
+                    "chronohorn ships its first clock",
+                    "agent:a", EvidenceClass.SELF_DECLARED.value)
+    # strict-AND needs both words in one doc → nothing; the bag relaxes
+    out = await _search(actions, "chronohorn harness")
+    assert "ANY term" in out.get("note", "")
+    assert out["hits"][0]["canonical"] == "decision:rare"  # rarity outranks repetition
+    got = {h["canonical"] for h in out["hits"]}
+    assert any(c.startswith("decision:common-") for c in got)  # the common hits still come
+
+
 async def test_the_misses_log_records_recall_failures(actions: Actions) -> None:
     """Every call logs; the zero-hit rate is the embeddings tripwire — measured, not vibed."""
     await _decision(actions, "decision:x", "the membrane holds",
