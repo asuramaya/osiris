@@ -624,10 +624,17 @@ async def test_mid_turn_means_the_transcript_is_moving_NOT_the_heartbeat(
     round-trip ask (2026-07-20): the chrome bumps agent_mounts.last_seen every few seconds
     FOR BACKGROUNDED SESSIONS TOO, so by that field every seated idle agent read as
     permanently mid-turn and the resume gate could never open. A turn WRITES the
-    transcript; a statusline render does not. (a) fresh heartbeat + quiet transcript →
-    RESUMED; (b) a genuinely moving transcript → delivered, no second process."""
+    transcript; a statusline render does not. AND THE INODE IS NOT THE TRANSCRIPT (the
+    Aegis phantom, 2026-07-21): something in the chrome/daemon touches mtime on a session
+    that is OFF — awake and asleep must never be confounded (the operator's ruling).
+    (a) fresh heartbeat + quiet transcript → RESUMED; (b) a touched inode with no fresh
+    TURN is ASLEEP → RESUMED, never 'delivered' to a corpse; (c) a genuinely moving
+    transcript (timestamped turn in the tail) → delivered, no second process."""
+    import json as _json
     import os
     import time as _time
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
 
     sense = await _stale_resumable_owner(actions, tmp_path)
     await actions.pool.execute("UPDATE agent_mounts SET last_seen = now()")  # the pump
@@ -641,18 +648,34 @@ async def test_mid_turn_means_the_transcript_is_moving_NOT_the_heartbeat(
         actions, settings=_settings(enabled=True, sense=str(sense)), spawn=_spawn)
     assert rep["resumed"] == 1 and spawned[0].get("resume_session") == FULL_SID
 
-    # (b) the transcript MOVES (a real turn in flight): a fresh DM is delivered, not woken
+    # (b) THE PHANTOM: mtime bumped, size unchanged, no timestamped turn — the addressee
+    # is ASLEEP and the mail wakes it; 'delivered' to a dead session strands the letter
     await actions.pool.execute(
         "INSERT INTO message_recipients (message_id, agent_id, read_at) "
         "VALUES ($1,$2,now())", m1, "agent:abcd1234")
-    await send_message(actions.pool, from_agent="agent:sender", from_project="other",
-                       to_agent="agent:abcd1234", body="while you were typing")
+    await actions.pool.execute("DELETE FROM agent_wakes")  # clear the once-per-message row
+    m2 = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                            to_agent="agent:abcd1234", body="while you were touched")
     t = sense / "-repo-demo" / f"{FULL_SID}.jsonl"
     now = _time.time()
     os.utime(t, (now, now))
     rep2 = await trigger_mail_tick(
         actions, settings=_settings(enabled=True, sense=str(sense)), spawn=_spawn)
-    assert rep2["resumed"] == 0 and len(spawned) == 1 and rep2["owner_live"] == 1
+    assert rep2["resumed"] == 1 and len(spawned) == 2 and rep2["owner_live"] == 0
+
+    # (c) a REAL turn in flight (timestamped line in the tail): delivered, no new process
+    await actions.pool.execute(
+        "INSERT INTO message_recipients (message_id, agent_id, read_at) "
+        "VALUES ($1,$2,now())", m2["id"], "agent:abcd1234")
+    await actions.pool.execute("DELETE FROM agent_wakes")
+    await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                       to_agent="agent:abcd1234", body="while you were typing")
+    with t.open("a") as fh:  # the fixture's pad bytes end without a newline — start fresh
+        fh.write("\n" + _json.dumps({"type": "assistant",
+                                     "timestamp": _dt.now(_UTC).isoformat()}) + "\n")
+    rep3 = await trigger_mail_tick(
+        actions, settings=_settings(enabled=True, sense=str(sense)), spawn=_spawn)
+    assert rep3["resumed"] == 0 and len(spawned) == 2 and rep3["owner_live"] == 1
 
 
 async def test_a_dm_resume_is_never_looped(actions: Actions, tmp_path: Path) -> None:

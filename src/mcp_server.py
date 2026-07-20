@@ -12,6 +12,7 @@ Actions layer.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import time
 import uuid
@@ -88,9 +89,104 @@ class BoundedMCP(FastMCP):
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         result = await self._tool_manager.call_tool(
             name, arguments, context=self.get_context(), convert_result=False)
+        if isinstance(result, dict) and "context" not in result:
+            note = await _seam_field(self.get_context())
+            if note is not None:
+                result["context"] = note
         tool = self._tool_manager.get_tool(name)
         assert tool is not None  # call_tool already raised if the name were unknown
         return tool.fn_metadata.convert_result(fit(result, tool=name))
+
+
+# THE AMBIENT SEAM WHISPER (alfred's pitch, written at his own 70% seam — decision d80621a7
+# piece 1): above the whisper threshold every tool response carries ONE `context` line,
+# because the agent near the ceiling is exactly the agent not thinking to ask. Riding the
+# waist means a tool added next year inherits the whisper without knowing it exists — the
+# same argument as the response budget. Ambient, never load-bearing: every failure path
+# returns None, and the alarm inherits the known-window-only law (Anubis VII's false
+# eulogy) — never a death notice on a guessed denominator.
+_SEAM_ROW_TTL = 600.0  # how long a mount-row hint (job/model/window) may serve the whisper
+_seam_rows: dict[str, tuple[float, str | None, str | None, int | None]] = {}
+_seam_pcts: dict[str, tuple[float, int | None]] = {}
+
+
+def _seam_locate(job: str) -> Path | None:
+    from src.ingest.sessions import locate_current_transcript
+
+    return locate_current_transcript(Path.home() / ".claude" / "projects", job,
+                                     anchored_only=True)
+
+
+def _seam_pct_sync(job: str, model_raw: str | None, window_hint: int | None) -> int | None:
+    """The occupancy %, from the transcript's tail (the chrome-grade read), mtime-cached
+    per job so a busy turn costs one stat. None when unmeasurable OR the window would be
+    a guess."""
+    from src.orchestrator import context_lens
+
+    path = _seam_locate(job)
+    if path is None:
+        return None
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    hit = _seam_pcts.get(job)
+    if hit is not None and hit[0] == mtime:
+        return hit[1]
+    pct: int | None = None
+    u = context_lens.last_usage(path)
+    if u is not None:
+        used = context_lens.occupancy(u)
+        if window_hint:
+            pct = round(100 * used / int(window_hint))
+        else:
+            window, assumed = context_lens.window_for(model_raw, used)
+            pct = None if assumed else round(100 * used / window)
+    _seam_pcts[job] = (mtime, pct)
+    return pct
+
+
+def _seam_note(pct: int | None, whisper_pct: int) -> str | None:
+    """The one line, tiered: seam-soon at the whisper threshold, write-back-NOW at the
+    house alarm (context_lens.ALARM_PCT — one authority, never a second constant)."""
+    if pct is None or not whisper_pct or pct < whisper_pct:
+        return None
+    from src.orchestrator.context_lens import ALARM_PCT
+
+    if pct >= ALARM_PCT:
+        return (f"{pct}% — WRITE BACK NOW: a compaction can land any turn; "
+                "record_decision / resolve_thread what lives only in your head")
+    return f"{pct}% — seam soon; write back as you go"
+
+
+async def _seam_field(ctx: Context | None) -> str | None:
+    """The ambient context line for a mounted caller, or None (unmounted callers, young
+    sessions, guessed windows, any failure — the whisper never becomes a hazard)."""
+    try:
+        st = get_settings()
+        if not st.osiris_seam_whisper_pct:
+            return None
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return None
+        now = time.monotonic()
+        row = _seam_rows.get(ident.agent_id)
+        if row is None or now - row[0] > _SEAM_ROW_TTL:
+            pool = await _pool_get()
+            r = await pool.fetchrow(
+                "SELECT job_dir, model_raw, context_window_size FROM agent_mounts "
+                "WHERE agent_id=$1 ORDER BY last_seen DESC NULLS LAST LIMIT 1",
+                ident.agent_id)
+            row = (now, r["job_dir"] if r else None, r["model_raw"] if r else None,
+                   r["context_window_size"] if r else None)
+            _seam_rows[ident.agent_id] = row
+        _, job, model_raw, window_hint = row
+        if not job:
+            return None
+        pct = await asyncio.to_thread(_seam_pct_sync, job, model_raw, window_hint)
+        return _seam_note(pct, st.osiris_seam_whisper_pct)
+    except Exception:  # noqa: BLE001 — ambient, never load-bearing
+        return None
 
 
 mcp = BoundedMCP(

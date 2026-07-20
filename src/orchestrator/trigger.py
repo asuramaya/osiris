@@ -17,11 +17,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import re
 import tempfile
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -609,6 +611,40 @@ def _resident_of_sync(root: Path, sid: str) -> str | None:
     return None
 
 
+def _turn_fresh_sync(root: Path, sid: str, active_secs: int) -> bool:
+    """Sync (runs via to_thread): is a TURN genuinely in flight in session `sid` — by the
+    transcript's own newest timestamped line, never the inode. AWAKE and ASLEEP are
+    different states and must not be confounded (operator, 2026-07-21, the Aegis phantom:
+    a session 13 hours dead wore a seconds-old mtime — something in the chrome/daemon
+    touches the file without writing). A turn appends timestamped records; a toucher
+    cannot. No timestamp in the tail = not moving."""
+    if not sid:
+        return False
+    t = next(iter(root.expanduser().glob(f"*/{sid}.jsonl")), None)
+    if t is None:
+        return False
+    try:
+        size = t.stat().st_size
+        with t.open("rb") as f:
+            f.seek(max(0, size - 65_536))
+            tail = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return False
+    for line in reversed(tail.splitlines()):
+        try:
+            ts = json.loads(line).get("timestamp")
+        except (ValueError, AttributeError):
+            continue
+        if not ts:
+            continue
+        try:
+            at = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        return (datetime.now(UTC) - at).total_seconds() < active_secs
+    return False
+
+
 async def _resident_disagrees(root: Path, sid: str, base: str) -> bool:
     """True when the session's own signed testimony names a DIFFERENT lineage than the
     addressee — the crossed-registry class (thread 0100a35e, the Ra misdelivery): the
@@ -783,12 +819,24 @@ async def dispatch_dm(
     # TOO, so by that field every seated idle agent read as permanently working and this
     # gate could never open. A turn WRITES the transcript; a chrome render does not. The
     # heartbeat keeps its own job — the minting guard — it just no longer testifies here.)
+    # AND THE INODE IS NOT THE TRANSCRIPT (the Aegis phantom, 2026-07-21: a session 13h
+    # dead on a 401 — size unchanged the whole time — wore an mtime seconds old, bumped
+    # by something in the chrome/daemon, and this gate read the corpse as a working mind.
+    # The operator's ruling: AWAKE and ASLEEP must never be confounded — 'waking them up
+    # to run jobs is one thing, waiting for them to awake is another'.) mtime is only the
+    # cheap pre-filter; the WITNESS is the newest timestamped line — a TURN writes those,
+    # a toucher cannot.
     resume = await _agent_resumable(pool, target, st)
     if resume is not None and time.time() - resume[2] < st.osiris_dm_active_secs:
-        return {"mode": "delivered",
-                "detail": "the addressee's transcript is moving right now (genuinely "
-                          "mid-turn) — its own turn's end surfaces the DM; no second "
-                          "process beside a working mind"}
+        root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
+            else Path.home() / ".claude" / "projects"
+        if await asyncio.to_thread(
+                _turn_fresh_sync, root, resume[0], st.osiris_dm_active_secs):
+            return {"mode": "delivered",
+                    "detail": "the addressee's transcript is moving right now (genuinely "
+                              "mid-turn) — its own turn's end surfaces the DM; no second "
+                              "process beside a working mind"}
+        # a fresh inode with no fresh TURN is an ASLEEP addressee — fall through and wake
     doors = {Path(r["job_dir"]).name for r in await pool.fetch(
         "SELECT job_dir FROM agent_mounts WHERE (agent_id=$1 "
         "OR agent_id LIKE $1 || '-%') AND job_dir IS NOT NULL", base)}

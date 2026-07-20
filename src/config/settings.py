@@ -236,6 +236,11 @@ class Settings(BaseSettings):
     # fable→opus when it senses danger (ruling f2ae6346); the swap-detector flags an observed
     # model that diverges from this — the confession backstop the cold-boot ritual can't be.
     osiris_expected_model: str = "claude-fable-5"
+    # THE AMBIENT SEAM WHISPER (alfred's pitch d80621a7 piece 1): above this context %, every
+    # osiris tool response carries one `context` line; the ALARM tier stays context_lens.
+    # ALARM_PCT (one authority). 0 disables the whisper entirely. Default 63 — exactly 2/3,
+    # the operator's word (2026-07-21): the whisper starts when a third of the life remains.
+    osiris_seam_whisper_pct: int = 63
 
 
 def get_settings() -> Settings:
