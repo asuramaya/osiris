@@ -166,6 +166,7 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `supersedes` | Decision → Decision | This decision overrides/replaces an earlier one. |
 | `grounded_by` | Decision → Reference | Decision is grounded by this design reference (the canon). |
 | `answers` | Decision → Thread | This decision is the ANSWER to that thread — the ruling a question was minted to get. Distinct from decided_in (where it was said) and grounded_by (what it rests on): this names what it SETTLED. Minted by record_decision(resolves=…), which closes the thread in the same act, so a ruling that names its question never leaves the question lit. |
+| `managed_by` | Seat → Seat | THE ORG CHART (task #50, ruling cabc28f5): a worker Seat's manager of record — the seat that minted it, or the seat it was adopted under. The org chart's FIRST real link type: Seat-to-Seat, distinct from `holds` (mind → role) and `governs` (seat → the repos it rules) — this is role → role, the trickling structure Fable-class coordinator seats extend themselves with. Never healed by valid_until on a mere reassignment ask; mint_seat only ever ADDS a missing edge, never removes one — an org chart restructure is a deliberate compensating act, not this verb's job. |
 <!-- END generated:schema -->
 
 ## Evidence classes

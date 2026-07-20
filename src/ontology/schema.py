@@ -309,6 +309,15 @@ _LINK_TYPES: tuple[LinkType, ...] = (
                         "record_decision(resolves=…), which closes the thread in the same act, "
                         "so a ruling that names its question never leaves the question lit.",
              ("Decision",), ("Thread",)),
+    LinkType("managed_by", "THE ORG CHART (task #50, ruling cabc28f5): a worker Seat's "
+             "manager of record — the seat that minted it, or the seat it was adopted "
+             "under. The org chart's FIRST real link type: Seat-to-Seat, distinct from "
+             "`holds` (mind → role) and `governs` (seat → the repos it rules) — this is "
+             "role → role, the trickling structure Fable-class coordinator seats extend "
+             "themselves with. Never healed by valid_until on a mere reassignment ask; "
+             "mint_seat only ever ADDS a missing edge, never removes one — an org chart "
+             "restructure is a deliberate compensating act, not this verb's job.",
+             ("Seat",), ("Seat",)),
 )
 
 OBJECT_TYPES: dict[str, ObjectType] = {t.name: t for t in _OBJECT_TYPES}
