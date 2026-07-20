@@ -684,6 +684,56 @@ async def record_blind_spot(
     return b
 
 
+async def kill_superstition(
+    actions: Actions, statement: str, *, killed_by: str, repo: str | None = None,
+    source: str = _SOURCE,
+) -> uuid.UUID:
+    """Put a WORKAROUND on the record as DEAD — the fix that landed names the practice it
+    obsoletes (thread a9be40c9, Atlas's own will: a bug spawns workarounds; the workarounds
+    are written into letters, succession notes and agent memory across the fleet; the bug
+    gets FIXED; the workarounds persist as inherited law, taxing every heir forever). A
+    Superstition is a first-class object so the kill is searchable forever; orient
+    announces recent kills fleet-wide (recent_dead_superstitions) so any mind whose memory
+    carries the practice strikes it. `statement` is the workaround AS IT PROPAGATES (quote
+    the words agents actually inherit, e.g. 'NEVER DM BY NAME'); `killed_by` points at the
+    fix (a decision id, a commit hash). Idempotent on the normalized statement."""
+    observed = datetime.now(UTC)
+    key = " ".join(statement.split()).lower()
+    s = await actions.create_or_find_object("Superstition", _canon("superstition", key), source)
+    await actions.assert_property(s, "statement", statement.strip(), source, observed, _CONF,
+                                  evidence_class=_EC)
+    await actions.assert_property(s, "killed_by", killed_by, source, observed, _CONF,
+                                  evidence_class=_EC)
+    await actions.assert_property(s, "killed_at", observed.isoformat(), source, observed,
+                                  _CONF, evidence_class=_EC)
+    if repo:
+        await link_repo(actions, s, repo, observed, source=source, evidence_class=_EC,
+                        confidence=_CONF)
+    return s
+
+
+async def recent_dead_superstitions(
+    pool: asyncpg.Pool, *, days: int = 14, limit: int = 5,
+) -> list[dict[str, str]]:
+    """The kills worth announcing — superstitions put down within the window, newest first.
+    FLEET-WIDE by design: a workaround replicates across houses (Anubis X was spreading
+    'stop using names' to a second house before the fix even shipped), so the announcement
+    must not stop at a project boundary. Bounded and aging-out: orient speaks the recent
+    dead, search remembers them all forever."""
+    rows = await pool.fetch(
+        "WITH latest AS ("
+        "  SELECT DISTINCT ON (a.object_id, a.name) a.object_id, a.name, "
+        "         a.value #>> '{}' AS val, a.observed_at "
+        "  FROM current_assertions a JOIN objects o ON o.id = a.object_id "
+        "  WHERE o.type = 'Superstition' AND o.status = 'active' "
+        "  ORDER BY a.object_id, a.name, a.confidence DESC, a.observed_at DESC) "
+        "SELECT s.val AS statement, k.val AS killed_by, s.observed_at "
+        "FROM latest s JOIN latest k ON k.object_id = s.object_id AND k.name = 'killed_by' "
+        "WHERE s.name = 'statement' AND s.observed_at > now() - ($1 || ' days')::interval "
+        "ORDER BY s.observed_at DESC LIMIT $2", str(days), limit)
+    return [{"statement": r["statement"], "killed_by": r["killed_by"]} for r in rows]
+
+
 # the words Ferryman listed (thread 022bd24a) plus the N/N shape — deliberately narrow:
 # a nag that fires on every ruling teaches everyone to ignore it
 _MEASUREMENT = re.compile(

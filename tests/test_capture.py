@@ -404,6 +404,77 @@ async def test_divergent_leans_say_two_minds_lean_apart(actions: Actions) -> Non
     assert "agent:two" in flagged[0]["divergence"]
 
 
+async def test_a_fix_kills_its_superstition_by_name(actions: Actions) -> None:
+    """Thread a9be40c9 (Atlas caught 'NEVER DM BY NAME' in his own will an hour after the
+    fix made it false): a killed workaround becomes a first-class dead Superstition —
+    searchable forever, idempotent on the normalized statement, announced while fresh."""
+    from src.orchestrator.capture import kill_superstition, recent_dead_superstitions
+
+    s1 = await kill_superstition(actions, "NEVER DM BY NAME", killed_by="43cfcf1",
+                                 repo="osiris")
+    # idempotent on the normalized statement — a re-kill sharpens the record, never twins
+    s2 = await kill_superstition(actions, "NEVER  DM BY NAME", killed_by="43cfcf1")
+    assert s2 == s1
+    assert await actions.pool.fetchval(
+        "SELECT type FROM objects WHERE id=$1", s1) == "Superstition"
+    kills = await recent_dead_superstitions(actions.pool)
+    mine = [k for k in kills if "DM BY NAME" in k["statement"]]
+    assert mine and mine[0]["killed_by"] == "43cfcf1"
+
+
+async def test_an_old_kill_leaves_the_announcement_but_not_the_record(
+        actions: Actions) -> None:
+    """orient announces the RECENT dead only — the window ages out so the block never
+    becomes a wall; the object itself stays searchable forever."""
+    from src.orchestrator.capture import recent_dead_superstitions
+
+    old = datetime.now(UTC) - timedelta(days=30)
+    s = await actions.create_or_find_object("Superstition", "superstition:ancient", "session")
+    await actions.assert_property(s, "statement", "always sacrifice a goat first",
+                                  "session", old, 0.8)
+    await actions.assert_property(s, "killed_by", "deadbeef", "session", old, 0.8)
+    kills = await recent_dead_superstitions(actions.pool)
+    assert "always sacrifice a goat first" not in [k["statement"] for k in kills]
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE canonical='superstition:ancient'") == 1
+
+
+async def test_record_decision_obsoletes_and_orient_announces_fleet_wide(
+        actions: Actions) -> None:
+    """The whole loop: a fix recorded with obsoletes=[…] mints the dead Superstition, and
+    ANY orient — even scoped to an unrelated project — carries the announcement, because a
+    workaround replicates across houses and its death must too."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key, orient
+    from src.mcp_server import record_decision as rd_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:killer1", session="killer1", project="nowhere-land",
+        model=None, cwd=None)
+    # the file's pool ritual: point the server at THIS test's pool (and loop) — a test
+    # that instead lets _pool_get mint the global pool leaves it bound to a dead loop
+    # for every later caller (the first-caller-owns-the-pool fragility, paid tonight)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await rd_tool("the DM router follows lineage heads now", kind="decision",
+                            obsoletes=["NEVER DM AFTER A RESTART"], ctx=ctx)
+        assert out["superstitions_killed"] == ["NEVER DM AFTER A RESTART"]
+        res = await orient(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+    recent = res["dead_superstitions"]["recent"]
+    assert "NEVER DM AFTER A RESTART" in [k["statement"] for k in recent]
+    assert res["dead_superstitions"]["note"].startswith("workarounds whose bug is FIXED")
+
+
 async def test_orient_explicit_project_overrides_the_mount(actions: Actions) -> None:
     """sibling-one's verified bug: orient(project=X) silently returned the MOUNT's briefing instead
     of X's — a silent wrong-scope (the confound class the fleet exists to catch). An explicit

@@ -148,6 +148,14 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                "stable per-project fact, never resolved away — and surfaced at orient() so a "
                "session knows the shape of its own ignorance before trusting a green harness.",
                ("blindspot:",)),
+    ObjectType("Superstition", "Software", "#8b949e", "diamond",
+               "A DEAD WORKAROUND — a practice a bug once justified, killed by name when its "
+               "fix landed (thread a9be40c9: Atlas caught 'NEVER DM BY NAME' in his own will "
+               "an hour after 43cfcf1 made it false — 'a superstition inherited as law, "
+               "forever, on my authority'). The half-life of a workaround outlives its bug: "
+               "record_decision(obsoletes=[…]) mints these, and orient announces recent kills "
+               "fleet-wide so every mind whose memory carries the practice strikes it.",
+               ("superstition:",)),
     ObjectType("Reflection", "Software", "#b083f0", "ellipse",
                "A memory lived for its own sake — the operator's ruling bfb3ae26 ('they "
                "need a home and I want them remembered; they are not exactly work "

@@ -1594,6 +1594,19 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         lic = await dispose_seam.licence(pool)
         if not lic["may_spend"]:
             seam["adversary_refused"] = lic["reason"]
+    # THE DEAD SUPERSTITIONS (thread a9be40c9): fleet-wide by design — a workaround
+    # replicates across houses, so the announcement of its death must too. Bounded window;
+    # silent when nothing died recently; search remembers every kill forever.
+    dead: dict[str, Any] = {}
+    with contextlib.suppress(Exception):
+        kills = await capture.recent_dead_superstitions(pool)
+        if kills:
+            dead["dead_superstitions"] = {
+                "recent": kills,
+                "note": "workarounds whose bug is FIXED — if your memory, letters or "
+                        "succession notes carry one of these practices, STRIKE it; the "
+                        "killed_by pointer is the fix to cite",
+            }
     # the reader's identity feeds the wall's ownership ordering: what is MINE TO ACT rides
     # above another mind's claims and above 'waiting on the human'
     me = frozenset(x for x in ((ident.agent_id if ident else None), proj) if x)
@@ -1617,6 +1630,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             **({"succession_note": inheritance} if inheritance else {}),
             **({"co_agents": co_agents} if co_agents else {}),
             **({"while_you_were_away": away} if away else {}),
+            **dead,
             **scoped,
             "fleet_open_threads_total": fleet_open,
             "note": f"scoped to {proj}; {fleet_open} fleet-wide open threads not shown "
@@ -1657,6 +1671,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         **({"while_you_were_away": away} if away else {}),
         **({"osiris_health": organs} if organs else {}),
         **seam,
+        **dead,
         "fleet_map": fleet_map,
         "recent_decisions": recent,
         "note": "un-mounted → the BOUNDED fleet map, never the firehose. mount(cwd, "
@@ -2186,7 +2201,8 @@ async def record_decision(
     summary: str, kind: str = "ruling", rationale: str | None = None,
     repo: str | None = None, grounds: list[str] | None = None,
     protocol: str | None = None, supersedes: str | None = None,
-    resolves: str | list[str] | None = None, subagent_id: str | None = None,
+    resolves: str | list[str] | None = None,
+    obsoletes: list[str] | None = None, subagent_id: str | None = None,
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -2219,7 +2235,15 @@ async def record_decision(
     zero threads is reported, never silently swallowed. Unlike a single string, an unmatched
     entry inside a list does NOT abort the whole ruling (one typo must not veto the other
     nine); a single STRING keeps the original strictness byte-for-byte — matches nothing →
-    the call errors and NOTHING is recorded."""
+    the call errors and NOTHING is recorded.
+    `obsoletes` = the WORKAROUND(s) this fix kills (thread a9be40c9: the half-life of a
+    workaround outlives its bug — it propagates through letters, succession notes and agent
+    memory as inherited law long after the fix lands). Quote each as it PROPAGATES (the
+    words agents actually inherit, e.g. 'NEVER DM BY NAME'); each is minted a dead
+    Superstition, searchable forever, and orient announces recent kills FLEET-WIDE so any
+    mind whose memory carries the practice strikes it. USE IT whenever your fix makes a
+    known workaround unnecessary — a fix that kills a practice silently leaves every heir
+    paying a bug tax that no longer exists."""
     pool = await _pool_get()
     gids: list[uuid.UUID] = []
     missing: list[str] = []
@@ -2263,6 +2287,19 @@ async def record_decision(
                  (str(answered[0]) if answered else None),
     )
     out: dict[str, Any] = {"id": str(d), "kind": kind, "summary": summary}
+    if obsoletes:
+        killed = []
+        for statement in obsoletes:
+            if statement and statement.strip():
+                await capture.kill_superstition(
+                    Actions(pool), statement, killed_by=str(d), repo=repo,
+                    source=await _actor_for(ctx, subagent_id, subagent_type))
+                killed.append(statement.strip())
+        if killed:
+            out["superstitions_killed"] = killed
+            out["superstitions_note"] = (
+                "each is a dead Superstition on the record; orient announces recent kills "
+                "fleet-wide for 14 days so minds carrying the practice strike it")
     if not protocol and capture.measurement_smell(f"{summary} {rationale or ''}"):
         # thread 022bd24a: `protocol` is this tool's best field and nothing asked for it —
         # advice in the receipt, never a gate (the decision is recorded either way)
