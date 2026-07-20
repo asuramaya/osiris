@@ -416,14 +416,22 @@ FULL_SID = "abcd1234-0000-4000-8000-000000000000"
 async def _stale_resumable_owner(actions: Actions, tmp_path: Path,
                                  transcript_bytes: int = 16) -> Path:
     """An owner for project demo: a durable mount (made STALE so it isn't 'live') whose job_dir
-    anchors a real transcript under the sense root. Returns the sense root."""
+    anchors a real transcript under the sense root — the transcript AGED too, because under
+    the adapter's law mid-turn means the TRANSCRIPT is moving (a fresh mtime would read as a
+    working mind and correctly refuse to resume). Returns the sense root."""
+    import os
+    import time as _time
+
     from src.orchestrator import mounts
 
     job = tmp_path / "jobs" / "abcd1234"
     sense = tmp_path / "projects"
     proj = sense / "-repo-demo"
     proj.mkdir(parents=True, exist_ok=True)
-    (proj / f"{FULL_SID}.jsonl").write_bytes(b"x" * transcript_bytes)
+    t = proj / f"{FULL_SID}.jsonl"
+    t.write_bytes(b"x" * transcript_bytes)
+    old = _time.time() - 3600
+    os.utime(t, (old, old))
     await mounts.save_mount(actions.pool, job_dir=str(job), agent_id="agent:abcd1234",
                             project="demo", cwd="/repo/demo", model=None, session_key=None)
     await actions.pool.execute(
@@ -597,20 +605,42 @@ async def test_a_dm_never_mints_a_stranger(actions: Actions, tmp_path: Path) -> 
     assert spawned == [] and rep["woke"] == 0         # nothing woken, nothing minted
 
 
-async def test_a_live_addressee_is_not_rewoken(actions: Actions, tmp_path: Path) -> None:
-    """The addressee's own tab is awake — its chrome/stop-hook surface the DM; a wake beside
-    it would be noise."""
+async def test_mid_turn_means_the_transcript_is_moving_NOT_the_heartbeat(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """THE STATUSLINE-HEARTBEAT SUPERSTITION, killed at the operator's first live
+    round-trip ask (2026-07-20): the chrome bumps agent_mounts.last_seen every few seconds
+    FOR BACKGROUNDED SESSIONS TOO, so by that field every seated idle agent read as
+    permanently mid-turn and the resume gate could never open. A turn WRITES the
+    transcript; a statusline render does not. (a) fresh heartbeat + quiet transcript →
+    RESUMED; (b) a genuinely moving transcript → delivered, no second process."""
+    import os
+    import time as _time
+
     sense = await _stale_resumable_owner(actions, tmp_path)
-    await actions.pool.execute("UPDATE agent_mounts SET last_seen = now()")  # awake NOW
-    await _dm_to_owner(actions)
-    spawned: list[str] = []
+    await actions.pool.execute("UPDATE agent_mounts SET last_seen = now()")  # the pump
+    m1 = await _dm_to_owner(actions)
+    spawned: list[dict[str, Any]] = []
 
     async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
-        spawned.append(repo)
+        spawned.append(kw)
 
     rep = await trigger_mail_tick(
         actions, settings=_settings(enabled=True, sense=str(sense)), spawn=_spawn)
-    assert spawned == [] and rep["owner_live"] == 1
+    assert rep["resumed"] == 1 and spawned[0].get("resume_session") == FULL_SID
+
+    # (b) the transcript MOVES (a real turn in flight): a fresh DM is delivered, not woken
+    await actions.pool.execute(
+        "INSERT INTO message_recipients (message_id, agent_id, read_at) "
+        "VALUES ($1,$2,now())", m1, "agent:abcd1234")
+    await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                       to_agent="agent:abcd1234", body="while you were typing")
+    t = sense / "-repo-demo" / f"{FULL_SID}.jsonl"
+    now = _time.time()
+    os.utime(t, (now, now))
+    rep2 = await trigger_mail_tick(
+        actions, settings=_settings(enabled=True, sense=str(sense)), spawn=_spawn)
+    assert rep2["resumed"] == 0 and len(spawned) == 1 and rep2["owner_live"] == 1
 
 
 async def test_a_dm_resume_is_never_looped(actions: Actions, tmp_path: Path) -> None:

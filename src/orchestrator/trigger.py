@@ -20,6 +20,7 @@ import contextlib
 import logging
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -385,17 +386,9 @@ async def _dms_with_unread(
     return [(r["to_agent"], r["id"], r["from_agent"]) for r in rows]
 
 
-async def _agent_live(pool: asyncpg.Pool, agent_id: str, within_secs: int) -> bool:
-    """Is the ADDRESSEE itself awake (not just some project sibling)? Its chrome/stop-hook
-    already surface the DM — waking beside a live addressee would be noise."""
-    return bool(await pool.fetchval(
-        "SELECT 1 FROM agent_mounts WHERE agent_id=$1 "
-        "AND last_seen > now() - make_interval(secs => $2) LIMIT 1", agent_id, within_secs))
-
-
 async def _agent_resumable(
     pool: asyncpg.Pool, agent_id: str, st: Settings
-) -> tuple[str, str] | None:
+) -> tuple[str, str, float] | None:
     """(session_id, repo_cwd) to resume the ADDRESSEE's own session, else None — the same
     checks as the project ladder (not retired, own anchored transcript, below the context
     ceiling) scoped to one agent's mounts."""
@@ -434,29 +427,32 @@ async def _retired(pool: asyncpg.Pool, agent_canonical: str) -> bool:
 
 def _pick_resumable_sync(
     cands: list[tuple[str, str]], root: Path, ceiling_bytes: int
-) -> tuple[str, str] | None:
+) -> tuple[str, str, float] | None:
     """The disk half of resume-resolution (sync — called via to_thread): for each candidate
     (job_dir, cwd), anchor its transcript and check the context ceiling. Returns
-    (full_session_id, cwd) for the first resumable owner. The transcript stem IS the session
-    id `claude --resume` takes; a transcript at the ceiling is retirement-by-compaction
-    territory — resuming it would replay a sibling project's 21:30 case, which was LEGITIMATE
-    succession."""
+    (full_session_id, cwd, transcript_mtime) for the first resumable owner. The transcript
+    stem IS the session id `claude --resume` takes; a transcript at the ceiling is
+    retirement-by-compaction territory — resuming it would replay a sibling project's 21:30
+    case, which was LEGITIMATE succession. The mtime rides along as the ONE honest mid-turn
+    signal: a turn writes the transcript; nothing else does (the statusline-heartbeat
+    superstition, killed 2026-07-20 — see dispatch_dm)."""
     for job_dir, cwd in cands:
         t = locate_current_transcript(root, job_dir, anchored_only=True)
         if t is None:
             continue
         try:
-            if t.stat().st_size > ceiling_bytes:
+            st = t.stat()
+            if st.st_size > ceiling_bytes:
                 continue
         except OSError:
             continue
-        return t.stem, cwd
+        return t.stem, cwd, st.st_mtime
     return None
 
 
 async def _resumable_owner(
     pool: asyncpg.Pool, project: str, st: Settings
-) -> tuple[str, str] | None:
+) -> tuple[str, str, float] | None:
     """(session_id, repo_cwd) of the project's freshest RESUMABLE owner, else None: not
     retired (graph check), transcript anchored on its own job_dir (never a co-tenant's), and
     below the context ceiling."""
@@ -636,12 +632,6 @@ async def dispatch_dm(
                 "detail": f"the addressee briefed the operator (desk={ask['desk']}, "
                           f"{ask['since']}) and has been quiet since — awaiting the human's "
                           "word; peer mail queues rather than preempting it"}
-    # mid-turn (NOT the broadcast lane's 15-min 'live': a backgrounded session that idled
-    # ten minutes ago perceives nothing — only genuinely-in-flight activity delivers)
-    if await _agent_live(pool, target, st.osiris_dm_active_secs):
-        return {"mode": "delivered",
-                "detail": "the addressee is mid-turn right now — its own turn's end "
-                          "surfaces the DM (no second process beside a working mind)"}
     if await _retired(pool, target):
         return {"mode": "pull-only",
                 "detail": f"{target} is retired — the trigger never reanimates a deliberate "
@@ -683,6 +673,18 @@ async def dispatch_dm(
     ok, why = await may_spend(pool, cap=st.osiris_daily_usd)
     if not ok:
         return {"mode": "refused", "detail": str(why)}
+    # MID-TURN MEANS THE TRANSCRIPT IS MOVING — nothing else (the statusline-heartbeat
+    # superstition, killed 2026-07-20 at the operator's first live round-trip ask: the
+    # statusline bumps agent_mounts.last_seen every few seconds FOR BACKGROUNDED SESSIONS
+    # TOO, so by that field every seated idle agent read as permanently working and this
+    # gate could never open. A turn WRITES the transcript; a chrome render does not. The
+    # heartbeat keeps its own job — the minting guard — it just no longer testifies here.)
+    resume = await _agent_resumable(pool, target, st)
+    if resume is not None and time.time() - resume[2] < st.osiris_dm_active_secs:
+        return {"mode": "delivered",
+                "detail": "the addressee's transcript is moving right now (genuinely "
+                          "mid-turn) — its own turn's end surfaces the DM; no second "
+                          "process beside a working mind"}
     # the poke lane first: a manager-hosted OPEN window holding this lineage's session gets
     # the mail typed in as a turn — never a second process beside an open window
     from src.orchestrator.agents import _generation
@@ -709,13 +711,12 @@ async def dispatch_dm(
     if not st.osiris_dm_resume:
         return {"mode": "held",
                 "detail": "the DM resume arm is dark (osiris_dm_resume=0) — pull-only"}
-    resume = await _agent_resumable(pool, target, st)
     if resume is None:
         return {"mode": "pull-only",
                 "detail": f"{target} has no resumable session (no anchored transcript, or "
                           "at the context ceiling) — a private message is never handed to "
                           "a fresh twin"}
-    session_id, repo = resume
+    session_id, repo = resume[0], resume[1]
     # the ledger row goes in UNDER AN ADVISORY LOCK, before the spawn: two dispatchers
     # (send's immediate leg + a concurrent tick) can both reach here for one message —
     # exactly one of them may spend
@@ -1014,7 +1015,7 @@ async def trigger_mail_tick(
         if await _last_wake_mode(pool, project, msg_id) != "resume":  # alternation guard
             resume = await _resumable_owner(pool, project, st)
         if resume is not None:
-            session_id, repo = resume
+            session_id, repo = resume[0], resume[1]
             await pool.execute(
                 "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
                 "VALUES ($1,$2,$3,'resume')", project, sender, msg_id)
