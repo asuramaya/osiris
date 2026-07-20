@@ -60,6 +60,13 @@ async def test_establish_office_the_whole_ceremony(
     assert "never formally declared" in orders          # no governs links yet: instruct
     assert "not yet seated" in orders                   # unbound lineage: the on-ramp note
     assert (office / ".osiris").read_text().startswith('project = "butlerhouse"')
+    # THE CHARTER FILE (d80621a7 piece 3): a fresh office gets a live-state scratchpad
+    # beside its standing orders
+    assert out["charter_file"] == "written"
+    charter = (office / "charter.md").read_text()
+    assert "Butler's charter" in charter
+    assert "OFFLOAD TARGET when context runs high" in charter
+    assert "## Current work" in charter and "## Key ids" in charter
     # the extraction rode along: his transcript moved and re-addressed, co-resident stayed
     assert out["rebind"]["harness"]["transcripts_moved"] == 1
     moved = tmp_path / "projects" / str(office).replace("/", "-")
@@ -78,13 +85,17 @@ async def test_establish_office_the_whole_ceremony(
         "WHERE d.name='office' AND o2.canonical=$1", agent)
     assert deed == str(office)
 
-    # idempotent: the second ceremony converges, never clobbers the standing orders
+    # idempotent: the second ceremony converges, never clobbers the standing orders OR a
+    # hand-edited charter — alfred's stays his, the whole point of the never-overwrite rule
+    (office / "charter.md").write_text("# Butler's charter\n\nMY OWN HAND-WRITTEN NOTES.\n")
     again = await establish_office(
         actions, seat_or_agent=agent, actor="agent:test",
         office_root=tmp_path / "seats", projects_root=tmp_path / "projects",
         claude_json=tmp_path / "cj.json")
     assert again["standing_orders"].startswith("left in place")
     assert again["office_deed"] == "already on the lineage's record"
+    assert again["charter_file"].startswith("left in place")
+    assert "MY OWN HAND-WRITTEN NOTES" in (office / "charter.md").read_text()
 
 
 async def test_establish_office_carries_a_declared_charter(

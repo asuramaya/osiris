@@ -17,6 +17,7 @@ session that never got whispered can always mount by hand.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Any
 
@@ -543,8 +544,10 @@ async def automount(
         except Exception:  # noqa: BLE001 — the whisper must never break on this
             obligations = []
     # SUCCESSION STEERING (d80621a7 piece 4): a freshly minted heir's summary-steering
-    # anchor is the CHARTER FILE (the standing orders that never rot) plus the newest OPEN
-    # OBLIGATION the project owns, found BY QUERY (owner + kind, newest at read time) —
+    # anchor is the CHARTER FILE — charter.md when the office has one (the seat's own
+    # hand-maintained live state, assignment 3), else CLAUDE.md (the standing orders,
+    # which never rot but also never change) — plus the newest OPEN OBLIGATION the
+    # project owns, found BY QUERY (owner + kind, newest at read time) —
     # never an id some ancestor copied into a file once. Ids rot; queries don't (Anubis
     # VIII's ask #4: 'search for the retirement letter by its natural name found nothing').
     # NEVER LABEL THE RESULT A 'SUCCESSION THREAD' (Thoth LI's amend, msg 861): the query
@@ -594,9 +597,22 @@ async def automount(
             newest = next(
                 (r for r in candidates if r["owner"] == ident.project
                  or _generation(r["owner"])[0] == base), None)
-            if office_path or (newest and newest["summary"]):
+            # PREFER THE CHARTER FILE (assignment 3, d80621a7 piece 3): a seat's charter.md
+            # is its own hand-maintained live state — the offload target, richer and fresher
+            # than the standing orders. automount runs on the SAME host as the office it
+            # names, so a disk check is a legitimate witness (never a network/DB round-trip)
+            # — off the event loop via to_thread, never a blocking stat() inline. An office
+            # scaffolded before this piece landed has no charter.md yet, so the fallback to
+            # CLAUDE.md stays live for every pre-existing office.
+            charter_path = None
+            if office_path:
+                has_charter = await asyncio.to_thread(
+                    os.path.exists, f"{office_path}/charter.md")
+                charter_path = (f"{office_path}/charter.md" if has_charter
+                                else f"{office_path}/CLAUDE.md")
+            if charter_path or (newest and newest["summary"]):
                 succession = {
-                    **({"charter_file": f"{office_path}/CLAUDE.md"} if office_path else {}),
+                    **({"charter_file": charter_path} if charter_path else {}),
                     **({"thread_id": str(newest["id"])[:8],
                         "thread_summary": newest["summary"]}
                        if newest and newest["summary"] else {}),

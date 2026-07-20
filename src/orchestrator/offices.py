@@ -56,6 +56,32 @@ exist. The fleet DMs you as send(to_agent='{handle}') — the seat is the addres
 waits for you across successions.
 """
 
+# THE CHARTER FILE (d80621a7 piece 3, alfred's alfred-seat-charter.md pattern graduating
+# to convention): the seat's own LIVE-STATE scratchpad, distinct from CLAUDE.md's standing
+# orders (identity, ritual — rarely rewritten) and distinct from the graph (typed, durable,
+# but not where a mid-thought working note belongs). This is the OFFLOAD TARGET the stop-
+# hook ritual (queue item 4) will enforce writing to above a context threshold — a session
+# that dies mid-turn leaves its heir this file, not a blank page.
+_CHARTER_TEMPLATE = """\
+# {handle}'s charter
+
+This file is **{handle}'s own live-state scratchpad** — write here AS YOU GO, not only at
+a seam. It is the OFFLOAD TARGET when context runs high (the stop-hook ritual enforces
+writing here before a quiet stop is allowed): a session that dies mid-turn leaves its heir
+this file, never a blank page. Durable typed facts still belong in the graph
+(`record_decision` / `open_thread` / `resolve_thread`) — this file is for the WHY and the
+IN-PROGRESS state a typed object can't hold on its own.
+
+## Current work
+(what you're doing right now — the thread that would be lost if this session ended mid-turn)
+
+## Key ids
+(threads, decisions, commits worth a successor's first glance — short ids, one line each)
+
+## Working notes
+(anything else worth carrying forward that doesn't fit the graph's typed objects)
+"""
+
 
 async def _handle_of(pool: asyncpg.Pool, agent_id: str) -> str | None:
     """The lineage's claimed handle (freshest generation's assertion), or None — an office
@@ -155,6 +181,14 @@ async def establish_office(
             handle=handle, office=office, house=house, seat_line=seat_line,
             charter_block=charter_block))
         orders_state = "written"
+    # THE CHARTER FILE, never clobbered (d80621a7 piece 3): an occupied office's charter is
+    # the seat's own hand-maintained live state — alfred's stays his, exactly like CLAUDE.md.
+    charter_file = office / "charter.md"
+    if charter_file.exists():
+        charter_file_state = "left in place — the seat's own live state, never overwritten"
+    else:
+        charter_file.write_text(_CHARTER_TEMPLATE.format(handle=handle))
+        charter_file_state = "written"
     rebind = await rebind_seat(
         actions, seat_or_agent=agent_id, new_cwd=str(office), actor=actor,
         projects_root=projects_root, claude_json=claude_json, extract=True)
@@ -173,6 +207,7 @@ async def establish_office(
         "seat": bound["seat_id"] if bound else None,
         "charter": repos or "UNDECLARED — the standing orders instruct the seat to declare",
         "standing_orders": orders_state,
+        "charter_file": charter_file_state,
         "rebind": rebind,
         "launch": f"cd {office} && claude   (or claude --resume there)",
         "note": f"{handle}'s office stands at {office} — the whisper will mount house "

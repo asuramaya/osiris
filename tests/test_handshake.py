@@ -776,6 +776,40 @@ async def test_automount_points_a_fresh_heir_at_charter_and_newest_succession_th
     assert "the actual handoff" in succ["thread_summary"]
 
 
+async def test_succession_pointer_prefers_charter_md_over_claude_md(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """Assignment 3, piece (iii): when the office has a charter.md (the seat's own
+    hand-maintained live state, assignment 3's scaffold), the succession pointer prefers
+    it over CLAUDE.md (the standing orders, which never change). automount runs on the
+    same host as the office it names, so a disk check is a legitimate witness. An office
+    with no charter.md (the case above) keeps falling back to CLAUDE.md."""
+    from src.orchestrator.agents import claim_name, register_agent, resolve_identity
+
+    root = tmp_path / "projects"
+    offices = tmp_path / "seats"
+    office = offices / "curator"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "curatorhouse"\n')
+    (office / "charter.md").write_text("# Curator's charter\n\nlive state.\n")
+    _transcript(root, str(office))
+
+    ident = resolve_identity(cwd=str(office), job_dir=str(tmp_path / "jobs" / SID[:8]), root=root)
+    await register_agent(actions, ident, actor="analyst:operator")
+    await claim_name(actions, ident.agent_id, "Curator", source=ident.agent_id)
+    await automount(actions, session_id=SID, cwd=str(office), actor="analyst:operator",
+                    root=root, jobs_home=tmp_path / "jobs", office_root=offices,
+                    source="startup")
+
+    reborn = await automount(actions, session_id=SID, cwd=str(office),
+                             actor="analyst:operator", root=root,
+                             jobs_home=tmp_path / "jobs", office_root=offices,
+                             source="compact")
+    succ = reborn.get("succession")
+    assert succ is not None
+    assert succ["charter_file"] == f"{office}/charter.md"
+
+
 async def test_succession_owner_match_finds_a_specific_incarnation_never_a_rebase_decoy(
     actions: Actions, tmp_path: Path
 ) -> None:
