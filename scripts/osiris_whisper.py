@@ -83,16 +83,22 @@ def render_whisper(out: dict[str, Any], *, cwd: str, env_job: str) -> str:
     if out.get("minted"):
         succ = out.get("succession") or {}
         # SUCCESSION STEERING (d80621a7 piece 4): point at the CHARTER FILE and the newest
-        # succession thread the server just resolved BY QUERY (owner+kind, newest at read
+        # OPEN OBLIGATION the server just resolved BY QUERY (owner+kind, newest at read
         # time) — never a copied id (Anubis VIII: 'search for the retirement letter by its
         # natural name found nothing'; ids rot, queries don't). Absent either, fall back to
         # the old pointer rather than promise a field the server didn't find.
+        #
+        # NAME IT HONESTLY (Thoth LI's amend, msg 861): the query finds the newest open
+        # obligation the project owns, NOT specifically a handoff/succession thread — a
+        # live repro called a census obligation "the newest succession thread", steering a
+        # fresh heir at zero context into the wrong thread. Never claim more than the query
+        # witnessed; when a result IS a handoff, its own summary already says so in caps.
         if succ.get("charter_file") or succ.get("thread_id"):
             bits.append(
                 f"You were MINTED as this lineage's successor — ancestor {out['minted']}. "
                 + (f"Your charter file is {succ['charter_file']}. " if succ.get("charter_file")
                    else "")
-                + (f"The newest succession thread is [{succ['thread_id']}] "
+                + (f"The newest open obligation your project owns is [{succ['thread_id']}] "
                    f"{str(succ.get('thread_summary') or '')[:120]} — read it, then orient()."
                    if succ.get("thread_id") else "Read orient() for the fold.")
             )

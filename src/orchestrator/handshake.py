@@ -543,10 +543,14 @@ async def automount(
         except Exception:  # noqa: BLE001 — the whisper must never break on this
             obligations = []
     # SUCCESSION STEERING (d80621a7 piece 4): a freshly minted heir's summary-steering
-    # anchor is the CHARTER FILE (the standing orders that never rot) plus the newest
-    # succession/obligation thread, found BY QUERY (owner + kind, newest at read time) —
+    # anchor is the CHARTER FILE (the standing orders that never rot) plus the newest OPEN
+    # OBLIGATION the project owns, found BY QUERY (owner + kind, newest at read time) —
     # never an id some ancestor copied into a file once. Ids rot; queries don't (Anubis
     # VIII's ask #4: 'search for the retirement letter by its natural name found nothing').
+    # NEVER LABEL THE RESULT A 'SUCCESSION THREAD' (Thoth LI's amend, msg 861): the query
+    # finds the newest open obligation, not specifically a handoff — asserting more than
+    # the query witnessed is exactly the false-seam class fixed above. The render side
+    # names it honestly; when a result IS a handoff, its own summary says so in caps.
     succession: dict[str, Any] | None = None
     if ident.succeeded_from:
         try:
@@ -556,12 +560,22 @@ async def automount(
                 "JOIN objects o ON o.id = d.object_id AND o.status = 'active' "
                 "WHERE d.name = 'office' AND (o.canonical = $1 OR o.canonical LIKE $1 || '-%') "
                 "ORDER BY d.observed_at DESC LIMIT 1", base)
-            owners = [x for x in (ident.project, base) if x]
-            newest = await actions.pool.fetchrow(
+            # THE OWNER MATCH: 'owned by this project' includes a SPECIFIC incarnation
+            # ('agent:ad1a1cb0-g40-xiii'), not only the bare project name or the bare
+            # lineage base — real obligations are filed that way. A wide SQL prefilter
+            # (LIKE base||'%') is UNSAFE alone — the deckard-rebase trap: base
+            # 'agent:d6a08aaa' LIKE-matches the unrelated lineage 'agent:d6a08aaa-g40-vii'.
+            # greatfold's proven shape: pull candidates cheaply with the wide filter, then
+            # keep only an EXACT match (owner == project, or _generation(owner)[0] == base)
+            # in Python — the wide net is for efficiency, the equality check is for truth.
+            candidates = await actions.pool.fetch(
                 "SELECT o.id AS id, "
                 " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id = o.id "
                 "   AND a.name = 'summary' ORDER BY a.confidence DESC, a.observed_at DESC "
-                "   LIMIT 1) AS summary "
+                "   LIMIT 1) AS summary, "
+                " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id = o.id "
+                "   AND a.name = 'owner' ORDER BY a.confidence DESC, a.observed_at DESC "
+                "   LIMIT 1) AS owner "
                 "FROM objects o "
                 "WHERE o.type = 'Thread' AND o.status = 'active' AND o.merged_into IS NULL "
                 "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
@@ -570,10 +584,16 @@ async def automount(
                 "  AND (SELECT a.value #>> '{}' FROM current_assertions a "
                 "   WHERE a.object_id = o.id AND a.name = 'kind' "
                 "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = 'obligation' "
-                "  AND (SELECT a.value #>> '{}' FROM current_assertions a "
+                "  AND ((SELECT a.value #>> '{}' FROM current_assertions a "
                 "   WHERE a.object_id = o.id AND a.name = 'owner' "
-                "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = ANY($1::text[]) "
-                "ORDER BY o.created_at DESC LIMIT 1", owners) if owners else None
+                "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = $1 "
+                "   OR (SELECT a.value #>> '{}' FROM current_assertions a "
+                "   WHERE a.object_id = o.id AND a.name = 'owner' "
+                "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) LIKE $2) "
+                "ORDER BY o.created_at DESC LIMIT 10", ident.project or "", f"{base}%")
+            newest = next(
+                (r for r in candidates if r["owner"] == ident.project
+                 or _generation(r["owner"])[0] == base), None)
             if office_path or (newest and newest["summary"]):
                 succession = {
                     **({"charter_file": f"{office_path}/CLAUDE.md"} if office_path else {}),

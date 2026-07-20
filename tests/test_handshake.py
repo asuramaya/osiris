@@ -774,3 +774,48 @@ async def test_automount_points_a_fresh_heir_at_charter_and_newest_succession_th
     assert succ is not None
     assert succ["charter_file"] == f"{office}/CLAUDE.md"
     assert "the actual handoff" in succ["thread_summary"]
+
+
+async def test_succession_owner_match_finds_a_specific_incarnation_never_a_rebase_decoy(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """Thoth LI's optional tightening (msg 861): 'owned by this project' must also match a
+    SPECIFIC incarnation's id ('agent:base-iii'), not only the bare project name or bare
+    lineage base — real obligations are filed that way. But the wide SQL prefilter
+    (LIKE base||'%') is unsafe alone — the deckard-rebase trap: an UNRELATED lineage that
+    merely shares the hash prefix ('agent:base-extra-ii') must never be picked over (or
+    instead of) the genuine match, however recent it is."""
+    from src.orchestrator.agents import claim_name, register_agent, resolve_identity
+    from src.orchestrator.capture import open_thread
+
+    root = tmp_path / "projects"
+    offices = tmp_path / "seats"
+    office = offices / "warden"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "wardenhouse"\n')
+    _transcript(root, str(office))
+
+    ident = resolve_identity(cwd=str(office), job_dir=str(tmp_path / "jobs" / SID[:8]), root=root)
+    assert ident.project == "wardenhouse"
+    await register_agent(actions, ident, actor="analyst:operator")
+    await claim_name(actions, ident.agent_id, "Warden", source=ident.agent_id)
+    base = ident.agent_id  # generation 1, no numeral suffix
+    await automount(actions, session_id=SID, cwd=str(office), actor="analyst:operator",
+                    root=root, jobs_home=tmp_path / "jobs", office_root=offices,
+                    source="startup")
+
+    # older, but owned by a SPECIFIC past incarnation of this exact lineage — must match
+    await open_thread(actions, "owned by a specific past incarnation, not the bare base",
+                      repo="wardenhouse", kind="obligation", owner=f"{base}-iii")
+    # newer, but an UNRELATED lineage that only shares the hash prefix — must NOT match
+    await open_thread(actions, "a decoy from an unrelated rebased lineage",
+                      repo="wardenhouse", kind="obligation", owner=f"{base}extra-ii")
+
+    reborn = await automount(actions, session_id=SID, cwd=str(office),
+                             actor="analyst:operator", root=root,
+                             jobs_home=tmp_path / "jobs", office_root=offices,
+                             source="compact")
+    succ = reborn.get("succession")
+    assert succ is not None
+    assert "owned by a specific past incarnation" in succ["thread_summary"]
+    assert "decoy" not in succ["thread_summary"]

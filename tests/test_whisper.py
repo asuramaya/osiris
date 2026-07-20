@@ -62,7 +62,7 @@ def test_a_witnessed_operator_swap_still_speaks_plainly() -> None:
 
 def test_succession_pointer_resolves_by_query_not_a_copied_id() -> None:
     """d80621a7 piece 4: point a freshly minted heir at the charter file and the newest
-    succession thread the SERVER just resolved by query (owner+kind, newest at read
+    OPEN OBLIGATION the SERVER just resolved by query (owner+kind, newest at read
     time) — never an id baked into this script."""
     out = _base(minted="agent:ad1a1cb0-g40-xiii", succession={
         "charter_file": "/home/asuramaya/.osiris/seats/thoth/CLAUDE.md",
@@ -74,6 +74,20 @@ def test_succession_pointer_resolves_by_query_not_a_copied_id() -> None:
     assert "Your charter file is /home/asuramaya/.osiris/seats/thoth/CLAUDE.md" in text
     assert "[12a58447] HANDOFF — Thoth L to LI" in text
     assert "then orient()" in text
+
+
+def test_succession_pointer_never_overclaims_the_kind_of_thread_it_found() -> None:
+    """Thoth LI's amend (msg 861): the query finds the newest OPEN OBLIGATION, not
+    specifically a handoff — a live repro called a census obligation 'the newest
+    succession thread', steering a fresh heir at zero context into the wrong thread. The
+    label must never claim more than the query witnessed."""
+    out = _base(minted="agent:ad1a1cb0-g40-xiii", succession={
+        "thread_id": "9dc3ce8b",
+        "thread_summary": "READ-SIDE ADOPTION OF THE VISIT CLASS",
+    })
+    text = render_whisper(out, cwd="/x", env_job="")
+    assert "The newest open obligation your project owns is [9dc3ce8b]" in text
+    assert "succession thread" not in text.lower()
 
 
 def test_succession_pointer_falls_back_when_the_server_found_neither() -> None:
