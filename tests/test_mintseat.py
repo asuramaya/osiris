@@ -54,6 +54,7 @@ async def test_a_fresh_mint_creates_seat_office_model_and_edge(
     assert 'project = "osiris"' in pin and 'model = "claude-sonnet-5"' in pin
     orders = (office / "CLAUDE.md").read_text()
     assert "Vajra — seat office" in orders and "not yet seated" in orders
+    assert "GRADE EVERY DM" in orders  # every minted worker is born knowing the convention
     charter = (office / "charter.md").read_text()
     assert "Vajra's charter" in charter and "OFFLOAD TARGET" in charter
 

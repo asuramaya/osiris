@@ -59,6 +59,7 @@ async def test_establish_office_the_whole_ceremony(
     assert "house **butlerhouse**" in orders
     assert "never formally declared" in orders          # no governs links yet: instruct
     assert "not yet seated" in orders                   # unbound lineage: the on-ramp note
+    assert "GRADE EVERY DM" in orders                    # every seat born knowing this now
     assert (office / ".osiris").read_text().startswith('project = "butlerhouse"')
     # THE CHARTER FILE (d80621a7 piece 3): a fresh office gets a live-state scratchpad
     # beside its standing orders

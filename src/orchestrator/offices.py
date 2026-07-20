@@ -54,6 +54,10 @@ Write back AS YOU GO: `record_decision` / `open_thread` (kind='obligation') /
 `resolve_thread`. A session can die at any instant; what is not in the graph does not
 exist. The fleet DMs you as send(to_agent='{handle}') — the seat is the address now; mail
 waits for you across successions.
+- GRADE EVERY DM: a brief or question that needs the recipient's act = `grade='ask'`; an
+  ack or status note = `grade='fyi'`. Graded asks are NAMED in the recipient's unread
+  count, and pair-heartbeat watchdogs key on them — an ungraded brief is invisible to
+  both the reader and whatever is watching the exchange.
 """
 
 # THE CHARTER FILE (d80621a7 piece 3, alfred's alfred-seat-charter.md pattern graduating
