@@ -1039,3 +1039,16 @@ async def test_scoped_tick_spends_only_inside_the_armed_projects(
     # nothing was buried by the narrow interval
     rep3 = await sense_sessions_tick(actions, tmp_path, llm, scopes=[])
     assert rep3["planted"] == 1
+
+
+def test_the_spec_carries_jennys_thirty_and_the_field_weights() -> None:
+    """Thread 5660ad36 — the first full pile-clear (30 judged) amended the spec: unverified
+    work is a STRONG positive signal (both such rows were real; one was the corpus's only
+    production defect), audit-shaped rows are skipped (they complete in-session), twins
+    referencing one artifact cluster to ONE concern, and a later session's proof
+    self-retires a stale candidate (16 of 23 drops were already-done work)."""
+    from src.ingest.sessions import _SYSTEM
+    assert "could not verify" in _SYSTEM            # weight UP: where real defects live
+    assert "'audit', 'catalog'" in _SYSTEM          # weight DOWN: completes in-session
+    assert "SAME file, artifact" in _SYSTEM         # cluster: one concern, one entry
+    assert "SELF-RETIRES" in _SYSTEM                # stale self-retirement, the other side

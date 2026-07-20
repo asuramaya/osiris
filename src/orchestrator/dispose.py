@@ -294,7 +294,15 @@ async def adversary_yield(
     `current_producer_only` measures the ADVERSARY THAT ACTUALLY EXISTS, not its dead predecessor.
     Default False, so the historical record stays readable — that 0.098 is what killed v1 and it
     should not be quietly erased. But the GATE reads the scoped number; see `licence`.
-    """
+
+    THE HONEST DENOMINATOR (Anubis XIII, thread 1258d382 — the metric's fifth correction): raw
+    admit-rate PUNISHES A PROJECT THAT RETRACTS. heinrich mined 5.1% not because the judge was
+    harsh but because the miner kept filing tickets against work the project had already buried
+    — a repo that kills its own lanes publicly will always mine low, raw. So beside the raw
+    numbers this also reports `yield_honest`: the same ratio over candidates born BEFORE their
+    project's last superseding ruling — a candidate minted after the project already re-ruled
+    the world it describes is a corpse at birth (`corpse_excluded` counts them) and says
+    something about the miner's LAG, not its quality. The licence gate reads the honest rate."""
     scope, args = "", [days]
     if project:
         scope = ("AND EXISTS (SELECT 1 FROM links l JOIN objects p ON p.id=l.to_id "
@@ -303,25 +311,46 @@ async def adversary_yield(
     if current_producer_only:
         scope += _V2_ONLY
     row = await pool.fetchrow(
-        "SELECT count(*) FILTER (WHERE a.name='admitted_because') AS admitted, "
-        "       count(*) FILTER (WHERE a.name='retracted_because') AS dropped, "
-        "       count(*) FILTER (WHERE a.name='asked_by') AS asked "
-        "FROM current_assertions a "
-        "WHERE a.evidence_class='self_declared' "
-        "  AND a.name IN ('admitted_because','retracted_because','asked_by') "
-        "  AND a.observed_at > now() - make_interval(days => $1) " + scope, *args)
+        "WITH judged AS ("
+        "  SELECT a.name, o.created_at AS born, rl.proj "
+        "  FROM current_assertions a JOIN objects o ON o.id = a.object_id "
+        "  LEFT JOIN LATERAL (SELECT l.to_id AS proj FROM links l "
+        "    WHERE l.from_id = a.object_id AND l.type='in_repo' LIMIT 1) rl ON true "
+        "  WHERE a.evidence_class='self_declared' "
+        "    AND a.name IN ('admitted_because','retracted_because','asked_by') "
+        "    AND a.observed_at > now() - make_interval(days => $1) " + scope + "), "
+        "last_ruling AS ("
+        "  SELECT l.to_id AS proj, max(sb.observed_at) AS at "
+        "  FROM current_assertions sb "
+        "  JOIN links l ON l.from_id = sb.object_id AND l.type='in_repo' "
+        "  WHERE sb.name='superseded_by' GROUP BY l.to_id) "
+        "SELECT count(*) FILTER (WHERE j.name='admitted_because') AS admitted, "
+        "       count(*) FILTER (WHERE j.name='retracted_because') AS dropped, "
+        "       count(*) FILTER (WHERE j.name='asked_by') AS asked, "
+        "       count(*) FILTER (WHERE lr.at IS NOT NULL AND j.born >= lr.at) AS corpse, "
+        "       count(*) FILTER (WHERE j.name='admitted_because' "
+        "                        AND (lr.at IS NULL OR j.born < lr.at)) AS admitted_h, "
+        "       count(*) FILTER (WHERE j.name='asked_by' "
+        "                        AND (lr.at IS NULL OR j.born < lr.at)) AS asked_h, "
+        "       count(*) FILTER (WHERE lr.at IS NULL OR j.born < lr.at) AS judged_h "
+        "FROM judged j LEFT JOIN last_ruling lr ON lr.proj = j.proj", *args)
     admitted, dropped = int(row["admitted"] or 0), int(row["dropped"] or 0)
     asked = int(row["asked"] or 0)
     judged = admitted + dropped + asked
+    judged_h, corpse = int(row["judged_h"] or 0), int(row["corpse"] or 0)
     out: dict[str, Any] = {"window_days": days, "project": project,
                            "admitted": admitted, "dropped": dropped, "asked": asked,
-                           "judged": judged}
+                           "judged": judged, "judged_honest": judged_h,
+                           "corpse_excluded": corpse}
     if judged:
         out["yield"] = round((admitted + asked) / judged, 3)
         out["reads"] = ("admitted ÷ judged — the adversary's LICENCE. Osiris's own first pass "
                         "scored 0.098 (26 of 264). Below the floor, it does not get to spend.")
     else:
         out["reads"] = "nothing judged in this window — the seam has not been walked"
+    if judged_h:
+        out["yield_honest"] = round(
+            (int(row["admitted_h"] or 0) + int(row["asked_h"] or 0)) / judged_h, 3)
     return out
 
 
@@ -362,16 +391,25 @@ async def licence(pool: asyncpg.Pool, *, days: int = 30) -> dict[str, Any]:
     silently disable the memory. It fails LOUD instead — `reason` says exactly why it is open.
     """
     m = await adversary_yield(pool, days=days, current_producer_only=True)
-    judged, rate = int(m["judged"]), m.get("yield")
+    judged = int(m["judged"])
+    # THE HONEST DENOMINATOR (1258d382): the gate judges the producer over candidates born
+    # BEFORE their project's last superseding ruling — a repo that retracts publicly must not
+    # read as a bad pile. With no corpse rows the two rates are the same number.
+    rate = m.get("yield_honest") if m.get("judged_honest") else m.get("yield")
+    corpse_note = (f" ({m['corpse_excluded']} corpse row(s) born after their project's last "
+                   "superseding ruling excluded — the honest denominator, 1258d382)"
+                   if m.get("corpse_excluded") else "")
     if judged < LICENCE_MIN_JUDGED:
         return {"may_spend": True, "reason": f"only {judged} rows judged in {days}d — a producer "
                 f"is given a real sample ({LICENCE_MIN_JUDGED}) before it is judged", **m}
     if rate is not None and rate < YIELD_FLOOR:
         return {"may_spend": False, "reason": f"YIELD {rate} IS BELOW THE FLOOR ({YIELD_FLOOR}) "
-                f"over {judged} judged rows in {days}d — the adversary is not earning its tokens "
+                f"over {judged} judged rows in {days}d{corpse_note} — the adversary is not "
+                "earning its tokens "
                 "and has lost the right to spend them. Fix its prompt, or leave it dark. Nothing "
                 "auto-restarts it (Osiris has no hands over your systems).", **m}
-    return {"may_spend": True, "reason": f"yield {rate} clears the floor ({YIELD_FLOOR})", **m}
+    return {"may_spend": True,
+            "reason": f"yield {rate} clears the floor ({YIELD_FLOOR}){corpse_note}", **m}
 
 
 async def orphans(pool: asyncpg.Pool) -> dict[str, Any]:

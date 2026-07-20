@@ -289,3 +289,35 @@ async def test_ask_keeps_a_question_a_QUESTION_never_a_promise(actions: Actions)
     # the licence meter counts the ask as use
     m = await adversary_yield(actions.pool, current_producer_only=True)
     assert m["asked"] == 1 and m["yield"] == 1.0
+
+async def test_the_HONEST_DENOMINATOR_forgives_the_public_retractor(actions: Actions) -> None:
+    """THE METRIC'S FIFTH CORRECTION (Anubis XIII, thread 1258d382): raw admit-rate punishes
+    a project that RETRACTS — the miner keeps filing tickets against work the project
+    already buried, and every one drops as stale, so the honest repos read as the bad piles.
+    A candidate born AFTER its project's last superseding ruling is a corpse at birth:
+    excluded from the honest denominator the licence reads. Nothing hidden — raw stays
+    reported beside it."""
+    # a project that retracts publicly: an old decision, buried by a later ruling
+    d = await actions.create_or_find_object("Decision", "decision:dead-lane", "agent:h")
+    await link_repo(actions, d, "heinrich", NOW, source="agent:h",
+                    evidence_class="self_declared")
+    # two candidates: one born BEFORE the burial (a fair test), one after (a corpse)
+    fair = await _mined(actions, "thread:pre", "the viz lane needs a colorbar",
+                        repo="heinrich")
+    corpse = await _mined(actions, "thread:post", "the viz lane needs axis labels",
+                          repo="heinrich")
+    born = {r["canonical"]: r["created_at"] for r in await actions.pool.fetch(
+        "SELECT canonical, created_at FROM objects "
+        "WHERE canonical IN ('thread:pre','thread:post')")}
+    burial = born["thread:pre"] + (born["thread:post"] - born["thread:pre"]) / 2
+    await actions.assert_property(d, "superseded_by", "abcd1234", "agent:h", burial, 0.9,
+                                  evidence_class="self_declared")
+    # the seat admits the fair one and drops the corpse as stale
+    await dispose(actions, source=SEAT,
+                  admit=[{"id": str(fair)[:8], "because": "real and unrecorded"}],
+                  drop=[{"id": str(corpse)[:8], "why": "stale"}])
+
+    m = await adversary_yield(actions.pool)
+    assert m["judged"] == 2 and m["yield"] == 0.5          # raw: the punishing number
+    assert m["corpse_excluded"] == 1 and m["judged_honest"] == 1
+    assert m["yield_honest"] == 1.0                        # judged only where the test was fair
