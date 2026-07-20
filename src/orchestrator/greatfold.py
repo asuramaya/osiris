@@ -348,9 +348,11 @@ async def demote_visits(
     named = _bases(await pool.fetch(
         "SELECT o.canonical AS c FROM objects o JOIN current_assertions a "
         "ON a.object_id=o.id AND a.name='handle' WHERE o.type='Agent'"))
+    # holds/governs are DELIBERATE acts; works_in is minted by mount() itself — the
+    # doorbell's own echo — so it can never testify that the ring was a soul
     chartered = _bases(await pool.fetch(
         "SELECT o.canonical AS c FROM links l JOIN objects o ON o.id=l.from_id "
-        "WHERE o.type='Agent' AND l.type IN ('holds','governs','works_in') "
+        "WHERE o.type='Agent' AND l.type IN ('holds','governs') "
         "AND (l.valid_until IS NULL OR l.valid_until > now())"))
     threaded = _bases(await pool.fetch(
         "SELECT a.value #>> '{}' AS c FROM objects t JOIN current_assertions a "
