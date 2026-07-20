@@ -19,6 +19,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -565,6 +566,61 @@ async def _seat_wakes(
     return n or 0
 
 
+# THE RESIDENT'S SIGNATURE — who actually lives in a session (the leak fix, operator's
+# question 2026-07-20: 'how can it resolve the current agent I'm speaking with?').
+# NOT by registry timestamp: the statusline pump bumps last_seen by job_dir, so a stale
+# claimant row on a live job is kept eternally fresh by the RESIDENT's own chrome, and the
+# one-row-per-door upsert erases history. The honest witness is the transcript: every
+# osiris act a session performs leaves a SIGNED receipt in its own append-only JSONL —
+# a send's {"sent":N,"from":"agent:…"}, a mount's {"agent":"agent:…","project":…}, the
+# whisper's "knows you as agent:…" at first breath. The newest signature in the tail IS
+# the resident. The chrome cannot pollute this file; only turns write it.
+# receipts appear JSON-escaped inside transcript lines (\"from\":\"agent:…\") and
+# occasionally plain — the optional backslashes cover both encodings
+_SIGNED = [
+    re.compile(r'\\?"sent\\?":\s*\d+,\s*\\?"from\\?":\s*\\?"(agent:[A-Za-z0-9._-]+)'),
+    re.compile(r'\\?"agent\\?":\s*\\?"(agent:[A-Za-z0-9._-]+)\\?",\s*\\?"project\\?"'),
+    re.compile(r"knows you as (agent:[A-Za-z0-9._-]+)"),
+]
+_RESIDENT_TAIL_BYTES = 400_000
+
+
+def _resident_of_sync(root: Path, sid: str) -> str | None:
+    """Sync (runs via to_thread): the agent id of the NEWEST signed osiris act in session
+    `sid`'s transcript, or None when the session has never signed anything (no whisper, no
+    mount, no send — a stranger this dispatcher must not address)."""
+    if not sid:
+        return None
+    t = next(iter(root.expanduser().glob(f"*/{sid}.jsonl")), None)
+    if t is None:
+        return None
+    try:
+        size = t.stat().st_size
+        with t.open("rb") as f:
+            f.seek(max(0, size - _RESIDENT_TAIL_BYTES))
+            tail = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in reversed(tail.splitlines()):
+        for pat in _SIGNED:
+            m = pat.search(line)
+            if m:
+                return m.group(1)
+    return None
+
+
+async def _resident_disagrees(root: Path, sid: str, base: str) -> bool:
+    """True when the session's own signed testimony names a DIFFERENT lineage than the
+    addressee — the crossed-registry class (thread 0100a35e, the Ra misdelivery): the
+    registry said the addressee lived there; the transcript says someone else does. An
+    unsigned session also disagrees (never address a stranger). Both the nudge AND the
+    resume must refuse on this — each would put the addressee's mail into a foreign
+    window."""
+    from src.orchestrator.agents import _generation
+    resident = await asyncio.to_thread(_resident_of_sync, root, sid)
+    return resident is None or _generation(resident)[0] != base
+
+
 def _mail_envelope(msg_id: int, *, sender_label: str, addressee_label: str,
                    grade: str | None, preview: str) -> str:
     """The nudge as a CUTE LITTLE MAIL (operator, 2026-07-20: 'formatting is important so
@@ -745,7 +801,14 @@ async def dispatch_dm(
     ids = doors | {d[:8] for d in doors}
     if resume is not None:
         ids |= {resume[0], resume[0][:8]}
+    root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
+        else Path.home() / ".claude" / "projects"
     job = await jobs(ids)
+    if job is not None and await _resident_disagrees(
+            root, str(job.get("sessionId") or ""), base):
+        # the crossed-registry class (0100a35e): the registry pointed here, the session's
+        # own signed testimony names someone else (or nobody) — never leak the envelope
+        job = None
     if job is not None:
         s_handle = ((await held_seat(pool, sender)) or {}).get("handle") if sender else None
         a_handle = ((await held_seat(pool, target)) or {}).get("handle")
@@ -803,6 +866,12 @@ async def dispatch_dm(
                           "at the context ceiling) — a private message is never handed to "
                           "a fresh twin"}
     session_id, repo = resume[0], resume[1]
+    if await _resident_disagrees(root, session_id, base):
+        return {"mode": "pull-only",
+                "detail": "the registry's door for this addressee leads to a session whose "
+                          "own signed testimony names a different mind (the crossed-registry "
+                          "class, 0100a35e) — refusing both nudge and resume; the mail "
+                          "stays pull-only until the identity is healed"}
     # the ledger row goes in UNDER AN ADVISORY LOCK, before the spawn: two dispatchers
     # (send's immediate leg + a concurrent tick) can both reach here for one message —
     # exactly one of them may spend

@@ -436,7 +436,12 @@ async def _stale_resumable_owner(actions: Actions, tmp_path: Path,
     proj = sense / "-repo-demo"
     proj.mkdir(parents=True, exist_ok=True)
     t = proj / f"{FULL_SID}.jsonl"
-    t.write_bytes(b"x" * transcript_bytes)
+    # the resident's SIGNATURE (the leak fix): a session is addressable only when its own
+    # transcript testifies who lives there — here, a signed send receipt as the harness
+    # encodes it (JSON-escaped inside the line)
+    signed = ('{"type":"user","toolUseResult":'
+              '"{\\"sent\\":1,\\"from\\":\\"agent:abcd1234\\"}"}\n')
+    t.write_bytes(signed.encode() + b"x" * transcript_bytes)
     old = _time.time() - 3600
     os.utime(t, (old, old))
     await mounts.save_mount(actions.pool, job_dir=str(job), agent_id="agent:abcd1234",
@@ -1312,7 +1317,8 @@ async def test_the_daemon_reply_rung_leads_and_wears_the_envelope(
 
     async def _jobs(ids: set) -> dict[str, Any] | None:
         assert "abcd1234" in ids            # matched via the door name AND the sid prefix
-        return {"short": "abcd1234", "name": "[D] Demo", "_sock": "/nowhere"}
+        return {"short": "abcd1234", "sessionId": FULL_SID, "name": "[D] Demo",
+                "_sock": "/nowhere"}
 
     async def _nudge(job: dict[str, Any], text: str) -> bool:
         nudges.append((job, text))
@@ -1348,7 +1354,7 @@ async def test_a_dark_daemon_falls_open_to_the_resume_lane(
     calls: list[dict[str, Any]] = []
 
     async def _jobs(ids: set) -> dict[str, Any]:
-        return {"short": "abcd1234", "_sock": "/nowhere"}
+        return {"short": "abcd1234", "sessionId": FULL_SID, "_sock": "/nowhere"}
 
     async def _nudge(job: dict[str, Any], text: str) -> bool:
         return False                                     # EAUTH / EPROTO / dead socket
@@ -1375,7 +1381,7 @@ async def test_a_nudged_message_is_never_renudged(
     msg_id = await _dm_to_owner(actions)
 
     async def _jobs(ids: set) -> dict[str, Any]:
-        return {"short": "abcd1234", "_sock": "/nowhere"}
+        return {"short": "abcd1234", "sessionId": FULL_SID, "_sock": "/nowhere"}
 
     async def _nudge(job: dict[str, Any], text: str) -> bool:
         return True
@@ -1420,4 +1426,49 @@ async def test_mail_settled_by_a_successor_is_never_phantom_nudged(
                           settings=_settings(enabled=True, sense=str(sense)),
                           spawn=_boom, windows=_no_windows, jobs=_boom, nudge=_boom)
     assert d["mode"] == "settled"
+    assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
+
+async def test_a_crossed_registry_never_leaks_the_envelope_or_the_resume(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """THE LEAK FIX (operator, 2026-07-20: 'the leak has to be fixed — how can it resolve
+    the current agent I'm speaking with?'): not by registry timestamp — the statusline pump
+    keeps a stale claimant row eternally fresh. The RESIDENT'S SIGNATURE decides: the
+    newest signed osiris act in the session's own append-only transcript. When the
+    registry's door leads to a session whose signatures name a DIFFERENT mind (the Ra
+    misdelivery, thread 0100a35e), BOTH the nudge and the resume refuse — the mail stays
+    pull-only, and not one preview character reaches the foreign window."""
+    import os
+    import time as _time
+
+    from src.orchestrator import mounts
+
+    # the registry claims agent:abcd1234 lives at this door...
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-demo"
+    proj.mkdir(parents=True, exist_ok=True)
+    t = proj / f"{FULL_SID}.jsonl"
+    # ...but the session's own signed testimony names a STRANGER
+    signed = ('{"type":"user","toolUseResult":'
+              '"{\\"sent\\":9,\\"from\\":\\"agent:zzstranger-ix\\"}"}\n')
+    t.write_bytes(signed.encode())
+    old = _time.time() - 3600
+    os.utime(t, (old, old))
+    await mounts.save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "abcd1234"),
+                            agent_id="agent:abcd1234", project="demo", cwd="/repo/demo",
+                            model=None, session_key=None)
+    await actions.pool.execute("UPDATE agent_mounts SET last_seen = now() - interval '1 hour'")
+    msg_id = await _dm_to_owner(actions)
+
+    async def _jobs(ids: set) -> dict[str, Any]:
+        return {"short": "abcd1234", "sessionId": FULL_SID, "_sock": "/nowhere"}
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a crossed door must never be nudged or resumed")
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_boom, windows=_no_windows, jobs=_jobs, nudge=_boom)
+    assert d["mode"] == "pull-only" and "crossed" in d["detail"]
     assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
