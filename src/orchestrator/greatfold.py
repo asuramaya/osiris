@@ -268,6 +268,11 @@ async def fold_seat(
             "SELECT canonical FROM objects WHERE type='Agent' AND status='active' "
             "AND (canonical=$1 OR canonical LIKE $1 || '-%') ORDER BY canonical", base)
         for row in labels:
+            # exact-base only: a REBASED lineage extends its ancestor's prefix (d6a08aaa →
+            # d6a08aaa-g40), so the LIKE sweep for the old base would swallow the living
+            # lineage — generation labels of any OTHER base are that base's own affair
+            if _generation(str(row["canonical"]))[0] != base:
+                continue
             will_fold.append({"label": str(row["canonical"]), "base": base,
                               "evidence": f"one-soul-per-seat (b64db62b), seat {handle}: "
                                           + "; ".join(why)})

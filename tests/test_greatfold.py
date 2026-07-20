@@ -205,6 +205,24 @@ async def test_fold_seat_by_handle_claim_alone(actions: Actions, tmp_path: Path)
     assert "claimed the name" in out["will_fold"][0]["evidence"]
 
 
+async def test_a_rebased_lineage_is_never_swallowed_by_its_ancestors_prefix(
+        actions: Actions, tmp_path: Path) -> None:
+    offices, projects = tmp_path / "offices", tmp_path / "projects"
+    _office(offices, "khnum", "riverhouse")
+    await _agent(actions, "agent:aaaa1111")            # the old base...
+    await _agent(actions, "agent:aaaa1111-iii")        # ...and its generations
+    await _agent(actions, "agent:aaaa1111-g40")        # the REBASE — the living lineage
+    await _agent(actions, "agent:aaaa1111-g40-ii")
+    _transcript(projects, "khnum", "s-old", _SEND.format(agent="agent:aaaa1111-iii"),
+                age_secs=3600)
+    _transcript(projects, "khnum", "s-new", _SEND.format(agent="agent:aaaa1111-g40-ii"))
+    out = await fold_seat(actions, handle="khnum", actor="agent:test",
+                          office_root=offices, projects_root=projects)
+    assert out["living_head"] == "agent:aaaa1111-g40-ii"
+    assert [f["label"] for f in out["will_fold"]] == ["agent:aaaa1111",
+                                                      "agent:aaaa1111-iii"]
+
+
 async def test_demote_visits_touches_only_the_tieless(actions: Actions) -> None:
     await _agent(actions, "agent:11110000", handle="Named")
     await _agent(actions, "agent:22220000")

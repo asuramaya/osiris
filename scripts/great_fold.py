@@ -42,6 +42,9 @@ async def _main() -> None:
     p_seat.add_argument("handle")
     p_seat.add_argument("--execute", action="store_true")
     p_seat.add_argument("--actor", default=ACTOR)
+    p_camp = sub.add_parser("campaign")  # every seat, ONE survey — dry unless --execute
+    p_camp.add_argument("--execute", action="store_true")
+    p_camp.add_argument("--actor", default=ACTOR)
     p_vis = sub.add_parser("visits")
     p_vis.add_argument("--execute", action="store_true")
     p_vis.add_argument("--limit", type=int, default=None)
@@ -66,6 +69,25 @@ async def _main() -> None:
         elif args.cmd == "seat":
             _show(await fold_seat(actions, handle=args.handle, actor=args.actor,
                                   execute=args.execute))
+        elif args.cmd == "campaign":
+            sv = await survey_seats(pool)
+            out: dict[str, object] = {}
+            for h in sorted(sv["seats"]):
+                r = await fold_seat(actions, handle=h, actor=args.actor,
+                                    execute=args.execute, survey=sv)
+                if "error" in r:
+                    out[h] = {"skipped": r["error"]}
+                    continue
+                out[h] = {
+                    "resident": r["resident"], "head": r["living_head"],
+                    "seat_id": r.get("seat_id"),
+                    "will_fold": [f["label"] for f in r["will_fold"]],
+                    "flagged": r["flagged"],
+                    **({"folded": len(r["folded"]), "refused": r["refused"],
+                        "seat_minted": r["seat_minted"], "briefed": r["briefed"]}
+                       if args.execute else {}),
+                }
+            _show(out)
         elif args.cmd == "visits":
             _show(await demote_visits(actions, actor=args.actor, execute=args.execute,
                                       limit=args.limit))
