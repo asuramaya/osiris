@@ -64,36 +64,31 @@ def _office_slug_dirs(projects_root: Path, handle: str) -> list[Path]:
         return []
 
 
-def signed_bases_sync(projects_root: Path, handle: str) -> dict[str, Any]:
-    """Sync (run via to_thread): every base that ever SIGNED an osiris act in this office's
-    transcripts, plus the RESIDENT (the newest signature across all of them — same witness
-    the delivery gate trusts, whole-file instead of tail because a fold weighs history, not
-    the current turn). Returns {"bases": {base: {"labels": [...], "hits": n}},
-    "resident": label|None}."""
-    from src.orchestrator.agents import _generation
+def signed_matches_sync(projects_root: Path, handle: str) -> list[list[str]]:
+    """Sync (run via to_thread): per transcript of this office (mtime-ascending), the
+    ORDERED _SIGNED matches — raw testimony only. The survey decides what counts: a
+    transcript QUOTES freely (census query results, read files, pasted reports all carry
+    other minds' ids — the Anubis lesson, caught by this machine's own first dry run), so
+    per session only the session's OWN resident signature is identity evidence, exactly
+    the delivery gate's semantics. That filtering needs the graph (quoted ids that no
+    registration ever backed must drop FIRST, or a trailing quote shadows the real
+    resident), so it lives in survey_seats, not here."""
     from src.orchestrator.trigger import _SIGNED
 
-    bases: dict[str, dict[str, Any]] = {}
-    resident: str | None = None
+    out: list[list[str]] = []
     files = sorted((f for d in _office_slug_dirs(projects_root, handle)
                     for f in d.glob("*.jsonl")),
                    key=lambda f: f.stat().st_mtime)
-    for f in files:  # mtime-ascending, so the last match overall IS the newest signature
+    for f in files:
         try:
             text = f.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        for line in text.splitlines():
-            for pat in _SIGNED:
-                for label in pat.findall(line):
-                    base = _generation(label)[0]
-                    row = bases.setdefault(base, {"labels": set(), "hits": 0})
-                    row["labels"].add(label)
-                    row["hits"] += 1
-                    resident = label
-    for row in bases.values():
-        row["labels"] = sorted(row["labels"])
-    return {"bases": bases, "resident": resident}
+        matches = [label for line in text.splitlines()
+                   for pat in _SIGNED for label in pat.findall(line)]
+        if matches:
+            out.append(matches)
+    return out
 
 
 async def seat_roster(pool: asyncpg.Pool, *, office_root: Path | None = None,
@@ -163,12 +158,17 @@ async def _handle_claims(pool: asyncpg.Pool) -> dict[str, dict[str, Any]]:
 
 async def survey_seats(pool: asyncpg.Pool, *, office_root: Path | None = None,
                        projects_root: Path | None = None) -> dict[str, Any]:
-    """The whole campaign's evidence, gathered ONCE: per seat, the bases that signed its
-    office and the bases that claimed its name; globally, the CONFLICTS — a base with
-    evidence for two different seats folds into neither (flag, never guess). Signature
-    evidence is filtered to bases the GRAPH knows: a transcript can QUOTE an id (a pasted
-    test fixture, a read file) but a quote never registered an agent, so unknown bases are
-    reading artifacts, not souls."""
+    """The whole campaign's evidence, gathered ONCE: per seat, the bases whose SESSIONS
+    resided in its office and the bases that claimed its name; globally, the CONFLICTS —
+    a base with evidence for two different seats folds into neither (flag, never guess).
+
+    THE QUOTE WALL (this machine's own first dry run, seats/anubis, 2026-07-21): a
+    transcript quotes freely — census query results, read files, pasted reports all carry
+    other minds' ids in signature-shaped lines — so per session only the session's OWN
+    resident signature counts: ids the graph never registered drop first (a quote never
+    rang a doorbell), then the NEWEST surviving match is the session's resident, the same
+    self-testimony the delivery gate stakes deliveries on. Everything a session merely
+    mentioned is reading material, not identity."""
     proot = projects_root or _PROJECTS_ROOT
     roster = await seat_roster(pool, office_root=office_root)
     claims = await _handle_claims(pool)
@@ -181,11 +181,24 @@ async def survey_seats(pool: asyncpg.Pool, *, office_root: Path | None = None,
     evidence_of: dict[str, set[str]] = {}  # base → seats with evidence for it
     for r in roster:
         h = str(r["handle"])
-        signed = (await asyncio.to_thread(signed_bases_sync, proot, h)
-                  if r["office"] else {"bases": {}, "resident": None})
-        signed_bases = {b: v for b, v in signed["bases"].items() if b in known_bases}
+        sessions = (await asyncio.to_thread(signed_matches_sync, proot, h)
+                    if r["office"] else [])
+        signed_bases: dict[str, dict[str, Any]] = {}
+        resident_signed: str | None = None
+        for matches in sessions:  # mtime-ascending: the last session's resident wins
+            vouched = [m for m in matches if _generation(m)[0] in known_bases]
+            if not vouched:
+                continue
+            res = vouched[-1]
+            row = signed_bases.setdefault(_generation(res)[0],
+                                          {"labels": set(), "sessions": 0})
+            row["labels"].add(res)
+            row["sessions"] += 1
+            resident_signed = res
+        for row in signed_bases.values():
+            row["labels"] = sorted(row["labels"])
         claimed = claims.get(h, {"bases": {}, "newest": None})
-        seats[h] = {**r, "signed": signed_bases, "resident_signed": signed["resident"],
+        seats[h] = {**r, "signed": signed_bases, "resident_signed": resident_signed,
                     "claimed": claimed["bases"], "resident_claimed": claimed["newest"]}
         for base in set(signed_bases) | set(claimed["bases"]):
             evidence_of.setdefault(base, set()).add(h)
@@ -239,8 +252,8 @@ async def fold_seat(
         claimed = seat["claimed"].get(base, [])
         why = []
         if signed:
-            why.append(f"signed {signed['hits']} acts in seats/{handle} transcripts "
-                       f"as {', '.join(signed['labels'])}")
+            why.append(f"resident signer of {signed['sessions']} session(s) in "
+                       f"seats/{handle} as {', '.join(signed['labels'])}")
         if claimed:
             why.append(f"claimed the name '{handle}' as {', '.join(claimed)}")
         labels = await actions.pool.fetch(

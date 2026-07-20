@@ -19,7 +19,7 @@ from src.orchestrator.greatfold import (
     fold_census,
     fold_seat,
     seat_roster,
-    signed_bases_sync,
+    signed_matches_sync,
     survey_seats,
 )
 from src.orchestrator.mailbox import send_message
@@ -63,35 +63,49 @@ def test_bare_strips_the_numeral_and_the_case() -> None:
     assert _bare("Thoth L") == "thoth"
 
 
-def test_signature_scan_finds_bases_and_the_newest_signer(tmp_path: Path) -> None:
+def test_signature_scan_returns_ordered_testimony_per_session(tmp_path: Path) -> None:
     _transcript(tmp_path, "khnum", "sid-old", _SEND.format(agent="agent:aaaa1111"),
                 age_secs=3600)
     _transcript(tmp_path, "khnum", "sid-new",
                 _WHISPER.format(agent="agent:bbbb2222-ii"),
                 _SEND.format(agent="agent:bbbb2222-ii"))
-    out = signed_bases_sync(tmp_path, "khnum")
-    assert set(out["bases"]) == {"agent:aaaa1111", "agent:bbbb2222"}
-    assert out["bases"]["agent:bbbb2222"]["hits"] == 2
-    assert out["resident"] == "agent:bbbb2222-ii"  # mtime order: the newest file signs last
+    out = signed_matches_sync(tmp_path, "khnum")
+    assert out == [["agent:aaaa1111"],                       # mtime-ascending file order
+                   ["agent:bbbb2222-ii", "agent:bbbb2222-ii"]]
 
 
-async def test_survey_drops_quoted_ids_and_flags_cross_seat_bases(
+async def test_survey_takes_each_sessions_own_resident_never_its_quotes(
+        actions: Actions, tmp_path: Path) -> None:
+    offices, projects = tmp_path / "offices", tmp_path / "projects"
+    _office(offices, "khnum", "riverhouse")
+    await _agent(actions, "agent:aaaa1111")
+    await _agent(actions, "agent:bbbb2222-ii")
+    # one session: quotes bbbb2222 mid-file (a census query, a read fixture), quotes an id
+    # the graph never registered LAST — its own resident signature sits between them
+    _transcript(projects, "khnum", "s1",
+                _SEND.format(agent="agent:bbbb2222-ii"),
+                _SEND.format(agent="agent:aaaa1111"),
+                _SEND.format(agent="agent:dddd9999"))
+    sv = await survey_seats(actions.pool, office_root=offices, projects_root=projects)
+    signed = sv["seats"]["khnum"]["signed"]
+    assert set(signed) == {"agent:aaaa1111"}   # the resident, not the quoted sibling
+    assert "agent:dddd9999" not in signed      # an unregistered id is reading material
+    assert sv["seats"]["khnum"]["resident_signed"] == "agent:aaaa1111"
+    assert sv["seats"]["khnum"]["house"] == "riverhouse"
+
+
+async def test_survey_flags_a_base_resident_in_two_offices(
         actions: Actions, tmp_path: Path) -> None:
     offices, projects = tmp_path / "offices", tmp_path / "projects"
     _office(offices, "khnum", "riverhouse")
     _office(offices, "sobek", "riverhouse")
     await _agent(actions, "agent:aaaa1111")
     await _agent(actions, "agent:bbbb2222-ii")
-    # aaaa1111 signs BOTH offices (the cross-seat class); dddd9999 is a QUOTE — a pasted
-    # fixture in a conversation — that no registration ever backed
-    _transcript(projects, "khnum", "s1", _SEND.format(agent="agent:aaaa1111"),
-                _SEND.format(agent="agent:dddd9999"))
-    _transcript(projects, "sobek", "s2", _SEND.format(agent="agent:aaaa1111"),
-                _SEND.format(agent="agent:bbbb2222-ii"))
+    _transcript(projects, "khnum", "s1", _SEND.format(agent="agent:aaaa1111"))
+    _transcript(projects, "sobek", "s2", _SEND.format(agent="agent:bbbb2222-ii"),
+                _SEND.format(agent="agent:aaaa1111"))
     sv = await survey_seats(actions.pool, office_root=offices, projects_root=projects)
-    assert "agent:dddd9999" not in sv["seats"]["khnum"]["signed"]
     assert sv["conflicts"] == {"agent:aaaa1111": ["khnum", "sobek"]}
-    assert sv["seats"]["khnum"]["house"] == "riverhouse"
 
 
 async def test_fold_seat_dry_run_names_the_folds_and_writes_nothing(
@@ -109,7 +123,7 @@ async def test_fold_seat_dry_run_names_the_folds_and_writes_nothing(
     assert out["living_head"] == "agent:bbbb2222-ii"
     assert [f["label"] for f in out["will_fold"]] == ["agent:aaaa1111",
                                                       "agent:aaaa1111-ii"]
-    assert "signed" in out["will_fold"][0]["evidence"]
+    assert "resident signer" in out["will_fold"][0]["evidence"]
     assert await canonical_agent(actions.pool, "agent:aaaa1111") == "agent:aaaa1111"
 
 
@@ -152,8 +166,8 @@ async def test_fold_seat_never_folds_a_cross_seat_base(
     _transcript(projects, "khnum", "s1", _SEND.format(agent="agent:aaaa1111"),
                 age_secs=3600)
     _transcript(projects, "khnum", "s2", _SEND.format(agent="agent:bbbb2222-ii"))
-    _transcript(projects, "sobek", "s3", _SEND.format(agent="agent:aaaa1111"),
-                _SEND.format(agent="agent:cccc3333"))
+    _transcript(projects, "sobek", "s3", _SEND.format(agent="agent:cccc3333"),
+                _SEND.format(agent="agent:aaaa1111"))
     out = await fold_seat(actions, handle="khnum", actor="agent:test", execute=True,
                           office_root=offices, projects_root=projects)
     assert [f["base"] for f in out["flagged"]] == ["agent:aaaa1111"]
