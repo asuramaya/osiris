@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from src.actions.core import Actions
+from src.orchestrator.capture import open_thread
 from src.orchestrator.compositions import run_spec
 from src.parsers.base import EvidenceClass
 
@@ -73,6 +74,43 @@ async def test_a_bare_hex_fragment_opens_the_id_door(actions: Actions) -> None:
     assert "id-fragment" in out["note"]
     # ...and ordinary words are never mistaken for ids ('decide' is not hex)
     assert (await _search(actions, "decide"))["hits"] == []
+
+
+async def test_the_id_door_also_matches_a_threads_canonical_short_hash(actions: Actions) -> None:
+    """Alfred V's repro (thread 4ffe0eb9): a Thread's natural handle is its CANONICAL
+    short hash (thread:23423ff856ab — a sha1 of the summary, minted by open_thread), not
+    the underlying object's UUID — two different hashes name one thread, and a holder may
+    quote either. Both must resolve."""
+    tid = await open_thread(actions, "Alfred IV's succession handoff, unfiled and unmissable")
+    canonical = await actions.pool.fetchval(
+        "SELECT canonical FROM objects WHERE id=$1", tid)
+    short_hash = canonical.split(":", 1)[1]  # the sha1[:12] tail, NOT the object's uuid
+
+    by_canon = await _search(actions, short_hash)
+    assert by_canon["hits"] and by_canon["hits"][0]["canonical"] == canonical
+    assert by_canon["hits"][0]["via"] == "id"
+
+    by_uuid = await _search(actions, str(tid)[:8])
+    assert by_uuid["hits"] and by_uuid["hits"][0]["canonical"] == canonical
+
+
+async def test_id_door_fires_on_a_token_inside_a_longer_query(actions: Actions) -> None:
+    """A quoted id doesn't have to be the WHOLE query — 'dd27f61f succession torch' must
+    still surface the thread the token names, merged above the ordinary text hits, while
+    the pure-FTS path for queries with no id token never regresses."""
+    tid = await open_thread(actions, "the succession torch passes at the seam")
+    canonical = await actions.pool.fetchval(
+        "SELECT canonical FROM objects WHERE id=$1", tid)
+
+    out = await _search(actions, f"{str(tid)[:8]} succession torch")
+    assert out["hits"][0]["canonical"] == canonical
+    assert out["hits"][0]["via"] == "id"
+    assert "id-fragment" not in out.get("note", "")  # not the bare-query early-return shape
+
+    # a plain multi-word query with no id token still finds it by text, unregressed
+    out2 = await _search(actions, "succession torch")
+    assert out2["hits"] and out2["hits"][0]["canonical"] == canonical
+    assert out2["hits"][0]["via"] != "id"
 
 
 async def test_a_keyword_bag_relaxes_to_any_term(actions: Actions) -> None:

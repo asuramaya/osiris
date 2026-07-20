@@ -232,6 +232,19 @@ async def _hide_foreign_reflections(
     return [h for h in hits if h.get("type") != "Reflection" or h["id"] in ok]
 
 
+_ID_TOKEN_OUTER = re.compile(r"[0-9a-f][0-9a-f-]{5,35}")
+_ID_TOKEN_HEX = re.compile(r"[0-9a-f]{6,32}")
+
+
+def _is_id_token(word: str) -> bool:
+    """A bare hex fragment (6-32 hex chars, dashes allowed) is a RULING/THREAD ID quoted
+    by its prefix — never ordinary vocabulary (no real word fullmatches this). Pure, so
+    both the whole-query and embedded-token cases share one definition of 'looks like an
+    id'."""
+    w = word.lower()
+    return bool(_ID_TOKEN_OUTER.fullmatch(w) and _ID_TOKEN_HEX.fullmatch(w.replace("-", "")))
+
+
 async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
     """search v2, MAX LEVEL (operator ruling a0cfcca1) — ONE engine, FOUR doors, one fused
     answer. Lexical ladder: strict FTS (websearch AND) → OR-relaxation (any-term bags) →
@@ -250,21 +263,30 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     caller = str(args.get("caller") or "") or _ACL_CALLER.get()
     if not q:
         return {"hits": [], "note": "pass q — words, phrases, or \"quoted phrases\""}
-    # THE ID DOOR (Soundwave, msg 244: 'tonight's cross-referencing is all manual memory'):
-    # a bare hex fragment is a RULING/THREAD ID, not vocabulary — look it up by prefix and
-    # answer directly, testimony included. Fleet convention quotes ids by their prefix.
-    frag = q.lower()
-    if re.fullmatch(r"[0-9a-f][0-9a-f-]{5,35}", frag) and \
-            re.fullmatch(r"[0-9a-f]{6,32}", frag.replace("-", "")):
+    # THE ID DOOR (Soundwave, msg 244: 'tonight's cross-referencing is all manual memory';
+    # extended per Alfred V's repro, thread 4ffe0eb9): a hex TOKEN is a RULING/THREAD ID,
+    # not vocabulary — a holder may quote it as the OBJECT's uuid prefix (dd27f61f…) or as
+    # its CANONICAL short hash (thread:23423ff856ab — the fleet's actual quoting habit),
+    # alone or embedded in a longer query ('dd27f61f succession torch'). Look it up by
+    # prefix against BOTH forms, wherever the token sits in the query, and answer directly,
+    # testimony included.
+    words = [w for w in q.split() if w]
+    id_candidates = list(dict.fromkeys(w.lower() for w in words if _is_id_token(w)))
+    id_hits: list[dict[str, Any]] = []
+    if id_candidates:
         idrows = await pool.fetch(
             "SELECT DISTINCT ON (o.id) o.id, o.type, o.canonical, a.value #>> '{}' AS text, "
             " a.source_id, a.evidence_class, a.observed_at "
             "FROM objects o LEFT JOIN current_assertions a ON a.object_id = o.id "
             " AND a.name IN ('summary','name') "
-            "WHERE o.status = 'active' AND o.id::text LIKE $1 || '%' "
-            "ORDER BY o.id, a.confidence DESC, a.observed_at DESC LIMIT 5", frag)
+            "WHERE o.status = 'active' AND EXISTS ("
+            "  SELECT 1 FROM unnest($1::text[]) AS frag "
+            "  WHERE o.id::text LIKE frag || '%' "
+            "     OR regexp_replace(o.canonical, '^[^:]+:', '') LIKE frag || '%') "
+            "ORDER BY o.id, a.confidence DESC, a.observed_at DESC "
+            "LIMIT $2", id_candidates, min(20, 5 * len(id_candidates)))
         if idrows:
-            hits = [
+            id_hits = [
                 {"id": str(r["id"]), "type": r["type"], "canonical": r["canonical"],
                  "field": "id", "snippet": (r["text"] or r["canonical"])[:160],
                  **({"source": r["source_id"], "grade": r["evidence_class"],
@@ -272,15 +294,23 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
                  "rank": 1.0, "via": "id"}
                 for r in idrows]
             # the id door is still a read lens — knowing a reflection's id is not a key
-            hits = await _hide_foreign_reflections(pool, hits, caller)
-            await pool.execute(
-                "INSERT INTO search_log (query, caller, hits, top_rank, relaxed) "
-                "VALUES ($1,$2,$3,1.0,false)", q, caller, len(hits))
-            return {"hits": hits, "q": q, "note": "id-fragment lookup (prefix match)"}
+            id_hits = await _hide_foreign_reflections(pool, id_hits, caller)
+    if len(words) == 1 and id_hits:
+        # the WHOLE query is one id token — answer directly, the legacy shape unchanged
+        await pool.execute(
+            "INSERT INTO search_log (query, caller, hits, top_rank, relaxed) "
+            "VALUES ($1,$2,$3,1.0,false)", q, caller, len(id_hits))
+        return {"hits": id_hits, "q": q, "note": "id-fragment lookup (prefix match)"}
+    # an id token embedded in a longer query falls through here: the FTS ladder below
+    # still runs on the FULL query (never regress the pure-FTS path) and id_hits merge in
+    # ABOVE the fused text hits further down.
     # stopword-only / punctuation-only queries parse to an EMPTY tsquery: zero hits by
     # construction, not a recall failure — returning early keeps them OUT of the misses log
-    # (they would poison the exact telemetry the embeddings tripwire reads).
-    if not await pool.fetchval("SELECT websearch_to_tsquery('english', $1)::text", q):
+    # (they would poison the exact telemetry the embeddings tripwire reads) — UNLESS an id
+    # token already answered part of the query, in which case that answer stands and the
+    # (harmlessly empty) FTS leg below just contributes nothing further.
+    if not id_hits and not await pool.fetchval(
+            "SELECT websearch_to_tsquery('english', $1)::text", q):
         return {"hits": [], "q": q,
                 "note": "query is all stopwords/punctuation — nothing to match (not logged)"}
     # rank inside `cand`, headline ONLY the surviving rows (`top`): ts_headline is the
@@ -308,7 +338,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     relaxed = fuzzy = False
     # explicit syntax (quotes, OR, minus) means the asker KNEW the language — no door
     # behind this one may second-guess it (the OR-relaxation's law, inherited by trigram)
-    words = [w for w in q.split() if w]
+    # (`words` was already split off `q` by the id door above; q is unchanged since)
     plain_bag = ('"' not in q and " or " not in q.lower()
                  and not any(w.startswith("-") for w in words))  # a leading '-' is NOT
     # syntax; an inner hyphen (hands-free, a-sibling) is just a word
@@ -349,8 +379,15 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     # embedder / empty index / any error) it contributes nothing and costs nothing.
     sem_hits = await _semantic_hits(pool, q, limit)
     hits = _fuse_ranked(lex_hits, sem_hits, limit)
+    if id_hits:
+        # an id token embedded in the query found an exact match — it leads, the fused
+        # textual/semantic hits follow beneath it, deduped so nothing appears twice
+        seen_ids = {h["id"] for h in id_hits}
+        hits = id_hits + [h for h in hits if h["id"] not in seen_ids]
+        hits = hits[:limit]
     # the house boundary (6c18709f): every door's rows converge here — one filter covers
-    # strict, relaxed, trigram and semantic alike (the id door filtered at its early return)
+    # strict, relaxed, trigram and semantic alike (id_hits were already filtered when
+    # computed, so re-filtering here is a no-op for them and real work for the rest)
     hits = await _hide_foreign_reflections(pool, hits, caller)
     semantic = any(h["via"] in ("semantic", "both") for h in hits)
     # a superseded decision must not read as live testimony (the supersedes verb,
