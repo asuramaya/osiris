@@ -668,6 +668,22 @@ async def dispatch_dm(
         return {"mode": "pull-only",
                 "detail": f"{target} is retired — the trigger never reanimates a deliberate "
                           "close; the estate carries the mail to the next mint"}
+    # ALREADY SETTLED BY THE LINEAGE (the per-agent-id read-state class, bug 00378259 —
+    # its third bite of the day, this one on the trigger's own deliverable query: it keys
+    # settlement on the EXACT addressed id, so mail acked by a successor generation reads
+    # deliverable forever and earns a phantom nudge. Caught live when the lane's first
+    # unsolicited delivery knocked on THIS builder's window with mail its own lineage
+    # settled days earlier.)
+    from src.orchestrator.agents import _generation
+    base = _generation(target)[0]
+    if await pool.fetchval(
+            "SELECT 1 FROM message_recipients r WHERE r.message_id=$1 "
+            "AND r.read_at IS NOT NULL AND (r.agent_id = $2 OR r.agent_id = $3 "
+            "OR r.agent_id LIKE $3 || '-%') LIMIT 1", msg_id, addressee, base):
+        return {"mode": "settled",
+                "detail": "already settled by the addressee's lineage — the deliverable "
+                          "query lags on cross-generation read-state (00378259); "
+                          "nothing to wake"}
     # wall #4 — the brakes, cheapest first
     if await _last_wake_mode_msg(pool, msg_id) in ("dm-reply", "dm-resume", "dm-poke"):
         return {"mode": "skipped-once-per-message",
@@ -717,8 +733,6 @@ async def dispatch_dm(
                 "detail": "the addressee's transcript is moving right now (genuinely "
                           "mid-turn) — its own turn's end surfaces the DM; no second "
                           "process beside a working mind"}
-    from src.orchestrator.agents import _generation
-    base = _generation(target)[0]
     doors = {Path(r["job_dir"]).name for r in await pool.fetch(
         "SELECT job_dir FROM agent_mounts WHERE (agent_id=$1 "
         "OR agent_id LIKE $1 || '-%') AND job_dir IS NOT NULL", base)}

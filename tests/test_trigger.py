@@ -1393,3 +1393,31 @@ async def test_a_nudged_message_is_never_renudged(
     assert d1["mode"] == "nudged" and d2["mode"] == "skipped-once-per-message"
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM agent_wakes WHERE message_id=$1", msg_id) == 1
+
+async def test_mail_settled_by_a_successor_is_never_phantom_nudged(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """The per-agent-id read-state class (bug 00378259), third bite: the deliverable query
+    keys settlement on the EXACT addressed id, so a DM to an old generation that the LIVING
+    HEAD already settled reads deliverable forever — caught live when the lane's first
+    unsolicited delivery knocked on its own builder's window with mail settled days
+    earlier. The dispatch now checks settlement lineage-wide and answers 'settled'."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    # a DM addressed to the OLD generation of the lineage the fixture's head belongs to
+    out = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                             to_agent="agent:abcd1234-ii", body="old ask, long since done")
+    msg_id = int(out["id"])
+    # ...settled by a DIFFERENT generation of the same lineage (the living head)
+    await actions.pool.execute(
+        "INSERT INTO message_recipients (message_id, agent_id, read_at) "
+        "VALUES ($1,$2,now())", msg_id, "agent:abcd1234-iv")
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("settled mail must never wake anything")
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234-ii", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_boom, windows=_no_windows, jobs=_boom, nudge=_boom)
+    assert d["mode"] == "settled"
+    assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
