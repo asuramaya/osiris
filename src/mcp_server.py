@@ -1336,6 +1336,71 @@ async def retire(reason: str = "", acknowledge_leftovers: bool = False,
 
 
 @mcp.tool()
+async def pause_seat(paused: bool = True, target: str | None = None, reason: str = "",
+                     session_anchor: str | None = None,
+                     ctx: Context | None = None) -> dict[str, Any]:
+    """The explicit per-seat PAUSE control (the background-session adapter, ruling 6c4d0b62
+    wall #2). While a seat is paused the DM push lane will NOT resume it — its mail QUEUES in
+    the box (nothing is lost, at-least-once holds) until pause_seat(paused=False) releases it;
+    the very next dispatch (a fresh send, or the worker sweep) drains the queue. Pull is
+    untouched: a paused seat that takes a turn still reads its own inbox normally.
+
+    `target` = None pauses YOURSELF (the commonest use: going quiet on purpose). A seat id
+    ('seat:…'), agent id ('agent:…'), or plain seat name pauses THAT seat — allowed for any
+    mounted caller BY DESIGN (flat mechanism, wall #3: hierarchy is convention, not substrate
+    privilege), but the act is LOUD: stamped in your name, visible in the graph and in every
+    queued sender's receipt, and reversible by anyone the same way. Pausing another seat
+    without its knowledge is the kind of act the record exists to make expensive.
+
+    The stamp lands on the SEAT object when the target holds one (a pause survives
+    succession — it gates the chair, not the incumbent), else on the agent object."""
+    ident = await _ident_for(ctx, session_anchor)
+    if ident is None:
+        return {"error": "mount first — a pause must say whose hand pulled the lever",
+                "why": _anchorless(ctx)}
+    pool = await _pool_get()
+    a = Actions(pool)
+    from src.orchestrator.folds import canonical_agent, living_head
+    from src.orchestrator.seats import held_seat, seat_receipt
+    who = target or ident.agent_id
+    if who.startswith("seat:"):
+        if await seat_receipt(pool, who) is None:
+            return {"error": f"no such living seat: '{who}' — check fleet()"}
+        stamp_on = who
+    elif who.startswith("agent:"):
+        head = await living_head(pool, await canonical_agent(pool, who))
+        bound = await held_seat(pool, head)
+        stamp_on = (bound or {}).get("seat_id") or head
+    else:  # a plain name — resolve like a DM address does
+        from src.orchestrator.agents import resolve_seat
+        resolved = await resolve_seat(a, who)
+        if resolved["agent"] is None:
+            return {"error": f"no seat or agent named '{who}' — check fleet()"}
+        stamp_on = resolved.get("seat_id") or resolved["agent"]
+    obj_type = "Seat" if stamp_on.startswith("seat:") else "Agent"
+    oid = await a.create_or_find_object(obj_type, stamp_on, ident.agent_id)
+    now = datetime.now(UTC)
+    await a.assert_property(oid, "paused", paused, ident.agent_id, now, 0.9,
+                            evidence_class="self_declared")
+    if reason:
+        await a.assert_property(oid, "paused_reason", reason[:500], ident.agent_id, now, 0.9,
+                                evidence_class="self_declared")
+    queued = 0
+    if stamp_on.startswith("agent:") or stamp_on.startswith("seat:"):
+        queued = await pool.fetchval(
+            "SELECT count(*) FROM fleet_messages m WHERE m.to_agent=$1 AND m.read_at IS NULL "
+            "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
+            "  AND r.read_at IS NOT NULL)", stamp_on) or 0
+    return {"paused" if paused else "released": stamp_on, "by": ident.agent_id,
+            **({"reason": reason} if reason else {}),
+            **({"queued_dms": queued} if queued else {}),
+            "note": ("the DM push lane now queues this seat's mail — release with "
+                     "pause_seat(paused=False, target=...)" if paused else
+                     "the queue drains on the next dispatch (a fresh send, or the worker "
+                     "sweep within the minute)")}
+
+
+@mcp.tool()
 async def candidates(project: str | None = None, limit: int = 50,
                      ctx: Context | None = None) -> dict[str, Any]:
     """THE PILE THIS SEAT MUST JUDGE — the miner's guesses about YOUR project, unread by any mind.
@@ -1907,6 +1972,21 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
         out["seat"] = res.get("seat")
         out["lineage_head"] = res.get("lineage_head")
         out["listener"] = await mounts.agent_liveness(pool, res["to_agent"])
+        # THE IMMEDIATE LEG (the background-session adapter, ruling 6c4d0b62): a DM's wake
+        # fires ON ARRIVAL, never on a clock — this very call dispatches it, and the receipt
+        # below is the PER-HOP truth (resumed / delivered / queued-* / pull-only), not a
+        # guess about what some future sweep might do. The worker tick stays as the backstop
+        # that drains gated mail. A dispatch failure must never fail the send: the message
+        # is already committed, the sweep will retry, and the receipt says so honestly.
+        if not res["dedup"]:
+            try:
+                from src.orchestrator.trigger import dispatch_dm
+                out["dispatch"] = await dispatch_dm(
+                    pool, addressee=res["to_agent"], msg_id=res["id"], sender=actor)
+            except Exception as exc:  # noqa: BLE001 — the send already committed; confess
+                out["dispatch"] = {"mode": "deferred",
+                                   "detail": f"immediate dispatch failed ({exc}) — the "
+                                             "worker sweep is the backstop"}
         if await pool.fetchval(
                 "SELECT 1 FROM current_assertions a JOIN objects o ON o.id=a.object_id "
                 "WHERE o.canonical=$1 AND a.name='is_sidechain' "

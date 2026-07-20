@@ -200,6 +200,31 @@ class Settings(BaseSettings):
     # 79 `claude -p` sessions in 18 hours on an abandoned project (2026-07-12). A retry that has
     # failed 79 times is not a retry; it is a leak.
     osiris_wake_message_attempts: int = 3
+    # THE BACKGROUND-SESSION ADAPTER (ruling 6c4d0b62): the fleet runs as harness-backgrounded
+    # sessions under one spawner pty — no pty fd to poke, no turn in flight to stop-hook — so
+    # RESUME is the DM lane's primary push: a DM's arrival dispatches immediately (send()
+    # itself dispatches; the worker tick is the backstop that drains queues), never a clock.
+    # This arm is DELIBERATELY SEPARATE from osiris_trigger_poke_only: that switch holds the
+    # BROADCAST spawn rungs (the operator's 2026-07-19 'no critter background agents' word,
+    # which still stands for room mail); this one arms the DM resume the 2026-07-20 adapter
+    # ruling made the push lane. Off = the DM lane is pull-only again.
+    osiris_dm_resume: bool = True
+    # MID-TURN, not "recently live": an addressee whose activity is fresher than this is
+    # actually working RIGHT NOW — deliver, don't resume (its own turn's end surfaces the DM).
+    # Distinct from osiris_owner_live_secs (the broadcast lane's 15-min liveness) because for
+    # a backgrounded session "live 10 minutes ago" does NOT mean "perceiving": it idles with
+    # no next turn coming, and mail beside it sits unread forever — the exact silent case the
+    # adapter exists to close.
+    osiris_dm_active_secs: int = 120
+    # The per-seat mail-wake rate brake (anti-spiral wall #4 of 6c4d0b62): at most this many
+    # wakes per ADDRESSEE per hour, on top of per-message dedup, the fleet hourly budget and
+    # the daily dollar ceiling. An A<->B reply ping-pong is legal work until a brake says
+    # otherwise; this is the brake that says it per seat. 0 = unbraked.
+    osiris_seat_wake_hourly_cap: int = 6
+    # Model for DM resumes. EMPTY ON PURPOSE (no --model flag): a DM resume continues a REAL
+    # seat's own session — pinning the triage model onto it would be a silent model downgrade
+    # of a working seat (the rug-pull class). The triage/mint lanes keep osiris_wake_model.
+    osiris_dm_resume_model: str = ""
     # The operator's STANDING model choice (the intent). The fable harness silently demotes
     # fable→opus when it senses danger (ruling f2ae6346); the swap-detector flags an observed
     # model that diverges from this — the confession backstop the cold-boot ritual can't be.

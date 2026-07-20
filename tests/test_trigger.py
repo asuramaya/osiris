@@ -17,7 +17,13 @@ import pytest
 from src.actions.core import Actions
 from src.orchestrator import trigger as trigger_module
 from src.orchestrator.mailbox import OPERATOR_ADDR, read_inbox, send_message
-from src.orchestrator.trigger import _WAKE_PROMPT, should_wake, trigger_mail_tick, wake_status
+from src.orchestrator.trigger import (
+    _WAKE_PROMPT,
+    dispatch_dm,
+    should_wake,
+    trigger_mail_tick,
+    wake_status,
+)
 
 NOW = datetime(2026, 7, 6, tzinfo=UTC)
 
@@ -27,7 +33,9 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
               ceiling: int = 8_000_000, sense: str = "",
               wake_model: str = "", attempts: int = 0,
               daily_usd: float = -1.0, projects: str = "",
-              poke_only: bool = False) -> SimpleNamespace:
+              poke_only: bool = False, dm_resume: bool = True,
+              dm_active: int = 120, seat_cap: int = 0,
+              dm_resume_model: str = "") -> SimpleNamespace:
     # grace defaults to 0 (disabled) so the rate-cap / lease tests exercise those bounds in
     # isolation; the wake-grace tests set it explicitly. sense="" → resume resolution looks at
     # ~/.claude/projects (no anchored transcript for the test ids there → mint), so the legacy
@@ -36,6 +44,7 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
     # — rate caps, leases, alternation — in isolation. The ceiling has its own suite
     # (test_ceiling.py) and its own trigger test below; a spend gate silently swallowing every
     # other test's wake would hide the very behaviour they exist to pin.
+    # seat_cap defaults to 0 (unbraked) for the same isolation reason; the brake has its own test.
     return SimpleNamespace(osiris_trigger_enabled=enabled, osiris_trigger_rate_cap=rate_cap,
                            osiris_trigger_window_secs=window, osiris_mail_lease_secs=lease,
                            osiris_trigger_grace_secs=grace, osiris_owner_live_secs=live,
@@ -47,7 +56,11 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
                            osiris_daily_usd=daily_usd,
                            osiris_trigger_projects=projects,
                            osiris_poke_min_idle_secs=600,
-                           osiris_trigger_poke_only=poke_only)
+                           osiris_trigger_poke_only=poke_only,
+                           osiris_dm_resume=dm_resume,
+                           osiris_dm_active_secs=dm_active,
+                           osiris_seat_wake_hourly_cap=seat_cap,
+                           osiris_dm_resume_model=dm_resume_model)
 
 
 async def _no_windows() -> list[dict[str, Any]]:
@@ -893,25 +906,39 @@ async def test_poke_only_arms_the_window_and_nothing_else(actions: Actions) -> N
     assert rep3["poke_only_held"] == 1 and rep3["resumed"] == 0
 
 
-async def test_poke_only_holds_the_dm_resume_rung_too(actions: Actions) -> None:
-    """The DM lane's resume is a spawn on the operator's card — poke-only holds it the
-    same way: a windowless addressee's DM stays pull-only, no process."""
-    a = await actions.create_or_find_object("Agent", "agent:demo-ii", "session")
-    await actions.assert_property(a, "project", "demo", "session", NOW, 0.9)
-    await send_message(actions.pool, from_agent="agent:other", from_project="other",
-                       to_agent="agent:demo-ii", body="for your eyes")
-    from src.orchestrator.mounts import save_mount
-    await save_mount(actions.pool, job_dir="/x/jobs/cafe0001", agent_id="agent:demo-ii",
-                     project="demo", cwd="/repo/demo", model=None,
-                     session_key="whisper:cafe0001", alive=False)
+async def test_the_dm_lane_rides_its_own_arm_not_poke_only(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """SUPERSESSION ON THE RECORD (ruling 6c4d0b62): the poke-only arm (operator,
+    2026-07-19) used to hold the DM resume rung too — then the adapter ruling (2026-07-20)
+    made resume the DM lane's PRIMARY push. poke_only still holds the BROADCAST spawn
+    rungs (that word stands: no critter background agents); the DM lane rides its OWN arm,
+    osiris_dm_resume — poke_only=True no longer touches it, and dm_resume=False is the
+    switch that darkens it."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    m1 = await _dm_to_owner(actions)
+    calls: list[dict[str, Any]] = []
 
     async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
-        raise AssertionError("poke-only resumed a DM addressee — the forbidden rung fired")
+        calls.append(kw)
 
-    rep = await trigger_mail_tick(actions, settings=_settings(enabled=True, poke_only=True),
-                                  spawn=_spawn)
-    assert rep["poke_only_held"] >= 1 and rep["resumed"] == 0
-    assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
+    rep = await trigger_mail_tick(
+        actions, settings=_settings(enabled=True, sense=str(sense), poke_only=True),
+        spawn=_spawn)
+    assert rep["resumed"] == 1 and calls[0].get("resume_session") == FULL_SID
+
+    # the resumed session settles its mail; the DM lane's own dark arm then holds a FRESH
+    # DM as 'held', counted where the operator's chrome already looks
+    await actions.pool.execute(
+        "INSERT INTO message_recipients (message_id, agent_id, read_at) "
+        "VALUES ($1,$2,now())", m1, "agent:abcd1234")
+    await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                       to_agent="agent:abcd1234", body="a second word")
+    rep2 = await trigger_mail_tick(
+        actions, settings=_settings(enabled=True, sense=str(sense), dm_resume=False),
+        spawn=_spawn)
+    assert len(calls) == 1 and rep2["resumed"] == 0
+    assert rep2["poke_only_held"] == 1
 
 
 async def test_a_busy_window_defers_and_spends_nothing(actions: Actions) -> None:
@@ -996,3 +1023,234 @@ async def test_a_mint_declares_its_parent_when_the_room_has_a_seat(
 
     rep = await trigger_mail_tick(actions, settings=_settings(enabled=True), spawn=_spawn)
     assert rep["woke"] == 1 and seen == ["agent:demo"]   # born declared, the seat's head
+
+# ═══ the background-session adapter (ruling 6c4d0b62): dispatch_dm, the per-hop grammar ═══
+# The fleet is harness-backgrounded sessions under one spawner pty — no pty fd, no turn in
+# flight — so RESUME is the DM lane's primary push, dispatched PER MESSAGE on arrival
+# (send()'s immediate leg) with the worker tick as the queue-draining backstop. These tests
+# pin the four walls: immediate, gated (needs-input / pause), flat, braked.
+
+
+async def test_dispatch_is_immediate_and_carries_the_receipt(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """The immediate leg: ONE dispatch_dm call — the thing send() fires on arrival — pushes
+    the DM as the addressee's next turn and returns the per-hop receipt. No tick, no clock:
+    natural mail arrival IS the spacing (a schedule halts-then-floods into rate limits)."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    msg_id = await _dm_to_owner(actions)
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append((repo, kw))
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_spawn, windows=_no_windows)
+    assert d["mode"] == "resumed" and FULL_SID[:8] in d["detail"]
+    assert calls[0][1].get("resume_session") == FULL_SID
+    assert await actions.pool.fetchval(
+        "SELECT mode FROM agent_wakes ORDER BY id DESC LIMIT 1") == "dm-resume"
+
+
+async def test_an_fyi_dm_never_wakes(actions: Actions, tmp_path: Path) -> None:
+    """The grammar's loop terminator: grade='fyi' + ack settles WITHOUT minting a turn — so
+    an fyi never resumes anybody. It waits, readable, for the addressee's own next turn;
+    this is what ends an A<->B exchange instead of ping-ponging it to the ceiling."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    out = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                             to_agent="agent:abcd1234", body="done, for the record",
+                             grade="fyi")
+
+    async def _boom(repo: str, prompt: str, **kw: Any) -> None:
+        raise AssertionError("an fyi minted a turn — the terminator failed")
+
+    st = _settings(enabled=True, sense=str(sense))
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=int(out["id"]),
+                          sender="agent:sender", settings=st, spawn=_boom,
+                          windows=_no_windows)
+    assert d["mode"] == "queued-fyi"
+    # and the backstop sweep holds the same line — two callers, one grammar
+    rep = await trigger_mail_tick(actions, settings=st, spawn=_boom)
+    assert rep.get("dm_queued") == 1 and rep["woke"] == 0
+    assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
+
+
+async def test_a_paused_seat_queues_and_release_drains(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """Wall #2, the explicit arm: paused=true holds the push lane (mail queues, nothing
+    lost); the newest paused assertion wins, so a release is just the next word — and the
+    queued DM rides the very next dispatch."""
+    from datetime import timedelta
+
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    msg_id = await _dm_to_owner(actions)
+    a = await actions.create_or_find_object("Agent", "agent:abcd1234", "agent:abcd1234")
+    await actions.assert_property(a, "paused", True, "agent:abcd1234", NOW, 0.9,
+                                  evidence_class="self_declared")
+    spawned: list[str] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        spawned.append(repo)
+
+    st = _settings(enabled=True, sense=str(sense))
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender", settings=st, spawn=_spawn,
+                          windows=_no_windows)
+    assert d["mode"] == "queued-paused" and spawned == []
+    # the release: a NEWER paused=false — latest word wins, the queue drains
+    await actions.assert_property(a, "paused", False, "agent:abcd1234",
+                                  NOW + timedelta(hours=1), 0.9,
+                                  evidence_class="self_declared")
+    d2 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                           sender="agent:sender", settings=st, spawn=_spawn,
+                           windows=_no_windows)
+    assert d2["mode"] == "resumed" and spawned == ["/repo/demo"]
+
+
+async def test_needs_input_gates_until_the_operators_word(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """Wall #2, the implicit arm: a seat whose last act was asking the human (an undismissed
+    decision/hands brief, quiet since) is not peer-resumable — its mail queues; the human's
+    word is the release. Peer mail must never preempt the operator's judgment."""
+    sense = await _stale_resumable_owner(actions, tmp_path)  # mount last_seen: 1h ago
+    brief = await send_message(actions.pool, from_agent="agent:abcd1234",
+                               from_project="demo", to_project=OPERATOR_ADDR,
+                               body="which retraction tier?", desk_kind="decision")
+    msg_id = await _dm_to_owner(actions)
+    spawned: list[str] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        spawned.append(repo)
+
+    st = _settings(enabled=True, sense=str(sense))
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender", settings=st, spawn=_spawn,
+                          windows=_no_windows)
+    assert d["mode"] == "queued-needs-input" and "decision" in d["detail"]
+    assert spawned == []
+    # the human answers (the brief is dismissed) — the gate lifts, the queue drains
+    await actions.pool.execute(
+        "INSERT INTO message_recipients (message_id, agent_id, read_at) "
+        "VALUES ($1,$2,now())", int(brief["id"]), OPERATOR_ADDR)
+    d2 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                           sender="agent:sender", settings=st, spawn=_spawn,
+                           windows=_no_windows)
+    assert d2["mode"] == "resumed" and spawned == ["/repo/demo"]
+
+
+async def test_an_fyi_brief_never_gates(actions: Actions, tmp_path: Path) -> None:
+    """Only decision/hands briefs mean 'awaiting the word' — a loop-closed fyi on the desk
+    must not freeze its sender's inbound lane."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    await send_message(actions.pool, from_agent="agent:abcd1234", from_project="demo",
+                       to_project=OPERATOR_ADDR, body="shipped, fyi", desk_kind="fyi")
+    msg_id = await _dm_to_owner(actions)
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        pass
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_spawn, windows=_no_windows)
+    assert d["mode"] == "resumed"
+
+
+async def test_a_seat_addressed_dm_reaches_the_holder(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """THE SEAT GAP, closed: name-addressed mail stores the SEAT id (B2), and the old DM
+    lane matched it against agent_mounts verbatim — so every seat-BOUND addressee (the
+    whole charter pattern, alfred's exact case) was silently pull-only. The dispatch now
+    resolves seat → holder → living head before looking for a session."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    seat = await actions.create_or_find_object("Seat", "seat:demo-charter", "session")
+    holder = await actions.create_or_find_object("Agent", "agent:abcd1234", "session")
+    await actions.create_link(holder, seat, "holds", "session", NOW, 0.9)
+    out = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                             to_agent="seat:demo-charter", body="for the seat")
+    calls: list[dict[str, Any]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append(kw)
+
+    d = await dispatch_dm(actions.pool, addressee="seat:demo-charter",
+                          msg_id=int(out["id"]), sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_spawn, windows=_no_windows)
+    assert d["mode"] == "resumed"
+    assert calls[0].get("resume_session") == FULL_SID  # the HOLDER's session, via the seat
+
+
+async def test_the_per_seat_brake_holds_the_spiral(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """Wall #4: an A<->B ping-pong is legal work until a brake says otherwise — and the
+    per-SEAT hourly cap is the brake that says it (the per-project cap can't see a spiral
+    burning one seat inside a busy project)."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    m1 = await _dm_to_owner(actions)
+    out2 = await send_message(actions.pool, from_agent="agent:other", from_project="other",
+                              to_agent="agent:abcd1234", body="a different word")
+    calls: list[dict[str, Any]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append(kw)
+
+    st = _settings(enabled=True, sense=str(sense), seat_cap=1)
+    d1 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=m1,
+                           sender="agent:sender", settings=st, spawn=_spawn,
+                           windows=_no_windows)
+    d2 = await dispatch_dm(actions.pool, addressee="agent:abcd1234",
+                           msg_id=int(out2["id"]), sender="agent:other", settings=st,
+                           spawn=_spawn, windows=_no_windows)
+    assert d1["mode"] == "resumed" and d2["mode"] == "braked"
+    assert len(calls) == 1
+
+
+async def test_the_grace_collapses_a_burst(actions: Actions, tmp_path: Path) -> None:
+    """Three DMs land in one minute: the FIRST resumes; the rest see the wake in flight and
+    ride along — the resumed session reads its WHOLE box, so nothing needs a second spawn."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    m1 = await _dm_to_owner(actions)
+    out2 = await send_message(actions.pool, from_agent="agent:third", from_project="other",
+                              to_agent="agent:abcd1234", body="me too")
+    calls: list[dict[str, Any]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append(kw)
+
+    st = _settings(enabled=True, sense=str(sense), grace=300)
+    d1 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=m1,
+                           sender="agent:sender", settings=st, spawn=_spawn,
+                           windows=_no_windows)
+    d2 = await dispatch_dm(actions.pool, addressee="agent:abcd1234",
+                           msg_id=int(out2["id"]), sender="agent:third", settings=st,
+                           spawn=_spawn, windows=_no_windows)
+    assert d1["mode"] == "resumed" and d2["mode"] == "queued-wake-in-flight"
+    assert len(calls) == 1
+
+
+async def test_a_dm_resume_never_pins_the_triage_model(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """A DM resume continues a REAL seat's own session — osiris_wake_model (the haiku
+    triage pin) must NOT ride it: that would be a silent model downgrade of a working seat
+    (the rug-pull class). The DM lane has its own knob, empty by default."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    await _dm_to_owner(actions)
+    calls: list[dict[str, Any]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append(kw)
+
+    rep = await trigger_mail_tick(
+        actions, settings=_settings(enabled=True, sense=str(sense),
+                                    wake_model="claude-haiku-4-5-20251001"),
+        spawn=_spawn)
+    assert rep["resumed"] == 1
+    assert calls[0].get("model") is None  # the seat's own default, never the triage pin

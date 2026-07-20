@@ -804,3 +804,61 @@ async def test_unread_split_sums_to_unread_count(actions: Actions) -> None:
     total = await unread_count(p, "myroom", reader_agent=me)
     assert split == {"mail": 1, "dm": 1}
     assert split["mail"] + split["dm"] == total
+
+
+async def test_send_tool_echoes_the_per_hop_dispatch_receipt(actions: Actions) -> None:
+    """The adapter's visibility half (ruling 6c4d0b62): a DM's send() receipt carries the
+    PER-HOP dispatch outcome — what actually happened on arrival, never a guess about a
+    future sweep. In this hermetic world the trigger is dark, and the receipt says exactly
+    that instead of pretending a wake is coming."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:alpha-1", session="alpha001", project="alpha", model=None, cwd=None)
+    try:
+        out = await srv.send("a word for you alone", to_agent="agent:beta-9", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["dispatch"]["mode"] == "pull-only"
+    assert "dark" in out["dispatch"]["detail"]
+
+
+async def test_pause_seat_tool_stamps_the_lever_the_dispatch_reads(
+    actions: Actions,
+) -> None:
+    """The explicit per-seat pause control (6c4d0b62 wall #2), tool to dispatch: pausing
+    stamps the lever the DM push lane checks; releasing is the next word, latest wins."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.trigger import _paused
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:alpha-1", session="alpha001", project="alpha", model=None, cwd=None)
+    try:
+        out = await srv.pause_seat(reason="deep work — hold my mail", ctx=ctx)
+        assert out["paused"] == "agent:alpha-1" and out["by"] == "agent:alpha-1"
+        assert await _paused(actions.pool, ["agent:alpha-1"]) == "agent:alpha-1"
+        out2 = await srv.pause_seat(paused=False, ctx=ctx)
+        assert out2["released"] == "agent:alpha-1"
+        assert await _paused(actions.pool, ["agent:alpha-1"]) is None
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)

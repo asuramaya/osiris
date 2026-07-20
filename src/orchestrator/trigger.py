@@ -142,8 +142,8 @@ async def _projects_with_unread(
     BROADCAST mail. DELIVERABLE = no recipient has settled it AND none holds a live lease (mail
     being processed right now would double-spawn if re-woken; lease expiry re-arms). Broadcasts
     only: the wake ensures SOMEONE in the project looks, and a broadcast read by one agent still
-    shows in the others' inboxes. DMs rely on pull until agent-precise waking (a later phase).
-    The operator desk is skipped — never woken."""
+    shows in the others' inboxes. DMs dispatch per-message through dispatch_dm (the
+    background-session adapter). The operator desk is skipped — never woken."""
     rows = await pool.fetch(
         "SELECT DISTINCT ON (m.to_project) m.to_project, m.id, m.from_agent, "
         " extract(epoch FROM (now() - m.created_at)) AS age_secs FROM fleet_messages m "
@@ -368,10 +368,10 @@ def _window_for(windows: list[dict[str, Any]], anchor_sids: set[str]) -> str | N
 async def _dms_with_unread(
     pool: asyncpg.Pool, lease_secs: int
 ) -> list[tuple[str, int, str | None]]:
-    """(addressee, oldest deliverable DM id, sender) for every agent with unsettled DM mail —
-    fleet mail phase 3 (task #61). A DM's wake ladder is DELIVER → RESUME → NOTHING: a live
-    addressee reads its own box; a stale addressee is resumed via ITS OWN session; and there
-    is NO mint lane — a fresh twin is not the addressee, and a private message must never be
+    """(addressee, oldest deliverable DM id, sender) for every agent with unsettled DM mail.
+    Each row feeds dispatch_dm (the background-session adapter, 6c4d0b62): deliver a mid-turn
+    addressee, poke an open manager window, RESUME the backgrounded session — and there is NO
+    mint lane — a fresh twin is not the addressee, and a private message must never be
     delivered to a stranger. Undeliverable DMs stay pull-only (and follow the seat at the
     next mint — the estate)."""
     rows = await pool.fetch(
@@ -482,6 +482,261 @@ async def _last_wake_mode(pool: asyncpg.Pool, project: str, message_id: int) -> 
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT mode FROM agent_wakes WHERE to_project=$1 AND message_id=$2 "
         "ORDER BY woke_at DESC LIMIT 1", project, message_id)
+
+
+# ══════════════════════ THE BACKGROUND-SESSION ADAPTER (ruling 6c4d0b62) ══════════════════════
+# The fleet runs as harness-backgrounded sessions under ONE spawner pty: no pty fd to poke,
+# no turn in flight for a stop-hook to decorate. RESUME is therefore the DM lane's PRIMARY
+# push — and it dispatches PER MESSAGE, on arrival (send() calls dispatch_dm directly; the
+# worker tick calls the same function as the backstop that drains queues). The four walls:
+# immediate (an event, never a clock), gated (needs-input / explicit pause — mail queues, it
+# never interrupts a mind that asked the human), FLAT (every seat equal; hierarchy is
+# convention in who-mails-whom, never privilege in this code), braked (per-message dedup +
+# per-seat rate + fleet budget + the daily dollar ceiling). Every dispatch returns a RECEIPT
+# {mode, detail} the sender sees in send()'s echo — a hop is visible or it did not happen.
+
+_ASK_SLACK_SECS = 900  # a turn may run this long past its own desk brief before going quiet
+
+
+async def _last_wake_mode_msg(pool: asyncpg.Pool, message_id: int) -> str | None:
+    """The DM alternation guard's input, message-scoped (a DM's ledger rows may span the
+    addressee's projects): one dm-resume per message, ever — a resume that did not settle
+    its mail is not looped."""
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT mode FROM agent_wakes WHERE message_id=$1 ORDER BY woke_at DESC LIMIT 1",
+        message_id)
+
+
+async def _paused(pool: asyncpg.Pool, canonicals: list[str]) -> str | None:
+    """The explicit per-seat PAUSE wall (6c4d0b62 wall #2): the newest `paused` assertion
+    per object wins (a control lever is latest-word, not highest-grade); returns the id
+    that carries a winning paused=true, else None. Checked across the addressee's faces —
+    the seat outlives successions, the agent covers the unbound."""
+    rows = await pool.fetch(
+        "SELECT DISTINCT ON (o.canonical) o.canonical, a.value #>> '{}' AS v "
+        "FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical = ANY($1::text[]) AND a.name='paused' "
+        "ORDER BY o.canonical, a.observed_at DESC", canonicals)
+    for r in rows:
+        if str(r["v"]).lower() == "true":
+            return str(r["canonical"])
+    return None
+
+
+async def _awaiting_operator(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
+    """The NEEDS-INPUT wall (6c4d0b62 wall #2): a seat whose last act was asking the human —
+    an undismissed lead desk brief of kind decision/hands, with the seat QUIET since — is
+    not peer-resumable; its mail queues until the operator's word. The quiet check is what
+    keeps this honest: a seat that briefed the desk and kept working was never halted by its
+    own ask (most briefs are filed mid-stride), so only ask-then-silence gates. Release is
+    the human's act by construction: dismissing the brief empties the predicate, and
+    answering by hand gives the seat a turn that moves its last_seen past the slack."""
+    from src.orchestrator.agents import _generation
+    from src.orchestrator.mailbox import _DESK_BRIEF_ROW
+    base = _generation(agent_id)[0]
+    q = ("SELECT m.desk_kind, m.created_at FROM fleet_messages m WHERE "
+         + _DESK_BRIEF_ROW.replace("$op", "$1")
+         + " AND m.desk_kind IN ('decision','hands') "
+         "AND (m.from_agent = $2 OR m.from_agent LIKE $2 || '-%') "
+         "ORDER BY m.created_at DESC LIMIT 1")
+    row = await pool.fetchrow(q, OPERATOR_ADDR, base)
+    if row is None:
+        return None
+    last = await pool.fetchval(
+        "SELECT max(last_seen) FROM agent_mounts WHERE agent_id=$1 "
+        "OR agent_id LIKE $1 || '-%'", base)
+    if last is not None and (last - row["created_at"]).total_seconds() > _ASK_SLACK_SECS:
+        return None  # it kept working well past the ask — the brief did not halt it
+    return {"desk": str(row["desk_kind"]), "since": str(row["created_at"])}
+
+
+async def _seat_wakes(
+    pool: asyncpg.Pool, agent_id: str, seat_id: str | None, window_secs: int
+) -> int:
+    """DM wakes landed on THIS addressee (lineage-wide, seat address included) within the
+    window — the per-seat rate brake's numerator (wall #4). Distinct from _recent_wakes,
+    which counts a PROJECT's wakes: an A<->B ping-pong inside one project would sail past
+    the project cap while each seat burns."""
+    from src.orchestrator.agents import _generation
+    base = _generation(agent_id)[0]
+    n: int | None = await pool.fetchval(
+        "SELECT count(*) FROM agent_wakes aw JOIN fleet_messages fm ON fm.id=aw.message_id "
+        "WHERE aw.mode IN ('dm-resume','dm-poke') "
+        "AND aw.woke_at > now() - make_interval(secs => $1) "
+        "AND (fm.to_agent = $2 OR fm.to_agent LIKE $2 || '-%' "
+        "     OR ($3::text IS NOT NULL AND fm.to_agent = $3::text))",
+        window_secs, base, seat_id)
+    return n or 0
+
+
+async def dispatch_dm(
+    pool: asyncpg.Pool, *, addressee: str, msg_id: int, sender: str | None,
+    settings: Settings | None = None, spawn: Any = None, windows: Any = None,
+    poke: Any = None,
+) -> dict[str, str]:
+    """Dispatch ONE DM — the adapter's whole grammar in one function, shared verbatim by
+    send()'s immediate leg and the worker tick's backstop sweep (two callers, one law: the
+    lanes must never drift). Returns the per-hop RECEIPT {mode, detail}:
+
+      resumed            — the addressee's own session was continued with the mail as its
+                           next turn (the push lane; the hop is a real turn in its transcript)
+      poked              — typed into the addressee's manager-hosted OPEN window (rare now)
+      delivered          — the addressee is MID-TURN; its own turn's end surfaces the DM
+      queued-fyi         — grade='fyi' never wakes: the grammar's loop terminator (an ack at
+                           the addressee's next natural turn settles it, no turn minted)
+      queued-paused      — an explicit pause holds the seat; mail waits in the box
+      queued-needs-input — the addressee asked the operator and went quiet; the human's word
+                           is the release, peer mail must not preempt it
+      queued-wake-in-flight / braked / skipped-* / held / pull-only / refused — the brakes,
+                           each detail saying exactly which one and why.
+
+    A resume carries ONE nudge and no spawn authority (--allowedTools mcp__osiris); the
+    ledger row is written under an advisory lock BEFORE the spawn, so two dispatchers (the
+    send leg and a concurrent tick) can never double-fire one message."""
+    st = settings or get_settings()
+    spawn = spawn or _spawn_claude
+    windows = windows or _manager_windows
+    poke = poke or _poke_window
+    if not st.osiris_trigger_enabled:
+        return {"mode": "pull-only", "detail": "the trigger is dark (osiris_trigger_enabled=0)"}
+    grade = await pool.fetchval("SELECT grade FROM fleet_messages WHERE id=$1", msg_id)
+    if grade == "fyi":
+        return {"mode": "queued-fyi",
+                "detail": "an fyi never wakes — the addressee acks it at its own next turn "
+                          "(the loop terminator)"}
+    # resolve the address to a living mind: seat → current holder → living head (folds).
+    # THE SEAT GAP this closes: name-addressed mail stores the SEAT id (B2), and the old DM
+    # lane matched it against agent_mounts verbatim — so every seat-bound addressee (the
+    # whole charter pattern) was silently pull-only.
+    from src.orchestrator.folds import canonical_agent, living_head
+    from src.orchestrator.seats import held_seat, seat_receipt
+    target = addressee
+    seat_id: str | None = None
+    if target.startswith("seat:"):
+        seat_id = target
+        sr = await seat_receipt(pool, target)
+        holder = (sr or {}).get("holder")
+        if not holder:
+            return {"mode": "pull-only",
+                    "detail": f"{target} is vacant — the mail waits for its next holder"}
+        target = str(holder)
+    target = await living_head(pool, await canonical_agent(pool, target))
+    if seat_id is None:
+        seat_id = ((await held_seat(pool, target)) or {}).get("seat_id")
+    faces = [c for c in {addressee, target, seat_id} if c]
+    # wall #2 — the gate: an explicit pause, or needs-input (ask-then-silence)
+    paused_on = await _paused(pool, faces)
+    if paused_on:
+        return {"mode": "queued-paused",
+                "detail": f"{paused_on} is explicitly paused — mail queues in the box; "
+                          "pause_seat(paused=false) releases it"}
+    ask = await _awaiting_operator(pool, target)
+    if ask:
+        return {"mode": "queued-needs-input",
+                "detail": f"the addressee briefed the operator (desk={ask['desk']}, "
+                          f"{ask['since']}) and has been quiet since — awaiting the human's "
+                          "word; peer mail queues rather than preempting it"}
+    # mid-turn (NOT the broadcast lane's 15-min 'live': a backgrounded session that idled
+    # ten minutes ago perceives nothing — only genuinely-in-flight activity delivers)
+    if await _agent_live(pool, target, st.osiris_dm_active_secs):
+        return {"mode": "delivered",
+                "detail": "the addressee is mid-turn right now — its own turn's end "
+                          "surfaces the DM (no second process beside a working mind)"}
+    if await _retired(pool, target):
+        return {"mode": "pull-only",
+                "detail": f"{target} is retired — the trigger never reanimates a deliberate "
+                          "close; the estate carries the mail to the next mint"}
+    # wall #4 — the brakes, cheapest first
+    if await _last_wake_mode_msg(pool, msg_id) in ("dm-resume", "dm-poke"):
+        return {"mode": "skipped-once-per-message",
+                "detail": "this message already got its one wake and did not settle — "
+                          "never looped; it stays readable in the box"}
+    grace = st.osiris_trigger_grace_secs
+    if grace > 0 and await _seat_wakes(pool, target, seat_id, grace):
+        return {"mode": "queued-wake-in-flight",
+                "detail": "a wake for this addressee is already in flight — the resumed "
+                          "session reads its WHOLE box, this message rides along"}
+    cap = st.osiris_seat_wake_hourly_cap
+    if cap > 0 and await _seat_wakes(pool, target, seat_id, 3600) >= cap:
+        return {"mode": "braked",
+                "detail": f"the per-seat rate brake: {cap} wakes/h already landed on this "
+                          "addressee — the next tick past the window retries"}
+    row = await pool.fetchrow(
+        "SELECT project FROM agent_mounts WHERE agent_id=$1 "
+        "ORDER BY last_seen DESC LIMIT 1", target)
+    if row is None:
+        return {"mode": "pull-only",
+                "detail": f"{target} has never mounted — no session to resume"}
+    project = str(row["project"])
+    hourly = await pool.fetchval(
+        "SELECT count(*) FROM agent_wakes WHERE woke_at > now() - interval '1 hour'")
+    reason = should_wake(
+        enabled=True, recent_wakes=await _recent_wakes(
+            pool, project, st.osiris_trigger_window_secs),
+        rate_cap=st.osiris_trigger_rate_cap, within_grace=False,
+        hourly_wakes=int(hourly or 0), hourly_budget=st.osiris_wake_hourly_budget,
+        urgent=(sender or "").startswith("operator"))
+    if reason is not None:
+        return {"mode": "skipped-" + reason,
+                "detail": f"the fleet's own brakes held it ({reason}); the sweep retries"}
+    # the dollar wall: a resume is a real turn on the operator's card
+    ok, why = await may_spend(pool, cap=st.osiris_daily_usd)
+    if not ok:
+        return {"mode": "refused", "detail": str(why)}
+    # the poke lane first: a manager-hosted OPEN window holding this lineage's session gets
+    # the mail typed in as a turn — never a second process beside an open window
+    from src.orchestrator.agents import _generation
+    base = _generation(target)[0]
+    wins = await windows()
+    if wins:
+        sids = {Path(r["job_dir"]).name[:8] for r in await pool.fetch(
+            "SELECT job_dir FROM agent_mounts WHERE (agent_id=$1 "
+            "OR agent_id LIKE $1 || '-%') AND job_dir IS NOT NULL", base)}
+        wname = _window_for(wins, sids)
+        if wname is not None:
+            res = await poke(wname, _DM_POKE_PROMPT, dedup=f"dm:{msg_id}",
+                             min_idle=st.osiris_poke_min_idle_secs)
+            if res.get("poked") and not res.get("deduped"):
+                await pool.execute(
+                    "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+                    "VALUES ($1,$2,$3,'dm-poke')", project, sender, msg_id)
+                return {"mode": "poked",
+                        "detail": f"typed into the open window {wname} as its next turn"}
+            if res.get("busy"):
+                return {"mode": "window-busy",
+                        "detail": "the addressee's window is streaming a turn — the mail "
+                                  "waits; nothing spent"}
+    if not st.osiris_dm_resume:
+        return {"mode": "held",
+                "detail": "the DM resume arm is dark (osiris_dm_resume=0) — pull-only"}
+    resume = await _agent_resumable(pool, target, st)
+    if resume is None:
+        return {"mode": "pull-only",
+                "detail": f"{target} has no resumable session (no anchored transcript, or "
+                          "at the context ceiling) — a private message is never handed to "
+                          "a fresh twin"}
+    session_id, repo = resume
+    # the ledger row goes in UNDER AN ADVISORY LOCK, before the spawn: two dispatchers
+    # (send's immediate leg + a concurrent tick) can both reach here for one message —
+    # exactly one of them may spend
+    async with pool.acquire() as conn, conn.transaction():
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended('osiris-dm-' || $1, 7445))",
+            str(msg_id))
+        prior = await conn.fetchval(
+            "SELECT 1 FROM agent_wakes WHERE message_id=$1 AND mode='dm-resume'", msg_id)
+        if prior:
+            return {"mode": "skipped-once-per-message",
+                    "detail": "another dispatcher resumed for this message first"}
+        await conn.execute(
+            "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+            "VALUES ($1,$2,$3,'dm-resume')", project, sender, msg_id)
+    await spawn(repo, _DM_RESUME_PROMPT, resume_session=session_id,
+                model=st.osiris_dm_resume_model or None,
+                allowed_tools=st.osiris_wake_allowed_tools or None)
+    return {"mode": "resumed",
+            "detail": f"the addressee's own session ({session_id[:8]}) is continued with "
+                      "this mail as its next turn — watch the hop in the agents view"}
 
 
 def _receipt_path(job_dir: str | None, resume_session: str | None) -> Path | None:
@@ -785,73 +1040,33 @@ async def trigger_mail_tick(
                     spawn_parent=await _room_parent(pool, project))
         report["woke"] += 1
 
-    # THE DM LANE (fleet mail phase 3, task #61): DELIVER → RESUME → nothing. No mint, ever —
-    # a private message is never handed to a stranger; an unresumable addressee's DM stays
-    # pull-only and follows the seat at the next mint (the estate). One resume attempt per
-    # message (the alternation guard's DM half): a resume that didn't settle it is not looped.
+    # THE DM LANE — the background-session adapter's BACKSTOP sweep (ruling 6c4d0b62):
+    # send() dispatches each DM on arrival through the very same dispatch_dm; this loop
+    # exists to DRAIN THE QUEUES — mail that arrived gated (paused / needs-input / braked /
+    # mid-turn) retries here once the gate lifts. Two callers, one grammar, no drift. No
+    # mint, ever — a private message is never handed to a stranger; an unresumable
+    # addressee's DM stays pull-only and follows the seat at the next mint (the estate).
     for agent_id, msg_id, sender in await _dms_with_unread(pool, st.osiris_mail_lease_secs):
         if not st.osiris_trigger_enabled:
             report["skipped"] += 1
             continue
-        if await _agent_live(pool, agent_id, st.osiris_owner_live_secs):
-            report["owner_live"] += 1  # the addressee is awake: its own chrome shows the DM
-            continue
-        row = await pool.fetchrow(
-            "SELECT project FROM agent_mounts WHERE agent_id=$1 "
-            "ORDER BY last_seen DESC LIMIT 1", agent_id)
-        dm_project: str | None = row["project"] if row else None
-        if not dm_project:  # an unmounted addressee has no session to resume: pull-only
+        d = await dispatch_dm(pool, addressee=agent_id, msg_id=msg_id, sender=sender,
+                              settings=st, spawn=spawn, windows=windows, poke=poke)
+        mode = d["mode"]
+        if mode == "resumed":
+            report["resumed"] += 1
+            report["woke"] += 1
+        elif mode == "poked":
+            report["poked"] += 1
+            report["woke"] += 1
+        elif mode == "delivered":
+            report["owner_live"] += 1
+        elif mode == "window-busy":
+            report["window_busy"] += 1
+        elif mode.startswith("queued"):
+            report["dm_queued"] = report.get("dm_queued", 0) + 1
+        elif mode == "held":
+            report["poke_only_held"] += 1  # the resume arm is dark: held, same book
+        else:  # skipped-*, braked, pull-only, refused
             report["skipped"] += 1
-            continue
-        project = dm_project
-        recent = await _recent_wakes(pool, project, st.osiris_trigger_window_secs)
-        within_grace = await _woken_within(pool, project, st.osiris_trigger_grace_secs)
-        if should_wake(enabled=True, recent_wakes=recent,
-                       rate_cap=st.osiris_trigger_rate_cap,
-                       within_grace=within_grace) is not None:
-            report["skipped"] += 1
-            continue
-        if await _last_wake_mode(pool, project, msg_id) == "dm-resume":
-            report["skipped"] += 1  # one attempt per DM — never a resume loop
-            continue
-        # THE DM POKE (the wake law's private half): the addressee's OWN window — matched
-        # lineage-wide, any generation's anchor — gets the DM typed in as its next turn.
-        # Same discipline as the project lane; a deduped-and-still-unsettled DM falls
-        # through to the resume rung (its one attempt).
-        if wins:
-            from src.orchestrator.agents import _generation
-            base = _generation(agent_id)[0]
-            sids = {Path(r["job_dir"]).name[:8] for r in await pool.fetch(
-                "SELECT job_dir FROM agent_mounts WHERE (agent_id=$1 "
-                "OR agent_id LIKE $1 || '-%') AND job_dir IS NOT NULL", base)}
-            wname = _window_for(wins, sids)
-            if wname is not None:
-                res = await poke(wname, _DM_POKE_PROMPT, dedup=f"dm:{msg_id}",
-                                 min_idle=st.osiris_poke_min_idle_secs)
-                if res.get("poked") and not res.get("deduped"):
-                    await pool.execute(
-                        "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
-                        "VALUES ($1,$2,$3,'dm-poke')", project, sender, msg_id)
-                    report["poked"] += 1
-                    report["woke"] += 1
-                    continue
-                if res.get("busy"):
-                    report["window_busy"] += 1
-                    continue
-        if st.osiris_trigger_poke_only:
-            report["poke_only_held"] += 1  # the DM's resume rung is a spawn — held too
-            continue
-        resume = await _agent_resumable(pool, agent_id, st)
-        if resume is None:
-            report["skipped"] += 1
-            continue
-        session_id, repo = resume
-        await pool.execute(
-            "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
-            "VALUES ($1,$2,$3,'dm-resume')", project, sender, msg_id)
-        await spawn(repo, _DM_RESUME_PROMPT, resume_session=session_id,
-                    model=st.osiris_wake_model or None,
-                    allowed_tools=st.osiris_wake_allowed_tools or None)
-        report["resumed"] += 1
-        report["woke"] += 1
     return report
