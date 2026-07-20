@@ -557,7 +557,7 @@ async def _seat_wakes(
     base = _generation(agent_id)[0]
     n: int | None = await pool.fetchval(
         "SELECT count(*) FROM agent_wakes aw JOIN fleet_messages fm ON fm.id=aw.message_id "
-        "WHERE aw.mode IN ('dm-resume','dm-poke') "
+        "WHERE aw.mode IN ('dm-reply','dm-resume','dm-poke') "
         "AND aw.woke_at > now() - make_interval(secs => $1) "
         "AND (fm.to_agent = $2 OR fm.to_agent LIKE $2 || '-%' "
         "     OR ($3::text IS NOT NULL AND fm.to_agent = $3::text))",
@@ -565,17 +565,42 @@ async def _seat_wakes(
     return n or 0
 
 
+def _mail_envelope(msg_id: int, *, sender_label: str, addressee_label: str,
+                   grade: str | None, preview: str) -> str:
+    """The nudge as a CUTE LITTLE MAIL (operator, 2026-07-20: 'formatting is important so
+    the logs know who did what at the transcript level'). The injected turn IS a transcript
+    record — it carries full attribution (who, to whom, which message, what grade) so a log
+    reader, the miner, or the operator scrolling a window sees the hop's provenance without
+    leaving the line. The envelope is the KNOCK, never the letter's authority: the addressee
+    still reads and settles through the box."""
+    g = {"ask": "ask — needs your reply or act",
+         "fyi": "fyi — an ack settles it"}.get(grade or "", grade or "ungraded")
+    return (
+        f"┌─ osiris mail · DM #{msg_id} ─────────────────────\n"
+        f"│ from : {sender_label}\n"
+        f"│ to   : {addressee_label}\n"
+        f"│ grade: {g}\n"
+        f"│ « {preview} »\n"
+        f"└─ inbox() reads it whole; settle with send(reply_to={msg_id}) or "
+        f"inbox(ack=[{msg_id}]). Reply only with NEW information."
+    )
+
+
 async def dispatch_dm(
     pool: asyncpg.Pool, *, addressee: str, msg_id: int, sender: str | None,
     settings: Settings | None = None, spawn: Any = None, windows: Any = None,
-    poke: Any = None,
+    poke: Any = None, jobs: Any = None, nudge: Any = None,
 ) -> dict[str, str]:
     """Dispatch ONE DM — the adapter's whole grammar in one function, shared verbatim by
     send()'s immediate leg and the worker tick's backstop sweep (two callers, one law: the
     lanes must never drift). Returns the per-hop RECEIPT {mode, detail}:
 
+      nudged             — the mail envelope was injected into the addressee's live
+                           backgrounded session via the HARNESS DAEMON (the visible hop:
+                           the operator's front renders daemon-owned turns natively —
+                           thread 4261a0d8, the ghost problem's fix)
       resumed            — the addressee's own session was continued with the mail as its
-                           next turn (the push lane; the hop is a real turn in its transcript)
+                           next turn (the fallback push when the daemon doesn't hold it)
       poked              — typed into the addressee's manager-hosted OPEN window (rare now)
       delivered          — the addressee is MID-TURN; its own turn's end surfaces the DM
       queued-fyi         — grade='fyi' never wakes: the grammar's loop terminator (an ack at
@@ -586,16 +611,23 @@ async def dispatch_dm(
       queued-wake-in-flight / braked / skipped-* / held / pull-only / refused — the brakes,
                            each detail saying exactly which one and why.
 
-    A resume carries ONE nudge and no spawn authority (--allowedTools mcp__osiris); the
-    ledger row is written under an advisory lock BEFORE the spawn, so two dispatchers (the
+    A wake carries ONE nudge and no spawn authority (--allowedTools mcp__osiris); the
+    ledger row is written under an advisory lock BEFORE the spend, so two dispatchers (the
     send leg and a concurrent tick) can never double-fire one message."""
     st = settings or get_settings()
     spawn = spawn or _spawn_claude
     windows = windows or _manager_windows
     poke = poke or _poke_window
+    if jobs is None or nudge is None:
+        from src.ingest.harness import claude_daemon
+        jobs = jobs or claude_daemon.job_for
+        nudge = nudge or claude_daemon.reply
     if not st.osiris_trigger_enabled:
         return {"mode": "pull-only", "detail": "the trigger is dark (osiris_trigger_enabled=0)"}
-    grade = await pool.fetchval("SELECT grade FROM fleet_messages WHERE id=$1", msg_id)
+    mrow = await pool.fetchrow(
+        "SELECT grade, left(body, 160) AS preview FROM fleet_messages WHERE id=$1", msg_id)
+    grade = mrow["grade"] if mrow else None
+    preview = " ".join(str((mrow["preview"] if mrow else "") or "").split())
     if grade == "fyi":
         return {"mode": "queued-fyi",
                 "detail": "an fyi never wakes — the addressee acks it at its own next turn "
@@ -637,7 +669,7 @@ async def dispatch_dm(
                 "detail": f"{target} is retired — the trigger never reanimates a deliberate "
                           "close; the estate carries the mail to the next mint"}
     # wall #4 — the brakes, cheapest first
-    if await _last_wake_mode_msg(pool, msg_id) in ("dm-resume", "dm-poke"):
+    if await _last_wake_mode_msg(pool, msg_id) in ("dm-reply", "dm-resume", "dm-poke"):
         return {"mode": "skipped-once-per-message",
                 "detail": "this message already got its one wake and did not settle — "
                           "never looped; it stays readable in the box"}
@@ -685,16 +717,56 @@ async def dispatch_dm(
                 "detail": "the addressee's transcript is moving right now (genuinely "
                           "mid-turn) — its own turn's end surfaces the DM; no second "
                           "process beside a working mind"}
-    # the poke lane first: a manager-hosted OPEN window holding this lineage's session gets
-    # the mail typed in as a turn — never a second process beside an open window
     from src.orchestrator.agents import _generation
     base = _generation(target)[0]
+    doors = {Path(r["job_dir"]).name for r in await pool.fetch(
+        "SELECT job_dir FROM agent_mounts WHERE (agent_id=$1 "
+        "OR agent_id LIKE $1 || '-%') AND job_dir IS NOT NULL", base)}
+    # THE DAEMON-REPLY RUNG LEADS — the VISIBLE hop (thread 4261a0d8; the ghost problem,
+    # operator-confirmed solved 2026-07-20): the front renders the harness DAEMON's job
+    # stream, so a daemon-owned turn is the one push the operator actually SEES. The
+    # daemon's own list is also the address book for LIVE jobs (no door-row dependency —
+    # bug b6a64207 shrinks to the daemon-dark case). Every failure falls OPEN into
+    # poke/resume: undocumented internals never get to strand a message.
+    ids = doors | {d[:8] for d in doors}
+    if resume is not None:
+        ids |= {resume[0], resume[0][:8]}
+    job = await jobs(ids)
+    if job is not None:
+        s_handle = ((await held_seat(pool, sender)) or {}).get("handle") if sender else None
+        a_handle = ((await held_seat(pool, target)) or {}).get("handle")
+        env = _mail_envelope(
+            msg_id, grade=grade, preview=preview,
+            sender_label=(f"{s_handle} ({sender})" if s_handle else (sender or "the fleet")),
+            addressee_label=(f"you — {a_handle} ({target})" if a_handle
+                             else f"you ({target})"))
+        nudged = False
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended('osiris-dm-' || $1, 7445))",
+                str(msg_id))
+            prior = await conn.fetchval(
+                "SELECT 1 FROM agent_wakes WHERE message_id=$1 "
+                "AND mode IN ('dm-reply','dm-resume','dm-poke')", msg_id)
+            if prior:
+                return {"mode": "skipped-once-per-message",
+                        "detail": "another dispatcher already woke for this message"}
+            nudged = bool(await nudge(job, env))
+            if nudged:
+                await conn.execute(
+                    "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+                    "VALUES ($1,$2,$3,'dm-reply')", project, sender, msg_id)
+        if nudged:
+            shown = job.get("name") or job.get("short") or "the job"
+            return {"mode": "nudged",
+                    "detail": f"the mail envelope landed as {shown}'s next turn via the "
+                              "harness daemon — visible live in the agents view"}
+        # the daemon refused (version seam, dead socket, missing key) — fall open
+    # the poke lane: a manager-hosted OPEN window holding this lineage's session gets
+    # the mail typed in as a turn — never a second process beside an open window
     wins = await windows()
     if wins:
-        sids = {Path(r["job_dir"]).name[:8] for r in await pool.fetch(
-            "SELECT job_dir FROM agent_mounts WHERE (agent_id=$1 "
-            "OR agent_id LIKE $1 || '-%') AND job_dir IS NOT NULL", base)}
-        wname = _window_for(wins, sids)
+        wname = _window_for(wins, {d[:8] for d in doors})
         if wname is not None:
             res = await poke(wname, _DM_POKE_PROMPT, dedup=f"dm:{msg_id}",
                              min_idle=st.osiris_poke_min_idle_secs)
@@ -725,10 +797,11 @@ async def dispatch_dm(
             "SELECT pg_advisory_xact_lock(hashtextextended('osiris-dm-' || $1, 7445))",
             str(msg_id))
         prior = await conn.fetchval(
-            "SELECT 1 FROM agent_wakes WHERE message_id=$1 AND mode='dm-resume'", msg_id)
+            "SELECT 1 FROM agent_wakes WHERE message_id=$1 "
+            "AND mode IN ('dm-reply','dm-resume','dm-poke')", msg_id)
         if prior:
             return {"mode": "skipped-once-per-message",
-                    "detail": "another dispatcher resumed for this message first"}
+                    "detail": "another dispatcher already woke for this message"}
         await conn.execute(
             "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
             "VALUES ($1,$2,$3,'dm-resume')", project, sender, msg_id)
@@ -1056,6 +1129,9 @@ async def trigger_mail_tick(
         mode = d["mode"]
         if mode == "resumed":
             report["resumed"] += 1
+            report["woke"] += 1
+        elif mode == "nudged":
+            report["nudged"] = report.get("nudged", 0) + 1
             report["woke"] += 1
         elif mode == "poked":
             report["poked"] += 1

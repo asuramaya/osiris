@@ -73,8 +73,15 @@ async def _no_windows() -> list[dict[str, Any]]:
 def _dark_manager(monkeypatch: pytest.MonkeyPatch) -> None:
     """HERMETIC by default: no test in this module may consult a live daemon socket on the
     dev box — the roster default resolves late, so darkening the module attribute covers
-    every tick that doesn't inject its own windows."""
+    every tick that doesn't inject its own windows. The CLAUDE harness daemon is darkened
+    the same way (its real socket exists on the dev box and would answer)."""
     monkeypatch.setattr(trigger_module, "_manager_windows", _no_windows)
+
+    async def _no_job(ids: set) -> None:
+        return None
+
+    from src.ingest.harness import claude_daemon
+    monkeypatch.setattr(claude_daemon, "job_for", _no_job)
 
 
 def test_should_wake_is_off_by_default_and_rate_capped() -> None:
@@ -1284,3 +1291,105 @@ async def test_a_dm_resume_never_pins_the_triage_model(
         spawn=_spawn)
     assert rep["resumed"] == 1
     assert calls[0].get("model") is None  # the seat's own default, never the triage pin
+
+# ═══ the daemon-reply rung (thread 4261a0d8): the VISIBLE hop leads the ladder ═══
+
+
+async def test_the_daemon_reply_rung_leads_and_wears_the_envelope(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """The ghost problem's fix, operator-confirmed 2026-07-20: a daemon-held addressee is
+    NUDGED through the harness daemon (the front renders daemon-owned turns) instead of
+    resumed by a second process — and the injected turn is a CUTE LITTLE MAIL: full
+    attribution (who, to whom, which message, what grade) readable at the transcript
+    level, plus a body preview."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    out = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                             to_agent="agent:abcd1234", body="the colorbar shipped, verify",
+                             grade="ask")
+    msg_id = int(out["id"])
+    nudges: list[tuple[dict[str, Any], str]] = []
+
+    async def _jobs(ids: set) -> dict[str, Any] | None:
+        assert "abcd1234" in ids            # matched via the door name AND the sid prefix
+        return {"short": "abcd1234", "name": "[D] Demo", "_sock": "/nowhere"}
+
+    async def _nudge(job: dict[str, Any], text: str) -> bool:
+        nudges.append((job, text))
+        return True
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        raise AssertionError("a daemon-held addressee must be nudged, never resumed")
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_spawn, windows=_no_windows, jobs=_jobs, nudge=_nudge)
+    assert d["mode"] == "nudged" and "[D] Demo" in d["detail"]
+    job, text = nudges[0]
+    assert f"DM #{msg_id}" in text                      # which message
+    assert "agent:sender" in text                        # who
+    assert "agent:abcd1234" in text                      # to whom
+    assert "ask — needs your reply or act" in text       # what grade
+    assert "the colorbar shipped" in text                # the preview
+    assert f"send(reply_to={msg_id})" in text            # how to settle
+    assert await actions.pool.fetchval(
+        "SELECT mode FROM agent_wakes ORDER BY id DESC LIMIT 1") == "dm-reply"
+
+
+async def test_a_dark_daemon_falls_open_to_the_resume_lane(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """Undocumented internals never strand a message: a daemon that refuses the nudge
+    (version seam, dead socket, missing key) writes NO ledger row and the dispatch falls
+    straight through to the resume fallback."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    msg_id = await _dm_to_owner(actions)
+    calls: list[dict[str, Any]] = []
+
+    async def _jobs(ids: set) -> dict[str, Any]:
+        return {"short": "abcd1234", "_sock": "/nowhere"}
+
+    async def _nudge(job: dict[str, Any], text: str) -> bool:
+        return False                                     # EAUTH / EPROTO / dead socket
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append(kw)
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_spawn, windows=_no_windows, jobs=_jobs, nudge=_nudge)
+    assert d["mode"] == "resumed" and calls[0].get("resume_session") == FULL_SID
+    modes = [r["mode"] for r in await actions.pool.fetch(
+        "SELECT mode FROM agent_wakes ORDER BY id")]
+    assert modes == ["dm-resume"]                        # no dm-reply row for the failure
+
+
+async def test_a_nudged_message_is_never_renudged(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """Once per message covers the nudge lane too: a second dispatch (the sweep after the
+    send leg, or a redelivery) skips — the envelope already knocked once."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    msg_id = await _dm_to_owner(actions)
+
+    async def _jobs(ids: set) -> dict[str, Any]:
+        return {"short": "abcd1234", "_sock": "/nowhere"}
+
+    async def _nudge(job: dict[str, Any], text: str) -> bool:
+        return True
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        raise AssertionError("nothing may spawn in this test")
+
+    st = _settings(enabled=True, sense=str(sense))
+    d1 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                           sender="agent:sender", settings=st, spawn=_spawn,
+                           windows=_no_windows, jobs=_jobs, nudge=_nudge)
+    d2 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                           sender="agent:sender", settings=st, spawn=_spawn,
+                           windows=_no_windows, jobs=_jobs, nudge=_nudge)
+    assert d1["mode"] == "nudged" and d2["mode"] == "skipped-once-per-message"
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM agent_wakes WHERE message_id=$1", msg_id) == 1
