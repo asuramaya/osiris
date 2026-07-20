@@ -740,7 +740,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         Returns its Result — objects / values / rows / data — for the generic renderer."""
         subject = uuid.UUID(body.subject) if body.subject else None
         try:
-            return await run_composition(p, name, subject)
+            # the console is the OPERATOR'S surface (6c18709f): its lenses see every house
+            return await run_composition(p, name, subject, caller="console")
         except ValueError as exc:  # e.g. a Function that needs a subject, or a bad op
             return {"error": str(exc)}
 
@@ -752,7 +753,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         edit a working spec and re-run it here without saving; 'Save as' persists it."""
         subject = uuid.UUID(body.subject) if body.subject else None
         try:
-            return await run_spec(p, body.spec, subject, name=body.name or "(working)")
+            return await run_spec(p, body.spec, subject, name=body.name or "(working)",
+                                  caller="console")
         except ValueError as exc:
             return {"error": str(exc)}
 

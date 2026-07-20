@@ -50,6 +50,7 @@ import re
 import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -165,6 +166,72 @@ _GRADE_W_PY = {"self_declared": 1.0, "authoritative_api": 0.95, "corroborated": 
                "direct_observation": 0.8, "derived": 0.5}
 
 
+# ═══════════ THE REFLECTION ACL — house-scoped memories (ruling 6c18709f) ═══════════
+# A Reflection is a memory lived with the operator's agents, not work knowledge: readable
+# within its OWN HOUSE and by the operator, opaque to other houses. Decisions, threads,
+# canon, tensions, blind spots stay fleet-readable — cross-repo recall is the product; the
+# boundary is reflections ONLY. Enforcement lives at the READ LENSES (this module is where
+# every discovery read converges): the record itself stays append-only and whole — an ACL
+# is a lens, never a delete. The caller rides a ContextVar so the recursive op evaluator
+# (select, and any op stacked over it) inherits it without threading a parameter through
+# every branch; run_spec sets it, _fn_search/_fn_lap fall back to it.
+
+_ACL_CALLER: ContextVar[str | None] = ContextVar("_ACL_CALLER", default=None)
+# the operator's own surfaces — the desk and the :8011 console self-identify as these
+_OPERATOR_CALLERS = {"operator", "console"}
+
+
+async def _caller_house(pool: asyncpg.Pool, caller: str | None) -> str | None:
+    """The house a caller reads reflections as: '*' for the operator's own surfaces,
+    None for an anonymous caller (reads NO reflections — an unmounted stranger has no
+    house), else the caller's seat house (a seat belongs to a house across successions)
+    falling back to its project label (most projects are their own house)."""
+    if caller in _OPERATOR_CALLERS:
+        return "*"
+    if not caller:
+        return None
+    from src.orchestrator.agents import house_of
+    from src.orchestrator.seats import held_seat
+    bound = await held_seat(pool, caller)
+    if bound and bound.get("house"):
+        return str(bound["house"])
+    return await house_of(pool, caller)
+
+
+async def _visible_reflections(
+    pool: asyncpg.Pool, ids: list[uuid.UUID], caller: str | None
+) -> set[uuid.UUID]:
+    """Which of these Reflection ids this caller may read: those whose in_repo project
+    matches the caller's house (a reflection filed with no house inherits its home
+    project's house — per the ruling; one filed with NO project at all is operator-only,
+    the conservative default)."""
+    if not ids:
+        return set()
+    house = await _caller_house(pool, caller)
+    if house == "*":
+        return set(ids)
+    if house is None:
+        return set()
+    rows = await pool.fetch(
+        "SELECT DISTINCT l.from_id AS id FROM links l JOIN objects p ON p.id = l.to_id "
+        "WHERE l.from_id = ANY($1::uuid[]) AND l.type='in_repo' "
+        "AND lower(regexp_replace(p.canonical, '^repo:', '')) = lower($2)",
+        ids, house)
+    return {r["id"] for r in rows}
+
+
+async def _hide_foreign_reflections(
+    pool: asyncpg.Pool, hits: list[dict[str, Any]], caller: str | None
+) -> list[dict[str, Any]]:
+    """Drop Reflection hits outside the caller's house from a search result — silently
+    (a boundary that names what it hides has already leaked that it exists)."""
+    refl = [uuid.UUID(h["id"]) for h in hits if h.get("type") == "Reflection"]
+    if not refl:
+        return hits
+    ok = {str(i) for i in await _visible_reflections(pool, refl, caller)}
+    return [h for h in hits if h.get("type") != "Reflection" or h["id"] in ok]
+
+
 async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
     """search v2, MAX LEVEL (operator ruling a0cfcca1) — ONE engine, FOUR doors, one fused
     answer. Lexical ladder: strict FTS (websearch AND) → OR-relaxation (any-term bags) →
@@ -178,7 +245,9 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     engine is judged by."""
     q = str(args.get("q", "")).strip()[:300]  # a 50KB paste is not a query
     limit = max(1, min(int(args.get("limit") or 15), 50))  # a negative limit is a PG error
-    caller = str(args.get("caller") or "") or None
+    # the caller identifies itself in args (the MCP tool, the console bar); a composition
+    # embedding search inherits run_spec's caller via the ACL contextvar
+    caller = str(args.get("caller") or "") or _ACL_CALLER.get()
     if not q:
         return {"hits": [], "note": "pass q — words, phrases, or \"quoted phrases\""}
     # THE ID DOOR (Soundwave, msg 244: 'tonight's cross-referencing is all manual memory'):
@@ -202,6 +271,8 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
                      "when": r["observed_at"].isoformat()} if r["source_id"] else {}),
                  "rank": 1.0, "via": "id"}
                 for r in idrows]
+            # the id door is still a read lens — knowing a reflection's id is not a key
+            hits = await _hide_foreign_reflections(pool, hits, caller)
             await pool.execute(
                 "INSERT INTO search_log (query, caller, hits, top_rank, relaxed) "
                 "VALUES ($1,$2,$3,1.0,false)", q, caller, len(hits))
@@ -278,6 +349,9 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     # embedder / empty index / any error) it contributes nothing and costs nothing.
     sem_hits = await _semantic_hits(pool, q, limit)
     hits = _fuse_ranked(lex_hits, sem_hits, limit)
+    # the house boundary (6c18709f): every door's rows converge here — one filter covers
+    # strict, relaxed, trigram and semantic alike (the id door filtered at its early return)
+    hits = await _hide_foreign_reflections(pool, hits, caller)
     semantic = any(h["via"] in ("semantic", "both") for h in hits)
     # a superseded decision must not read as live testimony (the supersedes verb,
     # dd04d7dd): one batched lookup marks such hits — still findable, honestly flagged
@@ -868,6 +942,13 @@ async def _fn_lap(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str,
         "FROM objects WHERE id=$1", oid)
     if head is None:
         return {"note": f"no object {oid}"}
+    # the house boundary (6c18709f): lap is the deepest read lens of all — it serves the
+    # BODY. A foreign house's reflection answers exactly like a missing object (a boundary
+    # that names what it hides has already leaked that it exists).
+    if head["type"] == "Reflection":
+        caller = str(args.get("caller") or "") or _ACL_CALLER.get()
+        if oid not in await _visible_reflections(pool, [oid], caller):
+            return {"note": (f"nothing matches {ref!r}" if ref else f"no object {oid}")}
     limit = max(1, min(int(args.get("limit") or 200), 1000))
     a_rows = await pool.fetch(
         "SELECT a.name, a.value #>> '{}' AS v, a.source_id, a.evidence_class, a.confidence, "
@@ -1729,6 +1810,17 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
             "SELECT id FROM objects WHERE status='active' AND ($1::text IS NULL OR type=$1) "
             "AND ($2::text IS NULL OR canonical LIKE $2 || '%')", ot, cp
         )
+        # the house boundary (6c18709f): a composition selecting Reflections — by type or
+        # by an untyped select-all — reads only the caller's own house; the record stays
+        # whole, this lens narrows
+        if ot in (None, "Reflection"):
+            refl = [r["id"] for r in await pool.fetch(
+                "SELECT id FROM objects WHERE id = ANY($1::uuid[]) AND type='Reflection'",
+                [r["id"] for r in rows])] if ot is None else [r["id"] for r in rows]
+            if refl:
+                ok = await _visible_reflections(pool, refl, _ACL_CALLER.get())
+                hidden = set(refl) - ok
+                rows = [r for r in rows if r["id"] not in hidden]
         # `neighborhood` is a DIMENSION, not a property — an object's tree is an in_repo EDGE,
         # not an assertion. Resolving it here (batched, only when asked for) makes it filterable
         # like any other fact, which is what lets `bundle`'s rows drill straight back into their
@@ -2176,24 +2268,34 @@ async def _package(pool: asyncpg.Pool, res: Result) -> Any:
 
 async def run_spec(
     pool: asyncpg.Pool, spec: dict[str, Any], subject: uuid.UUID | None = None,
-    name: str = "(spec)",
+    name: str = "(spec)", caller: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate an op-tree and package the Result for the generic renderer. The inline
-    composer (W4) runs an EPHEMERAL working spec through here as you edit chips — no save."""
-    res = await _eval(pool, spec, subject)
-    items = await _package(pool, res)
+    composer (W4) runs an EPHEMERAL working spec through here as you edit chips — no save.
+    `caller` is who is reading (an agent id, 'operator'/'console' for the human's own
+    surfaces, None for anonymous) — the reflection ACL's input (6c18709f), carried to the
+    ops on a contextvar so a nested select inherits it without parameter-threading."""
+    token = _ACL_CALLER.set(caller) if caller is not None else None
+    try:
+        res = await _eval(pool, spec, subject)
+        items = await _package(pool, res)
+    finally:
+        if token is not None:
+            _ACL_CALLER.reset(token)
     count = len(items) if isinstance(items, list | dict) else 1
     return {"composition": name, "kind": res.kind, "count": count, "items": items, "spec": spec}
 
 
 async def run_composition(
-    pool: asyncpg.Pool, ref: str, subject: uuid.UUID | None = None
+    pool: asyncpg.Pool, ref: str, subject: uuid.UUID | None = None,
+    caller: str | None = None,
 ) -> dict[str, Any]:
-    """Execute a saved composition (by name or id), optionally against a subject."""
+    """Execute a saved composition (by name or id), optionally against a subject.
+    `caller` = who is reading (the reflection ACL's input — see run_spec)."""
     spec = await _spec_of(pool, ref)
     if spec is None:
         return {"error": f"no composition {ref!r}"}
-    return await run_spec(pool, spec, subject, name=ref)
+    return await run_spec(pool, spec, subject, name=ref, caller=caller)
 
 
 # --- default compositions (templates — the engine's opinions, now forkable) --

@@ -493,13 +493,14 @@ async def search(
     spec = {"op": "function", "name": "search",
             "args": {"q": query, "limit": limit,
                      "caller": (ident.agent_id if ident else None)}}
-    out = await comp.run_spec(pool, spec, None, name="search")
+    out = await comp.run_spec(pool, spec, None, name="search",
+                              caller=(ident.agent_id if ident else None))
     items: dict[str, Any] = out["items"]  # unwrap the composition envelope
     return items
 
 
 @mcp.tool()
-async def lap(ref: str, limit: int = 200) -> dict[str, Any]:
+async def lap(ref: str, limit: int = 200, ctx: Context | None = None) -> dict[str, Any]:
     """ONE object's full provenance timeline — how the graph came to believe what it
     believes about it. Every assertion (with supersession fate), every link (both
     directions, retractions marked), every kernel event, in observed order, each carrying
@@ -508,8 +509,10 @@ async def lap(ref: str, limit: int = 200) -> dict[str, Any]:
     fact, before merging/healing an object, or to autopsy a corpse (a uuid ref reaches
     merged/retired objects too). `ref` = uuid | canonical (e.g. 'agent:ad1a1cb0') | name."""
     pool = await _pool_get()
+    ident = await _ident_for(ctx)
     spec = {"op": "function", "name": "lap", "args": {"ref": ref, "limit": limit}}
-    out = await comp.run_spec(pool, spec, None, name="lap")
+    out = await comp.run_spec(pool, spec, None, name="lap",
+                              caller=(ident.agent_id if ident else None))
     items: dict[str, Any] = out["items"]
     return items
 
@@ -750,7 +753,7 @@ async def get_console() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def focus_object(object_ref: str) -> dict[str, Any]:
+async def focus_object(object_ref: str, ctx: Context | None = None) -> dict[str, Any]:
     """Focus an object (UUID or name) on the operator's LIVE screen — drives the console so
     they see what you're looking at. Returns the object's identity + properties so you can
     reason about it too."""
@@ -758,6 +761,14 @@ async def focus_object(object_ref: str) -> dict[str, Any]:
     oid = await _resolve(pool, object_ref)
     if oid is None:
         return {"error": f"no object matches {object_ref!r}"}
+    # the house boundary (6c18709f): a foreign house's reflection answers exactly like a
+    # missing object — and is never pushed onto the screen by a hand that can't read it
+    if await pool.fetchval("SELECT type FROM objects WHERE id=$1", oid) == "Reflection":
+        ident = await _ident_for(ctx)
+        vis = await comp._visible_reflections(
+            pool, [oid], ident.agent_id if ident else None)
+        if oid not in vis:
+            return {"error": f"no object matches {object_ref!r}"}
     # focusing is explore mode — clear the active composition so it doesn't re-run on top
     await _set_console(pool, by="claude", focused_object_id=oid, composition=None)
     row = await pool.fetchrow("SELECT type, canonical FROM objects WHERE id=$1", oid)
@@ -769,13 +780,16 @@ async def focus_object(object_ref: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def run_composition(name: str, subject: str | None = None) -> dict[str, Any]:
+async def run_composition(name: str, subject: str | None = None,
+                          ctx: Context | None = None) -> dict[str, Any]:
     """Run a saved composition, optionally against a subject object (UUID or name), AND light
     it up on the operator's live screen. Returns its result — an object set (each named), a
     value list, or aggregate rows."""
     pool = await _pool_get()
+    ident = await _ident_for(ctx)
     sid = await _resolve(pool, subject) if subject else None
-    res = await comp.run_composition(pool, name, sid)
+    res = await comp.run_composition(pool, name, sid,
+                                     caller=(ident.agent_id if ident else None))
     # drive the front end: show this composition (and its subject, so a subject-lens reproduces)
     await _set_console(pool, by="claude", composition=name,
                        **({"focused_object_id": sid} if sid else {}))
@@ -1486,7 +1500,11 @@ async def _project_briefing(
         "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1", f"repo:{project}")
     if proj is None:
         return None
-    res = await comp.run_composition(pool, "project-briefing", proj)
+    # `me` is the wall's identity SET ({agent_id, project}, or {'operator'} from the
+    # console); the reflection ACL wants one reader — the agent id when there is one
+    acl_caller = next((m for m in me if m.startswith("agent:")),
+                      "operator" if "operator" in me else None)
+    res = await comp.run_composition(pool, "project-briefing", proj, caller=acl_caller)
     items = res.get("items") if isinstance(res, dict) else None
     if not isinstance(items, dict):  # unseeded / error — never crash orient, just show empty
         items = {}
