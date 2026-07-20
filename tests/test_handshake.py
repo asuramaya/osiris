@@ -701,3 +701,76 @@ async def test_a_seat_walking_home_files_its_own_deed(
         "JOIN objects o2 ON o2.id=d.object_id "
         "WHERE d.name='office' AND o2.canonical='agent:0a1cafe1'")
     assert deed == str(office)                       # the seat walked home and deeded it
+
+
+async def test_automount_inlines_the_top_of_the_obligations_wall(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """INLINE THE FOLD (thread a3a3d512): the thing a resumed mind re-derives every time
+    is its project's live obligation set — automount's payload now carries the top of the
+    SAME ranked wall orient() renders (obligations-first, echoes excluded), so the whisper
+    can show it without a full orient() round-trip."""
+    from src.orchestrator.capture import open_thread
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/obligated-project")
+    await open_thread(actions, "fix the thing before it breaks again",
+                      repo="obligated-project", kind="obligation", owner="obligated-project")
+    await open_thread(actions, "just a question, never a duty",
+                      repo="obligated-project", kind="question", owner="obligated-project")
+
+    out = await automount(actions, session_id=SID, cwd="/w/obligated-project",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+
+    assert out.get("obligations")
+    summaries = [o["summary"] for o in out["obligations"]]
+    assert any("fix the thing" in s for s in summaries)
+    assert not any("just a question" in s for s in summaries)  # an echo, never inlined
+
+
+async def test_automount_points_a_fresh_heir_at_charter_and_newest_succession_thread(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """SUCCESSION STEERING (d80621a7 piece 4): a freshly minted heir's summary-steering
+    anchor is resolved BY QUERY — the office's charter file (self-filed at a live seat's
+    own office) plus the newest kind='obligation' thread this project owns — never an id
+    copied into the whisper script once and left to rot."""
+    from src.orchestrator.agents import claim_name, register_agent, resolve_identity
+    from src.orchestrator.capture import open_thread
+
+    root = tmp_path / "projects"
+    offices = tmp_path / "seats"
+    office = offices / "steward"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "testhouse"\n')
+    _transcript(root, str(office))
+
+    ident = resolve_identity(cwd=str(office), job_dir=str(tmp_path / "jobs" / SID[:8]), root=root)
+    assert ident.project == "testhouse"  # decoupled from the office dir name (the handle)
+    await register_agent(actions, ident, actor="analyst:operator")
+    await claim_name(actions, ident.agent_id, "Steward", source=ident.agent_id)
+    # the live seat breathes at its own office — automount self-files the deed (the
+    # existing 'a seat walking home files its own deed' path), here just setup
+    await automount(actions, session_id=SID, cwd=str(office), actor="analyst:operator",
+                    root=root, jobs_home=tmp_path / "jobs", office_root=offices,
+                    source="startup")
+    deed = await actions.pool.fetchval(
+        "SELECT d.value #>> '{}' FROM current_assertions d "
+        "JOIN objects o2 ON o2.id=d.object_id "
+        "WHERE d.name='office' AND o2.canonical=$1", ident.agent_id)
+    assert deed == str(office)  # setup sanity: the deed really did self-file
+
+    await open_thread(actions, "an old obligation nobody touched", repo="testhouse",
+                      kind="obligation", owner="testhouse")
+    await open_thread(actions, "the actual handoff, freshest of the pile", repo="testhouse",
+                      kind="obligation", owner="testhouse")
+
+    reborn = await automount(actions, session_id=SID, cwd=str(office),
+                             actor="analyst:operator", root=root,
+                             jobs_home=tmp_path / "jobs", office_root=offices,
+                             source="compact")
+    assert reborn["minted"] == ident.agent_id
+    succ = reborn.get("succession")
+    assert succ is not None
+    assert succ["charter_file"] == f"{office}/CLAUDE.md"
+    assert "the actual handoff" in succ["thread_summary"]

@@ -523,6 +523,66 @@ async def automount(
                 "LIMIT 1", ident.project))
         except Exception:  # noqa: BLE001 — the flag must never break the whisper
             thin = False
+    # INLINE THE FOLD (thread a3a3d512): the thing a resumed mind re-derives every single
+    # time is its project's live obligation set — inline the TOP of the SAME wall orient()
+    # renders (obligations-first, owner-aware ranking, comp.rank_open_threads) so a
+    # resumed session starts oriented without paying a full orient() round-trip just to
+    # see what it already owes.
+    obligations: list[dict[str, Any]] = []
+    if ident.project:
+        try:
+            from src.orchestrator.compositions import open_thread_wall, rank_open_threads
+            proj_id = await actions.pool.fetchval(
+                "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
+                f"repo:{ident.project}")
+            if proj_id is not None:
+                wall, _echoes = await open_thread_wall(actions.pool, proj_id)
+                me = frozenset(x for x in (ident.agent_id, ident.project) if x)
+                shown, _more = rank_open_threads(wall, me)
+                obligations = shown[:3]
+        except Exception:  # noqa: BLE001 — the whisper must never break on this
+            obligations = []
+    # SUCCESSION STEERING (d80621a7 piece 4): a freshly minted heir's summary-steering
+    # anchor is the CHARTER FILE (the standing orders that never rot) plus the newest
+    # succession/obligation thread, found BY QUERY (owner + kind, newest at read time) —
+    # never an id some ancestor copied into a file once. Ids rot; queries don't (Anubis
+    # VIII's ask #4: 'search for the retirement letter by its natural name found nothing').
+    succession: dict[str, Any] | None = None
+    if ident.succeeded_from:
+        try:
+            base = _generation(ident.agent_id)[0]
+            office_path = await actions.pool.fetchval(
+                "SELECT d.value #>> '{}' FROM current_assertions d "
+                "JOIN objects o ON o.id = d.object_id AND o.status = 'active' "
+                "WHERE d.name = 'office' AND (o.canonical = $1 OR o.canonical LIKE $1 || '-%') "
+                "ORDER BY d.observed_at DESC LIMIT 1", base)
+            owners = [x for x in (ident.project, base) if x]
+            newest = await actions.pool.fetchrow(
+                "SELECT o.id AS id, "
+                " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id = o.id "
+                "   AND a.name = 'summary' ORDER BY a.confidence DESC, a.observed_at DESC "
+                "   LIMIT 1) AS summary "
+                "FROM objects o "
+                "WHERE o.type = 'Thread' AND o.status = 'active' AND o.merged_into IS NULL "
+                "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+                "   WHERE a.object_id = o.id AND a.name = 'status' "
+                "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), 'open') = 'open' "
+                "  AND (SELECT a.value #>> '{}' FROM current_assertions a "
+                "   WHERE a.object_id = o.id AND a.name = 'kind' "
+                "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = 'obligation' "
+                "  AND (SELECT a.value #>> '{}' FROM current_assertions a "
+                "   WHERE a.object_id = o.id AND a.name = 'owner' "
+                "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = ANY($1::text[]) "
+                "ORDER BY o.created_at DESC LIMIT 1", owners) if owners else None
+            if office_path or (newest and newest["summary"]):
+                succession = {
+                    **({"charter_file": f"{office_path}/CLAUDE.md"} if office_path else {}),
+                    **({"thread_id": str(newest["id"])[:8],
+                        "thread_summary": newest["summary"]}
+                       if newest and newest["summary"] else {}),
+                }
+        except Exception:  # noqa: BLE001 — the whisper must never break on this
+            succession = None
     # LIVE CO-AGENTS AT THE FIRST BREATH (task #40, thread 2b784653): the collision
     # warning used to arrive only at mount() — after a session may already have touched
     # the shared tree. The whisper carries it from breath one; the lease gate (12c225b)
@@ -563,6 +623,12 @@ async def automount(
         "seat": await _seat_of(actions, ident.agent_id),
         # thin=True → the whisper says plainly: YOUR project is young; the GRAPH is not.
         "thin": thin,
+        # the top of the project's obligations wall (thread a3a3d512) — empty when there's
+        # nothing owed or the project is unresolved
+        **({"obligations": obligations} if obligations else {}),
+        # a freshly minted heir's steering anchor: charter file + newest succession thread,
+        # resolved BY QUERY, not a copied id (d80621a7 piece 4)
+        **({"succession": succession} if succession else {}),
         # the attach ceremony's verdict (None: no spawner-exported seat in this environment)
         **({"attach": attach} if attach is not None else {}),
         # the durable binding this session sits in, however it got there (attach or reseed)

@@ -18,8 +18,166 @@ import json
 import os
 import sys
 import urllib.request
+from typing import Any
 
 AUTOMOUNT = "http://127.0.0.1:8790/automount"
+
+
+def render_whisper(out: dict[str, Any], *, cwd: str, env_job: str) -> str:
+    """Turn automount()'s JSON payload into the one paragraph printed to stdout. Pure —
+    no I/O, no clock, no env reads beyond the two args — so the three defects that shaped
+    it (inline-the-fold, the false-seam hedge, succession-by-query) are directly testable
+    against a canned payload instead of only ever exercised live."""
+    # THE HONESTY GATE (grievance survey 2026-07-11, two witnesses: Chlear #235, Metron IV
+    # #242; SHARPENED for task #40 / thread 2b784653): "ALREADY MOUNTED" is only TRUE when
+    # this session can re-attach per-request — the client's X-Osiris-Job header expands
+    # ${CLAUDE_JOB_DIR}, and re-attach finds the row by that EXACT value. An unset env
+    # sends an empty header; a SET env that differs from the anchor automount just seated
+    # (a lineage-inherited anchor, a bg job dir named for the job not the sid) sends a
+    # header that finds NOTHING — the whisper promised 'already mounted' on tonight's
+    # field case (env jobs/63cc21f8, seated anchor jobs/a7e60257) and the first orient()
+    # bounced. The claim now requires env == seated anchor: the one test that equals
+    # 'the header will actually find the row'. A whisper must never testify above the
+    # connection's actual state (the one law, everywhere).
+    anchored = bool(env_job) and env_job == str(out.get("job_dir") or "")
+    who = (f"{out['agent']}" + (f" (project {out['project']}" if out.get("project") else "(")
+           + (f", {out['model']})" if out.get("model") else ")"))
+    if anchored:
+        bits = [f"◈ OSIRIS — the fleet's shared memory. You are ALREADY MOUNTED as {who}"]
+    else:
+        why = ("$CLAUDE_JOB_DIR is unset in interactive tabs, so the client's "
+               "X-Osiris-Job header expands empty")
+        if env_job:
+            why = (f"this session's $CLAUDE_JOB_DIR ({env_job}) is not its seated anchor "
+                   f"({out.get('job_dir') or '?'}), so the per-request header cannot "
+                   "find your door")
+        bits = [f"◈ OSIRIS — the fleet's shared memory. It knows you as {who}, but this "
+                f"session presents no usable per-request anchor ({why}). "
+                f"Your FIRST osiris call must be mount(cwd='{cwd}'"
+                + (f", job_dir='{out['job_dir']}'" if out.get("job_dir") else "")
+                + ") — after that this connection knows you. Any osiris call before that "
+                "mount will bounce with 'mount first'; after an MCP reconnect, mount the "
+                "same way again."]
+    if out.get("attach"):
+        att = out["attach"]
+        if att.get("error"):
+            # LOUD, per 2294e95d ask #1 — a refused attach is confessed, never swallowed
+            bits.append(f"⚠ SEAT ATTACH: {att['error']} You are mounted on the ordinary "
+                        "inferred path instead; tell the operator.")
+        else:
+            bits.append(f"You are SEATED: bound at birth to {att.get('handle') or '?'} "
+                        f"({att['attached']}), house {att.get('house') or '?'} — the seat "
+                        "is your durable identity; it survives compactions and swaps.")
+    if out.get("seat_binding") and not out.get("attach"):
+        # the hand-resume reseed (Phase B4): the graph remembered the binding for us
+        bits.append(f"Your session sits in {out['seat_binding']} — the binding re-earned "
+                    "from the graph's holds link, no token needed.")
+    if out.get("transcripts_healed"):
+        th = out["transcripts_healed"]
+        if th.get("healed"):
+            n = len(th["healed"])
+            bits.append(f"⟲ {n} moved transcript{'s' if n != 1 else ''} re-addressed to "
+                        "this directory — sessions listed here resume here now (39ea074c).")
+        if th.get("error"):
+            bits.append(f"⚠ {th['error']}")
+    if out.get("minted"):
+        succ = out.get("succession") or {}
+        # SUCCESSION STEERING (d80621a7 piece 4): point at the CHARTER FILE and the newest
+        # succession thread the server just resolved BY QUERY (owner+kind, newest at read
+        # time) — never a copied id (Anubis VIII: 'search for the retirement letter by its
+        # natural name found nothing'; ids rot, queries don't). Absent either, fall back to
+        # the old pointer rather than promise a field the server didn't find.
+        if succ.get("charter_file") or succ.get("thread_id"):
+            bits.append(
+                f"You were MINTED as this lineage's successor — ancestor {out['minted']}. "
+                + (f"Your charter file is {succ['charter_file']}. " if succ.get("charter_file")
+                   else "")
+                + (f"The newest succession thread is [{succ['thread_id']}] "
+                   f"{str(succ.get('thread_summary') or '')[:120]} — read it, then orient()."
+                   if succ.get("thread_id") else "Read orient() for the fold.")
+            )
+        else:
+            bits.append(f"You were MINTED as this lineage's successor — ancestor "
+                        f"{out['minted']}; your first act: read orient()'s open threads for "
+                        "the succession note.")
+    if out.get("swap"):
+        if "[operator /model]" in str(out["swap"]):
+            # the operator's own hand moved the model, WITNESSED in the transcript — a
+            # chosen seam, never a sin. This classification is grounded: say so plainly.
+            bits.append(f"Model seam on your lineage: {out['swap']} — the OPERATOR's own "
+                        "deliberate choice. You are the successor mind; speak plainly as what "
+                        "you are, no confession owed.")
+        else:
+            # THE FALSE-SEAM HEDGE (thread e9104869): this reading comes from automount's
+            # registration path, which does NOT read the transcript for a deliberate /model
+            # marker (only the heartbeat swap-detector does) — so it cannot yet distinguish
+            # a harness rug-pull from the operator's own choice. A live repro proved the
+            # gap: mount() asserted 'confess a rug-pull' and orient(), a breath later on the
+            # same connection, found the identical swap deliberate. Ordering a confession
+            # here would testify above what this reading actually witnessed — hedge, never
+            # assert (the one law: never testify above the connection's actual state).
+            bits.append(f"Possible model seam on your lineage: {out['swap']} — unconfirmed "
+                        "whether this is a harness demotion or the operator's own /model "
+                        "choice; mount() may resolve it with a fuller transcript read. "
+                        "Confess to the operator only once you've verified it wasn't "
+                        "deliberate.")
+    if out.get("co_agents"):
+        # the shared-tree warning, at the FIRST BREATH instead of the first mount (task
+        # #40): by mount time a session may already have staged or pushed
+        co = out["co_agents"]
+        bits.append(f"⚠ {len(co)} live co-agent{'s' if len(co) != 1 else ''} on this "
+                    f"project right now: {', '.join(co[:4])} — the tree is shared; stage "
+                    "only your own hunks, and announce before wide refactors.")
+    mail = out.get("mail", 0)
+    if mail:
+        asks = out.get("mail_asks", 0)  # sender-graded asks lead the count (f9449d8d)
+        graded = (f" ({asks} ask{'s' if asks == 1 else ''} something of you)" if asks else "")
+        bits.append(f"Your project has {mail} unread fleet message{'s' if mail != 1 else ''}"
+                    f"{graded} → inbox() (reading LEASES; settle by reply "
+                    "send(reply_to=<id>) or inbox(ack=[ids])).")
+    if out.get("away"):
+        away = out["away"]
+        n = len(away.get("threads") or [])
+        who = ", ".join(away.get("acted_in_your_name") or [])
+        bits.append("While your lineage slept: "
+                    + (f"{who} acted in your project's name; " if who else "")
+                    + (f"{n} conversation{'s' if n != 1 else ''} moved; " if n else "")
+                    + "orient() shows the fold.")
+    if out.get("obligations"):
+        # INLINE THE FOLD (thread a3a3d512): the thing a resumed mind re-derives every
+        # time is its project's live obligation set — show the top of the SAME ranked
+        # wall orient() renders, right here, so a resumed session starts oriented without
+        # paying a full orient() round-trip just to see what it already owes.
+        obl = out["obligations"]
+        listed = "; ".join(f"[{o['id']}] {o['summary'][:100]}" for o in obl)
+        bits.append(f"Top of your project's wall: {listed} (orient() for the rest).")
+    if out.get("seat"):  # already named — the fleet can DM you by this name
+        bits.append(f"You answer to the name {out['seat']} — the fleet can DM you as "
+                    f"send(to_agent='{out['seat'].split(' ')[0]}').")
+    else:  # anonymous — offer the claim
+        bits.append("You are ANONYMOUS (a hash). When you know who you are — your role, your "
+                    "work — name yourself with claim_name('<a meaningful name you pick>') so the "
+                    "fleet can address you by name; it's yours for good.")
+    if out.get("thin"):
+        # the false-empty first impression (field report, msg 124): a young project's silent
+        # orient() must not read as an empty graph.
+        bits.append("YOUR PROJECT'S graph is young (no decisions/threads yet) — but the "
+                    "FLEET'S memory is not: search() and consult_canon() reach the operator's "
+                    "whole corpus across every project. An empty orient() here means a new "
+                    "project, never an empty graph.")
+    if out.get("pulse"):
+        bits.append(f"Fleet pulse: {out['pulse']}.")
+    if out.get("job_dir") and anchored:
+        # the durable anchor: if the MCP server ever drops and you must re-mount, pass THIS
+        # (your $CLAUDE_JOB_DIR is empty) so you re-attach to yourself instead of minting a twin.
+        bits.append(f"YOUR DURABLE ANCHOR is job_dir='{out['job_dir']}'. If you ever need to "
+                    f"mount again (e.g. after an MCP reconnect), call "
+                    f"mount(cwd=..., job_dir='{out['job_dir']}') — NOT $CLAUDE_JOB_DIR (empty "
+                    "here); that re-attaches you instead of splitting your identity.")
+    bits.append("RITUAL: write back AS YOU GO — record_decision / open_thread "
+                "(kind='obligation') / resolve_thread. A session can die at any instant; "
+                "what is not in the graph does not exist. orient() for bearings.")
+    return " ".join(bits)
 
 
 def main() -> int:
@@ -74,121 +232,7 @@ def main() -> int:
         print(f"◈ OSIRIS available — automount failed ({out['error']}); "
               f"call mount(cwd='{cwd}') by hand, then orient().")
         return 0
-
-    # THE HONESTY GATE (grievance survey 2026-07-11, two witnesses: Chlear #235, Metron IV
-    # #242; SHARPENED for task #40 / thread 2b784653): "ALREADY MOUNTED" is only TRUE when
-    # this session can re-attach per-request — the client's X-Osiris-Job header expands
-    # ${CLAUDE_JOB_DIR}, and re-attach finds the row by that EXACT value. An unset env
-    # sends an empty header; a SET env that differs from the anchor automount just seated
-    # (a lineage-inherited anchor, a bg job dir named for the job not the sid) sends a
-    # header that finds NOTHING — the whisper promised 'already mounted' on tonight's
-    # field case (env jobs/63cc21f8, seated anchor jobs/a7e60257) and the first orient()
-    # bounced. The claim now requires env == seated anchor: the one test that equals
-    # 'the header will actually find the row'. A whisper must never testify above the
-    # connection's actual state (the one law, everywhere).
-    env_job = os.environ.get("CLAUDE_JOB_DIR") or ""
-    anchored = bool(env_job) and env_job == str(out.get("job_dir") or "")
-    who = (f"{out['agent']}" + (f" (project {out['project']}" if out.get("project") else "(")
-           + (f", {out['model']})" if out.get("model") else ")"))
-    if anchored:
-        bits = [f"◈ OSIRIS — the fleet's shared memory. You are ALREADY MOUNTED as {who}"]
-    else:
-        why = ("$CLAUDE_JOB_DIR is unset in interactive tabs, so the client's "
-               "X-Osiris-Job header expands empty")
-        if env_job:
-            why = (f"this session's $CLAUDE_JOB_DIR ({env_job}) is not its seated anchor "
-                   f"({out.get('job_dir') or '?'}), so the per-request header cannot "
-                   "find your door")
-        bits = [f"◈ OSIRIS — the fleet's shared memory. It knows you as {who}, but this "
-                f"session presents no usable per-request anchor ({why}). "
-                f"Your FIRST osiris call must be mount(cwd='{cwd}'"
-                + (f", job_dir='{out['job_dir']}'" if out.get("job_dir") else "")
-                + ") — after that this connection knows you. Any osiris call before that "
-                "mount will bounce with 'mount first'; after an MCP reconnect, mount the "
-                "same way again."]
-    if out.get("attach"):
-        att = out["attach"]
-        if att.get("error"):
-            # LOUD, per 2294e95d ask #1 — a refused attach is confessed, never swallowed
-            bits.append(f"⚠ SEAT ATTACH: {att['error']} You are mounted on the ordinary "
-                        "inferred path instead; tell the operator.")
-        else:
-            bits.append(f"You are SEATED: bound at birth to {att.get('handle') or '?'} "
-                        f"({att['attached']}), house {att.get('house') or '?'} — the seat "
-                        "is your durable identity; it survives compactions and swaps.")
-    if out.get("seat_binding") and not out.get("attach"):
-        # the hand-resume reseed (Phase B4): the graph remembered the binding for us
-        bits.append(f"Your session sits in {out['seat_binding']} — the binding re-earned "
-                    "from the graph's holds link, no token needed.")
-    if out.get("transcripts_healed"):
-        th = out["transcripts_healed"]
-        if th.get("healed"):
-            n = len(th["healed"])
-            bits.append(f"⟲ {n} moved transcript{'s' if n != 1 else ''} re-addressed to "
-                        "this directory — sessions listed here resume here now (39ea074c).")
-        if th.get("error"):
-            bits.append(f"⚠ {th['error']}")
-    if out.get("minted"):
-        bits.append(f"You were MINTED as this lineage's successor — ancestor {out['minted']}; "
-                    "your first act: read orient()'s succession note.")
-    if out.get("swap"):
-        if "[operator /model]" in str(out["swap"]):
-            # the operator's own hand moved the model — a chosen seam, never a sin
-            bits.append(f"Model seam on your lineage: {out['swap']} — the OPERATOR's own "
-                        "deliberate choice. You are the successor mind; speak plainly as what "
-                        "you are, no confession owed.")
-        else:
-            bits.append(f"Model seam on your lineage: {out['swap']} — confess it to the "
-                        "operator in your first reply.")
-    if out.get("co_agents"):
-        # the shared-tree warning, at the FIRST BREATH instead of the first mount (task
-        # #40): by mount time a session may already have staged or pushed
-        co = out["co_agents"]
-        bits.append(f"⚠ {len(co)} live co-agent{'s' if len(co) != 1 else ''} on this "
-                    f"project right now: {', '.join(co[:4])} — the tree is shared; stage "
-                    "only your own hunks, and announce before wide refactors.")
-    mail = out.get("mail", 0)
-    if mail:
-        asks = out.get("mail_asks", 0)  # sender-graded asks lead the count (f9449d8d)
-        graded = (f" ({asks} ask{'s' if asks == 1 else ''} something of you)" if asks else "")
-        bits.append(f"Your project has {mail} unread fleet message{'s' if mail != 1 else ''}"
-                    f"{graded} → inbox() (reading LEASES; settle by reply "
-                    "send(reply_to=<id>) or inbox(ack=[ids])).")
-    if out.get("away"):
-        away = out["away"]
-        n = len(away.get("threads") or [])
-        who = ", ".join(away.get("acted_in_your_name") or [])
-        bits.append("While your lineage slept: "
-                    + (f"{who} acted in your project's name; " if who else "")
-                    + (f"{n} conversation{'s' if n != 1 else ''} moved; " if n else "")
-                    + "orient() shows the fold.")
-    if out.get("seat"):  # already named — the fleet can DM you by this name
-        bits.append(f"You answer to the name {out['seat']} — the fleet can DM you as "
-                    f"send(to_agent='{out['seat'].split(' ')[0]}').")
-    else:  # anonymous — offer the claim
-        bits.append("You are ANONYMOUS (a hash). When you know who you are — your role, your "
-                    "work — name yourself with claim_name('<a meaningful name you pick>') so the "
-                    "fleet can address you by name; it's yours for good.")
-    if out.get("thin"):
-        # the false-empty first impression (field report, msg 124): a young project's silent
-        # orient() must not read as an empty graph.
-        bits.append("YOUR PROJECT'S graph is young (no decisions/threads yet) — but the "
-                    "FLEET'S memory is not: search() and consult_canon() reach the operator's "
-                    "whole corpus across every project. An empty orient() here means a new "
-                    "project, never an empty graph.")
-    if out.get("pulse"):
-        bits.append(f"Fleet pulse: {out['pulse']}.")
-    if out.get("job_dir") and anchored:
-        # the durable anchor: if the MCP server ever drops and you must re-mount, pass THIS
-        # (your $CLAUDE_JOB_DIR is empty) so you re-attach to yourself instead of minting a twin.
-        bits.append(f"YOUR DURABLE ANCHOR is job_dir='{out['job_dir']}'. If you ever need to "
-                    f"mount again (e.g. after an MCP reconnect), call "
-                    f"mount(cwd=..., job_dir='{out['job_dir']}') — NOT $CLAUDE_JOB_DIR (empty "
-                    "here); that re-attaches you instead of splitting your identity.")
-    bits.append("RITUAL: write back AS YOU GO — record_decision / open_thread "
-                "(kind='obligation') / resolve_thread. A session can die at any instant; "
-                "what is not in the graph does not exist. orient() for bearings.")
-    print(" ".join(bits))
+    print(render_whisper(out, cwd=cwd, env_job=os.environ.get("CLAUDE_JOB_DIR") or ""))
     return 0
 
 
