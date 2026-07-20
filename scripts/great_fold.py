@@ -16,9 +16,9 @@ import argparse
 import asyncio
 import json
 
-import asyncpg
 from src.actions.core import Actions
 from src.config.settings import get_settings
+from src.db.pool import create_pool
 from src.orchestrator.greatfold import (
     demote_visits,
     fold_census,
@@ -51,7 +51,9 @@ async def _main() -> None:
     p_vis.add_argument("--actor", default=ACTOR)
     args = ap.parse_args()
 
-    pool = await asyncpg.create_pool(get_settings().database_url, min_size=1, max_size=4)
+    # the HOUSE pool, never bare asyncpg: its jsonb codecs are what Actions' event
+    # writes encode through — the bare pool refuses the first kernel write
+    pool = await create_pool(get_settings().database_url, min_size=1, max_size=4)
     try:
         actions = Actions(pool)
         if args.cmd == "survey":
