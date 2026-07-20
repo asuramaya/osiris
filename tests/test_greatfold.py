@@ -175,6 +175,21 @@ async def test_fold_seat_never_folds_a_cross_seat_base(
     assert await canonical_agent(actions.pool, "agent:aaaa1111") == "agent:aaaa1111"
 
 
+async def test_named_testimony_outranks_an_unnamed_newest_session(
+        actions: Actions, tmp_path: Path) -> None:
+    offices, projects = tmp_path / "offices", tmp_path / "projects"
+    _office(offices, "khnum", "riverhouse")
+    await _agent(actions, "agent:aaaa1111", handle="Khnum")
+    await _agent(actions, "agent:bbbb2222")   # the fresh mint that never claimed
+    _transcript(projects, "khnum", "s-named", _SEND.format(agent="agent:aaaa1111"),
+                age_secs=3600)
+    _transcript(projects, "khnum", "s-doorbell", _SEND.format(agent="agent:bbbb2222"))
+    out = await fold_seat(actions, handle="khnum", actor="agent:test",
+                          office_root=offices, projects_root=projects)
+    assert out["resident"] == "agent:aaaa1111"          # the name, not the doorbell
+    assert [f["label"] for f in out["will_fold"]] == ["agent:bbbb2222"]
+
+
 async def test_fold_seat_by_handle_claim_alone(actions: Actions, tmp_path: Path) -> None:
     offices = tmp_path / "offices"
     projects = tmp_path / "projects"

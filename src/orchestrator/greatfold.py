@@ -183,8 +183,10 @@ async def survey_seats(pool: asyncpg.Pool, *, office_root: Path | None = None,
         h = str(r["handle"])
         sessions = (await asyncio.to_thread(signed_matches_sync, proot, h)
                     if r["office"] else [])
+        claimed = claims.get(h, {"bases": {}, "newest": None})
         signed_bases: dict[str, dict[str, Any]] = {}
         resident_signed: str | None = None
+        resident_named: str | None = None
         for matches in sessions:  # mtime-ascending: the last session's resident wins
             vouched = [m for m in matches if _generation(m)[0] in known_bases]
             if not vouched:
@@ -195,10 +197,15 @@ async def survey_seats(pool: asyncpg.Pool, *, office_root: Path | None = None,
             row["labels"].add(res)
             row["sessions"] += 1
             resident_signed = res
+            # NAMED TESTIMONY OUTRANKS UNNAMED PRESENCE (the cassandra lesson): a seat
+            # whose newest session is a fresh mint that never claimed must not crown the
+            # doorbell — the living lineage is the newest signer that also BEARS the name
+            if _generation(res)[0] in claimed["bases"]:
+                resident_named = res
         for row in signed_bases.values():
             row["labels"] = sorted(row["labels"])
-        claimed = claims.get(h, {"bases": {}, "newest": None})
         seats[h] = {**r, "signed": signed_bases, "resident_signed": resident_signed,
+                    "resident_named": resident_named,
                     "claimed": claimed["bases"], "resident_claimed": claimed["newest"]}
         for base in set(signed_bases) | set(claimed["bases"]):
             evidence_of.setdefault(base, set()).add(h)
@@ -230,7 +237,8 @@ async def fold_seat(
     if seat is None:
         return {"error": f"no seat named {handle!r} on the roster — the machine walks "
                          "offices and Seat objects; it never invents one"}
-    resident_label = seat["resident_signed"] or seat["resident_claimed"]
+    resident_label = (seat.get("resident_named") or seat["resident_signed"]
+                      or seat["resident_claimed"])
     if resident_label is None:
         return {"error": f"seat {handle!r} has no living resident — no signed act in its "
                          "office and no handle claim; nothing to fold INTO. Flag for the "

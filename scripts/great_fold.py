@@ -54,7 +54,8 @@ async def _main() -> None:
         if args.cmd == "survey":
             sv = await survey_seats(pool)
             slim = {h: {"house": s.get("house"), "seat_id": s.get("seat_id"),
-                        "resident": s["resident_signed"] or s["resident_claimed"],
+                        "resident": (s.get("resident_named") or s["resident_signed"]
+                                     or s["resident_claimed"]),
                         "signed_bases": sorted(s["signed"]),
                         "claimed_bases": sorted(s["claimed"])}
                     for h, s in sv["seats"].items()}
