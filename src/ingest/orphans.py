@@ -38,6 +38,8 @@ from pathlib import Path
 
 import asyncpg
 
+from src.ingest.scope import scope_match, sense_scopes
+
 # A session is ENDED when its transcript has been still this long. Generous on purpose: a mind
 # heads-down for twenty minutes is ALIVE (456960e5 — we just spent a day learning that), and
 # sweeping a live session would mine a conversation mid-thought, which is the crawl's whole disease.
@@ -55,9 +57,12 @@ def swept_key(path: Path) -> str:
     return f"{_SWEPT}{path.stem}"
 
 
-def _ended(root: Path, quiet_secs: int) -> list[Path]:
+def _ended(root: Path, quiet_secs: int, scopes: list[str] | None = None) -> list[Path]:
     """Transcripts that have STOPPED MOVING — sorted oldest-first, so the deepest orphan is
-    recovered before the freshest. A stat(), nothing more."""
+    recovered before the freshest. A stat(), nothing more. `scopes` (the adversary's scope,
+    task #37) skips scoped-out projects at detection so the per-tick BATCH is never spent
+    on transcripts the licence doesn't cover — and since a scoped-out orphan is never
+    marked swept, widening the scope later hands it to this very detector."""
     now = time.time()
     out: list[tuple[float, Path]] = []
     try:
@@ -67,6 +72,8 @@ def _ended(root: Path, quiet_secs: int) -> list[Path]:
     for p in paths:
         if p.parent.name.endswith("-osiris-extract"):
             continue  # the adversary's own scratch sessions: an instrument reading itself
+        if not scope_match(p.parent.name, scopes or []):
+            continue  # the licence is armed for other projects: defer, never bury
         try:
             mtime = p.stat().st_mtime
         except OSError:
@@ -79,14 +86,21 @@ def _ended(root: Path, quiet_secs: int) -> list[Path]:
 
 async def find_orphans(
     pool: asyncpg.Pool, root: Path, *, quiet_secs: int = QUIET_SECS, limit: int = BATCH,
+    scopes: list[str] | None = None,
 ) -> list[Path]:
     """Sessions that ENDED and were never read. Free: a stat() and a watermark lookup.
 
     NOT "sessions that look interesting" and NOT "sessions that are stale" — ENDED AND UNREAD, both
     of which are FACTS. A reaper that acts on a suspicion is the janitor with opinions, and we have
     already ruled that out (69d64899).
+
+    `scopes` = the adversary's project scope: None reads OSIRIS_SENSE_PROJECTS, [] is
+    explicitly unscoped.
     """
-    ended = await asyncio.to_thread(_ended, root, quiet_secs)
+    if scopes is None:
+        from src.config.settings import get_settings
+        scopes = sense_scopes(get_settings().osiris_sense_projects)
+    ended = await asyncio.to_thread(_ended, root, quiet_secs, scopes)
     if not ended:
         return []
     known = {r["key"] for r in await pool.fetch(

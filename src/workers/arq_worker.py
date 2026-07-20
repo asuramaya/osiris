@@ -27,6 +27,7 @@ from src.connectors.registry import CONNECTORS
 from src.db.pool import create_pool
 from src.db.redis import create_redis
 from src.ingest.orphans import find_orphans, mark_swept
+from src.ingest.scope import scope_match, sense_scopes
 from src.ingest.sessions import adversary_pass, sense_sessions_tick
 from src.ingest.wake_cost import meter_bodies, meter_receipts, meter_wakes
 from src.orchestrator.budgets import BudgetLedger
@@ -347,9 +348,16 @@ async def sweep_session(ctx: dict[str, Any], transcript: str) -> int:
     """
     import asyncio
 
-    root = get_settings().osiris_sense_sessions
+    st = get_settings()
+    root = st.osiris_sense_sessions
     path = Path(transcript)
     if not root or not await asyncio.to_thread(path.is_file):
+        return 0
+    # THE SCOPE (task #37): a death rite outside the armed projects is DEFERRED, not
+    # buried — no spend, and deliberately NO mark_swept, so widening the scope later
+    # lets the orphan reaper find this session as ended-and-unread and drain it then.
+    if not scope_match(path.parent.name, sense_scopes(st.osiris_sense_projects)):
+        _log.info("death-rite sweep deferred (out of scope): %s", path.name)
         return 0
     actions: Actions = ctx["cascade"].actions
     try:

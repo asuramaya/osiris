@@ -69,6 +69,7 @@ from src.ingest.extract import _strip_fences
 from src.ingest.mined import consolidate_memory, distinctive_terms
 from src.ingest.providers import LLMClient, Usage, llm_provider
 from src.ingest.redact import credential_shaped, redact, strip_off_record
+from src.ingest.scope import scope_match, sense_scopes
 from src.ingest.usage import record_usage, usage_summary
 from src.orchestrator.capture import link_repo
 from src.orchestrator.ceiling import may_spend
@@ -474,9 +475,11 @@ def _is_wake_spawn(path: Path) -> bool:
     return verdict
 
 
-def _list_transcripts(root: Path) -> list[Path]:
+def _list_transcripts(root: Path, scopes: list[str] | None = None) -> list[Path]:
     """Sync (runs via to_thread): every transcript under the projects root, newest first
-    — the busiest session gets the tick's LLM budget before dormant ones.
+    — the busiest session gets the tick's LLM budget before dormant ones. `scopes` narrows
+    the walk to the named projects (src/ingest/scope.py — the adversary's scope, task #37);
+    empty/None walks everything, the unarmed default.
 
     TWO OWNERSHIP BOUNDARIES, both of the same class (rule 7 — an instrument may not read itself):
 
@@ -494,6 +497,7 @@ def _list_transcripts(root: Path) -> list[Path]:
     files = [
         p for p in root.expanduser().glob("*/*.jsonl")
         if p.is_file()
+        and scope_match(p.parent.name, scopes or [])
         and not p.parent.name.endswith("-osiris-extract")
         and not _is_wake_spawn(p)
     ]
@@ -1312,13 +1316,17 @@ async def sense_sessions_tick(
     max_chunks: int = 3,
     backfill: bool = False,
     only: Path | None = None,
+    scopes: list[str] | None = None,
 ) -> dict[str, int]:
     """One sensing pass over `root` (`~/.claude/projects`): for each transcript with new
     bytes past its cursor, distill → redact → extract → emit, then advance the cursor
     (after the emit — a crash re-reads the same delta; find-or-create dedups). At most
     `max_chunks` LLM calls per tick; a delta that distills to almost nothing advances
     free. `only` narrows to a single transcript (the sweep path); `backfill` starts an
-    unseen file at byte 0 instead of planting the cursor at its end."""
+    unseen file at byte 0 instead of planting the cursor at its end. `scopes` is the
+    adversary's project scope (task #37): None reads OSIRIS_SENSE_PROJECTS, [] is
+    explicitly unscoped; a scoped-out `only` is refused without spend or cursor motion
+    (scope defers reading, never buries it)."""
     llm = llm or llm_provider()
     if llm is None:
         raise RuntimeError(
@@ -1326,11 +1334,17 @@ async def sense_sessions_tick(
             "'auto'/'claude-cli') or set ANTHROPIC_API_KEY"
         )
     model = model or get_settings().osiris_extract_model
+    if scopes is None:
+        scopes = sense_scopes(get_settings().osiris_sense_projects)
     pool = actions.pool
     report = {"files": 0, "chunks": 0, "decisions": 0, "threads": 0, "obligations": 0,
               "resolved": 0, "skipped_foreign": 0, "skipped_dup": 0, "planted": 0, "swaps": 0}
 
-    files = [only] if only is not None else await asyncio.to_thread(_list_transcripts, root)
+    if only is not None and not scope_match(only.parent.name, scopes):
+        report["skipped_scope"] = 1  # the licence is armed for other projects tonight
+        return report
+    files = [only] if only is not None else await asyncio.to_thread(
+        _list_transcripts, root, scopes)
 
     touched_sessions: set[Path] = set()  # sessions with fresh activity → rescan their swarm
     for path in files:

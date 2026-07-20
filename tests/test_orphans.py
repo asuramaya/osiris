@@ -122,3 +122,21 @@ def test_the_reaper_is_SCHEDULED_but_the_MINER_still_is_not() -> None:
     crons = {c.coroutine.__name__ for c in WorkerSettings.cron_jobs}
     assert "reap_orphans" in crons          # the free detector may walk
     assert "sense_sessions" not in crons    # the paid inferrer may not
+
+async def test_the_scope_defers_the_reaper_and_never_buries(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The adversary's scope, the reaper's half (task #37): a scoped-out ended session is
+    not detected — the per-tick BATCH is never spent outside the armed projects — and
+    because nothing ever marked it swept, WIDENING the scope hands it straight back to
+    this detector. Scope DEFERS reading; it never buries a session."""
+    d = tmp_path / "-home-x-code-mono"
+    d.mkdir()
+    p = d / "dead0003.jsonl"
+    p.write_text('{"type":"user","message":{"content":"hello"}}\n')
+    old = time.time() - (QUIET_SECS + 60)
+    os.utime(p, (old, old))
+
+    assert await find_orphans(actions.pool, tmp_path, scopes=["pokex"]) == []
+    assert await find_orphans(actions.pool, tmp_path, scopes=["pokex", "mono"]) == [p]
+    assert await find_orphans(actions.pool, tmp_path, scopes=[]) == [p]

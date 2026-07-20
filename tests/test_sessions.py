@@ -1007,3 +1007,35 @@ def test_distill_honors_the_off_record_sentinel() -> None:
     assert "reply" in text
     assert "unrecorded thought" not in text      # the agent's voice may mark too
     assert "entirely private" not in text        # a wholly-marked message yields nothing
+
+# --- the adversary's SCOPE (task #37): armed for one project, as a mechanism ------------
+
+async def test_scoped_tick_spends_only_inside_the_armed_projects(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """OSIRIS_SENSE_PROJECTS as a real lever: a scoped tick neither plants cursors nor
+    spends chunks outside the named projects — and a scoped-out `only` (the death-rite /
+    sweep path) is refused without spend or cursor motion. Scope DEFERS reading, never
+    buries it: the un-planted transcript is picked up whole the moment the scope widens."""
+    inside = tmp_path / "-home-x-code-pokex"
+    inside.mkdir()
+    outside = tmp_path / "-home-x-code-mono"
+    outside.mkdir()
+    t_in = inside / "in000001.jsonl"
+    t_out = outside / "out00001.jsonl"
+    for t in (t_in, t_out):
+        t.write_text("\n".join(_dialogue("history " * 20, "reply " * 20)) + "\n")
+    llm = FakeLLM({"threads_opened": [], "threads_resolved": []})
+
+    rep = await sense_sessions_tick(actions, tmp_path, llm, scopes=["pokex"])
+    assert rep["planted"] == 1  # ONLY the in-scope transcript got a cursor
+
+    # the scoped-out `only`: refused — no LLM call, no cursor planted or moved
+    rep2 = await sense_sessions_tick(
+        actions, tmp_path, llm, only=t_out, backfill=True, scopes=["pokex"])
+    assert rep2.get("skipped_scope") == 1 and rep2["chunks"] == 0 and llm.prompts == []
+
+    # widening back to unscoped walks everything: the deferred transcript plants NOW —
+    # nothing was buried by the narrow interval
+    rep3 = await sense_sessions_tick(actions, tmp_path, llm, scopes=[])
+    assert rep3["planted"] == 1

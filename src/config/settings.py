@@ -107,6 +107,13 @@ class Settings(BaseSettings):
     # session forgot to write back. Empty => off. Forward-only: an unseen transcript starts
     # at its current end; history is `python -m src.ingest.sessions backfill`'s explicit job.
     osiris_sense_sessions: str = ""
+    # THE ADVERSARY'S SCOPE (task #37): which projects the sensing licence covers — a
+    # comma/space list matched against transcript project-dir slugs by suffix ('pokex',
+    # 'thoth', 'code/pokex'; see src/ingest/scope.py). Empty = every project (the unarmed
+    # default; ships dark — arming it is the operator's hand). Scope DEFERS reading, never
+    # buries it: scoped-out transcripts are never marked swept, so widening the scope later
+    # lets the orphan reaper drain the interim backlog through the normal licensed lanes.
+    osiris_sense_projects: str = ""
     # THE FREE OBSERVER, and it has its OWN switch on purpose. The transcripts root, read with a
     # `stat()` and nothing else: a session that is alive is WRITING TO ITS TRANSCRIPT whether or
     # not it is talking to us, so liveness is the freshest of (osiris call, transcript write).
