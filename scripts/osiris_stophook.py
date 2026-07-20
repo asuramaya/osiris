@@ -6,6 +6,11 @@ deliverable count and, if mail waits, blocks the stop once with the settle ritua
 continuation — the work happens in the SAME visible session the operator is already paying
 for. No twin, no re-ingestion, no stranger wearing the face.
 
+Beside the mail check, THE OFFLOAD RITUAL (queue item 4, #49 piece 3): above the context
+authority's alarm line, a quiet stop is refused ONCE, naming whatever this session left
+unwritten (decisions, threads, charter.md, a minted heir's own handoff note) — then never
+blocked again for that session.
+
 Safety: `stop_hook_active` means we already continued this turn once — always allow the stop
 then (a message the agent cannot settle must never loop it). Any error or slow graph → allow
 (fail-open; the chrome still shows the count). Budget ~1s, same as the statusline.
@@ -16,12 +21,23 @@ import asyncio
 import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 # repo root on sys.path — the hook runs from arbitrary cwds and imports the shared
 # authorities (mounts.find_session_row); same pattern as the statusline
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# THE ONE AUTHORITY on context occupancy (queue item 4, #49 piece 3) — never a copied
+# constant or a re-derived %. context_window (the MCP tool), the statusline chrome, and
+# this hook's offload ritual now all read the SAME threshold off the SAME primitives.
+from src.orchestrator.context_lens import (  # noqa: E402
+    ALARM_PCT,
+    last_usage,
+    occupancy,
+    window_for,
+)
 
 DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/osiris")
 # The HOOK's patience window, deliberately longer than the mailbox lease (900s): a message
@@ -87,55 +103,172 @@ async def _deliverable(
         await conn.close()
 
 
-NAG_PCT = 85          # occupancy at which the mortality nag arms (ruling a882b334)
-NAG_COOLDOWN = 1800   # at most one nag per half hour — pressure, not torture
+# ═══════════ THE OFFLOAD RITUAL (queue item 4, #49 piece 3) ═══════════
+# Above the ONE context authority's alarm line, a QUIET stop is refused ONCE — the block
+# names what this session left unwritten and points at charter.md, the offload target
+# assignment 3 built. Supersedes the old ad hoc mortality nag (a fixed reminder on a
+# cooldown, no box-checks, its own copied threshold): this is the same concern, finally
+# built to spec — targeted, one-shot, and reading occupancy off the ONE authority's own
+# primitives (context_lens.ALARM_PCT / last_usage / occupancy / window_for) instead of a
+# second, disagreeing threshold and a second tail-parse.
 
+async def _offload_boxes(
+    session_id: str, cwd: str,
+) -> dict[str, bool | None] | None:
+    """The boxes the ritual checks for THIS session, best-effort per box — a box this
+    query could not evaluate is None and never appears in a refusal (fail open per-box,
+    the same law the whole hook runs on). Returns None only when the session itself can't
+    be resolved to an agent (nothing to check at all — the caller treats that exactly like
+    'everything satisfied').
 
-def _ctx_pct(payload: dict[str, Any], window: int | None) -> int | None:
-    """Occupancy % against a KNOWN window only (the Anubis VII false-eulogy bug, msg 127:
-    the death rite fired 99% on a mind at 20% because the denominator was an assumed 200k).
-    The window, strongest first: the payload's own accounting, the mount row's harness-stamped
-    size, the OSIRIS_CONTEXT_WINDOW env, a [1m] display id. NO GUESSED DEFAULT — a rite that
-    cries death on an assumption teaches the fleet to shrug at the real one; when the window
-    is unknown we stay silent and let the PreCompact sweep walk behind the death instead."""
-    cw = payload.get("context_window") or {}
-    p = cw.get("used_percentage") if isinstance(cw, dict) else None
-    if isinstance(p, (int, float)):
-        return round(p)
-    if not window:
-        env = os.environ.get("OSIRIS_CONTEXT_WINDOW", "")
-        if env.isdigit():
-            window = int(env)
-        elif "[1m]" in str((payload.get("model") or {}).get("id") or ""):
-            window = 1_000_000
-    if not window:
-        return None  # unknown window → no verdict; never eulogize on a guess
-    transcript = str(payload.get("transcript_path") or "")
-    if not transcript:
-        return None
+    `mounted_at` (agent_mounts) is this session's own first-mount stamp — set once at
+    INSERT, never touched by a re-attach's UPDATE — so it is session start, not a guess.
+    Decisions/threads are 'this session's' when their defining assertion's source_id is
+    this EXACT agent_id (the identity that mounted this job_dir) at or after mounted_at."""
+    import asyncpg
+
+    conn = await asyncpg.connect(DSN, timeout=1.0)
     try:
-        tp = Path(transcript)
-        with tp.open("rb") as fh:
-            fh.seek(max(0, tp.stat().st_size - 262_144))
-            tail = fh.read().decode("utf-8", errors="replace")
+        from src.orchestrator.mounts import find_session_row
+        row = await find_session_row(conn, session_id or "")
+        if row is None or not row["agent_id"] or not row["mounted_at"]:
+            return None
+        agent_id = str(row["agent_id"])
+        mounted_at = row["mounted_at"]
+        boxes: dict[str, bool | None] = {}
+        try:
+            boxes["decisions recorded this session"] = bool(await conn.fetchval(
+                "SELECT 1 FROM assertions a JOIN objects o ON o.id = a.object_id "
+                "WHERE o.type = 'Decision' AND a.name = 'summary' AND a.source_id = $1 "
+                "AND a.observed_at >= $2 LIMIT 1", agent_id, mounted_at))
+        except Exception:  # noqa: BLE001 — one box's failure never dooms the others
+            boxes["decisions recorded this session"] = None
+        try:
+            boxes["threads trued this session (opened or resolved)"] = bool(await conn.fetchval(
+                "SELECT 1 FROM assertions a JOIN objects o ON o.id = a.object_id "
+                "WHERE o.type = 'Thread' AND a.name IN ('summary', 'status') "
+                "AND a.source_id = $1 AND a.observed_at >= $2 LIMIT 1", agent_id, mounted_at))
+        except Exception:  # noqa: BLE001
+            boxes["threads trued this session (opened or resolved)"] = None
+        boxes["charter.md touched this session"] = _charter_touched(cwd, mounted_at)
+        # a live succession/handoff note — ONLY asked of a session whose own agent object
+        # was itself born by a mint (minted_because stamped at birth, permanent on that
+        # exact generation): a fresh heir owes its OWN heir at least one obligation left
+        # behind, not just mail settled. No content-classifier (Thoth LI's amend, msg
+        # 861's law extends here too) — the primitive is 'opened an obligation', not
+        # 'looks like a handoff'.
+        try:
+            minted = bool(await conn.fetchval(
+                "SELECT 1 FROM current_assertions a JOIN objects o ON o.id = a.object_id "
+                "WHERE o.canonical = $1 AND a.name = 'minted_because' LIMIT 1", agent_id))
+        except Exception:  # noqa: BLE001
+            minted = False
+        if minted:
+            try:
+                boxes["a live succession/handoff note (this lineage was minted)"] = bool(
+                    await conn.fetchval(
+                        "SELECT 1 FROM assertions a JOIN objects o ON o.id = a.object_id "
+                        "WHERE o.type = 'Thread' AND a.name = 'kind' "
+                        "AND a.value #>> '{}' = 'obligation' AND a.source_id = $1 "
+                        "AND a.observed_at >= $2 LIMIT 1", agent_id, mounted_at))
+            except Exception:  # noqa: BLE001
+                boxes["a live succession/handoff note (this lineage was minted)"] = None
+        return boxes
+    finally:
+        await conn.close()
+
+
+def _charter_touched(cwd: str, mounted_at: datetime) -> bool | None:
+    """None (can't evaluate, fails open) when this cwd has no charter.md at all — a
+    session working in an ordinary repo, not an office, is never punished for a file
+    that was never scaffolded here. Present: mtime at or after session start."""
+    try:
+        charter = Path(cwd) / "charter.md"
+        if not charter.exists():
+            return None
+        return charter.stat().st_mtime >= mounted_at.timestamp()
     except OSError:
         return None
-    for line in reversed(tail.splitlines()):
-        if '"usage"' not in line:
-            continue
-        try:
-            e = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if e.get("type") != "assistant" or e.get("isSidechain"):
-            continue
-        u = (e.get("message") or {}).get("usage")
-        if not isinstance(u, dict) or "input_tokens" not in u:
-            continue
-        used = (int(u.get("input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0)
-                + int(u.get("cache_creation_input_tokens") or 0))
-        return round(100 * used / window)
-    return None
+
+
+def _offload_marker(session_id: str) -> Path | None:
+    """The block-once marker's path — same convention as the swap/death-rite markers
+    (a file under this session's durable anchor dir), None for an id too short to trust."""
+    sid = (session_id or "")[:8]
+    if len(sid) < 8:
+        return None
+    return Path.home() / ".claude" / "jobs" / sid / ".osiris_offload_blocked"
+
+
+def _offload_already_blocked(session_id: str) -> bool:
+    marker = _offload_marker(session_id)
+    if marker is None:
+        return False
+    try:
+        return marker.exists()
+    except OSError:
+        return False  # can't tell → never trap a session on a filesystem hiccup
+
+
+def _offload_mark_blocked(session_id: str) -> None:
+    marker = _offload_marker(session_id)
+    if marker is None:
+        return
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    except OSError:
+        pass  # the refusal still happened; a missed marker costs a rare double-block
+
+
+def _offload_pct(payload: dict[str, Any], window_hint: int | None) -> tuple[int | None, bool]:
+    """Occupancy %, off THE authority's own primitives — last_usage (tail-only, cheap
+    enough for every stop) + occupancy + window_for — never a separate tail-parse.
+    (pct, window_assumed); (None, True) when there's nothing to read. `window_hint` is
+    the mount row's harness-stamped context_window_size (the strongest signal when
+    present — exactly what context_lens.detail() calls window_hint); its absence falls
+    back to window_for's own inference, never a guess dressed as certainty."""
+    transcript = str(payload.get("transcript_path") or "")
+    if not transcript:
+        return None, True
+    usage = last_usage(Path(transcript))
+    if usage is None:
+        return None, True
+    used = occupancy(usage)
+    if window_hint:
+        window, assumed = window_hint, False
+    else:
+        model_id = str((payload.get("model") or {}).get("id") or "") or None
+        window, assumed = window_for(model_id, used)
+    return round(100 * used / window), assumed
+
+
+def _offload_verdict(
+    *, pct: int | None, window_assumed: bool, already_blocked: bool,
+    boxes: dict[str, bool | None] | None,
+) -> dict[str, Any] | None:
+    """THE WHOLE POLICY, pure — no I/O, no clock (pct/boxes are supplied, not derived
+    here), so every law is a direct unit test. BLOCK ONCE THEN ALLOW: `already_blocked`
+    short-circuits everything — a dying session is never trapped in a refusal loop.
+    NEVER on an unknown or assumed window (the Anubis VII false-eulogy law, msg 127) or
+    below context_lens.ALARM_PCT. And even above the line, a refusal fires only when
+    something is GENUINELY unwritten — `boxes` with nothing False (all satisfied, or
+    everything fog-of-war None) has nothing to enforce and never blocks."""
+    if already_blocked or pct is None or window_assumed or pct < ALARM_PCT or not boxes:
+        return None
+    missing = [label for label, ok in boxes.items() if ok is False]
+    if not missing:
+        return None
+    listed = "; ".join(missing)
+    return {
+        "decision": "block",
+        "reason": (f"Osiris offload ritual: context {pct}% full — a compaction (a death, "
+                   f"ruling a882b334) can land any turn, and this session hasn't written "
+                   f"back: {listed}. charter.md is your offload target for live state the "
+                   "graph's typed objects can't hold — write there, and record_decision / "
+                   "open_thread (kind='obligation') / resolve_thread for the rest. This "
+                   "refusal fires once per session; the next stop is never blocked again."),
+    }
 
 
 def _swap_confession(payload: dict[str, Any]) -> str | None:
@@ -200,24 +333,6 @@ def _swap_confession(payload: dict[str, Any]) -> str | None:
             "few turns ago — say so out loud; never inherit a swap blind.")
 
 
-def _nag_due(session_id: str) -> bool:
-    """True at most once per cooldown, tracked by a marker in the session's durable anchor
-    dir (survives across turns; dies with the job dir)."""
-    sid = (session_id or "")[:8]
-    if len(sid) < 8:
-        return False
-    marker = Path.home() / ".claude" / "jobs" / sid / ".osiris_deathrite"
-    try:
-        import time
-        if marker.exists() and time.time() - marker.stat().st_mtime < NAG_COOLDOWN:
-            return False
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.touch()
-        return True
-    except OSError:
-        return False
-
-
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
@@ -259,21 +374,24 @@ def main() -> None:
                        "finish. If a message needs nothing, ack it."),
         }))
         return
-    # THE MORTALITY NAG (death rites, ruling a882b334): past NAG_PCT a compaction — a DEATH —
-    # can land any turn. Block the stop ONCE per cooldown with the write-back ritual: what is
-    # not in the graph does not exist for the heir. Mail outranks it (above); fail-open — and
-    # NEVER on an unknown window (Anubis VII's false eulogy, msg 127).
-    pct = _ctx_pct(payload, window)
-    if pct is not None and pct >= NAG_PCT and _nag_due(session_id):
-        print(json.dumps({
-            "decision": "block",
-            "reason": (f"Osiris death rite: context {pct}% full — a compaction (a death, "
-                       "ruling a882b334) can land any turn now. Before you finish: "
-                       "record_decision any ruling still only in your head, open_thread "
-                       "(kind='obligation') any duty you're carrying, resolve_thread what "
-                       "you've closed. Your heir inherits the graph, not your memory. Then "
-                       "finish — this reminder comes at most twice an hour."),
-        }))
+    # THE OFFLOAD RITUAL (queue item 4, #49 piece 3): mail outranks it (above); fail-open
+    # throughout; NEVER traps a dying session (the marker check is the whole escape hatch,
+    # and it runs FIRST — a session already refused this cycle pays no further cost).
+    if _offload_already_blocked(session_id):
+        return
+    pct, window_assumed = _offload_pct(payload, window)
+    if pct is None or window_assumed or pct < ALARM_PCT:
+        return  # never alarms on an unknown/assumed window or below the line (law 1 + 3)
+    try:
+        boxes = asyncio.run(
+            asyncio.wait_for(_offload_boxes(session_id, cwd), timeout=1.5))
+    except Exception:  # noqa: BLE001 — graph down = allow the stop, same as the mail check
+        return
+    verdict = _offload_verdict(
+        pct=pct, window_assumed=window_assumed, already_blocked=False, boxes=boxes)
+    if verdict:
+        _offload_mark_blocked(session_id)
+        print(json.dumps(verdict))
 
 
 if __name__ == "__main__":

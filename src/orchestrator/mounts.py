@@ -155,7 +155,7 @@ async def find_session_row(
     #33): every per-window surface — statusline, stop hook, live_succession — resolves a
     window's identity through THIS, never its own copy (the vitals law: a copy is a fork
     that forgets it is one). Returns the row (job_dir, agent_id, project, model,
-    context_window_size) or None.
+    context_window_size, mounted_at) or None.
 
     Two lanes, strongest evidence first:
       1. THE ANCHOR NAMED FOR THE SID — the whisper derives ~/.claude/jobs/<sid8> for
@@ -171,7 +171,7 @@ async def find_session_row(
     sid = (session_id or "").strip().lower()
     if len(sid) < 8:
         return None
-    cols = "job_dir, agent_id, project, model, context_window_size"
+    cols = "job_dir, agent_id, project, model, context_window_size, mounted_at"
     row = await db.fetchrow(
         f"SELECT {cols} FROM agent_mounts WHERE job_dir LIKE '%/jobs/' || $1 "
         "ORDER BY last_seen DESC NULLS LAST LIMIT 1", sid[:8])
