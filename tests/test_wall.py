@@ -370,3 +370,57 @@ async def test_a_halted_program_is_not_debt(actions: Actions) -> None:
     await set_lifecycle(actions, "deadproj", "active", because="he changed his mind")
     resumed = (await _fn_wall(actions.pool, None, {}))["totals"]
     assert resumed["open"] == 2 and resumed["halted"] == 0
+
+
+async def test_an_unfiled_thread_surfaces_on_its_owners_wall(actions: Actions) -> None:
+    """THE UNFILED OWNER MATCH (thread 4ffe0eb9, Alfred V's succession repro): a thread
+    opened without repo= carries no in_repo link, yet it must still reach the wall of the
+    project whose move it is — matched by project name, or by an agent mounted there. A
+    stray owned elsewhere stays off this wall."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:walltest", "session")
+    a = await actions.create_or_find_object("Agent", "agent:wa11aaaa", "session")
+    await actions.assert_property(a, "project", "walltest", "session", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await open_thread(actions, "SUCCESSION HANDOFF nobody filed", kind="obligation",
+                      owner="walltest", source="agent:wa11aaaa")
+    await open_thread(actions, "an agent-owned stray", kind="obligation",
+                      owner="agent:wa11aaaa", source="agent:wa11aaaa")
+    await open_thread(actions, "someone else's stray", kind="obligation",
+                      owner="elsewhere", source="agent:zzzz9999")
+    wall, _ = await open_thread_wall(actions.pool, proj)
+    summaries = {w["summary"] for w in wall}
+    assert "SUCCESSION HANDOFF nobody filed" in summaries
+    assert "an agent-owned stray" in summaries
+    assert "someone else's stray" not in summaries
+
+
+async def test_open_thread_tool_files_under_the_mounted_project(actions: Actions) -> None:
+    """The tool half of 4ffe0eb9: open_thread without repo= defaults to the CALLER'S
+    mounted project — an unfiled thread now takes deliberate effort (an unmounted caller),
+    not a forgotten kwarg."""
+    import src.mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    await actions.create_or_find_object("SoftwareProject", "repo:walltest", "session")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:wa11aaaa", session="wall0001", project="walltest",
+        model=None, cwd=None)
+    try:
+        out = await srv.open_thread("a duty filed by default", kind="obligation", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    filed = await actions.pool.fetchval(
+        "SELECT 1 FROM links l JOIN objects t ON t.id=l.from_id "
+        "JOIN objects p ON p.id=l.to_id "
+        "WHERE t.id=$1::uuid AND l.type='in_repo' AND p.canonical='repo:walltest'",
+        out["id"])
+    assert filed == 1

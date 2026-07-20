@@ -1521,6 +1521,48 @@ async def open_thread_wall(
         "   WHERE a.object_id=o.id AND a.name='status' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
         "ORDER BY o.created_at DESC LIMIT 400", proj)
+    # THE UNFILED OWNER MATCH (thread 4ffe0eb9, Alfred V's succession repro): a thread
+    # opened without repo= carries no in_repo link, so the join above can never see it —
+    # Alfred IV's succession handoff hid from his own successor's orient while its owner
+    # said 'alfred' the whole time, and the successor's first instinct was to regex the
+    # transcript. Owner already means "whose move it is": an unfiled open thread whose
+    # owner IS this project (by name, or an agent mounted in it) belongs on its wall.
+    pname = await pool.fetchval(
+        "SELECT replace(canonical, 'repo:', '') FROM objects WHERE id=$1", proj)
+    if pname:
+        seen = {r["id"] for r in rows}
+        unfiled = await pool.fetch(
+            "SELECT o.id, o.created_at, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "   AND a.name='summary' "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "   AND a.name='kind' "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "   AND a.name='owner' "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS owner, "
+            " NOT EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
+            "   AND sa.evidence_class='self_declared') AS untouched "
+            "FROM objects o "
+            "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
+            "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+            "   WHERE a.object_id=o.id AND a.name='status' "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+            "  AND NOT EXISTS (SELECT 1 FROM links fl WHERE fl.from_id=o.id "
+            "   AND fl.type='in_repo') "
+            "  AND (COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+            "   WHERE a.object_id=o.id AND a.name='owner' "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'') = $1 "
+            "   OR COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+            "   WHERE a.object_id=o.id AND a.name='owner' "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'') IN ("
+            "   SELECT o2.canonical FROM objects o2 "
+            "     JOIN current_assertions pa ON pa.object_id=o2.id AND pa.name='project' "
+            "     WHERE o2.type='Agent' AND o2.status='active' "
+            "     AND pa.value #>> '{}' = $1)) "
+            "ORDER BY o.created_at DESC LIMIT 100", str(pname))
+        rows = list(rows) + [r for r in unfiled if r["id"] not in seen]
     wall: list[dict[str, Any]] = []
     echoes: list[dict[str, Any]] = []
     for r in rows:

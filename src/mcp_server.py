@@ -2589,6 +2589,13 @@ async def open_thread(
     open build; a DIFFERENT assignee asking for near-duplicate work surfaces it too, by
     design — a double-assignment must be VISIBLE, never silent."""
     pool = await _pool_get()
+    # AN UNFILED THREAD IS INVISIBLE TO ITS OWN PROJECT (Alfred V's succession repro,
+    # thread 4ffe0eb9: IV's handoff, opened without repo=, hid from orient and the whisper
+    # while his successor mined transcripts with regex). The mounted identity already
+    # knows the project — filing there is the default; unfiled takes deliberate effort.
+    if not repo:
+        ident = await _ident_for(ctx)
+        repo = ident.project if ident else None
     dup = await capture.find_near_duplicate_open_thread(pool, summary, repo=repo)
     if dup is not None:
         out: dict[str, str] = {"id": str(dup), "summary": summary, "status": "open",
