@@ -104,10 +104,15 @@ def test_a_dm_alone_rings_the_doorbell(
 
 
 def _strip_for(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
-               ceil: tuple[float, float, int], sid: str) -> str:
+               ceil: tuple[float, float, int], sid: str, metered: bool = True) -> str:
     """Render main() once with a given (spent, cap, blind) riding the counts. `sid` must be
     UNIQUE per call within a test now that renders are cache-keyed by session — three calls
-    sharing one id would have the 2nd and 3rd serve the 1st's cached (and now wrong) ceil."""
+    sharing one id would have the 2nd and 3rd serve the 1st's cached (and now wrong) ceil.
+
+    `metered` (default True) is the BILLED case — the only one where a dollar segment renders;
+    the subscription case (False) keeps the strip dark and has its own test."""
+    monkeypatch.setattr("src.ingest.providers.spend_is_metered", lambda s=None: metered)
+
     async def fake_fetch(*a: object, **k: object) -> tuple[tuple, bool]:
         return (0, 0, 0, 0, 1, 0, 0, 0, [], ceil), False
 
@@ -132,6 +137,18 @@ def test_the_price_is_dark_until_it_matters(
     assert "$6.50/$10" in out
     out2 = _strip_for(monkeypatch, capsys, (0.5, 10.0, 3), "deadbeef0003")  # blind: loud
     assert "3 unpriced" in out2
+
+
+def test_the_price_stays_dark_on_a_subscription(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The '$12/$10' chrome bug (Thoth LIII 2026-07-21): on a subscription the CLI's cost is
+    notional, so the statusline strip stays DARK — no dollar segment at 65% of a phantom cap,
+    no 'unpriced' warning — even though the billed case (metered=True) would light both."""
+    assert "$" not in _strip_for(monkeypatch, capsys, (6.5, 10.0, 0), "deadbeef0011",
+                                 metered=False)
+    dark = _strip_for(monkeypatch, capsys, (0.5, 10.0, 3), "deadbeef0012", metered=False)
+    assert "$" not in dark and "unpriced" not in dark
 
 
 def test_end_to_end_refused_port_renders_unreachable_not_a_crash(tmp_path: Path) -> None:

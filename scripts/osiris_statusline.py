@@ -444,12 +444,18 @@ def main() -> None:
         # nothing — the pulse and the desk carry the ambient number. The strip speaks only
         # when spend crosses 60% of the cap (amber; red at 85%) or a call went UNPRICED
         # (spend the ceiling cannot see — never silently scored as zero).
+        # ...but ONLY when the dollars are real. On a subscription the CLI's cost is notional
+        # (spend_is_metered False), so this strip stays dark rather than flashing a phantom
+        # '$12/$10' — the same reason the ceiling no longer gates and the pulse omits it
+        # (Thoth LIII 2026-07-21). The segment returns the day Osiris runs on a keyed API backend.
+        from src.ingest.providers import spend_is_metered
         spend_s = ""
-        if blind:
-            spend_s = f"{RED}⚠ {blind} unpriced call(s){RESET}"
-        elif cap > 0 and spent >= 0.6 * cap:
-            c = RED if spent >= 0.85 * cap else AMBER
-            spend_s = f"{c}${spent:.2f}/${cap:.0f}{RESET}"
+        if spend_is_metered():
+            if blind:
+                spend_s = f"{RED}⚠ {blind} unpriced call(s){RESET}"
+            elif cap > 0 and spent >= 0.6 * cap:
+                c = RED if spent >= 0.85 * cap else AMBER
+                spend_s = f"{c}${spent:.2f}/${cap:.0f}{RESET}"
         parts = [
             _link(f"◈ {project}", "desk"),
             *([_link(sick_s, "fleet")] if sick_s else []),
