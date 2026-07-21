@@ -2529,10 +2529,15 @@ async def record_decision(
     paying a bug tax that no longer exists."""
     pool = await _pool_get()
     gids: list[uuid.UUID] = []
+    grounded: list[dict[str, str]] = []
     missing: list[str] = []
     for g in grounds or []:
         rid = await _resolve(pool, g)
-        (gids.append(rid) if rid is not None else missing.append(g))
+        if rid is not None:
+            gids.append(rid)
+            grounded.append({"ref": g, "id": str(rid)[:8]})
+        else:
+            missing.append(g)
     old: uuid.UUID | None = None
     if supersedes:  # resolve BEFORE recording — a correction that can't name its target
         old = await capture._find_decision(pool, supersedes)  # records NOTHING
@@ -2600,8 +2605,8 @@ async def record_decision(
             "self (identical summary re-recorded) — nothing buried" if old == d else
             f"{str(old)[:8]} is buried under this decision: it leaves orient's recent "
             "list, the decision-log grays it (unwind: re-assert superseded_by='' on it)")
-    if gids:
-        out["grounded_by"] = len(gids)
+    if grounded:
+        out["grounded_by"] = grounded
     if missing:
         out["unresolved_grounds"] = missing
         out["note"] = ("unresolved grounds were SKIPPED — ingest_reference them first, "
@@ -2705,7 +2710,7 @@ async def open_thread(
         Actions(pool), summary, repo=repo, kind=kind, owner=owner, assignee=assignee,
         source=await _actor_for(ctx, subagent_id, subagent_type)
     )
-    out = {"id": str(t), "summary": summary, "status": "open"}
+    out = {"id": str(t), "summary": summary, "status": "open", "deduped": "false"}
     if assignee:
         out["assignee"] = assignee.strip()
     return out
@@ -2725,17 +2730,30 @@ async def resolve_thread(
     `artifact` is the POINTER to what actually closed it — a commit hash, a decision id, a
     file:line — kept as resolved_artifact; when it names a graph object (Commit/Decision)
     a resolved_by edge is minted too, the strong closure witness the closure-miner almost
-    never finds (022bd24a). Put the evidence THERE and keep `because` short."""
+    never finds (022bd24a). Put the evidence THERE and keep `because` short. The receipt's
+    `resolved_by` field CONFIRMS whether that edge actually landed — an artifact that only
+    matched free text (a file:line, an unresolvable pointer) says so plainly rather than
+    leaving the caller to guess from a conditional sentence."""
+    pool = await _pool_get()
     tid = await capture.resolve_thread(
-        Actions(await _pool_get()), ref, because=because, artifact=artifact,
+        Actions(pool), ref, because=because, artifact=artifact,
         source=await _actor_for(ctx, subagent_id, subagent_type)
     )
     if tid is None:
         return {"error": f"no open thread matches {ref!r}"}
     out = {"id": str(tid), "status": "resolved"}
     if artifact:
-        out["artifact"] = (f"{artifact} — kept as resolved_artifact "
-                           "(+ resolved_by edge if it names an object)")
+        out["artifact"] = f"{artifact} — kept as resolved_artifact"
+        target = await pool.fetchrow(
+            "SELECT o.type, o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
+            "WHERE l.from_id=$1 AND l.type='resolved_by' LIMIT 1", tid)
+        out["resolved_by"] = (
+            f"{target['type']} {target['canonical']} — the strong closure witness"
+            if target is not None else
+            "none — the artifact did not resolve to a graph object (a file:line or an "
+            "unmatched pointer); resolved_artifact still carries it as text, but the "
+            "closure-miner will not find this close"
+        )
     return out
 
 

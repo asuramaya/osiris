@@ -363,6 +363,65 @@ async def test_resolve_thread_artifact_points_at_the_closer(actions: Actions) ->
         "SELECT 1 FROM links WHERE from_id=$1 AND type='resolved_by'", t2) is None
 
 
+async def test_resolve_thread_tool_receipt_confirms_the_edge_when_it_lands(
+    actions: Actions,
+) -> None:
+    """Wave 0 (thread 1aa2ff36): the receipt must CONFIRM the resolved_by edge, not just
+    describe the possibility in a conditional sentence — a caller must never have to
+    re-query the graph to learn what its own write verb actually did."""
+    from src import mcp_server as srv
+
+    t = await open_thread(actions, "wire the frobnicator's doodad socket")
+    d = await record_decision(actions, "the doodad ships wired", kind="decision")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.resolve_thread(str(t), because="built", artifact=str(d)[:8])
+    finally:
+        srv._pool = saved_pool
+    assert out["id"] == str(t)
+    assert out["resolved_by"].startswith("Decision ")
+    # the canonical, not the short id, is what actually names the object in the receipt
+    canon = await actions.pool.fetchval("SELECT canonical FROM objects WHERE id=$1", d)
+    assert canon in out["resolved_by"]
+
+
+async def test_resolve_thread_tool_receipt_admits_when_the_edge_does_NOT_land(
+    actions: Actions,
+) -> None:
+    """A file:line or any other unresolvable pointer must be reported HONESTLY as text-only —
+    the old wrapper said '(+ resolved_by edge if it names an object)' unconditionally, which
+    reads as a promise regardless of what actually happened."""
+    from src import mcp_server as srv
+
+    t = await open_thread(actions, "teach the doohickey to hum")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.resolve_thread(str(t), artifact="src/doohickey/hum.py:17")
+    finally:
+        srv._pool = saved_pool
+    assert out["resolved_by"].startswith("none —")
+    assert "did not resolve to a graph object" in out["resolved_by"]
+
+
+async def test_resolve_thread_tool_receipt_omits_resolved_by_without_an_artifact(
+    actions: Actions,
+) -> None:
+    """No artifact given → nothing to confirm; the field is simply absent, not a false 'none'."""
+    from src import mcp_server as srv
+
+    t = await open_thread(actions, "a thread closed with no artifact at all")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.resolve_thread(str(t), because="moot")
+    finally:
+        srv._pool = saved_pool
+    assert "resolved_by" not in out
+    assert "artifact" not in out
+
+
 def test_measurement_smell_nags_only_the_measurements() -> None:
     """Thread 022bd24a: the protocol nag must fire on verification recipes (Ferryman's exact
     words + the N/N shape) and stay QUIET on ordinary rulings — a nag that fires on every
@@ -1279,6 +1338,36 @@ async def test_record_decision_tool_single_string_still_errors_on_a_miss(
         "value #>> '{}' = 'a ruling that cites a ghost thread'") == 0
 
 
+async def test_record_decision_tool_grounds_receipt_names_landed_and_skipped(
+    actions: Actions,
+) -> None:
+    """Wave 0's own acceptance example: one resolvable ground, one bogus one — the receipt
+    must show which landed (with enough detail to verify without a second query) and which
+    were skipped, never just a bare count that can't be checked against anything."""
+    from src import mcp_server as srv
+    from src.orchestrator.capture import ingest_reference
+
+    ref, canon = await ingest_reference(actions, "The RFM theorem", vendor="arxiv")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.record_decision(
+            "adopt RFM-based scoring", kind="choice",
+            grounds=[canon, "no-such-reference-anywhere"])
+    finally:
+        srv._pool = saved_pool
+    assert out["grounded_by"] == [{"ref": canon, "id": str(ref)[:8]}]
+    assert out["unresolved_grounds"] == ["no-such-reference-anywhere"]
+    # the receipt's claim matches the graph: exactly one grounded_by edge actually landed
+    d = await actions.pool.fetchval(
+        "SELECT o.id FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+        "WHERE o.type='Decision' AND a.name='summary' "
+        "AND a.value #>> '{}' = 'adopt RFM-based scoring'")
+    landed = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='grounded_by'", d)
+    assert landed == 1
+
+
 # --- single-assignee leased obligations (§4.3, alfred's ask 5, ruling dd47c1da) -----------
 
 async def test_open_thread_with_assignee_stamps_the_owner_property(actions: Actions) -> None:
@@ -1314,6 +1403,23 @@ async def test_assignee_rides_the_wall_exactly_like_owner(actions: Actions) -> N
     assert scoped is not None
     wall = scoped["open_threads"]
     assert wall[0]["owner"] == "agent:me"
+
+
+async def test_open_thread_tool_fresh_mint_says_deduped_false_explicitly(
+    actions: Actions,
+) -> None:
+    """Wave 0: 'deduped' or freshly minted must be an explicit field either way — an absent
+    key reads the same as a caller who forgot to check, which is exactly the ambiguity a
+    receipt exists to remove."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.open_thread("a genuinely new thread, never seen before", repo="freshmint")
+    finally:
+        srv._pool = saved_pool
+    assert out["deduped"] == "false"
 
 
 async def test_open_thread_same_assignee_near_dup_surfaces_the_existing_lease(
