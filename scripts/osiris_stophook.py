@@ -21,7 +21,7 @@ import asyncio
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -333,12 +333,187 @@ def _swap_confession(payload: dict[str, Any]) -> str | None:
             "few turns ago — say so out loud; never inherit a swap blind.")
 
 
+# ═══════════ THE PIT WATCH, STAGE A (thread 449bf55d) ═══════════
+# The founding evidence, one pair, one afternoon: a worker's brief landed on its manager
+# with no turn injection (a silent DM — the manager went spelunking for a stall that was
+# actually his own unread mail) and a session sat RUNNING BUT UNMOUNTED with an ask-graded
+# assignment in its box while neither side knew. Two mechanisms, both fail-open, neither
+# ever blocks a stop: (1) THE STOP CONFESSION — holding a leased assignment whose manager
+# spoke more recently than I did earns a one-line status DM up. (2) PENDING IS A STATE —
+# holding NO leased assignment asserts state='pending' on the agent, so a manager's orient
+# can show idle workers instead of silence.
+#
+# IDENTITY, PRE-MOUNT: the Stop hook fires on every turn end regardless of whether THIS
+# session has called mount() yet this turn — find_session_row can legitimately return None
+# on a session's very first stop. The office itself is the fallback: each worker seat's
+# cwd IS its office (~/.osiris/seats/<handle>/, single-tenant by construction), so the
+# directory's own basename names a seat whose CURRENT holder (seats.binding_of_handle) is
+# who's stopping — unconditional, no succession-liveness gate (handshake.office_seat's gate
+# answers 'who gets BORN into a quiet seat', a different question from 'who already lives
+# here and is mid-turn').
+
+async def _resolve_worker_identity(
+    conn: Any, session_id: str, cwd: str,
+) -> dict[str, Any] | None:
+    """{agent_id, seat_id} for whoever is stopping, or None when neither door resolves
+    (an ordinary code-repo cwd, a session with no mount row and no office of its own)."""
+    from src.orchestrator.mounts import find_session_row
+    from src.orchestrator.seats import binding_of_handle, held_seat
+
+    row = await find_session_row(conn, session_id or "")
+    if row is not None and row["agent_id"]:
+        agent_id = str(row["agent_id"])
+        bound = await held_seat(conn, agent_id)
+        return {"agent_id": agent_id, "seat_id": bound["seat_id"] if bound else None}
+    root = Path.home() / ".osiris" / "seats"
+    p = Path(cwd or "")
+    if p.parent != root or not p.name:
+        return None
+    bound = await binding_of_handle(conn, p.name)
+    if bound is None:
+        return None
+    return {"agent_id": bound["holder"], "seat_id": bound["seat_id"]}
+
+
+async def _leased_assignment(
+    conn: Any, seat_id: str, agent_id: str,
+) -> dict[str, Any] | None:
+    """The freshest open obligation whose owner is this seat or this agent's lineage — the
+    single-assignee lease (ruling dd47c1da §4.3: `assignee` stamps the same `owner`
+    property `open_thread`'s ordinary owner uses, so this is one query, not a new field)."""
+    from src.orchestrator.agents import _generation
+
+    base = _generation(agent_id)[0]
+    row = await conn.fetchrow(
+        "SELECT o.id, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS summary "
+        "FROM objects o WHERE o.type='Thread' AND o.status='active' "
+        "AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'') "
+        "   = 'obligation' "
+        "AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open') "
+        "   = 'open' "
+        "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   = ANY($1::text[]) "
+        "ORDER BY o.created_at DESC LIMIT 1", [seat_id, base])
+    return {"id": row["id"], "summary": row["summary"]} if row is not None else None
+
+
+async def _manager_seat(conn: Any, seat_id: str) -> str | None:
+    return await conn.fetchval(  # type: ignore[no-any-return]
+        "SELECT t.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE f.canonical=$1 AND l.type='managed_by' "
+        "AND t.type='Seat' AND t.status='active' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "ORDER BY l.first_seen DESC LIMIT 1", seat_id)
+
+
+async def _mail_gap(
+    conn: Any, my_seat: str, manager_seat: str, agent_id: str,
+) -> tuple[datetime | None, datetime | None]:
+    """(manager's newest DM to my seat, my newest DM to the manager's seat) — seat
+    addresses on both sides so the gap survives either party's own succession (a DM to
+    'seat:<id>' is deliverable to, and attributable through, whoever holds it at send
+    time, mailbox.py's own law)."""
+    from src.orchestrator.agents import _generation
+
+    base = _generation(agent_id)[0]
+    manager_to_me = await conn.fetchval(
+        "SELECT max(created_at) FROM fleet_messages WHERE to_agent=$1", my_seat)
+    me_to_manager = await conn.fetchval(
+        "SELECT max(created_at) FROM fleet_messages WHERE to_agent=$1 "
+        "AND (from_agent=$2 OR from_agent LIKE $2 || '-%')", manager_seat, base)
+    return manager_to_me, me_to_manager
+
+
+def _stage_a_confession(
+    *, leased: dict[str, Any], manager_dm_at: datetime | None, my_dm_at: datetime | None,
+) -> str | None:
+    """THE WHOLE POLICY, pure: confess only when the ball is provably in my court — the
+    manager spoke (an assignment message exists) and I never spoke back since. No manager
+    message on record is not a stall (nothing to be behind on); my own later DM means I
+    already said something this round, confession or otherwise."""
+    if manager_dm_at is None:
+        return None
+    if my_dm_at is not None and my_dm_at >= manager_dm_at:
+        return None
+    short = str(leased["id"])[:8]
+    summary = (leased.get("summary") or "")[:60]
+    tail = f" ({summary})" if summary else ""
+    return f"stopping; assignment {short}{tail}: in progress"
+
+
+async def _assert_pending(agent_id: str) -> None:
+    """PENDING IS A STATE, NOT A SILENCE: append-only (assert_property's own within-source
+    supersession keeps the chain honest; a fresh observed_at at the SAME value is still
+    real information — 'confirmed still idle at T2'), so a manager's orient can show idle
+    workers instead of nothing. Needs its own codec-registered pool (assert_property writes
+    a jsonb column) — the hook's own bare `asyncpg.connect` reads never needed one."""
+    from src.actions.core import Actions
+    from src.db.pool import create_pool
+
+    pool = await create_pool(DSN, min_size=1, max_size=1)
+    try:
+        actions = Actions(pool)
+        obj = await actions.create_or_find_object("Agent", agent_id, agent_id)
+        await actions.assert_property(
+            obj, "state", "pending", agent_id, datetime.now(UTC), 1.0,
+            evidence_class="self_declared")
+    finally:
+        await pool.close()
+
+
+async def _stage_a_async(payload: dict[str, Any]) -> None:
+    cwd = str(payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
+    session_id = str(payload.get("session_id") or "")
+    import asyncpg
+
+    conn = await asyncpg.connect(DSN, timeout=1.0)
+    try:
+        identity = await _resolve_worker_identity(conn, session_id, cwd)
+        if identity is None or not identity.get("seat_id"):
+            return  # nobody to attribute this to, or an unclaimed seat — nothing to confess
+        agent_id, seat_id = identity["agent_id"], identity["seat_id"]
+        leased = await _leased_assignment(conn, seat_id, agent_id)
+        if leased is None:
+            await _assert_pending(agent_id)
+            return
+        manager_seat = await _manager_seat(conn, seat_id)
+        if manager_seat is None:
+            return  # no manager of record — nobody to confess to
+        manager_dm_at, my_dm_at = await _mail_gap(conn, seat_id, manager_seat, agent_id)
+        body = _stage_a_confession(leased=leased, manager_dm_at=manager_dm_at, my_dm_at=my_dm_at)
+        if body is None:
+            return
+        from src.orchestrator.mailbox import send_message
+        await send_message(conn, from_agent=agent_id, from_project=Path(cwd).name,
+                           to_agent=manager_seat, body=body, grade="fyi")
+    finally:
+        await conn.close()
+
+
+def _stage_a(payload: dict[str, Any]) -> None:
+    """Best-effort, fire-and-forget — the whole point is that a failure here costs a missed
+    courtesy note, never a broken stop. Called only from ALLOW paths in main(): confessing
+    'stopping' on a path that ends up BLOCKED (mail waits, or the offload ritual refuses)
+    would be a lie — the session isn't actually stopping there."""
+    try:
+        asyncio.run(asyncio.wait_for(_stage_a_async(payload), timeout=1.5))
+    except Exception:  # noqa: BLE001 — never turn a clean stop into a broken one
+        pass
+
+
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
     except Exception:  # noqa: BLE001 — a hook must never crash the harness
         return
     if payload.get("stop_hook_active"):
+        _stage_a(payload)  # the real stop — the forced continuation already happened once
         return  # we already continued once this turn — never loop on unsettleable mail
     # IDENTITY OUTRANKS MAIL: a mind that changed models must know before anything else
     confession = _swap_confession(payload)
@@ -352,6 +527,7 @@ def main() -> None:
         n, senders, window, bands = asyncio.run(
             asyncio.wait_for(_deliverable(project, session_id), timeout=1.5))
     except Exception:  # noqa: BLE001 — graph down = allow the stop; the chrome still shows it
+        _stage_a(payload)
         return
     if n:
         who = f" (from {', '.join(senders[:4])})" if senders else ""
@@ -378,20 +554,25 @@ def main() -> None:
     # throughout; NEVER traps a dying session (the marker check is the whole escape hatch,
     # and it runs FIRST — a session already refused this cycle pays no further cost).
     if _offload_already_blocked(session_id):
+        _stage_a(payload)
         return
     pct, window_assumed = _offload_pct(payload, window)
     if pct is None or window_assumed or pct < ALARM_PCT:
+        _stage_a(payload)
         return  # never alarms on an unknown/assumed window or below the line (law 1 + 3)
     try:
         boxes = asyncio.run(
             asyncio.wait_for(_offload_boxes(session_id, cwd), timeout=1.5))
     except Exception:  # noqa: BLE001 — graph down = allow the stop, same as the mail check
+        _stage_a(payload)
         return
     verdict = _offload_verdict(
         pct=pct, window_assumed=window_assumed, already_blocked=False, boxes=boxes)
     if verdict:
         _offload_mark_blocked(session_id)
         print(json.dumps(verdict))
+        return
+    _stage_a(payload)
 
 
 if __name__ == "__main__":

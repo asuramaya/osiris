@@ -18,7 +18,9 @@ import pytest
 import scripts.osiris_stophook as stophook
 from src.actions.core import Actions
 from src.orchestrator.capture import open_thread, record_decision
+from src.orchestrator.mailbox import send_message
 from src.orchestrator.mounts import save_mount
+from src.orchestrator.seats import bind_holder
 
 # ═══════════ THE PURE POLICY — acceptance (a)-(d) ═══════════
 
@@ -209,3 +211,224 @@ async def test_offload_boxes_unresolvable_session_returns_none(
 ) -> None:
     monkeypatch.setattr(stophook, "DSN", pg_dsn)
     assert await stophook._offload_boxes("00000000-none-anywhere", "/nowhere") is None
+
+
+# ═══════════ THE PIT WATCH, STAGE A — the stop confession + pending-is-a-state ═══════════
+# _stage_a_confession is the whole policy, pure — same discipline as _offload_verdict above.
+
+def test_confession_never_fires_without_a_manager_message_on_record() -> None:
+    """No DM from the manager on record is not a stall — nothing to be behind on."""
+    assert stophook._stage_a_confession(
+        leased={"id": "x", "summary": "s"}, manager_dm_at=None, my_dm_at=None) is None
+
+
+def test_confession_never_fires_once_i_already_replied() -> None:
+    now = datetime.now(UTC)
+    assert stophook._stage_a_confession(
+        leased={"id": "x", "summary": "s"},
+        manager_dm_at=now - timedelta(minutes=5), my_dm_at=now) is None
+
+
+def test_confession_fires_when_the_manager_spoke_and_i_never_answered() -> None:
+    now = datetime.now(UTC)
+    body = stophook._stage_a_confession(
+        leased={"id": "abcdef1234567890", "summary": "fix the thing"},
+        manager_dm_at=now, my_dm_at=None)
+    assert body == "stopping; assignment abcdef12 (fix the thing): in progress"
+
+
+def test_confession_fires_when_my_own_reply_is_older_than_the_managers_latest() -> None:
+    now = datetime.now(UTC)
+    body = stophook._stage_a_confession(
+        leased={"id": "abcdef1234567890", "summary": ""},
+        manager_dm_at=now, my_dm_at=now - timedelta(minutes=10))
+    assert body == "stopping; assignment abcdef12: in progress"
+
+
+# ═══════════ IDENTITY, PRE-MOUNT — resolving who is stopping from the office alone ═══════════
+
+async def test_resolve_identity_via_session_row_when_mounted(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    agent = "agent:aaaa0001"
+    await actions.create_or_find_object("Agent", agent, agent)
+    seat = "seat:aaaa0001"
+    seat_obj = await actions.create_or_find_object("Seat", seat, agent)
+    now = datetime.now(UTC)
+    await actions.assert_property(seat_obj, "handle", "worker1", agent, now, 0.9,
+                                  evidence_class="self_declared")
+    await bind_holder(actions, seat_id=seat, agent_id=agent)
+    job_dir = str(tmp_path / "jobs" / "aaaa0001")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="testhouse",
+                     cwd=str(tmp_path / "somewhere"), model=None, session_key=None)
+    sid = "aaaa0001-0000-4000-8000-000000000000"
+    identity = await stophook._resolve_worker_identity(
+        actions.pool, sid, str(tmp_path / "somewhere"))
+    assert identity == {"agent_id": agent, "seat_id": seat}
+
+
+async def test_resolve_identity_falls_back_to_the_office_when_unmounted(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact gap that bit Seshat: a session that has never called mount() THIS turn —
+    find_session_row returns nothing — but its cwd IS a seat's office, single-tenant by
+    construction, so the directory alone names who's stopping."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    agent = "agent:bbbb0001"
+    await actions.create_or_find_object("Agent", agent, agent)
+    seat = "seat:bbbb0001"
+    seat_obj = await actions.create_or_find_object("Seat", seat, agent)
+    now = datetime.now(UTC)
+    await actions.assert_property(seat_obj, "handle", "worker2", agent, now, 0.9,
+                                  evidence_class="self_declared")
+    await bind_holder(actions, seat_id=seat, agent_id=agent)
+    office = tmp_path / ".osiris" / "seats" / "worker2"
+    office.mkdir(parents=True)
+    # NO save_mount at all — this session has never touched agent_mounts
+    never_mounted_sid = "cccccccc-0000-4000-8000-000000000000"
+    identity = await stophook._resolve_worker_identity(
+        actions.pool, never_mounted_sid, str(office))
+    assert identity == {"agent_id": agent, "seat_id": seat}
+
+
+async def test_resolve_identity_none_outside_any_office(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ordinary code-repo cwd (not under ~/.osiris/seats) with no mount row resolves to
+    nothing — the fallback must never misfire on a plain working tree."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    sid = "dddddddd-0000-4000-8000-000000000000"
+    identity = await stophook._resolve_worker_identity(
+        actions.pool, sid, str(tmp_path / "code" / "osiris"))
+    assert identity is None
+
+
+# ═══════════ THE LEASE, THE MANAGER, THE GAP ═══════════
+
+async def test_leased_assignment_finds_the_open_obligation_owned_by_my_seat(
+    actions: Actions,
+) -> None:
+    agent, seat = "agent:eeee0001", "seat:eeee0001"
+    await open_thread(actions, "stage A test assignment", kind="obligation", owner=seat,
+                      source=agent)
+    leased = await stophook._leased_assignment(actions.pool, seat, agent)
+    assert leased is not None
+    assert leased["summary"] == "stage A test assignment"
+
+
+async def test_leased_assignment_none_when_nothing_is_open_for_me(actions: Actions) -> None:
+    assert await stophook._leased_assignment(
+        actions.pool, "seat:ffff0001", "agent:ffff0001") is None
+
+
+async def test_manager_seat_resolves_the_managed_by_link(actions: Actions) -> None:
+    worker = await actions.create_or_find_object("Seat", "seat:1111aaaa", "test")
+    manager = await actions.create_or_find_object("Seat", "seat:2222bbbb", "test")
+    now = datetime.now(UTC)
+    await actions.create_link(worker, manager, "managed_by", "test", now, 0.9,
+                              evidence_class="self_declared")
+    assert await stophook._manager_seat(actions.pool, "seat:1111aaaa") == "seat:2222bbbb"
+
+
+async def test_manager_seat_none_when_unmanaged(actions: Actions) -> None:
+    await actions.create_or_find_object("Seat", "seat:3333cccc", "test")
+    assert await stophook._manager_seat(actions.pool, "seat:3333cccc") is None
+
+
+async def test_mail_gap_reads_both_directions(actions: Actions) -> None:
+    worker_agent, worker_seat = "agent:44440001", "seat:44440001"
+    manager_agent, manager_seat = "agent:55550001", "seat:55550001"
+    await actions.create_or_find_object("Seat", worker_seat, "test")
+    await actions.create_or_find_object("Seat", manager_seat, "test")
+    r1 = await send_message(actions.pool, from_agent=manager_agent, from_project="osiris",
+                            to_agent=worker_seat, body="assignment", grade="ask")
+    r2 = await send_message(actions.pool, from_agent=worker_agent, from_project="osiris",
+                            to_agent=manager_seat, body="ack", grade="fyi")
+    assert r1["dedup"] is False and r2["dedup"] is False
+    manager_to_me, me_to_manager = await stophook._mail_gap(
+        actions.pool, worker_seat, manager_seat, worker_agent)
+    assert manager_to_me is not None and me_to_manager is not None
+    assert me_to_manager >= manager_to_me  # I replied after the assignment landed
+
+
+async def test_assert_pending_writes_a_readable_state(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
+) -> None:
+    monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    agent = "agent:66660001"
+    await stophook._assert_pending(agent)
+    state = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='state' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent)
+    assert state == "pending"
+
+
+# ═══════════ INTEGRATION — _stage_a_async end to end ═══════════
+
+async def test_stage_a_sends_the_confession_when_the_manager_is_owed_a_reply(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
+) -> None:
+    monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    worker_agent, worker_seat = "agent:77770001", "seat:77770001"
+    manager_agent, manager_seat = "agent:88880001", "seat:88880001"
+    worker_obj = await actions.create_or_find_object("Seat", worker_seat, worker_agent)
+    manager_obj = await actions.create_or_find_object("Seat", manager_seat, manager_agent)
+    now = datetime.now(UTC)
+    await actions.assert_property(worker_obj, "handle", "worker7", worker_agent, now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.create_link(worker_obj, manager_obj, "managed_by", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await bind_holder(actions, seat_id=worker_seat, agent_id=worker_agent)
+    await open_thread(actions, "stage A integration assignment", kind="obligation",
+                      owner=worker_seat, source=manager_agent)
+    await send_message(actions.pool, from_agent=manager_agent, from_project="osiris",
+                       to_agent=worker_seat, body="go build it", grade="ask")
+
+    job_dir = str(tmp_path / "jobs" / "77770001")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=worker_agent, project="testhouse",
+                     cwd=str(tmp_path / "office"), model=None, session_key=None)
+    sid = "77770001-0000-4000-8000-000000000000"
+
+    before = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    await stophook._stage_a_async({"cwd": str(tmp_path / "office"), "session_id": sid})
+    after = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    assert after == before + 1
+    row = await actions.pool.fetchrow(
+        "SELECT from_agent, to_agent, body, grade FROM fleet_messages ORDER BY id DESC LIMIT 1")
+    assert row["from_agent"] == worker_agent
+    assert row["to_agent"] == manager_seat
+    assert row["grade"] == "fyi"
+    assert "stopping; assignment" in row["body"]
+    assert "stage A integration assignment" in row["body"]
+
+
+async def test_stage_a_asserts_pending_when_nothing_is_leased(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
+) -> None:
+    monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    agent, seat = "agent:99990001", "seat:99990001"
+    seat_obj = await actions.create_or_find_object("Seat", seat, agent)
+    now = datetime.now(UTC)
+    await actions.assert_property(seat_obj, "handle", "worker9", agent, now, 0.9,
+                                  evidence_class="self_declared")
+    await bind_holder(actions, seat_id=seat, agent_id=agent)
+    job_dir = str(tmp_path / "jobs" / "99990001")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="testhouse",
+                     cwd=str(tmp_path / "office9"), model=None, session_key=None)
+    sid = "99990001-0000-4000-8000-000000000000"
+
+    await stophook._stage_a_async({"cwd": str(tmp_path / "office9"), "session_id": sid})
+    state = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='state' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent)
+    assert state == "pending"
+
+
+def test_stage_a_never_raises_when_the_database_is_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Acceptance: a stop with mail machinery down still stops clean."""
+    monkeypatch.setattr(stophook, "DSN", "postgresql://u:p@127.0.0.1:1/osiris")
+    stophook._stage_a({"cwd": "/nowhere", "session_id": "deadbeef0000"})  # must not raise
