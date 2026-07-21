@@ -1524,6 +1524,123 @@ async def _managed_pair(actions: Actions, *, worker_agent: str, manager_agent: s
     return str(worker_seat), str(manager_seat)
 
 
+# ═══ THE RATE CAP'S UNIT (msg 984, 2026-07-21) — project vs pair ═══════════════════════
+# The DM lane's rate cap used to count wakes for the whole PROJECT; a managed pair's own
+# ping-pong bound is what the cap actually guards against (should_wake's own docstring),
+# and a project-wide count starves ordinary supervision the moment a house holds more than
+# one pair. dispatch_dm now scopes the cap to the pair when sender and target share an
+# active managed_by edge, and falls back to the old project-wide count otherwise.
+
+async def test_recent_wakes_for_pair_counts_both_directions_and_ignores_others(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.trigger import _recent_wakes_for_pair
+
+    worker_seat, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:pairw01", manager_agent="agent:pairm01")
+    m1 = await send_message(actions.pool, from_agent="agent:pairm01", from_project="demo",
+                            to_agent=worker_seat, body="assignment")
+    await actions.pool.execute(
+        "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+        "VALUES ('demo','agent:pairm01',$1,'resume')", int(m1["id"]))
+    m2 = await send_message(actions.pool, from_agent="agent:pairw01", from_project="demo",
+                            to_agent=manager_seat, body="reply")
+    await actions.pool.execute(
+        "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+        "VALUES ('demo','agent:pairw01',$1,'resume')", int(m2["id"]))
+    # an unrelated wake, same project, a different pair entirely — must not count
+    stray = await send_message(actions.pool, from_agent="agent:stranger", from_project="demo",
+                               to_agent="agent:someoneelse", body="unrelated")
+    await actions.pool.execute(
+        "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+        "VALUES ('demo','agent:stranger',$1,'mint')", int(stray["id"]))
+
+    n = await _recent_wakes_for_pair(
+        actions.pool, base_a="agent:pairw01", seat_a=worker_seat,
+        base_b="agent:pairm01", seat_b=manager_seat, window_secs=3600)
+    assert n == 2
+
+
+async def test_dispatch_dm_pair_scoped_cap_ignores_unrelated_project_wakes(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The actual fix, wired: a managed pair's own cap check must not be starved by OTHER
+    traffic sharing the same project (msg 984's measured incident) — only wakes between
+    THIS pair count against it."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    await _managed_pair(actions, worker_agent="agent:abcd1234", manager_agent="agent:sender")
+    # flood the project-wide wake count — enough to blow a project-scoped cap of 1, none of
+    # it involving this pair
+    for i in range(3):
+        stray = await send_message(
+            actions.pool, from_agent="agent:unrelated-stranger", from_project="demo",
+            to_agent=f"agent:target{i}", body="unrelated traffic")
+        await actions.pool.execute(
+            "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+            "VALUES ('demo','agent:unrelated-stranger',$1,'mint')", int(stray["id"]))
+    msg_id = await _dm_to_owner(actions)
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        pass
+
+    st = _settings(enabled=True, sense=str(sense), rate_cap=1)
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender", settings=st, spawn=_spawn,
+                          windows=_no_windows)
+    # the pair's OWN count is 0 — the unrelated flood never touches it
+    assert d["mode"] == "resumed"
+
+
+async def test_dispatch_dm_pair_scoped_cap_still_bounds_the_pingpong(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The unit changed; the bound itself must not have. A wake already recorded for THIS
+    pair, within the window, still caps the next one — the ping-pong halts exactly as
+    before, just scoped correctly now."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    await _managed_pair(actions, worker_agent="agent:abcd1234", manager_agent="agent:sender")
+    prior = await send_message(actions.pool, from_agent="agent:sender", from_project="demo",
+                               to_agent="agent:abcd1234", body="earlier assignment")
+    await actions.pool.execute(
+        "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+        "VALUES ('demo','agent:sender',$1,'resume')", int(prior["id"]))
+    msg_id = await _dm_to_owner(actions)
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        pass
+
+    st = _settings(enabled=True, sense=str(sense), rate_cap=1)
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender", settings=st, spawn=_spawn,
+                          windows=_no_windows)
+    assert d["mode"] == "skipped-rate-capped"
+
+
+async def test_dispatch_dm_falls_back_to_project_scope_without_a_managed_edge(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """No managed_by edge between sender and target (a peer DM, or an unseated party) keeps
+    the ORIGINAL project-wide brake — the fix narrows the cap only where the pair concept
+    actually applies; everything else is exactly as protected as it was before."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    # no _managed_pair call — "agent:sender" and "agent:abcd1234" share no managed_by edge
+    stray = await send_message(actions.pool, from_agent="agent:whoever", from_project="demo",
+                               to_agent="agent:whoever-else", body="project noise")
+    await actions.pool.execute(
+        "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+        "VALUES ('demo','agent:whoever',$1,'mint')", int(stray["id"]))
+    msg_id = await _dm_to_owner(actions)
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        pass
+
+    st = _settings(enabled=True, sense=str(sense), rate_cap=1)
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender", settings=st, spawn=_spawn,
+                          windows=_no_windows)
+    assert d["mode"] == "skipped-rate-capped"  # the old project-wide count still applies
+
+
 async def test_wake_refuses_an_unseated_caller(actions: Actions) -> None:
     """No held seat, no knock — managed_by is seat-to-seat and an unseated mind has no
     relationship it could invoke it with."""

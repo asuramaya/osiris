@@ -167,6 +167,33 @@ async def _recent_wakes(pool: asyncpg.Pool, project: str, window_secs: int) -> i
         "AND woke_at > now() - make_interval(secs => $2)", project, window_secs)
 
 
+async def _recent_wakes_for_pair(
+    pool: asyncpg.Pool, *, base_a: str, seat_a: str | None, base_b: str,
+    seat_b: str | None, window_secs: int,
+) -> int:
+    """Wakes in EITHER direction between two seats within the window — the ping-pong hazard
+    the rate cap exists to bound (should_wake's own docstring: 'the A↔B ping-pong') is a
+    property of the PAIR, not the project it happens to share (msg 984, 2026-07-21: two
+    capped nudges in ten minutes, on the two most important messages of the day, both
+    rescued by the operator by hand — a project-wide cap makes ordinary house growth
+    indistinguishable from a runaway loop). Matched by current lineage base (a wake's
+    from_agent may wear an older generation's suffix — the same LIKE-prefix shape
+    _seat_wakes already uses for to_agent) OR a seat address, whichever the message wore."""
+    n = await pool.fetchval(
+        "SELECT count(*) FROM agent_wakes aw JOIN fleet_messages fm ON fm.id=aw.message_id "
+        "WHERE aw.woke_at > now() - make_interval(secs => $1) AND ("
+        "  ((aw.from_agent = $2 OR aw.from_agent LIKE $2 || '-%') "
+        "    AND (fm.to_agent = $3 OR fm.to_agent LIKE $3 || '-%' "
+        "         OR ($4::text IS NOT NULL AND fm.to_agent = $4::text)))"
+        "  OR"
+        "  ((aw.from_agent = $3 OR aw.from_agent LIKE $3 || '-%') "
+        "    AND (fm.to_agent = $2 OR fm.to_agent LIKE $2 || '-%' "
+        "         OR ($5::text IS NOT NULL AND fm.to_agent = $5::text)))"
+        ")",
+        window_secs, base_a, base_b, seat_b, seat_a)
+    return int(n or 0)
+
+
 async def _attempts_on(pool: asyncpg.Pool, message_id: int) -> int:
     """How many times we have woken ANYONE for THIS message, ever. No window: this is the total
     the rate-limiters never kept, and its absence is what let one letter spawn 79 sessions."""
@@ -800,9 +827,23 @@ async def dispatch_dm(
     project = str(row["project"])
     hourly = await pool.fetchval(
         "SELECT count(*) FROM agent_wakes WHERE woke_at > now() - interval '1 hour'")
+    # THE RATE CAP'S UNIT (msg 984, 2026-07-21): the ping-pong hazard this brake bounds is a
+    # property of a PAIR, not a project — a project-wide cap makes ordinary house growth
+    # indistinguishable from a runaway loop (measured live: two capped nudges in ten
+    # minutes, on the two most important messages of the day, both rescued by the operator
+    # by hand). When sender and target share an active managed_by edge, scope the cap to
+    # that pair; anything else (a peer DM, an unseated party) keeps the original project
+    # brake — the aggregate/cost hazard already has its own dedicated guard (may_spend,
+    # below), so the rate cap does not need to double as one and can stay narrow.
+    sender_seat = ((await held_seat(pool, sender)) or {}).get("seat_id") if sender else None
+    if sender and seat_id and sender_seat and await _managed_edge(pool, seat_id, sender_seat):
+        recent = await _recent_wakes_for_pair(
+            pool, base_a=_generation(sender)[0], seat_a=sender_seat, base_b=base,
+            seat_b=seat_id, window_secs=st.osiris_trigger_window_secs)
+    else:
+        recent = await _recent_wakes(pool, project, st.osiris_trigger_window_secs)
     reason = should_wake(
-        enabled=True, recent_wakes=await _recent_wakes(
-            pool, project, st.osiris_trigger_window_secs),
+        enabled=True, recent_wakes=recent,
         rate_cap=st.osiris_trigger_rate_cap, within_grace=False,
         hourly_wakes=int(hourly or 0), hourly_budget=st.osiris_wake_hourly_budget,
         urgent=(sender or "").startswith("operator"))
