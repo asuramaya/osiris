@@ -15,9 +15,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 # THE ONE-AUTHORITY IMPORTS (operator ruling 2026-07-19: 'the chrome and the harness
 # disagree on briefs, mail, owe'): this script used to carry its own COPIES of every
@@ -33,6 +36,7 @@ CONSOLE = os.environ.get("OSIRIS_CONSOLE_URL", "http://127.0.0.1:8011")
 SUCCESSION = os.environ.get("OSIRIS_SUCCESSION_URL", "http://127.0.0.1:8790/succession")
 LINKS = os.environ.get("OSIRIS_STATUSLINE_LINKS", "1") != "0"  # kill switch if a terminal balks
 LEASE_SECS = 900  # mirror osiris_mail_lease_secs — deliverable = unsettled + no live lease
+CACHE_TTL_SECS = float(os.environ.get("OSIRIS_STATUSLINE_CACHE_TTL") or "5")
 
 DIM = "\033[2m"
 RED = "\033[31m"
@@ -281,6 +285,112 @@ async def _fetch_counts(
                     connect_timeout=2.5), timeout=3.0), True
 
 
+# THE FORK STORM (Ra's diagnosis, msg 958: load 20.5 on 20 vcpus, 17 concurrent
+# osiris_statusline.py forks + 9 PG backends — every Claude Code pane re-renders its chrome
+# on a timer, each render forking a fresh python that asyncpg-connects cold). desk/mail/dm/
+# flight/owed_here are READER-scoped (src/orchestrator/{mailbox,vitals}.py resolve them
+# against the rendering agent), so a cache shared ACROSS sessions would leak one agent's
+# numbers into another's window — the cache key is the SESSION, not the project. That
+# still kills the storm: its shape is one pane re-rendering far faster than the fleet
+# numbers actually change, not many panes each needing a genuinely different answer.
+_SAFE_CACHE_KEY = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def _cache_dir() -> Path:
+    override = os.environ.get("OSIRIS_STATUSLINE_CACHE_DIR")
+    if override:
+        return Path(override)
+    base = os.environ.get("XDG_RUNTIME_DIR") or "/var/tmp/osiris-scratch"
+    return Path(base) / "osiris-statusline"
+
+
+def _cache_key(session_id: str) -> str:
+    if _SAFE_CACHE_KEY.match(session_id):
+        return session_id
+    import hashlib
+    return hashlib.sha256(session_id.encode()).hexdigest()[:32]
+
+
+def _encode_counts(counts: tuple[Any, ...]) -> list[Any]:
+    *head, spend = counts
+    return [*head, list(spend)]
+
+
+def _decode_counts(obj: list[Any]) -> tuple[Any, ...]:
+    *head, spend = obj
+    return (*head, tuple(spend))
+
+
+def _cache_read(path: Path) -> tuple[tuple[Any, ...], bool, float] | None:
+    """(counts, slow, age_secs) if the file parses, else None — corrupt or missing is just
+    a miss, never an error (the cache is an optimization, never a source of truth)."""
+    try:
+        obj = json.loads(path.read_text())
+        counts = _decode_counts(obj["counts"])
+        return counts, bool(obj["slow"]), time.time() - float(obj["ts"])
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
+        return None
+
+
+def _cache_write(path: Path, counts: tuple[Any, ...], slow: bool) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(
+            {"ts": time.time(), "slow": slow, "counts": _encode_counts(counts)}))
+        tmp.replace(path)  # atomic on POSIX — no reader ever sees a partial write
+    except OSError:  # a scratch dir gone missing must never break the chrome
+        pass
+
+
+class _StatuslineDegrade(Exception):
+    """No cache to serve and a sibling pane already holds the refresh lock — render the
+    quiet minimal line (main()'s own except-Exception) rather than block on, or duplicate,
+    an in-flight query."""
+
+
+def _counts_cached(
+    project: str, session_id: str, model_id: str, model_raw: str, window_size: int | None,
+) -> tuple[tuple[Any, ...], bool]:
+    """Warm path never imports asyncpg — the cold-start cost Ra measured: a render within
+    CACHE_TTL_SECS of this SAME session's last one reads a JSON file instead of opening a
+    connection. Cold path is unchanged (one connection, the existing retry law) except the
+    first pane through the door writes the answer down for whoever renders next, and every
+    OTHER pane racing it (`flock` nonblocking) serves the stale answer rather than piling
+    onto Postgres too."""
+    if not session_id:  # nothing to key a cache on — exactly today's behavior
+        return asyncio.run(_fetch_counts(project, session_id, model_id, model_raw, window_size))
+    cache_path = _cache_dir() / f"{_cache_key(session_id)}.json"
+    cached = _cache_read(cache_path)
+    if cached is not None and cached[2] <= CACHE_TTL_SECS:
+        return cached[0], cached[1]
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_fh = open(cache_path.with_suffix(".lock"), "a+")
+    except OSError:
+        return asyncio.run(_fetch_counts(project, session_id, model_id, model_raw, window_size))
+    try:
+        import fcntl
+        try:
+            fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            # a sibling pane is refreshing this session's numbers RIGHT NOW — serve the
+            # stale answer if there is one, never a duplicate query, never a block
+            if cached is not None:
+                return cached[0], cached[1]
+            raise _StatuslineDegrade(
+                "refresh in flight elsewhere, no cache to serve meanwhile") from None
+        try:
+            counts, slow = asyncio.run(
+                _fetch_counts(project, session_id, model_id, model_raw, window_size))
+        finally:
+            fcntl.flock(lock_fh, fcntl.LOCK_UN)
+    finally:
+        lock_fh.close()
+    _cache_write(cache_path, counts, slow)
+    return counts, slow
+
+
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
@@ -306,8 +416,8 @@ def main() -> None:
 
     try:
         ((desk, mail, dm, flight, live, wakes, owed, owed_here, sick,
-          (spent, cap, blind)), slow) = asyncio.run(
-            _fetch_counts(project, session_id, model_id, model_raw, window_size))
+          (spent, cap, blind)), slow) = _counts_cached(
+            project, session_id, model_id, model_raw, window_size)
         # THE DEBT, NOT THE DOORBELL — and only the debt HERE (operator ruling, 2026-07-16:
         # the fleet-wide total 'can disappear'). A number you can do nothing about from this
         # directory is not an alarm, it is wallpaper, and wallpaper that is always red stops
