@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from src.actions.core import Actions
 from src.orchestrator import mounts
 from src.orchestrator.agents import resolve_identity
@@ -437,12 +438,18 @@ async def test_find_session_row_covers_both_lanes(actions: Actions) -> None:
     assert await mounts.find_session_row(p, "0dead000-none-anywhere") is None
 
 
-async def test_fleet_pulse_is_one_honest_glance(actions: Actions) -> None:
+async def test_fleet_pulse_is_one_honest_glance(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch) -> None:
     """The orient fold — SAME WORD, SAME NUMBER (operator ruling 2026-07-19): every figure
     comes from the shared authorities, so the pulse, the statusline, and the chrome desk
     can never disagree again. 'owed' is the desk page's red number; 'briefs' counts
-    undismissed desk cards with the page's own fold."""
+    undismissed desk cards with the page's own fold.
+
+    The spend segment is the BILLED-path case (spend_is_metered True): only there is the dollar
+    figure a real debit worth showing. The subscription case — where it is notional and omitted —
+    has its own test below."""
     from src.orchestrator.mailbox import send_message
+    monkeypatch.setattr("src.ingest.providers.spend_is_metered", lambda s=None: True)
 
     p = actions.pool
     await mounts.save_mount(p, job_dir="/j/a", agent_id="agent:aaa", project="osiris",
@@ -461,6 +468,25 @@ async def test_fleet_pulse_is_one_honest_glance(actions: Actions) -> None:
         "INSERT INTO llm_usage (purpose, model, cost_usd, ran_at) "
         "VALUES ('test', 'x', NULL, now())")
     assert (await mounts.fleet_pulse(p)).endswith("day ⚠1 unpriced")
+
+
+async def test_fleet_pulse_OMITS_the_phantom_spend_on_a_subscription(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch) -> None:
+    """On a subscription the ceiling's dollars are notional — not a small price, not a
+    measurement at all — so the pulse shows NOTHING rather than a phantom '$X/$10' that reads as
+    an over-budget stop (Thoth LIII 2026-07-21). The dollar segment returns only when the
+    inference is billed per call (spend_is_metered)."""
+    monkeypatch.setattr("src.ingest.providers.spend_is_metered", lambda s=None: False)
+
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/j/a", agent_id="agent:aaa", project="osiris",
+                     cwd="/w/osiris", model=None, session_key="sid:a")
+    # a ledger full of notional cost must not surface a dollar segment on the subscription pulse
+    await p.execute("INSERT INTO llm_usage (purpose, model, cost_usd, ran_at) "
+                    "VALUES ('wake', 'x', 9.99, now())")
+    pulse = await mounts.fleet_pulse(p)
+    assert "$" not in pulse and "day" not in pulse, f"phantom spend leaked into: {pulse!r}"
+    assert pulse.endswith("wakes 0/h")
 
 
 async def test_live_claimed_sids_sees_other_clients_lineage_aware(actions: Actions) -> None:

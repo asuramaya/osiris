@@ -389,13 +389,21 @@ async def fleet_pulse(
     # spenders since 07-13, but its number was invisible — 'nobody has ever measured what
     # a healthy Osiris costs per day' stays fixed only if the measurement is AMBIENT. One
     # authority (ceiling.ceiling — the very read the gate itself uses), never a copy.
+    # BUT ONLY WHEN THE DOLLARS ARE REAL (Thoth LIII 2026-07-21): on a subscription the CLI's
+    # cost is notional — not a small price, not a measurement at all — so we show NOTHING rather
+    # than a phantom '$X/$10' that reads as an over-budget stop. The segment returns the day
+    # Osiris runs on a keyed API backend (spend_is_metered), where the figure is a real debit.
     from src.config.settings import get_settings
+    from src.ingest.providers import spend_is_metered
     from src.orchestrator.ceiling import ceiling
-    c = await ceiling(pool, cap=get_settings().osiris_daily_usd)
-    spend = "$∞" if c.unlimited else f"${c.spent:.2f}/${c.cap:.0f}"
-    blind = f" ⚠{c.blind} unpriced" if c.blind else ""
+    spend_tail = ""
+    if spend_is_metered(get_settings()):
+        c = await ceiling(pool, cap=get_settings().osiris_daily_usd)
+        spend = "$∞" if c.unlimited else f"${c.spent:.2f}/${c.cap:.0f}"
+        blind = f" ⚠{c.blind} unpriced" if c.blind else ""
+        spend_tail = f" · {spend} day{blind}"
     return (f"{live['souls']} live {vis}· owed {owed} · briefs {briefs} "
-            f"· wakes {wakes}/h · {spend} day{blind}")
+            f"· wakes {wakes}/h{spend_tail}")
 
 
 async def while_away(

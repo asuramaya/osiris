@@ -18,9 +18,10 @@ scoring it $0 is precisely how the ghost farm ran for a week).
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 from src.actions.core import Actions
-from src.ingest.providers import Usage
+from src.ingest.providers import Usage, spend_is_metered
 from src.ingest.usage import record_usage
 from src.orchestrator.ceiling import DEFAULT_DAILY_USD, ceiling, may_spend
 
@@ -83,6 +84,37 @@ async def test_an_UNPRICED_call_is_not_a_FREE_call(actions: Actions) -> None:
     _, why = await may_spend(actions.pool, cap=10.0)
     assert "NO PRICE" in why and "INVISIBLE" in why
     assert "cannot price itself may not spend" in why
+
+
+def test_spend_is_metered_only_on_the_KEYED_api_backend() -> None:
+    """THE CEILING IS LIVE ONLY WHEN A DOLLAR IS ACTUALLY CHARGED (Thoth LIII 2026-07-21).
+
+    On the local Claude CLI (a subscription) the envelope's total_cost_usd is a notional number
+    the vendor prints, not a debit — so metering it is a category error. Metered is true only on
+    the keyed API path, which is exactly the decision llm_provider() already makes from config;
+    spend_is_metered asks it rather than re-guessing."""
+    api = SimpleNamespace(osiris_extract_provider="anthropic",
+                          osiris_claude_binary="claude", anthropic_api_key="sk-x")
+    assert spend_is_metered(api) is True
+
+    keyless = SimpleNamespace(osiris_extract_provider="anthropic",
+                              osiris_claude_binary="/no/such/claude", anthropic_api_key="")
+    assert spend_is_metered(keyless) is False   # 'anthropic' with no key resolves to no backend
+
+
+async def test_a_SUBSCRIPTION_makes_the_gate_INERT(actions: Actions) -> None:
+    """THE '$12/$10' FALSE STOP, REMOVED. On a subscription the CLI cost is notional, not a
+    charge, so a ledger far over any cap must STILL pass — the gate was halting real work on
+    imaginary money. may_spend(metered=False) never refuses and says why; and the SAME ledger
+    with metered=True still stops, so the gate itself is intact, only correctly scoped."""
+    for _ in range(50):
+        await _spend(actions, 10.00)                 # $500 of NOTIONAL cost — never charged
+    ok, why = await may_spend(actions.pool, cap=10.0, metered=False)
+    assert ok, "the ceiling false-stopped on money that was never charged"
+    assert "subscription" in why and "not billed" in why
+
+    stopped, _ = await may_spend(actions.pool, cap=10.0, metered=True)
+    assert not stopped, "the billed-path gate must still bite over the same ledger"
 
 
 async def test_a_cap_of_zero_is_an_HONEST_kill_switch(actions: Actions) -> None:

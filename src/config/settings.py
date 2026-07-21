@@ -241,6 +241,15 @@ class Settings(BaseSettings):
     # it from ever firing twice on the same message.
     osiris_pit_watch_enabled: bool = False
     osiris_pit_watch_escalate_at: int = 3
+    # THE FROZEN LANE (wake(), thread 9f566244 / handoff 8f005905) — OFF by default, and this
+    # one is not a mere kill switch but a QUARANTINE. wake() rides the Claude daemon reply lane,
+    # which this house proved is a confirmed harness-level RCE: an injected turn runs arbitrary
+    # shell in any session, forged as origin.kind='human' (decisions 635911f4, bd256380). The
+    # lane stays DARK until Anthropic closes the hole AND ships a sanctioned inter-agent API —
+    # building durable machinery on it before then is the exact mistake the disclosure names.
+    # When (only when) that successor exists, flip this on. wake_worker refuses with nothing sent
+    # while it is False, even for an authorized managed_by pair.
+    osiris_wake_enabled: bool = False
     # The operator's STANDING model choice (the intent). The fable harness silently demotes
     # fable→opus when it senses danger (ruling f2ae6346); the swap-detector flags an observed
     # model that diverges from this — the confession backstop the cold-boot ritual can't be.

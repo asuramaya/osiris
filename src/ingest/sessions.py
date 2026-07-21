@@ -67,7 +67,7 @@ from src.config.settings import get_settings
 from src.db.pool import create_pool
 from src.ingest.extract import _strip_fences
 from src.ingest.mined import consolidate_memory, distinctive_terms
-from src.ingest.providers import LLMClient, Usage, llm_provider
+from src.ingest.providers import LLMClient, Usage, llm_provider, spend_is_metered
 from src.ingest.redact import credential_shaped, redact, strip_off_record
 from src.ingest.scope import scope_match, sense_scopes
 from src.ingest.usage import record_usage, usage_summary
@@ -1268,7 +1268,8 @@ async def adversary_pass(
     # THE OPERATOR AFFORD IT?" (measured dollars). Those are different questions and until now
     # only one of them was answered — a producer can be excellent and still ruinous, and every
     # disaster in this system's life was the second kind wearing the first one's clothes.
-    ok, why = await may_spend(actions.pool, cap=get_settings().osiris_daily_usd)
+    ok, why = await may_spend(actions.pool, cap=get_settings().osiris_daily_usd,
+                              metered=spend_is_metered())
     if not ok:
         report["refused"] = 1
         report["why"] = why

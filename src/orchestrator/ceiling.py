@@ -112,8 +112,17 @@ async def ceiling(pool: asyncpg.Pool, *, cap: float = DEFAULT_DAILY_USD) -> Ceil
     return Ceiling(cap=cap, spent=float(row["spent"] or 0.0), blind=int(row["blind"] or 0))
 
 
-async def may_spend(pool: asyncpg.Pool, *, cap: float = DEFAULT_DAILY_USD) -> tuple[bool, str]:
+async def may_spend(
+    pool: asyncpg.Pool, *, cap: float = DEFAULT_DAILY_USD, metered: bool = True,
+) -> tuple[bool, str]:
     """THE GATE. Call it before any paid inference; obey what it says.
+
+    `metered` says whether that inference is BILLED PER CALL — the keyed API path (ask
+    providers.spend_is_metered(); it reads the live backend). On a SUBSCRIPTION (the local Claude
+    CLI) the vendor's `total_cost_usd` is a notional figure, not a debit, so summing it and gating
+    on it stops real work on imaginary money. When the spend is NOT metered this gate is INERT: it
+    never refuses, and it says so. It defaults True so a caller that forgets fails toward
+    enforcement, never toward an unbounded spree — the historically safe direction.
 
     FAILS OPEN on an unreadable ledger, and that is deliberate. If Postgres is down, Osiris has no
     graph to write to and no work worth doing — the ceiling is not what is protecting anyone in
@@ -122,6 +131,9 @@ async def may_spend(pool: asyncpg.Pool, *, cap: float = DEFAULT_DAILY_USD) -> tu
     readable, and an unpriced producer is refused AT THE PRODUCER — a place no database outage can
     reach.
     """
+    if not metered:
+        return True, ("subscription — inference runs on the local Claude CLI, not billed per "
+                      "call; the dollar ceiling does not apply (spend_is_metered=False)")
     try:
         c = await ceiling(pool, cap=cap)
     except Exception:  # noqa: BLE001 — an unreadable ledger must never brick the fleet

@@ -31,6 +31,7 @@ import asyncpg
 
 from src.actions.core import Actions
 from src.config.settings import Settings, get_settings
+from src.ingest.providers import spend_is_metered
 from src.ingest.sessions import locate_current_transcript
 from src.orchestrator.bodies import BodyProvider, LocalProvider
 from src.orchestrator.ceiling import may_spend
@@ -850,8 +851,10 @@ async def dispatch_dm(
     if reason is not None:
         return {"mode": "skipped-" + reason,
                 "detail": f"the fleet's own brakes held it ({reason}); the sweep retries"}
-    # the dollar wall: a resume is a real turn on the operator's card
-    ok, why = await may_spend(pool, cap=st.osiris_daily_usd)
+    # the dollar wall: a resume is a real turn — but only a BILLED one. On a subscription the
+    # CLI's cost is notional and this gate is inert (spend_is_metered=False); it bites only when
+    # Osiris runs on a keyed API backend.
+    ok, why = await may_spend(pool, cap=st.osiris_daily_usd, metered=spend_is_metered(st))
     if not ok:
         return {"mode": "refused", "detail": str(why)}
     # MID-TURN MEANS THE TRANSCRIPT IS MOVING — nothing else (the statusline-heartbeat
@@ -1155,6 +1158,17 @@ async def wake_worker(
                           "in either direction — wake() only knocks within a manager<->worker "
                           "pair; peers and cross-house traffic route through a manager or the "
                           "operator's desk"}
+    # THE FROZEN LANE (osiris_wake_enabled, default False). The pair is AUTHORIZED — this is not
+    # an authorization refusal — but wake() rides the daemon reply lane, a confirmed RCE, and it
+    # stays dark until a sanctioned inter-agent API exists (handoff 8f005905). Nothing is sent.
+    # The check sits here, past authorization, so the refusal can say honestly 'you're allowed,
+    # the lane is closed' rather than a blanket 'verb off' — and so no marker/DM is ever minted.
+    st = settings or get_settings()
+    if not st.osiris_wake_enabled:
+        return {"mode": "refused-wake-frozen",
+                "detail": "wake() is frozen (osiris_wake_enabled=False): the daemon reply lane it "
+                          "rides is a confirmed RCE, dark until Anthropic ships a sanctioned "
+                          "inter-agent API — the pair is authorized, but no knock was sent"}
     marker = _wake_marker(caller, caller_seat, (caller_held or {}).get("handle"))
     body = f"{marker}\n\n{message}"
     res = await send_message(pool, from_agent=caller, from_project=await house_of(pool, caller),
@@ -1354,7 +1368,7 @@ async def trigger_mail_tick(
     # spawner throws the vendor's own receipt at /dev/null (21a99136). Every other guard here is a
     # RATE (wakes per hour, attempts per message) — and a rate is not a bound: the storm ran for
     # days at a perfectly legal 5/hr. THIS is the bound.
-    ok, why = await may_spend(pool, cap=st.osiris_daily_usd)
+    ok, why = await may_spend(pool, cap=st.osiris_daily_usd, metered=spend_is_metered(st))
     if not ok:
         report["refused"] = 1
         report["why"] = why  # type: ignore[assignment]

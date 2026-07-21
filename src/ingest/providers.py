@@ -264,6 +264,26 @@ def llm_provider(settings: Settings | None = None) -> LLMClient | None:
     return None
 
 
+def spend_is_metered(settings: Settings | None = None) -> bool:
+    """True iff Osiris's inference is BILLED PER CALL — the keyed API backend.
+
+    The daily ceiling (orchestrator.ceiling) only means something when a dollar is actually
+    charged. The local Claude CLI runs on the operator's SUBSCRIPTION: the envelope's
+    `total_cost_usd` is a NOTIONAL number the vendor prints, not a debit against a card — and the
+    triggered sessions don't even report a reliable token count (the spawner bins the receipt). So
+    `total_cost_usd` on that path is not a small or fuzzy price, it is not a measurement at all;
+    summing it and gating on it stops real work on imaginary money (the '$12/$10' false stop,
+    Thoth LIII 2026-07-21).
+
+    Hence the ceiling is LIVE only when the RESOLVED text backend is the API client — real
+    per-token billing. That is exactly the decision llm_provider() already makes from config, so
+    we ask it rather than re-guess: 'auto' with the CLI installed resolves to the subscription
+    (metered False) even if a key is also set, because the CLI is what actually runs. (Note: the
+    API client currently records cost_usd=None, so metered mode is honest-but-toothless until the
+    keyed path is costed — tracked separately; it never FALSE-stops, which is the point here.)"""
+    return isinstance(llm_provider(settings), AnthropicClient)
+
+
 def vision_provider(settings: Settings | None = None) -> VisionClient | None:
     """The configured vision/OCR backend, or None. OCR (scanned pages) is the keyed path —
     the local CLI doesn't do image input here — so 'auto'/'anthropic' both need a key."""

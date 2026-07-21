@@ -38,7 +38,9 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
               daily_usd: float = -1.0, projects: str = "",
               poke_only: bool = False, dm_resume: bool = True,
               dm_active: int = 120, seat_cap: int = 0,
-              dm_resume_model: str = "") -> SimpleNamespace:
+              dm_resume_model: str = "",
+              extract_provider: str = "claude-cli", api_key: str = "",
+              wake_enabled: bool = True) -> SimpleNamespace:
     # grace defaults to 0 (disabled) so the rate-cap / lease tests exercise those bounds in
     # isolation; the wake-grace tests set it explicitly. sense="" → resume resolution looks at
     # ~/.claude/projects (no anchored transcript for the test ids there → mint), so the legacy
@@ -63,7 +65,16 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
                            osiris_dm_resume=dm_resume,
                            osiris_dm_active_secs=dm_active,
                            osiris_seat_wake_hourly_cap=seat_cap,
-                           osiris_dm_resume_model=dm_resume_model)
+                           osiris_dm_resume_model=dm_resume_model,
+                           # spend_is_metered(st) reads these: default is the local Claude CLI
+                           # (a subscription) → the dollar ceiling is INERT, which is why the
+                           # daily_usd=-1 dispatch tests never trip it. The ceiling test below
+                           # flips to the keyed API backend, the only world where it bites.
+                           osiris_extract_provider=extract_provider,
+                           osiris_claude_binary="claude", anthropic_api_key=api_key,
+                           # wake defaults ON in tests so the delivery/authorization suite
+                           # exercises the real send path; production ships it FROZEN (False).
+                           osiris_wake_enabled=wake_enabled)
 
 
 async def _no_windows() -> list[dict[str, Any]]:
@@ -853,6 +864,11 @@ async def test_the_DAILY_CEILING_stops_the_wake(actions: Actions) -> None:
     IS NOT A BOUND: the wake storm ran for days at a perfectly legal 5/hr, and every guard was
     working exactly as designed while it happened. A rate limits how FAST you burn. Only a
     ceiling limits how MUCH.
+
+    BUT ONLY WHEN THE DOLLARS ARE REAL (Thoth LIII 2026-07-21): the ceiling bites on the keyed
+    API backend, where total_cost_usd is a true debit. On a subscription the figure is notional
+    and the gate is inert — so this test runs the billed world explicitly (extract_provider=
+    'anthropic' + a key → spend_is_metered True).
     """
     from src.ingest.providers import Usage
     from src.ingest.usage import record_usage
@@ -869,11 +885,39 @@ async def test_the_DAILY_CEILING_stops_the_wake(actions: Actions) -> None:
             cache_read_tokens=0, cache_creation_tokens=0, cost_usd=1.00))
 
     rep = await trigger_mail_tick(
-        actions, settings=_settings(enabled=True, daily_usd=10.0), spawn=_spawn)
+        actions, settings=_settings(enabled=True, daily_usd=10.0,
+                                    extract_provider="anthropic", api_key="k"), spawn=_spawn)
 
     assert spawned == [], "the ceiling was reached and the trigger spawned anyway"
     assert rep.get("refused") == 1
     assert "CEILING REACHED" in str(rep.get("why", ""))
+
+
+async def test_a_SUBSCRIPTION_does_not_false_stop_the_wake(actions: Actions) -> None:
+    """THE FALSE STOP, REMOVED (Thoth LIII 2026-07-21). Identical $12-over-$10 ledger to the
+    test above — but on a SUBSCRIPTION (the local Claude CLI, the helper's default), where
+    total_cost_usd is a notional number the vendor prints, not a debit against a card. The
+    ceiling must NOT refuse here: it was halting real work on imaginary money. Every other guard
+    (rate caps, the window, the licence) still stands; only the phantom dollar wall is gone."""
+    from src.ingest.providers import Usage
+    from src.ingest.usage import record_usage
+
+    spawned: list[Any] = []
+
+    async def _spawn(*a: Any, **kw: Any) -> None:
+        spawned.append(a)
+
+    await _agent_with_mail(actions)
+    for _ in range(12):                                  # $12 of NOTIONAL cost, not a real charge
+        await record_usage(actions.pool, purpose="wake", usage=Usage(
+            model="claude-haiku-4-5-20251001", input_tokens=1, output_tokens=1,
+            cache_read_tokens=0, cache_creation_tokens=0, cost_usd=1.00))
+
+    # extract_provider defaults to 'claude-cli' → spend_is_metered False → the gate is inert
+    rep = await trigger_mail_tick(
+        actions, settings=_settings(enabled=True, daily_usd=10.0), spawn=_spawn)
+
+    assert rep.get("refused") != 1, "the ceiling false-stopped on notional subscription dollars"
 
 
 async def test_poke_lane_types_into_the_open_window_before_any_resume(
@@ -1735,6 +1779,27 @@ async def test_wake_authorizes_manager_to_worker_too(actions: Actions, tmp_path:
     assert d["status"] == "delivered" and d["seat"] == worker_seat and d["observed"] is True
 
 
+async def test_wake_is_FROZEN_when_the_flag_is_off(actions: Actions, tmp_path: Path) -> None:
+    """THE HANDOFF'S DEPLOY BIND, CLOSED (Thoth LIII 2026-07-21). wake() rides the daemon reply
+    lane — a confirmed RCE — so it ships FROZEN (osiris_wake_enabled=False). An AUTHORIZED pair,
+    the exact case the gate would otherwise let through, is refused with 'refused-wake-frozen'
+    and NOTHING is sent: no marker, no DM, no spawn. The flag flips only once a sanctioned
+    inter-agent API replaces the lane."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    _worker_seat, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        raise AssertionError("a frozen wake must never spawn")
+
+    d = await wake_worker(actions, caller="agent:sender", target=manager_seat,
+                          message="blocked, need your word",
+                          settings=_settings(enabled=True, sense=str(sense), wake_enabled=False),
+                          spawn=_spawn, windows=_no_windows)
+    assert d["mode"] == "refused-wake-frozen"
+    assert await actions.pool.fetchval("SELECT count(*) FROM fleet_messages") == 0
+
+
 async def test_wake_reports_queued_when_the_marker_never_lands(
     actions: Actions, tmp_path: Path
 ) -> None:
@@ -1772,7 +1837,7 @@ async def test_wake_never_calls_mid_turn_delivered(
 
     monkeypatch.setattr(trigger_module, "dispatch_dm", _fake_dispatch)
     d = await wake_worker(actions, caller="agent:sender", target=manager_seat,
-                          message="hey")
+                          message="hey", settings=_settings(enabled=True))
     assert d["status"] == "mid-turn"
     assert d["raw_mode"] == "delivered"  # the raw truth stays visible for anyone who reads it
 
@@ -1789,14 +1854,16 @@ async def test_wake_translates_pull_only_and_refused_budget(
         return {"mode": "pull-only", "detail": "never mounted"}
 
     monkeypatch.setattr(trigger_module, "dispatch_dm", _pull_only)
-    d = await wake_worker(actions, caller="agent:sender", target=manager_seat, message="hey")
+    d = await wake_worker(actions, caller="agent:sender", target=manager_seat, message="hey",
+                          settings=_settings(enabled=True))
     assert d["status"] == "no-live-body"
 
     async def _refused(*a: Any, **kw: Any) -> dict[str, Any]:
         return {"mode": "refused", "detail": "daily ceiling reached"}
 
     monkeypatch.setattr(trigger_module, "dispatch_dm", _refused)
-    d2 = await wake_worker(actions, caller="agent:sender", target=manager_seat, message="hey")
+    d2 = await wake_worker(actions, caller="agent:sender", target=manager_seat, message="hey",
+                           settings=_settings(enabled=True))
     assert d2["status"] == "refused-budget"
 
 
@@ -1812,6 +1879,7 @@ async def test_wake_buckets_every_unnamed_mode_as_queued(
         return {"mode": "braked", "detail": "the per-seat rate brake: 3 wakes/h already landed"}
 
     monkeypatch.setattr(trigger_module, "dispatch_dm", _braked)
-    d = await wake_worker(actions, caller="agent:sender", target=manager_seat, message="hey")
+    d = await wake_worker(actions, caller="agent:sender", target=manager_seat, message="hey",
+                          settings=_settings(enabled=True))
     assert d["status"] == "queued" and d["raw_mode"] == "braked"
     assert "rate brake" in d["detail"]
