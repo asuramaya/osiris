@@ -2376,6 +2376,40 @@ async def establish_office(seat: str, ctx: Context | None = None) -> dict[str, A
 
 
 @mcp.tool()
+async def mint_seat(
+    handle: str, project: str | None = None, model: str | None = None,
+    house: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """THE ORG CHART TRICKLES (task #50, ruling cabc28f5) — mint a specialist WORKER seat
+    under YOUR OWN seat, one act: ensure_seat + an office scaffold (dir, .osiris pin
+    carrying project AND model, CLAUDE.md + charter.md) + an intended_model stamp (Sonnet
+    default) + managed_by (you become manager of record). THE CALLING SEAT IS ALWAYS THE
+    MANAGER — there is no override param; a seat mints its OWN workers, never another's
+    (minting into someone else's org is a console act, deliberately absent here — alfred
+    adopts Tantra himself, a manager adopts its own). Idempotent: a handle that already
+    names a living Seat is ADOPTED (a missing edge/stamp asserted, nothing rewritten, no
+    new identity minted) rather than twinned. `house` omitted inherits YOUR house;
+    crossing houses refuses unless the caller is the operator. Refuses loudly if you hold
+    no seat of your own (claim_name first — an unclaimed lineage has no 'itself' to
+    extend)."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — minting a worker is a seat's own act",
+                         "why": _anchorless(ctx)}
+    from src.orchestrator.seats import held_seat
+    pool = await _pool_get()
+    bound = await held_seat(pool, ident.agent_id)
+    if bound is None:
+        return {"error": "you hold no seat of your own — claim_name first; a seat mints "
+                         "workers under ITSELF, and an unclaimed lineage has no seat to "
+                         "extend"}
+    from src.orchestrator.mintseat import mint_seat as _mint_seat
+    kwargs: dict[str, Any] = {"intended_model": model} if model else {}
+    return await _mint_seat(Actions(pool), manager=bound["seat_id"], handle=handle,
+                            house=house, project=project, actor=ident.agent_id, **kwargs)
+
+
+@mcp.tool()
 async def bootstrap(cwd: str) -> dict[str, Any]:
     """Onboard a project by migrating its markdown MEMORY (CLAUDE.md build log / DESIGN.md /
     memory essays) INTO the shared graph as retrieval-sized Reference nodes — so its history

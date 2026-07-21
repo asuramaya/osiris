@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from src.actions.core import Actions
 from src.orchestrator.greatfold import fold_census
 from src.orchestrator.mintseat import _resolve_seat_ref, mint_seat
@@ -224,3 +225,82 @@ async def test_f_the_operator_may_cross_a_house_boundary(
                           actor="operator", office_root=tmp_path / "seats")
     assert "error" not in out
     assert out["house"] == "houseb" and out["seat_minted"] is True
+
+
+# ═══════════ THE MCP TOOL LAYER — the calling seat is always the manager ═══════════
+# test_wall.py's _Ctx ritual is the precedent: fake a mounted connection by injecting an
+# AgentIdentity into srv._agents keyed by srv._conn_key(ctx), point srv._pool at the test
+# DB, call the tool FUNCTION directly (never the MCP transport).
+
+class _Ctx:
+    class request_context:  # noqa: N801
+        request = None
+        session = object()
+
+
+async def test_mcp_mint_seat_refuses_an_unmounted_caller(actions: Actions) -> None:
+    import src.mcp_server as srv
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mint_seat(handle="Vajra", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out and "mount first" in out["error"]
+
+
+async def test_mcp_mint_seat_refuses_a_caller_holding_no_seat(actions: Actions) -> None:
+    import src.mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:un5eated0", session="unseated0", project="osiris",
+        model=None, cwd=None)
+    try:
+        out = await srv.mint_seat(handle="Vajra", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "error" in out and "you hold no seat" in out["error"]
+
+
+async def test_mcp_mint_seat_the_caller_is_always_the_manager(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The happy path through the tool layer: a mounted caller who holds 'Thoth' mints
+    'Seshat' with NO manager param at all — the tool resolves the manager from the
+    connection's own identity, exactly the semantics Thoth's amendment asked for."""
+    import src.mcp_server as srv
+    from src.orchestrator import mintseat
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.seats import bind_holder
+
+    thoth_seat = await _seat(actions, "Thoth", "osiris", source="operator")
+    await bind_holder(actions, seat_id=thoth_seat, agent_id="agent:th0th0001",
+                      source="operator")
+    # office_root is not a tool param — point the shared default at a scratch dir for
+    # the duration of this one test
+    monkeypatch.setattr(mintseat, "_DEFAULT_OFFICE_ROOT", tmp_path / "seats")
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:th0th0001", session="thoth0001", project="osiris",
+        model=None, cwd=None)
+    try:
+        out = await srv.mint_seat(handle="Seshat", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert "error" not in out
+    assert out["manager_seat_id"] == thoth_seat
+    assert out["handle"] == "Seshat" and out["house"] == "osiris"
+    assert out["seat_minted"] is True
+    assert await _linked(actions, out["seat_id"], thoth_seat)

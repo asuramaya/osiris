@@ -26,3 +26,19 @@ git -C "$REPO" bundle create "$VAULT/osiris-repo.bundle.new" --all 2>/dev/null \
 # hold more history than the working set, never less)
 rsync -a "$DIR"/osiris-*.sql "$VAULT/" 2>/dev/null || cp -n "$DIR"/osiris-*.sql "$VAULT/" || true
 ls -1t "$VAULT"/osiris-2*.sql 2>/dev/null | tail -n +57 | xargs -r rm --
+
+# THE TRANSCRIPT VAULT (Phase 0 triage, operator's word, 2026-07-21): the fleet's memory
+# lives on disk as transcripts before it's ever a graph row — ~/.claude/projects (every
+# Claude Code session) and each seat's .crush store (the Crush harness's own session db,
+# ~/.osiris/seats/<handle>/.crush/). Poured ONCE by hand on Jul 8, never refreshed since —
+# 13 days of souls sat unprotected. Interim until soul-store piece 1 lands: dumb and
+# boring, same atomic-write and newest-N pruning idioms as the rest of this script.
+TRANSCRIPTS="$VAULT/claude-transcripts-$(date +%Y%m%d).tar.gz"
+tar_args=(-C "$HOME" .claude/projects)
+while IFS= read -r store; do
+  # -C "seats" "<handle>/.crush" (never a bare ".crush") — two seats' stores would
+  # otherwise collide on the SAME flattened archive path and overwrite each other
+  [ -n "$store" ] && tar_args+=(-C "$HOME/.osiris/seats" "$(basename "$(dirname "$store")")/.crush")
+done < <(find "$HOME/.osiris/seats" -maxdepth 2 -iname ".crush" -type d 2>/dev/null)
+tar czf "$TRANSCRIPTS.new" "${tar_args[@]}" 2>/dev/null && mv "$TRANSCRIPTS.new" "$TRANSCRIPTS"
+ls -1t "$VAULT"/claude-transcripts-*.tar.gz 2>/dev/null | tail -n +4 | xargs -r rm --
