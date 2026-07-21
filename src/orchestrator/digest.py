@@ -326,12 +326,22 @@ async def _resolve_since(
 # parked cost-levers thread) — a spend figure without this caveat would read as total burn.
 _COST_COVERAGE = ("session-extract only — wake sessions, interactive tabs and "
                   "document-extract are unmetered (cost-levers thread)")
+_COST_COVERAGE_SUBSCRIPTION = (
+    "token counts are real; DOLLARS OMITTED — this house runs on a subscription, where the CLI's "
+    "per-call cost is a NOTIONAL figure the vendor prints, not a billed amount. Showing it as "
+    "spend would be the same phantom the daily ceiling used to false-stop on (spend_is_metered "
+    "False; Thoth LIII 2026-07-21)")
 
 
 async def _costs(actions: Actions, since: datetime) -> dict[str, Any]:
     """The spend stream — llm_usage aggregated over the window, grouped by (purpose, model),
     biggest burner first. Telemetry, not the graph; rendered with its coverage note so the
     number never overclaims (the operator's 'where are the tokens burnt', metered)."""
+    # DOLLARS ONLY WHEN THEY ARE REAL (Thoth LIII 2026-07-21): on a subscription the CLI's
+    # cost_usd is notional, so the console shows the real TOKEN counts and omits the phantom $ —
+    # the same reason the daily ceiling no longer gates on it. Tokens are always real.
+    from src.ingest.providers import spend_is_metered
+    metered = spend_is_metered()
     rows = await actions.pool.fetch(
         "SELECT purpose, model, count(*) AS calls, "
         " coalesce(sum(input_tokens+output_tokens),0) AS tokens, sum(cost_usd) AS usd "
@@ -339,14 +349,14 @@ async def _costs(actions: Actions, since: datetime) -> dict[str, Any]:
         "GROUP BY purpose, model ORDER BY tokens DESC LIMIT 10", since)
     by = [{"purpose": r["purpose"], "model": r["model"], "calls": int(r["calls"]),
            "tokens": int(r["tokens"]),
-           "usd": round(float(r["usd"]), 4) if r["usd"] is not None else None}
+           "usd": round(float(r["usd"]), 4) if (metered and r["usd"] is not None) else None}
           for r in rows]
     return {
         "calls": sum(g["calls"] for g in by),
         "tokens": sum(g["tokens"] for g in by),
-        "usd": round(sum(g["usd"] for g in by if g["usd"] is not None), 2),
+        "usd": round(sum(g["usd"] for g in by if g["usd"] is not None), 2) if metered else None,
         "by": by,
-        "coverage": _COST_COVERAGE,
+        "coverage": _COST_COVERAGE if metered else _COST_COVERAGE_SUBSCRIPTION,
     }
 
 

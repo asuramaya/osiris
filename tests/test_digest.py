@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from src.actions.core import Actions
 from src.orchestrator.digest import fleet_digest
 from src.orchestrator.mailbox import OPERATOR_ADDR, send_message, unread_count
@@ -183,10 +184,14 @@ async def test_watermark_mode_advances_only_on_mark_seen(actions: Actions) -> No
     assert dg6["watermark"]["value"] == dg3["watermark"]["advanced_to"]
 
 
-async def test_costs_stream_meters_the_window_honestly(actions: Actions) -> None:
+async def test_costs_stream_meters_the_window_honestly(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch) -> None:
     """The operator's 'where are the tokens burnt', metered — grouped by burner, biggest
     first, and NEVER without its coverage note (a spend figure that overclaims is worse
-    than none: wakes and interactive tabs are unmetered today)."""
+    than none: wakes and interactive tabs are unmetered today). This is the BILLED case
+    (spend_is_metered True): only there is the dollar figure a real debit; the subscription
+    case — where it is notional and omitted — is the test below."""
+    monkeypatch.setattr("src.ingest.providers.spend_is_metered", lambda s=None: True)
     p = actions.pool
     await p.execute(
         "INSERT INTO llm_usage (purpose, model, input_tokens, output_tokens, cost_usd) VALUES "
@@ -200,6 +205,23 @@ async def test_costs_stream_meters_the_window_honestly(actions: Actions) -> None
     assert top["purpose"] == "session-extract" and top["calls"] == 2
     assert top["tokens"] == 53_000
     assert "unmetered" in dg["costs"]["coverage"]  # the honesty clause is part of the stream
+
+
+async def test_costs_stream_OMITS_notional_dollars_on_a_subscription(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch) -> None:
+    """On a subscription the CLI's cost_usd is notional, so the console shows the REAL token
+    counts and drops the phantom $ — the same reason the daily ceiling no longer gates on it
+    (Thoth LIII 2026-07-21). Tokens stay; every usd goes None so the membrane's guards omit it."""
+    monkeypatch.setattr("src.ingest.providers.spend_is_metered", lambda s=None: False)
+    p = actions.pool
+    await p.execute(
+        "INSERT INTO llm_usage (purpose, model, input_tokens, output_tokens, cost_usd) VALUES "
+        "('session-extract','claude-haiku-4-5-20251001', 30000, 2000, 0.05)")
+    dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
+    assert dg["summary"]["spend_tokens"] == 32_000   # tokens are real, kept
+    assert dg["summary"]["spend_usd"] is None         # the notional $ is dropped, not zeroed
+    assert dg["costs"]["by"][0]["usd"] is None        # ...per-row too, so the table cell is blank
+    assert "DOLLARS OMITTED" in dg["costs"]["coverage"]
 
 
 async def test_desk_folds_superseded_briefs_under_the_newest_head(actions: Actions) -> None:
