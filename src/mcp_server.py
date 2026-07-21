@@ -2399,13 +2399,28 @@ async def mint_seat(
     from src.orchestrator.seats import held_seat
     pool = await _pool_get()
     bound = await held_seat(pool, ident.agent_id)
-    if bound is None:
+    manager_seat_id = bound["seat_id"] if bound else None
+    if manager_seat_id is None:
+        # THE SUCCESSION GAP (live acceptance, msg 926 — Thoth LI's own first call): held_seat
+        # needs a `holds` link on the caller's EXACT label, but a succeeded lineage's holds
+        # link can sit on an ancestor label (mint_heir doesn't always re-link it at every
+        # mint — a separate, deeper gap, banked as its own thread rather than fixed here:
+        # whether succession should carry `holds` forward the way it already carries
+        # `handle`). The HANDLE ASSERTION, unlike the link, IS copied to every new
+        # generation (agents.mint_heir's seat-inheritance step) — fall back to it, the same
+        # way mount's own seat display (handshake._seat_of) already resolves.
+        from src.orchestrator.mintseat import _resolve_seat_ref
+        from src.orchestrator.offices import _handle_of
+        handle_claim = await _handle_of(pool, ident.agent_id)
+        if handle_claim:
+            manager_seat_id = await _resolve_seat_ref(pool, handle_claim)
+    if manager_seat_id is None:
         return {"error": "you hold no seat of your own — claim_name first; a seat mints "
                          "workers under ITSELF, and an unclaimed lineage has no seat to "
                          "extend"}
     from src.orchestrator.mintseat import mint_seat as _mint_seat
     kwargs: dict[str, Any] = {"intended_model": model} if model else {}
-    return await _mint_seat(Actions(pool), manager=bound["seat_id"], handle=handle,
+    return await _mint_seat(Actions(pool), manager=manager_seat_id, handle=handle,
                             house=house, project=project, actor=ident.agent_id, **kwargs)
 
 

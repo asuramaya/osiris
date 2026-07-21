@@ -304,3 +304,45 @@ async def test_mcp_mint_seat_the_caller_is_always_the_manager(
     assert out["handle"] == "Seshat" and out["house"] == "osiris"
     assert out["seat_minted"] is True
     assert await _linked(actions, out["seat_id"], thoth_seat)
+
+
+async def test_mcp_mint_seat_resolves_a_succeeded_lineage_via_handle_fallback(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Live acceptance (msg 926 — Thoth LI's own first call refused HIM): held_seat()
+    needs a `holds` link on the caller's EXACT label, but a succeeded lineage's holds
+    link can sit on an ancestor (mint_heir doesn't always re-link it at every mint — a
+    separate, deeper gap, not fixed here). The handle ASSERTION, unlike the link, IS
+    copied to every new generation (mint_heir's own seat-inheritance step) — the tool
+    must fall back to it, the same way mount's own seat display already does."""
+    import src.mcp_server as srv
+    from src.orchestrator import mintseat
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.seats import bind_holder
+
+    thoth_seat = await _seat(actions, "Thoth", "osiris", source="operator")
+    # the hold sits on an ANCESTOR label — a Great-Fold-deep lineage's real shape
+    await bind_holder(actions, seat_id=thoth_seat, agent_id="agent:th0th0001",
+                      source="operator")
+    # the CALLER is a SUCCEEDED generation carrying only the inherited handle assertion
+    # (mint_heir's seat-inheritance copy), never its own fresh holds link
+    heir = await actions.create_or_find_object("Agent", "agent:th0th0001-xiv", "operator")
+    await actions.assert_property(heir, "handle", "Thoth", "operator", NOW, 0.9,
+                                  evidence_class="self_declared")
+    monkeypatch.setattr(mintseat, "_DEFAULT_OFFICE_ROOT", tmp_path / "seats")
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:th0th0001-xiv", session="thoth0014", project="osiris",
+        model=None, cwd=None)
+    try:
+        out = await srv.mint_seat(handle="Seshat", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert "error" not in out
+    assert out["manager_seat_id"] == thoth_seat
+    assert await _linked(actions, out["seat_id"], thoth_seat)
