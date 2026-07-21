@@ -87,7 +87,11 @@ async def test_b_re_minting_adopts_never_twins(actions: Actions, tmp_path: Path)
 
     assert again["seat_id"] == first["seat_id"]
     assert again["seat_minted"] is False
-    assert "office" not in again  # never re-scaffolded on a re-mint
+    # the fill-missing scaffold runs again (ruling 7cffda8f) but finds nothing missing —
+    # every file this second call sees was already there, so every state reads unchanged
+    assert again["office"]["osiris_pin"] == "left in place"
+    assert again["office"]["standing_orders"] == "left in place"
+    assert again["office"]["charter_file"] == "left in place"
     assert again["intended_model_stamped"] is False
     assert again["managed_by"] == "already linked"
     # no twin: exactly one active Seat with this handle, one active managed_by edge
@@ -107,7 +111,9 @@ async def test_c_adopting_an_operator_minted_seat_mints_no_new_identity(
 ) -> None:
     """Tantra's real shape: a Seat + a named Agent, minted by the operator's own hand
     before mint_seat existed, no managed_by edge yet. mint_seat's first act of record for
-    her is asserting managed_by → alfred's seat, nothing else."""
+    her is asserting managed_by → alfred's seat and filling her hollow office — no new
+    IDENTITY, which is this test's core claim (the office-fill mechanics get their own
+    dedicated tests below)."""
     alfred_seat = await _seat(actions, "Alfred", "bytebye", source="operator")
     tantra_seat = await _seat(actions, "Tantra", "sutrahouse", source="operator")
     agent = await actions.create_or_find_object("Agent", "agent:7a17a000", "operator")
@@ -117,17 +123,140 @@ async def test_c_adopting_an_operator_minted_seat_mints_no_new_identity(
         "SELECT count(*) FROM objects WHERE type='Seat' AND status='active'")
 
     out = await mint_seat(actions, manager="Alfred", handle="Tantra",
-                          office_root=tmp_path / "unused-seats", actor="operator")
+                          office_root=tmp_path / "seats", actor="operator")
 
     assert out["seat_id"] == tantra_seat
     assert out["seat_minted"] is False
-    assert "office" not in out                      # her real office is untouched
     assert out["intended_model_stamped"] is True     # she had none — the missing piece
     assert out["managed_by"] == "linked"
     after = await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Seat' AND status='active'")
     assert after == before                           # NO new Seat minted
     assert await _linked(actions, tantra_seat, alfred_seat)
+
+
+# ═══════════ HOLLOW VS POPULATED ADOPTION (ruling 7cffda8f) ═══════════
+
+async def test_hollow_adoption_fills_the_empty_office(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Tantra's exact repro: an operator-made dir with nothing in it. Adoption must not
+    leave a seat hollow when there is nothing to clobber — all three files get written."""
+    await _seat(actions, "Alfred", "bytebye", source="operator")
+    await _seat(actions, "Tantra", "sutrahouse", source="operator")
+    offices = tmp_path / "seats"
+    (offices / "tantra").mkdir(parents=True)  # the operator's bare mkdir, nothing inside
+
+    out = await mint_seat(actions, manager="Alfred", handle="Tantra", office_root=offices,
+                          actor="operator")
+
+    assert out["office"]["osiris_pin"] == "written"
+    assert out["office"]["standing_orders"] == "written"
+    assert out["office"]["charter_file"] == "written"
+    office = offices / "tantra"
+    assert 'project = "sutrahouse"' in (office / ".osiris").read_text()
+    assert "Tantra — seat office" in (office / "CLAUDE.md").read_text()
+    assert "Tantra's charter" in (office / "charter.md").read_text()
+
+
+async def test_adoption_never_touches_a_populated_office(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The never-clobber law, proven under adoption too: a seat that already has all
+    three files keeps every byte of them — fill-missing-only means exactly that."""
+    await _seat(actions, "Alfred", "bytebye", source="operator")
+    await _seat(actions, "Tantra", "sutrahouse", source="operator")
+    offices = tmp_path / "seats"
+    office = offices / "tantra"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "sutrahouse"\nmodel = "claude-opus-4-8"\n')
+    (office / "CLAUDE.md").write_text("HER OWN HAND-TUNED ORDERS.\n")
+    (office / "charter.md").write_text("HER OWN HAND-WRITTEN CHARTER.\n")
+
+    out = await mint_seat(actions, manager="Alfred", handle="Tantra", office_root=offices,
+                          actor="operator")
+
+    assert out["office"]["osiris_pin"] == "left in place"
+    assert out["office"]["standing_orders"] == "left in place"
+    assert out["office"]["charter_file"] == "left in place"
+    assert (office / ".osiris").read_text() == 'project = "sutrahouse"\nmodel = "claude-opus-4-8"\n'
+    assert "HER OWN HAND-TUNED ORDERS" in (office / "CLAUDE.md").read_text()
+    assert "HER OWN HAND-WRITTEN CHARTER" in (office / "charter.md").read_text()
+
+
+# ═══════════ THE NEAR-MISS GUARD (ruling 7cffda8f, Alfred's field pilot) ═══════════
+
+async def test_near_miss_refuses_a_normalized_collision(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Tantra's real claimed handle is 'tantra 1' — a bare 'Tantra' fresh-mint request
+    never exact-matches it and, before this fix, would have silently minted a twin."""
+    await _seat(actions, "Alfred", "bytebye", source="operator")
+    await _seat(actions, "tantra 1", "sutrahouse", source="operator")
+
+    out = await mint_seat(actions, manager="Alfred", handle="Tantra",
+                          office_root=tmp_path / "seats")
+
+    assert "error" in out
+    assert "tantra 1" in out["error"] and "near" in out["error"].lower()
+    # no twin: the near-miss refusal minted nothing
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Seat' AND status='active'"
+        ) == 2  # just Alfred + tantra 1, unchanged
+
+
+async def test_near_miss_covers_generation_suffix_variants(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Space/dash/underscore before a roman numeral or plain digit all normalize away —
+    none of these exact-match 'Vajra' (that's a plain case-insensitive adopt, tested
+    separately below), so each must refuse as a near-miss."""
+    await _seat(actions, "Alfred", "bytebye", source="operator")
+    await _seat(actions, "Vajra", "bytebye", source="operator")
+    for variant in ("Vajra II", "vajra-2", "vajra_iv", "vajra 1"):
+        out = await mint_seat(actions, manager="Alfred", handle=variant,
+                              office_root=tmp_path / "seats")
+        assert "error" in out, f"{variant!r} should have refused as a near-miss"
+
+
+async def test_a_pure_case_variant_is_an_exact_match_not_a_near_miss(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """'vajra'/'VAJRA' case-insensitively EXACT-match 'Vajra' via _resolve_seat_ref
+    itself — that's a normal adopt, never even reaching the near-miss guard."""
+    await _seat(actions, "Alfred", "bytebye", source="operator")
+    vajra_seat = await _seat(actions, "Vajra", "bytebye", source="operator")
+    out = await mint_seat(actions, manager="Alfred", handle="vajra",
+                          office_root=tmp_path / "seats")
+    assert "error" not in out
+    assert out["seat_id"] == vajra_seat and out["seat_minted"] is False
+
+
+async def test_force_mints_past_a_near_miss_refusal(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    await _seat(actions, "Alfred", "bytebye", source="operator")
+    await _seat(actions, "tantra 1", "sutrahouse", source="operator")
+
+    out = await mint_seat(actions, manager="Alfred", handle="Tantra", force=True,
+                          office_root=tmp_path / "seats")
+
+    assert "error" not in out
+    assert out["seat_minted"] is True and out["handle"] == "Tantra"
+
+
+async def test_adopt_true_refuses_rather_than_falling_through_to_fresh(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The caller SAID adopt — minting on a miss would be the lie."""
+    await _seat(actions, "Alfred", "bytebye", source="operator")
+
+    out = await mint_seat(actions, manager="Alfred", handle="NobodyYet", adopt=True,
+                          office_root=tmp_path / "seats")
+
+    assert "error" in out and "adopt=True" in out["error"]
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Seat' AND status='active'") == 1  # Alfred only
 
 
 # ═══════════ (d) OUR OWN PAIR — the same adopt path ═══════════

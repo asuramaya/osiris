@@ -52,8 +52,10 @@ Launch here, resume here — this path never moves again, whatever happens to th
 ## Ritual (unchanged)
 Write back AS YOU GO: `record_decision` / `open_thread` (kind='obligation') /
 `resolve_thread`. A session can die at any instant; what is not in the graph does not
-exist. The fleet DMs you as send(to_agent='{handle}') — the seat is the address now; mail
-waits for you across successions.
+exist. The fleet DMs you as send(to_agent='{handle}') once you've `claim_name`'d it —
+claim_name first if you haven't (an unclaimed seat is not yet a resolvable address); until
+then, mail reaches you as project traffic. After that first claim, the seat is the address
+across every succession.
 - GRADE EVERY DM: a brief or question that needs the recipient's act = `grade='ask'`; an
   ack or status note = `grade='fyi'`. Graded asks are NAMED in the recipient's unread
   count, and pair-heartbeat watchdogs key on them — an ungraded brief is invisible to

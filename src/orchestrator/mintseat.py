@@ -8,21 +8,29 @@ own template family — never re-derived, never duplicated) + an `intended_model
 type — Seat-to-Seat, the minting seat becomes manager of record).
 
 IDEMPOTENT, and idempotent two different ways depending on what already exists:
-  * the WORKER handle is brand new → mint the Seat, scaffold a fresh office, stamp the
-    model, link managed_by. Every piece is new.
-  * the WORKER handle already names a living Seat (Tantra, minted by the operator's own
-    hand before this verb existed) → ADOPT: no new Seat, no office rewrite (an occupied
-    office is the seat's own hand-maintained home — the same never-clobber law CLAUDE.md
-    and charter.md already run on), only the MISSING pieces get asserted (an unset
-    intended_model, a missing managed_by edge). Calling it again once everything is
-    already true is a pure no-op.
+  * the WORKER handle is brand new (no exact match, no near-miss) → mint the Seat,
+    scaffold a fresh office, stamp the model, link managed_by. Every piece is new.
+  * the WORKER handle already names a living Seat EXACTLY (Tantra, minted by the
+    operator's own hand before this verb existed) → ADOPT: no new Seat, the office
+    scaffold runs FILL-MISSING-ONLY (an occupied office is the seat's own hand-
+    maintained home — the same never-clobber law CLAUDE.md and charter.md already run
+    on, now also closing a HOLLOW shell's gaps: Tantra's real office was an
+    operator-made dir with no pin, no orders at all), only the missing pieces get
+    asserted (an unset intended_model, a missing managed_by edge). Calling it again
+    once everything is already true is a pure no-op.
 
-GUARDRAILS (the ruling's own, both refused LOUD, never silently swallowed):
+GUARDRAILS (the ruling's own, all refused LOUD, never silently swallowed):
   * PERSON COLLISION — this graph is shared with an entity-resolution product line; a
     worker handle that coincides with a real Person record must never be confused with
     one. Structurally impossible by construction (every seat lookup here filters on
     `type='Seat'`, so a Person is invisible to it) — the explicit check below exists
     ONLY to make the refusal a NAMED error instead of a silent 'seat not found'.
+  * THE NEAR-MISS TWIN (ruling 7cffda8f, Alfred's field pilot) — a handle that
+    NORMALIZES to the same name as a living seat (casefold, strip a trailing
+    generation marker, strip punctuation: 'Tantra' vs the real 'tantra 1') but does not
+    exact-match it refuses instead of silently minting a second identity wearing a
+    near-stranger's face. `adopt=True` states the intent explicitly (no match refuses,
+    never falls through to fresh); `force=True` is the only door past the refusal.
   * CROSS-HOUSE MINTING — a manager mints workers in its OWN house by default (no house
     param = inherit the manager's); crossing to a DIFFERENT house needs the operator's
     own hand (an `actor` naming the operator), never a seat's unilateral reach into a
@@ -31,6 +39,7 @@ GUARDRAILS (the ruling's own, both refused LOUD, never silently swallowed):
 """
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -104,21 +113,63 @@ async def _person_collision(pool: Any, handle: str) -> str | None:
         "LIMIT 1", handle)
 
 
+# THE NEAR-MISS GUARD (Alfred's field pilot, ruling 7cffda8f): Tantra's real claimed
+# handle is 'tantra 1' — a bare 'Tantra' fresh-mint request NEVER exact-matches it, and
+# the fresh path used to fire on any non-match, so it would have silently minted a twin
+# in his house and called it success. Identity deserves MORE conservatism than
+# open_thread's own near-dup dedup, not less: a false near-miss refusal costs a retry; a
+# missed one mints a twin wearing a stranger's face.
+_GEN_SUFFIX_RE = re.compile(r"[\s._-]+(?:[ivxlcdm]+|\d+)$")
+_PUNCT_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _normalize_handle(handle: str) -> str:
+    """Casefold, strip a trailing generation marker (a roman numeral or plain digit —
+    'Tantra II', 'tantra 1', 'Tantra-2' all strip to 'tantra'), then strip whatever
+    punctuation/whitespace remains. Pure — the guard's whole comparison key."""
+    s = handle.strip().casefold()
+    s = _GEN_SUFFIX_RE.sub("", s)
+    return _PUNCT_RE.sub("", s)
+
+
+async def _near_miss(pool: Any, handle: str) -> str | None:
+    """A LIVING Seat whose handle normalizes the same as `handle` (but isn't reached by
+    _resolve_seat_ref's own exact/case-insensitive match — the caller already checked
+    that), or None. Scans the active roster; the fleet's seat count is small enough that
+    a full scan beats a fragile SQL normalization of the same regex."""
+    target = _normalize_handle(handle)
+    if not target:
+        return None
+    rows = await pool.fetch(
+        "SELECT (SELECT a.value #>> '{}' FROM current_assertions a "
+        " WHERE a.object_id=o.id AND a.name='handle' "
+        " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS handle "
+        "FROM objects o WHERE o.type='Seat' AND o.status='active'")
+    for r in rows:
+        cand = r["handle"]
+        if cand and _normalize_handle(str(cand)) == target:
+            return str(cand)
+    return None
+
+
 def _scaffold_office(
     *, handle: str, house: str, project: str, intended_model: str,
     office_root: Path,
 ) -> dict[str, Any]:
-    """A BRAND NEW worker's office — dir + `.osiris` (project AND model, assignment 3's
-    own gap for pre-existing seats closed at birth for a new one) + CLAUDE.md +
-    charter.md, all from offices.py's own template family, all idempotent (never
-    overwrite — though a just-minted seat's office cannot yet exist to collide with).
-    Never called for the adopt path: an already-living seat's office is its own hand-
-    maintained home, exactly the file assignment 3 already refuses to clobber."""
+    """A worker's office — dir + `.osiris` (project AND model, assignment 3's own gap
+    for pre-existing seats closed at birth for a new one) + CLAUDE.md + charter.md, all
+    from offices.py's own template family. FILL-MISSING-ONLY, every file its own
+    exists-guard: a fresh mint's office cannot yet exist to collide with, and an
+    ADOPTED seat's office (Alfred's field pilot, ruling 7cffda8f — Tantra's real shell
+    was an operator-made dir with no pin, no orders, a HOLLOW adoption otherwise) gets
+    exactly its missing pieces filled, nothing present ever touched."""
     office = office_root / handle.lower()
     office.mkdir(parents=True, exist_ok=True)
     pin = office / ".osiris"
+    pin_state = "left in place"
     if not pin.exists():
         pin.write_text(f'project = "{project}"\nmodel = "{intended_model}"\n')
+        pin_state = "written"
     orders = office / "CLAUDE.md"
     orders_state = "left in place"
     if not orders.exists():
@@ -135,7 +186,8 @@ def _scaffold_office(
     if not charter.exists():
         charter.write_text(_CHARTER_TEMPLATE.format(handle=handle))
         charter_state = "written"
-    return {"office": str(office), "standing_orders": orders_state, "charter_file": charter_state}
+    return {"office": str(office), "osiris_pin": pin_state,
+            "standing_orders": orders_state, "charter_file": charter_state}
 
 
 async def mint_seat(
@@ -143,11 +195,17 @@ async def mint_seat(
     house: str | None = None, project: str | None = None,
     intended_model: str = DEFAULT_WORKER_MODEL,
     office_root: Path | None = None, actor: str | None = None,
+    adopt: bool = False, force: bool = False,
 ) -> dict[str, Any]:
     """The whole ceremony, one receipt. `manager` is the minting seat — its own handle or
     seat_id (whichever the caller knows about itself). `handle` is the worker's name.
-    Refuses loudly on an unknown manager, a Person-handle collision, or an unauthorized
-    house crossing. Idempotent: minted once, adopted forever after."""
+    Refuses loudly on an unknown manager, a Person-handle collision, a NEAR-MISS handle
+    (ruling 7cffda8f — a living seat whose handle normalizes the same, e.g. 'Tantra' vs
+    'tantra 1'), or an unauthorized house crossing. Idempotent: minted once, adopted
+    forever after. `adopt=True` states the caller's intent explicitly — no match REFUSES
+    instead of silently falling through to a fresh mint (the caller said adopt; minting
+    would be the lie). `force=True` is the only door past a near-miss refusal, for the
+    rare case a distinct seat genuinely belongs beside a similarly-named one."""
     actor = actor or "ceremony:mint-seat"
     manager_seat_id = await _resolve_seat_ref(actions.pool, manager)
     if manager_seat_id is None:
@@ -168,8 +226,8 @@ async def mint_seat(
                          "mint_seat never mints or adopts a case entity as a worker"}
 
     now = datetime.now(UTC)
+    root = office_root or _DEFAULT_OFFICE_ROOT
     existing_seat_id = await _resolve_seat_ref(actions.pool, handle)
-    office_result: dict[str, Any] | None = None
     if existing_seat_id is not None:
         # THE ADOPT PATH (Tantra's shape): no new identity, no house crossing to refuse —
         # recognizing what already exists is not the same act as minting fresh
@@ -178,6 +236,16 @@ async def mint_seat(
         worker_house = worker_facts.get("house")
         seat_minted = False
     else:
+        if adopt:
+            return {"error": f"adopt=True but no living seat exactly matches {handle!r} "
+                             "— minting would be the lie the caller explicitly refused"}
+        if not force:
+            near = await _near_miss(actions.pool, handle)
+            if near:
+                return {"error": f"near-miss twin refused: living seat {near!r} "
+                                 f"normalizes to the same name as {handle!r} — pass the "
+                                 f"exact handle {near!r} to adopt it, or force=True to "
+                                 "mint a distinct seat anyway"}
         resolved_house = house or manager_house
         if house and manager_house and house != manager_house \
                 and (actor or "") not in _OPERATOR_ACTORS:
@@ -191,11 +259,16 @@ async def mint_seat(
         worker_seat_id = seat_result["seat_id"]
         worker_house = resolved_house
         seat_minted = bool(seat_result["minted"])
-        if seat_minted:
-            root = office_root or _DEFAULT_OFFICE_ROOT
-            office_result = _scaffold_office(
-                handle=handle, house=worker_house or "", project=project or worker_house or "",
-                intended_model=intended_model, office_root=root)
+
+    # THE OFFICE SCAFFOLD (assignment 3's templates): a fresh mint always scaffolds; an
+    # ADOPTED seat scaffolds FILL-MISSING-ONLY (ruling 7cffda8f — an operator-made shell
+    # with no pin/orders is a hollow adoption otherwise). Every write inside is its own
+    # exists-guard, so running it here unconditionally is always safe.
+    office_result: dict[str, Any] | None = None
+    if existing_seat_id is not None or seat_minted:
+        office_result = _scaffold_office(
+            handle=handle, house=worker_house or "", project=project or worker_house or "",
+            intended_model=intended_model, office_root=root)
 
     worker_obj = await actions.create_or_find_object("Seat", worker_seat_id, actor)
     worker_facts = await _seat_facts(actions.pool, worker_seat_id)
