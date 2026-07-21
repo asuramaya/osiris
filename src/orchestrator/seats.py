@@ -155,9 +155,22 @@ async def reseed_binding(pool: asyncpg.Pool, *, agent_id: str, job_dir: str) -> 
 async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
     """The Seat this mind actively holds, with its display facts — the 'who am I' half of
     the binding (Phase B3): orient/mount tell a bound mind WHICH ROLE it sits in, whether
-    or not it ever claim_named itself in the assertion world. None when unbound."""
-    row = await pool.fetchrow(
-        "SELECT t.canonical AS seat_id, "
+    or not it ever claim_named itself in the assertion world. None when unbound.
+
+    LINEAGE-AWARE (the Thoth seat-binding gap, 2026-07-21 — two independent witnesses caught
+    it from opposite ends the same hour: wake()'s authorization gate and the mail envelope's
+    handle lookup): mint_heir's automatic succession never called claim_name, so a holds link
+    minted for an ancestor generation (say, -xvii) was invisible to a caller asking about its
+    successor (-xviii) — the old query exact-matched the presented id. Now any active link
+    ANYWHERE in the lineage (the presented id, the bare root, or any `-<suffix>` generation —
+    the same LIKE-prefix shape the trigger.py rate caps already use) answers; when more than
+    one survives un-healed, the NEWEST generation wins, the same tiebreak follow_binding uses
+    when it moves a link forward."""
+    from src.orchestrator.agents import _generation
+
+    base = _generation(agent_id)[0]
+    rows = await pool.fetch(
+        "SELECT f.canonical AS holder, t.canonical AS seat_id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=t.id "
         "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
         "   AS handle, "
@@ -165,12 +178,13 @@ async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
         "   AND a.name='house' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
         "   AS house "
         "FROM links l JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
-        "WHERE f.canonical=$1 AND l.type='holds' AND t.type='Seat' AND t.status='active' "
-        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
-        "ORDER BY l.first_seen DESC LIMIT 1", agent_id)
-    if row is None:
+        "WHERE (f.canonical=$1 OR f.canonical=$2 OR f.canonical LIKE $2 || '-%') "
+        "AND l.type='holds' AND t.type='Seat' AND t.status='active' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", agent_id, base)
+    if not rows:
         return None
-    return {"seat_id": row["seat_id"], "handle": row["handle"], "house": row["house"]}
+    best = max(rows, key=lambda r: _generation(r["holder"])[1])
+    return {"seat_id": best["seat_id"], "handle": best["handle"], "house": best["house"]}
 
 
 async def bind_holder(
@@ -197,6 +211,62 @@ async def bind_holder(
     if not exists:
         await actions.create_link(agent_oid, seat_oid, "holds", src, now, _CONF,
                                   evidence_class=_EC)
+
+
+async def backfill_unbound_seats(actions: Actions, *, dry_run: bool = True) -> dict[str, Any]:
+    """THE ORPHAN-SEAT BACKFILL (thread 749bf530 / occupancy piece C, 9f566244) — the batch
+    cure for the Thoth seat-binding gap. mint_heir's automatic succession only ever MOVES an
+    existing `holds` link (follow_binding, lineage-wide) — it never CREATES one from nothing.
+    A seat whose original claim predates the Seat-object binding (5cef856b) has therefore sat
+    unbound through every generation since, however many times it has changed hands; its
+    CURRENT holder calling claim_name again would fix it in one act, but nothing prompts that
+    call. This finds every such seat and (dry-run by default) proposes binding it to whoever
+    the assertion world already calls its live holder — the exact fallback resolve_seat uses
+    for an un-seated lineage, asked in bulk rather than one name at a time.
+
+    DRY-RUN REPORTS THE PLAN AND WRITES NOTHING (a2cf8405: a graph mutation is never hand-run
+    without surfacing it first). Idempotent either way: bind_holder no-ops on an already-active
+    link, so a repeat run — or a seat someone fixed by hand in between — changes nothing on its
+    second pass. A seat with no resolvable live holder (no handle asserted, or the assertion
+    world itself has no living candidate) is reported, never guessed."""
+    from src.orchestrator.agents import resolve_seat
+
+    pool = actions.pool
+    unbound = await pool.fetch(
+        "SELECT o.canonical AS seat_id, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS handle, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='house' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS house "
+        "FROM objects o WHERE o.type='Seat' AND o.status='active' "
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.to_id=o.id AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()))")
+    plan: list[dict[str, Any]] = []
+    for row in unbound:
+        seat_id, handle, house = row["seat_id"], row["handle"], row["house"]
+        if not handle:
+            plan.append({"seat_id": seat_id, "handle": None, "house": house, "holder": None,
+                        "note": "no handle asserted on this seat — nothing to resolve by"})
+            continue
+        resolved = await resolve_seat(actions, handle)
+        holder = resolved.get("agent")
+        item: dict[str, Any] = {"seat_id": seat_id, "handle": handle, "house": house,
+                                "holder": holder, "live": resolved.get("live", False)}
+        if not holder:
+            item["note"] = "no resolvable holder in the assertion world — skipped"
+        elif resolved.get("warning"):
+            item["note"] = resolved["warning"]
+        plan.append(item)
+    bound = 0
+    if not dry_run:
+        for item in plan:
+            if item.get("holder"):
+                await bind_holder(actions, seat_id=item["seat_id"], agent_id=item["holder"])
+                bound += 1
+    return {"dry_run": dry_run, "total_unbound": len(unbound), "plan": plan,
+            "resolvable": sum(1 for p in plan if p.get("holder")), "bound": bound}
 
 
 async def holds(pool: asyncpg.Pool, agent_id: str, seat_id: str) -> bool:

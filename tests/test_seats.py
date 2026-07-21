@@ -18,8 +18,10 @@ from src.orchestrator.handshake import automount
 from src.orchestrator.mounts import save_mount
 from src.orchestrator.seats import (
     attach_session,
+    bind_holder,
     ensure_seat,
     find_seat,
+    held_seat,
     mint_attach_token,
     seat_of_mount,
 )
@@ -208,6 +210,38 @@ async def test_the_binding_follows_the_lineage_head(actions: Actions) -> None:
         "WHERE f.canonical='agent:hhhh0001' AND t.canonical=$1 AND l.type='holds' "
         "AND l.valid_until IS NOT NULL", seat["seat_id"])
     assert healed == 1
+
+
+async def test_held_seat_is_lineage_aware(actions: Actions) -> None:
+    """THE THOTH SEAT-BINDING GAP (2026-07-21, two independent witnesses in one hour — wake()'s
+    authorization gate and the mail envelope's handle lookup): a holds link minted for an
+    ANCESTOR generation (agent:iiii0001) must still answer for a SUCCESSOR presenting its own
+    id (agent:iiii0001-iii) that the ordinary succession path never re-bound — held_seat now
+    matches anywhere in the lineage, not just the exact id presented."""
+    seat = await ensure_seat(actions, house="osiris", handle="Ptah", source="test")
+    await actions.create_or_find_object("Agent", "agent:iiii0001", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:iiii0001")
+
+    # a successor exists in the graph (e.g. a mint_heir path that, for whatever reason, never
+    # re-ran follow_binding) but the active link is still sitting on the ancestor
+    successor = "agent:iiii0001-iii"
+    await actions.create_or_find_object("Agent", successor, "test")
+
+    bound = await held_seat(actions.pool, successor)
+    assert bound is not None
+    assert bound["seat_id"] == seat["seat_id"] and bound["handle"] == "Ptah"
+
+    # NEWEST GENERATION WINS when more than one survives un-healed (the same tiebreak
+    # follow_binding uses): bind a later generation too, DIRECTLY (create_link, not
+    # bind_holder) so the ancestor's link is never healed — simulating exactly the
+    # un-healed state this fix exists to read past.
+    later = "agent:iiii0001-v"
+    other_seat = await ensure_seat(actions, house="osiris", handle="Ptah2", source="test")
+    later_oid = await actions.create_or_find_object("Agent", later, "test")
+    other_seat_oid = await actions.create_or_find_object("Seat", other_seat["seat_id"], "test")
+    await actions.create_link(later_oid, other_seat_oid, "holds", "test", datetime.now(UTC), 0.9)
+    newest = await held_seat(actions.pool, "agent:iiii0001-vii")  # asks about a THIRD generation
+    assert newest is not None and newest["seat_id"] == other_seat["seat_id"]  # -v outranks -i
 
 
 SID = "af00c0de-0000-4000-8000-000000000000"
@@ -713,3 +747,82 @@ async def test_claim_name_mints_and_binds_the_seat_object(actions: Actions) -> N
     assert again["seat_id"] == out["seat_id"]          # the SAME durable seat, found not minted
     assert await _active_holds(actions, "agent:xxxx0002", out["seat_id"])
     assert not await _active_holds(actions, "agent:xxxx0001", out["seat_id"])
+
+
+# ═══ THE ORPHAN-SEAT BACKFILL (thread 749bf530 / occupancy piece C, 9f566244) ═══════════════
+# A seat whose original claim predates the Seat-object binding never got a holds link, and
+# mint_heir's automatic succession only ever MOVES an existing one — never creates one from
+# nothing. These tests simulate exactly that: a Seat object + a handle-asserted Agent, with
+# NO holds link between them at all (the pre-binding-era shape), never routed through
+# claim_name/bind_holder.
+
+
+async def _legacy_unbound_seat(
+    actions: Actions, *, handle: str, house: str = "osiris", agent_id: str = "agent:zzzz0001",
+) -> tuple[str, str]:
+    """A Seat object + a live, handle-matching Agent — the pre-binding-era shape backfill
+    exists to heal. Returns (seat_id, agent_id)."""
+    seat = await ensure_seat(actions, house=house, handle=handle, source="test")
+    a = await actions.create_or_find_object("Agent", agent_id, agent_id)
+    now = datetime.now(UTC)
+    await actions.assert_property(a, "handle", handle, agent_id, now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(a, "project", house, agent_id, now, 0.9,
+                                  evidence_class="self_declared")
+    await save_mount(actions.pool, job_dir=f"/jobs/{agent_id.split(':')[1]}", agent_id=agent_id,
+                     project=house, cwd="/w/osiris", model="claude-sonnet-5", session_key=None)
+    return str(seat["seat_id"]), agent_id
+
+
+async def test_backfill_dry_run_reports_without_writing(actions: Actions) -> None:
+    """DRY-RUN IS THE DEFAULT AND WRITES NOTHING (a2cf8405): the plan names the seat and its
+    resolvable holder, but no holds link exists afterward — a mutation is never hand-run
+    without surfacing the plan first."""
+    from src.orchestrator.seats import backfill_unbound_seats
+
+    seat_id, agent_id = await _legacy_unbound_seat(actions, handle="Sekhmet")
+    out = await backfill_unbound_seats(actions)  # dry_run=True by default
+
+    assert out["dry_run"] is True and out["bound"] == 0
+    row = next(p for p in out["plan"] if p["seat_id"] == seat_id)
+    assert row["holder"] == agent_id and row["live"] is True
+    assert await held_seat(actions.pool, agent_id) is None  # still unbound — nothing written
+
+
+async def test_backfill_apply_binds_the_resolved_holder(actions: Actions) -> None:
+    """dry_run=False actually binds — the same act claim_name's own tail performs, run in
+    bulk for seats whose current holder will never call it unprompted."""
+    from src.orchestrator.seats import backfill_unbound_seats
+
+    seat_id, agent_id = await _legacy_unbound_seat(actions, handle="Anubis")
+    out = await backfill_unbound_seats(actions, dry_run=False)
+
+    assert out["bound"] == 1
+    bound = await held_seat(actions.pool, agent_id)
+    assert bound is not None and bound["seat_id"] == seat_id and bound["handle"] == "Anubis"
+
+
+async def test_backfill_is_idempotent(actions: Actions) -> None:
+    """A second pass — whether re-run deliberately or because a seat someone fixed by hand
+    meanwhile is now bound — finds nothing left to do and changes nothing."""
+    from src.orchestrator.seats import backfill_unbound_seats
+
+    await _legacy_unbound_seat(actions, handle="Bastet")
+    first = await backfill_unbound_seats(actions, dry_run=False)
+    assert first["bound"] == 1
+
+    second = await backfill_unbound_seats(actions, dry_run=False)
+    assert second["total_unbound"] == 0 and second["bound"] == 0
+
+
+async def test_backfill_never_guesses_an_unresolvable_seat(actions: Actions) -> None:
+    """A seat with no live (or any) handle-matching Agent is reported, not guessed — apply
+    must not crash or bind a stranger to it."""
+    from src.orchestrator.seats import backfill_unbound_seats
+
+    seat = await ensure_seat(actions, house="osiris", handle="Wepwawet", source="test")
+    out = await backfill_unbound_seats(actions, dry_run=False)
+
+    row = next(p for p in out["plan"] if p["seat_id"] == seat["seat_id"])
+    assert row["holder"] is None and "note" in row
+    assert out["bound"] == 0
