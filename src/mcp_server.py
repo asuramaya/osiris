@@ -2141,6 +2141,42 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
 
 
 @mcp.tool()
+async def wake(target: str, message: str, subagent_id: str | None = None,
+               subagent_type: str | None = None, session_anchor: str | None = None,
+               ctx: Context | None = None) -> dict[str, Any]:
+    """Knock on the OTHER HALF of your own managed_by pair — never a peer (thread 9f566244
+    piece D, ruling 16722273). Gated on the seat graph alone: an active managed_by edge must
+    exist between your held seat and the target's, in EITHER direction (you manage them, or
+    they manage you) — compaction stays strictly downward because it can end a mind, but a
+    wake is only a request for attention, and refusing it upward would leave a blocked
+    worker holding the freshest information with no way to make its manager look. Peers and
+    cross-house calls refuse; that traffic routes through a manager or the operator's desk.
+    THE OPERATOR NEVER CALLS THIS, ON PURPOSE: there is no operator parameter — an override a
+    caller can assert in an argument is an override that can be forged, so the operator's
+    real override stays entirely out-of-band, their own hand in the window.
+
+    `target` accepts anything send()'s to_agent does — a claimed handle, `seat:<id>`, or
+    `agent:<id>`. The message posts as a graded ask (a wake IS a request for attention) and
+    dispatches immediately through the SAME resolution/delivery path send() uses for every
+    DM — this verb adds only the authority gate in front of it and an honest receipt behind
+    it. `status` is one of: `delivered` (actually pushed into a live session right now),
+    `mid-turn` (their transcript is genuinely moving; your ask waits for their turn's end —
+    never called "delivered", that would be the lying receipt a prior finding named),
+    `no-live-body` (nobody has ever mounted there; the mail waits), `refused-not-your-worker`
+    (no managed_by edge either direction — nothing was sent), `refused-budget` (the daily
+    spend ceiling), or `queued` (a rate brake, a pause, or an in-flight wake already covers
+    it — see `detail` and `raw_mode` for which)."""
+    ident = await _ident_for(ctx, session_anchor)
+    if ident is None:
+        return {"error": "mount(cwd, job_dir=<your anchor>) first — a wake must say who "
+                         "it's from", "why": _anchorless(ctx)}
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
+    from src.orchestrator.trigger import wake_worker
+    return await wake_worker(Actions(await _pool_get()), caller=actor, target=target,
+                             message=message)
+
+
+@mcp.tool()
 async def inbox(project: str | None = None, peek: bool = False,
                 ack: list[int] | None = None, subagent_id: str | None = None,
                 subagent_type: str | None = None, session_anchor: str | None = None,

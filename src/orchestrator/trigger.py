@@ -944,6 +944,107 @@ async def dispatch_dm(
                       "this mail as its next turn — watch the hop in the agents view"}
 
 
+# ═══ THE KNOCK — wake(), thread 9f566244 piece D, ruling 16722273 ═══════════════════════
+# A manager or worker rousing the OTHER half of its own managed_by pair — never a peer.
+# Gated on the seat graph alone: dispatch_dm above already IS the resolver (handle → seat →
+# living holder → daemon short, with the crossed-registry guard, the real mid-turn check,
+# and every rate brake this file owns) — duplicating it would drift the instant either copy
+# was touched. wake() adds only the authority gate in front of it and an honest vocabulary
+# behind it (dispatch_dm's own "delivered" mode actually means mid-turn and unread — the
+# lying receipt, thread 5af93c89 — this layer never repeats it).
+
+
+async def _seat_for_target(actions: Actions, target: str) -> str | None:
+    """The Seat addressed by `target` — a raw seat id, a raw agent id, or a claimed handle —
+    or None (a legacy unbound agent, or nobody). managed_by is Seat-to-Seat; a target with no
+    seat of its own cannot be arbitrated by it, gated or not."""
+    target = (target or "").strip()
+    if target.startswith("seat:"):
+        exists = await actions.pool.fetchval(
+            "SELECT 1 FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
+            target)
+        return target if exists else None
+    from src.orchestrator.seats import held_seat
+    if target.startswith("agent:"):
+        held = await held_seat(actions.pool, target)
+        return held["seat_id"] if held else None
+    from src.orchestrator.agents import resolve_seat
+    resolved = await resolve_seat(actions, target)
+    return resolved.get("seat_id")
+
+
+async def _managed_edge(pool: asyncpg.Pool, seat_a: str, seat_b: str) -> bool:
+    """An ACTIVE managed_by edge between two seats, in EITHER direction (ruling 16722273: a
+    wake is a knock, not a killing — gating it downward-only like compaction disenfranchises
+    the worker, who holds the freshest information and the blocking question). Peers and
+    cross-house traffic still refuse; only a live manager<->worker pair may knock on each
+    other."""
+    return bool(await pool.fetchval(
+        "SELECT 1 FROM links l JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
+        "WHERE l.type='managed_by' AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "AND ((f.canonical=$1 AND t.canonical=$2) OR (f.canonical=$2 AND t.canonical=$1))",
+        seat_a, seat_b))
+
+
+# dispatch_dm's mode → wake()'s honest vocabulary. Anything not named here (queued-*, braked,
+# skipped-*, settled, held, window-busy) is a rate brake, a pause, or an in-flight wake already
+# covering it — all genuinely "queued", and `detail`/`raw_mode` carry the specific reason so
+# nothing is lost to the bucket.
+_WAKE_STATUS = {
+    "nudged": "delivered", "resumed": "delivered", "poked": "delivered",
+    "delivered": "mid-turn",  # dispatch_dm's own word for this means mid-turn, never delivered
+    "pull-only": "no-live-body",
+    "refused": "refused-budget",  # the dollar wall, distinct from the authority refusal below
+}
+
+
+async def wake_worker(
+    actions: Actions, *, caller: str, target: str, message: str,
+    settings: Settings | None = None, spawn: Any = None, windows: Any = None,
+    poke: Any = None, jobs: Any = None, nudge: Any = None,
+) -> dict[str, Any]:
+    """Knock on the other half of `caller`'s OWN managed_by pair. Refuses LOUDLY (nothing
+    sent) when no active managed_by edge exists between the two seats in either direction —
+    peers and cross-house calls route through a manager or the operator's desk instead.
+    THE OPERATOR NEVER CALLS THIS: there is no operator parameter and none should ever be
+    added — an override a caller can assert in an argument is an override that can be forged;
+    the operator's real override stays out-of-band, their own hand in the window (Thoth,
+    msg 989).
+
+    On authorization, this posts `message` as a graded ask (a wake IS a request for
+    attention) addressed to the target's SEAT — the same address the gate just verified —
+    and dispatches it through dispatch_dm, the exact path send() uses for every DM. Returns
+    a receipt that never says "delivered" for anything less than an actual live push."""
+    from src.orchestrator.agents import house_of
+    from src.orchestrator.seats import held_seat
+
+    pool = actions.pool
+    caller_seat = (await held_seat(pool, caller) or {}).get("seat_id")
+    if caller_seat is None:
+        return {"mode": "refused-not-your-worker",
+                "detail": f"{caller} holds no seat — wake() is a seat-to-seat act; an "
+                          "unseated caller has no managed_by relationship to invoke it with"}
+    target_seat = await _seat_for_target(actions, target)
+    if target_seat is None:
+        return {"mode": "refused-not-your-worker",
+                "detail": f"'{target}' resolves to no living Seat — managed_by is Seat-to-"
+                          "Seat and cannot arbitrate a target with none"}
+    if not await _managed_edge(pool, caller_seat, target_seat):
+        return {"mode": "refused-not-your-worker",
+                "detail": f"no active managed_by edge between {caller_seat} and {target_seat} "
+                          "in either direction — wake() only knocks within a manager<->worker "
+                          "pair; peers and cross-house traffic route through a manager or the "
+                          "operator's desk"}
+    res = await send_message(pool, from_agent=caller, from_project=await house_of(pool, caller),
+                             to_agent=target_seat, body=message, grade="ask")
+    d = await dispatch_dm(pool, addressee=res["to_agent"], msg_id=res["id"], sender=caller,
+                          settings=settings, spawn=spawn, windows=windows, poke=poke,
+                          jobs=jobs, nudge=nudge)
+    mode = d.get("mode", "")
+    return {"message_id": res["id"], "seat": target_seat, "raw_mode": mode,
+            "status": _WAKE_STATUS.get(mode, "queued"), "detail": d.get("detail", mode)}
+
+
 def _receipt_path(job_dir: str | None, resume_session: str | None) -> Path | None:
     """Where this wake drops the CLI's cost envelope. None when we have nowhere to put it — and
     a wake with nowhere to put its receipt is a wake nobody can ever cost, which the log says

@@ -17,12 +17,14 @@ import pytest
 from src.actions.core import Actions
 from src.orchestrator import trigger as trigger_module
 from src.orchestrator.mailbox import OPERATOR_ADDR, read_inbox, send_message
+from src.orchestrator.seats import bind_holder, ensure_seat
 from src.orchestrator.trigger import (
     _WAKE_PROMPT,
     dispatch_dm,
     should_wake,
     trigger_mail_tick,
     wake_status,
+    wake_worker,
 )
 
 NOW = datetime(2026, 7, 6, tzinfo=UTC)
@@ -1495,3 +1497,162 @@ async def test_a_crossed_registry_never_leaks_the_envelope_or_the_resume(
                           spawn=_boom, windows=_no_windows, jobs=_jobs, nudge=_boom)
     assert d["mode"] == "pull-only" and "crossed" in d["detail"]
     assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
+
+
+# ═══ THE KNOCK — wake(), thread 9f566244 piece D, ruling 16722273 ═══════════════════════
+# wake() adds ONE thing dispatch_dm doesn't have: the managed_by authority gate. These tests
+# pin the gate (both directions authorize, peers/unbound/seatless refuse, nothing is sent on
+# a refusal) and the honest vocabulary (dispatch_dm's own "delivered" — genuinely mid-turn,
+# unread — must never surface as wake()'s "delivered").
+
+
+async def _managed_pair(actions: Actions, *, worker_agent: str, manager_agent: str,
+                        worker_handle: str = "Worker", manager_handle: str = "Manager",
+                        house: str = "demo") -> tuple[str, str]:
+    """Two seats, bound to two live agents, with an active managed_by edge worker→manager —
+    the ordinary shape wake()'s gate is built for. Returns (worker_seat_id, manager_seat_id)."""
+    worker_seat = (await ensure_seat(actions, house=house, handle=worker_handle,
+                                     source="test"))["seat_id"]
+    manager_seat = (await ensure_seat(actions, house=house, handle=manager_handle,
+                                      source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=worker_seat, agent_id=worker_agent)
+    await bind_holder(actions, seat_id=manager_seat, agent_id=manager_agent)
+    w_oid = await actions.create_or_find_object("Seat", worker_seat, "test")
+    m_oid = await actions.create_or_find_object("Seat", manager_seat, "test")
+    await actions.create_link(w_oid, m_oid, "managed_by", "test", NOW, 0.9)
+    return str(worker_seat), str(manager_seat)
+
+
+async def test_wake_refuses_an_unseated_caller(actions: Actions) -> None:
+    """No held seat, no knock — managed_by is seat-to-seat and an unseated mind has no
+    relationship it could invoke it with."""
+    d = await wake_worker(actions, caller="agent:nobody", target="agent:alsonobody",
+                          message="hey")
+    assert d["mode"] == "refused-not-your-worker" and "holds no seat" in d["detail"]
+
+
+async def test_wake_refuses_a_seatless_target(actions: Actions) -> None:
+    """The caller holds a seat but the target names nobody living — refused, nothing sent."""
+    worker_seat = (await ensure_seat(actions, house="demo", handle="Solo",
+                                     source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=worker_seat, agent_id="agent:solo01")
+    d = await wake_worker(actions, caller="agent:solo01", target="agent:ghost99",
+                          message="hey")
+    assert d["mode"] == "refused-not-your-worker" and "no living Seat" in d["detail"]
+    assert await actions.pool.fetchval("SELECT count(*) FROM fleet_messages") == 0
+
+
+async def test_wake_refuses_a_peer_with_no_managed_by_edge(actions: Actions) -> None:
+    """Two seated minds, no managed_by edge between them — a peer knock, refused. This is
+    the exact case wake() exists to distinguish from send(): mail between peers is normal;
+    a wake between peers is not."""
+    a_seat = (await ensure_seat(actions, house="demo", handle="Alpha",
+                                source="test"))["seat_id"]
+    b_seat = (await ensure_seat(actions, house="demo", handle="Beta",
+                                source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=a_seat, agent_id="agent:alpha01")
+    await bind_holder(actions, seat_id=b_seat, agent_id="agent:beta01")
+    d = await wake_worker(actions, caller="agent:alpha01", target="agent:beta01",
+                          message="hey")
+    assert d["mode"] == "refused-not-your-worker" and "no active managed_by edge" in d["detail"]
+    assert await actions.pool.fetchval("SELECT count(*) FROM fleet_messages") == 0
+
+
+async def test_wake_authorizes_worker_to_manager(actions: Actions, tmp_path: Path) -> None:
+    """The direction the org chart actually stores (worker --managed_by--> manager): a
+    worker knocking on ITS OWN manager is authorized, and the mail reaches the manager's
+    seat via the SAME dispatch path send() uses."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    worker_seat, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append((repo, kw))
+
+    d = await wake_worker(actions, caller="agent:sender", target=manager_seat,
+                          message="blocked, need your word",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_spawn, windows=_no_windows)
+    assert d["status"] == "delivered" and d["raw_mode"] == "resumed"
+    assert d["seat"] == manager_seat
+    assert calls  # the resume actually fired
+    row = await actions.pool.fetchrow(
+        "SELECT to_agent, grade FROM fleet_messages WHERE id=$1", d["message_id"])
+    assert row["to_agent"] == manager_seat and row["grade"] == "ask"
+
+
+async def test_wake_authorizes_manager_to_worker_too(actions: Actions, tmp_path: Path) -> None:
+    """Ruling 16722273: the gate is bidirectional. A manager knocking DOWN on its own
+    worker is just as authorized as the reverse — only peers and strangers refuse."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    worker_seat, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:abcd1234", manager_agent="agent:sender")
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        pass
+
+    d = await wake_worker(actions, caller="agent:sender", target=worker_seat,
+                          message="status?",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_spawn, windows=_no_windows)
+    assert d["status"] == "delivered" and d["seat"] == worker_seat
+
+
+async def test_wake_never_calls_mid_turn_delivered(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """THE WHOLE POINT: dispatch_dm's own mode literally named "delivered" means the
+    addressee is mid-turn and has NOT read the message. wake() must translate it to
+    "mid-turn", never let the lying word reach the caller."""
+    worker_seat, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
+
+    async def _fake_dispatch(*a: Any, **kw: Any) -> dict[str, Any]:
+        return {"mode": "delivered", "detail": "genuinely mid-turn, unread"}
+
+    monkeypatch.setattr(trigger_module, "dispatch_dm", _fake_dispatch)
+    d = await wake_worker(actions, caller="agent:sender", target=manager_seat,
+                          message="hey")
+    assert d["status"] == "mid-turn"
+    assert d["raw_mode"] == "delivered"  # the raw truth stays visible for anyone who reads it
+
+
+async def test_wake_translates_pull_only_and_refused_budget(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other two named buckets: nobody home, and the dollar wall — each its own honest
+    word, neither one a bare boolean."""
+    worker_seat, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
+
+    async def _pull_only(*a: Any, **kw: Any) -> dict[str, Any]:
+        return {"mode": "pull-only", "detail": "never mounted"}
+
+    monkeypatch.setattr(trigger_module, "dispatch_dm", _pull_only)
+    d = await wake_worker(actions, caller="agent:sender", target=manager_seat, message="hey")
+    assert d["status"] == "no-live-body"
+
+    async def _refused(*a: Any, **kw: Any) -> dict[str, Any]:
+        return {"mode": "refused", "detail": "daily ceiling reached"}
+
+    monkeypatch.setattr(trigger_module, "dispatch_dm", _refused)
+    d2 = await wake_worker(actions, caller="agent:sender", target=manager_seat, message="hey")
+    assert d2["status"] == "refused-budget"
+
+
+async def test_wake_buckets_every_unnamed_mode_as_queued(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rate brakes, pauses, and in-flight wakes are all genuinely "queued" — the catch-all
+    default — and the raw mode/detail survive so nothing is lost to the bucket."""
+    worker_seat, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
+
+    async def _braked(*a: Any, **kw: Any) -> dict[str, Any]:
+        return {"mode": "braked", "detail": "the per-seat rate brake: 3 wakes/h already landed"}
+
+    monkeypatch.setattr(trigger_module, "dispatch_dm", _braked)
+    d = await wake_worker(actions, caller="agent:sender", target=manager_seat, message="hey")
+    assert d["status"] == "queued" and d["raw_mode"] == "braked"
+    assert "rate brake" in d["detail"]
