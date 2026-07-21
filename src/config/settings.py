@@ -144,7 +144,14 @@ class Settings(BaseSettings):
     # had not opened in days; a re-arm after a dark period should NAME ITS SUBJECTS, and this
     # makes that a setting instead of a promise.
     osiris_trigger_projects: str = ""
-    osiris_trigger_rate_cap: int = 5
+    # 15/hr per PAIR, not 5 (Thoth LIII 2026-07-21): 5 was measured-too-tight — active
+    # manager<->worker collaboration is BURSTY (several knocks in minutes, then quiet), and a
+    # 5/hr pair cap smothered legitimate dispatch (ruling bcaae418's evidence: two capped nudges
+    # in ten minutes on the two most important messages of the day, both rescued by hand; the
+    # fleet then SITS until a human nudges it). A true ping-pong runaway sustains a high rate
+    # INDEFINITELY and is still caught at 15; a human-directed burst fits under it. The cap bounds
+    # a loop, it must not throttle a conversation.
+    osiris_trigger_rate_cap: int = 15
     osiris_trigger_window_secs: int = 3600
     # Wake-GRACE (the double-wake guard, obligation c45bb2e3): the cron ticks (60s) faster than a
     # woken agent can spawn, mount, and lease its inbox (~100s+). In that gap the mail is still
