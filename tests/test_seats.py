@@ -826,3 +826,24 @@ async def test_backfill_never_guesses_an_unresolvable_seat(actions: Actions) -> 
     row = next(p for p in out["plan"] if p["seat_id"] == seat["seat_id"])
     assert row["holder"] is None and "note" in row
     assert out["bound"] == 0
+
+
+async def test_backfill_only_seats_scopes_the_write(actions: Actions) -> None:
+    """THE OPERATOR'S STAGED ROLLOUT (2026-07-21: Thoth-first, fleet-wide only after that
+    lands clean) — only_seats restricts both the plan and the write to exactly the named
+    seats; every other unbound seat is counted in total_unbound but never appears in `plan`
+    and is never touched, so a scoped apply cannot spill onto seats nobody signed off on."""
+    from src.orchestrator.seats import backfill_unbound_seats
+
+    scoped_seat, scoped_agent = await _legacy_unbound_seat(
+        actions, handle="Osiris1", agent_id="agent:yyyy0001")
+    other_seat, other_agent = await _legacy_unbound_seat(
+        actions, handle="Osiris2", agent_id="agent:yyyy0002")
+
+    out = await backfill_unbound_seats(actions, dry_run=False, only_seats={scoped_seat})
+
+    assert out["total_unbound"] == 2 and out["scoped_out"] == 1
+    assert [p["seat_id"] for p in out["plan"]] == [scoped_seat]
+    assert out["bound"] == 1
+    assert (await held_seat(actions.pool, scoped_agent) or {}).get("seat_id") == scoped_seat
+    assert await held_seat(actions.pool, other_agent) is None  # untouched — out of scope

@@ -213,7 +213,9 @@ async def bind_holder(
                                   evidence_class=_EC)
 
 
-async def backfill_unbound_seats(actions: Actions, *, dry_run: bool = True) -> dict[str, Any]:
+async def backfill_unbound_seats(
+    actions: Actions, *, dry_run: bool = True, only_seats: set[str] | None = None,
+) -> dict[str, Any]:
     """THE ORPHAN-SEAT BACKFILL (thread 749bf530 / occupancy piece C, 9f566244) — the batch
     cure for the Thoth seat-binding gap. mint_heir's automatic succession only ever MOVES an
     existing `holds` link (follow_binding, lineage-wide) — it never CREATES one from nothing.
@@ -223,6 +225,11 @@ async def backfill_unbound_seats(actions: Actions, *, dry_run: bool = True) -> d
     call. This finds every such seat and (dry-run by default) proposes binding it to whoever
     the assertion world already calls its live holder — the exact fallback resolve_seat uses
     for an un-seated lineage, asked in bulk rather than one name at a time.
+
+    `only_seats` scopes BOTH the plan and the write to exactly those seat ids (operator's
+    ruling, 2026-07-21: Thoth-first, fleet-wide only after that lands clean) — every OTHER
+    unbound seat is still counted in `total_unbound` so the caller can see what a scoped run
+    deliberately left untouched, but never appears in `plan` and is never written.
 
     DRY-RUN REPORTS THE PLAN AND WRITES NOTHING (a2cf8405: a graph mutation is never hand-run
     without surfacing it first). Idempotent either way: bind_holder no-ops on an already-active
@@ -243,8 +250,9 @@ async def backfill_unbound_seats(actions: Actions, *, dry_run: bool = True) -> d
         "FROM objects o WHERE o.type='Seat' AND o.status='active' "
         "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.to_id=o.id AND l.type='holds' "
         "AND (l.valid_until IS NULL OR l.valid_until > now()))")
+    scoped = [row for row in unbound if only_seats is None or row["seat_id"] in only_seats]
     plan: list[dict[str, Any]] = []
-    for row in unbound:
+    for row in scoped:
         seat_id, handle, house = row["seat_id"], row["handle"], row["house"]
         if not handle:
             plan.append({"seat_id": seat_id, "handle": None, "house": house, "holder": None,
@@ -265,7 +273,8 @@ async def backfill_unbound_seats(actions: Actions, *, dry_run: bool = True) -> d
             if item.get("holder"):
                 await bind_holder(actions, seat_id=item["seat_id"], agent_id=item["holder"])
                 bound += 1
-    return {"dry_run": dry_run, "total_unbound": len(unbound), "plan": plan,
+    return {"dry_run": dry_run, "total_unbound": len(unbound),
+            "scoped_out": len(unbound) - len(scoped), "plan": plan,
             "resolvable": sum(1 for p in plan if p.get("holder")), "bound": bound}
 
 
