@@ -771,6 +771,22 @@ async def dispatch_dm(
     target = await living_head(pool, await canonical_agent(pool, target))
     if seat_id is None:
         seat_id = ((await held_seat(pool, target)) or {}).get("seat_id")
+    # THE HUMAN-ATTENDED GUARD (Thoth LIII 2026-07-21, ruling d8a77f80). The daemon reply lane
+    # FORGES a human turn (the confirmed RCE), so a nudge/poke into a session the operator drives
+    # lands in the operator's OWN input turn — caught live. In this house the operator works at
+    # the MANAGER tier; a seat that MANAGES someone (the to-side of a managed_by edge, minted
+    # worker→manager at mintseat.py) is human-attended and perceives mail by PULL — its mailbox +
+    # the stop-hook — never by injection. Only agent-driven WORKERS are woken by the daemon. This
+    # yields the right asymmetry for free: manager→worker injects (wakes the worker), worker→
+    # manager does NOT (the report waits in the box, surfaces on the human's next turn). It runs
+    # EVEN WITH the trigger on — a manager is never a nudge target, period. LIMIT (known): it does
+    # not cover the operator ATTENDING a worker session directly; that needs a real attached
+    # signal the daemon does not expose — banked, the manager tier is the operator's actual surface.
+    if seat_id and await _manages_someone(pool, seat_id):
+        return {"mode": "queued-human",
+                "detail": f"{target} is a human-attended (manager) seat — the daemon never "
+                          "injects a human's live turn; the mail waits in its box and surfaces "
+                          "on its next turn (perceived by pull, not a forged injection)"}
     faces = [c for c in {addressee, target, seat_id} if c]
     # wall #2 — the gate: an explicit pause, or needs-input (ask-then-silence)
     paused_on = await _paused(pool, faces)
@@ -1017,6 +1033,18 @@ async def _seat_for_target(actions: Actions, target: str) -> str | None:
     return resolved.get("seat_id")
 
 
+async def _manages_someone(pool: asyncpg.Pool, seat_id: str) -> bool:
+    """True if this seat is the MANAGER side of an active managed_by edge — the house's proxy
+    for 'a human drives this session'. managed_by is minted worker→manager (mintseat.py), so a
+    manager is the TO-side: workers point up to it. The operator works at the manager tier, so a
+    manager perceives mail by pull (mailbox + stop-hook), never by a forged-human daemon injection
+    into its live turn (the human-attended guard in dispatch_dm; ruling d8a77f80)."""
+    return bool(await pool.fetchval(
+        "SELECT 1 FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND l.type='managed_by' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) LIMIT 1", seat_id))
+
+
 async def _managed_edge(pool: asyncpg.Pool, seat_a: str, seat_b: str) -> bool:
     """An ACTIVE managed_by edge between two seats, in EITHER direction (ruling 16722273: a
     wake is a knock, not a killing — gating it downward-only like compaction disenfranchises
@@ -1112,6 +1140,9 @@ _WAKE_STATUS = {
     "nudged": "delivered", "resumed": "delivered", "poked": "delivered",
     "delivered": "mid-turn",  # dispatch_dm's own word for this means mid-turn, never delivered
     "pull-only": "no-live-body",
+    # a manager is a LIVE human body, not a missing one — the human-attended guard queues the
+    # knock in its box (perceived by pull), it does not forge the human's live turn (d8a77f80).
+    "queued-human": "queued-human-attended",
     "refused": "refused-budget",  # the dollar wall, distinct from the authority refusal below
 }
 

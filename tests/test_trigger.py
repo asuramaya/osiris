@@ -1685,6 +1685,36 @@ async def test_dispatch_dm_falls_back_to_project_scope_without_a_managed_edge(
     assert d["mode"] == "skipped-rate-capped"  # the old project-wide count still applies
 
 
+async def test_manages_someone_is_the_MANAGER_side(actions: Actions) -> None:
+    """Pin the direction the human-attended guard turns on (invert it and you inject the operator
+    while starving the worker): managed_by is minted worker→manager, so the MANAGER is the
+    to-side; _manages_someone is True for the manager, False for the worker."""
+    from src.orchestrator.trigger import _manages_someone
+
+    worker_seat, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:w0001", manager_agent="agent:m0001")
+    assert await _manages_someone(actions.pool, manager_seat) is True
+    assert await _manages_someone(actions.pool, worker_seat) is False
+
+
+async def test_dispatch_dm_never_injects_a_MANAGER(actions: Actions) -> None:
+    """THE HUMAN-ATTENDED GUARD (Thoth LIII 2026-07-21, ruling d8a77f80). The operator works at
+    the manager tier, so a manager seat is human-attended — mail to it waits in the box and is
+    perceived by PULL (mailbox + stop-hook), never a forged-human daemon injection into the
+    operator's live turn. Here agent:abcd1234 is the MANAGER of the pair: dispatch returns
+    pull-only and NOTHING is injected, spawned, or poked — even with the trigger on."""
+    await _managed_pair(actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
+
+    async def _boom(*a: Any, **kw: Any) -> Any:
+        raise AssertionError("a manager must never be injected / spawned / poked")
+
+    msg_id = await _dm_to_owner(actions)  # a DM to agent:abcd1234 (the manager)
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender", settings=_settings(enabled=True),
+                          spawn=_boom, nudge=_boom, poke=_boom, windows=_no_windows)
+    assert d["mode"] == "queued-human" and "manager" in d["detail"]
+
+
 async def test_wake_refuses_an_unseated_caller(actions: Actions) -> None:
     """No held seat, no knock — managed_by is seat-to-seat and an unseated mind has no
     relationship it could invoke it with."""
@@ -1752,13 +1782,16 @@ async def test_wake_authorizes_worker_to_manager(actions: Actions, tmp_path: Pat
                           message="blocked, need your word",
                           settings=_settings(enabled=True, sense=str(sense)),
                           spawn=_spawn, windows=_no_windows)
-    assert d["status"] == "delivered" and d["raw_mode"] == "resumed"
-    assert d["observed"] is True
+    # the manager is HUMAN-ATTENDED (human-attended guard, d8a77f80): the knock is authorized
+    # but delivered by PULL — it waits in the manager's box and surfaces on its next turn / the
+    # stop-hook, never a forged injection into the operator's live turn. 16722273's "the worker
+    # can reach up" is preserved; only the delivery mechanism changes.
+    assert d["status"] == "queued-human-attended" and d["raw_mode"] == "queued-human"
     assert d["seat"] == manager_seat
-    assert calls  # the resume actually fired
+    assert not calls  # NOTHING injected or spawned — the human perceives it via the mailbox
     row = await actions.pool.fetchrow(
         "SELECT to_agent, grade FROM fleet_messages WHERE id=$1", d["message_id"])
-    assert row["to_agent"] == manager_seat and row["grade"] == "ask"
+    assert row["to_agent"] == manager_seat and row["grade"] == "ask"  # the ask waits in the box
 
 
 async def test_wake_authorizes_manager_to_worker_too(actions: Actions, tmp_path: Path) -> None:
@@ -1808,14 +1841,16 @@ async def test_wake_reports_queued_when_the_marker_never_lands(
     ordinary case in these tests, since the mocked spawn/nudge writes nothing real), wake()
     must NOT claim "delivered" — it downgrades honestly to "queued", unconfirmed."""
     sense = await _stale_resumable_owner(actions, tmp_path)
+    # knock DOWN on a worker (abcd1234), the injectable direction — a manager target would be
+    # pull-only by the human-attended guard and never reach the marker-downgrade path this pins.
     worker_seat, manager_seat = await _managed_pair(
-        actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
+        actions, worker_agent="agent:abcd1234", manager_agent="agent:sender")
 
     async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
         pass  # never writes the marker anywhere — nothing "lands"
 
-    d = await wake_worker(actions, caller="agent:sender", target=manager_seat,
-                          message="blocked, need your word",
+    d = await wake_worker(actions, caller="agent:sender", target=worker_seat,
+                          message="status?",
                           settings=_settings(enabled=True, sense=str(sense)),
                           spawn=_spawn, windows=_no_windows)
     assert d["raw_mode"] == "resumed"  # dispatch_dm itself still reports success...
