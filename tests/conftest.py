@@ -35,6 +35,12 @@ _TABLES = (
     ",harness_sessions,harness_turns"
     # THE TELEMETRY READER (task #35): the retained-events sidecar, same law.
     ",harness_telemetry,harness_telemetry_files"
+    # PIT WATCH STAGE B's own ledger (thread 449bf55d): append-only, deriving state by
+    # aggregate query — exactly the shape that bites hardest when forgotten here, since a
+    # leftover 'escalated' tombstone on a message_id a later test's own fresh sequence
+    # reuses (RESTART IDENTITY resets fleet_messages, not this table) silently forges a
+    # false "already escalated" for a message that was never touched this test.
+    ",pit_watch_alarms"
 )
 
 

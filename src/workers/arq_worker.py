@@ -432,6 +432,24 @@ async def trigger_mail(ctx: dict[str, Any]) -> int:
     return report["woke"]
 
 
+async def pit_watch_heartbeat(ctx: dict[str, Any]) -> int:
+    """Pit Watch Stage B: alarm on a managed_by pair's ask-graded DM sitting unread while its
+    addressee is provably not mid-turn, escalating to the operator's desk after enough
+    consecutive sightings (OFF unless osiris_pit_watch_enabled — the kill switch). Never
+    dispatches or spawns anything of its own; a DB hiccup logs, never sinks the cron."""
+    from src.orchestrator.pit_watch import pit_watch_tick
+
+    actions: Actions = ctx["cascade"].actions
+    try:
+        report = await pit_watch_tick(actions)
+    except Exception as exc:  # a DB hiccup must not kill the cron
+        _log.warning("pit watch heartbeat failed: %r", exc)
+        return 0
+    if report["sighted"] or report["escalated"]:
+        _log.info("pit watch heartbeat: %s", report)
+    return report["escalated"]
+
+
 def watched(fn: Any, *, every: int) -> Any:
     """THE SEAM WHERE A JOB CANNOT LIE ABOUT ITS OWN HEALTH.
 
@@ -537,6 +555,11 @@ class WorkerSettings:
         # the mailbox alarm clock: wake an agent for a project with unread mail — bounded by a
         # per-project rate cap, and a no-op unless osiris_trigger_enabled (the kill switch).
         cron(watched(trigger_mail, every=60), minute=set(range(0, 60)), second={45}),
+        # the pair heartbeat (Pit Watch Stage B): a managed_by pair's ask-graded DM sitting
+        # unread while the addressee is not mid-turn escalates to the operator's desk after
+        # enough consecutive sightings — a no-op unless osiris_pit_watch_enabled.
+        cron(watched(pit_watch_heartbeat, every=300), minute=set(range(0, 60, 5)),
+             second={30}),
     ]
     on_startup = startup
     on_shutdown = shutdown

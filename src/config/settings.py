@@ -232,6 +232,15 @@ class Settings(BaseSettings):
     # seat's own session — pinning the triage model onto it would be a silent model downgrade
     # of a working seat (the rug-pull class). The triage/mint lanes keep osiris_wake_model.
     osiris_dm_resume_model: str = ""
+    # THE PAIR HEARTBEAT (Pit Watch Stage B, thread 449bf55d) — OFF by default, the same law
+    # as osiris_trigger_enabled: a mechanism that pages the operator's desk earns its own kill
+    # switch, never inherits one. When on, a tick alarms on any managed_by pair's ask-graded
+    # DM sitting unread past osiris_mail_lease_secs while the addressee is provably not
+    # mid-turn (_turn_fresh_sync); after osiris_pit_watch_escalate_at consecutive sightings,
+    # ONE brief reaches the operator naming the pair and the message, then a tombstone stops
+    # it from ever firing twice on the same message.
+    osiris_pit_watch_enabled: bool = False
+    osiris_pit_watch_escalate_at: int = 3
     # The operator's STANDING model choice (the intent). The fable harness silently demotes
     # fable→opus when it senses danger (ruling f2ae6346); the swap-detector flags an observed
     # model that diverges from this — the confession backstop the cold-boot ritual can't be.
