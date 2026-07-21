@@ -2156,16 +2156,20 @@ async def wake(target: str, message: str, subagent_id: str | None = None,
     real override stays entirely out-of-band, their own hand in the window.
 
     `target` accepts anything send()'s to_agent does — a claimed handle, `seat:<id>`, or
-    `agent:<id>`. The message posts as a graded ask (a wake IS a request for attention) and
-    dispatches immediately through the SAME resolution/delivery path send() uses for every
-    DM — this verb adds only the authority gate in front of it and an honest receipt behind
-    it. `status` is one of: `delivered` (actually pushed into a live session right now),
-    `mid-turn` (their transcript is genuinely moving; your ask waits for their turn's end —
-    never called "delivered", that would be the lying receipt a prior finding named),
-    `no-live-body` (nobody has ever mounted there; the mail waits), `refused-not-your-worker`
-    (no managed_by edge either direction — nothing was sent), `refused-budget` (the daily
-    spend ceiling), or `queued` (a rate brake, a pause, or an in-flight wake already covers
-    it — see `detail` and `raw_mode` for which)."""
+    `agent:<id>`. The message is prefixed with a self-identifying provenance marker (naming
+    you and your seat) before it posts as a graded ask — the harness stamps every injected
+    turn origin.kind='human' regardless of who actually wrote it, so this refuses to hide
+    behind that label — and dispatches immediately through the SAME resolution/delivery
+    path send() uses for every DM; this verb adds only the authority gate in front of it and
+    an honest receipt behind it. `status` is one of: `delivered` (the marker was CONFIRMED
+    landed as a submitted turn in their transcript — `observed: true` — never claimed on a
+    bare queue success), `mid-turn` (their transcript is genuinely moving; your ask waits
+    for their turn's end — never called "delivered", that would be the lying receipt a
+    prior finding named), `no-live-body` (nobody has ever mounted there; the mail waits),
+    `refused-not-your-worker` (no managed_by edge either direction — nothing was sent),
+    `refused-budget` (the daily spend ceiling), or `queued` (a rate brake, a pause, an
+    in-flight wake, OR an injection that was queued but not yet confirmed submitted — see
+    `detail` and `raw_mode` for which)."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a wake must say who "

@@ -20,6 +20,7 @@ from src.orchestrator.mailbox import OPERATOR_ADDR, read_inbox, send_message
 from src.orchestrator.seats import bind_holder, ensure_seat
 from src.orchestrator.trigger import (
     _WAKE_PROMPT,
+    _wake_marker,
     dispatch_dm,
     should_wake,
     trigger_mail_tick,
@@ -1558,13 +1559,29 @@ async def test_wake_refuses_a_peer_with_no_managed_by_edge(actions: Actions) -> 
     assert await actions.pool.fetchval("SELECT count(*) FROM fleet_messages") == 0
 
 
+def _land_marker(sense: Path, marker: str) -> None:
+    """Simulate the outcome-read's happy path: append a genuine "type":"user" line carrying
+    `marker` to the fixture transcript `_stale_resumable_owner` already created — the mocked
+    spawn/nudge in these tests never write anything real, so the landing has to be staged."""
+    import json
+
+    t = sense / "-repo-demo" / f"{FULL_SID}.jsonl"
+    with t.open("a") as f:
+        # a leading newline guarantees our own line, whatever the fixture's own trailing
+        # bytes look like (the base fixture pads with un-terminated "x" filler bytes)
+        f.write("\n" + json.dumps({"type": "user",
+                                   "message": {"content": f"{marker}\n\nbody"}}) + "\n")
+
+
 async def test_wake_authorizes_worker_to_manager(actions: Actions, tmp_path: Path) -> None:
     """The direction the org chart actually stores (worker --managed_by--> manager): a
     worker knocking on ITS OWN manager is authorized, and the mail reaches the manager's
-    seat via the SAME dispatch path send() uses."""
+    seat via the SAME dispatch path send() uses — CONFIRMED landed via the outcome-read
+    (ruling 986b12f0), not merely queued."""
     sense = await _stale_resumable_owner(actions, tmp_path)
     worker_seat, manager_seat = await _managed_pair(
         actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
+    _land_marker(sense, _wake_marker("agent:sender", worker_seat, "Worker"))
     calls: list[tuple[str, dict[str, Any]]] = []
 
     async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
@@ -1575,6 +1592,7 @@ async def test_wake_authorizes_worker_to_manager(actions: Actions, tmp_path: Pat
                           settings=_settings(enabled=True, sense=str(sense)),
                           spawn=_spawn, windows=_no_windows)
     assert d["status"] == "delivered" and d["raw_mode"] == "resumed"
+    assert d["observed"] is True
     assert d["seat"] == manager_seat
     assert calls  # the resume actually fired
     row = await actions.pool.fetchrow(
@@ -1588,6 +1606,7 @@ async def test_wake_authorizes_manager_to_worker_too(actions: Actions, tmp_path:
     sense = await _stale_resumable_owner(actions, tmp_path)
     worker_seat, manager_seat = await _managed_pair(
         actions, worker_agent="agent:abcd1234", manager_agent="agent:sender")
+    _land_marker(sense, _wake_marker("agent:sender", manager_seat, "Manager"))
 
     async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
         pass
@@ -1596,7 +1615,30 @@ async def test_wake_authorizes_manager_to_worker_too(actions: Actions, tmp_path:
                           message="status?",
                           settings=_settings(enabled=True, sense=str(sense)),
                           spawn=_spawn, windows=_no_windows)
-    assert d["status"] == "delivered" and d["seat"] == worker_seat
+    assert d["status"] == "delivered" and d["seat"] == worker_seat and d["observed"] is True
+
+
+async def test_wake_reports_queued_when_the_marker_never_lands(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """THE OUTCOME-READ'S WHOLE POINT (ruling 986b12f0): a daemon/resume success is a QUEUE
+    success, not a SEEN one. When the marker never appears in the target's transcript (the
+    ordinary case in these tests, since the mocked spawn/nudge writes nothing real), wake()
+    must NOT claim "delivered" — it downgrades honestly to "queued", unconfirmed."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    worker_seat, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        pass  # never writes the marker anywhere — nothing "lands"
+
+    d = await wake_worker(actions, caller="agent:sender", target=manager_seat,
+                          message="blocked, need your word",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_spawn, windows=_no_windows)
+    assert d["raw_mode"] == "resumed"  # dispatch_dm itself still reports success...
+    assert d["status"] == "queued" and d["observed"] is False  # ...but wake() won't inherit it
+    assert "not yet confirmed" in d["detail"].lower()
 
 
 async def test_wake_never_calls_mid_turn_delivered(

@@ -986,6 +986,80 @@ async def _managed_edge(pool: asyncpg.Pool, seat_a: str, seat_b: str) -> bool:
         seat_a, seat_b))
 
 
+# THE PROVENANCE MARKER (ruling 986b12f0): the harness stamps EVERY arrival in a session's
+# input buffer origin.kind='human', regardless of who actually wrote it — an agent's
+# injection and a person's typing share one socket and one key, with no technical mark
+# distinguishing them. wake() is the choke point every future knock in this house passes
+# through, so the marker is minted HERE, once, rather than trusted to each caller.
+_WAKE_MARKER_FMT = "[osiris-wake from={who} seat={seat}]"
+
+
+def _wake_marker(caller: str, caller_seat: str, caller_handle: str | None) -> str:
+    """A single, stable, machine-parseable first line naming who actually wrote this turn —
+    never the harness's own label, which cannot tell an agent's hand from a person's."""
+    who = f"{caller_handle} ({caller})" if caller_handle else caller
+    return _WAKE_MARKER_FMT.format(who=who, seat=caller_seat)
+
+
+_MARKER_TAIL_BYTES = 65_536
+
+
+def _marker_landed_sync(root: Path, sid_prefix: str, marker: str) -> bool:
+    """Sync (runs via to_thread): has `marker` landed as a SUBMITTED user turn anywhere
+    under `sid_prefix`'s transcript(s) — never assumed from a queue op (ruling 986b12f0:
+    reply() returning True means QUEUED, not SEEN; the operator has watched an injected
+    turn erased by a keystroke before it ever submitted). Only a "type":"user" line whose
+    OWN content carries the marker counts."""
+    if not sid_prefix or not marker:
+        return False
+    for t in root.expanduser().glob(f"*/{sid_prefix}*.jsonl"):
+        try:
+            size = t.stat().st_size
+            with t.open("rb") as f:
+                f.seek(max(0, size - _MARKER_TAIL_BYTES))
+                tail = f.read().decode("utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in reversed(tail.splitlines()):
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(obj, dict) or obj.get("type") != "user":
+                continue
+            msg = obj.get("message")
+            content = msg.get("content") if isinstance(msg, dict) else None
+            text = content if isinstance(content, str) else json.dumps(content)
+            if marker in text:
+                return True
+    return False
+
+
+async def _verify_landed(
+    pool: asyncpg.Pool, target_seat: str, marker: str, settings: Settings | None,
+) -> bool:
+    """Best-effort OUTCOME-READ (ruling 986b12f0: never let a receipt claim an effect nobody
+    observed). A narrow, READ-ONLY re-check of the already-resolved holder's newest
+    transcript — not a second resolver: dispatch_dm's own resolution walk (rate brakes, the
+    crossed-registry guard, the daemon job listing) is never repeated here, only the marker's
+    actual arrival is confirmed."""
+    from src.orchestrator.seats import seat_receipt
+
+    st = settings or get_settings()
+    holder = (await seat_receipt(pool, target_seat) or {}).get("holder")
+    if not holder:
+        return False
+    row = await pool.fetchrow(
+        "SELECT job_dir FROM agent_mounts WHERE agent_id=$1 "
+        "ORDER BY last_seen DESC NULLS LAST LIMIT 1", holder)
+    if row is None or not row["job_dir"]:
+        return False
+    sid_prefix = Path(row["job_dir"]).name
+    root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
+        else Path.home() / ".claude" / "projects"
+    return await asyncio.to_thread(_marker_landed_sync, root, sid_prefix, marker)
+
+
 # dispatch_dm's mode → wake()'s honest vocabulary. Anything not named here (queued-*, braked,
 # skipped-*, settled, held, window-busy) is a rate brake, a pause, or an in-flight wake already
 # covering it — all genuinely "queued", and `detail`/`raw_mode` carry the specific reason so
@@ -1011,15 +1085,20 @@ async def wake_worker(
     the operator's real override stays out-of-band, their own hand in the window (Thoth,
     msg 989).
 
-    On authorization, this posts `message` as a graded ask (a wake IS a request for
-    attention) addressed to the target's SEAT — the same address the gate just verified —
-    and dispatches it through dispatch_dm, the exact path send() uses for every DM. Returns
-    a receipt that never says "delivered" for anything less than an actual live push."""
+    On authorization, this posts `message` — prefixed with a self-identifying provenance
+    marker (ruling 986b12f0: the harness cannot tell an agent's injection from a person's
+    typing, so this refuses to hide behind that label) — as a graded ask (a wake IS a
+    request for attention) addressed to the target's SEAT, and dispatches it through
+    dispatch_dm, the exact path send() uses for every DM. A "delivered" status is only ever
+    returned once the marker is CONFIRMED landed as a submitted turn in the target's own
+    transcript — a queued injection that hasn't (yet, or ever) been seen reports honestly
+    as "queued", never as an effect nobody observed."""
     from src.orchestrator.agents import house_of
     from src.orchestrator.seats import held_seat
 
     pool = actions.pool
-    caller_seat = (await held_seat(pool, caller) or {}).get("seat_id")
+    caller_held = await held_seat(pool, caller)
+    caller_seat = (caller_held or {}).get("seat_id")
     if caller_seat is None:
         return {"mode": "refused-not-your-worker",
                 "detail": f"{caller} holds no seat — wake() is a seat-to-seat act; an "
@@ -1035,14 +1114,26 @@ async def wake_worker(
                           "in either direction — wake() only knocks within a manager<->worker "
                           "pair; peers and cross-house traffic route through a manager or the "
                           "operator's desk"}
+    marker = _wake_marker(caller, caller_seat, (caller_held or {}).get("handle"))
+    body = f"{marker}\n\n{message}"
     res = await send_message(pool, from_agent=caller, from_project=await house_of(pool, caller),
-                             to_agent=target_seat, body=message, grade="ask")
+                             to_agent=target_seat, body=body, grade="ask")
     d = await dispatch_dm(pool, addressee=res["to_agent"], msg_id=res["id"], sender=caller,
                           settings=settings, spawn=spawn, windows=windows, poke=poke,
                           jobs=jobs, nudge=nudge)
     mode = d.get("mode", "")
-    return {"message_id": res["id"], "seat": target_seat, "raw_mode": mode,
-            "status": _WAKE_STATUS.get(mode, "queued"), "detail": d.get("detail", mode)}
+    status = _WAKE_STATUS.get(mode, "queued")
+    out: dict[str, Any] = {"message_id": res["id"], "seat": target_seat, "raw_mode": mode,
+                           "status": status, "detail": d.get("detail", mode)}
+    if status == "delivered":
+        observed = await _verify_landed(pool, target_seat, marker, settings)
+        out["observed"] = observed
+        if not observed:
+            out["status"] = "queued"
+            out["detail"] = (f"{d.get('detail', mode)} — injected but NOT YET CONFIRMED as a "
+                             "submitted turn (a queued injection is not a seen one); it may "
+                             "still land, or may never have been submitted at all")
+    return out
 
 
 def _receipt_path(job_dir: str | None, resume_session: str | None) -> Path | None:
