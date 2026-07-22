@@ -57,6 +57,7 @@ from src.orchestrator.agents import (
 from src.orchestrator.budget import fit
 from src.orchestrator.console import get_console as _get_console
 from src.orchestrator.console import set_console as _set_console
+from src.orchestrator.describe import describe_table
 from src.orchestrator.dossier import entity_dossier
 from src.orchestrator.fleetview import render_fleet_tree
 from src.orchestrator.mailbox import (
@@ -657,6 +658,17 @@ async def get_schema() -> dict[str, Any]:
         ],
         "categories": cat["categories"],
     }
+
+
+@mcp.tool()
+async def describe(table: str) -> dict[str, Any]:
+    """A table's ACTUAL Postgres shape — columns (name/type/nullable/default), in column
+    order, plus indexes (name/definition) — straight off information_schema/pg_indexes.
+    get_schema answers a DIFFERENT question (the ontology this app's code declares: object/
+    link types, categories, canonical schemes); this answers what the DATABASE actually has,
+    for when you need a real column name or type before hand-writing SQL. Returns
+    `exists: false` (never a silently-empty shape) when `table` doesn't match anything real."""
+    return await describe_table(await _pool_get(), table)
 
 
 # --- collect (federate a base) ----------------------------------------------
