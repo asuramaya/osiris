@@ -847,3 +847,84 @@ async def test_backfill_only_seats_scopes_the_write(actions: Actions) -> None:
     assert out["bound"] == 1
     assert (await held_seat(actions.pool, scoped_agent) or {}).get("seat_id") == scoped_seat
     assert await held_seat(actions.pool, other_agent) is None  # untouched — out of scope
+
+
+# ═══ THE HOLE STOPS REGENERATING (Khnum's tail of 9f566244/749bf530) ═══════════════════════
+# The backfill above cures every orphan seat that exists TODAY. But mint_heir's automatic
+# succession is the one path that fires on every compaction/model-swap/session-death without
+# anyone asking — and until now it only ever MOVED an existing holds link (follow_binding),
+# never created one from nothing. Left alone, the very next mint of an already-orphaned
+# lineage would re-open the identical hole the backfill just closed. These tests exercise
+# mint_heir directly against the same pre-binding-era shape _legacy_unbound_seat builds.
+
+
+async def test_mint_heir_binds_a_never_claimed_orphan_seat(actions: Actions) -> None:
+    """An heir minted for a handle that names an EXISTING, still-unbound Seat binds to it as
+    part of the mint itself — the same self-heal claim_name performs explicitly, now running
+    at the one moment nobody has to think to call it."""
+    seat_id, agent_id = await _legacy_unbound_seat(actions, handle="Tefnut")
+    assert await held_seat(actions.pool, agent_id) is None       # confirm the orphan shape
+    anc = await actions.create_or_find_object("Agent", agent_id, agent_id)
+
+    heir, _heir_oid = await mint_heir(actions, agent_id, anc, because="compaction",
+                                      succession=None)
+
+    bound = await held_seat(actions.pool, heir)
+    assert bound is not None
+    assert bound["seat_id"] == seat_id and bound["handle"] == "Tefnut"
+
+
+async def test_mint_heir_leaves_an_actively_held_seat_alone(actions: Actions) -> None:
+    """The bind-if-unbound path only fires when the seat is TRULY unbound — a lineage whose
+    seat is already properly bound (the common case, via claim_name) keeps riding
+    follow_binding exactly as before; the new code never double-writes or races it."""
+    from src.orchestrator.agents import claim_name
+
+    anc = await actions.create_or_find_object("Agent", "agent:xxww0001", "test")
+    await actions.assert_property(anc, "project", "osiris", "test", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+    claimed = await claim_name(actions, "agent:xxww0001", "Serqet", source="test")
+    seat_id = claimed["seat_id"]
+
+    heir, _heir_oid = await mint_heir(actions, "agent:xxww0001", anc, because="compaction",
+                                      succession=None)
+
+    bound = await held_seat(actions.pool, heir)
+    assert bound is not None and bound["seat_id"] == seat_id
+    assert not await _active_holds(actions, "agent:xxww0001", seat_id)  # healed, not doubled
+
+
+async def test_mint_heir_never_mints_a_seat_that_never_existed(actions: Actions) -> None:
+    """Bind-if-unbound closes a hole that already has a NAME — it must never MINT a new Seat
+    object (ensure_seat's own law: minting is deliberate, only at a claim or an attach, never
+    an automatic sweep). A handle with no Seat object stays exactly that plain."""
+    anc = await actions.create_or_find_object("Agent", "agent:noseat01", "test")
+    now = datetime.now(UTC)
+    await actions.assert_property(anc, "project", "osiris", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(anc, "handle", "Sobek", "test", now, 0.9,
+                                  evidence_class="self_declared")
+
+    heir, _heir_oid = await mint_heir(actions, "agent:noseat01", anc, because="compaction",
+                                      succession=None)
+
+    assert await find_seat(actions.pool, house="osiris", handle="Sobek") is None
+    assert await held_seat(actions.pool, heir) is None
+
+
+async def test_mint_heir_orphan_bind_is_idempotent_across_successions(actions: Actions) -> None:
+    """A SECOND mint of the now-bound lineage rides follow_binding forward exactly as it
+    always has — the orphan-bind fires once, at the mint that actually closes the hole, and
+    every later succession is the ordinary case."""
+    seat_id, agent_id = await _legacy_unbound_seat(actions, handle="Neith")
+    anc = await actions.create_or_find_object("Agent", agent_id, agent_id)
+    heir, heir_oid = await mint_heir(actions, agent_id, anc, because="compaction",
+                                     succession=None)
+    assert (await held_seat(actions.pool, heir) or {}).get("seat_id") == seat_id
+
+    heir2, _heir2_oid = await mint_heir(actions, heir, heir_oid, because="compaction",
+                                        succession=None)
+
+    bound2 = await held_seat(actions.pool, heir2)
+    assert bound2 is not None and bound2["seat_id"] == seat_id
+    assert not await _active_holds(actions, heir, seat_id)  # healed forward, one active link

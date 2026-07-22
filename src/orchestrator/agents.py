@@ -801,6 +801,27 @@ async def mint_heir(
     # seat on a corpse. The old link heals by valid_until; holder history stays walkable.
     from src.orchestrator.seats import follow_binding
     await follow_binding(actions, ancestor_oid=ancestor_oid, heir=heir, heir_oid=a, now=now)
+    # THE HOLE STOPS REGENERATING (Khnum's tail, 9f566244/749bf530): follow_binding above only
+    # MOVES a holds link the lineage already carries — a seat whose original claim predates the
+    # Seat-object binding (5cef856b) never got one in the first place, and NOTHING automatic
+    # ever calls claim_name for it. The backfill cures every such seat that exists today; left
+    # here, the very next mint of that same lineage would re-open the identical hole, forever,
+    # because mint_heir fires on every compaction/model-swap/session-death and nobody asks it
+    # to. So: if the handle just inherited names an EXISTING Seat object with no active holder
+    # anywhere, bind it now — the same self-heal claim_name performs explicitly, run at the one
+    # moment that requires no one to think to call it. NEVER mints a new Seat (ensure_seat's own
+    # law: minting is deliberate, only at a claim or an attach) — this only closes a hole that
+    # already has a name.
+    if inherited and house:
+        from src.orchestrator.seats import bind_holder, find_seat
+        legacy_seat = await find_seat(actions.pool, house=house, handle=inherited)
+        if legacy_seat:
+            already_bound = await actions.pool.fetchval(
+                "SELECT 1 FROM links l JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 "
+                "AND l.type='holds' AND (l.valid_until IS NULL OR l.valid_until > now()) "
+                "LIMIT 1", legacy_seat)
+            if not already_bound:
+                await bind_holder(actions, seat_id=legacy_seat, agent_id=heir, source=heir)
     await actions.pool.execute(
         "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
         heir, ancestor_id)
