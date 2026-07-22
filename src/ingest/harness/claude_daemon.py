@@ -95,7 +95,16 @@ async def job_for(ids: set[str]) -> dict[str, Any] | None:
 
 async def reply(job: dict[str, Any], text: str) -> bool:
     """Inject `text` as the job's next turn — daemon-owned, chrome-visible. True only on
-    the daemon's own {ok:true}; every failure is False and the caller falls through."""
+    the daemon's own {ok:true}; every failure is False and the caller falls through.
+
+    ⚠ FLAGGED ILLEGAL — TEMPORARY (ruling 482c3d0f, operator 2026-07-22). This is THE RCE
+    PRIMITIVE: it rides the Claude-harness daemon SIDE CHANNEL (op='reply'), the confirmed
+    turn-injection hole disclosed to Anthropic via HackerOne. It WORKS NOW and is used as-is,
+    but it is to be BROKEN by a future harness patch and REPLACED by a sanctioned inter-agent
+    API — do NOT build new machinery on it or invest in proving the concept. The injectable
+    `nudge` parameter in trigger.trigger_mail_tick is the interface seam a sanctioned API
+    swaps into with no other change. (`job_for` above is a READ of daemon job state — the
+    authoritative liveness Ra's reachability read consults — and is NOT this side channel.)"""
     key = _control_key()
     raw = str(job.get("_sock") or "")
     short = str(job.get("short") or "")

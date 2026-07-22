@@ -739,6 +739,12 @@ async def dispatch_dm(
     windows = windows or _manager_windows
     poke = poke or _poke_window
     if jobs is None or nudge is None:
+        # ⚠ THE FLAGGED-ILLEGAL INJECT SEAM (ruling 482c3d0f, operator 2026-07-22): `nudge`
+        # defaults to claude_daemon.reply — the RCE turn-injection SIDE CHANNEL disclosed to
+        # Anthropic, temporary and to be replaced by the sanctioned inter-agent API. `nudge`
+        # IS the interface: a sanctioned API drops in here with no other change; do not build
+        # new machinery on the default. `jobs` (job_for) is a benign READ of daemon liveness
+        # (the authoritative state Ra's reachability read consults), NOT the side channel.
         from src.ingest.harness import claude_daemon
         jobs = jobs or claude_daemon.job_for
         nudge = nudge or claude_daemon.reply
