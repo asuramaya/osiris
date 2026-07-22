@@ -371,39 +371,30 @@ async def fleet_pulse(
     """One glance line for orient — 'N live · owed X · briefs Y · wakes K/h'. The caller
     omits the key on any failure (the pulse must never slow or crash orient).
 
-    SAME WORD, SAME NUMBER (operator ruling 2026-07-19: 'the chrome and the harness
-    disagree on briefs, mail, owe'): every figure here comes from the shared authorities —
-    `live` counts seated SOULS (vitals.live_souls — the visitor gate's discriminator, the
-    chrome pill's exact number); `owed` is the desk page's red YOU-OWE (vitals.
-    operator_debts); `briefs` counts undismissed desk cards with the page's own fold
-    (mailbox.desk_briefs_total). The old inline copies drifted three ways; they are gone."""
-    from src.orchestrator.mailbox import desk_briefs_total
-    from src.orchestrator.vitals import live_souls, operator_debts, wakes_hour
+    A THIN VIEW over the shared segment authority (surface.py, ruling e9ef7373, thread
+    109b6c48 — the render analog of the write-verb receipt law): `live`/`owed`/
+    `briefs_total`/`wakes`/`spend` are the fleet-wide-scoped variants (this line has no
+    project of its own to narrow to — orient() calls it unscoped). ALL thresholds and
+    presentation rules live in surface.py now; this function only picks its five segments
+    and formats them the way this line has always read.
 
-    live = await live_souls(pool, live_secs=live_secs)
-    owed = (await operator_debts(pool))["owed"]
-    briefs = await desk_briefs_total(pool)
-    wakes = await wakes_hour(pool)
-    vis = f"+{live['visitors']} " if live["visitors"] else ""
-    # THE PRICE ON THE PULSE (task #26's last mile, 2026-07-19): the ceiling has gated the
-    # spenders since 07-13, but its number was invisible — 'nobody has ever measured what
-    # a healthy Osiris costs per day' stays fixed only if the measurement is AMBIENT. One
-    # authority (ceiling.ceiling — the very read the gate itself uses), never a copy.
-    # BUT ONLY WHEN THE DOLLARS ARE REAL (Thoth LIII 2026-07-21): on a subscription the CLI's
-    # cost is notional — not a small price, not a measurement at all — so we show NOTHING rather
-    # than a phantom '$X/$10' that reads as an over-budget stop. The segment returns the day
-    # Osiris runs on a keyed API backend (spend_is_metered), where the figure is a real debit.
-    from src.config.settings import get_settings
-    from src.ingest.providers import spend_is_metered
-    from src.orchestrator.ceiling import ceiling
+    ONE DELIBERATE EXCEPTION, disclosed rather than silently unified: this pulse has NEVER
+    gated spend on a threshold — it shows the day's figure whenever spend is metered, full
+    stop (unlike the statusline's dark-until-60%-of-cap convention). So this reads
+    `seg.spend.data['metered']` directly rather than `seg.spend.show`."""
+    from src.orchestrator import surface
+
+    seg = await surface.fetch(pool, lease_secs=lease_secs, live_secs=live_secs)
+    vis = f"+{seg.live.data['visitors']} " if seg.live.data["visitors"] else ""
     spend_tail = ""
-    if spend_is_metered(get_settings()):
-        c = await ceiling(pool, cap=get_settings().osiris_daily_usd)
-        spend = "$∞" if c.unlimited else f"${c.spent:.2f}/${c.cap:.0f}"
-        blind = f" ⚠{c.blind} unpriced" if c.blind else ""
+    if seg.spend.data.get("metered"):
+        d = seg.spend.data
+        spend = "$∞" if d["unlimited"] else f"${d['spent']:.2f}/${d['cap']:.0f}"
+        blind = f" ⚠{d['blind']} unpriced" if d["blind"] else ""
         spend_tail = f" · {spend} day{blind}"
-    return (f"{live['souls']} live {vis}· owed {owed} · briefs {briefs} "
-            f"· wakes {wakes}/h{spend_tail}")
+    return (f"{seg.live.data['souls']} live {vis}· owed {seg.owed.data['owed']} "
+            f"· briefs {seg.briefs_total.data['briefs']} · wakes {seg.wakes.data['wakes']}/h"
+            f"{spend_tail}")
 
 
 async def while_away(
