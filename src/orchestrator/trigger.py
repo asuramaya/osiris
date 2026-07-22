@@ -1222,6 +1222,195 @@ async def wake_worker(
     return out
 
 
+# ═══ launch() — THE BODY VERB (thread 9f566244 piece D; ruling 43b84c5e) ══════════════════════
+# wake() speaks to a body that already EXISTS; launch() CREATES one. It is a thin authority
+# layer over the manager daemon's pty_spawn (src/manager/daemon.py), which already does the hard
+# parts: identity-at-birth (the seat's one-time attach token in the child env, so it self-binds
+# before its first breath — §4.2/5cef856b), the cgroup envelope (born bounded or not at all),
+# window metadata for mail-routing, the lease gate, and the room-busy advisory. This verb adds
+# only what pty_spawn deliberately lacks: (1) a managed_by authority gate, DOWNWARD-ONLY — a
+# manager bodies a seat it manages; a worker may wake its manager (16722273) but never spawn one
+# a body (78e3734e); (2) the [TAG] Handle naming; (3) idempotency (a live body is RETURNED, never
+# twinned); (4) Ra's honest receipt (53ae1a87): body_exists and can_receive are SEPARATE states,
+# each an independent READ, never one collapsed boolean. Creating a body is NOT the frozen reply
+# lane — pty_spawn spawns a fresh `claude`, the same act the MINT lane already performs; it
+# injects no turn into anyone's live session.
+
+
+async def _manages(pool: asyncpg.Pool, manager_seat: str, worker_seat: str) -> bool:
+    """DOWNWARD authority (78e3734e): an active managed_by edge FROM worker TO manager
+    (managed_by is minted worker→manager, mintseat.py). launch() is downward-only — a birth is
+    not a knock: a worker may wake its manager but may never spawn it a body."""
+    return bool(await pool.fetchval(
+        "SELECT 1 FROM links l JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
+        "WHERE l.type='managed_by' AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "AND f.canonical=$1 AND t.canonical=$2", worker_seat, manager_seat))
+
+
+async def _seat_facts(pool: asyncpg.Pool, seat_id: str) -> dict[str, Any]:
+    """A target Seat's display + office facts (handle, house, anchor_cwd) by WINNING assertions —
+    the office is the room the body is born in, the house names its [TAG]."""
+    def _win(name: str) -> str:
+        return ("(SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
+                f"ON o.id=a.object_id WHERE o.canonical=$1 AND a.name='{name}' "
+                "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)")
+    row = await pool.fetchrow(
+        f"SELECT {_win('handle')} AS handle, {_win('house')} AS house, "
+        f"{_win('anchor_cwd')} AS anchor_cwd", seat_id)
+    if row is None:
+        return {"handle": None, "house": None, "anchor_cwd": None}
+    return {"handle": row["handle"], "house": row["house"], "anchor_cwd": row["anchor_cwd"]}
+
+
+async def _manager_control(req: dict[str, Any]) -> dict[str, Any]:
+    """One manager control op (the injectable default; tests supply their own). Raises on a dark
+    daemon — launch_seat catches it and reports 'manager-cold' honestly, never a false success."""
+    from src.manager.client import manager_call
+    return await manager_call(req)
+
+
+def _house_tag(house: str | None) -> str:
+    """The window's [TAG] prefix — the operator's front-door naming ('[OS] Thoth', c8da5a52). A
+    simple house-derived short code for now (osiris→OS); a real house→tag map is a later
+    refinement, flagged in the launch() build."""
+    h = (house or "").strip()
+    return h[:2].upper() if h else "OS"
+
+
+def _launch_anchor(seat_id: str) -> str:
+    """A STABLE durable anchor per SEAT (not per launch) — a re-launched seat re-wears its own
+    anchor, the same 'one ghost, re-worn' discipline _wake_job_dir uses per project. The seat
+    (via its attach token) is the true identity; this is the session anchor the trigger keys
+    its mail-window routing on, so it must match the window's own job_dir metadata."""
+    return str(Path.home() / ".claude" / "jobs" / seat_id.replace(":", "-"))
+
+
+async def launch_seat(
+    actions: Actions, *, caller: str, target: str, message: str = "",
+    model: str | None = None, settings: Settings | None = None,
+    manager: Any = None, windows: Any = None,
+) -> dict[str, Any]:
+    """Give a seat a BODY. Downward-only, managed_by-gated (a manager bodies a seat it manages).
+    Idempotent: a live window for the seat is RETURNED, never twinned. The receipt reports
+    body_exists and can_receive SEPARATELY, each from an independent read — Ra's requirement
+    (53ae1a87): a launch that returns success must mean a body exists AND can receive, and where
+    those are separable states the verb must not collapse them into one lying boolean.
+
+    THE OPERATOR NEVER CALLS THIS (no operator param, exactly like wake): an override a caller can
+    assert in an argument is an override that can be forged; the operator's hand stays out-of-band.
+    `manager`/`windows` are injected so tests assert the DECISION without a live daemon."""
+    pool = actions.pool
+    from src.orchestrator.agents import house_of
+    from src.orchestrator.seats import held_seat
+    manager = manager or _manager_control
+    windows = windows or _manager_windows
+
+    caller_held = await held_seat(pool, caller)
+    caller_seat = (caller_held or {}).get("seat_id")
+    if caller_seat is None:
+        return {"status": "refused-not-your-worker",
+                "detail": f"{caller} holds no seat — launch is a seat-to-seat act; an unseated "
+                          "caller has no managed_by relationship to invoke it with"}
+    target_seat = await _seat_for_target(actions, target)
+    if target_seat is None:
+        return {"status": "refused-not-your-worker",
+                "detail": f"'{target}' resolves to no living Seat — launch bodies a seat, and "
+                          "managed_by is Seat-to-Seat"}
+    if not await _manages(pool, caller_seat, target_seat):
+        return {"status": "refused-not-your-worker",
+                "detail": f"no active managed_by edge from {target_seat} up to {caller_seat} — "
+                          "launch is DOWNWARD-ONLY (78e3734e): you may only body a seat you "
+                          "manage; a worker cannot spawn its manager a body"}
+
+    facts = await _seat_facts(pool, target_seat)
+    handle, house, office = facts["handle"], facts["house"], facts["anchor_cwd"]
+    if not handle:
+        return {"status": "refused-no-handle",
+                "detail": f"{target_seat} carries no handle assertion — a body cannot be named "
+                          "for a nameless seat"}
+    if not office:
+        return {"status": "refused-no-office",
+                "detail": f"{handle} ({target_seat}) has no anchor_cwd — establish_office first; "
+                          "a body needs a room to be born in"}
+
+    # IDEMPOTENCY — a live window already holding this seat is RETURNED, never twinned (the
+    # one-body-at-a-time discipline; Ra's stale-liveness collision, b3a86a7d). Fail-open on a dark
+    # daemon: an empty roster means nothing to collide with, and the spawn below reports its state.
+    try:
+        roster = await windows()
+    except (OSError, TimeoutError, ValueError):
+        roster = []
+    for w in roster:
+        if isinstance(w, dict) and w.get("seat_id") == target_seat and w.get("alive"):
+            return {"status": "already-live", "window": w.get("name"), "seat": target_seat,
+                    "body_exists": True, "can_receive": True,
+                    "detail": f"a live body already holds {handle} — not minting a twin"}
+
+    st = settings or get_settings()
+    argv = ["claude"]
+    argv_model = model or st.osiris_wake_model or None
+    if argv_model:
+        argv += ["--model", argv_model]
+    name = f"[{_house_tag(house)}] {handle}"
+    anchor = _launch_anchor(target_seat)
+    # A FULL env, minus the launcher's own CLAUDE_JOB_DIR (never inherit an anchor — the
+    # collision class, 2294e95d), plus the body's own stable anchor so it matches the window's
+    # job_dir metadata. pty_spawn adds OSIRIS_SEAT_ID + OSIRIS_ATTACH_TOKEN on top (identity at
+    # birth); a child with only those two vars has no PATH, so the real environ is the base.
+    child_env = {k: v for k, v in os.environ.items() if k != "CLAUDE_JOB_DIR"}
+    child_env["CLAUDE_JOB_DIR"] = anchor
+
+    try:
+        res = await manager({
+            "op": "pty_spawn", "name": name, "argv": argv, "cwd": office,
+            "seat": {"handle": handle, "house": house}, "job_dir": anchor, "env": child_env})
+    except (OSError, TimeoutError, ValueError) as exc:
+        return {"status": "manager-cold", "seat": target_seat,
+                "detail": f"the manager daemon is unreachable ({exc}) — ask the operator to start "
+                          "osiris-manager; NOTHING was spawned"}
+    if not isinstance(res, dict) or res.get("error"):
+        return {"status": "refused-spawn", "seat": target_seat,
+                "detail": (res.get("error") if isinstance(res, dict) else str(res))
+                or "the manager refused the spawn"}
+
+    spawned = res.get("spawned")
+    # RA'S RECEIPT (53ae1a87): body_exists is the spawn's own word; can_receive is a SEPARATE,
+    # independent READ. A fresh claude takes seconds to boot and self-mount, so at THIS instant
+    # the window exists but is almost never live yet — the two are never one boolean.
+    alive = False
+    try:
+        for w in await windows():
+            if isinstance(w, dict) and w.get("name") == spawned and w.get("alive"):
+                alive = True
+                break
+    except (OSError, TimeoutError, ValueError):
+        pass
+
+    # THE OPENING BRIEF rides the ordinary mail→poke lane, never a hand-forged turn: sent as a
+    # graded ask to the new seat, the trigger types it into the fresh window once it is alive.
+    brief_id: int | None = None
+    if message.strip():
+        sent = await send_message(
+            pool, from_agent=caller, from_project=await house_of(pool, caller),
+            to_agent=target_seat, body=message, grade="ask")
+        brief_id = sent.get("id")
+
+    out: dict[str, Any] = {
+        "status": "launched", "window": spawned, "seat": res.get("seat_id", target_seat),
+        "body_exists": bool(spawned), "can_receive": alive,
+        "detail": ("body created and live" if alive else
+                   "body created; mount NOT yet confirmed — the claude is booting and will "
+                   "self-bind via its attach token; confirm with pty_list / occupancy"),
+    }
+    if brief_id is not None:
+        out["brief_message_id"] = brief_id
+    if res.get("room_busy"):
+        out["room_busy"] = res["room_busy"]
+        if res.get("room_busy_note"):
+            out["room_busy_note"] = res["room_busy_note"]
+    return out
+
+
 def _receipt_path(job_dir: str | None, resume_session: str | None) -> Path | None:
     """Where this wake drops the CLI's cost envelope. None when we have nowhere to put it — and
     a wake with nowhere to put its receipt is a wake nobody can ever cost, which the log says

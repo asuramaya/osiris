@@ -1918,3 +1918,177 @@ async def test_wake_buckets_every_unnamed_mode_as_queued(
                           settings=_settings(enabled=True))
     assert d["status"] == "queued" and d["raw_mode"] == "braked"
     assert "rate brake" in d["detail"]
+
+
+# ═══ launch() — THE BODY VERB (thread 9f566244 piece D; ruling 43b84c5e) ══════════════════════
+# launch() is the CREATE twin of wake()'s speak: it summons a fresh claude into a managed seat's
+# own office via the manager daemon's pty_spawn. These tests pin the authority gate (DOWNWARD-
+# ONLY, unlike wake's either-direction knock), idempotency (never a twin), the honest body_exists-
+# vs-can_receive receipt (Ra's requirement, 53ae1a87), and graceful failure on a dark daemon. The
+# manager socket is INJECTED, so nothing here spawns a real body.
+
+
+def _fake_manager(record: list[dict[str, Any]], *, ret: dict[str, Any] | None = None,
+                  raises: BaseException | None = None) -> Any:
+    async def _m(req: dict[str, Any]) -> dict[str, Any]:
+        record.append(req)
+        if raises is not None:
+            raise raises
+        return ret if ret is not None else {"spawned": req["name"]}
+    return _m
+
+
+def _fake_windows(rows: list[dict[str, Any]]) -> Any:
+    async def _w() -> list[dict[str, Any]]:
+        return list(rows)
+    return _w
+
+
+async def _office(actions: Actions, seat_id: str, cwd: str) -> None:
+    """Give a seat an anchor_cwd (its office) — _managed_pair leaves it unset."""
+    oid = await actions.create_or_find_object("Seat", seat_id, "test")
+    await actions.assert_property(oid, "anchor_cwd", cwd, "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+
+
+async def test_launch_refuses_an_unseated_caller(actions: Actions) -> None:
+    """No held seat, no birth — launch is a seat-to-seat act. Returns before any daemon touch."""
+    d = await trigger_module.launch_seat(actions, caller="agent:nobody01", target="seat:whatever")
+    assert d["status"] == "refused-not-your-worker" and "holds no seat" in d["detail"]
+
+
+async def test_launch_refuses_a_seatless_target(actions: Actions) -> None:
+    await _managed_pair(actions, worker_agent="agent:lw01", manager_agent="agent:lm01")
+    record: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:lm01", target="agent:has-no-seat",
+        manager=_fake_manager(record), windows=_fake_windows([]))
+    assert d["status"] == "refused-not-your-worker" and "no living Seat" in d["detail"]
+    assert record == []  # nothing spawned
+
+
+async def test_launch_is_downward_only_a_worker_cannot_body_its_manager(actions: Actions) -> None:
+    """THE distinction from wake(): a worker may WAKE its manager (16722273) but may never
+    LAUNCH it a body (78e3734e). The stored edge is worker→manager, so the worker does not
+    MANAGE the manager — refused, nothing spawned."""
+    _worker_seat, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:dw01", manager_agent="agent:dm01")
+    record: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:dw01", target=manager_seat,
+        manager=_fake_manager(record), windows=_fake_windows([]))
+    assert d["status"] == "refused-not-your-worker" and "DOWNWARD-ONLY" in d["detail"]
+    assert record == []
+
+
+async def test_launch_refuses_a_seat_with_no_office(actions: Actions) -> None:
+    """A seat with no anchor_cwd has no room to be born in — refused, nothing spawned."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:ow01", manager_agent="agent:om01")
+    record: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:om01", target=worker_seat,
+        manager=_fake_manager(record), windows=_fake_windows([]))
+    assert d["status"] == "refused-no-office" and record == []
+
+
+async def test_launch_bodies_a_managed_seat_with_an_honest_receipt(actions: Actions) -> None:
+    """The core: a manager bodies a seat it manages. body_exists is true (the window was made);
+    can_receive is FALSE at the spawn instant (the fresh claude has not booted), reported
+    SEPARATELY (Ra, 53ae1a87). The manager op is a pty_spawn naming the seat, into its office,
+    carrying the seat's own anchor (never the launcher's)."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:sw01", manager_agent="agent:sm01",
+        worker_handle="Tefnut", house="osiris")
+    await _office(actions, worker_seat, "/home/asuramaya/.osiris/seats/tefnut")
+    record: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:sm01", target=worker_seat,
+        manager=_fake_manager(record), windows=_fake_windows([]))
+    assert d["status"] == "launched"
+    assert d["body_exists"] is True and d["can_receive"] is False
+    assert "NOT yet confirmed" in d["detail"] and "self-bind" in d["detail"]
+    assert len(record) == 1
+    req = record[0]
+    assert req["op"] == "pty_spawn"
+    assert req["name"] == "[OS] Tefnut"
+    assert req["argv"][0] == "claude"
+    assert req["cwd"] == "/home/asuramaya/.osiris/seats/tefnut"
+    assert req["seat"] == {"handle": "Tefnut", "house": "osiris"}
+    assert req["env"]["CLAUDE_JOB_DIR"] == req["job_dir"]  # the body's anchor, not inherited
+
+
+async def test_launch_can_receive_true_when_the_window_comes_up_live(actions: Actions) -> None:
+    """When the post-spawn READ shows the window ALIVE, can_receive is true — the separate read
+    is real, not a hard-coded false."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:cw01", manager_agent="agent:cm01",
+        worker_handle="Nut", house="osiris")
+    await _office(actions, worker_seat, "/tmp/nut")
+    name = "[OS] Nut"
+    calls = {"n": 0}
+
+    async def _w() -> list[dict[str, Any]]:
+        calls["n"] += 1
+        if calls["n"] == 1:  # the idempotency check — nothing live yet
+            return []
+        return [{"name": name, "alive": True, "seat_id": worker_seat}]  # the liveness read
+
+    record: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:cm01", target=worker_seat,
+        manager=_fake_manager(record, ret={"spawned": name}), windows=_w)
+    assert d["status"] == "launched"
+    assert d["body_exists"] is True and d["can_receive"] is True
+    assert d["detail"] == "body created and live"
+
+
+async def test_launch_is_idempotent_returns_the_live_window_not_a_twin(actions: Actions) -> None:
+    """A live body already holds the seat → RETURN it, never spawn a twin (Ra's stale-liveness
+    collision, b3a86a7d). The manager op is never called."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:iw01", manager_agent="agent:im01",
+        worker_handle="Geb", house="osiris")
+    await _office(actions, worker_seat, "/tmp/geb")
+    record: list[dict[str, Any]] = []
+    existing = _fake_windows([{"name": "[OS] Geb", "alive": True, "seat_id": worker_seat}])
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:im01", target=worker_seat,
+        manager=_fake_manager(record), windows=existing)
+    assert d["status"] == "already-live"
+    assert d["body_exists"] is True and d["can_receive"] is True
+    assert record == []  # NO twin spawned
+
+
+async def test_launch_reports_manager_cold_when_the_daemon_is_dark(actions: Actions) -> None:
+    """A dark manager daemon → an honest 'manager-cold', nothing claimed spawned."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:kw01", manager_agent="agent:km01",
+        worker_handle="Shu", house="osiris")
+    await _office(actions, worker_seat, "/tmp/shu")
+    record: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:km01", target=worker_seat,
+        manager=_fake_manager(record, raises=OSError("no such socket")),
+        windows=_fake_windows([]))
+    assert d["status"] == "manager-cold" and "osiris-manager" in d["detail"]
+
+
+async def test_launch_delivers_the_opening_brief_over_the_mail_lane(actions: Actions) -> None:
+    """A message rides the ordinary mail lane as a graded ask to the new seat — never a
+    hand-forged turn. It lands as a fleet_messages row addressed to the seat."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:bw01", manager_agent="agent:bm01",
+        worker_handle="Isis", house="osiris")
+    await _office(actions, worker_seat, "/tmp/isis")
+    manc = await actions.create_or_find_object("Agent", "agent:bm01", "test")
+    await actions.assert_property(manc, "project", "osiris", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    record: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:bm01", target=worker_seat, message="Welcome — mount and orient.",
+        manager=_fake_manager(record, ret={"spawned": "[OS] Isis"}), windows=_fake_windows([]))
+    assert d["status"] == "launched" and d.get("brief_message_id")
+    row = await actions.pool.fetchrow(
+        "SELECT body FROM fleet_messages WHERE id=$1", int(d["brief_message_id"]))
+    assert row is not None and "mount and orient" in row["body"]
