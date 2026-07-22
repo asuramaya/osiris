@@ -33,6 +33,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
 
 import asyncpg
@@ -261,6 +262,56 @@ async def fleet_occupancy(
         out.append({"seat_id": row["seat_id"], "handle": row["handle"], "house": row["house"],
                     **occ})
     return out
+
+
+async def reachability(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
+    """Can this lineage be reached RIGHT NOW — the TRUTHFUL answer, consulted from the
+    Claude harness daemon's own job state (ruling d739d486, Ra's clean repro): a mail
+    SEND-RECEIPT can lie during a compaction seam ('no resumable session — never handed to
+    a fresh twin') while the daemon's job_for on the SAME lineage has held a live,
+    resumable job the whole time. A stale disk/DB snapshot INFERS liveness; job_for READS
+    it from the one place that cannot lag the seam — the daemon owns the job, so it knows
+    the instant a successor exists, before any mount row or transcript file catches up.
+
+    Composes with seat_occupancy: occupancy answers 'is a live body here' (holds link +
+    agent_mounts); this answers 'and can it RECEIVE a turn, this instant' (the daemon's own
+    job table) — two different authorities for two different questions, not a duplicate.
+
+    LINEAGE-WIDE, matching every other liveness read in this codebase (held_seat,
+    seat_occupancy, trigger.py's own `doors`): checks every job_dir this base OR any of its
+    generations has ever mounted, because a fresh successor's OWN mount row is exactly the
+    evidence a seam can lag — the daemon may already hold its job before agent_mounts
+    reflects it at all.
+
+    THE READ ONLY, deliberately: this does not retry a refused send, notify anyone, or
+    change what dispatch_dm does — it is the truthful primitive Ra's fix and any future
+    notify-at-seam work CONSULT, not a rewrite of either. `job_for` is a pure READ of
+    daemon job state (claude_daemon.job_for), never the RCE-flagged `reply` injection lane
+    (ruling 482c3d0f) — legal and used as-is under the flagged-abstraction policy. Fails
+    OPEN like claude_daemon's own convention: a dark daemon or an unknown lineage reads
+    unreachable-by-this-check, never treated as proof of death — only as 'this read
+    couldn't confirm it'."""
+    from src.ingest.harness.claude_daemon import job_for
+    from src.orchestrator.agents import _generation
+
+    base = _generation(agent_id)[0]
+    rows = await pool.fetch(
+        "SELECT job_dir FROM agent_mounts WHERE (agent_id=$1 OR agent_id LIKE $1 || '-%') "
+        "AND job_dir IS NOT NULL", base)
+    doors = {Path(r["job_dir"]).name for r in rows if r["job_dir"]}
+    if not doors:
+        return {"reachable": False, "via": "none", "job": None,
+                "detail": "no known job_dir for this lineage — nothing to ask the daemon "
+                          "about"}
+    ids = doors | {d[:8] for d in doors}
+    job = await job_for(ids)
+    if job is None:
+        return {"reachable": False, "via": "none", "job": None,
+                "detail": "the daemon holds no job for this lineage right now — dark or "
+                          "genuinely not running; never treated as proof of death"}
+    shown = job.get("short") or job.get("sessionId") or "its job"
+    return {"reachable": True, "via": "daemon-job", "job": job,
+            "detail": f"the daemon's own job state confirms {shown} is live right now"}
 
 
 async def bind_holder(

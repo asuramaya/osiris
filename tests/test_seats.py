@@ -11,7 +11,9 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
+import pytest
 from src.actions.core import Actions
 from src.orchestrator.agents import mint_heir
 from src.orchestrator.handshake import automount
@@ -1030,3 +1032,100 @@ async def test_fleet_occupancy_lists_every_active_seat_including_vacant(
     assert rows[occupied["seat_id"]]["state"] == "occupied"
     assert rows[occupied["seat_id"]]["handle"] == "Tefnut2"
     assert rows[occupied["seat_id"]]["holder"] == "agent:fo000001"
+
+
+# ═══ REACHABILITY (ruling d739d486) — a TRUTHFUL "can I reach this lineage right now?" ═════
+# Ra's clean repro: a mail send-receipt refused a fresh successor ("no resumable session —
+# never handed to a fresh twin") while the daemon's own job_for on the same lineage held a
+# live, resumable job the whole time. A stale disk/DB snapshot infers; job_for reads the
+# one place that cannot lag the seam. These tests fake claude_daemon.job_for directly (the
+# same monkeypatch shape test_trigger.py's own hermetic fixture uses) — never a live socket.
+
+
+async def test_reachability_confirms_a_live_daemon_job(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.ingest.harness import claude_daemon
+    from src.orchestrator.seats import reachability
+
+    await save_mount(actions.pool, job_dir="/home/t/.claude/jobs/reach001",
+                     agent_id="agent:reach0001", project="osiris", cwd="/t",
+                     model="claude-sonnet-5", session_key=None)
+    job = {"short": "reach001", "sessionId": "reach001-full", "state": "resumable"}
+
+    async def _fake(ids: set[str]) -> dict[str, Any] | None:
+        return job if "reach001" in ids else None
+
+    monkeypatch.setattr(claude_daemon, "job_for", _fake)
+
+    out = await reachability(actions.pool, "agent:reach0001")
+
+    assert out == {"reachable": True, "via": "daemon-job", "job": job,
+                   "detail": "the daemon's own job state confirms reach001 is live right now"}
+
+
+async def test_reachability_is_honest_when_the_daemon_is_dark(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dark daemon (no job found) reads unreachable — but the detail says so plainly as
+    'couldn't confirm', never as proof the lineage is dead."""
+    from src.ingest.harness import claude_daemon
+    from src.orchestrator.seats import reachability
+
+    await save_mount(actions.pool, job_dir="/home/t/.claude/jobs/reach002",
+                     agent_id="agent:reach0002", project="osiris", cwd="/t",
+                     model="claude-sonnet-5", session_key=None)
+
+    async def _dark(ids: set[str]) -> None:
+        return None
+
+    monkeypatch.setattr(claude_daemon, "job_for", _dark)
+
+    out = await reachability(actions.pool, "agent:reach0002")
+
+    assert out["reachable"] is False and out["via"] == "none" and out["job"] is None
+    assert "never treated as proof of death" in out["detail"]
+
+
+async def test_reachability_has_nothing_to_ask_about_an_unmounted_lineage(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No agent_mounts row at all — never even asks the daemon, since there is no job_dir
+    to ask about."""
+    from src.ingest.harness import claude_daemon
+    from src.orchestrator.seats import reachability
+
+    async def _boom(ids: set[str]) -> None:
+        raise AssertionError("job_for must not be called with nothing to ask about")
+
+    monkeypatch.setattr(claude_daemon, "job_for", _boom)
+
+    out = await reachability(actions.pool, "agent:reach0003")
+
+    assert out == {"reachable": False, "via": "none", "job": None,
+                   "detail": "no known job_dir for this lineage — nothing to ask the "
+                             "daemon about"}
+
+
+async def test_reachability_is_lineage_wide_like_held_seat(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ra's exact shape: the mount row still names the PRE-compaction generation, but the
+    caller asks about the POST-compaction successor — the daemon check must still find it,
+    the same base-or-'-suffix' match held_seat/seat_occupancy already use."""
+    from src.ingest.harness import claude_daemon
+    from src.orchestrator.seats import reachability
+
+    await save_mount(actions.pool, job_dir="/home/t/.claude/jobs/reach004",
+                     agent_id="agent:reach0004", project="osiris", cwd="/t",
+                     model="claude-sonnet-5", session_key=None)
+    job = {"short": "reach004", "sessionId": "reach004-full"}
+
+    async def _fake(ids: set[str]) -> dict[str, Any] | None:
+        return job if "reach004" in ids else None
+
+    monkeypatch.setattr(claude_daemon, "job_for", _fake)
+
+    out = await reachability(actions.pool, "agent:reach0004-ii")  # the fresh successor
+
+    assert out["reachable"] is True and out["job"] == job
