@@ -26,6 +26,9 @@ tr{border-bottom:1px solid #161b22}
 .strip{display:flex;gap:1.6rem;margin:1rem 0;flex-wrap:wrap}
 .strip a{color:#c9d1d9;text-decoration:none;border-bottom:1px dotted #30363d}
 .strip b{font-weight:600}
+.strip.ambient{border-top:1px solid #21262d;padding-top:.7rem;margin-top:0}
+.strip-label{font-size:.75rem;letter-spacing:.15em;text-transform:uppercase;color:#484f58;
+             margin:1rem 0 -.4rem}
 a{color:#58a6ff;text-decoration:none}
 .body{white-space:pre-wrap;color:#8b949e;max-width:60rem}
 """
@@ -76,12 +79,50 @@ def _footer(dg: dict[str, Any]) -> str:
             '<span class="dim">· the page never advances the watermark</span></p>')
 
 
-def render_membrane(dg: dict[str, Any], wakes: list[dict[str, Any]]) -> str:
+_SEVERITY_CLASS = {"ok": "", "amber": "amber", "red": "red", "alarm": "red"}
+
+
+def render_ambient_strip(seg: Any) -> str:
+    """THE RIGHT-NOW ROW (surface.py, ruling e9ef7373 / thread 109b6c48 stage 3) — a SECOND,
+    SEPARATE strip beside the page's existing windowed summary, not a replacement of it. The
+    two answer genuinely different questions: the windowed strip is 'what happened in this
+    window' (desk-in-window, threads-in-window, activity, laundering, spend-in-window); this
+    one is 'what does Osiris look like this instant' (live/owed/briefs/wakes/sensing/spend,
+    the same ambient facts fleet_pulse's orient line and the statusline strip already share).
+    Replacing the windowed fields with these would silently change what a reader of this page
+    sees today under the same label — the console analog of the byte-exact golden discipline
+    the other two surfaces are held to (Thoth, msg 1094). `seg` is a surface.Segments — fleet-
+    wide scope only, the same unscoped call fleet_pulse makes (this page has no single
+    project/agent to narrow owed_here/briefs_mine/mail to)."""
+
+    def span(s: Any, href: str) -> str:
+        cls = _SEVERITY_CLASS[s.severity]
+        open_b = f'<b class="{cls}">' if cls else "<b>"
+        note = f' <span class="dim">{_e(s.note)}</span>' if s.note else ""
+        return f'<span><a href="{href}">{open_b}{_e(s.value)}</b></a>{note}</span>'
+
+    parts = [span(seg.live, "/fleet"), span(seg.owed, "/desk"),
+             span(seg.briefs_total, "/desk"), span(seg.wakes, "#wakes")]
+    if seg.sensing.show:
+        parts.append(span(seg.sensing, "/fleet"))
+    if seg.spend.show:
+        parts.append(span(seg.spend, "#costs"))
+    return (f'<div class="strip-label">right now</div>'
+            f'<div class="strip ambient">{"".join(parts)}</div>')
+
+
+def render_membrane(
+    dg: dict[str, Any], wakes: list[dict[str, Any]], ambient: Any = None,
+) -> str:
     """The whole page from a fleet_digest dict + the wake-ledger tail. Pure — tests feed it
-    fixtures; the route feeds it the live graph."""
+    fixtures; the route feeds it the live graph. `ambient` is an optional surface.Segments —
+    when given, an ADDITIONAL 'right now' strip renders above the existing windowed one (see
+    render_ambient_strip); when omitted the page is exactly what it always was."""
     s = dg["summary"]
     desk = dg["operator_inbox"]
+    ambient_strip = render_ambient_strip(ambient) if ambient is not None else ""
     strip = (
+        f'{ambient_strip}'
         f'<div class="strip">'
         # the counts now OPEN (the chrome pages, 2026-07-11) — the in-page anchors remain
         # below for the statusline's deep links

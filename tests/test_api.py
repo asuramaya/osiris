@@ -44,6 +44,17 @@ async def test_health(client: httpx.AsyncClient) -> None:
     assert r.json() == {"status": "ok"}
 
 
+async def test_membrane_route_wires_the_ambient_strip_live(client: httpx.AsyncClient) -> None:
+    """The one live-route test for stage 3 (ruling e9ef7373, thread 109b6c48): the route
+    handler now also calls surface.fetch() and passes it through — this is the wiring check
+    that the pure render_membrane/render_ambient_strip unit tests can't cover on their own."""
+    r = await client.get("/membrane")
+    assert r.status_code == 200
+    assert '<div class="strip-label">right now</div>' in r.text
+    assert '<div class="strip ambient">' in r.text
+    assert '<div class="strip">' in r.text  # the windowed strip, still there beside it
+
+
 async def test_list_and_get_object(client: httpx.AsyncClient, actions: Actions) -> None:
     await _seed(actions)
     r = await client.get("/objects", params={"type": "IntrusionSet"})

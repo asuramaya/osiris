@@ -53,6 +53,7 @@ from src.ontology.resolution import (
     review_tray,
 )
 from src.ontology.schema import catalog as ontology_catalog
+from src.orchestrator import surface
 from src.orchestrator.cobrowse import cobrowse_open
 from src.orchestrator.compositions import (
     list_compositions,
@@ -985,7 +986,12 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         wakes = [dict(r) for r in await p.fetch(
             "SELECT to_project, from_agent, message_id, woke_at FROM agent_wakes "
             "ORDER BY woke_at DESC LIMIT 20")]
-        return Response(render_membrane(dg, wakes), media_type="text/html")
+        # THE AMBIENT ROW (ruling e9ef7373, thread 109b6c48 stage 3): fleet-wide, unscoped —
+        # this page has no single project/agent to narrow owed_here/briefs_mine/mail to, the
+        # same call fleet_pulse makes for orient's one-liner. Beside the windowed strip
+        # above, never in place of it — see render_ambient_strip's own docstring.
+        ambient = await surface.fetch(p)
+        return Response(render_membrane(dg, wakes, ambient=ambient), media_type="text/html")
 
     # THE CHROME OPENED (operator, 2026-07-11): /desk /mail /fleet — clickable, openable,
     # ~4s-fresh lenses so the human looks WITHOUT calling an agent. Same read-only
