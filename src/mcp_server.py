@@ -58,6 +58,7 @@ from src.orchestrator.budget import fit
 from src.orchestrator.console import get_console as _get_console
 from src.orchestrator.console import set_console as _set_console
 from src.orchestrator.describe import describe_table
+from src.orchestrator.doors import doors as _doors_lookup
 from src.orchestrator.dossier import entity_dossier
 from src.orchestrator.fleetview import render_fleet_tree
 from src.orchestrator.mailbox import (
@@ -669,6 +670,17 @@ async def describe(table: str) -> dict[str, Any]:
     for when you need a real column name or type before hand-writing SQL. Returns
     `exists: false` (never a silently-empty shape) when `table` doesn't match anything real."""
     return await describe_table(await _pool_get(), table)
+
+
+@mcp.tool()
+async def doors(ref: str) -> dict[str, Any]:
+    """One coherent answer about an agent, a seat, or a cwd — 'ref' is sniffed: an `agent:` id,
+    a `seat:` id, a bare handle, or an absolute cwd path (`/...` or `~/...`). Always returns
+    {ref, resolved, matches: [...]} — an agent/seat/handle resolves to 0-or-1 match (one
+    lineage-folded identity); a cwd resolves to 0-or-many (an office can be multi-tenant). Seat
+    binding is read off the `holds` graph link, never a cache column, so this is the one place
+    that never falls into that trap. Replaces the hand-rolled query against agent_mounts."""
+    return await _doors_lookup(await _pool_get(), ref)
 
 
 # --- collect (federate a base) ----------------------------------------------
