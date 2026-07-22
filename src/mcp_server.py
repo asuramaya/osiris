@@ -2009,6 +2009,8 @@ async def fleet(full: bool = False) -> dict[str, Any]:
             mounts_live[proj] = mounts_live.get(proj, 0) + 1
     ghost_gap = {p: gap for p, n_live in mounts_live.items()
                 if (gap := n_live - os_bodies.get(p, 0)) > 0}
+    from src.orchestrator.seats import fleet_occupancy
+    seats = await fleet_occupancy(pool)
     return {
         "connected_now": len(_agents),
         "count": len(nodes),
@@ -2017,6 +2019,11 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         "swarm": sum(1 for n in nodes.values() if n["parent"]),
         "os_bodies": os_bodies,
         **({"ghost_gap": ghost_gap} if ghost_gap else {}),
+        # OCCUPANCY (9f566244 piece B): every active Seat, VACANT ones included — the
+        # agent tree above is rooted at Agent objects, so a seat with no holder AT ALL
+        # (Ptah's shape: an office scaffolded, never sat in) never appears in it at all.
+        "seats": [{"seat": s["seat_id"], "handle": s["handle"], "house": s["house"],
+                   "state": s["state"], "holder": s["holder"]} for s in seats],
         "tree": render_fleet_tree(nodes, full=full, os_bodies=os_bodies),
         "registered": [
             {"agent": c, "model": n["model"], "project": n["project"], "depth": n["depth"],
@@ -2178,6 +2185,44 @@ async def wake(target: str, message: str, subagent_id: str | None = None,
     from src.orchestrator.trigger import wake_worker
     return await wake_worker(Actions(await _pool_get()), caller=actor, target=target,
                              message=message)
+
+
+@mcp.tool()
+async def launch(target: str, message: str = "", model: str | None = None,
+                 subagent_id: str | None = None, subagent_type: str | None = None,
+                 session_anchor: str | None = None,
+                 ctx: Context | None = None) -> dict[str, Any]:
+    """Give a seat a BODY — the create-verb wake() is the speak-verb of (thread 9f566244 piece
+    D, ruling 43b84c5e). wake() knocks on a body that already exists; launch() summons a fresh
+    `claude` into the target seat's own office via the manager daemon's pty_spawn, with the
+    seat's identity minted into the child before its first breath (it self-binds, no whisper
+    guessing — §4.2). DISTINCT from wake in two ways that matter: it is DOWNWARD-ONLY (you may
+    only body a seat you MANAGE — a worker can wake its manager but never spawn it a body,
+    78e3734e), and it is CREATE not inject — a new session, never a turn forged into an existing
+    one, so it is not the frozen reply lane.
+
+    Idempotent: a live body already holding the seat is RETURNED, never twinned. `message`, if
+    given, is delivered as the body's opening brief over the ordinary mail lane (the trigger
+    types it into the fresh window once alive) — never a hand-forged turn.
+
+    THE OPERATOR NEVER CALLS THIS, ON PURPOSE: there is no operator parameter — an override a
+    caller can assert is an override that can be forged; the operator's real hand stays
+    out-of-band. The receipt is HONEST (Ra's requirement, 53ae1a87): `body_exists` (the window
+    was created) and `can_receive` (an independent read confirms it is live) are SEPARATE — a
+    freshly-spawned claude takes seconds to boot, so a launch usually returns body_exists=true,
+    can_receive=false, and `detail` says to confirm via pty_list/occupancy. `status` is one of:
+    `launched`, `already-live` (idempotent hit), `manager-cold` (the manager daemon is down —
+    ask the operator to start osiris-manager; nothing spawned), `refused-not-your-worker` (no
+    downward managed_by edge — nothing spawned), `refused-no-office`/`refused-no-handle` (the
+    seat is not ready to be bodied), or `refused-spawn` (the daemon declined — see `detail`)."""
+    ident = await _ident_for(ctx, session_anchor)
+    if ident is None:
+        return {"error": "mount(cwd, job_dir=<your anchor>) first — a launch must say who "
+                         "it's from", "why": _anchorless(ctx)}
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
+    from src.orchestrator.trigger import launch_seat
+    return await launch_seat(Actions(await _pool_get()), caller=actor, target=target,
+                             message=message, model=model)
 
 
 @mcp.tool()

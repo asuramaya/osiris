@@ -33,7 +33,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 import asyncpg
 
@@ -185,6 +185,82 @@ async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
         return None
     best = max(rows, key=lambda r: _generation(r["holder"])[1])
     return {"seat_id": best["seat_id"], "handle": best["handle"], "house": best["house"]}
+
+
+SeatState = Literal["vacant", "occupied", "cold"]
+
+
+async def seat_occupancy(
+    pool: asyncpg.Pool, seat_id: str, *, live_secs: int = _LIVE_SECS,
+) -> dict[str, Any]:
+    """VACANT / OCCUPIED / COLD (occupancy piece B, 9f566244) — one authority for whether a
+    Seat has a living body in it, the vitals.py way: computed at READ time from
+    links(holds) + agent_mounts, no schema change, no new table. THE ACCEPTANCE CASE: Ptah's
+    office once showed four bodies where one lived — a seat with no holder at all must read
+    VACANT on its own, never silently absent from a query that only ever asks about agents.
+
+    VACANT — no `holds` link has EVER existed for this seat (mint_seat's own law: a seat is
+    furniture until a body sits in it). OCCUPIED — an active holder exists AND is live right
+    now (agent_mounts, the same live_secs window every other liveness read in this codebase
+    shares — live_souls, resolve_seat, held_seat's own contention check, the fleet roster).
+    COLD — held, now or in the past, but nobody live this instant: the ordinary in-between
+    state of a seat between sessions, never an alarm by itself.
+
+    LINEAGE-AWARE the same way held_seat is: the active holder's liveness is read across its
+    whole lineage (base id or any `-<suffix>` generation), because bind_holder/follow_binding
+    keep the holds link on the freshest generation but a mount row can still be tagged to an
+    ancestor label mid-succession.
+
+    This IS the read launch() needs for its own idempotency (detect-existing-window before
+    spawning, never mint a twin body) and its honest liveness receipt (Ra's requirement,
+    53ae1a87: body-exists and can-receive are separate states, each independently
+    verifiable) — call it with the seat about to be launched into, before launching."""
+    ever_held = await pool.fetchval(
+        "SELECT 1 FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND l.type='holds' LIMIT 1", seat_id)
+    if not ever_held:
+        return {"state": "vacant", "holder": None, "live": False}
+    holder = await pool.fetchval(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND l.type='holds' AND f.type='Agent' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "ORDER BY l.first_seen DESC LIMIT 1", seat_id)
+    if holder is None:
+        return {"state": "cold", "holder": None, "live": False}
+    from src.orchestrator.agents import _generation
+
+    base = _generation(holder)[0]
+    live = bool(await pool.fetchval(
+        "SELECT max(last_seen) > now() - make_interval(secs => $2) "
+        "FROM agent_mounts WHERE agent_id=$1 OR agent_id LIKE $1 || '-%'",
+        base, float(live_secs)))
+    return {"state": "occupied" if live else "cold", "holder": holder, "live": live}
+
+
+async def fleet_occupancy(
+    pool: asyncpg.Pool, *, live_secs: int = _LIVE_SECS,
+) -> list[dict[str, Any]]:
+    """Every active Seat's occupancy, one row each — the batch read fleet() renders beside
+    the agent tree, so a seat with no holder at all (Ptah's shape) is as visible as one with
+    three. Same authority as seat_occupancy(), run once per seat instead of asked one at a
+    time; small fleet, small N, and matches backfill_unbound_seats' own list-then-resolve
+    shape rather than a fused query the seat count doesn't yet justify."""
+    seats = await pool.fetch(
+        "SELECT o.canonical AS seat_id, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS handle, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='house' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS house "
+        "FROM objects o WHERE o.type='Seat' AND o.status='active' ORDER BY o.canonical")
+    out: list[dict[str, Any]] = []
+    for row in seats:
+        occ = await seat_occupancy(pool, row["seat_id"], live_secs=live_secs)
+        out.append({"seat_id": row["seat_id"], "handle": row["handle"], "house": row["house"],
+                    **occ})
+    return out
 
 
 async def bind_holder(

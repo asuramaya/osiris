@@ -928,3 +928,105 @@ async def test_mint_heir_orphan_bind_is_idempotent_across_successions(actions: A
     bound2 = await held_seat(actions.pool, heir2)
     assert bound2 is not None and bound2["seat_id"] == seat_id
     assert not await _active_holds(actions, heir, seat_id)  # healed forward, one active link
+
+
+# ═══ OCCUPANCY — VACANT / OCCUPIED / COLD (occupancy piece B, 9f566244) ═══════════════════
+# The acceptance case: Ptah's office once showed four bodies where one lived — a seat with
+# no holder at all must read VACANT on its own, distinct from a seat that HAS a holder who
+# simply isn't live right now (COLD, the ordinary in-between state, never an alarm).
+
+
+async def test_occupancy_reads_vacant_for_a_seat_never_held(actions: Actions) -> None:
+    """A minted seat nobody has ever attached to — furniture, not yet a body."""
+    from src.orchestrator.seats import seat_occupancy
+
+    seat = await ensure_seat(actions, house="osiris", handle="Ptah", source="test")
+
+    occ = await seat_occupancy(actions.pool, seat["seat_id"])
+    assert occ == {"state": "vacant", "holder": None, "live": False}
+
+
+async def test_occupancy_reads_occupied_for_a_live_holder(actions: Actions) -> None:
+    """A bound holder with a fresh mount row reads OCCUPIED."""
+    from src.orchestrator.seats import seat_occupancy
+
+    seat = await ensure_seat(actions, house="osiris", handle="Anhur", source="test")
+    await actions.create_or_find_object("Agent", "agent:live00001", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:live00001")
+    await save_mount(actions.pool, job_dir="/jobs/live00001", agent_id="agent:live00001",
+                     project="osiris", cwd="/w/osiris", model="claude-sonnet-5",
+                     session_key=None)
+
+    occ = await seat_occupancy(actions.pool, seat["seat_id"])
+    assert occ == {"state": "occupied", "holder": "agent:live00001", "live": True}
+
+
+async def test_occupancy_reads_cold_for_a_holder_who_is_not_live(actions: Actions) -> None:
+    """A bound holder with NO recent pulse (no mount row at all) reads COLD, not VACANT —
+    the seat is not furniture, it is simply between sessions."""
+    from src.orchestrator.seats import seat_occupancy
+
+    seat = await ensure_seat(actions, house="osiris", handle="Wadjet", source="test")
+    await actions.create_or_find_object("Agent", "agent:cold0001", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:cold0001")
+
+    occ = await seat_occupancy(actions.pool, seat["seat_id"])
+    assert occ == {"state": "cold", "holder": "agent:cold0001", "live": False}
+
+
+async def test_occupancy_reads_cold_after_the_holder_moves_on(actions: Actions) -> None:
+    """A seat HELD HISTORICALLY but with no active holder at all (the link healed by
+    valid_until and nothing replaced it) is COLD, not VACANT — it has a past, just no
+    present holder."""
+    from src.orchestrator.seats import seat_occupancy
+
+    seat = await ensure_seat(actions, house="osiris", handle="Nekhbet", source="test")
+    await actions.create_or_find_object("Agent", "agent:moved001", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:moved001")
+    # heal the only active link, leaving the seat with history but no current holder
+    seat_oid = await actions.create_or_find_object("Seat", seat["seat_id"], "test")
+    agent_oid = await actions.create_or_find_object("Agent", "agent:moved001", "test")
+    await actions.invalidate_link(agent_oid, seat_oid, "holds", "test", datetime.now(UTC))
+
+    occ = await seat_occupancy(actions.pool, seat["seat_id"])
+    assert occ == {"state": "cold", "holder": None, "live": False}
+
+
+async def test_occupancy_is_lineage_aware_like_held_seat(actions: Actions) -> None:
+    """A holder bound under an ancestor generation label but LIVE under its successor's
+    label still reads OCCUPIED — the same lineage-wide liveness held_seat already uses."""
+    from src.orchestrator.seats import seat_occupancy
+
+    seat = await ensure_seat(actions, house="osiris", handle="Serqet", source="test")
+    await actions.create_or_find_object("Agent", "agent:gen00001", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:gen00001")
+    await save_mount(actions.pool, job_dir="/jobs/gen00001-ii", agent_id="agent:gen00001-ii",
+                     project="osiris", cwd="/w/osiris", model="claude-sonnet-5",
+                     session_key=None)
+
+    occ = await seat_occupancy(actions.pool, seat["seat_id"])
+    assert occ["state"] == "occupied" and occ["live"] is True
+
+
+async def test_fleet_occupancy_lists_every_active_seat_including_vacant(
+    actions: Actions,
+) -> None:
+    """The batch read fleet() renders from — every active Seat gets a row, vacant ones
+    included, so a seat with no body at all is as visible as one with a live holder."""
+    from src.orchestrator.seats import fleet_occupancy
+
+    vacant = await ensure_seat(actions, house="osiris", handle="Sopdet", source="test")
+    occupied = await ensure_seat(actions, house="osiris", handle="Tefnut2", source="test")
+    await actions.create_or_find_object("Agent", "agent:fo000001", "test")
+    await bind_holder(actions, seat_id=occupied["seat_id"], agent_id="agent:fo000001")
+    await save_mount(actions.pool, job_dir="/jobs/fo000001", agent_id="agent:fo000001",
+                     project="osiris", cwd="/w/osiris", model="claude-sonnet-5",
+                     session_key=None)
+
+    rows = {r["seat_id"]: r for r in await fleet_occupancy(actions.pool)}
+
+    assert rows[vacant["seat_id"]]["state"] == "vacant"
+    assert rows[vacant["seat_id"]]["handle"] == "Sopdet"
+    assert rows[occupied["seat_id"]]["state"] == "occupied"
+    assert rows[occupied["seat_id"]]["handle"] == "Tefnut2"
+    assert rows[occupied["seat_id"]]["holder"] == "agent:fo000001"

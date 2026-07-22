@@ -925,6 +925,49 @@ async def test_fleet_survives_a_census_that_fails(actions: Actions) -> None:
     assert "ghost_gap" not in out or out["ghost_gap"] == {}
 
 
+async def test_fleet_surfaces_occupancy_including_a_seat_with_no_agent_at_all(
+    actions: Actions,
+) -> None:
+    """occupancy piece B (9f566244), acceptance case: Ptah's office once showed four
+    bodies where one lived. The agent tree is rooted at Agent objects, so a seat with NO
+    holder ever — nothing to walk to from any agent row — would never appear in it at
+    all. fleet()'s new `seats` list is rooted at Seat objects instead, so a vacant seat
+    is exactly as visible as an occupied one."""
+    from src import mcp_server as srv
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import claim_name
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    vacant = await ensure_seat(actions, house="osiris", handle="Ptah", source="test")
+    live_agent = "agent:occtest01"
+    obj = await actions.create_or_find_object("Agent", live_agent, live_agent)
+    await actions.assert_property(obj, "project", "osiris", live_agent, datetime.now(UTC),
+                                  0.9, evidence_class=EvidenceClass.SELF_DECLARED.value)
+    await mounts.save_mount(actions.pool, job_dir="/j/occtest01", agent_id=live_agent,
+                            project="osiris", cwd="/x", model="claude-fable-5",
+                            session_key=live_agent)
+    await claim_name(actions, live_agent, "Anhur", source=live_agent)
+    cold_seat = await ensure_seat(actions, house="osiris", handle="Wadjet2", source="test")
+    await actions.create_or_find_object("Agent", "agent:occtest02", "test")
+    await bind_holder(actions, seat_id=cold_seat["seat_id"], agent_id="agent:occtest02")
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.fleet()
+    finally:
+        srv._pool = saved_pool
+
+    rows = {r["seat"]: r for r in out["seats"]}
+    assert rows[vacant["seat_id"]]["state"] == "vacant"
+    assert rows[vacant["seat_id"]]["holder"] is None
+    live_seat_id = next(r["seat"] for r in out["seats"] if r["handle"] == "Anhur")
+    assert rows[live_seat_id]["state"] == "occupied"
+    assert rows[live_seat_id]["holder"] == live_agent
+    assert rows[cold_seat["seat_id"]]["state"] == "cold"
+    assert rows[cold_seat["seat_id"]]["holder"] == "agent:occtest02"
+
+
 def test_an_anchorless_bounce_names_its_own_cause() -> None:
     """A bounce that says only "mount first" is a mystery; one that names its cause is a bug
     report the next mind does not have to file again.

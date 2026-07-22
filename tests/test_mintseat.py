@@ -475,3 +475,62 @@ async def test_mcp_mint_seat_resolves_a_succeeded_lineage_via_handle_fallback(
     assert "error" not in out
     assert out["manager_seat_id"] == thoth_seat
     assert await _linked(actions, out["seat_id"], thoth_seat)
+
+
+# ═══════════ (g) THE RECEIPT COMPLETES THE LIFECYCLE — occupancy piece A, 9f566244 ═══════
+# mint_seat used to finish HALF the ceremony: a seat, an office, a manager edge, and silence
+# about whether a body exists yet. The receipt now states occupancy plainly (piece B's
+# machinery) and names whose hand the next step needs.
+
+
+async def test_g_fresh_mint_receipt_reads_vacant(actions: Actions, tmp_path: Path) -> None:
+    await _seat(actions, "Steward", "osiris")
+
+    out = await mint_seat(actions, manager="Steward", handle="Vajra",
+                          office_root=tmp_path / "seats")
+
+    assert out["occupancy"] == "vacant"
+    assert out["holder"] is None
+    assert "furniture" in out["next_step"]
+
+
+async def test_g_adopting_a_live_seat_receipt_reads_occupied(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator import mounts
+    from src.orchestrator.seats import bind_holder
+
+    await _seat(actions, "Steward", "osiris")
+    worker_seat = await _seat(actions, "Tantra", "osiris")
+    await actions.create_or_find_object("Agent", "agent:tantra01", "test")
+    await bind_holder(actions, seat_id=worker_seat, agent_id="agent:tantra01")
+    await mounts.save_mount(actions.pool, job_dir="/j/tantra01", agent_id="agent:tantra01",
+                            project="osiris", cwd="/x", model="claude-sonnet-5",
+                            session_key=None)
+
+    out = await mint_seat(actions, manager="Steward", handle="Tantra",
+                          office_root=tmp_path / "seats")
+
+    assert out["seat_minted"] is False                # adopted, not twinned
+    assert out["occupancy"] == "occupied"
+    assert out["holder"] == "agent:tantra01"
+    assert out["next_step"] == "already live — no next step, someone's home"
+
+
+async def test_g_adopting_a_held_but_quiet_seat_receipt_reads_cold(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.seats import bind_holder
+
+    await _seat(actions, "Steward", "osiris")
+    worker_seat = await _seat(actions, "Tantra", "osiris")
+    await actions.create_or_find_object("Agent", "agent:tantra02", "test")
+    await bind_holder(actions, seat_id=worker_seat, agent_id="agent:tantra02")
+    # no mount row at all — held, but nobody's pulse is fresh
+
+    out = await mint_seat(actions, manager="Steward", handle="Tantra",
+                          office_root=tmp_path / "seats")
+
+    assert out["occupancy"] == "cold"
+    assert out["holder"] == "agent:tantra02"
+    assert "resumes on its own" in out["next_step"]

@@ -46,7 +46,7 @@ from typing import Any
 
 from src.actions.core import Actions
 from src.orchestrator.offices import _CHARTER_TEMPLATE, _DEFAULT_OFFICE_ROOT, _STANDING_ORDERS
-from src.orchestrator.seats import ensure_seat
+from src.orchestrator.seats import ensure_seat, seat_occupancy
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -288,6 +288,22 @@ async def mint_seat(
                                   evidence_class=_EC)
         linked_now = True
 
+    # THE RECEIPT COMPLETES THE LIFECYCLE (occupancy piece A, 9f566244) — mint_seat only
+    # ever finished HALF of it: a seat, an office, a manager edge, and silence about
+    # whether a BODY exists yet. Now the receipt states occupancy plainly and names whose
+    # hand the next step needs, the same treatment every half-finished ceremony in this
+    # house owes its caller (Ra's day this would have saved: minting told him nothing
+    # about VACANT vs OCCUPIED, so he found out only by asking again later).
+    occ = await seat_occupancy(actions.pool, worker_seat_id)
+    next_step = {
+        "vacant": "no session has ever attached — furniture until a body sits in it; "
+                 "launch one (launch(), once it exists) or start a session in the "
+                 "office and have it claim_name itself",
+        "occupied": "already live — no next step, someone's home",
+        "cold": "held, but nobody's live right now — its holder resumes on its own "
+               "next mount; no outside hand needed",
+    }[occ["state"]]
+
     return {
         "seat_id": worker_seat_id, "handle": handle, "house": worker_house,
         "seat_minted": seat_minted,
@@ -296,4 +312,5 @@ async def mint_seat(
         "intended_model_stamped": stamped_model,
         "manager_seat_id": manager_seat_id,
         "managed_by": "linked" if linked_now else "already linked",
+        "occupancy": occ["state"], "holder": occ["holder"], "next_step": next_step,
     }
