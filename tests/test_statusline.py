@@ -11,11 +11,14 @@ import json
 import subprocess
 import sys
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 from scripts import osiris_statusline as sl
+from src.actions.core import Actions
+from src.orchestrator.mailbox import send_message
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "osiris_statusline.py"
 
@@ -78,6 +81,65 @@ async def test_a_non_timeout_failure_is_never_retried(monkeypatch: pytest.Monkey
     with pytest.raises(ConnectionRefusedError):
         await sl._fetch_counts("proj", "deadbeef", "claude-fable-5", "claude-fable-5", None)
     assert calls == 1   # no second knock
+
+
+async def test_counts_maps_the_shared_segments_into_its_own_tuple_shape(
+    actions: Actions, pg_dsn: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_counts` no longer owns any fact-SQL or rule (surface.fetch does) — this is the one
+    test that exercises its REAL query path against a real Postgres, to pin the plumbing: the
+    shared Segments land in the exact tuple slots main() expects. `sl.DSN` is a module global
+    read once at import; it has to be patched directly, `DATABASE_URL` alone arrives too late.
+    Every field is seeded to a DISTINCT value so a scrambled tuple position fails loudly."""
+    from src.orchestrator.mounts import save_mount
+
+    monkeypatch.setattr(sl, "DSN", pg_dsn)
+    monkeypatch.setattr("src.ingest.providers.spend_is_metered", lambda s=None: True)
+    p = actions.pool
+    reader = "agent:1eadde01"
+
+    # briefs_mine=1 (from the reader's own lineage), briefs_total=2 (one from elsewhere too)
+    await send_message(p, from_agent=reader, from_project="proj",
+                       to_project="operator", body="a brief from the reader")
+    await send_message(p, from_agent="agent:e15ewh3r", from_project="proj",
+                       to_project="operator", body="a brief from someone else")
+    # mail=1 (a broadcast to the project, not from the reader), dm=1 (addressed to the reader)
+    await send_message(p, from_agent="agent:e15ewh3r", from_project="proj",
+                       to_project="proj", body="a broadcast")
+    await send_message(p, from_agent="agent:e15ewh3r", from_project="proj",
+                       to_agent=reader, to_project="proj", body="dm for the reader")
+    # live=1: the reader's OWN heartbeat mount — the same row `_counts`'s identity-resolution
+    # block stamps on every real call, found via find_session_row's job_dir/sid8 lane
+    session_id = "1eadde01-aaaa-bbbb-cccc-dddddddddddd"
+    await save_mount(p, job_dir="/x/jobs/1eadde01", agent_id=reader, project="proj",
+                     cwd="/w", model=None, session_key=None)
+    # wakes=2
+    await p.execute("INSERT INTO agent_wakes (to_project, from_agent, message_id) "
+                    "VALUES ('proj','agent:e15ewh3r',NULL), ('proj','agent:e15ewh3r',NULL)")
+    # owed=2 (fleet-wide), owed_here=1 (only the one linked in_repo to THIS project)
+    proj_obj = await actions.create_or_find_object("SoftwareProject", "repo:proj", "test")
+    for i, hood in enumerate(("proj", None)):
+        oid = await actions.create_or_find_object("Thread", f"thread:test-owed-{i}", "test")
+        for name, val in (("owner", "operator"), ("status", "open"), ("summary", "a debt")):
+            await actions.assert_property(oid, name, val, "test", datetime.now(UTC), 0.9,
+                                          evidence_class="direct_observation")
+        if hood:
+            await actions.create_link(oid, proj_obj, "in_repo", "test", datetime.now(UTC), 0.9)
+    # sick=1
+    await p.execute("INSERT INTO watermarks (key, cursor) VALUES ('job:stuck', '{\"every\":600}')")
+    # spend: metered, one priced call, no threshold crossed — the RAW numbers still ride
+    # the tuple even though main() would render nothing for them (that gate is main()'s job)
+    await p.execute("INSERT INTO llm_usage (purpose, model, cost_usd, ran_at) "
+                    "VALUES ('test', 'x', 1.23, now())")
+
+    (desk, mail, dm, flight, live, wakes, owed, owed_here, sick,
+     (spent, cap, blind)) = await sl._counts(
+        "proj", session_id, "claude-fable-5", "claude-fable-5", None)
+
+    assert desk == 1 and mail == 1 and dm == 1 and flight == 0
+    assert live == 1 and wakes == 2 and owed == 2 and owed_here == 1
+    assert sick == ["stuck"]
+    assert spent == 1.23 and blind == 0 and cap == 10.0
 
 
 def test_a_dm_alone_rings_the_doorbell(

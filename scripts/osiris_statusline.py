@@ -18,7 +18,6 @@ import os
 import re
 import sys
 import time
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -211,56 +210,21 @@ async def _counts(
             if agent and bare and stored and stored.split("[", 1)[0].strip() != bare:
                 agent = _succession(session_id, bare) or agent
         agent = agent or ""
-        # ONE AUTHORITY PER FACT (operator ruling 2026-07-19: 'the chrome and the harness
-        # disagree on briefs, mail, owe'): every number below comes from the shared
-        # formulas in src/orchestrator/{mailbox,vitals} — the same functions orient, the
-        # pulse, and the chrome desk call, so the same word always shows the same number.
-        # This script owns NO count SQL anymore except `flight` (statusline-only: a
-        # sibling's live lease on shared broadcasts). The old inline copies had drifted:
-        # the mail predicate predated the lineage rollup and the hold grace; the fleet
-        # number counted seated ROWS where the chrome counted seated SOULS.
-        from src.orchestrator import vitals
-        from src.orchestrator.ceiling import ceiling
-        from src.orchestrator.mailbox import desk_briefs_from, unread_split
+        # ONE AUTHORITY PER FACT, and now one AUTHORITY PER RULE too (ruling e9ef7373,
+        # thread 109b6c48 — the render analog of the write-verb receipt law): this script
+        # owns no fact-SQL and no presentation rule (thresholds/gates/severity) anymore —
+        # surface.fetch is the single batched read every ambient number and every dark-
+        # until-it-matters/metered-gate/dm-lights-alone rule comes from.
+        from src.orchestrator import surface
 
-        desk = await desk_briefs_from(conn, agent or None)
-        split = await unread_split(conn, project, reader_agent=agent or None,
-                                   lease_secs=LEASE_SECS)
-        debts = await vitals.operator_debts(conn, hood=project)
-        souls = await vitals.live_souls(conn)
-        wakes = await vitals.wakes_hour(conn)
-        # the daily ceiling — the gate's own read (task #26's last mile); rendered dark
-        # until spend approaches the cap, so the strip stays quiet on a healthy day
-        from src.config.settings import get_settings
-        ceil = await ceiling(conn, cap=get_settings().osiris_daily_usd)
-        flight = await conn.fetchval(
-            "SELECT count(*) FROM fleet_messages m JOIN message_recipients r "
-            "  ON r.message_id=m.id WHERE m.to_project=$1 AND m.to_agent IS NULL "
-            "  AND r.agent_id <> $3 AND r.read_at IS NULL AND r.delivered_at IS NOT NULL "
-            "  AND r.delivered_at >= now() - make_interval(secs => $2)",
-            project, LEASE_SECS, agent)
-        # THE ORGANS — is Osiris still SENSING? The session-miner died at 08:50 on 2026-07-12
-        # and stayed dead ten hours: the memory simply stopped forming and nothing said so.
-        # Computed HERE, at read time, in a process that is alive by construction — a watchdog
-        # cron would have lived inside the very worker that died (79e1328c). Each job stamps
-        # its own cadence with its outcome, so "late" needs no magic number kept elsewhere.
-        jobs = await conn.fetch("SELECT key, cursor FROM watermarks WHERE key LIKE 'job:%'")
-        sick: list[str] = []
-        for j in jobs:
-            try:
-                blob = json.loads(j["cursor"] or "{}")
-            except ValueError:
-                continue
-            ok, every = blob.get("last_ok"), int(blob.get("every") or 600)
-            if not ok:
-                sick.append(j["key"][4:])
-                continue
-            age = (datetime.now(UTC) - datetime.fromisoformat(ok)).total_seconds()
-            if age > 3 * every:  # three cadences missed is not a blip
-                sick.append(j["key"][4:])
-        return (desk, split["mail"], split["dm"], int(flight or 0), souls["souls"],
-                wakes, debts["owed"], debts["owed_here"], sick,
-                (ceil.spent, ceil.cap, ceil.blind))
+        seg = await surface.fetch(conn, project=project, agent=agent or None,
+                                  lease_secs=LEASE_SECS)
+        return (seg.briefs_mine.data["briefs"], seg.mail.data["mail"], seg.mail.data["dm"],
+                seg.mail.data["flight"], seg.live.data["souls"], seg.wakes.data["wakes"],
+                seg.owed.data["owed"], seg.owed_here.data["owed_here"],
+                seg.sensing.data["sick"],
+                (seg.spend.data.get("spent", 0.0), seg.spend.data.get("cap", 0.0),
+                 seg.spend.data.get("blind", 0)))
     finally:
         await conn.close()
 
