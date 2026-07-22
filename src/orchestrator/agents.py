@@ -948,6 +948,31 @@ async def _debounce_roundtrip(
                     f"{_SEAM_DEBOUNCE_SECS // 60}m, no act — debounced, not a death)"}
 
 
+async def _already_reached(actions: Actions, *, agent_id: str, observed: str) -> bool:
+    """Did this lineage HEAD already record a swap landing on `observed`? (idempotency on
+    /succession, thread 8dc9940c — Thoth's own live repro, three 'live-swap' mints for one
+    real fable→opus transition.) The comparison live_succession runs the seam against —
+    agent_mounts.model — is a MUTABLE row that can drift back to a stale value after the
+    real swap already completed (mount()'s own re-derivation resets it; the deeper cause is
+    banked as a separate question). The head's own `source_model` is equally mutable, reset
+    by the same path. `model_succession` is not: mint_heir stamps it EXACTLY ONCE, at the
+    mint that recorded the swap, and nothing ever touches it again — the one write-once
+    witness immune to the drift. If the head's own recorded transition already landed on
+    `observed`, a fresh 'stored != observed' reading is re-discovering a COMPLETED swap, not
+    witnessing a new one — minting again would just be the duplicate ruling 95dff46f warned
+    against, one lineage, three numerals, one transition. A genuinely NEW target (observed
+    differs from what's already recorded) returns False and mints exactly as before."""
+    seam = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND o.status='active' AND a.name='model_succession' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent_id)
+    if not seam or "→" not in seam:
+        return False
+    right = seam.split("→", 1)[1].strip()
+    target = normalize_model(right.split("[", 1)[0].strip())
+    return target is not None and target == observed
+
+
 async def live_succession(
     actions: Actions, *, session_id: str, observed_model: str,
 ) -> dict[str, Any]:
@@ -1002,6 +1027,21 @@ async def live_succession(
                                            now=now, job_dir=row["job_dir"])
         if healed is not None:
             return healed
+        # IDEMPOTENCY (thread 8dc9940c): the head already recorded reaching THIS exact
+        # model once — a fresh disagreement against the (mutable, driftable) stored row is
+        # the same completed swap resurfacing, not a new one. Repair the drifted stamps in
+        # place; mint nothing.
+        if await _already_reached(actions, agent_id=head, observed=observed):
+            do = EvidenceClass.DIRECT_OBSERVATION
+            head_oid = await actions.create_or_find_object("Agent", head, head)
+            await actions.assert_property(head_oid, "source_model", observed, head, now,
+                                          confidence_for(do), evidence_class=do.value)
+            await actions.pool.execute(
+                "UPDATE agent_mounts SET model=$2, last_seen=now() WHERE job_dir=$1",
+                row["job_dir"], observed)
+            return {"unchanged": True,
+                   "reason": f"idempotent — {head} already recorded reaching {observed}; "
+                             "repaired the drifted stored model, minted nothing"}
         # whose hand moved the model? A /model on THIS session's own transcript makes the seam
         # the OPERATOR's deliberate act — the mint still happens (a death is a death, ruling
         # a882b334) but the seam string carries the hand, so no downstream surface preaches.

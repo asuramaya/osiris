@@ -110,6 +110,87 @@ async def test_TWO_concurrent_heartbeats_mint_ONE_generation(actions: Actions) -
     assert n == 2, "exactly the ancestor and one heir"
 
 
+# ═══ /succession IDEMPOTENCY (thread 8dc9940c) ═══════════════════════════════════════════
+# Thoth's own live repro: one real fable→opus swap, minted correctly once — then THREE
+# numerals for it (agent:ad1a1cb0-g40-xx → xxi → xxii) because agent_mounts.model kept
+# drifting back to fable between mounts (a separate, still-open root) and every later
+# heartbeat re-detected the SAME already-completed transition as if it were new. NOT the
+# debounce's case: each intermediate generation genuinely ACTED (sent real mail) before
+# being succeeded, so heal_husks/round-trip debounce correctly refuse to touch them —
+# idempotency on the /succession call site is the only fix that doesn't erase a mind that
+# spoke.
+
+
+async def test_idempotent_swap_repeats_without_reminting(actions: Actions) -> None:
+    """A real swap mints once; the stored model then drifts back and the next heartbeat
+    re-detects the identical transition. Caught even though the heir ACTED in between
+    (msg-1078-shaped) — this is NOT the unwitnessed-round-trip case the debounce already
+    covers; the idempotency check works independent of whether anyone spoke."""
+    sid = "1de40001"
+    await actions.create_or_find_object("Agent", f"agent:{sid}", "test")
+    await save_mount(actions.pool, job_dir=f"/home/t/.claude/jobs/{sid}",
+                     agent_id=f"agent:{sid}", project="osiris", cwd="/t",
+                     model=FABLE, session_key="sid:test")
+    first = await live_succession(actions, session_id=sid + "aaaa-bbbb", observed_model=OPUS)
+    heir = first["minted"]
+    assert heir == f"agent:{sid}-ii"
+    await _acts(actions, heir)  # a REAL act — the old debounce would refuse to heal this
+    # the drift: agent_mounts.model resets to fable (the reset's own root cause is a
+    # separate, still-open question — this reproduces its OBSERVABLE effect)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET model=$1 WHERE job_dir=$2",
+        FABLE, f"/home/t/.claude/jobs/{sid}")
+
+    again = await live_succession(actions, session_id=sid + "aaaa-bbbb", observed_model=OPUS)
+
+    assert "minted" not in again
+    assert again["unchanged"] is True
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' AND canonical LIKE $1",
+        f"agent:{sid}%")
+    assert n == 2, "the duplicate re-detection minted a THIRD generation"
+    row_model = await actions.pool.fetchval(
+        "SELECT model FROM agent_mounts WHERE job_dir=$1", f"/home/t/.claude/jobs/{sid}")
+    assert row_model == OPUS, "the drifted row must be repaired, not left stale"
+
+
+async def test_a_genuinely_new_target_still_mints_after_an_idempotent_repair(
+    actions: Actions,
+) -> None:
+    """The idempotency guard only absorbs a REPEAT of a transition this lineage already
+    recorded — a target it has never reached before is a real seam and mints exactly as
+    before, even against the same stale-row drift pattern."""
+    sid = "1de40002"
+    await actions.create_or_find_object("Agent", f"agent:{sid}", "test")
+    await save_mount(actions.pool, job_dir=f"/home/t/.claude/jobs/{sid}",
+                     agent_id=f"agent:{sid}", project="osiris", cwd="/t",
+                     model=FABLE, session_key="sid:test")
+    first = await live_succession(actions, session_id=sid + "aaaa-bbbb", observed_model=OPUS)
+    await _acts(actions, first["minted"])
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET model=$1 WHERE job_dir=$2",
+        FABLE, f"/home/t/.claude/jobs/{sid}")
+
+    sonnet = "claude-sonnet-5"
+    again = await live_succession(actions, session_id=sid + "aaaa-bbbb", observed_model=sonnet)
+
+    assert again.get("minted") == f"agent:{sid}-iii", "a genuinely new target must still mint"
+
+
+async def test_idempotency_never_absorbs_a_COMPACTION_head(actions: Actions) -> None:
+    """A compaction mint stamps no model_succession at all — _already_reached has nothing
+    to compare against and must never mistake silence for a match."""
+    a = await actions.create_or_find_object("Agent", "agent:1de40003", "test")
+    await mint_heir(actions, "agent:1de40003", a, because="compaction", succession=None)
+    await save_mount(actions.pool, job_dir="/home/t/.claude/jobs/1de40003",
+                     agent_id="agent:1de40003-ii", project="osiris", cwd="/t",
+                     model=FABLE, session_key="sid:test")
+
+    out = await live_succession(actions, session_id="1de40003aaaa-bbbb", observed_model=OPUS)
+
+    assert out.get("minted") == "agent:1de40003-iii"
+
+
 async def test_a_promoted_mount_row_FOLLOWS_the_lineage_head(
     actions: Actions, tmp_path: Path,
 ) -> None:
