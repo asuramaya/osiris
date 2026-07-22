@@ -5,6 +5,7 @@ collision or an unauthorized house crossing.
 """
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -58,6 +59,8 @@ async def test_a_fresh_mint_creates_seat_office_model_and_edge(
     assert "GRADE EVERY DM" in orders  # every minted worker is born knowing the convention
     charter = (office / "charter.md").read_text()
     assert "Vajra's charter" in charter and "OFFLOAD TARGET" in charter
+    grant = json.loads((office / ".claude" / "settings.local.json").read_text())
+    assert grant == {"permissions": {"allow": ["mcp__osiris", "mcp__osiris__*"]}}
 
     assert await _linked(actions, out["seat_id"], manager)
 
@@ -153,10 +156,13 @@ async def test_hollow_adoption_fills_the_empty_office(
     assert out["office"]["osiris_pin"] == "written"
     assert out["office"]["standing_orders"] == "written"
     assert out["office"]["charter_file"] == "written"
+    assert out["office"]["permission_grant"] == "written"
     office = offices / "tantra"
     assert 'project = "sutrahouse"' in (office / ".osiris").read_text()
     assert "Tantra — seat office" in (office / "CLAUDE.md").read_text()
     assert "Tantra's charter" in (office / "charter.md").read_text()
+    grant = json.loads((office / ".claude" / "settings.local.json").read_text())
+    assert grant == {"permissions": {"allow": ["mcp__osiris", "mcp__osiris__*"]}}
 
 
 async def test_adoption_never_touches_a_populated_office(
@@ -172,6 +178,8 @@ async def test_adoption_never_touches_a_populated_office(
     (office / ".osiris").write_text('project = "sutrahouse"\nmodel = "claude-opus-4-8"\n')
     (office / "CLAUDE.md").write_text("HER OWN HAND-TUNED ORDERS.\n")
     (office / "charter.md").write_text("HER OWN HAND-WRITTEN CHARTER.\n")
+    (office / ".claude").mkdir()
+    (office / ".claude" / "settings.local.json").write_text('{"permissions": {"allow": []}}')
 
     out = await mint_seat(actions, manager="Alfred", handle="Tantra", office_root=offices,
                           actor="operator")
@@ -179,9 +187,12 @@ async def test_adoption_never_touches_a_populated_office(
     assert out["office"]["osiris_pin"] == "left in place"
     assert out["office"]["standing_orders"] == "left in place"
     assert out["office"]["charter_file"] == "left in place"
+    assert out["office"]["permission_grant"] == "left in place"
     assert (office / ".osiris").read_text() == 'project = "sutrahouse"\nmodel = "claude-opus-4-8"\n'
     assert "HER OWN HAND-TUNED ORDERS" in (office / "CLAUDE.md").read_text()
     assert "HER OWN HAND-WRITTEN CHARTER" in (office / "charter.md").read_text()
+    assert (office / ".claude" / "settings.local.json").read_text() == \
+        '{"permissions": {"allow": []}}'
 
 
 # ═══════════ THE NEAR-MISS GUARD (ruling 7cffda8f, Alfred's field pilot) ═══════════
