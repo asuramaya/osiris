@@ -1253,21 +1253,6 @@ async def _manages(pool: asyncpg.Pool, manager_seat: str, worker_seat: str) -> b
         "AND f.canonical=$1 AND t.canonical=$2", worker_seat, manager_seat))
 
 
-async def _seat_facts(pool: asyncpg.Pool, seat_id: str) -> dict[str, Any]:
-    """A target Seat's display + office facts (handle, house, anchor_cwd) by WINNING assertions —
-    the office is the room the body is born in, the house names its [TAG]."""
-    def _win(name: str) -> str:
-        return ("(SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
-                f"ON o.id=a.object_id WHERE o.canonical=$1 AND a.name='{name}' "
-                "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)")
-    row = await pool.fetchrow(
-        f"SELECT {_win('handle')} AS handle, {_win('house')} AS house, "
-        f"{_win('anchor_cwd')} AS anchor_cwd", seat_id)
-    if row is None:
-        return {"handle": None, "house": None, "anchor_cwd": None}
-    return {"handle": row["handle"], "house": row["house"], "anchor_cwd": row["anchor_cwd"]}
-
-
 async def _manager_control(req: dict[str, Any]) -> dict[str, Any]:
     """One manager control op (the injectable default; tests supply their own). Raises on a dark
     daemon — launch_seat catches it and reports 'manager-cold' honestly, never a false success."""
@@ -1328,7 +1313,8 @@ async def launch_seat(
                           "launch is DOWNWARD-ONLY (78e3734e): you may only body a seat you "
                           "manage; a worker cannot spawn its manager a body"}
 
-    facts = await _seat_facts(pool, target_seat)
+    from src.orchestrator.seats import seat_facts
+    facts = await seat_facts(pool, target_seat)
     handle, house, office = facts["handle"], facts["house"], facts["anchor_cwd"]
     if not handle:
         return {"status": "refused-no-handle",

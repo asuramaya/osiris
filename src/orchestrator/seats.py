@@ -28,6 +28,7 @@ mint_heir), so the SEAT is the address that stops churning precisely because min
 
 from __future__ import annotations
 
+import logging
 import secrets
 import uuid
 from collections.abc import AsyncIterator
@@ -41,6 +42,8 @@ import asyncpg
 from src.actions.core import Actions
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
+
+logger = logging.getLogger("osiris.seats")
 
 _EC = EvidenceClass.SELF_DECLARED.value
 _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
@@ -166,7 +169,10 @@ async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
     ANYWHERE in the lineage (the presented id, the bare root, or any `-<suffix>` generation —
     the same LIKE-prefix shape the trigger.py rate caps already use) answers; when more than
     one survives un-healed, the NEWEST generation wins, the same tiebreak follow_binding uses
-    when it moves a link forward."""
+    when it moves a link forward.
+
+    `house` is DERIVED (ruling ff6148b0, decision 4c9e4bd7), never the seat's own stored
+    property — see derive_house()."""
     from src.orchestrator.agents import _generation
 
     base = _generation(agent_id)[0]
@@ -174,10 +180,7 @@ async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
         "SELECT f.canonical AS holder, t.canonical AS seat_id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=t.id "
         "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS handle, "
-        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=t.id "
-        "   AND a.name='house' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS house "
+        "   AS handle "
         "FROM links l JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
         "WHERE (f.canonical=$1 OR f.canonical=$2 OR f.canonical LIKE $2 || '-%') "
         "AND l.type='holds' AND t.type='Seat' AND t.status='active' "
@@ -185,7 +188,8 @@ async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
     if not rows:
         return None
     best = max(rows, key=lambda r: _generation(r["holder"])[1])
-    return {"seat_id": best["seat_id"], "handle": best["handle"], "house": best["house"]}
+    house = await derive_house(pool, best["seat_id"])
+    return {"seat_id": best["seat_id"], "handle": best["handle"], "house": house}
 
 
 SeatState = Literal["vacant", "occupied", "cold"]
@@ -246,20 +250,20 @@ async def fleet_occupancy(
     the agent tree, so a seat with no holder at all (Ptah's shape) is as visible as one with
     three. Same authority as seat_occupancy(), run once per seat instead of asked one at a
     time; small fleet, small N, and matches backfill_unbound_seats' own list-then-resolve
-    shape rather than a fused query the seat count doesn't yet justify."""
+    shape rather than a fused query the seat count doesn't yet justify.
+
+    `house` is DERIVED per seat (ruling ff6148b0, decision 4c9e4bd7) — see derive_house()."""
     seats = await pool.fetch(
         "SELECT o.canonical AS seat_id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS handle, "
-        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='house' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS house "
+        "   AS handle "
         "FROM objects o WHERE o.type='Seat' AND o.status='active' ORDER BY o.canonical")
     out: list[dict[str, Any]] = []
     for row in seats:
         occ = await seat_occupancy(pool, row["seat_id"], live_secs=live_secs)
-        out.append({"seat_id": row["seat_id"], "handle": row["handle"], "house": row["house"],
+        house = await derive_house(pool, row["seat_id"])
+        out.append({"seat_id": row["seat_id"], "handle": row["handle"], "house": house,
                     **occ})
     return out
 
@@ -327,6 +331,74 @@ async def manager_of_seat(pool: asyncpg.Pool, seat_id: str) -> str | None:
         "AND t.type='Seat' AND t.status='active' "
         "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "ORDER BY l.first_seen DESC LIMIT 1", seat_id)
+
+
+_MAX_HOUSE_HOPS = 32  # generous for any real org depth (mirrors mint_heir's own bounded-
+                      # walk convention, range(64)) — exists to catch a managed_by CYCLE,
+                      # a data bug, not a legitimately deep chain
+
+
+async def derive_house(pool: asyncpg.Pool, seat_id: str, *, max_hops: int = _MAX_HOUSE_HOPS,
+                       ) -> str | None:
+    """House must be DERIVED, not stored (operator ruling ff6148b0, decision 4c9e4bd7):
+    house(seat) = house(manager(seat)), walked up the managed_by chain to the HEAD (a seat
+    with no active managed_by edge out) — the head's own STORED house is the one legitimate
+    anchor left, a deliberate declaration (Alfred's 'alfred', Thoth's 'osiris') never a
+    spawn-time snapshot. Every seat below derives through the chain; the stored `house`
+    property on a non-head seat is legacy noise this never reads (Alfred's old bytebye,
+    Vajra's twin house=vajra simply stop being consulted, not corrected).
+
+    READ-TIME ONLY, same discipline as reachability(): computed fresh every call, nothing
+    written back. LOUD on a managed_by CYCLE — a seat reappearing in its own chain is a
+    graph bug, not a deep hierarchy, so this logs and returns None rather than silently
+    truncating; a legitimately unbounded chain (should never happen — max_hops is generous)
+    reads the same way, also logged."""
+    seen: set[str] = set()
+    current = seat_id
+    for _ in range(max_hops):
+        if current in seen:
+            logger.warning("managed_by cycle deriving house for %s: reached %s twice",
+                           seat_id, current)
+            return None
+        seen.add(current)
+        manager = await manager_of_seat(pool, current)
+        if manager is None:  # current is the HEAD — its own stamped house is authoritative
+            return await pool.fetchval(  # type: ignore[no-any-return]
+                "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+                "ON a.object_id=o.id AND a.name='house' WHERE o.canonical=$1 "
+                "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", current)
+        current = manager
+    logger.warning("house derivation for %s exceeded %d hops without reaching a head",
+                   seat_id, max_hops)
+    return None
+
+
+async def seat_facts(pool: asyncpg.Pool, seat_id: str) -> dict[str, Any]:
+    """A Seat's own handle/house/intended_model/anchor_cwd, one read — the shared resolver
+    mintseat.py and trigger.py each independently hand-rolled as a private `_seat_facts`
+    (identical name, near-identical shape, the exact 'two resolvers disagree' class this
+    house keeps re-learning). `house` is DERIVED (ruling ff6148b0, decision 4c9e4bd7), the
+    other three are the seat's own stored assertions — always all four keys present (None
+    when absent or the seat doesn't exist), matching trigger.py's stricter contract so a
+    caller can index `facts["handle"]` directly rather than every caller re-deriving its
+    own tolerant `.get()`."""
+    row = await pool.fetchrow(
+        "SELECT "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS handle, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='intended_model' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   LIMIT 1) AS intended_model, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='anchor_cwd' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS anchor_cwd "
+        "FROM objects o WHERE o.canonical=$1 AND o.type='Seat' AND o.status='active'", seat_id)
+    house = await derive_house(pool, seat_id)
+    if row is None:
+        return {"handle": None, "house": house, "intended_model": None, "anchor_cwd": None}
+    return {"handle": row["handle"], "house": house,
+            "intended_model": row["intended_model"], "anchor_cwd": row["anchor_cwd"]}
 
 
 async def bind_holder(

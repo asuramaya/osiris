@@ -1153,3 +1153,130 @@ async def test_manager_of_seat_none_when_unmanaged(actions: Actions) -> None:
     await actions.create_or_find_object("Seat", "seat:mos2cccc", "test")
 
     assert await manager_of_seat(actions.pool, "seat:mos2cccc") is None
+
+
+# ═══ DERIVE_HOUSE (ruling ff6148b0, decision 4c9e4bd7) — house is DERIVED off the managed_by
+# chain to the head, never a stored snapshot that drifts (Alfred's legacy bytebye, Vajra's
+# twin house=vajra). The head's own stored house is the one legitimate anchor. ═══════════
+
+
+async def _link_managed_by(actions: Actions, worker: Any, manager: Any) -> None:
+    await actions.create_link(worker, manager, "managed_by", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+
+
+async def test_derive_house_of_a_head_reads_its_own_stored_house(actions: Actions) -> None:
+    """No managed_by edge out = the head; its own stamped house is authoritative — the one
+    legitimate place house is still stored (a deliberate anchor, e.g. Alfred's 'alfred')."""
+    from src.orchestrator.seats import derive_house
+
+    head = await actions.create_or_find_object("Seat", "seat:dh1head0", "test")
+    await actions.assert_property(head, "house", "alfred", "test", datetime.now(UTC), 0.9)
+
+    assert await derive_house(actions.pool, "seat:dh1head0") == "alfred"
+
+
+async def test_derive_house_walks_the_chain_ignoring_a_worker_s_own_stale_stamp(
+    actions: Actions,
+) -> None:
+    """THE ACTUAL BUG: a worker's own stored house ('bytebye', a legacy mint-time snapshot)
+    is WRONG — but it's never read. Only the chain up to the head matters, however many
+    hops. Two levels here (worker -> manager -> head) to prove it isn't just one hop."""
+    from src.orchestrator.seats import derive_house
+
+    head = await actions.create_or_find_object("Seat", "seat:dh2head0", "test")
+    await actions.assert_property(head, "house", "alfred", "test", datetime.now(UTC), 0.9)
+    manager = await actions.create_or_find_object("Seat", "seat:dh2mgr00", "test")
+    worker = await actions.create_or_find_object("Seat", "seat:dh2wrk00", "test")
+    await actions.assert_property(worker, "house", "bytebye", "test", datetime.now(UTC), 0.9)
+    await _link_managed_by(actions, manager, head)
+    await _link_managed_by(actions, worker, manager)
+
+    assert await derive_house(actions.pool, "seat:dh2wrk00") == "alfred"
+    assert await derive_house(actions.pool, "seat:dh2mgr00") == "alfred"
+
+
+async def test_derive_house_detects_a_managed_by_cycle_without_hanging(
+    actions: Actions,
+) -> None:
+    """A seat reappearing in its own chain is a graph BUG, not a deep hierarchy — this must
+    terminate (never infinite-loop) and read as None, not crash or hang."""
+    from src.orchestrator.seats import derive_house
+
+    a = await actions.create_or_find_object("Seat", "seat:dh3aaaa0", "test")
+    b = await actions.create_or_find_object("Seat", "seat:dh3bbbb0", "test")
+    await _link_managed_by(actions, a, b)
+    await _link_managed_by(actions, b, a)
+
+    assert await derive_house(actions.pool, "seat:dh3aaaa0") is None
+
+
+async def test_derive_house_none_for_an_unknown_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import derive_house
+
+    assert await derive_house(actions.pool, "seat:dh4ghost") is None
+
+
+async def test_held_seat_reports_the_derived_house_not_the_stale_stamp(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The integration point orient()/mount() actually read: a worker seat's OWN stored
+    house is stale, but held_seat() reports the head's house, matching derive_house()."""
+    from src.orchestrator.agents import claim_name
+    from src.orchestrator.seats import bind_holder, held_seat
+
+    head = await actions.create_or_find_object("Seat", "seat:dh5head0", "test")
+    await actions.assert_property(head, "house", "alfred", "test", datetime.now(UTC), 0.9)
+    a = await actions.create_or_find_object("Agent", "agent:dh5wrk01", "test")
+    await actions.assert_property(a, "project", "osiris", "test", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+    claimed = await claim_name(actions, "agent:dh5wrk01", "Vajra", source="test")
+    worker = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
+    # a legacy stray stamp on the worker's OWN seat — must never be read now
+    await actions.assert_property(worker, "house", "vajra", "test", datetime.now(UTC), 0.9)
+    await _link_managed_by(actions, worker, head)
+    await bind_holder(actions, seat_id=claimed["seat_id"], agent_id="agent:dh5wrk01")
+
+    bound = await held_seat(actions.pool, "agent:dh5wrk01")
+    assert bound is not None and bound["house"] == "alfred"
+
+
+async def test_fleet_occupancy_reports_derived_house_per_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import bind_holder, ensure_seat, fleet_occupancy
+
+    head = await actions.create_or_find_object("Seat", "seat:dh6head0", "test")
+    await actions.assert_property(head, "house", "alfred", "test", datetime.now(UTC), 0.9)
+    worker = await ensure_seat(actions, house="stale-nonsense", handle="Tefnut6",
+                               source="test")
+    await _link_managed_by(actions, await actions.create_or_find_object(
+        "Seat", worker["seat_id"], "test"), head)
+    await bind_holder(actions, seat_id=worker["seat_id"], agent_id="agent:dh6live1")
+
+    rows = await fleet_occupancy(actions.pool)
+    row = next(r for r in rows if r["seat_id"] == worker["seat_id"])
+    assert row["house"] == "alfred"
+
+
+async def test_seat_facts_returns_all_four_keys_with_derived_house(actions: Actions) -> None:
+    """The shared resolver (mintseat.py + trigger.py's own duplicate _seat_facts,
+    consolidated here) — always all four keys present, `house` derived not stored."""
+    from src.orchestrator.seats import seat_facts
+
+    head = await actions.create_or_find_object("Seat", "seat:sf1head0", "test")
+    await actions.assert_property(head, "house", "alfred", "test", datetime.now(UTC), 0.9)
+    worker = await actions.create_or_find_object("Seat", "seat:sf1wrk00", "test")
+    await actions.assert_property(worker, "handle", "Vajra", "test", datetime.now(UTC), 0.9)
+    await actions.assert_property(worker, "anchor_cwd", "/home/vajra", "test",
+                                  datetime.now(UTC), 0.9)
+    await _link_managed_by(actions, worker, head)
+
+    facts = await seat_facts(actions.pool, "seat:sf1wrk00")
+    assert facts == {"handle": "Vajra", "house": "alfred", "intended_model": None,
+                     "anchor_cwd": "/home/vajra"}
+
+
+async def test_seat_facts_all_none_for_an_unknown_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import seat_facts
+
+    assert await seat_facts(actions.pool, "seat:sf2ghost") == {
+        "handle": None, "house": None, "intended_model": None, "anchor_cwd": None}

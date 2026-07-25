@@ -182,10 +182,12 @@ _OPERATOR_CALLERS = {"operator", "console"}
 
 
 async def _caller_house(pool: asyncpg.Pool, caller: str | None) -> str | None:
-    """The house a caller reads reflections as: '*' for the operator's own surfaces,
-    None for an anonymous caller (reads NO reflections — an unmounted stranger has no
-    house), else the caller's seat house (a seat belongs to a house across successions)
-    falling back to its project label (most projects are their own house)."""
+    """The house a caller reads reflections as — a SECURITY-RELEVANT read (this gates
+    cross-house reflection visibility, ruling ff6148b0): '*' for the operator's own
+    surfaces, None for an anonymous caller (reads NO reflections — an unmounted stranger
+    has no house), else the caller's seat house, falling back to its project label (most
+    projects are their own house). `held_seat`'s `house` is DERIVED (decision 4c9e4bd7) —
+    this inherits that fix for free, no query of its own."""
     if caller in _OPERATOR_CALLERS:
         return "*"
     if not caller:

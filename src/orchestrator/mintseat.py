@@ -49,7 +49,7 @@ from typing import Any
 
 from src.actions.core import Actions
 from src.orchestrator.offices import _CHARTER_TEMPLATE, _DEFAULT_OFFICE_ROOT, _STANDING_ORDERS
-from src.orchestrator.seats import ensure_seat, seat_occupancy
+from src.orchestrator.seats import ensure_seat, seat_facts, seat_occupancy
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -98,23 +98,6 @@ async def _resolve_seat_ref(pool: Any, ref: str) -> str | None:
         "  WHERE a.object_id=o.id AND a.name='handle' "
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1)", ref)
     return str(rows[0]["canonical"]) if len(rows) == 1 else None
-
-
-async def _seat_facts(pool: Any, seat_id: str) -> dict[str, Any]:
-    """A Seat's own handle/house/intended_model — {} when no such active Seat."""
-    row = await pool.fetchrow(
-        "SELECT "
-        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS handle, "
-        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='house' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS house, "
-        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='intended_model' ORDER BY a.confidence DESC, a.observed_at DESC "
-        "   LIMIT 1) AS intended_model "
-        "FROM objects o WHERE o.canonical=$1 AND o.type='Seat' AND o.status='active'", seat_id)
-    return dict(row) if row else {}
 
 
 async def _person_collision(pool: Any, handle: str) -> str | None:
@@ -239,7 +222,7 @@ async def mint_seat(
                              "never treats a case entity as an org-chart role"}
         return {"error": f"no such manager seat: {manager!r} — mint_seat never invents "
                          "who is minting"}
-    manager_facts = await _seat_facts(actions.pool, manager_seat_id)
+    manager_facts = await seat_facts(actions.pool, manager_seat_id)
     manager_house = manager_facts.get("house")
 
     handle = (handle or "").strip()
@@ -257,7 +240,7 @@ async def mint_seat(
         # THE ADOPT PATH (Tantra's shape): no new identity, no house crossing to refuse —
         # recognizing what already exists is not the same act as minting fresh
         worker_seat_id = existing_seat_id
-        worker_facts = await _seat_facts(actions.pool, worker_seat_id)
+        worker_facts = await seat_facts(actions.pool, worker_seat_id)
         worker_house = worker_facts.get("house")
         seat_minted = False
     else:
@@ -296,7 +279,7 @@ async def mint_seat(
             intended_model=intended_model, office_root=root)
 
     worker_obj = await actions.create_or_find_object("Seat", worker_seat_id, actor)
-    worker_facts = await _seat_facts(actions.pool, worker_seat_id)
+    worker_facts = await seat_facts(actions.pool, worker_seat_id)
     stamped_model = False
     if not worker_facts.get("intended_model"):
         await actions.assert_property(worker_obj, "intended_model", intended_model, actor,
