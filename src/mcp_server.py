@@ -2555,6 +2555,58 @@ async def fold_agent(dupe: str, into: str, evidence: str,
 
 
 @mcp.tool()
+async def correct_house(new_house: str, ctx: Context | None = None) -> dict[str, Any]:
+    """A HEAD corrects its OWN stored house (ruling ff6148b0, decision 87953278) — the one
+    legitimate write left after house became a live derivation off the managed_by chain
+    (derive_house): a head's anchor is a deliberate identity declaration, exactly like
+    claim_name, so this is SELF-scoped and never operator-fenced. Refuses on a non-head
+    (an active managed_by edge out means this seat derives its house through its manager
+    now — nothing here to correct) or a caller holding no seat."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — house-correct is a seat's own act",
+                "why": _anchorless(ctx)}
+    from src.orchestrator.seats import correct_house as _correct_house
+    return await _correct_house(Actions(await _pool_get()), ident.agent_id, new_house,
+                                source=ident.agent_id)
+
+
+@mcp.tool()
+async def fold_seat(dupe: str, into: str, evidence: str,
+                    ctx: Context | None = None) -> dict[str, Any]:
+    """Fold seat `dupe` into seat `into` — the deliberate cure for a TWIN (thread cb374585,
+    the Vajra shape: claim_name's own resolution-order bug minted a second seat while the
+    real one sat vacant). UNLIKE fold_agent, this MOVES active holders rather than refusing
+    on one — that is its whole job; concurrent holders on the dupe converge to the newest
+    as the surviving active holder. managed_by edges and unread mail follow too. Refuses
+    LOUDLY on thin evidence, an unknown or non-Seat label, dupe==into, or an already-folded
+    dupe."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a fold is a mind's act, and the graph must know whose",
+                "why": _anchorless(ctx)}
+    from src.orchestrator.seats import fold_seat as _fold_seat
+    return await _fold_seat(Actions(await _pool_get()), dupe=dupe, into=into,
+                            evidence=evidence, actor=ident.agent_id)
+
+
+@mcp.tool()
+async def retire_seat(seat_id: str, reason: str = "",
+                      ctx: Context | None = None) -> dict[str, Any]:
+    """Mark a Seat permanently CLOSED — a genuinely dead role, no successor, no merge
+    target. DISTINCT from retire() (that one retires a live agent's own session/turn;
+    this retires the ROLE ITSELF). Refuses on an unknown or already-inactive seat, or an
+    ACTIVE holder — transfer or let it vacate first."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — retiring a seat is a deliberate act on the record",
+                "why": _anchorless(ctx)}
+    from src.orchestrator.seats import retire_seat as _retire_seat
+    return await _retire_seat(Actions(await _pool_get()), seat_id, reason=reason,
+                              actor=ident.agent_id)
+
+
+@mcp.tool()
 async def fold_candidates(ctx: Context | None = None) -> dict[str, Any]:
     """THE ARCHAEOLOGIST'S TRAY (thread b975851b) — sweep the registry and disk for
     anonymous agents that evidence says were never distinct minds (view-aliases: a mount

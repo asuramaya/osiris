@@ -1280,3 +1280,155 @@ async def test_seat_facts_all_none_for_an_unknown_seat(actions: Actions) -> None
 
     assert await seat_facts(actions.pool, "seat:sf2ghost") == {
         "handle": None, "house": None, "intended_model": None, "anchor_cwd": None}
+
+
+# ═══ SEAT LIFECYCLE (ruling ff6148b0's completion, decision 87953278, thread cb374585) ═══
+
+
+async def test_correct_house_lets_a_head_fix_its_own_anchor(actions: Actions) -> None:
+    """The motivating case: Alfred (a head, no managed_by out) corrects bytebye -> alfred
+    on himself. A delegate re-derives the new value immediately."""
+    from src.orchestrator.agents import claim_name
+    from src.orchestrator.seats import correct_house, derive_house
+
+    head = await actions.create_or_find_object("Agent", "agent:ch1alfrd", "test")
+    await actions.assert_property(head, "project", "bytebye", "test", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+    claimed = await claim_name(actions, "agent:ch1alfrd", "Alfred", source="test")
+    assert claimed.get("error") is None
+
+    out = await correct_house(actions, "agent:ch1alfrd", "alfred", source="test")
+    assert out == {"seat_id": claimed["seat_id"], "house": "alfred", "was": "bytebye"}
+    assert await derive_house(actions.pool, claimed["seat_id"]) == "alfred"
+
+
+async def test_correct_house_refuses_a_non_head(actions: Actions) -> None:
+    from src.orchestrator.seats import correct_house
+
+    head = await actions.create_or_find_object("Seat", "seat:ch2head0", "test")
+    await actions.assert_property(head, "house", "alfred", "test", datetime.now(UTC), 0.9)
+    worker = await actions.create_or_find_object("Seat", "seat:ch2wrk00", "test")
+    await _link_managed_by(actions, worker, head)
+    await actions.create_or_find_object("Agent", "agent:ch2wrker", "test")
+    from src.orchestrator.seats import bind_holder
+    await bind_holder(actions, seat_id="seat:ch2wrk00", agent_id="agent:ch2wrker",
+                      source="test")
+
+    out = await correct_house(actions, "agent:ch2wrker", "bogus", source="test")
+    assert "not a head" in out.get("error", "")
+
+
+async def test_correct_house_refuses_an_empty_value(actions: Actions) -> None:
+    from src.orchestrator.seats import correct_house
+
+    assert "needs a name" in (
+        await correct_house(actions, "agent:ch3nobody", "  ", source="test"))["error"]
+
+
+async def test_correct_house_refuses_a_caller_with_no_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import correct_house
+
+    out = await correct_house(actions, "agent:ch4unseated", "somehouse", source="test")
+    assert "holds no seat" in out["error"]
+
+
+async def test_fold_seat_moves_active_holders_and_estate_the_vajra_shape(
+    actions: Actions,
+) -> None:
+    """Reproduces the exact live shape: a twin with TWO concurrent holders (the anomaly
+    itself — two sessions bound to the wrong seat) folds into the real, org-anchored seat.
+    Both are re-pointed (named in holders_moved); they converge to ONE active holder on
+    the survivor — the NEWEST — matching bind_holder's own one-seat-one-holder law rather
+    than preserving the twin's anomaly on the far side of the fold."""
+    from src.orchestrator.seats import fold_seat, held_seat, manager_of_seat
+
+    alfred = await actions.create_or_find_object("Seat", "seat:fs1alfrd", "test")
+    await actions.assert_property(alfred, "house", "alfred", "test", datetime.now(UTC), 0.9)
+    real = await actions.create_or_find_object("Seat", "seat:fs1real0", "test")
+    await _link_managed_by(actions, real, alfred)
+    twin = await actions.create_or_find_object("Seat", "seat:fs1twin0", "test")
+    h1 = await actions.create_or_find_object("Agent", "agent:fs1hld01", "test")
+    h2 = await actions.create_or_find_object("Agent", "agent:fs1hld02", "test")
+    await actions.create_link(h1, twin, "holds", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+    await actions.create_link(h2, twin, "holds", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+    await mailbox_send(actions, to_agent="seat:fs1twin0")
+
+    out = await fold_seat(actions, dupe="seat:fs1twin0", into="seat:fs1real0",
+                          evidence="test: the Vajra twin shape", actor="test")
+    assert set(out["holders_moved"]) == {"agent:fs1hld01", "agent:fs1hld02"}
+    assert out["mail_moved"] == 1
+
+    b1 = await held_seat(actions.pool, "agent:fs1hld01")
+    b2 = await held_seat(actions.pool, "agent:fs1hld02")
+    assert b1 is None, "the OLDER concurrent holder heals away, converging to one soul"
+    assert b2 is not None and b2["seat_id"] == "seat:fs1real0", (
+       "the NEWER concurrent holder survives as the seat's one active holder")
+    assert await manager_of_seat(actions.pool, "seat:fs1real0") == "seat:fs1alfrd"
+
+
+async def mailbox_send(actions: Actions, *, to_agent: str) -> None:
+    from src.orchestrator.mailbox import send_message
+    await send_message(actions.pool, from_agent="agent:someone", from_project="test",
+                       to_agent=to_agent, body="a stray message to the twin")
+
+
+async def test_fold_seat_refuses_thin_evidence(actions: Actions) -> None:
+    from src.orchestrator.seats import fold_seat
+
+    a = await actions.create_or_find_object("Seat", "seat:fs2aaaa0", "test")
+    b = await actions.create_or_find_object("Seat", "seat:fs2bbbb0", "test")
+    assert a and b
+    out = await fold_seat(actions, dupe="seat:fs2aaaa0", into="seat:fs2bbbb0", evidence="",
+                          actor="test")
+    assert "auto-merge wearing a signature" in out["error"]
+
+
+async def test_fold_seat_refuses_dupe_equals_into(actions: Actions) -> None:
+    from src.orchestrator.seats import fold_seat
+
+    out = await fold_seat(actions, dupe="seat:fs3same0", into="seat:fs3same0",
+                          evidence="test", actor="test")
+    assert "same seat" in out["error"]
+
+
+async def test_fold_seat_refuses_an_unknown_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import fold_seat
+
+    a = await actions.create_or_find_object("Seat", "seat:fs4real0", "test")
+    assert a
+    out = await fold_seat(actions, dupe="seat:fs4ghost", into="seat:fs4real0",
+                          evidence="test", actor="test")
+    assert "unknown seat" in out["error"] and "seat:fs4ghost" in out["error"]
+
+
+async def test_retire_seat_closes_a_vacant_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import retire_seat
+
+    await actions.create_or_find_object("Seat", "seat:rs1dead0", "test")
+    out = await retire_seat(actions, "seat:rs1dead0", reason="role discontinued",
+                            actor="test")
+    assert out == {"retired": "seat:rs1dead0"}
+    val = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+        "AND a.name='retired' WHERE o.canonical=$1", "seat:rs1dead0")
+    assert val == "true"
+
+
+async def test_retire_seat_refuses_an_active_holder(actions: Actions) -> None:
+    from src.orchestrator.seats import bind_holder, retire_seat
+
+    await actions.create_or_find_object("Seat", "seat:rs2live0", "test")
+    await bind_holder(actions, seat_id="seat:rs2live0", agent_id="agent:rs2holdr",
+                      source="test")
+
+    out = await retire_seat(actions, "seat:rs2live0", actor="test")
+    assert "actively held" in out["error"] and "agent:rs2holdr" in out["error"]
+
+
+async def test_retire_seat_refuses_an_unknown_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import retire_seat
+
+    out = await retire_seat(actions, "seat:rs3ghost", actor="test")
+    assert "no such seat" in out["error"]

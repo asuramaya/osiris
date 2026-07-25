@@ -298,8 +298,12 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
     if elsewhere is not None and not holders:
         return {"error": f"'{name}' is a seat in another house ({elsewhere['canonical']}) — a name "
                          "belongs to one house; pick a name for your own."}
-    # a seat a LIVE mind is already sitting in is not vacant: two minds in one house do two jobs
-    sitting = await resolve_seat(actions, name) if holders else {"live": False}
+    # a seat a LIVE mind is already sitting in is not vacant: two minds in one house do two jobs.
+    # UNCONDITIONAL now (thread cb374585): gating this behind `holders` — an AGENT-history,
+    # house-scoped count — meant a caller whose own computed house didn't match the seat's
+    # own stored house skipped the seat-world check entirely, exactly the Vajra shape (a
+    # fresh session's CWD-derived house disagreeing with the seat Alfred actually minted).
+    sitting = await resolve_seat(actions, name)
     if sitting["live"] and sitting["agent"] != agent_id:
         return {"error": f"'{name}' is currently held by {sitting['agent']}, who is LIVE — a seat "
                          "is a job, and two minds in one house do two jobs. Take another seat, or "
@@ -337,13 +341,31 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
     # (visitor, live-sitter, other-house) already ran. Legacy seats enter the Seat world
     # the moment they are next claimed; from there succession, mail, resolution, and
     # resume all ride the durable binding.
-    from src.orchestrator.seats import bind_holder, ensure_seat
-    seat_world = await ensure_seat(actions, house=house, handle=name, source=source)
-    seat_id: str | None = None
-    if not seat_world.get("error"):
-        seat_id = seat_world["seat_id"]
-        await bind_holder(actions, seat_id=seat_world["seat_id"], agent_id=agent_id,
-                          source=source)
+    #
+    # GLOBAL FIRST, HOUSE-SCOPED ONLY WHEN GENUINELY NEW (thread cb374585): a real,
+    # unambiguous seat for this handle can be VACANT (no holder to disagree with a stale
+    # house guess) — find_seat's own (house, handle) lookup silently misses it whenever the
+    # caller's own computed house doesn't match what's actually stored, and used to mint a
+    # SECOND seat instead (the Vajra twin, seat:1d3cf119, born this exact way while the real
+    # seat:191f1a1e — managed_by Alfred — sat untouched). seats_by_handle answers the
+    # question find_seat can't: does ANY active seat already carry this name, regardless of
+    # house? Zero → mint fresh, house-scoped is correct (nothing to conflict with). One →
+    # THAT seat, always, whatever its own stored house says. Two or more → an ambiguity
+    # (a twin) this claim refuses rather than silently arbitrates; fold_seat resolves it
+    # deliberately, on its own turn, never as a side effect of an unrelated claim.
+    from src.orchestrator.seats import bind_holder, ensure_seat, seats_by_handle
+    existing = await seats_by_handle(actions.pool, name)
+    if len(existing) > 1:
+        return {"error": f"'{name}' names {len(existing)} active seats — an ambiguity this "
+                         f"claim will not silently arbitrate: {', '.join(existing)}. A "
+                         "deliberate fold_seat resolves a twin; claim_name never guesses."}
+    seat_id: str | None = existing[0] if existing else None
+    if seat_id is None:
+        seat_world = await ensure_seat(actions, house=house, handle=name, source=source)
+        if not seat_world.get("error"):
+            seat_id = seat_world["seat_id"]
+    if seat_id:
+        await bind_holder(actions, seat_id=seat_id, agent_id=agent_id, source=source)
     return {"claimed": name, "seat": seat_label(agent_id, name, gen), "agent": agent_id,
             "house": house, "generation": gen, "inherited_from": prior,
             **({"seat_id": seat_id} if seat_id else {})}

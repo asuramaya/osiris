@@ -80,6 +80,25 @@ async def find_seat(pool: asyncpg.Pool, *, house: str | None, handle: str) -> st
         "ORDER BY o.created_at LIMIT 1", handle, house)
 
 
+async def seats_by_handle(pool: asyncpg.Pool, handle: str) -> list[str]:
+    """Every ACTIVE Seat carrying this handle, case-insensitive, GLOBALLY — house-agnostic
+    on purpose (thread cb374585, the Vajra twin's root cause): find_seat's (house, handle)
+    lookup misses a real, unambiguous seat whenever the caller's own computed house doesn't
+    match what's actually stored on it (a vacant seat has no live session to disagree with
+    a stale/CWD-derived house guess) — exactly the shape that let claim_name mint a SECOND
+    seat for 'Vajra' while the real one (managed_by Alfred, house 'bytebye') sat untouched.
+    Zero results means genuinely new (mint fresh, house-scoped is fine — nothing to
+    conflict with); exactly one is the seat any claim to this handle must bind; two or more
+    is an ambiguity — a twin — that a caller must name and refuse, never silently
+    arbitrate (fold_seat resolves it deliberately, this function only reports it)."""
+    return [r["canonical"] for r in await pool.fetch(
+        "SELECT o.canonical FROM objects o WHERE o.type='Seat' AND o.status='active' "
+        "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='handle' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1) "
+        "ORDER BY o.created_at", handle)]
+
+
 async def ensure_seat(
     actions: Actions, *, house: str | None, handle: str, anchor_cwd: str | None = None,
     source: str,
@@ -660,3 +679,162 @@ async def follow_binding(
         await actions.invalidate_link(r["from_id"], r["to_id"], "holds", heir, now)
         await actions.create_link(heir_oid, r["to_id"], "holds", heir, now, _CONF,
                                   evidence_class=_EC)
+
+
+# ═══ SEAT LIFECYCLE (ruling ff6148b0's completion, decision 87953278, thread cb374585) —
+# self-organizing seats: a head corrects its own anchor, a twin folds deliberately, a
+# genuinely dead role retires. None of this is fenced to the operator's hand — each is an
+# identity act within its own caller's authority, the same law claim_name already runs on.
+
+
+async def correct_house(actions: Actions, agent_id: str, new_house: str, *, source: str,
+                        ) -> dict[str, Any]:
+    """A HEAD corrects its OWN stored house — the one legitimate write left after
+    derive_house (ruling ff6148b0, decision 4c9e4bd7): a head's anchor is a deliberate
+    identity declaration, exactly like claim_name, so this is SELF-scoped and NOT
+    operator-fenced (decision 87953278: 'an identity act within its own authority').
+
+    Refuses LOUDLY on: an empty house; a caller holding no seat; a caller whose seat is
+    NOT a head (an active managed_by edge out means this seat derives its house through
+    its manager now — stamping its own house property would be inert data nobody reads,
+    the exact 'legacy write stays inert' shape derive_house already documents)."""
+    new_house = (new_house or "").strip()
+    if not new_house:
+        return {"error": "a house needs a name"}
+    bound = await held_seat(actions.pool, agent_id)
+    if bound is None:
+        return {"error": f"{agent_id} holds no seat — house-correct is a seat's own act, "
+                         "never done on another's behalf"}
+    seat_id = bound["seat_id"]
+    manager = await manager_of_seat(actions.pool, seat_id)
+    if manager is not None:
+        return {"error": f"{seat_id} is managed_by {manager} — not a head. A non-head "
+                         f"derives its house through the chain (currently {bound['house']!r}); "
+                         "only a head's own stamp is ever read, so only a head may correct "
+                         "one. Nothing to do here."}
+    was = bound.get("house")
+    seat_obj = await actions.create_or_find_object("Seat", seat_id, source)
+    await actions.assert_property(seat_obj, "house", new_house, source, datetime.now(UTC),
+                                  _CONF, evidence_class=_EC)
+    return {"seat_id": seat_id, "house": new_house, "was": was}
+
+
+async def fold_seat(
+    actions: Actions, *, dupe: str, into: str, evidence: str, actor: str,
+) -> dict[str, Any]:
+    """Fold seat `dupe` into seat `into` — the deliberate, evidence-gated cure for a TWIN
+    (two Seat objects that should have been one; the Vajra twin, thread cb374585, is the
+    concrete case this exists for: claim_name's own resolution-order bug minted a second
+    seat while the real one, managed_by Alfred, sat vacant).
+
+    UNLIKE fold_agent (folds.py — refuses outright when `dupe` holds a seat, because a
+    seat transfer is a deliberate act there, never a fold's side effect): fold_seat's WHOLE
+    JOB is moving active holders. Every live `holds` link on `dupe` re-points to `into`. If
+    `dupe` had MORE THAN ONE concurrent holder (the twin's own anomaly — the thing this
+    verb exists to close, not preserve), they converge to ONE: bind_holder's own succession
+    law means whichever is re-pointed LAST survives as `into`'s active holder, so this
+    processes oldest-first — the NEWEST holder wins, matching every recency-wins
+    convention elsewhere in this codebase. All are still named in `holders_moved`. `managed_by`
+    edges move too, in either direction, so a folded seat's own org-chart position (who it
+    managed, who managed it) survives the merge. Mail addressed to `dupe` follows to `into`.
+
+    Refuses LOUDLY, nothing written, on: empty evidence (an auto-merge wearing a
+    signature); either label unknown or not a Seat; dupe==into; dupe already folded."""
+    dupe, into = (dupe or "").strip(), (into or "").strip()
+    if not (evidence or "").strip():
+        return {"error": "a fold without evidence is an auto-merge wearing a signature — "
+                         "cite what proves these are one seat"}
+    if not dupe or not into:
+        return {"error": "fold_seat needs both labels: dupe and into"}
+    if dupe == into:
+        return {"error": "dupe and into name the same seat — nothing to fold"}
+    rows = await actions.pool.fetch(
+        "SELECT id, canonical, status FROM objects WHERE canonical = ANY($1::text[]) "
+        "AND type='Seat'", [dupe, into])
+    by_label = {r["canonical"]: r for r in rows}
+    if dupe not in by_label or into not in by_label:
+        missing = [x for x in (dupe, into) if x not in by_label]
+        return {"error": f"unknown seat(s): {', '.join(missing)} — a fold never invents "
+                         "either side"}
+    if by_label[dupe]["status"] == "merged":
+        return {"error": f"{dupe} is already folded — nothing to do"}
+    if by_label[into]["status"] == "merged":
+        return {"error": f"{into} is itself folded — fold into the living seat instead"}
+    now = datetime.now(UTC)
+    dupe_oid, into_oid = by_label[dupe]["id"], by_label[into]["id"]
+    into_obj = await actions.create_or_find_object("Seat", into, actor)
+    # THE ESTATE, seat-shaped: active holders move first — the point of this verb, where
+    # fold_agent refuses instead. OLDEST FIRST, DELIBERATELY: bind_holder's own succession
+    # law (one active holder per seat, prior heals by valid_until) means whichever holder
+    # is bound LAST survives as the seat's single active holder — a twin's multiple
+    # concurrent holders (a data anomaly the fold exists to close, not preserve) converge
+    # to the NEWEST one, the same recency-wins convention this codebase already uses
+    # everywhere else. Still reported in `holders_moved`, whether or not they end up
+    # active — every one was RE-POINTED off the dupe seat, which is what "moved" means.
+    holders = await actions.pool.fetch(
+        "SELECT f.id AS fid, f.canonical AS holder FROM links l JOIN objects f ON f.id=l.from_id "
+        "WHERE l.to_id=$1 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "ORDER BY l.first_seen ASC", dupe_oid)
+    for row in holders:
+        await actions.invalidate_link(row["fid"], dupe_oid, "holds", actor, now)
+        await bind_holder(actions, seat_id=into, agent_id=row["holder"], source=actor)
+    # managed_by, either direction — a folded seat's org-chart position survives with it
+    managing = await actions.pool.fetch(
+        "SELECT to_id AS tid, t.canonical AS mgr FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='managed_by' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", dupe_oid)
+    for row in managing:
+        await actions.invalidate_link(dupe_oid, row["tid"], "managed_by", actor, now)
+        await actions.create_link(into_obj, row["tid"], "managed_by", actor, now, _CONF,
+                                  evidence_class=_EC)
+    managed = await actions.pool.fetch(
+        "SELECT from_id AS fid, f.canonical AS worker FROM links l "
+        "JOIN objects f ON f.id=l.from_id "
+        "WHERE l.to_id=$1 AND l.type='managed_by' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", dupe_oid)
+    for row in managed:
+        await actions.invalidate_link(row["fid"], dupe_oid, "managed_by", actor, now)
+        await actions.create_link(row["fid"], into_obj, "managed_by", actor, now, _CONF,
+                                  evidence_class=_EC)
+    # the kernel merge: event, projection, resolve-on-read — the same primitive fold_agent
+    # itself calls, type-agnostic, no Agent-only check inside it
+    await actions.merge_objects(into_oid, dupe_oid, justification=evidence, actor=actor)
+    mail_tag = await actions.pool.execute(
+        "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
+        into, dupe)
+    mail_moved = int(mail_tag.rsplit(" ", 1)[-1])
+    return {"folded": dupe, "into": into, "holders_moved": [r["holder"] for r in holders],
+           "managed_by_moved": len(managing) + len(managed), "mail_moved": mail_moved}
+
+
+async def retire_seat(actions: Actions, seat_id: str, *, reason: str = "", actor: str,
+                      ) -> dict[str, Any]:
+    """Mark a Seat permanently CLOSED — a genuinely dead role, no successor, no merge
+    target (fold_seat is for a twin; this is for a role that's simply over). DISTINCT from
+    the session-level retire() (mcp_server.py) — that one retires a live AGENT's own
+    turn; this retires the ROLE ITSELF, for every mind that ever might hold it.
+
+    Refuses LOUDLY on: unknown or already-inactive seat; an ACTIVE holder (a live mind
+    sitting in a seat is not this verb's business to evict — transfer or let it vacate
+    first, the same discipline fold_agent already holds for agents)."""
+    seat_id = (seat_id or "").strip()
+    row = await actions.pool.fetchrow(
+        "SELECT id, status FROM objects WHERE canonical=$1 AND type='Seat'", seat_id)
+    if row is None:
+        return {"error": f"no such seat: {seat_id!r}"}
+    if row["status"] != "active":
+        return {"error": f"{seat_id} is already {row['status']} — nothing to retire"}
+    holder = await actions.pool.fetchval(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "WHERE l.to_id=$1 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) LIMIT 1", row["id"])
+    if holder:
+        return {"error": f"{seat_id} is actively held by {holder} — retire_seat never "
+                         "evicts a live mind; transfer or vacate the seat first"}
+    await actions.assert_property(row["id"], "retired", "true", actor, datetime.now(UTC),
+                                  _CONF, evidence_class=_EC)
+    if (reason or "").strip():
+        await actions.assert_property(row["id"], "retired_because", reason.strip(), actor,
+                                      datetime.now(UTC), _CONF, evidence_class=_EC)
+    return {"retired": seat_id}

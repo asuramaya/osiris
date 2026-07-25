@@ -308,3 +308,87 @@ def test_dot_osiris_label_decouples_from_the_folder(tmp_path: Path) -> None:
     from src.orchestrator.agents import resolve_identity
     assert resolve_identity(cwd=str(repo)).project == "handlingtheloop"
     assert resolve_identity(cwd=str(repo), project_label="override").project == "override"
+
+
+# ═══ THE VAJRA TWIN'S ROOT CAUSE (thread cb374585) — a real, unambiguous, VACANT seat has no
+# live session to disagree with a stale/CWD-derived house guess, so the old house-scoped
+# lookup silently missed it and minted a second seat instead. seats_by_handle answers "does
+# ANY active seat already carry this name" globally, before ever falling to a fresh mint. ═══
+
+
+async def test_claim_name_binds_the_existing_vacant_seat_despite_a_house_mismatch(
+    actions: Actions,
+) -> None:
+    """THE EXACT VAJRA SHAPE: a real seat exists (managed_by nobody in this test, just
+    house='bytebye', never held) and a fresh agent's own computed house ('freshhouse')
+    doesn't match it. The old code minted a SECOND seat here; now it binds the real one."""
+    from src.orchestrator.seats import ensure_seat, held_seat
+
+    real = await ensure_seat(actions, house="bytebye", handle="Vajra", source="test")
+    assert real["minted"] is True
+
+    await _agent(actions, "agent:vajrafresh", project="freshhouse")
+    claimed = await claim_name(actions, "agent:vajrafresh", "Vajra", source="agent:vajrafresh")
+
+    assert claimed.get("error") is None
+    assert claimed["seat_id"] == real["seat_id"], "must bind the REAL seat, not mint a twin"
+    bound = await held_seat(actions.pool, "agent:vajrafresh")
+    assert bound is not None and bound["seat_id"] == real["seat_id"]
+
+
+async def test_claim_name_refuses_loudly_on_an_existing_twin_ambiguity(
+    actions: Actions,
+) -> None:
+    """Two active seats already share a handle (the twin already happened, e.g. from before
+    this fix landed) — claim_name must NAME the ambiguity and refuse, never silently pick
+    one or mint a THIRD. Resolving a twin is fold_seat's deliberate act, not a side effect."""
+    from src.orchestrator.seats import ensure_seat
+
+    seat_a = await ensure_seat(actions, house="bytebye", handle="Vajra", source="test")
+    seat_b = await ensure_seat(actions, house="vajra", handle="Vajra", source="test")
+    assert seat_a["seat_id"] != seat_b["seat_id"]
+
+    await _agent(actions, "agent:vajrathird", project="thirdhouse")
+    claimed = await claim_name(actions, "agent:vajrathird", "Vajra", source="agent:vajrathird")
+
+    assert "ambiguity" in claimed.get("error", "")
+    assert seat_a["seat_id"] in claimed["error"] and seat_b["seat_id"] in claimed["error"]
+
+
+async def test_claim_name_still_mints_fresh_for_a_genuinely_new_handle(
+    actions: Actions,
+) -> None:
+    """Zero existing seats for this handle — the house-scoped mint is correct here, nothing
+    to conflict with. Guards the 0-match branch against a regression from the other two."""
+    from src.orchestrator.seats import held_seat
+
+    await _agent(actions, "agent:freshmint", project="brandnewhouse")
+    claimed = await claim_name(actions, "agent:freshmint", "Nebula", source="agent:freshmint")
+
+    assert claimed.get("error") is None
+    bound = await held_seat(actions.pool, "agent:freshmint")
+    assert bound is not None and bound["handle"] == "Nebula"
+
+
+async def test_claim_name_live_check_is_unconditional_not_gated_by_house_scoped_holders(
+    actions: Actions,
+) -> None:
+    """The `sitting` check used to skip resolve_seat entirely when the AGENT-history,
+    house-scoped `holders` list was empty — exactly the Vajra shape (a fresh caller whose
+    own house never matches the real seat's holder history). A LIVE seat-world binding
+    must block a conflicting claim regardless."""
+    from src.orchestrator.mounts import save_mount
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    real = await ensure_seat(actions, house="bytebye", handle="Orrery", source="test")
+    await _agent(actions, "agent:orrholder", project="differenthouse")
+    await bind_holder(actions, seat_id=real["seat_id"], agent_id="agent:orrholder",
+                      source="test")
+    await save_mount(actions.pool, job_dir="/h/.claude/jobs/orrholde",
+                     agent_id="agent:orrholder", project="differenthouse", cwd="/x",
+                     model=None, session_key="k")
+
+    await _agent(actions, "agent:orrrival", project="thirdhouse")
+    refused = await claim_name(actions, "agent:orrrival", "Orrery", source="agent:orrrival")
+
+    assert refused.get("error") is not None and "LIVE" in refused["error"]
