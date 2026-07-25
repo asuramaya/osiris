@@ -123,6 +123,7 @@ setInterval(tick,4000);
 </script>"""
 
 _TABS = (("desk", "/desk"), ("mail", "/mail"), ("fleet", "/fleet"),
+         ("roadmap", "/roadmap"), ("docs", "/canon"),
          ("overhead", "/overhead"), ("membrane", "/membrane"))
 
 
@@ -719,6 +720,94 @@ def render_fleet(data: dict[str, Any]) -> str:
         "</tr>"
         for w in data["wakes"]) or '<tr><td class="dim">no wakes yet</td></tr>'
     out.append(f"<h2>wake ledger</h2><table>{wrows}</table>")
+    return "".join(out)
+
+
+# ── /roadmap ─────────────────────────────────────────────────────────────────────────────
+# GENERIC PER-PROJECT (the operator: "every project needs it" — a primitive, not an osiris
+# page): the renderer takes whatever `src.orchestrator.roadmap.roadmap()` computed for
+# WHATEVER project the route asked for; nothing here assumes osiris is the only tenant.
+
+def _roadmap_thread_row(t: dict[str, Any]) -> str:
+    return (f'<div class="debt"><code>{_e(str(t["id"]))}</code> {_e(t["summary"])}'
+            + (' <span class="pill">obligation</span>'
+               if t.get("kind") == "obligation" else "")
+            + "</div>")
+
+
+_STATUS_HDR = {"open": "hdr-decision", "resolved": "hdr-fyi", "retracted": "hdr-fyi"}
+
+
+def _roadmap_status_band(s: dict[str, Any]) -> str:
+    """One status, its owner sub-groups inside — the same collapsible band shape as
+    /desk's _guesses_band/_dimmed_band, one level deeper (status → owner → threads)."""
+    status = s["status"]
+    owners = s.get("owners") or []
+    n = sum(len(o["threads"]) for o in owners)
+    body = []
+    for o in owners:
+        body.append(f'<h3 class="who">{_e(o["owner"])} '
+                    f'<span class="pill">{len(o["threads"])}</span></h3>')
+        body.extend(_roadmap_thread_row(t) for t in o["threads"])
+    return (f'<details class="band" id="rm-{_e(status)}"{" open" if status == "open" else ""}>'
+            f'<summary class="{_STATUS_HDR.get(status, "hdr-fyi")}">{_e(status)} '
+            f'<span class="pill">{n}</span></summary>' + "".join(body) + "</details>")
+
+
+def render_roadmap(data: dict[str, Any]) -> str:
+    """One project's Threads/obligations, status→owner (thread 521ae613a6f4 / d56e7073) —
+    v1 has no `arc` (thread 8df8e611, tracked as debt with a migration trigger). `data` is
+    `roadmap()`'s own receipt (composing open_thread_wall + rank_open_threads for the open
+    band, plus resolved/retracted) — this function does no fetching, no ranking, only
+    layout, same discipline as every other renderer here."""
+    if "error" in data:
+        return f'<p class="dim">{_e(data["error"])}</p>'
+    project = data["project"]
+    statuses = data.get("statuses") or []
+    total = sum(len(o["threads"]) for s in statuses for o in s["owners"])
+    out = [f'<h2>roadmap <span class="who">{_e(project)}</span> '
+           f'<span class="pill">{total} thread{"s" if total != 1 else ""}</span></h2>']
+    if not statuses:
+        out.append(f'<p class="dim">nothing tracked yet for <b>{_e(project)}</b>.</p>')
+    out.extend(_roadmap_status_band(s) for s in statuses)
+    if data.get("note"):
+        out.append(f'<p class="dim">{_e(data["note"])}</p>')
+    return "".join(out)
+
+
+# ── /canon (the "docs" tab — routed at /canon, NOT /docs: FastAPI reserves /docs for its
+# own Swagger UI, discovered live when the first route test hit the swagger page instead of
+# this renderer. The nav LABEL stays "docs" (page()'s active-tab match is on the tab name,
+# never the href); only the URL moves, to a word the codebase already uses for exactly this
+# — "the design canon", ingest_canon.) ─────────────────────────────────────────────────────
+
+def render_docs(data: dict[str, Any], project: str) -> str:
+    """The doc canon, topic-sectioned (thread 521ae613a6f4) — flat, one level: no hierarchy
+    link type exists between References (`cites` means "draws from," not "subsection of";
+    Thoth's call, msg 1227, not bent into tree structure). `project` names which project's
+    chrome this is viewed from, for the heading only — `docs()` itself is not yet
+    project-scoped (References carry no reliable per-project link), so every project's
+    canon page currently shows the SAME set. Flagged here, not hidden; the fix is a real
+    per-project scoping mechanism on Reference, not something this renderer can paper over."""
+    sections = data.get("sections") or []
+    total = sum(len(s["docs"]) for s in sections)
+    out = [f'<h2>docs <span class="who">{_e(project)}</span> '
+           f'<span class="pill">{total} doc{"s" if total != 1 else ""}</span></h2>']
+    if not sections:
+        out.append('<p class="dim">nothing ingested yet — seed with '
+                    "<code>python -m src.ingest.reference</code>.</p>")
+    for s in sections:
+        rows = "".join(
+            f'<div class="debt">{_e(d["name"] or d["canonical"])}'
+            + (f' <span class="dim">{_e(d["vendor"])}</span>' if d.get("vendor") else "")
+            + "</div>"
+            for d in s["docs"])
+        out.append(
+            f'<details class="band" id="doc-{_e(s["topic"])}" open>'
+            f'<summary class="hdr-fyi">{_e(s["topic"])} '
+            f'<span class="pill">{len(s["docs"])}</span></summary>' + rows + "</details>")
+    out.append('<p class="dim">the same canon renders under every project until '
+               "References get their own project scoping.</p>")
     return "".join(out)
 
 

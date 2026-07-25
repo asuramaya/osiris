@@ -9,9 +9,11 @@ from src.api.chrome import (
     page,
     render_desk,
     render_desk_project,
+    render_docs,
     render_fleet,
     render_mail_box,
     render_mail_overview,
+    render_roadmap,
 )
 from src.orchestrator.capture import open_thread
 from src.parsers.base import EvidenceClass
@@ -426,3 +428,102 @@ def test_render_overhead_telemetry_band() -> None:
     assert "<b>x</b>" not in html              # event names are escaped
     # without a summary the band is absent, not zero-filled
     assert "retained telemetry" not in render_overhead(_overhead_data(), None)
+
+
+# ── /roadmap ─────────────────────────────────────────────────────────────────────────────
+
+def _roadmap_data(project: str = "seats") -> dict:
+    return {
+        "project": project,
+        "statuses": [
+            {"status": "open", "owners": [
+                {"owner": "unowned", "threads": [
+                    {"id": "aaaa1111", "summary": "an open duty", "kind": "obligation"}]},
+                {"owner": "operator", "threads": [
+                    {"id": "bbbb2222", "summary": "an operator blocker"}]},
+            ]},
+            {"status": "resolved", "owners": [
+                {"owner": "agent:builder", "threads": [
+                    {"id": "cccc3333", "summary": "shipped work"}]},
+            ]},
+        ],
+        "note": "v1: status→owner only, no `arc` yet (thread 8df8e611)",
+    }
+
+
+def test_render_roadmap_bands_by_status_then_owner() -> None:
+    html = render_roadmap(_roadmap_data())
+    assert "roadmap" in html and "seats" in html
+    assert "3 threads" in html
+    assert 'id="rm-open"' in html and 'id="rm-resolved"' in html
+    assert html.index('id="rm-open"') < html.index('id="rm-resolved"')  # fixed status order
+    assert "an open duty" in html and "operator" in html
+    assert "shipped work" in html and "agent:builder" in html
+    assert '<span class="pill">obligation</span>' in html
+    assert "no `arc` yet" in html
+
+
+def test_render_roadmap_open_band_is_expanded_others_are_not() -> None:
+    html = render_roadmap(_roadmap_data())
+    assert '<details class="band" id="rm-open" open>' in html
+    assert '<details class="band" id="rm-resolved">' in html
+
+
+def test_render_roadmap_refuses_honestly() -> None:
+    html = render_roadmap({"error": "no such project: 'ghost'"})
+    assert "no such project" in html
+
+
+def test_render_roadmap_empty_project_says_so() -> None:
+    html = render_roadmap({"project": "quietproj", "statuses": [], "note": "v1..."})
+    assert "nothing tracked yet" in html and "quietproj" in html
+
+
+def test_render_roadmap_is_generic_across_projects() -> None:
+    """Same renderer, two different projects — nothing here hardcodes 'osiris' or 'seats'
+    (the operator's 'every project needs it' — a primitive, not an osiris page)."""
+    for project in ("seats", "some-other-project"):
+        html = render_roadmap(_roadmap_data(project))
+        assert project in html
+
+
+# ── /docs ────────────────────────────────────────────────────────────────────────────────
+
+def _docs_data() -> dict:
+    return {
+        "sections": [
+            {"topic": "getting-started", "docs": [
+                {"canonical": "ref:install", "name": "INSTALL", "vendor": "osiris"}]},
+            {"topic": "reference", "docs": [
+                {"canonical": "ref:palantir-object-sets", "name": "Object Sets",
+                 "vendor": "palantir"}]},
+        ],
+    }
+
+
+def test_render_docs_sections_by_topic() -> None:
+    html = render_docs(_docs_data(), "seats")
+    assert "docs" in html and "seats" in html
+    assert "2 docs" in html
+    assert 'id="doc-getting-started"' in html and 'id="doc-reference"' in html
+    assert "INSTALL" in html and "osiris" in html
+    assert "Object Sets" in html and "palantir" in html
+
+
+def test_render_docs_empty_says_so() -> None:
+    html = render_docs({"sections": []}, "seats")
+    assert "nothing ingested yet" in html
+    assert "python -m src.ingest.reference" in html
+
+
+def test_render_docs_is_generic_across_projects() -> None:
+    for project in ("seats", "some-other-project"):
+        html = render_docs(_docs_data(), project)
+        assert project in html
+
+
+def test_page_shell_includes_the_new_nav_tabs() -> None:
+    html = page("roadmap", "roadmap", "<p>x</p>")
+    # "docs" routes at /canon, not /docs — FastAPI reserves /docs for its own Swagger UI
+    for tab in ("/roadmap", "/canon"):
+        assert f'href="{tab}"' in html

@@ -1041,6 +1041,39 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         return Response(inner if partial else chrome.page("fleet", "fleet", inner),
                         media_type="text/html")
 
+    @app.get("/roadmap")
+    async def roadmap_page(
+        p_: str = Query("osiris", alias="p"), partial: int = 0,
+        p: asyncpg.Pool = Depends(get_pool),
+    ) -> Response:
+        """A project's obligations/threads, status→owner (thread 521ae613a6f4) — GENERIC
+        per-project, `?p=<project>` switches (defaults to osiris's own). Reading leases
+        nothing; roadmap() does the ranking, this route only feeds the graph in."""
+        from src.orchestrator.roadmap import roadmap
+        data = await roadmap(p, p_)
+        inner = chrome.render_roadmap(data)
+        title = f"roadmap · {p_}"
+        return Response(inner if partial else chrome.page(title, "roadmap", inner),
+                        media_type="text/html")
+
+    @app.get("/canon")
+    async def canon_page(
+        p_: str = Query("osiris", alias="p"), partial: int = 0,
+        p: asyncpg.Pool = Depends(get_pool),
+    ) -> Response:
+        """The doc canon, topic-sectioned (thread 521ae613a6f4) — the "docs" nav tab, routed
+        at /canon rather than /docs: FastAPI reserves /docs for its own Swagger UI, and a
+        second route at the same path is silently shadowed by it (caught live by the route
+        test). `?p=<project>` names which project's chrome this is (defaults to osiris's
+        own) — docs() itself is not yet project-scoped, so every project currently renders
+        the same canon; see render_docs's own docstring."""
+        from src.orchestrator.docs import docs
+        data = await docs(p)
+        inner = chrome.render_docs(data, p_)
+        title = f"docs · {p_}"
+        return Response(inner if partial else chrome.page(title, "docs", inner),
+                        media_type="text/html")
+
     @app.get("/overhead")
     async def overhead_page(
         partial: int = 0, p: asyncpg.Pool = Depends(get_pool),
