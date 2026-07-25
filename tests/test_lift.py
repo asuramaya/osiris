@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from src.actions.core import Actions
 from src.orchestrator.agents import claim_name
 from src.orchestrator.lift import lift
@@ -120,3 +121,64 @@ async def test_lift_propagates_claim_name_refusals(actions: Actions, tmp_path: P
     assert out["step"] == "claim_name"
     assert "currently held by" in out["error"]
     assert not (tmp_path / "seats").exists()
+
+
+# ═══════════ THE MCP TOOL LAYER ═══════════
+# test_mintseat.py's ritual is the precedent: fake a mounted connection by injecting an
+# AgentIdentity into srv._agents keyed by srv._conn_key(ctx), point srv._pool at the test
+# DB, call the tool FUNCTION directly (never the MCP transport). lift() exposes no
+# office_root param (a live caller never gets to redirect where an office lands) — the
+# happy-path test monkeypatches offices._DEFAULT_OFFICE_ROOT instead, exactly mint_seat's
+# own technique for the same problem.
+
+class _Ctx:
+    class request_context:  # noqa: N801
+        request = None
+        session = object()
+
+
+async def test_mcp_lift_refuses_an_unmounted_caller(actions: Actions) -> None:
+    import src.mcp_server as srv
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.lift(ref="agent:whoever", handle="Whoever", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out and "mount" in out["error"]
+
+
+async def test_mcp_lift_the_happy_path_through_the_tool_layer(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The tool layer end to end: a mounted caller lifts a different, quiet rogue — the
+    wrapper resolves `actor` from the connection's own identity (never a param) and hands
+    off to the real lift(), which really writes the office (redirected to a scratch dir,
+    since the tool exposes no office_root override)."""
+    import src.mcp_server as srv
+    from src.orchestrator import offices
+    from src.orchestrator.agents import AgentIdentity
+
+    monkeypatch.setattr(offices, "_DEFAULT_OFFICE_ROOT", tmp_path / "seats")
+    cwd = str(tmp_path / "clusterfuck")
+    Path(cwd).mkdir()
+    await _rogue(actions, "agent:rogue0009", cwd)
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:caller001", session="caller001", project="osiris",
+        model=None, cwd=None)
+    try:
+        out = await srv.lift(ref="agent:rogue0009", handle="Scribble", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert "error" not in out
+    assert out["agent"] == "agent:rogue0009"
+    assert out["verified"]["seat_bound"] is True
+    assert out["established"]["office"] == str(tmp_path / "seats" / "scribble")

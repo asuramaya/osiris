@@ -2609,6 +2609,34 @@ async def establish_office(seat: str, ctx: Context | None = None) -> dict[str, A
 
 
 @mcp.tool()
+async def lift(ref: str, handle: str, subagent_id: str | None = None,
+               subagent_type: str | None = None, session_anchor: str | None = None,
+               ctx: Context | None = None) -> dict[str, Any]:
+    """Pull a NAMED, QUIET rogue out of its ad hoc cwd and into a clean osiris office — the
+    P2V move (thread 67f11cbd): import a running-but-unmanaged instance, preserve its state,
+    give it a clean managed identity. Composes `doors(ref)` to resolve the target (refuses on
+    0 matches, on >1 — an ambiguous multi-tenant cwd, name a specific `agent:` id instead —
+    and on a LIVE match: moving a live seat splits its running session's history between two
+    homes, close its tab first), `claim_name(handle)` (propagating its own real refusals: a
+    visitor, a name held live elsewhere, a cross-house collision), and `establish_office`
+    (the actual move). `ref` accepts anything `doors()` does — an `agent:` id, a `seat:` id, a
+    bare handle, or an absolute cwd path. The receipt's `verified` field is a FRESH post-write
+    `doors()` read, never an echo of what the earlier steps each individually claimed.
+
+    SELF-LIFT IS STRUCTURALLY IMPOSSIBLE, not just refused: your own session's `last_seen` is
+    kept perpetually fresh by your own terminal's statusline heartbeat, so you can never
+    observe yourself as quiet from inside a call — `lift()` always targets a DIFFERENT,
+    already-quiet session, never the caller's own."""
+    ident = await _ident_for(ctx, session_anchor)
+    if ident is None:
+        return {"error": "mount(cwd, job_dir=<your anchor>) first — a lift is a mind's act, "
+                         "and the graph must know whose", "why": _anchorless(ctx)}
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
+    from src.orchestrator.lift import lift as _lift
+    return await _lift(await _pool_get(), ref, handle, actor=actor)
+
+
+@mcp.tool()
 async def mint_seat(
     handle: str, project: str | None = None, model: str | None = None,
     house: str | None = None, ctx: Context | None = None,
