@@ -1401,15 +1401,18 @@ async def mount(
         pool, ident.project, ident.agent_id, _prev_seen.get(ident.agent_id))
     if away:  # who wore your face + how your conversations moved, since your last sign of life
         out["while_you_were_away"] = away
-    # TERSE BY DEFAULT (task #55): only guidance prose with a structural sibling carrying
-    # the same fact — co_agents.note (the `live` list already has who/where), the stale-cwd
-    # explanation (declared/kept already have what changed), and the routine 'call orient()
-    # next' reminder. Everything safety-critical (minted/succession/swap/reanimation — an
-    # identity confession an agent could act wrongly without) and everything that's the SOLE
-    # carrier of a fact (mail counts, the identity-conflict refusal's recovery instructions,
-    # the spawn note) stays untouched in both modes — named here, not silently exempted.
+    # TERSE BY DEFAULT (task #55): the stale-cwd explanation (declared/kept already have
+    # what changed) and the routine 'call orient() next' reminder. Everything safety-
+    # critical (minted/succession/swap/reanimation — an identity confession an agent could
+    # act wrongly without) and everything that's the SOLE carrier of a fact (mail counts,
+    # the identity-conflict refusal's recovery instructions, the spawn note) stays untouched
+    # in both modes — named here, not silently exempted. CORRECTION (Thoth's review, DM
+    # 1238, thread 1233): co_agents.note is the SHARED-TREE SAFETY WARNING ('never git add
+    # -A, stage your own hunks, check foreign markers') — the `live` list says WHO is here,
+    # this says WHAT TO DO about it, the same identity-safety class as the banners above,
+    # not redundant guidance. Stays in both modes here too, matching orient()'s own fix.
     return out if verbose else _terse(
-        out, ("co_agents", "note"), ("cwd_corrected", "note"), ("note",))
+        out, ("cwd_corrected", "note"), ("note",))
 
 
 async def _owned_open_threads(pool: asyncpg.Pool, agent_id: str) -> list[dict[str, str]]:
@@ -1936,18 +1939,23 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             "note": f"scoped to {proj}; {fleet_open} fleet-wide open threads not shown "
                     "(run_composition('briefing') for the whole graph).",
         }
-        # TERSE BY DEFAULT (task #55): every path below is either fully redundant with a
-        # structured sibling already in this dict (the top-level note restates
-        # fleet_open_threads_total; open_threads_note restates the new open_threads_more;
-        # unread_echoes/blind_spots/dead_superstitions/co_agents keep their data lists,
-        # only the "here's what to do about it" sentence drops) or a one-line pointer
-        # (succession_note) to content (`notes`) that stays. NEVER touches `swap` — that's
-        # the identity-safety confession, not guidance, and stays in both modes.
+        # TERSE BY DEFAULT (task #55): the paths below are fully redundant with a structured
+        # sibling already in this dict (the top-level note restates fleet_open_threads_total;
+        # open_threads_note restates open_threads_more; unread_echoes/blind_spots/
+        # dead_superstitions keep their data lists, only the "here's what to do about it"
+        # sentence drops). NEVER touches `swap` — the identity-safety confession, not
+        # guidance. CORRECTION (Thoth's review, DM 1238, thread 1233): co_agents.note is
+        # the SHARED-TREE SAFETY WARNING ('never git add -A, stage your own hunks, check
+        # foreign markers') — the `live` list says WHO is here, this says WHAT TO DO about
+        # it, and it's conditional (only present with live siblings) so it's not per-call
+        # bloat. Same class as the identity banners; it slipped through the first pass.
+        # succession_note.note stays too — a pre-existing test (test_capture.py) asserts
+        # it unconditionally; restoring the tested contract rather than re-litigating it
+        # inside the same fix that caught this class of miss.
         return result if verbose else _terse(
             result, ("note",), ("open_threads_note",), ("unread_echoes", "note"),
             ("unread_echoes", "verbs"), ("blind_spots_note",),
-            ("dead_superstitions", "note"), ("co_agents", "note"),
-            ("succession_note", "note"))
+            ("dead_superstitions", "note"))
     # THE UN-MOUNTED CAP (Metron IV, wave-2 fa918939: a fresh session's first orient
     # returned 353K chars of whole-fleet briefing it had to jq from a dump file). An
     # un-mounted caller gets a BOUNDED map — per-project open counts + the newest few
@@ -1991,11 +1999,13 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
                 "peeks at another's; run_composition('briefing') if you truly want the "
                 "whole graph.",
     }
-    # TERSE BY DEFAULT (task #55): "who" already carries "call mount(cwd) first" when
-    # un-mounted — this note is the same instruction restated, safe to drop; co_agents/
-    # succession_note follow the scoped branch's own reasoning above.
-    return result if verbose else _terse(
-        result, ("note",), ("co_agents", "note"), ("succession_note", "note"))
+    # CORRECTION (Thoth's review, DM 1238, thread 1233): this branch's top-level note is
+    # asserted unconditionally by a pre-existing test (test_unmounted_orient_is_a_
+    # bounded_map_never_the_firehose) — restoring the tested contract rather than
+    # re-litigating it inside the regression fix, same call as co_agents/succession_note
+    # above. Nothing left here is terse-safe to strip; `verbose` stays accepted for
+    # symmetry with the scoped branch and any future addition.
+    return result
 
 
 @mcp.tool()

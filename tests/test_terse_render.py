@@ -96,11 +96,13 @@ async def test_mount_verbose_restores_the_linked_note(actions: Actions, tmp_path
         srv._pool = saved
 
 
-async def test_mount_terse_keeps_co_agents_data_but_drops_its_note(
+async def test_mount_terse_keeps_co_agents_note_in_both_modes(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The live-sibling FACT (who, where) is structural and must survive terse mode; the
-    'never git add -A' etiquette reminder is guidance prose and may drop."""
+    """CORRECTION (Thoth's review, DM 1238, thread 1233): co_agents.note is the shared-tree
+    SAFETY WARNING ('never git add -A, stage your own hunks') — the `live` list says WHO is
+    here, this says WHAT TO DO about it. Not redundant guidance; stays in BOTH modes, same
+    class as the identity-safety banners already left untouched."""
     from src import mcp_server as srv
 
     proj = "trsprojc"
@@ -113,13 +115,12 @@ async def test_mount_terse_keeps_co_agents_data_but_drops_its_note(
         terse = await srv.mount(cwd=str(tmp_path / proj),
                                 job_dir=str(tmp_path / "jobs" / "trscme01"))
         assert terse["co_agents"]["live"][0]["agent"] == "agent:trscsib1"
-        assert "note" not in terse["co_agents"]
+        assert terse["co_agents"]["note"].startswith("1 other LIVE agent(s)")
 
         verbose = await srv.mount(cwd=str(tmp_path / proj),
                                   job_dir=str(tmp_path / "jobs" / "trscme02"), verbose=True)
         assert verbose["co_agents"]["note"].startswith("2 other LIVE agent(s)")
-        # ADDITIVE-ONLY: strip exactly the declared key from verbose, get terse's shape back
-        assert verbose["co_agents"].keys() - {"note"} == terse["co_agents"].keys()
+        assert verbose["co_agents"].keys() == terse["co_agents"].keys()
     finally:
         srv._pool = saved
 
@@ -150,9 +151,11 @@ async def test_orient_terse_drops_the_scoped_note_but_keeps_the_same_count(
         srv._pool = saved
 
 
-async def test_orient_terse_keeps_co_agents_data_but_drops_its_note(
+async def test_orient_terse_keeps_co_agents_note_in_both_modes(
     actions: Actions, tmp_path: Path,
 ) -> None:
+    """Same correction as mount()'s: co_agents.note is safety guidance, not redundant
+    prose — present in both terse and verbose."""
     from src import mcp_server as srv
 
     proj = "trsorntd"
@@ -169,7 +172,7 @@ async def test_orient_terse_keeps_co_agents_data_but_drops_its_note(
         verbose = await srv.orient(project=proj, verbose=True,
                                    session_anchor=str(tmp_path / "jobs" / "trsdme01"))
         assert terse.get("co_agents", {}).get("live", [{}])[0].get("agent") == "agent:trsdsib1"
-        assert "note" not in terse.get("co_agents", {})
+        assert terse["co_agents"]["note"].startswith("1 other LIVE agent(s)")
         assert verbose["co_agents"]["note"].startswith("1 other LIVE agent(s)")
     finally:
         srv._pool = saved
@@ -202,9 +205,12 @@ async def test_orient_terse_promotes_open_threads_more_as_a_structured_sibling(
         srv._pool = saved
 
 
-async def test_orient_unmounted_terse_drops_the_redundant_note(actions: Actions) -> None:
-    """'who' already says 'call mount(cwd) first' when unmounted — the top-level note
-    restates it; safe to drop in terse, present in verbose."""
+async def test_orient_unmounted_terse_keeps_its_note_in_both_modes(actions: Actions) -> None:
+    """CORRECTION (Thoth's review, DM 1238, thread 1233): a pre-existing test
+    (test_unmounted_orient_is_a_bounded_map_never_the_firehose) asserts this note
+    unconditionally — restoring the tested contract rather than re-litigating it inside
+    the same fix that caught the co_agents.note regression. Terse and verbose are
+    identical for the un-mounted branch; nothing here was terse-safe to strip after all."""
     from src import mcp_server as srv
 
     saved = srv._pool
@@ -212,9 +218,8 @@ async def test_orient_unmounted_terse_drops_the_redundant_note(actions: Actions)
     try:
         terse = await srv.orient()
         verbose = await srv.orient(verbose=True)
-        assert "note" not in terse
-        assert verbose["note"].startswith("un-mounted →")
-        assert terse["fleet_map"] == verbose["fleet_map"]
+        assert terse["note"].startswith("un-mounted →")
+        assert terse == verbose
     finally:
         srv._pool = saved
 
