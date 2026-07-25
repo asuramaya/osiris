@@ -119,12 +119,17 @@ async def test_a_compaction_mint_notifies_the_managed_by_manager(
 ) -> None:
     """Ra's clean repro (aeae9977): a compacting worker's manager learned from the HUMAN,
     not the fleet. The heir now DMs its own manager, and the daemon's own reachability()
-    confirmation rides along inline — not just our say-so."""
+    confirmation rides along inline — not just our say-so. Goes all the way to the manager
+    actually PERCEIVING it (Thoth's review, DM 1216) — a row landing in fleet_messages is
+    not the same claim as a manager's own inbox read surfacing it."""
     from src.ingest.harness import claude_daemon
+    from src.orchestrator.mailbox import read_inbox
+    from src.orchestrator.seats import bind_holder
 
     ancestor = await _register(actions, "cccc0001", OPUS, T0)
     seat_id = await _bind_managed_worker(actions, ancestor, handle="Ptah",
                                          manager_seat="seat:cccc9999")
+    await bind_holder(actions, seat_id="seat:cccc9999", agent_id="agent:manager001")
     await save_mount(actions.pool, job_dir="/home/t/.claude/jobs/cccc0001",
                      agent_id=ancestor, project="osiris", cwd="/t", model=OPUS,
                      session_key=None)
@@ -148,6 +153,13 @@ async def test_a_compaction_mint_notifies_the_managed_by_manager(
     assert row["to_agent"] == "seat:cccc9999"
     assert row["grade"] == "fyi"
     assert "Ptah" in row["body"] and "compaction" in row["body"]
+
+    # THE LOOP CLOSES: the manager's own SEAT-address inbox read surfaces it, not just a
+    # row in the table — the whole point of Ra's bug being about PERCEPTION, not storage.
+    seen = await read_inbox(actions.pool, "osiris", reader_agent="agent:manager001",
+                            mark_read=False)
+    assert any(m["body"] == row["body"] and m["from"] == heir for m in seen), (
+        "the manager's own inbox read must surface the notify, not just the messages table")
     assert "cccc0001 is live right now" in row["body"], (
         "the daemon's OWN confirmation must ride inline, not a bare claim")
     assert seat_id != "seat:cccc9999"  # sanity: worker and manager are distinct seats

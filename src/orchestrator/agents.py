@@ -21,6 +21,7 @@ instance, which model, decided what — and (b) keeps the miner's ownership boun
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import uuid
 from collections.abc import AsyncIterator
@@ -43,6 +44,8 @@ from src.ingest.sessions import (
 from src.orchestrator.swaps import classify_swap, swap_marker
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
+
+logger = logging.getLogger("osiris.agents")
 
 _EC = EvidenceClass.SELF_DECLARED.value
 _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
@@ -1231,9 +1234,13 @@ async def register_agent(
         try:
             await _notify_seam_manager(actions, heir=src, mint_because=mint_because,
                                        project=identity.project)
-        except Exception:  # noqa: BLE001 — Ra's bug (aeae9977) was SILENCE; a notify
-                           # failure must never be the thing that blocks a mount
-            pass
+        except Exception as exc:  # noqa: BLE001 — Ra's bug (aeae9977) was SILENCE; a
+                                   # notify failure must never be the thing that blocks a
+                                   # mount, but swallowing it WITHOUT A TRACE would just
+                                   # relocate the same silence one layer down (Thoth's
+                                   # review, DM 1216) — fail open, never fail quiet
+            logger.warning("notify-at-seam failed for heir %s (%s): %r",
+                           src, mint_because, exc)
     label = f"{identity.model or 'claude'} in {identity.project or '?'}"
     await actions.assert_property(a, "name", label, src, now, _CONF, evidence_class=_EC)
     await actions.assert_property(a, "session", identity.session, src, now, _CONF,
