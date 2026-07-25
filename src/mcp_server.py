@@ -1071,6 +1071,32 @@ def _terse(payload: dict[str, Any], *paths: tuple[str, ...]) -> dict[str, Any]:
     return payload
 
 
+_SUMMARY_CAP = 160  # matches the existing (but silent) [:160] precedent already in this
+                    # file — unread_echoes.triage, the un-mounted branch's recent_decisions
+
+
+def _cap_text(items: list[dict[str, Any]], key: str, limit: int = _SUMMARY_CAP,
+             ) -> list[dict[str, Any]]:
+    """Truncate `key` on each row to `limit` chars for a terse receipt — task #60/thread
+    b81b0fac. Measured, not guessed: on the real dev graph, `summary` text is 96-98% of
+    every open_threads/recent_decisions item's bytes, and this one cap took orient()'s
+    scoped payload from 66060 to 10623 bytes (-83.9%) — the actual #55/#60 win, two orders
+    of magnitude past what stripping guidance prose alone reached (_terse, -1%).
+
+    A SEPARATE primitive from _terse() on purpose: truncating a string and deleting a key
+    are different operations, and mixing them would make either harder to reason about.
+    UNLIKE the existing [:160]/[:800] slices elsewhere in this file, truncation here is
+    NEVER silent — an explicit '…' marks a shortened value, because a truncated summary
+    that reads as complete is worse than one that visibly isn't (the same law that made
+    reachability()'s `detail` a required field, not a nice-to-have: a caller must be able
+    to tell 'this is all of it' from 'this is not'). Mutates and returns `items`."""
+    for row in items:
+        val = row.get(key)
+        if isinstance(val, str) and len(val) > limit:
+            row[key] = val[:limit] + "…"
+    return items
+
+
 def _seam_confidently_dated(ident: AgentIdentity) -> bool:
     """mount() must never assert a model-seam it cannot date with confidence (ruling dd47c1da,
     Maat's fix adopted as direction: orient() is the single source of truth for the seam —
@@ -1640,7 +1666,7 @@ _open_thread_wall = comp.open_thread_wall
 
 
 async def _project_briefing(
-    pool: asyncpg.Pool, project: str, me: frozenset[str] = frozenset(),
+    pool: asyncpg.Pool, project: str, me: frozenset[str] = frozenset(), verbose: bool = False,
 ) -> dict[str, Any] | None:
     """A working agent's SCOPED bearings — its OWN project's open threads + recent decisions,
     not the whole fleet's (a sibling project surfaced that orient's flood costs more context than it
@@ -1677,9 +1703,10 @@ async def _project_briefing(
                                            str(r.get("pole_b") or "")))))
             if key in div:
                 r["divergence"] = div[key]
+    recent_decisions = [r for r in (items.get("recent_decisions") or []) if r.get("summary")]
     out: dict[str, Any] = {
         "open_threads": shown,
-        "recent_decisions": [r for r in (items.get("recent_decisions") or []) if r.get("summary")],
+        "recent_decisions": recent_decisions,
         "tensions": tensions,
     }
     blind_spots = [dict(r) for r in (items.get("blind_spots") or []) if r.get("surface")]
@@ -1710,6 +1737,30 @@ async def _project_briefing(
                       "a question, not work → reclassify_thread(id, kind='question'). "
                       "Your judgment is testimony; never resolve what merely looks stale."),
         }
+    if len(recent_decisions) == 15:  # the composition's own take(n=15) — a full page means
+        # more MAY exist; count for real rather than assume (task #60, symmetry with
+        # open_threads_more). Mirrors the composition's own filter exactly (project-scoped,
+        # active, no winning superseded_by/retracted) — never touch the composition itself
+        # just to learn its own total, that's what this count is for.
+        total = await pool.fetchval(
+            "SELECT count(*) FROM objects o "
+            "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+            "WHERE o.type='Decision' AND o.status='active' "
+            "AND NOT EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
+            "  AND s.name='superseded_by') "
+            "AND NOT EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
+            "  AND s.name='retracted')", proj)
+        if total and total > 15:
+            out["recent_decisions_more"] = total - 15
+    # TERSE BY DEFAULT (task #60, thread b81b0fac): the byte-per-key measurement named the
+    # real weight — summary text is 96-98% of every open_threads/recent_decisions item.
+    # _cap_text (not _terse: truncation, not deletion) shortens it in terse mode; verbose
+    # restores full summaries exactly as today. Every decision item now also carries `id`
+    # (compositions.py's _table gained the magic "id" property for this) so a capped
+    # summary is addressable — verbose=True or search(query=...) recovers the rest.
+    if not verbose:
+        _cap_text(out["open_threads"], "summary")
+        _cap_text(out["recent_decisions"], "summary")
     return out
 
 
@@ -1723,10 +1774,13 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
     otherwise it's your mounted project; un-mounted with neither → the whole-fleet briefing.
     Call after mount(), and again after any compaction, to inherit instead of starting blind.
 
-    `verbose=True` restores the guidance prose terse mode (the default) drops — echo/
-    blind-spot/dead-superstition/co-agent explanations, the ancestor-letter pointer, the
-    'N more not shown' sentence. Every structured fact (counts, ids, the swap/reanimation
-    confession) survives either way; verbose only adds explanation (task #55)."""
+    `verbose=True` restores what terse mode (the default) trims — echo/blind-spot/dead-
+    superstition/co-agent explanations, the ancestor-letter pointer, the 'N more not shown'
+    sentence (task #55), AND full-length open_threads/recent_decisions summaries, capped to
+    160 chars in terse mode (task #60 — measured as 96-98% of the payload's bytes; every
+    decision now also carries `id` so a capped summary stays addressable). Every structured
+    fact (counts, ids, the swap/reanimation confession) survives either way; verbose only
+    adds length and explanation back."""
     pool = await _pool_get()
     lease = get_settings().osiris_mail_lease_secs
     ident = await _ident_for(ctx, session_anchor)
@@ -1856,7 +1910,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
     # the reader's identity feeds the wall's ownership ordering: what is MINE TO ACT rides
     # above another mind's claims and above 'waiting on the human'
     me = frozenset(x for x in ((ident.agent_id if ident else None), proj) if x)
-    scoped = await _project_briefing(pool, proj, me=me) if proj else None
+    scoped = await _project_briefing(pool, proj, me=me, verbose=verbose) if proj else None
     if scoped is not None:
         fleet_open = await pool.fetchval(
             "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "

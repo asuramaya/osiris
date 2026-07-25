@@ -78,6 +78,19 @@ async def test_project_briefing_composition_scopes_to_its_subject(actions: Actio
     assert "the demo ruling" in [r["summary"] for r in items["recent_decisions"]]
 
 
+async def test_table_op_id_property_returns_the_rows_own_short_id(actions: Actions) -> None:
+    """task #60 (thread b81b0fac): a truncated summary must stay addressable — `id` is a
+    row's own identity, never an assertion, so `_table` special-cases it rather than
+    looking it up in `_props`."""
+    d = await actions.create_or_find_object("Decision", "decision:idtest-1", "session")
+    await actions.assert_property(d, "summary", "an id-bearing ruling", "session", NOW, 0.9)
+    spec = {"op": "table", "columns": [{"property": "id"}, {"property": "summary"}],
+            "from": {"op": "select", "object_type": "Decision",
+                     "canonical_prefix": "decision:idtest-"}}
+    rows = (await _eval(actions.pool, spec, None)).rows
+    assert rows == [{"id": str(d)[:8], "summary": "an id-bearing ruling"}]
+
+
 # --- the headline: discrepancy IS a composition -----------------------------
 
 async def test_discrepancy_is_just_a_composition(actions: Actions) -> None:

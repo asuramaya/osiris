@@ -5,9 +5,17 @@ open_threads_more) survives in BOTH modes. The regression guard throughout: verb
 payload is always a strict superset of terse's — remove exactly the declared keys from
 verbose and you get terse back, byte-for-byte, nothing else moves (the additive-only golden
 shape, mirroring surface.py's own byte-exact convention).
+
+TASK #60 (thread b81b0fac) extends the same discipline to DATA, not prose: _terse() only
+ever deletes a whole key, but the byte measurement found open_threads/recent_decisions
+summaries are 96-98% of orient()'s bytes — a fact no key-deletion could touch. _cap_text()
+truncates those summaries to 160 chars in terse mode (an explicit '…' marks it, unlike the
+existing but silent [:160]/[:800] precedents elsewhere in this file); every decision now
+also carries `id` so a capped summary stays addressable via verbose=True or search().
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 from src.actions.core import Actions
@@ -207,5 +215,116 @@ async def test_orient_unmounted_terse_drops_the_redundant_note(actions: Actions)
         assert "note" not in terse
         assert verbose["note"].startswith("un-mounted →")
         assert terse["fleet_map"] == verbose["fleet_map"]
+    finally:
+        srv._pool = saved
+
+
+# ═══ _cap_text() — the DATA-VOLUME mechanism (task #60, thread b81b0fac) ═════════════════
+
+
+def test_cap_text_truncates_and_marks_a_long_value() -> None:
+    from src.mcp_server import _cap_text
+
+    items = [{"summary": "x" * 200}]
+    out = _cap_text(items, "summary", limit=160)
+    assert out[0]["summary"] == "x" * 160 + "…"
+
+
+def test_cap_text_leaves_a_short_value_unmarked() -> None:
+    """A value AT or under the limit is never touched — no marker on something that isn't
+    actually truncated, or a caller can't trust the marker's own meaning."""
+    from src.mcp_server import _cap_text
+
+    items = [{"summary": "short and sweet"}]
+    out = _cap_text(items, "summary", limit=160)
+    assert out[0]["summary"] == "short and sweet"
+
+
+def test_cap_text_ignores_a_missing_or_non_string_key() -> None:
+    from src.mcp_server import _cap_text
+
+    items = [{"kind": "ruling"}, {"summary": None}]
+    out = _cap_text(items, "summary", limit=160)
+    assert out == [{"kind": "ruling"}, {"summary": None}]
+
+
+# ═══ orient() data-volume — the tool-level integration ═══════════════════════════════════
+
+
+async def test_orient_terse_caps_a_long_decision_summary_and_carries_its_id(
+    actions: Actions,
+) -> None:
+    """The measured win: terse shortens+marks the summary; verbose restores it in full;
+    both carry the SAME `id`, so a capped decision stays addressable either way."""
+    from src import mcp_server as srv
+    from src.orchestrator.compositions import seed_default_compositions
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:trsdecap", "session")
+    d = await actions.create_or_find_object("Decision", "decision:trsdecap-1", "session")
+    long_summary = "a very long ruling that goes on and on " * 10
+    await actions.assert_property(d, "summary", long_summary, "session", datetime.now(UTC), 0.9)
+    await actions.assert_property(d, "kind", "ruling", "session", datetime.now(UTC), 0.9)
+    await actions.create_link(d, proj, "in_repo", "session", datetime.now(UTC), 0.9)
+    await seed_default_compositions(actions.pool)
+
+    saved = srv._pool
+    srv._pool = actions.pool
+    try:
+        terse = await srv.orient(project="trsdecap")
+        verbose = await srv.orient(project="trsdecap", verbose=True)
+        t_row = next(r for r in terse["recent_decisions"] if r["id"] == str(d)[:8])
+        v_row = next(r for r in verbose["recent_decisions"] if r["id"] == str(d)[:8])
+        assert t_row["summary"] == long_summary[:160] + "…"
+        assert v_row["summary"] == long_summary
+    finally:
+        srv._pool = saved
+
+
+async def test_orient_terse_caps_a_long_thread_summary(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    long_summary = "a very long open thread that goes on and on " * 10
+    await open_thread(actions, long_summary, repo="trsthcap", kind="obligation",
+                      source="session")
+
+    saved = srv._pool
+    srv._pool = actions.pool
+    try:
+        terse = await srv.orient(project="trsthcap")
+        verbose = await srv.orient(project="trsthcap", verbose=True)
+        assert terse["open_threads"][0]["summary"] == long_summary[:160] + "…"
+        assert verbose["open_threads"][0]["summary"] == long_summary
+    finally:
+        srv._pool = saved
+
+
+async def test_orient_recent_decisions_more_only_past_a_full_page(actions: Actions) -> None:
+    """Symmetry with open_threads_more (task #55): the composition's own take(n=15) means a
+    full page MAY hide more — count for real rather than assume, and stay silent under a
+    full page (nothing hidden, nothing to report)."""
+    from src import mcp_server as srv
+    from src.orchestrator.compositions import seed_default_compositions
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:trsdmore", "session")
+    for i in range(16):
+        d = await actions.create_or_find_object("Decision", f"decision:trsdmore-{i}", "session")
+        await actions.assert_property(d, "summary", f"ruling #{i}", "session",
+                                      datetime.now(UTC), 0.9)
+        await actions.create_link(d, proj, "in_repo", "session", datetime.now(UTC), 0.9)
+
+    proj2 = await actions.create_or_find_object("SoftwareProject", "repo:trsdfew", "session")
+    d2 = await actions.create_or_find_object("Decision", "decision:trsdfew-1", "session")
+    await actions.assert_property(d2, "summary", "the only ruling", "session",
+                                  datetime.now(UTC), 0.9)
+    await actions.create_link(d2, proj2, "in_repo", "session", datetime.now(UTC), 0.9)
+    await seed_default_compositions(actions.pool)
+
+    saved = srv._pool
+    srv._pool = actions.pool
+    try:
+        many = await srv.orient(project="trsdmore")
+        few = await srv.orient(project="trsdfew")
+        assert many["recent_decisions_more"] == 1
+        assert "recent_decisions_more" not in few
     finally:
         srv._pool = saved

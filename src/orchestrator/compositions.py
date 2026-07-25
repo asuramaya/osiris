@@ -2059,7 +2059,14 @@ async def _table(
         row: dict[str, Any] = {}
         for col in columns:
             name = str(col.get("name") or col.get("property") or "col")
-            if "property" in col:
+            if col.get("property") == "id":
+                # THE ROW'S OWN IDENTITY (task #60, thread b81b0fac): not an assertion — a
+                # row is a candidate object, not a fact ABOUT one — so it never lived in
+                # `facts`. Same 8-char short-id convention every other read site uses
+                # (_owned_open_threads' substring(o.id::text,1,8), the open-thread wall's
+                # own ids). Lets a caller recover a summary this table truncated.
+                row[name] = str(oid)[:8]
+            elif "property" in col:
                 row[name] = facts.get(str(col["property"]))
             elif "rollup" in col:
                 row[name] = await _rollup(pool, oid, col["rollup"])
@@ -2473,7 +2480,8 @@ PROJECT_BRIEFING: dict[str, Any] = {
         # record keeps it; the decision-log (audit view) still lists it under its successor.
         {"title": "recent_decisions", "body": {
             "op": "take", "n": 15, "from": {
-                "op": "table", "columns": [{"property": "summary"}, {"property": "kind"}],
+                "op": "table", "columns": [{"property": "id"}, {"property": "summary"},
+                                           {"property": "kind"}],
                 "from": {"op": "order", "by": "recency", "dir": "desc", "from": {
                     "op": "intersect", "sets": [
                         {"op": "select", "object_type": "Decision", "where": [
