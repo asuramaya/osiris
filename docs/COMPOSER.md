@@ -1,3 +1,5 @@
+<!-- topic: concepts -->
+
 # The Composer — grounded spec
 
 The composer is Osiris's front end: the place where intent becomes a **composition** — a

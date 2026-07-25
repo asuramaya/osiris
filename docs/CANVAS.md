@@ -1,3 +1,5 @@
+<!-- topic: concepts -->
+
 # The neutral canvas — audit & rebuild spec
 
 Status: **spec / in progress.** This document is the fixed reference for rebuilding the

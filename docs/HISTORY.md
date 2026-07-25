@@ -1,3 +1,5 @@
+<!-- topic: history -->
+
 # HISTORY — the frozen CLAUDE.md build log (2024-06 → 2026-07-03)
 
 > Frozen 2026-07-03 (ruling 8c5772a7: the graph is the only memory). This file is

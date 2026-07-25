@@ -1,3 +1,5 @@
+<!-- topic: deployment -->
+
 # Deployment
 
 Osiris separates by **blast radius**, not by feature. Two long-running processes,

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,8 +26,8 @@ from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
 _HEADER = re.compile(r"<!--\s*(.*?)\s*-->", re.S)
-# the own docs to ingest (SELF_DECLARED) and the vendor refs COMPOSER.md cites
-_OWN_DOCS = ("docs/COMPOSER.md", "ARCHITECTURE.md", "docs/REFERENCE.md")
+# the root-level docs outside docs/ that still count as "own" canon
+_OWN_DOCS_ROOT = ("ARCHITECTURE.md",)
 
 
 def _slug(name: str) -> str:
@@ -44,7 +45,7 @@ def _md_files(directory: str) -> list[str]:
     return [str(p) for p in sorted(Path(directory).glob("*.md"))]
 
 
-def _existing(paths: tuple[str, ...]) -> list[str]:
+def _existing(paths: Sequence[str]) -> list[str]:
     return [p for p in paths if Path(p).exists()]
 
 
@@ -209,8 +210,11 @@ async def ingest_canon(actions: Actions, *, case_id: uuid.UUID | None = None) ->
     """Ingest the vendor canon (docs/reference/) + our own docs, then wire the `cites` edges
     COMPOSER.md declares (it descends its op vocabulary from the Palantir/Notion refs)."""
     vendor_refs = await ingest_reference_dir(actions, case_id=case_id)
+    # ALL of docs/*.md (non-recursive — docs/reference/ is the vendor canon, ingested above)
+    # plus the handful of root-level docs that are still "own" canon.
+    own_paths = [*_OWN_DOCS_ROOT, *_md_files("docs")]
     own = [await ingest_reference_doc(actions, p, case_id=case_id)
-           for p in _existing(_OWN_DOCS)]
+           for p in _existing(own_paths)]
     # the true self-referential link: COMPOSER cites the canon it was grounded in
     composer = next((o for o in own if o["canonical"] == "ref:composer"), None)
     cites = 0

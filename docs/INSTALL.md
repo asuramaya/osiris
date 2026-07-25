@@ -1,3 +1,5 @@
+<!-- topic: getting-started -->
+
 # INSTALL — zero to a mounted fleet
 
 The stranger's runbook: from `git clone` to a working console and a fleet of Claude

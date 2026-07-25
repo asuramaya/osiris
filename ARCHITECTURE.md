@@ -1,3 +1,5 @@
+<!-- topic: concepts -->
+
 # Architecture
 
 This describes the **current shape** of Osiris. The build history, with rationale and

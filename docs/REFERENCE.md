@@ -1,3 +1,5 @@
+<!-- topic: reference -->
+
 # Reference
 
 Generated-from-code reference for Osiris. For the prose explanation see

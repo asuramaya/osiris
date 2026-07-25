@@ -1,3 +1,5 @@
+<!-- topic: concepts -->
+
 # SPEC — Osiris as Terminal / Agent-Manager (the mind/body/face fold)
 
 **Status:** design LOCKED — rev 2. The 2026-07-14 night design session settled every question
