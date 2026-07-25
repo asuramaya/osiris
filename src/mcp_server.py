@@ -1049,6 +1049,28 @@ async def _overhead_glance(
 
 # --- mount: link to the graph as a first-class fleet member ---
 
+def _terse(payload: dict[str, Any], *paths: tuple[str, ...]) -> dict[str, Any]:
+    """Strip prose-only key paths for a terse receipt — task #55/thread 9092ed51,
+    verbose=False the default. An explicit, hand-reviewed allowlist per tool, NEVER a
+    generic 'strip long strings' heuristic (that's how you eat a structural field like
+    `seat` or a job's `sessionId` that just happens to be long — the reachability().detail
+    lesson, thread aeae9977: a field consumed as DATA by another function must never be
+    silently dropped by a blind length check). Each path names a chain of dict keys ending
+    in the prose key to remove; a path through a key that isn't present (a conditional
+    field this particular receipt never populated) is a silent no-op — mutates and returns
+    `payload` so terse and verbose stay byte-identical apart from exactly the declared
+    keys."""
+    for path in paths:
+        node: Any = payload
+        for key in path[:-1]:
+            node = node.get(key) if isinstance(node, dict) else None
+            if not isinstance(node, dict):
+                break
+        if isinstance(node, dict):
+            node.pop(path[-1], None)
+    return payload
+
+
 def _seam_confidently_dated(ident: AgentIdentity) -> bool:
     """mount() must never assert a model-seam it cannot date with confidence (ruling dd47c1da,
     Maat's fix adopted as direction: orient() is the single source of truth for the seam —
@@ -1072,7 +1094,7 @@ async def mount(
     cwd: str, job_dir: str | None = None, model: str | None = None,
     session_anchor: str | None = None, subagent_id: str | None = None,
     subagent_type: str | None = None, subagent_transcript: str | None = None,
-    ctx: Context | None = None
+    verbose: bool = False, ctx: Context | None = None
 ) -> dict[str, Any]:
     """Link this agent to Osiris as a first-class fleet member — call it ONCE, first thing.
     Pass your working directory `cwd` (names your project). For `job_dir`, pass the DURABLE
@@ -1084,7 +1106,11 @@ async def mount(
     (works_in your project, acts_for the principal) and attributes every decision/thread you
     record to `agent:<you>` instead of the shared `session` bucket. Then call orient().
     ALREADY MOUNTED (the whisper said so)? Skip this — orient() for bearings and proceed;
-    re-mounting is only for after an MCP bounce, with your anchor (network msg 317)."""
+    re-mounting is only for after an MCP bounce, with your anchor (network msg 317).
+
+    `verbose=True` restores the guidance prose (co-agent etiquette, the 'call orient()
+    next' reminder) that terse mode (the default) drops — every structured fact survives
+    either way; verbose only adds explanation of facts already present (task #55)."""
     pool = await _pool_get()
     settings = get_settings()
     lease = settings.osiris_mail_lease_secs
@@ -1349,7 +1375,15 @@ async def mount(
         pool, ident.project, ident.agent_id, _prev_seen.get(ident.agent_id))
     if away:  # who wore your face + how your conversations moved, since your last sign of life
         out["while_you_were_away"] = away
-    return out
+    # TERSE BY DEFAULT (task #55): only guidance prose with a structural sibling carrying
+    # the same fact — co_agents.note (the `live` list already has who/where), the stale-cwd
+    # explanation (declared/kept already have what changed), and the routine 'call orient()
+    # next' reminder. Everything safety-critical (minted/succession/swap/reanimation — an
+    # identity confession an agent could act wrongly without) and everything that's the SOLE
+    # carrier of a fact (mail counts, the identity-conflict refusal's recovery instructions,
+    # the spawn note) stays untouched in both modes — named here, not silently exempted.
+    return out if verbose else _terse(
+        out, ("co_agents", "note"), ("cwd_corrected", "note"), ("note",))
 
 
 async def _owned_open_threads(pool: asyncpg.Pool, agent_id: str) -> list[dict[str, str]]:
@@ -1655,6 +1689,10 @@ async def _project_briefing(
                                    "check verify_with before trusting a green run on these "
                                    "surfaces; register new ones with register_blind_spot()")
     if more > 0:  # trailing count so a capped wall never hides work silently (membrane, #6)
+        # the COUNT is structural (task #55) — a terse receipt that strips the sentence
+        # below must not lose the fact a capped wall is hiding work; open_threads_more
+        # survives terse mode even when open_threads_note (the prose explaining it) doesn't.
+        out["open_threads_more"] = more
         out["open_threads_note"] = (
             f"showing {len(shown)} of {len(shown) + more} open threads (obligations first; "
             "within a kind, yours-to-act before others' claims before waiting-on-the-human, "
@@ -1678,12 +1716,17 @@ async def _project_briefing(
 @mcp.tool()
 async def orient(project: str | None = None, subagent_id: str | None = None,
                  subagent_type: str | None = None, session_anchor: str | None = None,
-                 ctx: Context | None = None) -> dict[str, Any]:
+                 verbose: bool = False, ctx: Context | None = None) -> dict[str, Any]:
     """Get your bearings — the mount ritual as one call. Returns a SCOPED briefing: open
     threads + recent decisions for a project, plus a count of fleet-wide threads not shown.
     An explicit `project` OVERRIDES your mount (so you can peek at another repo's briefing);
     otherwise it's your mounted project; un-mounted with neither → the whole-fleet briefing.
-    Call after mount(), and again after any compaction, to inherit instead of starting blind."""
+    Call after mount(), and again after any compaction, to inherit instead of starting blind.
+
+    `verbose=True` restores the guidance prose terse mode (the default) drops — echo/
+    blind-spot/dead-superstition/co-agent explanations, the ancestor-letter pointer, the
+    'N more not shown' sentence. Every structured fact (counts, ids, the swap/reanimation
+    confession) survives either way; verbose only adds explanation (task #55)."""
     pool = await _pool_get()
     lease = get_settings().osiris_mail_lease_secs
     ident = await _ident_for(ctx, session_anchor)
@@ -1820,7 +1863,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             "AND (SELECT s.value #>> '{}' FROM current_assertions s WHERE s.object_id=o.id "
             "  AND s.name='status' ORDER BY s.confidence DESC, s.observed_at DESC LIMIT 1)"
             "  = 'open'")
-        return {
+        result = {
             "you": who, "model": (ident.model if ident else None), "project": proj,
             **({"osiris_health": organs} if organs else {}),
             **seam,
@@ -1839,6 +1882,18 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             "note": f"scoped to {proj}; {fleet_open} fleet-wide open threads not shown "
                     "(run_composition('briefing') for the whole graph).",
         }
+        # TERSE BY DEFAULT (task #55): every path below is either fully redundant with a
+        # structured sibling already in this dict (the top-level note restates
+        # fleet_open_threads_total; open_threads_note restates the new open_threads_more;
+        # unread_echoes/blind_spots/dead_superstitions/co_agents keep their data lists,
+        # only the "here's what to do about it" sentence drops) or a one-line pointer
+        # (succession_note) to content (`notes`) that stays. NEVER touches `swap` — that's
+        # the identity-safety confession, not guidance, and stays in both modes.
+        return result if verbose else _terse(
+            result, ("note",), ("open_threads_note",), ("unread_echoes", "note"),
+            ("unread_echoes", "verbs"), ("blind_spots_note",),
+            ("dead_superstitions", "note"), ("co_agents", "note"),
+            ("succession_note", "note"))
     # THE UN-MOUNTED CAP (Metron IV, wave-2 fa918939: a fresh session's first orient
     # returned 353K chars of whole-fleet briefing it had to jq from a dump file). An
     # un-mounted caller gets a BOUNDED map — per-project open counts + the newest few
@@ -1861,7 +1916,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         "  WHERE s.object_id=o.id AND s.name='superseded_by' "
         "  ORDER BY s.confidence DESC, s.observed_at DESC LIMIT 1),'')='' "
         "ORDER BY o.created_at DESC LIMIT 5") if r["summary"]]
-    return {
+    result = {
         "you": who, "model": (ident.model if ident else None), "project": proj,
         **(await seat_bearings(pool, who) if who else {}),
         "mail": mail,
@@ -1882,6 +1937,11 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
                 "peeks at another's; run_composition('briefing') if you truly want the "
                 "whole graph.",
     }
+    # TERSE BY DEFAULT (task #55): "who" already carries "call mount(cwd) first" when
+    # un-mounted — this note is the same instruction restated, safe to drop; co_agents/
+    # succession_note follow the scoped branch's own reasoning above.
+    return result if verbose else _terse(
+        result, ("note",), ("co_agents", "note"), ("succession_note", "note"))
 
 
 @mcp.tool()
