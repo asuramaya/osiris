@@ -16,10 +16,13 @@ import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
+import pytest
 from src.actions.core import Actions
 from src.orchestrator.agents import (
     AgentIdentity,
+    claim_name,
     live_succession,
     mint_heir,
     register_agent,
@@ -88,6 +91,102 @@ async def test_a_COMPACTION_mint_never_debounces(actions: Actions) -> None:
     again = await _register(actions, "aaaa0003", OPUS, datetime.now(UTC),
                             mint_reason="compaction")
     assert again == "agent:aaaa0003-iii", "a compaction is never settings churn"
+
+
+# ═══ NOTIFY-AT-SEAM (thread aeae9977) — a compacting worker DMs its own manager, with the
+# daemon's own reachability() evidence inline. Only the silent class (compaction/context-
+# clear); a manager of record must exist; both gates proven with a negative case. ═══════════
+
+
+async def _bind_managed_worker(
+    actions: Actions, agent_id: str, *, handle: str, manager_seat: str,
+) -> str:
+    """claim a seat for `agent_id` and put it under `manager_seat`'s management — the exact
+    managed_by shape notify-at-seam reads. Returns the worker's own seat canonical."""
+    a = await actions.create_or_find_object("Agent", agent_id, agent_id)
+    await actions.assert_property(a, "project", "osiris", "test", T0, 0.9,
+                                  evidence_class="self_declared")
+    claimed = await claim_name(actions, agent_id, handle, source="test")
+    worker = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
+    manager = await actions.create_or_find_object("Seat", manager_seat, "test")
+    await actions.create_link(worker, manager, "managed_by", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+    return str(claimed["seat_id"])
+
+
+async def test_a_compaction_mint_notifies_the_managed_by_manager(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ra's clean repro (aeae9977): a compacting worker's manager learned from the HUMAN,
+    not the fleet. The heir now DMs its own manager, and the daemon's own reachability()
+    confirmation rides along inline — not just our say-so."""
+    from src.ingest.harness import claude_daemon
+
+    ancestor = await _register(actions, "cccc0001", OPUS, T0)
+    seat_id = await _bind_managed_worker(actions, ancestor, handle="Ptah",
+                                         manager_seat="seat:cccc9999")
+    await save_mount(actions.pool, job_dir="/home/t/.claude/jobs/cccc0001",
+                     agent_id=ancestor, project="osiris", cwd="/t", model=OPUS,
+                     session_key=None)
+    job = {"short": "cccc0001", "sessionId": "cccc0001-full"}
+
+    async def _fake(ids: set[str]) -> dict[str, Any] | None:
+        return job if "cccc0001" in ids else None
+
+    monkeypatch.setattr(claude_daemon, "job_for", _fake)
+
+    before = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    heir = await _register(actions, "cccc0001", OPUS, datetime.now(UTC),
+                           mint_reason="compaction")
+    after = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+
+    assert heir == "agent:cccc0001-ii"
+    assert after == before + 1, "the heir must DM its manager exactly once"
+    row = await actions.pool.fetchrow(
+        "SELECT from_agent, to_agent, body, grade FROM fleet_messages ORDER BY id DESC LIMIT 1")
+    assert row["from_agent"] == heir
+    assert row["to_agent"] == "seat:cccc9999"
+    assert row["grade"] == "fyi"
+    assert "Ptah" in row["body"] and "compaction" in row["body"]
+    assert "cccc0001 is live right now" in row["body"], (
+        "the daemon's OWN confirmation must ride inline, not a bare claim")
+    assert seat_id != "seat:cccc9999"  # sanity: worker and manager are distinct seats
+
+
+async def test_a_compaction_mint_is_silent_with_no_manager_of_record(
+    actions: Actions,
+) -> None:
+    """The same 'nobody to confess to' shape Stage A's stop-hook already uses: a claimed,
+    bound seat with NO managed_by edge sends nothing — there is no one to notify."""
+    ancestor = await _register(actions, "cccc0002", OPUS, T0)
+    a = await actions.create_or_find_object("Agent", ancestor, ancestor)
+    await actions.assert_property(a, "project", "osiris", "test", T0, 0.9,
+                                  evidence_class="self_declared")
+    await claim_name(actions, ancestor, "Anubis", source="test")
+
+    before = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    heir = await _register(actions, "cccc0002", OPUS, datetime.now(UTC),
+                           mint_reason="compaction")
+    after = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+
+    assert heir == "agent:cccc0002-ii"
+    assert after == before, "an unmanaged worker has nobody to notify"
+
+
+async def test_a_model_succession_mint_does_NOT_notify(actions: Actions) -> None:
+    """The whitelist is precise on purpose: model-succession and live-swap already surface
+    on the membrane's DANGER map, so a plain anchored model swap — no mint_reason at all —
+    must never fire this, even with a manager of record sitting right there."""
+    ancestor = await _register(actions, "cccc0003", OPUS, T0)
+    await _bind_managed_worker(actions, ancestor, handle="Sobek",
+                               manager_seat="seat:cccc8888")
+
+    before = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    heir = await _register(actions, "cccc0003", FABLE, datetime.now(UTC))
+    after = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+
+    assert heir == "agent:cccc0003-ii", "the model seam itself must still mint"
+    assert after == before, "model-succession is not in the notify whitelist"
 
 
 async def test_TWO_concurrent_heartbeats_mint_ONE_generation(actions: Actions) -> None:

@@ -1129,3 +1129,27 @@ async def test_reachability_is_lineage_wide_like_held_seat(
     out = await reachability(actions.pool, "agent:reach0004-ii")  # the fresh successor
 
     assert out["reachable"] is True and out["job"] == job
+
+
+# ═══ MANAGER_OF_SEAT (notify-at-seam, thread aeae9977) — the single-pair managed_by read,
+# mirroring osiris_stophook.py's own local `_manager_seat` query so mint_heir's compaction
+# path doesn't hand-roll a third copy of the same SQL. ═══════════════════════════════════
+
+
+async def test_manager_of_seat_resolves_the_managed_by_link(actions: Actions) -> None:
+    from src.orchestrator.seats import manager_of_seat
+
+    worker = await actions.create_or_find_object("Seat", "seat:mos1aaaa", "test")
+    manager = await actions.create_or_find_object("Seat", "seat:mos1bbbb", "test")
+    await actions.create_link(worker, manager, "managed_by", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+
+    assert await manager_of_seat(actions.pool, "seat:mos1aaaa") == "seat:mos1bbbb"
+
+
+async def test_manager_of_seat_none_when_unmanaged(actions: Actions) -> None:
+    from src.orchestrator.seats import manager_of_seat
+
+    await actions.create_or_find_object("Seat", "seat:mos2cccc", "test")
+
+    assert await manager_of_seat(actions.pool, "seat:mos2cccc") is None

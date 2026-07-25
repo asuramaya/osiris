@@ -836,6 +836,46 @@ async def mint_heir(
     return heir, a
 
 
+# NOTIFY-AT-SEAM (thread aeae9977, Ra's ask #1): "a compacting bodied worker's manager learns
+# from the FLEET, not the human." Only a harness-reported context death fires this — the
+# SILENT class nobody else is watching. model-succession and live-swap already surface on the
+# membrane's DANGER map; reanimation-of-retired is a deliberate act, not an accident that
+# strands a manager mid-conversation. KNOWN v1 GAP (Thoth's call, DM 1212): reanimation
+# co-occurring with a REAL compaction is excluded too — when both fire, mint_because reads
+# "reanimation-of-retired", never "compaction", so it never matches this whitelist. Left this
+# way on purpose: it's rare, and widening the whitelist now would trade v1's whole value —
+# precision on the silent class — for a case nobody's been bitten by yet. A successor who IS
+# bitten by it finds the gap named here, not rediscovered.
+_SEAM_NOTIFY_REASONS = {"compaction", "context-clear"}
+
+
+async def _notify_seam_manager(
+    actions: Actions, *, heir: str, mint_because: str, project: str | None,
+) -> None:
+    """A worker that just silently died and came back DMs its OWN manager — Ra's clean repro
+    (aeae9977): a mail send-receipt refused the manager's DM to a fresh successor while the
+    daemon held a live job the whole time, and the human had to notice and tell him. This is
+    the fix: the successor reports itself, with the daemon's own reachability() evidence
+    inline (Thoth's requirement — the manager gets a confirmation, not our say-so). Silent
+    no-op when there's no seat or no manager of record — same 'nobody to confess to' shape
+    Stage A's stop-hook confession already uses."""
+    from src.orchestrator.mailbox import send_message
+    from src.orchestrator.seats import held_seat, manager_of_seat, reachability
+
+    bound = await held_seat(actions.pool, heir)
+    if bound is None:
+        return
+    manager_seat = await manager_of_seat(actions.pool, bound["seat_id"])
+    if manager_seat is None:
+        return
+    check = await reachability(actions.pool, heir)
+    handle = bound["handle"] or heir
+    body = (f"{handle} just {mint_because.replace('-', ' ')} — new generation {heir}. "
+           f"{check['detail']}")
+    await send_message(actions.pool, from_agent=heir, from_project=project,
+                       to_agent=manager_seat, body=body, grade="fyi")
+
+
 _SEAM_DEBOUNCE_SECS = 900
 _DEBOUNCE_SRC = "seam-debounce"
 
@@ -1185,6 +1225,15 @@ async def register_agent(
                                       minting_door=identity.session)
             identity.agent_id = heir
             src = heir
+    if mint_because is not None and mint_because == mint_reason and (
+        mint_reason in _SEAM_NOTIFY_REASONS
+    ):
+        try:
+            await _notify_seam_manager(actions, heir=src, mint_because=mint_because,
+                                       project=identity.project)
+        except Exception:  # noqa: BLE001 — Ra's bug (aeae9977) was SILENCE; a notify
+                           # failure must never be the thing that blocks a mount
+            pass
     label = f"{identity.model or 'claude'} in {identity.project or '?'}"
     await actions.assert_property(a, "name", label, src, now, _CONF, evidence_class=_EC)
     await actions.assert_property(a, "session", identity.session, src, now, _CONF,

@@ -314,6 +314,21 @@ async def reachability(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
             "detail": f"the daemon's own job state confirms {shown} is live right now"}
 
 
+async def manager_of_seat(pool: asyncpg.Pool, seat_id: str) -> str | None:
+    """The manager Seat of a worker Seat, or None when unmanaged — the single-pair read
+    mirroring osiris_stophook.py's own local `_manager_seat` query (same table, same shape),
+    promoted here so notify-at-seam (mint_heir's compaction path, thread aeae9977) doesn't
+    hand-roll a third copy. The stop-hook script keeps its own copy for now (it cannot import
+    across the script/package boundary without a heavier refactor) — a known duplicate, not a
+    disagreement: both read `managed_by` the same way."""
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT t.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE f.canonical=$1 AND l.type='managed_by' "
+        "AND t.type='Seat' AND t.status='active' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "ORDER BY l.first_seen DESC LIMIT 1", seat_id)
+
+
 async def bind_holder(
     actions: Actions, *, seat_id: str, agent_id: str, source: str | None = None,
 ) -> None:
