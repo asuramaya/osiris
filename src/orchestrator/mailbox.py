@@ -115,9 +115,11 @@ async def _dm_ineligibility(pool: asyncpg.Pool, agent_id: str) -> str | None:
     row = await pool.fetchrow(
         "SELECT "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='retired' ORDER BY a.observed_at DESC LIMIT 1) AS retired, "
+        "   AND a.name='retired' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   LIMIT 1) AS retired, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='false_mint' ORDER BY a.observed_at DESC LIMIT 1) AS false_mint "
+        "   AND a.name='false_mint' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   LIMIT 1) AS false_mint "
         "FROM objects o WHERE o.canonical=$1 AND o.type='Agent' AND o.status='active'",
         agent_id)
     if row is None:
