@@ -3409,6 +3409,27 @@ async def sweep_route(request: Any) -> Any:
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 
+async def _boot_check() -> None:
+    """THE DEPLOY-ORDERING GUARD (thread e6f5556f): LOUD ALARM, never a refusal — see
+    deploy_guard's own module docstring for why. Scoped to the PERSISTENT streamable-http
+    server only (the systemd `osiris-mcp` unit, the fleet's one shared door) — not the
+    per-session stdio subprocess every mount spins up, which isn't a "deploy" in the sense
+    this guard exists for. Wrapped defensively on top of check_schema_drift's own internal
+    fail-open: nothing here may ever block or delay serving."""
+    import logging
+
+    from src.orchestrator.deploy_guard import alarm_schema_drift, check_schema_drift
+
+    try:
+        pool = await _pool_get()
+        drift = await check_schema_drift(pool)
+        if drift:
+            await alarm_schema_drift(pool, drift, service="osiris-mcp")
+    except Exception as exc:  # noqa: BLE001 — the guard must never become the thing it guards against
+        logging.getLogger("osiris.deploy_guard").warning(
+            "deploy_guard check failed at mcp boot: %r", exc)
+
+
 def main() -> None:
     """Run the server. `OSIRIS_MCP_TRANSPORT=streamable-http` = the PERSISTENT fleet server
     (one always-on process on host:port, one shared pool); default `stdio` = one server for
@@ -3418,6 +3439,7 @@ def main() -> None:
     if transport in ("streamable-http", "sse"):
         mcp.settings.host = s.osiris_mcp_host
         mcp.settings.port = s.osiris_mcp_port
+        asyncio.run(_boot_check())
         mcp.run(transport=transport)  # type: ignore[arg-type]
     else:
         mcp.run()

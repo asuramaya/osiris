@@ -118,6 +118,23 @@ def _iso_epoch(iso: str) -> float:
     return datetime.fromisoformat(iso).timestamp()
 
 
+async def collect_schema_drift() -> str | None:
+    """Belt-and-suspenders on top of the boot-time deploy guard (thread e6f5556f): the boot
+    check only ever fires ONCE, at a service's own start — a process that booted clean and
+    then drifted later (a migration landed on the DB, or got reverted, while the service kept
+    running) would never re-check itself. This weekly pass reuses the SAME comparison
+    (deploy_guard.check_schema_drift), not a duplicate of the logic, so the two never disagree
+    on what counts as drift."""
+    import asyncpg
+    from src.orchestrator.deploy_guard import check_schema_drift
+
+    pool = await asyncpg.create_pool(DSN, min_size=1, max_size=1)
+    try:
+        return await check_schema_drift(pool)
+    finally:
+        await pool.close()
+
+
 def evaluate(m: dict) -> list[str]:
     """The judgments — pure, tested. Returns human-readable failures; [] = all green."""
     fails: list[str] = []
@@ -165,6 +182,11 @@ def evaluate(m: dict) -> list[str]:
     if miner and miner.get("recent_errors", 0) >= 3:
         fails.append(f"adversary errored {miner['recent_errors']} of the last "
                      f"{miner['recent']} runs — the death-rite sweep is failing")
+    # THE DEPLOY-ORDERING GUARD'S WEEKLY BACKSTOP (thread e6f5556f): the boot-time check only
+    # ever fires once, at start — this catches drift that happens AFTER a clean boot.
+    drift = m.get("schema_drift")
+    if drift:
+        fails.append(f"SCHEMA DRIFT: {drift} — run `alembic upgrade head` against the real DB")
     return fails
 
 
@@ -222,6 +244,10 @@ def main() -> int:
         m["miner"] = asyncio.run(collect_miner())
     except Exception:  # noqa: BLE001 — DB unreachable is already a unit/container failure
         m["miner"] = None
+    try:
+        m["schema_drift"] = asyncio.run(collect_schema_drift())
+    except Exception:  # noqa: BLE001 — DB unreachable is already a unit/container failure
+        m["schema_drift"] = None
     fails = evaluate(m)
     if "--drill" in sys.argv and m.get("newest_dump"):
         d = drill(m["newest_dump"])

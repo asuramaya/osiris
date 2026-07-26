@@ -88,3 +88,18 @@ def test_failing_open_miner_is_named() -> None:
     m = _green()
     m["miner"] = {**_healthy_miner(), "recent_errors": 3}
     assert "errored 3 of the last 6 runs" in "\n".join(evaluate(m))
+
+
+# --- the deploy-ordering guard's weekly backstop (thread e6f5556f) --------------------------
+
+def test_no_schema_drift_key_is_quiet() -> None:
+    """collect_schema_drift() returning None (matched, or DB unreachable) is silence, same as
+    every other None-shaped field in this matrix."""
+    assert evaluate(_green()) == []
+
+
+def test_a_real_schema_drift_is_named_loudly() -> None:
+    m = _green()
+    m["schema_drift"] = "code expects migration head '0036', DB is at '0034'"
+    fails = "\n".join(evaluate(m))
+    assert "SCHEMA DRIFT" in fails and "0034" in fails and "alembic upgrade head" in fails

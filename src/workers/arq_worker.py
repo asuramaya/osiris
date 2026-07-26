@@ -33,6 +33,7 @@ from src.ingest.wake_cost import meter_bodies, meter_receipts, meter_wakes
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, expand_case, run_cascade
 from src.orchestrator.census import live_bodies, live_bodies_by_cwd
+from src.orchestrator.deploy_guard import alarm_schema_drift, check_schema_drift
 from src.orchestrator.liveness import observe_liveness
 from src.orchestrator.manifests import load_manifests
 from src.orchestrator.monitor import (
@@ -91,6 +92,15 @@ async def startup(ctx: dict[str, Any]) -> None:
     reaped = await reap_decommissioned_jobs(pool)
     if reaped:
         _log.warning("decommissioned organs reaped from telemetry: %s", ", ".join(reaped))
+    # THE DEPLOY-ORDERING GUARD (thread e6f5556f): LOUD ALARM, never a refusal — see
+    # deploy_guard's own module docstring for why. Wrapped defensively here too, on top of
+    # check_schema_drift's own internal fail-open: nothing in this path may ever block a boot.
+    try:
+        drift = await check_schema_drift(pool)
+        if drift:
+            await alarm_schema_drift(pool, drift, service="osiris-worker")
+    except Exception as exc:  # noqa: BLE001 — the guard must never become the thing it guards against
+        _log.warning("deploy_guard check failed at worker boot: %r", exc)
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
