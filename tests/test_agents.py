@@ -818,6 +818,70 @@ async def test_an_auto_minted_heir_inherits_the_SEAT_not_just_the_name(actions: 
     assert await house_of(actions.pool, "agent:ghosttest") == "osiris"
 
 
+async def test_mint_heir_counts_and_inherits_the_seats_true_house_not_the_ancestors_stamp(
+    actions: Actions,
+) -> None:
+    """Thoth's fused bug (DM 1301, live case): Thoth LVII's own mount was transiently
+    polluted (a container-root cwd with no seat pin) and re-stamped its OWN project to
+    'seats' — but the SEAT OBJECT's own stored house ('osiris') was never touched, only the
+    ancestor's AGENT-level property was. The old mint_heir read house_of(ancestor) for BOTH
+    the heir's inherited project stamp and the generation count, so a 58-generation reign
+    rendered as generation 2. held_seat is already lineage-aware and already derives its
+    house from the SEAT itself (derive_house, ruling ff6148b0) — reusing it here fixes both
+    at once, going forward.
+
+    Five clean prior holders establish real history, all correctly stamped 'osiris'. THEN
+    the fifth (the ancestor about to auto-mint) gets its OWN stamp corrupted to 'seats' —
+    simulating the pollution happening on ITS OWN later mount, same shape as Thoth's.
+
+    NOTE what this fix does NOT do: it cannot retroactively un-pollute an ALREADY-corrupted
+    ancestor stamp — that is the separate, sign-off-gated data repair. seat_holders counts
+    by matching each AGENT's own CURRENT project stamp, so the polluted ancestor itself
+    becomes invisible to an 'osiris'-scoped count until its own stamp is repaired. The heir
+    therefore lands on generation 5 here (four clean ancestors + this heir), not the 'true'
+    6 — a real, honest improvement over the old code's 2, not a full retroactive cure."""
+    from src.orchestrator.agents import claim_name, mint_heir
+    from src.orchestrator.seats import held_seat
+
+    now = datetime.now(UTC)
+    ancestor_id = ""
+    for i in range(5):
+        aid = f"agent:ptah{i}"
+        a = await actions.create_or_find_object("Agent", aid, "test")
+        await actions.assert_property(a, "project", "osiris", "test", now, 0.9,
+                                      evidence_class=EvidenceClass.SELF_DECLARED.value)
+        claimed = await claim_name(actions, aid, "Ptah", source="test")
+        assert claimed.get("error") is None and claimed["generation"] == i + 1
+        ancestor_id = aid
+    ancestor_oid = await actions.create_or_find_object("Agent", ancestor_id, "test")
+
+    # THE POLLUTION: the ancestor's OWN mount, later, re-stamps its project — the seat
+    # object itself is untouched.
+    await actions.assert_property(ancestor_oid, "project", "seats", "test", now, 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+
+    sanity = await held_seat(actions.pool, ancestor_id)
+    assert sanity is not None and sanity["house"] == "osiris", (
+        "sanity check: the SEAT's own derived house must read 'osiris' regardless of the "
+        "ancestor's own polluted stamp — this is exactly what the fix reuses")
+
+    heir, heir_oid = await mint_heir(actions, ancestor_id, ancestor_oid,
+                                     because="compaction", succession=None)
+
+    heir_project = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='project' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        heir_oid)
+    assert heir_project == "osiris", (
+        "the heir must inherit the SEAT's true house, not the ancestor's polluted stamp")
+
+    gen = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='seat_generation' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        heir_oid)
+    assert gen == "5", "four clean ancestors + this heir — far better than the old bug's '2'"
+
+
 async def test_succeeds_seat_is_not_succeeded_from(actions: Actions) -> None:
     """Two relations, two names. `succeeded_from` chains ANCHORS (which conversation spawned
     which); `succeeds_seat` chains HOLDERS of a job. Two relations wearing one name is the

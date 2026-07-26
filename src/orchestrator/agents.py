@@ -41,6 +41,7 @@ from src.ingest.sessions import (
     locate_transcript_by_cwd,
     model_of_transcript,
 )
+from src.orchestrator.offices import _DEFAULT_OFFICE_ROOT
 from src.orchestrator.swaps import classify_swap, swap_marker
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
@@ -98,6 +99,14 @@ class AgentIdentity:
     # lineage-linked id (agent:<base>-ii…) because it arrived across a detected seam or wore a
     # retired face. Holds the ANCESTOR's canonical; mount() confesses the minting to the heir.
     succeeded_from: str | None = None
+    # SET HERE, by resolve_identity itself (mount-guard #6, Thoth's fused ask, DM 1301): a cwd
+    # that is exactly the bare seat-office root (~/.osiris/seats, no .osiris pin, parent of
+    # every seat — never a seat itself) has no single project to fall back to. The old
+    # basename fallback minted the literal string "seats" as a phantom project, silently —
+    # this names the reason instead, so the caller can refuse loudly rather than mint it.
+    # None on every ordinary path; every existing caller of resolve_identity ignores an
+    # unset field exactly as it always has.
+    refused: str | None = None
 
 
 # Roman generations for successor ids (a sibling's grammar: agent:a8c15486-ii). The alphabet
@@ -213,7 +222,10 @@ async def seat_holders(pool: asyncpg.Pool, house: str | None, seat: str) -> list
         # the leak, not a holder — counting it would renumber every real generation after it.
         "AND NOT EXISTS (SELECT 1 FROM links sl WHERE sl.from_id=o.id "
         "  AND sl.type='spawned_by') "
-        "ORDER BY o.created_at", seat, house)]
+        # a same-instant double-mint has no deterministic order on created_at alone —
+        # Thoth's flag, DM 1301 — id tiebreaks it, matching compositions.py's own
+        # "ORDER BY created_at, id" idiom elsewhere in this codebase.
+        "ORDER BY o.created_at, o.id", seat, house)]
 
 
 async def house_of(pool: asyncpg.Pool, agent_id: str) -> str | None:
@@ -280,6 +292,26 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
         return {"error": f"'{name}' is a SEAT LABEL, not a name — the numeral is the generation, "
                          f"and the substrate assigns it. Claim '{bare}' if that lineage is "
                          "yours to continue; otherwise pick a name of your own."}
+    # GLOBAL FIRST, HOUSE-SCOPED ONLY WHEN GENUINELY NEW (thread cb374585): a real,
+    # unambiguous seat for this handle can be VACANT (no holder to disagree with a stale
+    # house guess) — find_seat's own (house, handle) lookup silently misses it whenever the
+    # caller's own computed house doesn't match what's actually stored, and used to mint a
+    # SECOND seat instead (the Vajra twin, seat:1d3cf119, born this exact way while the real
+    # seat:191f1a1e — managed_by Alfred — sat untouched). seats_by_handle answers the
+    # question find_seat can't: does ANY active seat already carry this name, regardless of
+    # house? Zero → mint fresh, house-scoped is correct (nothing to conflict with). One →
+    # THAT seat, always, whatever its own stored house says. Two or more → an ambiguity
+    # (a twin) this claim refuses rather than silently arbitrates; fold_seat resolves it
+    # deliberately, on its own turn, never as a side effect of an unrelated claim.
+    # Resolved HERE, early, because the seat's own id is also THE COUNTING HOUSE below —
+    # not a separate concern to revisit after the generation math runs.
+    from src.orchestrator.seats import bind_holder, derive_house, ensure_seat, seats_by_handle
+    existing = await seats_by_handle(actions.pool, name)
+    if len(existing) > 1:
+        return {"error": f"'{name}' names {len(existing)} active seats — an ambiguity this "
+                         f"claim will not silently arbitrate: {', '.join(existing)}. A "
+                         "deliberate fold_seat resolves a twin; claim_name never guesses."}
+    seat_id: str | None = existing[0] if existing else None
     # A SEAT BELONGS TO A HOUSE, AND AN HEIR INHERITS IT (operator's ruling, 2026-07-12). The old
     # guard keyed a name to a LINEAGE ROOT — the anchor — so the moment a conversation ended, its
     # name died with it: the next mind in the same house reached for the family name, was refused
@@ -287,6 +319,24 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
     # "were you minted under the same job_dir" but "do you work in the same house".
     house = await house_of(actions.pool, agent_id)
     holders = await seat_holders(actions.pool, house, name)
+    # THE COUNTING HOUSE IS THE SEAT'S, NOT THE CALLER'S (Thoth's fused ask, DM 1301, live
+    # case: a transient wrong-house mount — a container-root cwd with no seat pin —
+    # miscounted a 58-generation reign as generation 2). When a real seat already exists,
+    # its own derive_house (the managed_by-chain-derived, lineage-authoritative house — same
+    # discipline as held_seat/manager_of_seat) is the counting authority for GENERATION MATH
+    # ONLY — kept deliberately separate from `holders` above, which the elsewhere-check just
+    # below still needs scoped by the CALLER's own house: that guard's whole job is "does my
+    # OWN house have zero history with this name", and answering it with the seat's house
+    # instead would let an outsider from a genuinely different house walk straight past it
+    # (a real regression, caught by test_the_house_the_seat_and_the_holders — an outsider in
+    # 'sibling-one' must still be refused a seat whose true, derived house is 'sibling-two').
+    # A genuinely EMPTY derived house (a seat minted before any project was known) is treated
+    # like "no seat yet" — trusting an empty stamp over the caller's own real one regressed
+    # mint_heir's sibling case (test_the_whisper_honors_a_bound_seat); same discipline here.
+    _derived = await derive_house(actions.pool, seat_id) if seat_id else None
+    counting_house = _derived if _derived else house
+    counting_holders = (holders if counting_house == house
+                        else await seat_holders(actions.pool, counting_house, name))
     elsewhere = await actions.pool.fetchrow(
         "SELECT o.canonical FROM objects o JOIN current_assertions h ON h.object_id=o.id "
         "AND h.name='handle' WHERE o.type='Agent' AND lower(h.value #>> '{}') = lower($1) "
@@ -311,8 +361,10 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
     a = await actions.create_or_find_object("Agent", agent_id, source)
     now = datetime.now(UTC)
     await actions.assert_property(a, "handle", name, source, now, _CONF, evidence_class=_EC)
-    # the generation counts HOLDERS of this seat in this house — not anchors, not conversations
-    gen = (holders.index(agent_id) + 1) if agent_id in holders else len(holders) + 1
+    # the generation counts HOLDERS of this seat in ITS OWN house — not anchors, not
+    # conversations, and not the caller's possibly-wrong house (see counting_house above)
+    gen = ((counting_holders.index(agent_id) + 1) if agent_id in counting_holders
+          else len(counting_holders) + 1)
     await actions.assert_property(a, "seat_generation", str(gen), source, now, _CONF,
                                   evidence_class=_EC)
     # THE SUCCESSION EDGE (Ra V, a-sibling, msg 374): "the graph finally gets the parent edge
@@ -322,14 +374,15 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
     # traversable, or the next mind re-derives it from the disk the way he had to.
     # THE PREDECESSOR IS THE HOLDER BEFORE ME — not "the last holder unless it happens to be me".
     # That older reading silently skipped the edge for the one case that needs it most: an heir
-    # minted by mint_heir ALREADY carries the inherited handle, so it is already in `holders`, and
-    # as the newest it IS holders[-1] — which resolved `prior` to None and minted nothing. A mind
-    # that inherited its seat could not claim its own ancestry. (The ghosts, 53729dd6.)
-    if agent_id in holders:
-        i = holders.index(agent_id)
-        prior = holders[i - 1] if i > 0 else None
+    # minted by mint_heir ALREADY carries the inherited handle, so it is already in
+    # `counting_holders`, and as the newest it IS counting_holders[-1] — which resolved `prior`
+    # to None and minted nothing. A mind that inherited its seat could not claim its own
+    # ancestry. (The ghosts, 53729dd6.)
+    if agent_id in counting_holders:
+        i = counting_holders.index(agent_id)
+        prior = counting_holders[i - 1] if i > 0 else None
     else:
-        prior = holders[-1] if holders else None
+        prior = counting_holders[-1] if counting_holders else None
     if prior:
         await actions.create_link(
             a, await actions.create_or_find_object("Agent", prior, source),
@@ -340,34 +393,17 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
     # claim is the assertion world's own deliberate binding act, and every guard above
     # (visitor, live-sitter, other-house) already ran. Legacy seats enter the Seat world
     # the moment they are next claimed; from there succession, mail, resolution, and
-    # resume all ride the durable binding.
-    #
-    # GLOBAL FIRST, HOUSE-SCOPED ONLY WHEN GENUINELY NEW (thread cb374585): a real,
-    # unambiguous seat for this handle can be VACANT (no holder to disagree with a stale
-    # house guess) — find_seat's own (house, handle) lookup silently misses it whenever the
-    # caller's own computed house doesn't match what's actually stored, and used to mint a
-    # SECOND seat instead (the Vajra twin, seat:1d3cf119, born this exact way while the real
-    # seat:191f1a1e — managed_by Alfred — sat untouched). seats_by_handle answers the
-    # question find_seat can't: does ANY active seat already carry this name, regardless of
-    # house? Zero → mint fresh, house-scoped is correct (nothing to conflict with). One →
-    # THAT seat, always, whatever its own stored house says. Two or more → an ambiguity
-    # (a twin) this claim refuses rather than silently arbitrates; fold_seat resolves it
-    # deliberately, on its own turn, never as a side effect of an unrelated claim.
-    from src.orchestrator.seats import bind_holder, ensure_seat, seats_by_handle
-    existing = await seats_by_handle(actions.pool, name)
-    if len(existing) > 1:
-        return {"error": f"'{name}' names {len(existing)} active seats — an ambiguity this "
-                         f"claim will not silently arbitrate: {', '.join(existing)}. A "
-                         "deliberate fold_seat resolves a twin; claim_name never guesses."}
-    seat_id: str | None = existing[0] if existing else None
+    # resume all ride the durable binding. `seat_id` was already resolved above (it doubles
+    # as the counting house's own key) — only the genuinely-new-handle case has minting left
+    # to do here.
     if seat_id is None:
-        seat_world = await ensure_seat(actions, house=house, handle=name, source=source)
+        seat_world = await ensure_seat(actions, house=counting_house, handle=name, source=source)
         if not seat_world.get("error"):
             seat_id = seat_world["seat_id"]
     if seat_id:
         await bind_holder(actions, seat_id=seat_id, agent_id=agent_id, source=source)
     return {"claimed": name, "seat": seat_label(agent_id, name, gen), "agent": agent_id,
-            "house": house, "generation": gen, "inherited_from": prior,
+            "house": counting_house, "generation": gen, "inherited_from": prior,
             **({"seat_id": seat_id} if seat_id else {})}
 
 
@@ -540,8 +576,18 @@ def resolve_identity(
     session) makes the guess REFUSE a taken sid; the refuser falls to a deterministic per-client
     fallback keyed on `fallback_seed` (its MCP session key) — distinct, stable across re-calls
     within the connection, and honestly resolved=False."""
-    # the project LABEL: an explicit override (env) > the .osiris file > the folder basename
-    project = project_label or read_project_label(cwd) or (Path(cwd).name if cwd else None)
+    # the project LABEL: an explicit override (env) > the .osiris file > the folder basename —
+    # UNLESS the folder is the bare seat-office root itself (mount-guard #6, DM 1301): the
+    # parent of every seat has no .osiris pin and no single project to fall back to, so the
+    # basename ("seats") would be a phantom, not a guess. Refuse instead of minting it.
+    pinned = project_label or read_project_label(cwd)
+    refused = None
+    if pinned is None and cwd and Path(cwd) == _DEFAULT_OFFICE_ROOT:
+        refused = (f"cwd is the bare seat-office root ({cwd}) — the parent of every seat, "
+                  "not a seat itself. There is no single project to resolve to; relaunch "
+                  "with cwd set to your own office (~/.osiris/seats/<your-handle>), the one "
+                  "with your own .osiris pin file beside it.")
+    project = None if refused else (pinned or (Path(cwd).name if cwd else None))
     sid = session or _job_id(job_dir)
     confident = sid is not None  # a session/job_dir ANCHOR; the cwd-locate below is only a GUESS
     declared = model  # the agent's SELF-REPORT of its model (may be None) — the WEAK signal
@@ -610,7 +656,7 @@ def resolve_identity(
                          cwd=cwd, model_method=method, model_declared=declared,
                          model_divergent=divergent, model_history=tuple(history),
                          model_deliberate=deliberate, model_observed_at=observed_at,
-                         resolved=resolved)
+                         resolved=resolved, refused=refused)
 
 
 async def _link_once(
@@ -787,7 +833,25 @@ async def mint_heir(
     # assertion later but never the works_in EDGE, so every lens that walks the edge missed
     # them. Inherit both HERE, once, for every mint path — the register path re-stamps its
     # own reading afterwards and the byte-dup skip absorbs the overlap.
-    house = await house_of(actions.pool, ancestor_id)
+    #
+    # THE HOUSE IS THE SEAT'S, NOT THE ANCESTOR'S OWN STAMP (Thoth's fused ask, DM 1301, live
+    # case: a transient wrong-house mount compounds across every AUTOMATIC mint via
+    # house_of(ancestor_id) — mint_heir fires on every compaction/model-swap/session-death, so
+    # a single polluted stamp propagates forward forever, not just miscounting one numeral but
+    # re-stamping the heir's own project too, since this one `house` value feeds both). held_seat
+    # is already lineage-aware and already derives its `house` from the seat itself
+    # (derive_house, ruling ff6148b0) — reuse it, but ONLY when it actually resolves to
+    # something: a seat minted before any project was known (house='' at ensure_seat time,
+    # the pre-Seat-object era, or simply the very first claim) stores an empty house FOREVER
+    # — nothing ever revisits it after mint except a deliberate correct_house call — while the
+    # ancestor's own CURRENT stamp may since have been legitimately, correctly established by
+    # an ordinary mount. Trusting a genuinely empty seat-stamp over a live, real one regressed
+    # test_the_whisper_honors_a_bound_seat (a caught regression, not a hypothetical): treat an
+    # empty derived house exactly like "no seat yet" and fall back.
+    from src.orchestrator.seats import held_seat
+    ancestor_seat = await held_seat(actions.pool, ancestor_id)
+    house = (ancestor_seat["house"] if ancestor_seat and ancestor_seat.get("house")
+            else await house_of(actions.pool, ancestor_id))
     if house:
         await actions.assert_property(a, "project", house, heir, now, _CONF, evidence_class=_EC)
         proj = await actions.create_or_find_object("SoftwareProject", f"repo:{house}", heir)

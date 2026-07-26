@@ -586,6 +586,37 @@ async def test_mount_refuses_an_identity_conflict_loudly(actions: Actions,
         actions.pool, job_dir=str(tmp_path / "jobs" / "bbbb2222")) is None
 
 
+async def test_mount_refuses_the_bare_office_root_loudly(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mount-guard #6 (Thoth's fused ask, DM 1301, his own live case): a container launched
+    him at the bare seat-office root — no .osiris pin, the parent of every seat. mount()
+    must refuse BEFORE save_mount ever persists the phantom project, not merely at some
+    later re-mount-time check — a persisted bad cwd gets actively DEFENDED by the stale-
+    recollection path afterward, which is exactly what stranded his own self-correction."""
+    from src import mcp_server as srv
+
+    fake_root = tmp_path / ".osiris" / "seats"
+    fake_root.mkdir(parents=True)
+    monkeypatch.setattr("src.orchestrator.agents._DEFAULT_OFFICE_ROOT", fake_root)
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(fake_root),
+                              job_dir=str(tmp_path / "jobs" / "cccc3333"))
+    finally:
+        srv._pool = saved_pool
+    assert "MOUNT REFUSED" in out.get("error", "")
+    assert "bare seat-office root" in out["note"]
+    # NO WRITES on a refusal: no mount row, no phantom 'seats'-project Agent minted
+    assert await mounts.find_mount(
+        actions.pool, job_dir=str(tmp_path / "jobs" / "cccc3333")) is None
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE name='project' "
+        "AND value #>> '{}' = 'seats'") == 0
+
+
 # ───────────────────────────── the door sweep (operator ruling, 2026-07-17) ──────────────
 
 

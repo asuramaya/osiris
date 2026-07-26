@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from src.actions.core import Actions
 from src.orchestrator.agents import (
     claim_name,
@@ -308,6 +309,35 @@ def test_dot_osiris_label_decouples_from_the_folder(tmp_path: Path) -> None:
     from src.orchestrator.agents import resolve_identity
     assert resolve_identity(cwd=str(repo)).project == "handlingtheloop"
     assert resolve_identity(cwd=str(repo), project_label="override").project == "override"
+
+
+def test_resolve_identity_refuses_the_bare_office_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mount-guard #6 (Thoth's fused ask, DM 1301, his own live case): a container launched
+    him at the bare seat-office root itself — ~/.osiris/seats, no .osiris pin, the parent of
+    every seat, never a seat itself. The old fallback would have minted the literal string
+    'seats' as a phantom project, silently — the root cause behind a 58-generation reign
+    rendering as generation 2. Refuse instead, loudly, before anything downstream (save_mount)
+    ever persists it — the guard must sit at first bind, not re-mount-time validation, since
+    a persisted bad cwd gets actively DEFENDED by the stale-recollection path afterward."""
+    from src.orchestrator import agents as agents_mod
+
+    fake_root = tmp_path / ".osiris" / "seats"
+    fake_root.mkdir(parents=True)
+    monkeypatch.setattr(agents_mod, "_DEFAULT_OFFICE_ROOT", fake_root)
+
+    ident = agents_mod.resolve_identity(cwd=str(fake_root))
+    assert ident.refused is not None and "bare seat-office root" in ident.refused
+    assert ident.project is None
+
+    # a REAL office subdirectory, one level down, is unaffected — the refusal is an exact
+    # match on the root itself, never a prefix guess that would catch every real office too
+    office = fake_root / "someseat"
+    office.mkdir()
+    normal = agents_mod.resolve_identity(cwd=str(office))
+    assert normal.refused is None
+    assert normal.project == "someseat"  # no .osiris pin here either — ordinary basename
 
 
 # ═══ THE VAJRA TWIN'S ROOT CAUSE (thread cb374585) — a real, unambiguous, VACANT seat has no

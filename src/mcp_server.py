@@ -1247,6 +1247,14 @@ async def mount(
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model,
                              claimed=claimed, fallback_seed=key,
                              store_reading=store_reading)
+    # THE BARE-ROOT REFUSAL (mount-guard #6, Thoth's fused ask, DM 1301 — his own live case:
+    # a container launched him at ~/.osiris/seats itself, no .osiris pin, no seat to resolve
+    # to). Caught UPSTREAM, at first bind, on purpose: once a bad cwd reaches save_mount below,
+    # the stale-recollection path (cwd_corrected, further down) DEFENDS it on every later
+    # re-mount — his own self-correction attempt failed for exactly this reason. No write
+    # happens on a refusal, same discipline as the IDENTITY CONFLICT guard above.
+    if ident.refused:
+        return {"error": "MOUNT REFUSED — bare office root", "cwd": cwd, "note": ident.refused}
     if bound is not None:
         # NO local re-import of _generation here: a local import anywhere in a function
         # shadows the module-level name for the WHOLE function, and this branch is
