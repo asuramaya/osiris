@@ -593,12 +593,20 @@ def watched(fn: Any, *, every: int) -> Any:
 class WorkerSettings:
     # enqueueable jobs (the API hands heavy work here instead of running it inline)
     functions: list[Any] = [expand_case_job, sweep_session]
+    # RUN_AT_STARTUP HARDENING (Thoth's diagnosis + go-ahead, DM 1338/1350): a cron job WITHOUT
+    # run_at_startup only SETS next_run on the worker's first heartbeat rather than firing
+    # immediately (arq's own run_cron) — it needs the process to survive uninterrupted to its
+    # next real wall-clock tick to ever fire once. If the worker crash-loops around a restart,
+    # every flagless job can silently miss its whole window while heartbeat (which HAS the
+    # flag) keeps firing and masks the outage — exactly "registered, zero runs, no errors",
+    # the reap_orphans symptom this closes. Every cron job below now carries it.
     cron_jobs = [
         cron(watched(drain_cascade, every=5), second=set(range(0, 60, 5)), run_at_startup=True),
         # the watch: evaluate subscriptions every 5s (offset from the cascade drain),
         # pull source deltas once a minute.
         cron(watched(evaluate_watch, every=5), second=set(range(2, 60, 5)), run_at_startup=True),
-        cron(watched(run_source_ticks, every=60), minute=set(range(0, 60)), second={0}),
+        cron(watched(run_source_ticks, every=60), minute=set(range(0, 60)), second={0},
+             run_at_startup=True),
         # self-heal orphaned claims every 5 min (the failure-drill recovery path).
         cron(watched(reap_runs, every=300), minute=set(range(0, 60, 5)), run_at_startup=True),
         # liveness heartbeat every 30s (the dead-man's-switch /health/worker reads).
@@ -623,19 +631,21 @@ class WorkerSettings:
         # laptop — left nobody holding the context. DETECTION is free (a stat + a watermark); each
         # orphan is then swept ONCE by the same licence-gated death rite. Not a crawl: its cost is
         # (sessions that actually died un-swept) and it converges to zero.
-        cron(watched(reap_orphans, every=900), minute={7, 22, 37, 52}, second={0}, timeout=600),
+        cron(watched(reap_orphans, every=900), minute={7, 22, 37, 52}, second={0}, timeout=600,
+             run_at_startup=True),
         # THE SWEEP LEDGER'S WATCHDOG (Finding A, thread 5177057a): B7 above only catches a
         # transcript that never got ANY successful sweep, ever — its watermark is a one-time-
         # ever boolean per file, so it goes permanently blind to a dropped enqueue on a
         # lineage's 2nd/3rd/Nth compaction once the 1st has already succeeded. This is the
         # narrower, faster net: one indexed query (no filesystem walk), retries a stuck
         # enqueue in-process, and escalates (never loops forever) past SWEEP_RETRY_CEILING.
-        cron(watched(reap_stuck_sweeps, every=120), minute=set(range(0, 60, 2)), second={20}),
+        cron(watched(reap_stuck_sweeps, every=120), minute=set(range(0, 60, 2)), second={20},
+             run_at_startup=True),
         # THE GHOST FARM'S BILL: 818 wakes, none of them ever in the ledger. Free (a parse of
         # transcripts we already have), deterministic, once per session — so it rides the
         # OBSERVER's switch, never the adversary's.
         cron(watched(meter_the_wakes, every=600), minute=set(range(3, 60, 10)), second={40},
-             timeout=300),
+             timeout=300, run_at_startup=True),
         # THE CRAWL IS GONE (B6 of ruling ceae1604). There is no session-sensing cron, and its
         # absence is the design, not an omission.
         #
@@ -657,18 +667,20 @@ class WorkerSettings:
         # the semantic index walks behind the miner (offset so they never contend for CPU):
         # fresh text is embedded within ~10 minutes of landing; unchanged graphs cost nothing
         cron(watched(embed_pass, every=600), minute=set(range(5, 60, 10)), second={15},
-             timeout=300),
+             timeout=300, run_at_startup=True),
         # rung 4 walks nightly in the quiet hour: echo-folding is free, summaries are
         # budgeted (≤3/pass, stalest-first) and skip-unchanged by fingerprint
-        cron(watched(neighborhood_pass, every=86400), hour={9}, minute={10}, timeout=480),
+        cron(watched(neighborhood_pass, every=86400), hour={9}, minute={10}, timeout=480,
+             run_at_startup=True),
         # the mailbox alarm clock: wake an agent for a project with unread mail — bounded by a
         # per-project rate cap, and a no-op unless osiris_trigger_enabled (the kill switch).
-        cron(watched(trigger_mail, every=60), minute=set(range(0, 60)), second={45}),
+        cron(watched(trigger_mail, every=60), minute=set(range(0, 60)), second={45},
+             run_at_startup=True),
         # the pair heartbeat (Pit Watch Stage B): a managed_by pair's ask-graded DM sitting
         # unread while the addressee is not mid-turn escalates to the operator's desk after
         # enough consecutive sightings — a no-op unless osiris_pit_watch_enabled.
         cron(watched(pit_watch_heartbeat, every=300), minute=set(range(0, 60, 5)),
-             second={30}),
+             second={30}, run_at_startup=True),
     ]
     on_startup = startup
     on_shutdown = shutdown
