@@ -1,5 +1,5 @@
-"""roadmap(project) — open + resolved/retracted Threads, grouped status→owner (thread
-521ae613a6f4 / d56e7073, Thoth's go msg 1227: v1 status→owner only, no `arc` yet)."""
+"""roadmap(project) — open + resolved/retracted Threads, grouped arc→status→owner (thread
+521ae613a6f4 / d56e7073 / 8df8e611, Thoth's go msg 1299: locked arc taxonomy, v2)."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -17,12 +17,20 @@ async def _project(actions: Actions, name: str) -> None:
                                   evidence_class="self_declared")
 
 
+def _arc(out: dict, name: str) -> dict:
+    return next(a for a in out["arcs"] if a["arc"] == name)
+
+
+def _status(arc: dict, name: str) -> dict:
+    return next(s for s in arc["statuses"] if s["status"] == name)
+
+
 async def test_roadmap_refuses_an_unknown_project(actions: Actions) -> None:
     out = await roadmap(actions.pool, "no-such-project")
     assert "error" in out and "no such project" in out["error"]
 
 
-async def test_roadmap_groups_open_threads_by_owner(actions: Actions) -> None:
+async def test_roadmap_untagged_threads_bucket_as_unsorted(actions: Actions) -> None:
     await _project(actions, "rmtest")
     await open_thread(actions, "an unowned duty", repo="rmtest",
                       kind="obligation", source="agent:me")
@@ -31,7 +39,8 @@ async def test_roadmap_groups_open_threads_by_owner(actions: Actions) -> None:
 
     out = await roadmap(actions.pool, "rmtest")
 
-    open_status = next(s for s in out["statuses"] if s["status"] == "open")
+    assert [a["arc"] for a in out["arcs"]] == ["unsorted"]
+    open_status = _status(_arc(out, "unsorted"), "open")
     owners = {o["owner"] for o in open_status["owners"]}
     assert owners == {"unowned", "operator"}
     unowned = next(o for o in open_status["owners"] if o["owner"] == "unowned")
@@ -39,6 +48,49 @@ async def test_roadmap_groups_open_threads_by_owner(actions: Actions) -> None:
     # obligation-first / whose-move ordering (rank_open_threads): unowned ("mine to act")
     # ranks above the operator group — the owner GROUPS inherit that same order
     assert [o["owner"] for o in open_status["owners"]][0] == "unowned"
+
+
+async def test_roadmap_groups_a_tagged_thread_under_its_declared_arc(
+    actions: Actions,
+) -> None:
+    await _project(actions, "rmtest")
+    await open_thread(actions, "a security finding", repo="rmtest",
+                      arc="Security", source="agent:me")
+    await open_thread(actions, "an untagged duty", repo="rmtest", source="agent:me")
+
+    out = await roadmap(actions.pool, "rmtest")
+
+    assert {a["arc"] for a in out["arcs"]} == {"Security", "unsorted"}
+    sec_threads = _status(_arc(out, "Security"), "open")["owners"][0]["threads"]
+    assert sec_threads[0]["summary"] == "a security finding"
+    unsorted_threads = _status(_arc(out, "unsorted"), "open")["owners"][0]["threads"]
+    assert unsorted_threads[0]["summary"] == "an untagged duty"
+
+
+async def test_roadmap_arc_order_matches_the_locked_taxonomy_then_unsorted_last(
+    actions: Actions,
+) -> None:
+    await _project(actions, "rmtest")
+    # opened out of taxonomy order, on purpose — the OUTPUT order must not just echo input
+    await open_thread(actions, "token thread", repo="rmtest", arc="Token-Cost",
+                      source="agent:me")
+    await open_thread(actions, "identity thread", repo="rmtest", arc="Identity-Succession",
+                      source="agent:me")
+    await open_thread(actions, "untagged thread", repo="rmtest", source="agent:me")
+
+    out = await roadmap(actions.pool, "rmtest")
+
+    assert [a["arc"] for a in out["arcs"]] == [
+        "Identity-Succession", "Token-Cost", "unsorted"]
+
+
+async def test_open_thread_refuses_an_arc_outside_the_locked_taxonomy(
+    actions: Actions,
+) -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="arc must be one of"):
+        await open_thread(actions, "bad arc", arc="Not-A-Real-Arc", source="agent:me")
 
 
 async def test_roadmap_excludes_untouched_miner_echoes(actions: Actions) -> None:
@@ -56,10 +108,7 @@ async def test_roadmap_excludes_untouched_miner_echoes(actions: Actions) -> None
 
     out = await roadmap(actions.pool, "rmtest")
 
-    open_status = next((s for s in out["statuses"] if s["status"] == "open"), None)
-    assert open_status is None or all(
-        "guessed duty" not in th["summary"]
-        for o in open_status["owners"] for th in o["threads"])
+    assert not out["arcs"], "no thread was ever DECLARED — nothing should render"
 
 
 async def test_roadmap_includes_resolved_and_retracted_grouped_separately(
@@ -77,7 +126,8 @@ async def test_roadmap_includes_resolved_and_retracted_grouped_separately(
 
     out = await roadmap(actions.pool, "rmtest")
 
-    by_status = {s["status"]: s for s in out["statuses"]}
+    unsorted = _arc(out, "unsorted")
+    by_status = {s["status"]: s for s in unsorted["statuses"]}
     assert set(by_status) == {"resolved", "retracted"}       # no open threads left
     resolved_threads = by_status["resolved"]["owners"][0]["threads"]
     assert resolved_threads[0]["summary"] == "shipped work"
@@ -94,5 +144,6 @@ async def test_roadmap_status_groups_render_in_a_fixed_order(actions: Actions) -
 
     out = await roadmap(actions.pool, "rmtest")
 
-    assert [s["status"] for s in out["statuses"]] == ["open", "resolved"]
-    assert out["note"].startswith("v1: status")
+    unsorted = _arc(out, "unsorted")
+    assert [s["status"] for s in unsorted["statuses"]] == ["open", "resolved"]
+    assert out["note"].startswith("v2: arc")

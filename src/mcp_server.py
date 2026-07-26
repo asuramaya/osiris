@@ -2941,7 +2941,8 @@ async def ingest_reference(
 @mcp.tool()
 async def open_thread(
     summary: str, repo: str | None = None, kind: str | None = None,
-    owner: str | None = None, assignee: str | None = None, session_anchor: str | None = None,
+    owner: str | None = None, assignee: str | None = None, arc: str | None = None,
+    session_anchor: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, str]:
@@ -2966,7 +2967,12 @@ async def open_thread(
     a near-duplicate hit SURFACES THE EXISTING LEASE instead of just deduping silently —
     `leased_to` names who already holds it. Asking again as the SAME assignee finds your own
     open build; a DIFFERENT assignee asking for near-duplicate work surfaces it too, by
-    design — a double-assignment must be VISIBLE, never silent."""
+    design — a double-assignment must be VISIBLE, never silent.
+    `arc` names which of a CLOSED taxonomy (capture.ARCS: Identity-Succession,
+    Compaction-Resilience, Model-Identity, Token-Cost, Surfaces-Roadmap-Docs,
+    Fleet-Hygiene, Security) this thread belongs to — the roadmap screen's top grouping.
+    Omit it for the common case; an unrecognized value refuses loudly rather than
+    fragmenting the taxonomy with a typo."""
     pool = await _pool_get()
     # AN UNFILED THREAD IS INVISIBLE TO ITS OWN PROJECT (Alfred V's succession repro,
     # thread 4ffe0eb9: IV's handoff, opened without repo=, hid from orient and the whisper
@@ -2991,10 +2997,13 @@ async def open_thread(
                 "parallel build (a double-assignment must be visible, not silent)"
             )
         return out
-    t = await capture.open_thread(
-        Actions(pool), summary, repo=repo, kind=kind, owner=owner, assignee=assignee,
-        source=await _actor_for(ctx, subagent_id, subagent_type)
-    )
+    try:
+        t = await capture.open_thread(
+            Actions(pool), summary, repo=repo, kind=kind, owner=owner, assignee=assignee,
+            arc=arc, source=await _actor_for(ctx, subagent_id, subagent_type)
+        )
+    except ValueError as e:
+        return {"error": str(e)}
     out = {"id": str(t), "summary": summary, "status": "open", "deduped": "false"}
     if assignee:
         out["assignee"] = assignee.strip()

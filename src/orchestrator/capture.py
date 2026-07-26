@@ -371,9 +371,19 @@ async def find_near_duplicate_open_thread(
     return uuid.UUID(str(best_id)) if best_id is not None and best_ratio > _DEDUP_SIM else None
 
 
+# THE ROADMAP ARC TAXONOMY (thread 8df8e611, Thoth's locked list, msg 1299) — CLOSED on
+# purpose: a free-text `arc` would fragment silently (a typo is a new, permanently-empty
+# arc no thread ever finds again), so `open_thread` refuses anything outside this set
+# rather than accepting a drifting label. roadmap.py imports this SAME constant for its
+# section order — one taxonomy, never two copies that quietly disagree.
+ARCS = ("Identity-Succession", "Compaction-Resilience", "Model-Identity", "Token-Cost",
+        "Surfaces-Roadmap-Docs", "Fleet-Hygiene", "Security")
+
+
 async def open_thread(
     actions: Actions, summary: str, *, repo: str | None = None, kind: str | None = None,
-    owner: str | None = None, assignee: str | None = None, source: str = _SOURCE,
+    owner: str | None = None, assignee: str | None = None, arc: str | None = None,
+    source: str = _SOURCE,
 ) -> uuid.UUID:
     """Open a thread at source — an unresolved question / next-step for the next session
     to inherit. Same shape as a mined Thread (props summary + status=open) so it appears in
@@ -397,7 +407,16 @@ async def open_thread(
     (assignee wins if both are given) — orient's sort-by-owner needs no change. What's new
     is ENFORCEMENT, not storage: the caller (mcp_server.open_thread) checks
     find_near_duplicate_open_thread BEFORE minting and, on a hit, surfaces the EXISTING
-    lease + its holder instead of minting a parallel build — see that tool's docstring."""
+    lease + its holder instead of minting a parallel build — see that tool's docstring.
+
+    `arc` (thread 8df8e611, roadmap v2) names which of the CLOSED taxonomy (`ARCS`,
+    above) this thread belongs to — the roadmap screen's top-level grouping, one level
+    above `status`. Raises ValueError on anything outside `ARCS`: a locked taxonomy that
+    silently accepted typos would fragment into permanently-empty arcs nobody finds
+    again. Omitted (the common case for now) leaves the thread arc-less; roadmap.py
+    buckets those as "unsorted" rather than guessing."""
+    if arc is not None and arc not in ARCS:
+        raise ValueError(f"arc must be one of {ARCS}, got {arc!r}")
     observed = datetime.now(UTC)
     effective_owner = assignee if assignee is not None else owner
     # ONE transaction (see record_decision): Thread + summary + status(+kind)(+repo) atomic —
@@ -410,6 +429,9 @@ async def open_thread(
                                 evidence_class=_EC)
         if kind:
             await a.assert_property(t, "kind", kind, source, observed, _CONF,
+                                    evidence_class=_EC)
+        if arc:
+            await a.assert_property(t, "arc", arc, source, observed, _CONF,
                                     evidence_class=_EC)
         if effective_owner:
             await a.assert_property(t, "owner", effective_owner.strip(), source, observed,

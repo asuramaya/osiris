@@ -754,22 +754,38 @@ def _roadmap_status_band(s: dict[str, Any]) -> str:
             f'<span class="pill">{n}</span></summary>' + "".join(body) + "</details>")
 
 
+def _roadmap_arc_band(a: dict[str, Any]) -> str:
+    """One arc, its status bands nested inside — the top grouping level. Reuses `.proj`
+    (the border-accent box render_desk_project already established) so the arc level
+    reads as visually one step ABOVE the `.band` status level inside it."""
+    arc = a["arc"]
+    statuses = a.get("statuses") or []
+    n = sum(len(o["threads"]) for s in statuses for o in s["owners"])
+    body = "".join(_roadmap_status_band(s) for s in statuses)
+    # every real arc opens by default; the "unsorted" catch-all collapses so a project
+    # with a lot of not-yet-tagged history doesn't dominate the page on first load
+    open_attr = "" if arc == "unsorted" else " open"
+    return (f'<details class="proj" id="rm-arc-{_e(arc)}"{open_attr}>'
+            f'<summary>{_e(arc)} <span class="pill">{n}</span></summary>'
+            + body + "</details>")
+
+
 def render_roadmap(data: dict[str, Any]) -> str:
-    """One project's Threads/obligations, status→owner (thread 521ae613a6f4 / d56e7073) —
-    v1 has no `arc` (thread 8df8e611, tracked as debt with a migration trigger). `data` is
-    `roadmap()`'s own receipt (composing open_thread_wall + rank_open_threads for the open
-    band, plus resolved/retracted) — this function does no fetching, no ranking, only
-    layout, same discipline as every other renderer here."""
+    """One project's Threads/obligations, arc→status→owner (thread 521ae613a6f4 / d56e7073
+    / 8df8e611). `data` is `roadmap()`'s own receipt (composing open_thread_wall +
+    rank_open_threads for the open band, resolved/retracted, and the arc lookup) — this
+    function does no fetching, no ranking, only layout, same discipline as every other
+    renderer here."""
     if "error" in data:
         return f'<p class="dim">{_e(data["error"])}</p>'
     project = data["project"]
-    statuses = data.get("statuses") or []
-    total = sum(len(o["threads"]) for s in statuses for o in s["owners"])
+    arcs = data.get("arcs") or []
+    total = sum(len(o["threads"]) for a in arcs for s in a["statuses"] for o in s["owners"])
     out = [f'<h2>roadmap <span class="who">{_e(project)}</span> '
            f'<span class="pill">{total} thread{"s" if total != 1 else ""}</span></h2>']
-    if not statuses:
+    if not arcs:
         out.append(f'<p class="dim">nothing tracked yet for <b>{_e(project)}</b>.</p>')
-    out.extend(_roadmap_status_band(s) for s in statuses)
+    out.extend(_roadmap_arc_band(a) for a in arcs)
     if data.get("note"):
         out.append(f'<p class="dim">{_e(data["note"])}</p>')
     return "".join(out)

@@ -424,3 +424,19 @@ async def test_open_thread_tool_files_under_the_mounted_project(actions: Actions
         "WHERE t.id=$1::uuid AND l.type='in_repo' AND p.canonical='repo:walltest'",
         out["id"])
     assert filed == 1
+
+
+async def test_open_thread_tool_refuses_an_arc_outside_the_locked_taxonomy(
+    actions: Actions,
+) -> None:
+    """The tool layer catches capture.open_thread's ValueError and returns an honest
+    {"error": ...} — never an unhandled exception reaching the MCP transport."""
+    import src.mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.open_thread("a duty with a bad arc", arc="Not-A-Real-Arc")
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out and "arc must be one of" in out["error"]

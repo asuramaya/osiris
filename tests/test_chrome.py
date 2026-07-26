@@ -435,32 +435,50 @@ def test_render_overhead_telemetry_band() -> None:
 def _roadmap_data(project: str = "seats") -> dict:
     return {
         "project": project,
-        "statuses": [
-            {"status": "open", "owners": [
-                {"owner": "unowned", "threads": [
-                    {"id": "aaaa1111", "summary": "an open duty", "kind": "obligation"}]},
-                {"owner": "operator", "threads": [
-                    {"id": "bbbb2222", "summary": "an operator blocker"}]},
+        "arcs": [
+            {"arc": "Security", "statuses": [
+                {"status": "open", "owners": [
+                    {"owner": "unowned", "threads": [
+                        {"id": "aaaa1111", "summary": "an open duty",
+                         "kind": "obligation"}]},
+                    {"owner": "operator", "threads": [
+                        {"id": "bbbb2222", "summary": "an operator blocker"}]},
+                ]},
+                {"status": "resolved", "owners": [
+                    {"owner": "agent:builder", "threads": [
+                        {"id": "cccc3333", "summary": "shipped work"}]},
+                ]},
             ]},
-            {"status": "resolved", "owners": [
-                {"owner": "agent:builder", "threads": [
-                    {"id": "cccc3333", "summary": "shipped work"}]},
+            {"arc": "unsorted", "statuses": [
+                {"status": "open", "owners": [
+                    {"owner": "unowned", "threads": [
+                        {"id": "dddd4444", "summary": "an untagged duty"}]},
+                ]},
             ]},
         ],
-        "note": "v1: status→owner only, no `arc` yet (thread 8df8e611)",
+        "note": "v2: arc→status→owner (thread 8df8e611)",
     }
 
 
-def test_render_roadmap_bands_by_status_then_owner() -> None:
+def test_render_roadmap_bands_by_arc_then_status_then_owner() -> None:
     html = render_roadmap(_roadmap_data())
     assert "roadmap" in html and "seats" in html
-    assert "3 threads" in html
+    assert "4 threads" in html
+    assert 'id="rm-arc-Security"' in html and 'id="rm-arc-unsorted"' in html
+    assert html.index('id="rm-arc-Security"') < html.index('id="rm-arc-unsorted"')
     assert 'id="rm-open"' in html and 'id="rm-resolved"' in html
     assert html.index('id="rm-open"') < html.index('id="rm-resolved"')  # fixed status order
     assert "an open duty" in html and "operator" in html
     assert "shipped work" in html and "agent:builder" in html
+    assert "an untagged duty" in html
     assert '<span class="pill">obligation</span>' in html
-    assert "no `arc` yet" in html
+    assert "arc→status→owner" in html
+
+
+def test_render_roadmap_every_real_arc_is_expanded_unsorted_is_not() -> None:
+    html = render_roadmap(_roadmap_data())
+    assert '<details class="proj" id="rm-arc-Security" open>' in html
+    assert '<details class="proj" id="rm-arc-unsorted">' in html
 
 
 def test_render_roadmap_open_band_is_expanded_others_are_not() -> None:
@@ -475,7 +493,7 @@ def test_render_roadmap_refuses_honestly() -> None:
 
 
 def test_render_roadmap_empty_project_says_so() -> None:
-    html = render_roadmap({"project": "quietproj", "statuses": [], "note": "v1..."})
+    html = render_roadmap({"project": "quietproj", "arcs": [], "note": "v2..."})
     assert "nothing tracked yet" in html and "quietproj" in html
 
 
