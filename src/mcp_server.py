@@ -1249,11 +1249,17 @@ async def mount(
                              store_reading=store_reading)
     # THE BARE-ROOT REFUSAL (mount-guard #6, Thoth's fused ask, DM 1301 — his own live case:
     # a container launched him at ~/.osiris/seats itself, no .osiris pin, no seat to resolve
-    # to). Caught UPSTREAM, at first bind, on purpose: once a bad cwd reaches save_mount below,
-    # the stale-recollection path (cwd_corrected, further down) DEFENDS it on every later
-    # re-mount — his own self-correction attempt failed for exactly this reason. No write
-    # happens on a refusal, same discipline as the IDENTITY CONFLICT guard above.
-    if ident.refused:
+    # to). Caught UPSTREAM, at FIRST bind, on purpose — and ONLY first bind: `bound is None`
+    # here, deliberately. Thoth's own live safety question (DM 1325) caught the gap in an
+    # earlier draft of this guard, which fired on cwd alone: his OWN bound row's cwd is ALSO
+    # the bare root (that's the historical corruption), so the stale-recollection substitution
+    # above never fires for him (bound.cwd == cwd, no discrepancy to correct) — an unconditional
+    # refusal would have locked him out of ever mounting again, forever, the moment this
+    # deployed. An ALREADY-bound session rides its own established binding forward exactly as
+    # it always has; only a session with NO row yet for this job_dir gets refused, so the
+    # pollution never gets a first foothold without blocking a life already in progress. No
+    # write happens on a refusal, same discipline as the IDENTITY CONFLICT guard above.
+    if ident.refused and bound is None:
         return {"error": "MOUNT REFUSED — bare office root", "cwd": cwd, "note": ident.refused}
     if bound is not None:
         # NO local re-import of _generation here: a local import anywhere in a function
@@ -1930,6 +1936,30 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
                         "succession notes carry one of these practices, STRIKE it; the "
                         "killed_by pointer is the fix to cite",
             }
+    # THE SWEEP RECEIPT (Finding A, thread 5177057a, Thoth's design approval DM 1326, NON-
+    # optional): a fresh compaction's own mining sweep is async and the seam gives no
+    # confirmation it landed. Rather than let a successor trust that silently, orient checks
+    # THIS lineage's own most recent sweep_ledger row — if it's still incomplete past the
+    # watchdog's own SLA (arq_worker.SWEEP_RETRY_SLA=300s, duplicated here on purpose: "the
+    # miner mines, the server only rings" is a deliberate ownership boundary, sweep_route/
+    # orient never import the worker module), the successor is told plainly instead of
+    # silently trusting an unconfirmed predecessor. Same family as swap_banner/
+    # notify-at-seam: a confession the running mind cannot feel on its own, so NEVER stripped
+    # by the terse pass below (same discipline as `swap`).
+    sweep_receipt: dict[str, Any] = {}
+    if ident:
+        with contextlib.suppress(Exception):
+            row = await pool.fetchrow(
+                "SELECT enqueued_at, completed_at, extract(epoch FROM now() - enqueued_at) "
+                "AS age_secs FROM sweep_ledger WHERE session_id = $1 "
+                "ORDER BY enqueued_at DESC LIMIT 1", ident.session)
+            if row and row["completed_at"] is None and row["age_secs"] > 300:
+                sweep_receipt["sweep_unconfirmed"] = (
+                    f"your last compaction's mining sweep (enqueued "
+                    f"{int(row['age_secs'] // 60)} min ago) has not confirmed completion — "
+                    "the watchdog retries it automatically; nothing to act on, but don't "
+                    "assume that seam's yield has landed in the graph yet."
+                )
     # the reader's identity feeds the wall's ownership ordering: what is MINE TO ACT rides
     # above another mind's claims and above 'waiting on the human'
     me = frozenset(x for x in ((ident.agent_id if ident else None), proj) if x)
@@ -1950,6 +1980,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             **op_mail,
             **({"charter": charter} if charter else {}),
             **({"swap": swap} if swap else {}),
+            **sweep_receipt,
             **({"succession_note": inheritance} if inheritance else {}),
             **({"co_agents": co_agents} if co_agents else {}),
             **({"while_you_were_away": away} if away else {}),
@@ -2627,6 +2658,28 @@ async def retire_seat(seat_id: str, reason: str = "",
 
 
 @mcp.tool()
+async def correct_agent_house(agent_id: str, project: str | None = None,
+                              seat_generation: int | None = None,
+                              ctx: Context | None = None) -> dict[str, Any]:
+    """Heal an ALREADY-POLLUTED agent's own project/seat_generation stamps — the
+    data-repair half of mount-guard #6 (commit cb47d02): the code fix stops NEW
+    pollution from a bare-office-root mount, it does not retroactively cure a stamp a
+    transient bad mount already wrote. UNLIKE correct_house, NOT self-scoped — the
+    target need not be the caller (an ancestor's already-corrupted stamp is exactly
+    the case this exists for). Append-only: asserts a new current value, never
+    touches the superseded row. Refuses on no correction named, an empty project,
+    a non-positive generation, or an unknown/inactive agent."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a correction is a mind's act, and the graph "
+                         "must know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.agents import correct_agent_house as _correct_agent_house
+    return await _correct_agent_house(Actions(await _pool_get()), agent_id=agent_id,
+                                      project=project, seat_generation=seat_generation,
+                                      actor=ident.agent_id)
+
+
+@mcp.tool()
 async def fold_candidates(ctx: Context | None = None) -> dict[str, Any]:
     """THE ARCHAEOLOGIST'S TRAY (thread b975851b) — sweep the registry and disk for
     anonymous agents that evidence says were never distinct minds (view-aliases: a mount
@@ -3299,7 +3352,14 @@ async def sweep_route(request: Any) -> Any:
     """The death rite's doorbell (task #22): the PreCompact hook posts the dying session's
     transcript; we ENQUEUE the miner's sweep on the worker (ownership boundary — the miner
     mines, the server only rings). Fail-open, localhost-only, idempotent (the miner's cursor
-    and dedup absorb re-rings)."""
+    and dedup absorb re-rings).
+
+    Also writes ONE ROW to `sweep_ledger` (Finding A, thread 5177057a) — a cheap synchronous
+    INSERT alongside the enqueue, so a watchdog cron can tell whether THIS SPECIFIC attempt
+    ever completed. B7 (the orphan reaper) only catches a transcript that never got any
+    successful sweep, ever; its watermark is a one-time-ever boolean per file, so it is
+    permanently blind to a dropped enqueue on a lineage's 2nd/3rd/Nth compaction once the
+    1st has already succeeded. This ledger closes that gap without reviving the crawl."""
     from arq import create_pool as arq_create_pool
     from arq.connections import RedisSettings
     from starlette.responses import JSONResponse
@@ -3308,19 +3368,25 @@ async def sweep_route(request: Any) -> Any:
     try:
         body = await request.json()
         transcript = str(body.get("transcript_path") or "")
+        session_id = str(body.get("session_id") or "")
         if not transcript.startswith("/"):
             return JSONResponse({"error": "transcript_path required"}, status_code=400)
         if _arq is None:
             _arq = await arq_create_pool(RedisSettings.from_dsn(get_settings().redis_url))
+        pool = await _pool_get()
+        await pool.execute(
+            "INSERT INTO sweep_ledger (transcript_path, session_id) VALUES ($1, $2)",
+            transcript, session_id)
         await _arq.enqueue_job("sweep_session", transcript)
         return JSONResponse({"enqueued": True})
     except Exception as e:  # noqa: BLE001
-        # THE STAKES CHANGED WHEN THE CRAWL DIED (ceae1604). This used to read "a missed sweep
-        # costs ≤10 min of miner lag" — true when a cron walked every transcript every ten minutes
-        # and would pick it up on the next round. There IS no next round. Mining is SUMMONED, and
-        # this doorbell is the only bell: a missed sweep now loses THE WHOLE SESSION's yield.
-        # It still must never block the dying mind — a hook that can refuse a death is worse than
-        # a lost extraction — but it is no longer cheap, and the next reader should know that.
+        # THE STAKES CHANGED WHEN THE CRAWL DIED (ceae1604): mining is SUMMONED, never walking,
+        # so a dropped enqueue is no longer a cheap ≤10-min miner lag — it can lose real yield.
+        # Two nets now catch that, not zero: B7 (the orphan reaper) recovers a transcript that
+        # NEVER got a successful sweep at all, and sweep_ledger's own watchdog (arq_worker.py)
+        # recovers a dropped attempt on a lineage B7 has already swept once and gone blind to.
+        # It still must never block the dying mind — a hook that can refuse a death is worse
+        # than a lost extraction — so this route stays fail-open either way.
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 

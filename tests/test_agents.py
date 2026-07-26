@@ -882,6 +882,87 @@ async def test_mint_heir_counts_and_inherits_the_seats_true_house_not_the_ancest
     assert gen == "5", "four clean ancestors + this heir — far better than the old bug's '2'"
 
 
+async def test_correct_agent_house_heals_a_polluted_stamp_on_someone_else(
+    actions: Actions,
+) -> None:
+    """The data-repair half of mount-guard #6 (DM 1301): UNLIKE correct_house, this is not
+    self-scoped — Thoth's own case needed his PREDECESSOR's stamp corrected too, an
+    ancestor who cannot act for itself. `actor` carries accountability; the target is
+    named explicitly and may be anyone."""
+    from src.orchestrator.agents import correct_agent_house, house_of
+
+    victim = await actions.create_or_find_object("Agent", "agent:cah1poll", "test")
+    await actions.assert_property(victim, "project", "seats", "test", datetime.now(UTC), 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    await actions.assert_property(victim, "seat_generation", "2", "test", datetime.now(UTC),
+                                  0.9, evidence_class=EvidenceClass.SELF_DECLARED.value)
+
+    out = await correct_agent_house(actions, agent_id="agent:cah1poll", project="osiris",
+                                    seat_generation=58, actor="agent:witness")
+    assert out == {"agent_id": "agent:cah1poll",
+                   "corrected": {"project": "osiris", "seat_generation": 58},
+                   "was": {"project": "seats", "seat_generation": "2"}}
+    assert await house_of(actions.pool, "agent:cah1poll") == "osiris"
+    gen = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='seat_generation' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", "agent:cah1poll")
+    assert gen == "58"
+
+
+async def test_correct_agent_house_can_correct_just_one_field(actions: Actions) -> None:
+    """Thoth's own predecessor case: seat_generation STAYS correct (57), only project
+    needs healing — passing just one field leaves the other untouched."""
+    from src.orchestrator.agents import correct_agent_house, house_of
+
+    a = await actions.create_or_find_object("Agent", "agent:cah2half", "test")
+    await actions.assert_property(a, "project", "seats", "test", datetime.now(UTC), 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    await actions.assert_property(a, "seat_generation", "57", "test", datetime.now(UTC), 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+
+    out = await correct_agent_house(actions, agent_id="agent:cah2half", project="osiris",
+                                    actor="agent:witness")
+    assert out["corrected"] == {"project": "osiris"}
+    assert await house_of(actions.pool, "agent:cah2half") == "osiris"
+    gen = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='seat_generation' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", "agent:cah2half")
+    assert gen == "57", "untouched — only project was named"
+
+
+async def test_correct_agent_house_refuses_no_correction_named(actions: Actions) -> None:
+    from src.orchestrator.agents import correct_agent_house
+
+    out = await correct_agent_house(actions, agent_id="agent:cah3none", actor="agent:witness")
+    assert "nothing to correct" in out["error"]
+
+
+async def test_correct_agent_house_refuses_an_empty_project(actions: Actions) -> None:
+    from src.orchestrator.agents import correct_agent_house
+
+    out = await correct_agent_house(actions, agent_id="agent:cah4empt", project="   ",
+                                    actor="agent:witness")
+    assert "empty string" in out["error"]
+
+
+async def test_correct_agent_house_refuses_a_non_positive_generation(actions: Actions) -> None:
+    from src.orchestrator.agents import correct_agent_house
+
+    out = await correct_agent_house(actions, agent_id="agent:cah5zero", seat_generation=0,
+                                    actor="agent:witness")
+    assert "positive integer" in out["error"]
+
+
+async def test_correct_agent_house_refuses_an_unknown_agent(actions: Actions) -> None:
+    from src.orchestrator.agents import correct_agent_house
+
+    out = await correct_agent_house(actions, agent_id="agent:cah6ghos", project="osiris",
+                                    actor="agent:witness")
+    assert "no such agent" in out["error"]
+
+
 async def test_succeeds_seat_is_not_succeeded_from(actions: Actions) -> None:
     """Two relations, two names. `succeeded_from` chains ANCHORS (which conversation spawned
     which); `succeeds_seat` chains HOLDERS of a job. Two relations wearing one name is the

@@ -237,6 +237,58 @@ async def house_of(pool: asyncpg.Pool, agent_id: str) -> str | None:
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent_id)
 
 
+async def correct_agent_house(
+    actions: Actions, *, agent_id: str, project: str | None = None,
+    seat_generation: int | None = None, actor: str,
+) -> dict[str, Any]:
+    """Heal an ALREADY-POLLUTED agent's own project/seat_generation stamps — the
+    data-repair half of mount-guard #6 (Thoth's fused ask, DM 1301). A transient bad
+    mount (the bare seat-office root, no .osiris pin) leaves a durable wrong `project`
+    stamp on an Agent object — and, downstream through claim_name/mint_heir's now-
+    fixed counting, a wrong `seat_generation` too — that commit cb47d02's code fix
+    cannot itself heal: it only stops NEW pollution from taking root, deliberately.
+    This is that healing act.
+
+    UNLIKE correct_house: NOT self-scoped, on purpose. The target need not be the
+    caller — Thoth's own case needed his PREDECESSOR's stamp corrected too, an
+    ancestor who cannot act for itself. Accountability lives in `actor`, an explicit
+    witness, not in a same-caller requirement. Append-only, same as everywhere in
+    this kernel: asserts a new current value, never touches the superseded row.
+
+    Refuses LOUDLY on: no correction named at all; an empty project string; a
+    non-positive generation; an unknown or inactive Agent."""
+    if project is None and seat_generation is None:
+        return {"error": "nothing to correct — pass project and/or seat_generation"}
+    if project is not None and not project.strip():
+        return {"error": "project cannot be corrected to an empty string"}
+    if seat_generation is not None and seat_generation < 1:
+        return {"error": "seat_generation must be a positive integer"}
+    row = await actions.pool.fetchrow(
+        "SELECT id, status FROM objects WHERE canonical=$1 AND type='Agent'", agent_id)
+    if row is None:
+        return {"error": f"no such agent: {agent_id!r}"}
+    if row["status"] != "active":
+        return {"error": f"{agent_id} is {row['status']}, not active — nothing to correct"}
+    now = datetime.now(UTC)
+    was: dict[str, Any] = {}
+    corrected: dict[str, Any] = {}
+    if project is not None:
+        project = project.strip()
+        was["project"] = await house_of(actions.pool, agent_id)
+        await actions.assert_property(row["id"], "project", project, actor, now, _CONF,
+                                      evidence_class=_EC)
+        corrected["project"] = project
+    if seat_generation is not None:
+        was["seat_generation"] = await actions.pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+            "AND a.name='seat_generation' ORDER BY a.confidence DESC, a.observed_at DESC "
+            "LIMIT 1", row["id"])
+        await actions.assert_property(row["id"], "seat_generation", str(seat_generation),
+                                      actor, now, _CONF, evidence_class=_EC)
+        corrected["seat_generation"] = seat_generation
+    return {"agent_id": agent_id, "corrected": corrected, "was": was}
+
+
 def seat_label(canonical: str, handle: str | None, generation: int | None = None) -> str | None:
     """The human display for an agent: 'Ra V' — the SEAT plus which holder of it this mind is.
 

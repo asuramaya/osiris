@@ -617,6 +617,41 @@ async def test_mount_refuses_the_bare_office_root_loudly(
         "AND value #>> '{}' = 'seats'") == 0
 
 
+async def test_mount_never_refuses_an_already_bound_session_from_the_bare_root(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE CLOSE CALL (Thoth's own live safety question, DM 1325): his session's actual
+    process cwd genuinely IS the bare office root, every single mount — that's the historical
+    corruption, not a one-time accident. His OWN bound row's cwd is ALSO the bare root, so the
+    stale-recollection substitution above never fires for him (no discrepancy to correct) —
+    an earlier draft of this guard checked ONLY `ident.refused`, with no regard for whether a
+    binding already existed, and would have locked him out of ever mounting again the moment
+    it deployed. The guard fires ONLY on `bound is None` — a genuinely fresh job_dir with no
+    prior row. An already-established session, however it got that way, rides its own binding
+    forward exactly as it always has; the code fix stops NEW pollution from taking root, it
+    does not strand a life already in progress."""
+    from src import mcp_server as srv
+
+    fake_root = tmp_path / ".osiris" / "seats"
+    fake_root.mkdir(parents=True)
+    monkeypatch.setattr("src.orchestrator.agents._DEFAULT_OFFICE_ROOT", fake_root)
+
+    job_dir = str(tmp_path / "jobs" / "dddd4444")
+    # a PRIOR row already exists for this job_dir, itself bound to the bare root — the
+    # historical shape, established before this guard ever existed
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:dddd4444",
+                            project="seats", cwd=str(fake_root), model=None, session_key="k")
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(fake_root), job_dir=job_dir)
+    finally:
+        srv._pool = saved_pool
+    assert out.get("error") is None, f"an already-bound session must never be refused: {out}"
+    assert out["agent"] == "agent:dddd4444"
+
+
 # ───────────────────────────── the door sweep (operator ruling, 2026-07-17) ──────────────
 
 
