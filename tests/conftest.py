@@ -41,6 +41,9 @@ _TABLES = (
     # reuses (RESTART IDENTITY resets fleet_messages, not this table) silently forges a
     # false "already escalated" for a message that was never touched this test.
     ",pit_watch_alarms"
+    # THE DEATH RITE'S OWN COMPLETION LEDGER (Finding A, thread 5177057a): one row per
+    # enqueue attempt, same append-only shape as pit_watch_alarms above, same leak risk.
+    ",sweep_ledger"
 )
 
 

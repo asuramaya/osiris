@@ -348,16 +348,19 @@ async def sweep_session(ctx: dict[str, Any], transcript: str) -> int:
     """
     import asyncio
 
+    pool = ctx["cascade"].actions.pool
     st = get_settings()
     root = st.osiris_sense_sessions
     path = Path(transcript)
     if not root or not await asyncio.to_thread(path.is_file):
+        await _mark_ledger_done(pool, transcript)
         return 0
     # THE SCOPE (task #37): a death rite outside the armed projects is DEFERRED, not
     # buried — no spend, and deliberately NO mark_swept, so widening the scope later
     # lets the orphan reaper find this session as ended-and-unread and drain it then.
     if not scope_match(path.parent.name, sense_scopes(st.osiris_sense_projects)):
         _log.info("death-rite sweep deferred (out of scope): %s", path.name)
+        await _mark_ledger_done(pool, transcript)
         return 0
     actions: Actions = ctx["cascade"].actions
     try:
@@ -371,8 +374,97 @@ async def sweep_session(ctx: dict[str, Any], transcript: str) -> int:
         # swept a second time, 45 minutes later, by the reaper. Two full extractions of the same
         # conversation is exactly the ECHO class we deleted the crawl to be rid of.
         await mark_swept(actions.pool, path)
+        # THE LEDGER'S OWN COMPLETION MARK (Finding A, thread 5177057a): every exit path from
+        # this function marks its sweep_ledger row done — whether this call came from the
+        # original PreCompact-triggered enqueue or the watchdog's own retry (reap_stuck_sweeps
+        # calls this function directly, in-process, same as the orphan reaper's own _arq_sweep
+        # precedent). A hiccup here must not leave the row stuck for the watchdog to keep
+        # re-driving forever, same "mark done even on failure" logic as mark_swept above.
+        await _mark_ledger_done(actions.pool, transcript)
     _log.info("death-rite sweep %s: %s", path.name, report)
     return int(report.get("proposed", 0))
+
+
+async def _mark_ledger_done(pool: Any, transcript: str) -> None:
+    """Every sweep_session exit — success, failure, dark subsystem, or a deliberate out-of-
+    scope defer — marks its sweep_ledger row(s) done. An out-of-scope defer or a disabled
+    sensing subsystem is a real, stable DECISION, not a stall; retrying either forever would be
+    the watchdog nagging (then eventually poison-pill escalating) something that was never
+    actually stuck, only ever deferred by design."""
+    await pool.execute(
+        "UPDATE sweep_ledger SET completed_at = now() "
+        "WHERE transcript_path = $1 AND completed_at IS NULL", transcript)
+
+
+# below this age, a healthy attempt is probably just still running — don't nag it yet
+SWEEP_RETRY_SLA = 300
+# past this age with no completion, it is not slow — a poison pill (the existing "mark it read
+# even if adversary_pass raised" philosophy already absorbs an ordinary content-level failure
+# on its FIRST retry, so a row surviving THIS long means the row itself can't reach completion
+# at all, not that mining keeps erroring on it). Stop retrying and escalate instead of looping.
+SWEEP_RETRY_CEILING = 1800
+
+
+async def reap_stuck_sweeps(ctx: dict[str, Any]) -> int:
+    """Finding A's own watchdog (thread 5177057a, Thoth's design approval DM 1326): sweep_route
+    writes one sweep_ledger row per enqueue attempt; this is the only reader that acts on an
+    attempt still incomplete past its SLA. Cheap by construction — one indexed query against
+    sweep_ledger_pending_idx, no filesystem walk, no spend unless something is actually stuck.
+
+    Catches exactly what B7 (the orphan reaper) structurally cannot: a dropped enqueue on a
+    lineage whose first-ever sweep already succeeded. mark_swept's watermark is a one-time-ever
+    boolean per transcript file, so the orphan reaper goes permanently blind to that file the
+    moment it is swept once — a session compacting every few minutes is exactly this shape.
+
+    Bounded, never loops forever: past SWEEP_RETRY_CEILING with no completion, re-enqueueing
+    stops and the row is escalated as a poison pill instead (_escalate_poison_sweep) — a
+    durable, fleet-visible Thread plus a logged alarm, the same "confess, don't hide" discipline
+    as every other silent-failure class this house has already closed."""
+    pool = ctx["cascade"].actions.pool
+    stuck = await pool.fetch(
+        "SELECT id, transcript_path, session_id, "
+        "extract(epoch FROM now() - enqueued_at) AS age_secs "
+        "FROM sweep_ledger WHERE completed_at IS NULL "
+        "AND enqueued_at < now() - make_interval(secs => $1) "
+        "ORDER BY enqueued_at LIMIT 20", float(SWEEP_RETRY_SLA))
+    for row in stuck:
+        if row["age_secs"] >= SWEEP_RETRY_CEILING:
+            await _escalate_poison_sweep(ctx, row)
+        else:
+            _log.warning("sweep_ledger: retrying stuck enqueue #%s (%.0fs old): %s",
+                        row["id"], row["age_secs"], row["transcript_path"])
+            # IN-PROCESS, not re-enqueued via arq — same precedent as the orphan reaper's own
+            # _arq_sweep, which calls the mining logic directly rather than pushing a nested
+            # job onto the queue (this worker's ctx["redis"] is the app's rate-limiter client,
+            # not an arq-enqueue-capable connection; sweep_route's own arq pool lives in the
+            # MCP server process, a different one).
+            await sweep_session(ctx, row["transcript_path"])
+    return len(stuck)
+
+
+async def _escalate_poison_sweep(ctx: dict[str, Any], row: Any) -> None:
+    """A sweep that has failed to complete for SWEEP_RETRY_CEILING is not slow, it is STUCK —
+    re-enqueueing it forever would burn spend retrying a transcript that will never yield. Stop,
+    and confess loudly instead of looping quietly: a durable Thread the fleet can see (open_thread
+    dedups on its own summary hash, so a later tick finding the same row doesn't mint a second
+    one) plus a logged alarm. Marks the row done either way — this ledger's own job is knowing
+    whether to keep retrying, not proving the sweep actually succeeded; the escalation Thread is
+    the source of truth for that."""
+    from src.orchestrator.capture import open_thread as _open_thread
+
+    _log.warning("sweep_ledger: POISON SWEEP, giving up after %.0fs: id=%s %s",
+                row["age_secs"], row["id"], row["transcript_path"])
+    actions = ctx["cascade"].actions
+    await _open_thread(
+        actions,
+        f"POISON SWEEP: transcript {row['transcript_path']} (session {row['session_id']}) "
+        f"never completed after {SWEEP_RETRY_CEILING // 60} min of retries — the death rite's "
+        "mining call is stuck or crashing on this transcript every attempt. Needs a mind to "
+        "read it directly and find out why, not another automatic retry.",
+        kind="obligation", arc="Compaction-Resilience", source="cron:sweep_watchdog",
+    )
+    await actions.pool.execute(
+        "UPDATE sweep_ledger SET completed_at = now() WHERE id = $1", row["id"])
 
 
 async def embed_pass(ctx: dict[str, Any]) -> int:
@@ -522,6 +614,13 @@ class WorkerSettings:
         # orphan is then swept ONCE by the same licence-gated death rite. Not a crawl: its cost is
         # (sessions that actually died un-swept) and it converges to zero.
         cron(watched(reap_orphans, every=900), minute={7, 22, 37, 52}, second={0}, timeout=600),
+        # THE SWEEP LEDGER'S WATCHDOG (Finding A, thread 5177057a): B7 above only catches a
+        # transcript that never got ANY successful sweep, ever — its watermark is a one-time-
+        # ever boolean per file, so it goes permanently blind to a dropped enqueue on a
+        # lineage's 2nd/3rd/Nth compaction once the 1st has already succeeded. This is the
+        # narrower, faster net: one indexed query (no filesystem walk), retries a stuck
+        # enqueue in-process, and escalates (never loops forever) past SWEEP_RETRY_CEILING.
+        cron(watched(reap_stuck_sweeps, every=120), minute=set(range(0, 60, 2)), second={20}),
         # THE GHOST FARM'S BILL: 818 wakes, none of them ever in the ledger. Free (a parse of
         # transcripts we already have), deterministic, once per session — so it rides the
         # OBSERVER's switch, never the adversary's.
