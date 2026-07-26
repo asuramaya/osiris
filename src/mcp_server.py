@@ -683,6 +683,18 @@ async def doors(ref: str) -> dict[str, Any]:
     return await _doors_lookup(await _pool_get(), ref)
 
 
+@mcp.tool()
+async def recall(ref: str, kind: str | None = None) -> dict[str, Any]:
+    """The full, untruncated record for a Thread or Decision — reach for this after
+    orient()'s 160-char summary cap (task #60) leaves you wanting the whole thing. `ref` is
+    a UUID, the 8-char short id orient() already hands you, or a summary substring. `kind`
+    ('thread' or 'decision') skips auto-detection when you already know which; omitted,
+    tries Thread then Decision. Refuses loudly when nothing matches either type — never
+    guesses, and never widens into a fuzzy search (use search(query=...) for that)."""
+    from src.orchestrator.recall import recall as _recall
+    return await _recall(await _pool_get(), ref, kind=kind)
+
+
 # --- collect (federate a base) ----------------------------------------------
 
 @mcp.tool()
