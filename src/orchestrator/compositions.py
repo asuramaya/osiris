@@ -58,6 +58,7 @@ from typing import Any
 import asyncpg
 
 from src.ontology.resolution import screen_network
+from src.orchestrator.agents import _generation
 from src.orchestrator.coinvest import coinvestment_ties
 from src.orchestrator.discrepancy import _HOME_PROPS, country_of
 from src.orchestrator.frontier import subject_report
@@ -1509,11 +1510,17 @@ def rank_open_threads(
     """Rank open threads for display and cap. Obligations — DUTIES an action minted — float
     above ordinary threads. WITHIN each kind group, ownership orders for the READER (`me` =
     the caller's agent id + project; the console passes {'operator'}): MINE TO ACT first,
-    another mind's claims next, 'waiting on the human' last. Input (recency) order breaks
-    remaining ties — Python's sort is stable. Pure."""
+    another mind's claims next, 'waiting on the human' last. Ownership matching is LINEAGE-
+    AWARE (finding D, Khnum audit thread ffb13bd9): an obligation owned by an earlier or
+    later generation of the same agent lineage (agent:foo-iii vs agent:foo-iv, post-
+    compaction succession) still ranks as mine — the compositions layer had never inherited
+    the `_generation()` treatment held_seat/manager_of_seat already carry. Input (recency)
+    order breaks remaining ties — Python's sort is stable. Pure."""
+    me_roots = frozenset(_generation(m)[0] for m in me)
+
     def whose_move(r: dict[str, Any]) -> int:
         owner = (r.get("owner") or "").strip()
-        if not owner or owner in me:
+        if not owner or owner in me or _generation(owner)[0] in me_roots:
             return 0  # mine to act (unowned = anyone who reads it may act)
         return 2 if owner == "operator" else 1
     summ = [r for r in rows if r.get("summary")]

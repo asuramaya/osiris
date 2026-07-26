@@ -799,6 +799,27 @@ def test_rank_open_threads_orders_by_whose_move_within_a_kind() -> None:
     ]
 
 
+def test_rank_open_threads_owner_match_is_lineage_aware() -> None:
+    """Finding D (Khnum audit thread ffb13bd9, live proof: Thoth LVII -> Thoth II across a
+    compaction seam): an obligation owned by an EARLIER generation of the reader's own
+    lineage (agent:foo-iii, when the reader is agent:foo-iv, a post-compaction successor)
+    still ranks as mine to act — not another mind's claim. A DIFFERENT lineage entirely
+    (agent:bar-iv) never matches just because it shares a generation suffix."""
+    from src.mcp_server import _rank_open_threads
+
+    me = frozenset({"agent:foo-iv"})
+    rows = [
+        {"summary": "mine-by-ancestor-gen", "kind": "obligation", "owner": "agent:foo-iii"},
+        {"summary": "mine-by-exact", "kind": "obligation", "owner": "agent:foo-iv"},
+        {"summary": "other-lineage-same-gen", "kind": "obligation", "owner": "agent:bar-iv"},
+    ]
+    shown, _ = _rank_open_threads(rows, me)
+    assert [r["summary"] for r in shown] == [
+        "mine-by-ancestor-gen", "mine-by-exact",  # both same lineage, mine to act
+        "other-lineage-same-gen",                  # different root — another mind's claim
+    ]
+
+
 async def test_owner_tag_persists_and_rides_the_wall(actions: Actions) -> None:
     """End to end: open_thread(owner='operator') stamps the property; the wall renders the
     tag and sinks the waiting-on-human duty below an unowned one for any reader; the owner
