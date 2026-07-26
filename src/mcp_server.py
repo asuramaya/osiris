@@ -48,6 +48,7 @@ from src.orchestrator import dispose as dispose_seam
 from src.orchestrator.agents import (
     AgentIdentity,
     _generation,
+    house_of,
     read_project_model,
     register_agent,
     resolve_identity,
@@ -408,6 +409,22 @@ async def _wake_economy_standdown(
             "and say so to the operator.")
 
 
+async def _fallback_to_stored_project(pool: asyncpg.Pool, ident: AgentIdentity) -> None:
+    """Read-side completion of mount-guard #6's Q2 (Thoth's own follow-up, DM 1334, caught
+    live on his own re-attach): resolve_identity() correctly leaves `project` None for a
+    bare-office-root cwd, and register_agent's own write gate correctly stays silent on that
+    None rather than clobbering a repaired stamp — but everything DOWNSTREAM of that point
+    (unread/asks counts, sibling awareness, orient()'s own scoping via the cached ident,
+    the mount response's "project" field, the agent_mounts registry row) was ALSO reading
+    that same fresh None, so an already-bound, correctly-repaired agent stayed briefing-blind
+    forever, not just for the one mount that happened to guess wrong. Falls back to the
+    agent's own STORED project (house_of) — never for the write gate above, which has
+    already run by the time this is called. Mutates `ident` in place; a no-op when
+    `ident.project` is already truthy."""
+    if not ident.project:
+        ident.project = await house_of(pool, ident.agent_id)
+
+
 async def _reattach(
     pool: asyncpg.Pool, key: str | None, job: str | None
 ) -> AgentIdentity | None:
@@ -454,6 +471,7 @@ async def _reattach(
     await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
                          expected_model=await _expected_model(pool, rec.cwd, ident.project),
                          mint_reason=mint_reason)
+    await _fallback_to_stored_project(pool, ident)
     if key is not None:
         _agents[key] = ident
         _agents_touched[key] = time.monotonic()
@@ -1302,6 +1320,7 @@ async def mount(
     await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
                          expected_model=await _expected_model(pool, cwd, ident.project),
                          mint_reason=mount_mint_reason)
+    await _fallback_to_stored_project(pool, ident)
     if job_dir:
         # THE SESSION LEDGER, write side (16e3cee9): the anchor form (sid8) suffices —
         # the ledger keys on the first 8 chars, the harness's own jobs scheme
