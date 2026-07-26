@@ -311,16 +311,16 @@ def test_dot_osiris_label_decouples_from_the_folder(tmp_path: Path) -> None:
     assert resolve_identity(cwd=str(repo), project_label="override").project == "override"
 
 
-def test_resolve_identity_refuses_the_bare_office_root(
+def test_resolve_identity_never_invents_a_project_from_the_bare_office_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Mount-guard #6 (Thoth's fused ask, DM 1301, his own live case): a container launched
-    him at the bare seat-office root itself — ~/.osiris/seats, no .osiris pin, the parent of
-    every seat, never a seat itself. The old fallback would have minted the literal string
-    'seats' as a phantom project, silently — the root cause behind a 58-generation reign
-    rendering as generation 2. Refuse instead, loudly, before anything downstream (save_mount)
-    ever persists it — the guard must sit at first bind, not re-mount-time validation, since
-    a persisted bad cwd gets actively DEFENDED by the stale-recollection path afterward."""
+    """The operator launches agents from the bare seat-office root ON PURPOSE (ruling
+    577988ed) — that's the intended pattern, never something to refuse. But cwd still has
+    nothing honest to say there (no .osiris pin, the parent of every seat, never a seat
+    itself): the old basename fallback would have minted the literal string 'seats' as a
+    phantom project. resolve_identity stays honestly unresolved from cwd (None) rather than
+    inventing it — a location-independent identity finds its project through its SEAT
+    instead (mount()'s seat-first resolution), not by guessing from where it's sitting."""
     from src.orchestrator import agents as agents_mod
 
     fake_root = tmp_path / ".osiris" / "seats"
@@ -328,15 +328,13 @@ def test_resolve_identity_refuses_the_bare_office_root(
     monkeypatch.setattr(agents_mod, "_DEFAULT_OFFICE_ROOT", fake_root)
 
     ident = agents_mod.resolve_identity(cwd=str(fake_root))
-    assert ident.refused is not None and "bare seat-office root" in ident.refused
     assert ident.project is None
 
-    # a REAL office subdirectory, one level down, is unaffected — the refusal is an exact
-    # match on the root itself, never a prefix guess that would catch every real office too
+    # a REAL office subdirectory, one level down, is unaffected — the non-invention is an
+    # exact match on the root itself, never a prefix guess that would catch every real office
     office = fake_root / "someseat"
     office.mkdir()
     normal = agents_mod.resolve_identity(cwd=str(office))
-    assert normal.refused is None
     assert normal.project == "someseat"  # no .osiris pin here either — ordinary basename
 
 

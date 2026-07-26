@@ -48,7 +48,6 @@ from src.orchestrator import dispose as dispose_seam
 from src.orchestrator.agents import (
     AgentIdentity,
     _generation,
-    house_of,
     read_project_model,
     register_agent,
     resolve_identity,
@@ -409,20 +408,25 @@ async def _wake_economy_standdown(
             "and say so to the operator.")
 
 
-async def _fallback_to_stored_project(pool: asyncpg.Pool, ident: AgentIdentity) -> None:
-    """Read-side completion of mount-guard #6's Q2 (Thoth's own follow-up, DM 1334, caught
-    live on his own re-attach): resolve_identity() correctly leaves `project` None for a
-    bare-office-root cwd, and register_agent's own write gate correctly stays silent on that
-    None rather than clobbering a repaired stamp — but everything DOWNSTREAM of that point
-    (unread/asks counts, sibling awareness, orient()'s own scoping via the cached ident,
-    the mount response's "project" field, the agent_mounts registry row) was ALSO reading
-    that same fresh None, so an already-bound, correctly-repaired agent stayed briefing-blind
-    forever, not just for the one mount that happened to guess wrong. Falls back to the
-    agent's own STORED project (house_of) — never for the write gate above, which has
-    already run by the time this is called. Mutates `ident` in place; a no-op when
-    `ident.project` is already truthy."""
-    if not ident.project:
-        ident.project = await house_of(pool, ident.agent_id)
+async def _resolve_project_seat_first(pool: asyncpg.Pool, ident: AgentIdentity) -> None:
+    """IDENTITY IS LOCATION-INDEPENDENT (operator ruling 577988ed, correcting mount-guard #6's
+    original refusal): osiris orients from the SEAT (anchor→holds→seat), never from cwd — the
+    whole point of a seat is that where a session happens to be sitting doesn't matter. For a
+    SEATED session, project is the SEAT'S OWN derived house (held_seat, which already sources
+    from derive_house — ruling ff6148b0) — UNCONDITIONALLY, overriding whatever cwd produced,
+    not merely filling in a gap when cwd came up empty. Deliberately NOT house_of(agent_id):
+    that reads the AGENT's own project stamp, exactly what a transient bad mount can pollute
+    (Thoth's own case) — trusting it here would let a polluted stamp go on leaking into every
+    read, the very thing this function exists to stop. An UNSEATED session (no holds binding
+    yet — nothing to trust but its own resolution) keeps whatever cwd produced, None included;
+    that's an honest 'not mounted to a definite project', not an error. Mutates `ident` in
+    place; call AFTER register_agent (the write gate must still see the FRESH cwd-derived
+    value, unclobbered — a legitimate cwd-derived project still gets asserted for a session
+    that isn't seated yet)."""
+    from src.orchestrator.seats import held_seat
+    seat = await held_seat(pool, ident.agent_id)
+    if seat and seat.get("house"):
+        ident.project = seat["house"]
 
 
 async def _reattach(
@@ -471,7 +475,7 @@ async def _reattach(
     await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
                          expected_model=await _expected_model(pool, rec.cwd, ident.project),
                          mint_reason=mint_reason)
-    await _fallback_to_stored_project(pool, ident)
+    await _resolve_project_seat_first(pool, ident)
     if key is not None:
         _agents[key] = ident
         _agents_touched[key] = time.monotonic()
@@ -1265,20 +1269,18 @@ async def mount(
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model,
                              claimed=claimed, fallback_seed=key,
                              store_reading=store_reading)
-    # THE BARE-ROOT REFUSAL (mount-guard #6, Thoth's fused ask, DM 1301 — his own live case:
-    # a container launched him at ~/.osiris/seats itself, no .osiris pin, no seat to resolve
-    # to). Caught UPSTREAM, at FIRST bind, on purpose — and ONLY first bind: `bound is None`
-    # here, deliberately. Thoth's own live safety question (DM 1325) caught the gap in an
-    # earlier draft of this guard, which fired on cwd alone: his OWN bound row's cwd is ALSO
-    # the bare root (that's the historical corruption), so the stale-recollection substitution
-    # above never fires for him (bound.cwd == cwd, no discrepancy to correct) — an unconditional
-    # refusal would have locked him out of ever mounting again, forever, the moment this
-    # deployed. An ALREADY-bound session rides its own established binding forward exactly as
-    # it always has; only a session with NO row yet for this job_dir gets refused, so the
-    # pollution never gets a first foothold without blocking a life already in progress. No
-    # write happens on a refusal, same discipline as the IDENTITY CONFLICT guard above.
-    if ident.refused and bound is None:
-        return {"error": "MOUNT REFUSED — bare office root", "cwd": cwd, "note": ident.refused}
+    # THE BARE-ROOT REFUSAL WAS THE WRONG FIX (operator ruling 577988ed, correcting mount-
+    # guard #6): the operator LAUNCHES agents from the bare seat-office root ON PURPOSE — that
+    # IS the intended pattern, and the whole point of a seat is that identity is LOCATION-
+    # INDEPENDENT: osiris orients from the SEAT (anchor→holds→seat), never from cwd. A hard
+    # refusal here fought the fleet's own onboarding — `bound is None` is true for a
+    # genuinely fresh, legitimate first launch exactly as much as for the pollution case, so
+    # this guard could have refused real new agents, not just healed old corruption. NEUTRAL-
+    # IZED. What's still true and still kept: resolve_identity never INVENTS a phantom project
+    # from the bare root's own basename ("seats") — it stays unresolved from cwd, same as
+    # before. The actual fix lives downstream now: a SEATED session's project resolves from
+    # the SEAT's own derived house (_resolve_project_seat_first, below), not cwd — so identity
+    # survives a bare-root launch by being location-independent, not by refusing the location.
     if bound is not None:
         # NO local re-import of _generation here: a local import anywhere in a function
         # shadows the module-level name for the WHOLE function, and this branch is
@@ -1320,7 +1322,7 @@ async def mount(
     await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
                          expected_model=await _expected_model(pool, cwd, ident.project),
                          mint_reason=mount_mint_reason)
-    await _fallback_to_stored_project(pool, ident)
+    await _resolve_project_seat_first(pool, ident)
     if job_dir:
         # THE SESSION LEDGER, write side (16e3cee9): the anchor form (sid8) suffices —
         # the ledger keys on the first 8 chars, the harness's own jobs scheme

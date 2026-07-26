@@ -99,14 +99,6 @@ class AgentIdentity:
     # lineage-linked id (agent:<base>-ii…) because it arrived across a detected seam or wore a
     # retired face. Holds the ANCESTOR's canonical; mount() confesses the minting to the heir.
     succeeded_from: str | None = None
-    # SET HERE, by resolve_identity itself (mount-guard #6, Thoth's fused ask, DM 1301): a cwd
-    # that is exactly the bare seat-office root (~/.osiris/seats, no .osiris pin, parent of
-    # every seat — never a seat itself) has no single project to fall back to. The old
-    # basename fallback minted the literal string "seats" as a phantom project, silently —
-    # this names the reason instead, so the caller can refuse loudly rather than mint it.
-    # None on every ordinary path; every existing caller of resolve_identity ignores an
-    # unset field exactly as it always has.
-    refused: str | None = None
 
 
 # Roman generations for successor ids (a sibling's grammar: agent:a8c15486-ii). The alphabet
@@ -629,17 +621,16 @@ def resolve_identity(
     fallback keyed on `fallback_seed` (its MCP session key) — distinct, stable across re-calls
     within the connection, and honestly resolved=False."""
     # the project LABEL: an explicit override (env) > the .osiris file > the folder basename —
-    # UNLESS the folder is the bare seat-office root itself (mount-guard #6, DM 1301): the
-    # parent of every seat has no .osiris pin and no single project to fall back to, so the
-    # basename ("seats") would be a phantom, not a guess. Refuse instead of minting it.
+    # UNLESS the folder is the bare seat-office root itself (operator ruling 577988ed: the
+    # operator launches agents from here ON PURPOSE, the intended pattern, not an accident).
+    # The parent of every seat has no .osiris pin and no single project of its own; the
+    # basename ("seats") would be a phantom, not a guess, so it stays unresolved from cwd —
+    # a location-independent identity finds its project through its SEAT instead (mount()'s
+    # seat-first resolution), never by inventing one from where it happens to be sitting.
     pinned = project_label or read_project_label(cwd)
-    refused = None
-    if pinned is None and cwd and Path(cwd) == _DEFAULT_OFFICE_ROOT:
-        refused = (f"cwd is the bare seat-office root ({cwd}) — the parent of every seat, "
-                  "not a seat itself. There is no single project to resolve to; relaunch "
-                  "with cwd set to your own office (~/.osiris/seats/<your-handle>), the one "
-                  "with your own .osiris pin file beside it.")
-    project = None if refused else (pinned or (Path(cwd).name if cwd else None))
+    bare_root = cwd and Path(cwd) == _DEFAULT_OFFICE_ROOT
+    project = None if (pinned is None and bare_root) else (pinned or
+             (Path(cwd).name if cwd else None))
     sid = session or _job_id(job_dir)
     confident = sid is not None  # a session/job_dir ANCHOR; the cwd-locate below is only a GUESS
     declared = model  # the agent's SELF-REPORT of its model (may be None) — the WEAK signal
@@ -708,7 +699,7 @@ def resolve_identity(
                          cwd=cwd, model_method=method, model_declared=declared,
                          model_divergent=divergent, model_history=tuple(history),
                          model_deliberate=deliberate, model_observed_at=observed_at,
-                         resolved=resolved, refused=refused)
+                         resolved=resolved)
 
 
 async def _link_once(

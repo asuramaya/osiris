@@ -110,25 +110,31 @@ async def test_reattach_honors_a_bound_seat(actions: Actions, tmp_path: Path) ->
     srv._agents.pop("sid:re", None)
 
 
-async def test_reattach_falls_back_to_the_stored_project_when_cwd_yields_none(
+async def test_reattach_resolves_project_from_the_seat_when_cwd_yields_none(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """THE EXACT LIVE SHAPE Thoth hit (DM 1334): a deploy bounces the MCP server — the hot
     dict empties, the NEXT call is a cache-miss re-attach, not a fresh mount() — from a cwd
-    that is structurally the bare office root. The repair had already landed on the GRAPH
-    (project='osiris'), but _reattach's own resolve_identity() re-derives fresh from cwd every
-    time and comes up with nothing; without the fallback the re-attached identity — and
-    therefore every orient() call riding it — stays at project=None even though the truth was
-    sitting right there, one query away."""
+    that is structurally the bare office root. SEAT-FIRST RESOLUTION (operator ruling
+    577988ed): the seat's own derived house wins, not the agent's own stamp — proven against
+    the strongest case, the agent's OWN project stamp says 'seats' (the polluted shape) while
+    a REAL seat binds it to house 'osiris'. Without seat-first resolution the re-attached
+    identity — and therefore every orient() call riding it — would stay wrong or None even
+    though the truth was one query away, via the seat, not the agent's own record."""
     from src import mcp_server as srv
+    from src.orchestrator.seats import bind_holder, ensure_seat
 
     fake_root = tmp_path / ".osiris" / "seats"
     fake_root.mkdir(parents=True)
     monkeypatch.setattr("src.orchestrator.agents._DEFAULT_OFFICE_ROOT", fake_root)
 
     agent = await actions.create_or_find_object("Agent", "agent:ffff6666", "test")
-    await actions.assert_property(agent, "project", "osiris", "test", datetime.now(UTC), 0.9,
+    await actions.assert_property(agent, "project", "seats", "test", datetime.now(UTC), 0.9,
                                   evidence_class="self_declared")
+    seat = await ensure_seat(actions, house="osiris", handle="Reattachfirst", source="test")
+    assert seat.get("error") is None
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:ffff6666",
+                      source="test")
     job_dir = str(tmp_path / "jobs" / "ffff6666")
     await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:ffff6666",
                             project="seats", cwd=str(fake_root), model=None,
@@ -616,14 +622,15 @@ async def test_mount_refuses_an_identity_conflict_loudly(actions: Actions,
         actions.pool, job_dir=str(tmp_path / "jobs" / "bbbb2222")) is None
 
 
-async def test_mount_refuses_the_bare_office_root_loudly(
+async def test_mount_never_refuses_a_session_from_the_bare_root(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Mount-guard #6 (Thoth's fused ask, DM 1301, his own live case): a container launched
-    him at the bare seat-office root — no .osiris pin, the parent of every seat. mount()
-    must refuse BEFORE save_mount ever persists the phantom project, not merely at some
-    later re-mount-time check — a persisted bad cwd gets actively DEFENDED by the stale-
-    recollection path afterward, which is exactly what stranded his own self-correction."""
+    """THE BARE ROOT IS THE INTENDED LAUNCH PATTERN, not corruption (operator ruling 577988ed,
+    correcting mount-guard #6's original refusal — which would have refused a genuinely FRESH,
+    legitimate first launch exactly as readily as the pollution case: `bound is None` is true
+    for both). A session mounting from here — bound or not — must never be refused; an
+    unseated one honestly reports project=None (nothing invented from the basename) rather
+    than the phantom "seats" the old naive fallback would have minted."""
     from src import mcp_server as srv
 
     fake_root = tmp_path / ".osiris" / "seats"
@@ -633,89 +640,60 @@ async def test_mount_refuses_the_bare_office_root_loudly(
     saved_pool = srv._pool
     srv._pool = actions.pool
     try:
-        out = await srv.mount(cwd=str(fake_root),
-                              job_dir=str(tmp_path / "jobs" / "cccc3333"))
+        # a genuinely FRESH job_dir — bound is None, the exact shape the old guard refused
+        fresh = await srv.mount(cwd=str(fake_root),
+                                job_dir=str(tmp_path / "jobs" / "cccc3333"))
+        # an ALREADY-bound session, the historical shape — was always safe, stays safe
+        job_dir = str(tmp_path / "jobs" / "dddd4444")
+        await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:dddd4444",
+                                project=None, cwd=str(fake_root), model=None,
+                                session_key="k")
+        bound = await srv.mount(cwd=str(fake_root), job_dir=job_dir)
     finally:
         srv._pool = saved_pool
-    assert "MOUNT REFUSED" in out.get("error", "")
-    assert "bare seat-office root" in out["note"]
-    # NO WRITES on a refusal: no mount row, no phantom 'seats'-project Agent minted
-    assert await mounts.find_mount(
-        actions.pool, job_dir=str(tmp_path / "jobs" / "cccc3333")) is None
+    assert fresh.get("error") is None, f"a fresh session must never be refused: {fresh}"
+    assert fresh["project"] == "?", "unseated: honestly unresolved, nothing invented"
+    assert bound.get("error") is None
+    assert bound["agent"] == "agent:dddd4444"
+    # no phantom 'seats'-project Agent ever got minted
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM current_assertions WHERE name='project' "
         "AND value #>> '{}' = 'seats'") == 0
 
 
-async def test_mount_never_refuses_an_already_bound_session_from_the_bare_root(
+async def test_mount_resolves_project_from_the_seat_not_cwd_when_seated(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE CLOSE CALL (Thoth's own live safety question, DM 1325): his session's actual
-    process cwd genuinely IS the bare office root, every single mount — that's the historical
-    corruption, not a one-time accident. His OWN bound row's cwd is ALSO the bare root, so the
-    stale-recollection substitution above never fires for him (no discrepancy to correct) —
-    an earlier draft of this guard checked ONLY `ident.refused`, with no regard for whether a
-    binding already existed, and would have locked him out of ever mounting again the moment
-    it deployed. The guard fires ONLY on `bound is None` — a genuinely fresh job_dir with no
-    prior row. An already-established session, however it got that way, rides its own binding
-    forward exactly as it always has; the code fix stops NEW pollution from taking root, it
-    does not strand a life already in progress."""
+    """SEAT-FIRST RESOLUTION (operator ruling 577988ed): a SEATED session's project is its
+    SEAT's own derived house — UNCONDITIONALLY, not merely a fallback for when cwd comes up
+    empty. Proven here against the strongest case: the agent's OWN project stamp says
+    'seats' (exactly what a transient bad mount pollutes — Thoth's own shape), a REAL seat
+    binds it to house 'osiris', and cwd is the structurally-empty bare root. The seat wins
+    over both — never house_of(agent_id), which is exactly the stamp that gets polluted."""
     from src import mcp_server as srv
+    from src.orchestrator.seats import bind_holder, ensure_seat
 
     fake_root = tmp_path / ".osiris" / "seats"
     fake_root.mkdir(parents=True)
     monkeypatch.setattr("src.orchestrator.agents._DEFAULT_OFFICE_ROOT", fake_root)
 
-    job_dir = str(tmp_path / "jobs" / "dddd4444")
-    # a PRIOR row already exists for this job_dir, itself bound to the bare root — the
-    # historical shape, established before this guard ever existed
-    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:dddd4444",
-                            project="seats", cwd=str(fake_root), model=None, session_key="k")
-
-    saved_pool = srv._pool
-    srv._pool = actions.pool
-    try:
-        out = await srv.mount(cwd=str(fake_root), job_dir=job_dir)
-    finally:
-        srv._pool = saved_pool
-    assert out.get("error") is None, f"an already-bound session must never be refused: {out}"
-    assert out["agent"] == "agent:dddd4444"
-
-
-async def test_mount_falls_back_to_the_stored_project_when_cwd_yields_none(
-    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """THE READ-SIDE COMPLETION of Q2 (Thoth's own follow-up, DM 1334, caught live on his own
-    re-attach right after the repair landed): the WRITE gate correctly stays silent on a fresh
-    None so register_agent never clobbers a repaired stamp — but mount()'s own RESPONSE was
-    reading that same fresh None, so an already-bound, correctly-repaired agent stayed
-    briefing-blind (project shown as "?") on every single mount from a structurally bare-root
-    cwd, not just the one that happened to guess wrong. This is exactly what stranded Thoth
-    right after his own repair: the write survived, but nothing downstream ever read it back."""
-    from src import mcp_server as srv
-
-    fake_root = tmp_path / ".osiris" / "seats"
-    fake_root.mkdir(parents=True)
-    monkeypatch.setattr("src.orchestrator.agents._DEFAULT_OFFICE_ROOT", fake_root)
-
-    # the GRAPH already carries the repaired truth (as correct_agent_house would leave it)...
-    agent = await actions.create_or_find_object("Agent", "agent:eeee5555", "test")
-    await actions.assert_property(agent, "project", "osiris", "test", datetime.now(UTC), 0.9,
+    agent = await actions.create_or_find_object("Agent", "agent:ffff7777", "test")
+    await actions.assert_property(agent, "project", "seats", "test", datetime.now(UTC), 0.9,
                                   evidence_class="self_declared")
-    # ...while the durable REGISTRY row (a separate table) still carries the stale value —
-    # exactly what a bare-root cwd would keep re-deriving without the fallback
-    job_dir = str(tmp_path / "jobs" / "eeee5555")
-    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:eeee5555",
-                            project="seats", cwd=str(fake_root), model=None, session_key="k")
+    seat = await ensure_seat(actions, house="osiris", handle="Seatfirst", source="test")
+    assert seat.get("error") is None
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:ffff7777",
+                      source="test")
 
     saved_pool = srv._pool
     srv._pool = actions.pool
     try:
-        out = await srv.mount(cwd=str(fake_root), job_dir=job_dir)
+        out = await srv.mount(cwd=str(fake_root),
+                              job_dir=str(tmp_path / "jobs" / "ffff7777"))
     finally:
         srv._pool = saved_pool
     assert out.get("error") is None
-    assert out["project"] == "osiris", f"must read the repaired truth, not '?': {out}"
+    assert out["project"] == "osiris", f"must read the SEAT's house, not the polluted stamp: {out}"
 
 
 # ───────────────────────────── the door sweep (operator ruling, 2026-07-17) ──────────────
