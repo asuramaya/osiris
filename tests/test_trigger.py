@@ -8,6 +8,8 @@ woken (it has no repo — the human reads it, membrane #6's upward lane).
 """
 from __future__ import annotations
 
+import json
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -2188,3 +2190,175 @@ async def test_launch_delivers_the_opening_brief_over_the_mail_lane(actions: Act
     row = await actions.pool.fetchrow(
         "SELECT body FROM fleet_messages WHERE id=$1", int(d["brief_message_id"]))
     assert row is not None and "mount and orient" in row["body"]
+
+
+# ═══ THE HARNESS-NATIVE SUBSTRATE (task #68 item 9, ruling 33d6a2eb; spike f2dc98549521) ══════
+# `claude --bg` + `claude agents --json` instead of the manager daemon's PTY broker. Same
+# hermetic discipline as _spawn_claude's own tests: `trigger.asyncio.create_subprocess_exec` is
+# monkeypatched, never a real `claude` process.
+
+
+def test_seat_session_id_is_deterministic_and_seat_specific() -> None:
+    """The substrate's join key: same seat_id -> same session id, every time (uuid5, never a
+    fresh roll) — and two different seats never collide."""
+    a1 = trigger_module._seat_session_id("seat:fe041bc5")
+    a2 = trigger_module._seat_session_id("seat:fe041bc5")
+    b = trigger_module._seat_session_id("seat:34f4e5fa")
+    assert a1 == a2
+    assert a1 != b
+    uuid.UUID(a1)  # a valid UUID string — the exact shape --session-id requires
+
+
+async def test_spawn_claude_bg_issues_the_documented_bg_flags(monkeypatch: Any) -> None:
+    """`--bg` + `-n` + `--model` + `--session-id` — the sanctioned flags the spike verified,
+    never the undocumented daemon claim-socket. Fire-and-forget: NOTHING here awaits the
+    process (same B1 scar _spawn_claude's tests guard), so a fake proc with just a pid
+    satisfies the call."""
+    from src.orchestrator import trigger
+
+    captured: dict[str, Any] = {}
+
+    class _Proc:
+        pid = 4242
+
+    async def _fake_exec(*args: Any, **kwargs: Any) -> _Proc:
+        captured["args"] = args
+        captured["env"] = kwargs.get("env")
+        return _Proc()
+
+    monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
+    sid = trigger._seat_session_id("seat:deadbeef")
+    await trigger._spawn_claude_bg(
+        "/home/asuramaya/.osiris/seats/nefer", name="[OS] Nefer",
+        model="claude-sonnet-5", session_id=sid, job_dir="/tmp/jobs/nefer")
+
+    assert captured["args"][:2] == ("claude", "--bg")
+    pairs = _pairs(captured["args"])
+    assert ("-n", "[OS] Nefer") in pairs
+    assert ("--model", "claude-sonnet-5") in pairs
+    assert ("--session-id", sid) in pairs
+    assert captured["env"]["CLAUDE_JOB_DIR"] == "/tmp/jobs/nefer"
+
+
+async def test_spawn_claude_bg_never_leaks_the_spawners_own_anchor(monkeypatch: Any) -> None:
+    """Same anchor discipline as _spawn_claude (the collision class, 2294e95d): the spawner's
+    own CLAUDE_JOB_DIR must never reach the child unless explicitly re-minted for it."""
+    from src.orchestrator import trigger
+
+    captured: dict[str, Any] = {}
+
+    class _Proc:
+        pid = 1
+
+    async def _fake_exec(*args: Any, **kwargs: Any) -> _Proc:
+        captured["env"] = kwargs.get("env")
+        return _Proc()
+
+    monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
+    monkeypatch.setenv("CLAUDE_JOB_DIR", "/tmp/jobs/spawner-own-anchor")
+    await trigger._spawn_claude_bg("/repo/demo")
+    assert "CLAUDE_JOB_DIR" not in captured["env"]
+
+
+async def test_claude_agents_json_parses_a_real_shaped_sample(monkeypatch: Any) -> None:
+    """The exact shape sampled live from a running fleet (2026-07-27) — background AND
+    interactive rows, with and without a `state`/`id` field."""
+    from src.orchestrator import trigger
+
+    sample = json.dumps([
+        {"pid": 1, "id": "e08c3850", "cwd": "/home/asuramaya/.osiris/seats/imhotep",
+         "kind": "background", "sessionId": "e08c3850-4180-4876-b313-fafef21d368a",
+         "name": "[OS] Imhotep", "status": "busy", "state": "working"},
+        {"pid": 2, "cwd": "/home/asuramaya/.osiris/seats/imhotep", "kind": "interactive",
+         "sessionId": "5198945f-d468-4a2d-b794-b9f3a2d364ad", "name": "imhotep-0e",
+         "status": "idle"},
+    ]).encode()
+
+    class _Proc:
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return sample, b""
+
+    async def _fake_exec(*args: Any, **kwargs: Any) -> _Proc:
+        captured_argv.append(args)
+        return _Proc()
+
+    captured_argv: list[Any] = []
+    monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
+    rows = await trigger._claude_agents_json(cwd="/home/asuramaya/.osiris/seats/imhotep")
+
+    assert captured_argv[0] == ("claude", "agents", "--json",
+                                "--cwd", "/home/asuramaya/.osiris/seats/imhotep")
+    assert len(rows) == 2
+    assert rows[0]["id"] == "e08c3850" and rows[0]["status"] == "busy"
+
+
+async def test_claude_agents_json_fails_open_to_empty_on_error(monkeypatch: Any) -> None:
+    """A status read must never break a caller that only wants a roster (same discipline as
+    _manager_windows) — a dark/missing `claude` binary answers [], not an exception."""
+    from src.orchestrator import trigger
+
+    async def _boom(*args: Any, **kwargs: Any) -> Any:
+        raise OSError("no such file or directory: claude")
+
+    monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _boom)
+    assert await trigger._claude_agents_json() == []
+
+
+async def test_bg_session_cost_is_honestly_unpriced_not_fabricated(monkeypatch: Any) -> None:
+    """The spike's own open question: `claude agents --json` carries no cost field at all
+    (confirmed live against the real fleet) — a --bg session's spend must be reported as
+    UNPRICED, never a made-up number."""
+    from src.orchestrator import trigger
+
+    sample = json.dumps([
+        {"id": "e08c3850", "sessionId": "e08c3850-4180-4876-b313-fafef21d368a",
+         "status": "idle", "state": "done"},
+    ]).encode()
+
+    class _Proc:
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return sample, b""
+
+    async def _fake_exec(*args: Any, **kwargs: Any) -> _Proc:
+        return _Proc()
+
+    monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
+    out = await trigger._bg_session_cost("e08c3850-4180-4876-b313-fafef21d368a")
+    assert out == {"priced": False,
+                   "reason": "claude agents --json carries no cost field for this session",
+                   "session_row": json.loads(sample)[0]}
+
+
+async def test_bg_session_cost_reports_a_real_number_if_the_harness_ever_adds_one(
+    monkeypatch: Any,
+) -> None:
+    """Forward-compatible: if a future harness version DOES carry a cost field, this reports
+    it as priced rather than staying stuck in the unpriced branch forever."""
+    from src.orchestrator import trigger
+
+    sample = json.dumps([{"id": "abc", "sessionId": "abc-full", "total_cost_usd": 0.42}]).encode()
+
+    class _Proc:
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return sample, b""
+
+    async def _fake_exec(*args: Any, **kwargs: Any) -> _Proc:
+        return _Proc()
+
+    monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
+    out = await trigger._bg_session_cost("abc-full")
+    assert out == {"priced": True, "cost_usd": 0.42}
+
+
+async def test_bg_session_cost_session_not_found(monkeypatch: Any) -> None:
+    from src.orchestrator import trigger
+
+    async def _fake_exec(*args: Any, **kwargs: Any) -> Any:
+        class _Proc:
+            async def communicate(self) -> tuple[bytes, bytes]:
+                return b"[]", b""
+        return _Proc()
+
+    monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
+    out = await trigger._bg_session_cost("nonexistent")
+    assert out == {"priced": False, "reason": "session not found in claude agents --json"}

@@ -23,6 +23,7 @@ import os
 import re
 import tempfile
 import time
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -1583,6 +1584,113 @@ async def _spawn_in_body(
     _log.info("trigger: bodied %s in %s (handle %s)",
               f"resume:{resume_session}" if resume_session else f"mint:{job_dir}", repo, handle)
     return handle
+
+
+# --- THE HARNESS-NATIVE SUBSTRATE (task #68 item 9, ruling 33d6a2eb clause 3; spike verdict
+# f2dc98549521) --------------------------------------------------------------------------------
+#
+# A third sibling to _spawn_claude/_spawn_in_body: `claude --bg` + `claude agents --json`
+# instead of a bare -p child, a metered body, or the manager daemon's PTY broker + claim-socket.
+# The spike verified live (claude --help + a real `claude agents --json` sample against the
+# fleet's own running sessions) that these documented, sanctioned flags already cover both
+# halves launch() needs — building a session-create client against the undocumented daemon
+# spare-pool claim-socket protocol would be new machinery on the same class of internal channel
+# ruling 482c3d0f already flags as a disclosed RCE primitive not to build on. Every spawned
+# session is visible in `claude agents --json` BY CONSTRUCTION — clause 3 ("front end wide
+# open") made mechanical, not patched around (contrast the attach-line receipt, part 2 of this
+# task, which is an interim fix for the OLD substrate's blind spot, not a replacement for this).
+
+_SEAT_SESSION_NAMESPACE = uuid.UUID("b3f6b6b0-3f77-4b1a-9f3e-2f7a2b6b6b6b")
+
+
+def _seat_session_id(seat_id: str) -> str:
+    """A deterministic `--session-id` per seat — presenting the SAME seat_id always derives
+    the SAME harness session id, so a relaunch/resume of one seat targets the one underlying
+    claude session instead of osiris inferring identity from a fresh job_dir every time (the
+    binding leg's own join key, clause 1 of 33d6a2eb, once that lands). uuid5, never uuid4:
+    must be reproducible from the seat_id alone, never randomly re-rolled."""
+    return str(uuid.uuid5(_SEAT_SESSION_NAMESPACE, seat_id))
+
+
+async def _spawn_claude_bg(
+    repo: str, *, name: str | None = None, model: str | None = None,
+    session_id: str | None = None, job_dir: str | None = None,
+    allowed_tools: str | None = None,
+) -> None:
+    """`claude --bg` in `repo` — the harness's own documented background-session surface.
+    SAME fire-and-forget discipline as `_spawn_claude`/`_spawn_in_body` (B1's scar: an arq
+    timeout that awaited a live billing `claude -p` once wedged the whole worker) — `--bg`
+    itself returns almost immediately once the harness's background-agent daemon has taken
+    the session over, so this call confirms only that the command was ISSUED, never that the
+    session completed; poll `_claude_agents_json` for that, the same surface the operator's
+    own front end reads. `session_id` should be `_seat_session_id(seat_id)` — presenting it
+    is what makes a later relaunch of the same seat rebind instead of minting a twin."""
+    env = os.environ.copy()
+    # same anchor discipline as _spawn_claude: a spawner's own anchor must never leak into
+    # the child (the anchor-collision class, 2294e95d) — the child gets the one minted below.
+    env.pop("CLAUDE_JOB_DIR", None)
+    cmd = ["claude", "--bg"]
+    if name:
+        cmd += ["-n", name]
+    if model:
+        cmd += ["--model", model]
+    if session_id:
+        cmd += ["--session-id", session_id]
+    if allowed_tools:
+        cmd += ["--allowedTools", allowed_tools]
+    if job_dir:
+        env["CLAUDE_JOB_DIR"] = job_dir
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, cwd=repo, env=env,
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+    _log.info("trigger: bg-spawned %s in %s (pid %s, session %s)",
+              name or "(unnamed)", repo, proc.pid, session_id or "none")
+
+
+async def _claude_agents_json(
+    *, cwd: str | None = None, include_completed: bool = False,
+) -> list[dict[str, Any]]:
+    """`claude agents --json` — the harness's own front-end view (clause 3: a body this
+    cannot show is an orphan by definition). Fails open to `[]` on any error, the same
+    discipline `_manager_windows` uses: a status read must never break a caller that only
+    wants a roster."""
+    cmd = ["claude", "agents", "--json"]
+    if cwd:
+        cmd += ["--cwd", cwd]
+    if include_completed:
+        cmd.append("--all")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await proc.communicate()
+    except OSError:
+        return []
+    try:
+        rows = json.loads(out.decode() or "[]")
+    except ValueError:
+        return []
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
+async def _bg_session_cost(
+    session_id: str, *, cwd: str | None = None,
+) -> dict[str, Any]:
+    """The spike's own open question, answered honestly: `claude agents --json` carries no
+    cost/usage field for any session — confirmed live, 2026-07-27, across busy/idle/done
+    states alike. A `--bg`-spawned session's spend is therefore structurally UNPRICED from
+    this surface, same doctrine as the subscription-lane blind spot (osiris cannot recover
+    the marginal joule from outside the vendor's own dashboard). Never fabricates a number:
+    reports `{'priced': False, ...}` rather than a guess — if a future harness version adds
+    a cost field, this starts reporting it (`cost_usd`/`total_cost_usd`, checked first)."""
+    for row in await _claude_agents_json(cwd=cwd, include_completed=True):
+        if row.get("sessionId") == session_id or row.get("id") == session_id[:8]:
+            cost = row.get("cost_usd") or row.get("total_cost_usd")
+            if cost is not None:
+                return {"priced": True, "cost_usd": cost}
+            return {"priced": False,
+                    "reason": "claude agents --json carries no cost field for this session",
+                    "session_row": row}
+    return {"priced": False, "reason": "session not found in claude agents --json"}
 
 
 async def trigger_mail_tick(
