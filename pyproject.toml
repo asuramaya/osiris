@@ -82,4 +82,18 @@ testpaths = ["tests"]
 pythonpath = ["."]
 
 [tool.uv]
-package = false
+package = true
+
+# task #69 (ruling 45b074bf): the `osiris` console-script — CWD/PYTHONPATH must never matter
+# for the operator (the exact class 3e96c10e's cousin closes). `packages = ["src"]` installs
+# the existing `src` top-level package as-is (every `from src.x import y` already assumes this
+# name; nothing renamed) so the wheel matches the checkout 1:1 — no src-layout remapping.
+[project.scripts]
+osiris = "src.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

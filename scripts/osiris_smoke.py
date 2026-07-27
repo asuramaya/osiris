@@ -36,26 +36,6 @@ DSN = "postgresql://osiris:osiris@127.0.0.1:5601/osiris"
 MCP_URL = "http://127.0.0.1:8790/mcp"
 
 
-async def call_mcp_smoke(url: str = MCP_URL) -> dict[str, Any] | str:
-    """The real round-trip: connect over streamable-http, call the `smoke` tool. Returns the
-    tool's own {chrome, db, ok} dict, or a plain error string if MCP itself never answered —
-    that string IS the finding (osiris-mcp down), not a crash."""
-    try:
-        from mcp import ClientSession
-        from mcp.client.streamable_http import streamablehttp_client
-
-        async with streamablehttp_client(url) as (read, write, _):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                result = await session.call_tool("smoke", {})
-        if result.isError:
-            return f"error: {result.content}"
-        data = result.structuredContent
-        return data if isinstance(data, dict) else f"error: unexpected shape {data!r}"
-    except Exception as e:  # noqa: BLE001 - report, never crash the walk
-        return f"error: {e}"
-
-
 async def local_chrome_walk() -> dict[str, str]:
     """Chrome walked DIRECTLY (no MCP in the loop) — so an MCP-only outage still leaves an
     honest chrome verdict, not a blank."""
@@ -67,18 +47,6 @@ async def local_chrome_walk() -> dict[str, str]:
         base_url=get_settings().osiris_console_base_url, timeout=5.0,
     ) as client:
         return await smoke_chrome(client)
-
-
-def _fails_from(chrome: dict[str, str], mcp_result: dict[str, Any] | str) -> list[str]:
-    fails = [f"chrome {route}: {status}" for route, status in chrome.items() if status != "ok"]
-    if isinstance(mcp_result, str):
-        fails.append(f"osiris-mcp round-trip: {mcp_result}")
-    else:
-        if mcp_result.get("db") != "ok":
-            fails.append(f"osiris-mcp pool: {mcp_result.get('db')}")
-        fails += [f"osiris-mcp's own chrome view {r}: {s}"
-                  for r, s in (mcp_result.get("chrome") or {}).items() if s != "ok"]
-    return fails
 
 
 async def brief_operator(fails: list[str]) -> None:
@@ -99,13 +67,17 @@ async def brief_operator(fails: list[str]) -> None:
 
 
 async def _run_both() -> tuple[dict[str, str], dict[str, Any] | str]:
-    chrome, mcp_result = await asyncio.gather(local_chrome_walk(), call_mcp_smoke())
+    from src.orchestrator.smoke import call_mcp_smoke
+
+    chrome, mcp_result = await asyncio.gather(local_chrome_walk(), call_mcp_smoke(MCP_URL))
     return chrome, mcp_result
 
 
 def main() -> int:
+    from src.orchestrator.smoke import summarize_failures
+
     chrome, mcp_result = asyncio.run(_run_both())
-    fails = _fails_from(chrome, mcp_result)
+    fails = summarize_failures(chrome, mcp_result)
     if not fails:
         print("smoke: all green (8 chrome routes + the live mcp pool)")
         return 0

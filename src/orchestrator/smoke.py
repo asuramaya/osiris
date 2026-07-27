@@ -55,3 +55,29 @@ async def smoke(client: httpx.AsyncClient, pool: asyncpg.Pool) -> dict[str, Any]
     db = await smoke_pool(pool)
     ok = db == "ok" and all(v == "ok" for v in chrome.values())
     return {"chrome": chrome, "db": db, "ok": ok}
+
+
+async def call_mcp_smoke(url: str) -> dict[str, Any] | str:
+    """The CLIENT-side half (task #69's `osiris smoke`, and scripts/osiris_smoke.py before it):
+    round-trip the real MCP protocol to call THIS module's own `smoke` tool as the fleet
+    actually calls it — proving the pool a live agent gets, not a throwaway one. Returns the
+    tool's own {chrome, db, ok} dict, or a plain error STRING if the round-trip itself failed
+    (server down, refused, timed out) — that string IS the finding, never a silent gap."""
+    from src.orchestrator.mcp_client import call_mcp_tool
+
+    return await call_mcp_tool(url, "smoke")
+
+
+def summarize_failures(chrome: dict[str, str], mcp_result: dict[str, Any] | str) -> list[str]:
+    """The two probes (a direct chrome walk, the MCP round-trip's OWN view of both chrome and
+    its pool) named as one flat list of failures — every surface that isn't 'ok' shows up by
+    name, never collapsed into a single pass/fail bit."""
+    fails = [f"chrome {route}: {status}" for route, status in chrome.items() if status != "ok"]
+    if isinstance(mcp_result, str):
+        fails.append(f"osiris-mcp round-trip: {mcp_result}")
+    else:
+        if mcp_result.get("db") != "ok":
+            fails.append(f"osiris-mcp pool: {mcp_result.get('db')}")
+        fails += [f"osiris-mcp's own chrome view {r}: {s}"
+                  for r, s in (mcp_result.get("chrome") or {}).items() if s != "ok"]
+    return fails
