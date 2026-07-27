@@ -261,6 +261,83 @@ class Actions:
             await self._outbox(conn, "property_added", object_id, case_id, {"name": name})
             return new_id
 
+    # --- 2b. supersede_assertion (the CROSS-source supersede) -------------
+
+    async def supersede_assertion(
+        self,
+        object_id: uuid.UUID,
+        name: str,
+        superseded_id: int,
+        value: Any,
+        source_id: str,
+        observed_at: datetime,
+        confidence: float,
+        because: str,
+        *,
+        case_id: uuid.UUID | None = None,
+        evidence_class: str | None = None,
+        actor: str | None = None,
+    ) -> int:
+        """The one legitimate way to retire ANOTHER source's assertion explicitly (thread
+        52911d2a, found diagnosing b9aa7326): assert_property's own supersession is scoped
+        to the SAME source only ("other sources' values coexist as the multi-source set") —
+        by design, for legitimate multi-source corroboration, but it leaves a peer's
+        CORRECTION of another agent's bad self-declaration structurally unable to retire it.
+        Khnum's own correct_agent_house call on agent:ad1a1cb0-g40-xxiv proved this live: the
+        right value landed, the wrong one stayed current, both simultaneously "current" per
+        current_assertions' own definition (every row nothing else's supersedes points at).
+
+        `because` is recorded in the audit trail — a cross-source retirement crosses
+        accountability lines (someone else's self-declared word), so the justification is
+        never optional the way assert_property's own routine same-source supersession
+        doesn't need one.
+
+        Raises ActionError when `superseded_id` isn't a `name` assertion on `object_id`, or
+        is already superseded — the orchestrator-level `retire_assertion` is expected to
+        have already checked this and returned a friendlier error dict; this is the
+        last-resort invariant, matching merge_objects' own defense-in-depth."""
+        actor = actor or source_id
+        async with self._tx() as conn:
+            target = await conn.fetchrow(
+                "SELECT id FROM assertions WHERE id=$1 AND object_id=$2 AND name=$3",
+                superseded_id, object_id, name,
+            )
+            if target is None:
+                raise ActionError(
+                    f"assertion {superseded_id} is not a {name!r} assertion on this object")
+            already = await conn.fetchval(
+                "SELECT 1 FROM assertions WHERE supersedes=$1", superseded_id)
+            if already:
+                raise ActionError(f"assertion {superseded_id} is already superseded")
+            new_id = cast(
+                int,
+                await conn.fetchval(
+                    "INSERT INTO assertions "
+                    "(object_id,name,value,source_id,case_id,observed_at,confidence,"
+                    " supersedes,evidence_class) "
+                    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id",
+                    object_id,
+                    name,
+                    value,
+                    source_id,
+                    case_id,
+                    observed_at,
+                    confidence,
+                    superseded_id,
+                    evidence_class,
+                ),
+            )
+            await self._audit(
+                conn,
+                "supersede_assertion",
+                actor,
+                case_id,
+                {"object_id": str(object_id), "name": name, "superseded_id": superseded_id,
+                 "because": because},
+            )
+            await self._outbox(conn, "property_added", object_id, case_id, {"name": name})
+            return new_id
+
     # --- 3. create_link --------------------------------------------------
 
     async def create_link(

@@ -2804,6 +2804,31 @@ async def correct_agent_house(agent_id: str, project: str | None = None,
 
 
 @mcp.tool()
+async def retire_assertion(ref: str, name: str, superseded_id: int, value: str, because: str,
+                           ctx: Context | None = None) -> dict[str, Any]:
+    """THE CROSS-SOURCE SUPERSEDE (thread 52911d2a, found diagnosing b9aa7326) — retires
+    ANOTHER source's assertion explicitly, the one class assert_property's own automatic
+    (same-source-only) supersession cannot reach: a peer's correction of another agent's bad
+    self-declaration. correct_agent_house's own repair asserts a new value but can never
+    retire the wrong one this way when the correction comes from a different source — both
+    stay simultaneously "current" until this runs.
+
+    Deliberately narrow — retires ONE named assertion, by id, never a bare "whatever's
+    current now": the caller must already know exactly which row is wrong, from a diagnosis,
+    never a guess. `because` is required (a cross-source retirement crosses accountability
+    lines). Refuses loudly: `ref` doesn't resolve; `superseded_id` isn't a `name` assertion
+    on that object; it's already superseded; `because` is blank."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a retirement is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.retirement import retire_assertion as _retire_assertion
+    return await _retire_assertion(Actions(await _pool_get()), ref=ref, name=name,
+                                   superseded_id=superseded_id, value=value, because=because,
+                                   actor=ident.agent_id)
+
+
+@mcp.tool()
 async def fold_candidates(ctx: Context | None = None) -> dict[str, Any]:
     """THE ARCHAEOLOGIST'S TRAY (thread b975851b) — sweep the registry and disk for
     anonymous agents that evidence says were never distinct minds (view-aliases: a mount

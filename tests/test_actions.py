@@ -171,3 +171,50 @@ async def test_unmerge_guards(actions: Actions, case_id: str) -> None:
     a = await actions.create_or_find_object("Person", "un-g", "analyst:test", case_id)
     with pytest.raises(ActionError):  # not merged
         await actions.unmerge_objects(a, "nothing to undo", "analyst:test", case_id)
+
+
+async def test_supersede_assertion_retires_a_different_sources_row(
+    actions: Actions, case_id: str,
+) -> None:
+    """The cross-source supersede (thread 52911d2a) — assert_property's own within-source
+    rule leaves two different sources' rows coexisting; supersede_assertion is the one
+    legitimate way to retire one of them explicitly, by id."""
+    obj = await actions.create_or_find_object("Domain", "corp.com", "analyst:test", case_id)
+    wrong = await actions.assert_property(obj, "registrar", "GoDaddy", "helper:self", NOW, 0.9)
+    await actions.assert_property(obj, "registrar", "Namecheap", "helper:peer", NOW, 0.9)
+    vals = await actions.current_values(obj, "registrar")
+    assert {v["value"] for v in vals} == {"GoDaddy", "Namecheap"}  # both current, cross-source
+
+    new_id = await actions.supersede_assertion(
+        obj, "registrar", wrong, "Namecheap", "helper:correction", NOW, 0.9,
+        "peer correction, verified live", evidence_class="self_declared")
+
+    superseded_by = await actions.pool.fetchval(
+        "SELECT supersedes FROM assertions WHERE id=$1", new_id)
+    assert superseded_by == wrong
+    vals = await actions.current_values(obj, "registrar")
+    assert {v["value"] for v in vals} == {"Namecheap"}  # the wrong row is gone from current
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM audit_log WHERE action='supersede_assertion'") == 1
+
+
+async def test_supersede_assertion_guards(actions: Actions, case_id: str) -> None:
+    obj = await actions.create_or_find_object("Domain", "corp.com", "analyst:test", case_id)
+    other = await actions.create_or_find_object("Domain", "other.com", "analyst:test", case_id)
+    row_id = await actions.assert_property(obj, "registrar", "GoDaddy", "helper:self", NOW, 0.9)
+
+    with pytest.raises(ActionError):  # wrong object
+        await actions.supersede_assertion(
+            other, "registrar", row_id, "X", "helper:x", NOW, 0.9, "wrong object")
+    with pytest.raises(ActionError):  # wrong name
+        await actions.supersede_assertion(
+            obj, "not-registrar", row_id, "X", "helper:x", NOW, 0.9, "wrong name")
+    with pytest.raises(ActionError):  # unknown id
+        await actions.supersede_assertion(
+            obj, "registrar", 999999999, "X", "helper:x", NOW, 0.9, "unknown id")
+
+    await actions.supersede_assertion(
+        obj, "registrar", row_id, "Namecheap", "helper:peer", NOW, 0.9, "correction")
+    with pytest.raises(ActionError):  # already superseded — never twice
+        await actions.supersede_assertion(
+            obj, "registrar", row_id, "MarkMonitor", "helper:another", NOW, 0.9, "twice")
