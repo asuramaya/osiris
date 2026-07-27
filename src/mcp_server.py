@@ -23,6 +23,7 @@ from typing import Any
 import asyncpg
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.lowlevel.server import NotificationOptions
 
 from src.actions.core import Actions
 from src.config.settings import get_settings
@@ -93,15 +94,51 @@ class BoundedMCP(FastMCP):
     """
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        ctx = self.get_context()
+        await _nudge_tool_list_refresh(ctx)
         result = await self._tool_manager.call_tool(
-            name, arguments, context=self.get_context(), convert_result=False)
+            name, arguments, context=ctx, convert_result=False)
         if isinstance(result, dict) and "context" not in result:
-            note = await _seam_field(self.get_context())
+            note = await _seam_field(ctx)
             if note is not None:
                 result["context"] = note
         tool = self._tool_manager.get_tool(name)
         assert tool is not None  # call_tool already raised if the name were unknown
         return tool.fn_metadata.convert_result(fit(result, tool=name))
+
+
+# TOOL-LIST REFRESH (thread 6a78e64b leg 1, operator-directed: "three verbs deployed today
+# each sat invisible for turns"). The MCP spec's own mechanism for this is
+# notifications/tools/list_changed — checked FastMCP (mcp==1.28.1) before building anything:
+# the lowlevel Server already HAS the capability type (types.ToolsCapability) and the send
+# method (ServerSession.send_tool_list_changed); FastMCP's own create_initialization_options()
+# call sites (stdio/sse/streamable-http, all inside the SDK) just never pass a
+# NotificationOptions(tools_changed=True), so the capability was never declared. That is an
+# ergonomics gap in FastMCP's convenience wrapper, not a "don't build on this" wall (482c3d0f's
+# discipline is about the daemon's undocumented claim-socket internals — a different thing
+# entirely): NotificationOptions/create_initialization_options are PUBLIC, documented SDK
+# surface, exactly like BoundedMCP.call_tool above already overrides FastMCP's own public
+# call_tool. No monkey-patch of anything private.
+_notified_list_changed: set[str] = set()
+
+
+async def _nudge_tool_list_refresh(ctx: Context | None) -> None:
+    """Once per CLIENT CONNECTION (keyed by `_conn_key`, the same key the identity cache
+    uses), tell an already-connected session its tool list may be stale — the deploy-time
+    pain this closes: osiris-mcp restarts several times a day as new tools land, but a
+    long-lived agent session's MCP client can RESUME its existing connection across that
+    restart without ever re-running `initialize`/`tools/list`, so it never learns new tools
+    exist until something else nudges it. Ambient, never load-bearing: any failure here
+    must never block or fail the tool call it rides in on."""
+    key = _conn_key(ctx)
+    if key is None or key in _notified_list_changed:
+        return
+    _notified_list_changed.add(key)
+    try:
+        assert ctx is not None
+        await ctx.session.send_tool_list_changed()
+    except Exception:  # noqa: BLE001 — ambient, never load-bearing
+        pass
 
 
 # THE AMBIENT SEAM WHISPER (alfred's pitch, written at his own 70% seam — decision d80621a7
@@ -225,6 +262,26 @@ mcp = BoundedMCP(
         "a rug-pull must be confessed, never inherited blind."
     ),
 )
+# DECLARE THE listChanged CAPABILITY (see BoundedMCP/_nudge_tool_list_refresh above): FastMCP
+# never passes NotificationOptions through to the lowlevel Server's own
+# create_initialization_options(), so `tools_changed` silently defaults to False and a
+# compliant client never even learns the server MIGHT send this notification. Wrapping the
+# bound method (public, not underscore-prefixed) to supply the default the SDK already
+# supports — every call site that omits its own notification_options gets tools_changed=True.
+_orig_create_init_options = mcp._mcp_server.create_initialization_options
+
+
+def _create_init_options_with_tools_changed(
+    notification_options: NotificationOptions | None = None,
+    experimental_capabilities: dict[str, dict[str, Any]] | None = None,
+) -> Any:
+    return _orig_create_init_options(
+        notification_options=notification_options or NotificationOptions(tools_changed=True),
+        experimental_capabilities=experimental_capabilities)
+
+
+mcp._mcp_server.create_initialization_options = (  # type: ignore[method-assign]
+    _create_init_options_with_tools_changed)
 _pool: asyncpg.Pool | None = None
 
 
