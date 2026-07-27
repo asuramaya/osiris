@@ -69,9 +69,27 @@ async def test_lap_resolves_names_and_reports_absence(actions: Actions) -> None:
                                   evidence_class=_SD)
     assert await resolve_ref(actions.pool, "Hannah Arendt") == a  # exact name
     assert await resolve_ref(actions.pool, "person:named") == a  # canonical
+    assert await resolve_ref(actions.pool, str(a)[:8]) == a  # short-id prefix (task #64)
     out = await _fn(actions, "lap", {"ref": "Arendt"})  # substring
     assert out["object"]["canonical"] == "person:named"
     assert "nothing matches" in (await _fn(actions, "lap", {"ref": "zz-never-zz"}))["note"]
+
+
+async def test_resolve_ref_short_id_never_shadows_a_real_canonical_or_name(
+    actions: Actions,
+) -> None:
+    """task #64 (ruling ad19a779) — the short-id leg mirrors capture._find_thread/
+    _find_decision's own convention exactly, widened to any object type: a
+    table/Function-sourced row's own "id" column (_col_value's 8-char short-id special
+    case) now resolves through dossier()/focus_object(), not just recall(). A ref that
+    ISN'T hex-shaped (a real canonical, a real name) is completely untouched by the new
+    leg — it never even runs the short-id query."""
+    a = await actions.create_or_find_object("Person", "person:short-a", "t")
+    b = await actions.create_or_find_object("Person", "person:short-b", "t")
+    assert await resolve_ref(actions.pool, str(a)[:8]) == a
+    assert await resolve_ref(actions.pool, str(b)[:8]) == b
+    assert await resolve_ref(actions.pool, "not-hex-at-all") is None
+    assert await resolve_ref(actions.pool, "repo:osiris-does-not-exist") is None
     assert "ONE object" in (await _fn(actions, "lap", {}))["note"]  # no ref, no subject
 
 

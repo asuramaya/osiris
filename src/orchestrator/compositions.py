@@ -939,14 +939,31 @@ async def _fn_pulse(
 
 
 async def resolve_ref(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
-    """Accept a UUID, an exact canonical, or a name; resolve to an object id. Name matching
-    tries exact first (most-described wins), then substring (shortest name wins — closest to
-    the query). ONE definition shared by the server's tools and the composition functions,
-    so the console and an agent always resolve the same words to the same object."""
+    """Accept a UUID, a short-id PREFIX, an exact canonical, or a name; resolve to an object
+    id. Name matching tries exact first (most-described wins), then substring (shortest name
+    wins — closest to the query). ONE definition shared by the server's tools and the
+    composition functions, so the console and an agent always resolve the same words to the
+    same object.
+
+    The short-id leg (task #64, ruling ad19a779 — every id a composition row hands out must
+    feed straight back in) mirrors capture._find_thread/_find_decision's own convention
+    exactly (same regex, same order, one object type wider — this resolves ANY type, not
+    just Thread/Decision): a `table`/Function-sourced row's own "id" column IS this 8-char
+    prefix (`_col_value`'s special case), and dossier()/focus_object() previously had no way
+    to resolve it at all — only recall() (via _find_thread/_find_decision) could. Verified
+    live before this fix: dossier("3e96c10e") returned "no object", though recall() resolved
+    the identical ref cleanly."""
     try:
         return uuid.UUID(ref)
     except ValueError:
         pass
+    short = (ref or "").strip().lower()
+    if re.fullmatch(r"[0-9a-f]{8}[0-9a-f-]*", short):
+        oid = await pool.fetchval(
+            "SELECT id FROM objects WHERE status='active' AND id::text LIKE $1 || '%' LIMIT 1",
+            short)
+        if oid is not None:
+            return uuid.UUID(str(oid))
     oid = await pool.fetchval(
         "SELECT id FROM objects WHERE canonical=$1 AND status='active' LIMIT 1", ref)
     if oid is not None:

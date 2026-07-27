@@ -71,6 +71,27 @@ async def test_dossier_missing_object_is_empty(actions: Actions) -> None:
     assert await entity_dossier(actions.pool, uuid.uuid4()) == {}
 
 
+async def test_the_mcp_dossier_tool_resolves_a_short_id(actions: Actions) -> None:
+    """task #64 (ruling ad19a779): every id a composition ROW hands out (a table/Function
+    row's own 8-char "id" column) must feed straight back into dossier(), not just
+    recall(). Before the resolve_ref fix, this returned {"error": "no object ..."} — proven
+    directly against the real MCP tool (srv._pool swap, mirrors test_describe.py's own
+    pattern), not just the lower-level resolve_ref function."""
+    from src import mcp_server as srv
+
+    await ingest_ftm(actions, _FTM)
+    p1 = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='P1'")
+    short = str(p1)[:8]
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.dossier(short)
+    finally:
+        srv._pool = saved_pool
+    assert out["name"] == "Kim Jong Un"
+
+
 async def test_dossier_endpoint(client: httpx.AsyncClient, actions: Actions) -> None:
     await ingest_ftm(actions, _FTM)
     p1 = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='P1'")
