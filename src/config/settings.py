@@ -245,6 +245,14 @@ class Settings(BaseSettings):
     # seat's own session — pinning the triage model onto it would be a silent model downgrade
     # of a working seat (the rug-pull class). The triage/mint lanes keep osiris_wake_model.
     osiris_dm_resume_model: str = ""
+    # THE DEFAULT FLIP (task #68 wave, rulings 0fe36e59 + 33d6a2eb clause 3): launch_seat's
+    # default spawn lane is the harness-native substrate (`claude --bg`, _spawn_claude_bg) —
+    # every body it creates is visible in the operator's own `claude agents` list BY
+    # CONSTRUCTION (clause 3, "front end wide open", made mechanical instead of patched
+    # around). "pty" keeps the OLD osiris PTY-broker lane alive as an explicit, vendor-neutral
+    # fallback (thread c171a3de) — for an incident, or a harness build that lacks --bg. A
+    # launch_seat caller's own `substrate` argument always wins over this fleet-wide default.
+    osiris_launch_substrate: str = "harness"
     # THE PAIR HEARTBEAT (Pit Watch Stage B, thread 449bf55d) — OFF by default, the same law
     # as osiris_trigger_enabled: a mechanism that pages the operator's desk earns its own kill
     # switch, never inherits one. When on, a tick alarms on any managed_by pair's ask-graded

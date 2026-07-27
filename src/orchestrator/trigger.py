@@ -1291,7 +1291,8 @@ def _launch_anchor(seat_id: str) -> str:
 async def launch_seat(
     actions: Actions, *, caller: str, target: str, message: str = "",
     model: str | None = None, settings: Settings | None = None,
-    manager: Any = None, windows: Any = None,
+    manager: Any = None, windows: Any = None, substrate: str | None = None,
+    spawn: Any = None, agents_json: Any = None, cost_reader: Any = None,
 ) -> dict[str, Any]:
     """Give a seat a BODY. Downward-only, managed_by-gated (a manager bodies a seat it manages).
     Idempotent: a live window for the seat is RETURNED, never twinned. The receipt reports
@@ -1301,12 +1302,22 @@ async def launch_seat(
 
     THE OPERATOR NEVER CALLS THIS (no operator param, exactly like wake): an override a caller can
     assert in an argument is an override that can be forged; the operator's hand stays out-of-band.
-    `manager`/`windows` are injected so tests assert the DECISION without a live daemon."""
+
+    SUBSTRATE (the default flip, task #68 wave, rulings 0fe36e59 + 33d6a2eb clause 3): `substrate`
+    picks the spawn lane — an explicit argument wins, then `osiris_launch_substrate`
+    (default 'harness'). 'harness' bodies the seat as a `claude --bg` background session
+    (visible in `claude agents --json` BY CONSTRUCTION); 'pty' keeps the original osiris
+    PTY-broker lane alive as an explicit, vendor-neutral fallback. `manager`/`windows` are
+    injected for the PTY lane's tests; `spawn`/`agents_json`/`cost_reader` for the harness
+    lane's — either way, without a live daemon or a live `claude` binary."""
     pool = actions.pool
     from src.orchestrator.agents import house_of
     from src.orchestrator.seats import held_seat
     manager = manager or _manager_control
     windows = windows or _manager_windows
+    spawn = spawn or _spawn_claude_bg
+    agents_json = agents_json or _claude_agents_json
+    cost_reader = cost_reader or _bg_session_cost
 
     caller_held = await held_seat(pool, caller)
     caller_seat = (caller_held or {}).get("seat_id")
@@ -1347,62 +1358,164 @@ async def launch_seat(
     attach = {"office": office, "session_anchor": anchor,
              "command": f'python -m src.manager.attach "[{_house_tag(house)}] {handle}"'}
 
-    # IDEMPOTENCY — a live window already holding this seat is RETURNED, never twinned (the
-    # one-body-at-a-time discipline; Ra's stale-liveness collision, b3a86a7d). Fail-open on a dark
-    # daemon: an empty roster means nothing to collide with, and the spawn below reports its state.
-    try:
-        roster = await windows()
-    except (OSError, TimeoutError, ValueError):
-        roster = []
-    for w in roster:
-        if isinstance(w, dict) and w.get("seat_id") == target_seat and w.get("alive"):
-            return {"status": "already-live", "window": w.get("name"), "seat": target_seat,
-                    "body_exists": True, "can_receive": True, "attach": attach,
-                    "detail": f"a live body already holds {handle} — not minting a twin"}
-
     st = settings or get_settings()
-    argv = ["claude"]
+    lane = (substrate or st.osiris_launch_substrate or "harness").strip().lower()
     # MODEL PRECEDENCE (task #68, finding #7, thread 20e4feb6): an explicit caller param wins,
     # then the SEAT'S OWN stamped intended_model (mint_seat's pin — the whole point of naming
     # a model per worker), and only then the trigger's own global default. The old order
     # skipped the stamp entirely, which is why a seat pinned to sonnet-5 could spawn on
     # whatever osiris_wake_model happened to be that day, silently.
     argv_model = model or facts.get("intended_model") or st.osiris_wake_model or None
-    if argv_model:
-        argv += ["--model", argv_model]
     name = f"[{_house_tag(house)}] {handle}"
-    # A FULL env, minus the launcher's own CLAUDE_JOB_DIR (never inherit an anchor — the
-    # collision class, 2294e95d), plus the body's own stable anchor so it matches the window's
-    # job_dir metadata. pty_spawn adds OSIRIS_SEAT_ID + OSIRIS_ATTACH_TOKEN on top (identity at
-    # birth); a child with only those two vars has no PATH, so the real environ is the base.
-    child_env = {k: v for k, v in os.environ.items() if k != "CLAUDE_JOB_DIR"}
-    child_env["CLAUDE_JOB_DIR"] = anchor
 
-    try:
-        res = await manager({
-            "op": "pty_spawn", "name": name, "argv": argv, "cwd": office,
-            "seat": {"handle": handle, "house": house}, "job_dir": anchor, "env": child_env})
-    except (OSError, TimeoutError, ValueError) as exc:
-        return {"status": "manager-cold", "seat": target_seat,
-                "detail": f"the manager daemon is unreachable ({exc}) — ask the operator to start "
-                          "osiris-manager; NOTHING was spawned"}
-    if not isinstance(res, dict) or res.get("error"):
-        return {"status": "refused-spawn", "seat": target_seat,
-                "detail": (res.get("error") if isinstance(res, dict) else str(res))
-                or "the manager refused the spawn"}
+    out: dict[str, Any]
+    if lane == "pty":
+        # ═══ THE OSIRIS PTY-BROKER LANE — the ORIGINAL substrate, kept alive as an explicit,
+        # vendor-neutral FALLBACK (rulings 0fe36e59 + 33d6a2eb clause 3) for an incident, or a
+        # harness build with no --bg. No longer the default; a caller (or the settings knob)
+        # must ask for it by name.
+        #
+        # IDEMPOTENCY — a live window already holding this seat is RETURNED, never twinned
+        # (the one-body-at-a-time discipline; Ra's stale-liveness collision, b3a86a7d).
+        # Fail-open on a dark daemon: an empty roster means nothing to collide with, and the
+        # spawn below reports its own state.
+        try:
+            roster = await windows()
+        except (OSError, TimeoutError, ValueError):
+            roster = []
+        for w in roster:
+            if isinstance(w, dict) and w.get("seat_id") == target_seat and w.get("alive"):
+                return {"status": "already-live", "window": w.get("name"), "seat": target_seat,
+                        "body_exists": True, "can_receive": True, "attach": attach,
+                        "detail": f"a live body already holds {handle} — not minting a twin"}
 
-    spawned = res.get("spawned")
-    # RA'S RECEIPT (53ae1a87): body_exists is the spawn's own word; can_receive is a SEPARATE,
-    # independent READ. A fresh claude takes seconds to boot and self-mount, so at THIS instant
-    # the window exists but is almost never live yet — the two are never one boolean.
-    alive = False
-    try:
-        for w in await windows():
-            if isinstance(w, dict) and w.get("name") == spawned and w.get("alive"):
-                alive = True
-                break
-    except (OSError, TimeoutError, ValueError):
-        pass
+        argv = ["claude"]
+        if argv_model:
+            argv += ["--model", argv_model]
+        # A FULL env, minus the launcher's own CLAUDE_JOB_DIR (never inherit an anchor — the
+        # collision class, 2294e95d), plus the body's own stable anchor so it matches the
+        # window's own job_dir metadata. pty_spawn adds OSIRIS_SEAT_ID + OSIRIS_ATTACH_TOKEN
+        # on top (identity at birth); a child with only those two vars has no PATH, so the
+        # real environ is the base.
+        child_env = {k: v for k, v in os.environ.items() if k != "CLAUDE_JOB_DIR"}
+        child_env["CLAUDE_JOB_DIR"] = anchor
+
+        try:
+            res = await manager({
+                "op": "pty_spawn", "name": name, "argv": argv, "cwd": office,
+                "seat": {"handle": handle, "house": house}, "job_dir": anchor,
+                "env": child_env})
+        except (OSError, TimeoutError, ValueError) as exc:
+            return {"status": "manager-cold", "seat": target_seat,
+                    "detail": f"the manager daemon is unreachable ({exc}) — ask the operator "
+                              "to start osiris-manager; NOTHING was spawned"}
+        if not isinstance(res, dict) or res.get("error"):
+            return {"status": "refused-spawn", "seat": target_seat,
+                    "detail": (res.get("error") if isinstance(res, dict) else str(res))
+                    or "the manager refused the spawn"}
+
+        spawned = res.get("spawned")
+        # RA'S RECEIPT (53ae1a87): body_exists is the spawn's own word; can_receive is a
+        # SEPARATE, independent READ. A fresh claude takes seconds to boot and self-mount, so
+        # at THIS instant the window exists but is almost never live yet.
+        alive = False
+        try:
+            for w in await windows():
+                if isinstance(w, dict) and w.get("name") == spawned and w.get("alive"):
+                    alive = True
+                    break
+        except (OSError, TimeoutError, ValueError):
+            pass
+        out = {
+            "status": "launched", "window": spawned, "seat": res.get("seat_id", target_seat),
+            "body_exists": bool(spawned), "can_receive": alive, "spawned_model": argv_model,
+            "detail": ("body created and live" if alive else
+                       "body created; mount NOT yet confirmed — the claude is booting and "
+                       "will self-bind via its attach token; confirm with pty_list / "
+                       "occupancy"),
+            "attach": attach,
+        }
+        if res.get("room_busy"):
+            out["room_busy"] = res["room_busy"]
+            if res.get("room_busy_note"):
+                out["room_busy_note"] = res["room_busy_note"]
+    else:
+        # ═══ THE HARNESS-NATIVE LANE (the default flip, task #68 wave) — `claude --bg` +
+        # `claude agents --json` instead of the manager daemon's PTY broker + claim-socket.
+        # Every body this creates is visible in the operator's own `claude agents` list BY
+        # CONSTRUCTION (clause 3, "front end wide open", made mechanical instead of patched
+        # around) — see the spike verdict f2dc98549521 and _spawn_claude_bg's own docstring.
+        session_id = _seat_session_id(target_seat)
+        try:
+            roster = await agents_json(cwd=office)
+        except (OSError, TimeoutError, ValueError):
+            roster = []
+        live = next((r for r in roster
+                    if isinstance(r, dict) and r.get("sessionId") == session_id), None)
+        if live is not None:
+            return {"status": "already-live", "window": live.get("name"), "seat": target_seat,
+                    "body_exists": True, "can_receive": True, "attach": attach,
+                    "detail": f"a live body already holds {handle} — not minting a twin"}
+
+        # THE ATTACH CEREMONY, WITHOUT THE DAEMON (identity core, 5cef856b): this substrate
+        # bypasses osiris-manager entirely, so `_op_pty_spawn`'s own ensure_seat +
+        # mint_attach_token call never runs for it. Do it here instead — or a launched body
+        # comes up an anonymous stranger on its first breath (THE FULL VISITOR GATE,
+        # handshake.py), failing the very acceptance case this flip exists to pass ("identity
+        # binds, no anon"). ensure_seat is idempotent by (house, handle): this returns the
+        # SAME target_seat, never a twin.
+        from src.orchestrator.seats import ensure_seat, mint_attach_token
+        seated = await ensure_seat(actions, house=house, handle=handle, anchor_cwd=office,
+                                   source="osiris-trigger")
+        if seated.get("error"):
+            return {"status": "refused-spawn", "seat": target_seat,
+                    "detail": f"seat refused: {seated['error']}"}
+        token = await mint_attach_token(pool, seat_id=seated["seat_id"],
+                                        minted_by="osiris-trigger")
+        try:
+            await spawn(office, name=name, model=argv_model, session_id=session_id,
+                       job_dir=anchor, seat_id=seated["seat_id"], attach_token=token)
+        except OSError as exc:
+            return {"status": "refused-spawn", "seat": target_seat,
+                    "detail": f"claude --bg failed to start ({exc}); NOTHING was spawned"}
+
+        # RA'S RECEIPT (53ae1a87), same law as the PTY lane: body_exists is the spawn's own
+        # word; can_receive is a SEPARATE, independent read — `claude --bg` returns as soon as
+        # the harness's own background-agent daemon takes the session over, which can be
+        # seconds before it necessarily shows up in `claude agents --json`.
+        alive = False
+        try:
+            alive = any(isinstance(r, dict) and r.get("sessionId") == session_id
+                       for r in await agents_json(cwd=office))
+        except (OSError, TimeoutError, ValueError):
+            pass
+        out = {
+            "status": "launched", "window": name, "seat": target_seat,
+            "body_exists": True, "can_receive": alive, "spawned_model": argv_model,
+            "detail": ("body created and live" if alive else
+                       "body created; mount NOT yet confirmed — the claude is booting and "
+                       "will self-bind via its attach token; confirm with `claude agents "
+                       "--json`"),
+            "attach": attach,
+        }
+        # THE CEILING'S READ PATH (task #8, unblocked by the binding leg): a --bg body is a
+        # real billed session on a metered backend, same as any other one — recorded into
+        # llm_usage or the ceiling never learns it happened (the ghost-farm disease,
+        # wake_cost's own doctrine: "a hand you cannot cost is a hand you cannot govern").
+        # _bg_session_cost never fabricates: a real cost_usd if the harness ever grows one,
+        # the honest UNPRICED/blind class today (confirmed live, 2026-07-27 — no cost field
+        # exists on this surface at all) — never folded into 0, which the ceiling would
+        # silently read as a free call. Fail-open: a metering failure must never cost a launch.
+        try:
+            priced = await cost_reader(session_id, cwd=office)
+            from src.ingest.providers import Usage
+            from src.ingest.usage import record_usage
+            await record_usage(
+                pool, purpose="launch",
+                usage=Usage(model=argv_model or "unknown",
+                           cost_usd=priced.get("cost_usd") if priced.get("priced") else None))
+        except Exception:  # noqa: BLE001 — a metering failure must never cost a launch
+            _log.debug("launch cost-metering failed for %s", session_id, exc_info=True)
 
     # THE OPENING BRIEF rides the ordinary mail→poke lane, never a hand-forged turn: sent as a
     # graded ask to the new seat, the trigger types it into the fresh window once it is alive.
@@ -1413,14 +1526,6 @@ async def launch_seat(
             to_agent=target_seat, body=message, grade="ask")
         brief_id = sent.get("id")
 
-    out: dict[str, Any] = {
-        "status": "launched", "window": spawned, "seat": res.get("seat_id", target_seat),
-        "body_exists": bool(spawned), "can_receive": alive, "spawned_model": argv_model,
-        "detail": ("body created and live" if alive else
-                   "body created; mount NOT yet confirmed — the claude is booting and will "
-                   "self-bind via its attach token; confirm with pty_list / occupancy"),
-        "attach": attach,
-    }
     stamped_model = facts.get("intended_model")
     if stamped_model and argv_model != stamped_model:
         out["model_mismatch"] = (
@@ -1428,10 +1533,6 @@ async def launch_seat(
             f"{stamped_model!r} — never silent (thread 20e4feb6)")
     if brief_id is not None:
         out["brief_message_id"] = brief_id
-    if res.get("room_busy"):
-        out["room_busy"] = res["room_busy"]
-        if res.get("room_busy_note"):
-            out["room_busy_note"] = res["room_busy_note"]
     return out
 
 
@@ -1615,7 +1716,8 @@ def _seat_session_id(seat_id: str) -> str:
 async def _spawn_claude_bg(
     repo: str, *, name: str | None = None, model: str | None = None,
     session_id: str | None = None, job_dir: str | None = None,
-    allowed_tools: str | None = None,
+    allowed_tools: str | None = None, seat_id: str | None = None,
+    attach_token: str | None = None,
 ) -> None:
     """`claude --bg` in `repo` — the harness's own documented background-session surface.
     SAME fire-and-forget discipline as `_spawn_claude`/`_spawn_in_body` (B1's scar: an arq
@@ -1624,7 +1726,14 @@ async def _spawn_claude_bg(
     the session over, so this call confirms only that the command was ISSUED, never that the
     session completed; poll `_claude_agents_json` for that, the same surface the operator's
     own front end reads. `session_id` should be `_seat_session_id(seat_id)` — presenting it
-    is what makes a later relaunch of the same seat rebind instead of minting a twin."""
+    is what makes a later relaunch of the same seat rebind instead of minting a twin.
+
+    `seat_id`/`attach_token` (the default-flip's parity fix, task #68 wave): THE ATTACH
+    CEREMONY (identity core, 5cef856b) is how a spawned body self-binds with no whisper
+    guessing — the daemon's own `_op_pty_spawn` has always stamped these into the child's
+    env before its first breath. Bypassing the daemon for this substrate must not also
+    bypass that ceremony, or a launch's acceptance test ('identity binds, no anon') fails on
+    every FIRST launch of a seat (no prior mount row at this anchor for `bound` to find)."""
     env = os.environ.copy()
     # same anchor discipline as _spawn_claude: a spawner's own anchor must never leak into
     # the child (the anchor-collision class, 2294e95d) — the child gets the one minted below.
@@ -1640,6 +1749,9 @@ async def _spawn_claude_bg(
         cmd += ["--allowedTools", allowed_tools]
     if job_dir:
         env["CLAUDE_JOB_DIR"] = job_dir
+    if seat_id and attach_token:
+        env["OSIRIS_SEAT_ID"] = seat_id
+        env["OSIRIS_ATTACH_TOKEN"] = attach_token
     proc = await asyncio.create_subprocess_exec(
         *cmd, cwd=repo, env=env,
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)

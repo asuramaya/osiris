@@ -2005,7 +2005,7 @@ async def test_launch_bodies_a_managed_seat_with_an_honest_receipt(actions: Acti
     await _office(actions, worker_seat, "/home/asuramaya/.osiris/seats/tefnut")
     record: list[dict[str, Any]] = []
     d = await trigger_module.launch_seat(
-        actions, caller="agent:sm01", target=worker_seat,
+        actions, caller="agent:sm01", target=worker_seat, substrate="pty",
         manager=_fake_manager(record), windows=_fake_windows([]))
     assert d["status"] == "launched"
     assert d["body_exists"] is True and d["can_receive"] is False
@@ -2038,7 +2038,7 @@ async def test_launch_hands_the_attach_line_on_the_idempotent_path_too(
     record: list[dict[str, Any]] = []
     existing = _fake_windows([{"name": "[OS] Anhur", "alive": True, "seat_id": worker_seat}])
     d = await trigger_module.launch_seat(
-        actions, caller="agent:alm01", target=worker_seat,
+        actions, caller="agent:alm01", target=worker_seat, substrate="pty",
         manager=_fake_manager(record), windows=existing)
 
     assert d["status"] == "already-live"
@@ -2064,7 +2064,7 @@ async def test_launch_resolves_a_vacant_seat_by_handle(actions: Actions) -> None
 
     record: list[dict[str, Any]] = []
     d = await trigger_module.launch_seat(
-        actions, caller="agent:vm01", target="Nefer",
+        actions, caller="agent:vm01", target="Nefer", substrate="pty",
         manager=_fake_manager(record), windows=_fake_windows([]))
 
     assert d["status"] == "launched"
@@ -2087,7 +2087,7 @@ async def test_launch_prefers_the_seats_stamped_model_over_the_global_default(
                                   evidence_class="self_declared")
     record: list[dict[str, Any]] = []
     d = await trigger_module.launch_seat(
-        actions, caller="agent:mm01", target=worker_seat,
+        actions, caller="agent:mm01", target=worker_seat, substrate="pty",
         manager=_fake_manager(record), windows=_fake_windows([]),
         settings=_settings(enabled=True, wake_model="claude-haiku-4-5"))
 
@@ -2110,7 +2110,7 @@ async def test_launch_flags_a_model_mismatch_loudly(actions: Actions) -> None:
     record: list[dict[str, Any]] = []
     d = await trigger_module.launch_seat(
         actions, caller="agent:xm01", target=worker_seat, model="claude-haiku-4-5",
-        manager=_fake_manager(record), windows=_fake_windows([]))
+        substrate="pty", manager=_fake_manager(record), windows=_fake_windows([]))
 
     assert d["spawned_model"] == "claude-haiku-4-5"
     assert "model_mismatch" in d and "claude-sonnet-5" in d["model_mismatch"]
@@ -2134,7 +2134,7 @@ async def test_launch_can_receive_true_when_the_window_comes_up_live(actions: Ac
 
     record: list[dict[str, Any]] = []
     d = await trigger_module.launch_seat(
-        actions, caller="agent:cm01", target=worker_seat,
+        actions, caller="agent:cm01", target=worker_seat, substrate="pty",
         manager=_fake_manager(record, ret={"spawned": name}), windows=_w)
     assert d["status"] == "launched"
     assert d["body_exists"] is True and d["can_receive"] is True
@@ -2151,7 +2151,7 @@ async def test_launch_is_idempotent_returns_the_live_window_not_a_twin(actions: 
     record: list[dict[str, Any]] = []
     existing = _fake_windows([{"name": "[OS] Geb", "alive": True, "seat_id": worker_seat}])
     d = await trigger_module.launch_seat(
-        actions, caller="agent:im01", target=worker_seat,
+        actions, caller="agent:im01", target=worker_seat, substrate="pty",
         manager=_fake_manager(record), windows=existing)
     assert d["status"] == "already-live"
     assert d["body_exists"] is True and d["can_receive"] is True
@@ -2166,7 +2166,7 @@ async def test_launch_reports_manager_cold_when_the_daemon_is_dark(actions: Acti
     await _office(actions, worker_seat, "/tmp/shu")
     record: list[dict[str, Any]] = []
     d = await trigger_module.launch_seat(
-        actions, caller="agent:km01", target=worker_seat,
+        actions, caller="agent:km01", target=worker_seat, substrate="pty",
         manager=_fake_manager(record, raises=OSError("no such socket")),
         windows=_fake_windows([]))
     assert d["status"] == "manager-cold" and "osiris-manager" in d["detail"]
@@ -2185,7 +2185,202 @@ async def test_launch_delivers_the_opening_brief_over_the_mail_lane(actions: Act
     record: list[dict[str, Any]] = []
     d = await trigger_module.launch_seat(
         actions, caller="agent:bm01", target=worker_seat, message="Welcome — mount and orient.",
+        substrate="pty",
         manager=_fake_manager(record, ret={"spawned": "[OS] Isis"}), windows=_fake_windows([]))
+    assert d["status"] == "launched" and d.get("brief_message_id")
+    row = await actions.pool.fetchrow(
+        "SELECT body FROM fleet_messages WHERE id=$1", int(d["brief_message_id"]))
+    assert row is not None and "mount and orient" in row["body"]
+
+
+# ═══ THE DEFAULT FLIP — launch_seat's harness-native lane (task #68 wave, rulings 0fe36e59 +
+# 33d6a2eb clause 3) ═══════════════════════════════════════════════════════════════════════════
+# 'harness' is now launch_seat's DEFAULT substrate (no `substrate` argument needed); the PTY
+# lane above only runs when a test (or a caller) asks for it by name. `spawn`/`agents_json`/
+# `cost_reader` are injected fakes — never a real `claude` process or subprocess.
+
+
+def _fake_agents_json(rows_by_call: list[list[dict[str, Any]]]) -> Any:
+    """One list of rows PER CALL, consumed in order; the last list repeats once exhausted (a
+    caller that reads the roster more times than scripted gets the steady state, not an
+    IndexError)."""
+    calls = {"n": 0}
+
+    async def _read(*, cwd: str | None = None,
+                    include_completed: bool = False) -> list[dict[str, Any]]:
+        i = min(calls["n"], len(rows_by_call) - 1)
+        calls["n"] += 1
+        return list(rows_by_call[i])
+    return _read
+
+
+def _fake_spawn(record: list[dict[str, Any]], *, raises: Exception | None = None) -> Any:
+    async def _spawn(repo: str, **kwargs: Any) -> None:
+        if raises is not None:
+            raise raises
+        record.append({"repo": repo, **kwargs})
+    return _spawn
+
+
+def _fake_cost_reader(result: dict[str, Any]) -> Any:
+    async def _cost(session_id: str, *, cwd: str | None = None) -> dict[str, Any]:
+        return dict(result)
+    return _cost
+
+
+async def _launch_usage_rows(actions: Actions) -> list[Any]:
+    return await actions.pool.fetch(
+        "SELECT purpose, model, cost_usd FROM llm_usage WHERE purpose='launch' "
+        "ORDER BY id DESC LIMIT 1")
+
+
+async def test_launch_defaults_to_the_harness_native_lane_with_an_honest_receipt(
+    actions: Actions,
+) -> None:
+    """No `substrate` argument at all — the flip's whole point: launch_seat now bodies a
+    seat as a `claude --bg` session by default, with an honest body_exists/can_receive split
+    (Ra, 53ae1a87) exactly like the old PTY lane."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:hw01", manager_agent="agent:hm01",
+        worker_handle="Sobek", house="osiris")
+    await _office(actions, worker_seat, "/tmp/sobek")
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm01", target=worker_seat,
+        spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[]]),
+        cost_reader=_fake_cost_reader({"priced": False, "reason": "no cost field"}))
+
+    assert d["status"] == "launched"
+    assert d["body_exists"] is True and d["can_receive"] is False
+    assert d["window"] == "[OS] Sobek"
+    assert d["attach"]["office"] == "/tmp/sobek"
+    assert d["attach"]["command"] == 'python -m src.manager.attach "[OS] Sobek"'
+    assert len(spawned) == 1
+    call = spawned[0]
+    assert call["repo"] == "/tmp/sobek" and call["name"] == "[OS] Sobek"
+    assert call["session_id"] == trigger_module._seat_session_id(worker_seat)
+    assert call["seat_id"] == worker_seat
+    assert call["attach_token"]  # identity at birth — a non-empty one-time token
+
+
+async def test_launch_harness_lane_is_idempotent_returns_the_live_body_not_a_twin(
+    actions: Actions,
+) -> None:
+    """A live `claude agents --json` row already wearing this seat's deterministic session id
+    → RETURN it, never spawn a twin (the same one-body law as the PTY lane, b3a86a7d)."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:hw02", manager_agent="agent:hm02",
+        worker_handle="Anubis", house="osiris")
+    await _office(actions, worker_seat, "/tmp/anubis")
+    sid = trigger_module._seat_session_id(worker_seat)
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm02", target=worker_seat,
+        spawn=_fake_spawn(spawned),
+        agents_json=_fake_agents_json([[{"sessionId": sid, "name": "[OS] Anubis"}]]))
+
+    assert d["status"] == "already-live"
+    assert d["body_exists"] is True and d["can_receive"] is True
+    assert d["attach"]["office"] == "/tmp/anubis"
+    assert spawned == []  # NO twin spawned
+
+
+async def test_launch_harness_lane_can_receive_true_when_the_session_comes_up_live(
+    actions: Actions,
+) -> None:
+    """The post-spawn READ is real, not hard-coded false — when the fresh session already
+    shows up in `claude agents --json`, can_receive reports it."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:hw03", manager_agent="agent:hm03",
+        worker_handle="Bastet", house="osiris")
+    await _office(actions, worker_seat, "/tmp/bastet")
+    sid = trigger_module._seat_session_id(worker_seat)
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm03", target=worker_seat,
+        spawn=_fake_spawn([]),
+        agents_json=_fake_agents_json([[], [{"sessionId": sid, "name": "[OS] Bastet"}]]))
+
+    assert d["status"] == "launched"
+    assert d["body_exists"] is True and d["can_receive"] is True
+    assert d["detail"] == "body created and live"
+
+
+async def test_launch_harness_lane_reports_refused_spawn_when_claude_bg_fails(
+    actions: Actions,
+) -> None:
+    """A `claude --bg` that fails to start (OSError — e.g. no such binary) is an honest
+    refusal, same taxonomy as the PTY lane's manager-cold/refused-spawn — never a false
+    'launched'."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:hw04", manager_agent="agent:hm04",
+        worker_handle="Thoth-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/thoth-test")
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm04", target=worker_seat,
+        spawn=_fake_spawn([], raises=OSError("no such file or directory: claude")),
+        agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "refused-spawn"
+    assert "claude --bg" in d["detail"]
+
+
+async def test_launch_harness_lane_records_the_unpriced_cost_honestly(actions: Actions) -> None:
+    """THE CEILING'S READ PATH (task #8): a --bg body is a real billed session, same as any
+    other — its spend must land in llm_usage even when it is UNPRICED, or the ceiling never
+    learns it happened at all (the ghost-farm disease). Never fabricated: cost_usd stays
+    NULL, not folded into 0."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:hw05", manager_agent="agent:hm05",
+        worker_handle="Khepri", house="osiris")
+    await _office(actions, worker_seat, "/tmp/khepri")
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm05", target=worker_seat,
+        spawn=_fake_spawn([]), agents_json=_fake_agents_json([[]]),
+        cost_reader=_fake_cost_reader(
+            {"priced": False, "reason": "claude agents --json carries no cost field"}))
+
+    assert d["status"] == "launched"
+    rows = await _launch_usage_rows(actions)
+    assert len(rows) == 1
+    assert rows[0]["purpose"] == "launch" and rows[0]["cost_usd"] is None
+
+
+async def test_launch_harness_lane_records_a_real_price_if_the_reader_has_one(
+    actions: Actions,
+) -> None:
+    """Forward-compatible (mirrors _bg_session_cost's own forward-compat test): if the cost
+    reader ever reports a real number, it is RECORDED, not discarded in favor of blindness."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:hw06", manager_agent="agent:hm06",
+        worker_handle="Wadjet", house="osiris")
+    await _office(actions, worker_seat, "/tmp/wadjet")
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm06", target=worker_seat,
+        spawn=_fake_spawn([]), agents_json=_fake_agents_json([[]]),
+        cost_reader=_fake_cost_reader({"priced": True, "cost_usd": 0.17}))
+
+    assert d["status"] == "launched"
+    rows = await _launch_usage_rows(actions)
+    assert len(rows) == 1
+    assert rows[0]["cost_usd"] == pytest.approx(0.17)
+
+
+async def test_launch_harness_lane_delivers_the_opening_brief_over_the_mail_lane(
+    actions: Actions,
+) -> None:
+    """Same law as the PTY lane: the message rides the ordinary mail lane as a graded ask,
+    never a hand-forged turn — substrate must not change that contract."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:hw07", manager_agent="agent:hm07",
+        worker_handle="Serqet", house="osiris")
+    await _office(actions, worker_seat, "/tmp/serqet")
+    manc = await actions.create_or_find_object("Agent", "agent:hm07", "test")
+    await actions.assert_property(manc, "project", "osiris", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm07", target=worker_seat, message="Welcome — mount and orient.",
+        spawn=_fake_spawn([]), agents_json=_fake_agents_json([[]]))
+
     assert d["status"] == "launched" and d.get("brief_message_id")
     row = await actions.pool.fetchrow(
         "SELECT body FROM fleet_messages WHERE id=$1", int(d["brief_message_id"]))
@@ -2258,6 +2453,50 @@ async def test_spawn_claude_bg_never_leaks_the_spawners_own_anchor(monkeypatch: 
     monkeypatch.setenv("CLAUDE_JOB_DIR", "/tmp/jobs/spawner-own-anchor")
     await trigger._spawn_claude_bg("/repo/demo")
     assert "CLAUDE_JOB_DIR" not in captured["env"]
+
+
+async def test_spawn_claude_bg_stamps_identity_at_birth_when_given_a_seat(
+    monkeypatch: Any,
+) -> None:
+    """THE ATTACH CEREMONY (identity core, 5cef856b), parity with the daemon's own
+    `_op_pty_spawn`: bypassing osiris-manager for this substrate must not also bypass the
+    seat_id/attach_token env stamp, or a launched body comes up an anonymous stranger."""
+    from src.orchestrator import trigger
+
+    captured: dict[str, Any] = {}
+
+    class _Proc:
+        pid = 7
+
+    async def _fake_exec(*args: Any, **kwargs: Any) -> _Proc:
+        captured["env"] = kwargs.get("env")
+        return _Proc()
+
+    monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
+    await trigger._spawn_claude_bg(
+        "/repo/demo", seat_id="seat:deadbeef", attach_token="tok-abc123")
+    assert captured["env"]["OSIRIS_SEAT_ID"] == "seat:deadbeef"
+    assert captured["env"]["OSIRIS_ATTACH_TOKEN"] == "tok-abc123"
+
+
+async def test_spawn_claude_bg_stamps_nothing_without_a_seat(monkeypatch: Any) -> None:
+    """No seat_id/attach_token given → no stamp at all, never a half-written pair — a
+    caller error should fail LOUD at the attach ceremony downstream, not silently."""
+    from src.orchestrator import trigger
+
+    captured: dict[str, Any] = {}
+
+    class _Proc:
+        pid = 8
+
+    async def _fake_exec(*args: Any, **kwargs: Any) -> _Proc:
+        captured["env"] = kwargs.get("env")
+        return _Proc()
+
+    monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
+    await trigger._spawn_claude_bg("/repo/demo")
+    assert "OSIRIS_SEAT_ID" not in captured["env"]
+    assert "OSIRIS_ATTACH_TOKEN" not in captured["env"]
 
 
 async def test_claude_agents_json_parses_a_real_shaped_sample(monkeypatch: Any) -> None:
