@@ -3350,17 +3350,29 @@ async def settle(
         boxes = await settle_boxes(pool, agent_id=ident.agent_id,
                                    mounted_at=mounted["mounted_at"], cwd=ident.cwd)
         missing = missing_boxes(boxes)
+    # OBLIGATIONS ARE CARRIED, NOT UNWRITTEN (thread f0511eed, found on Thoth's first live
+    # dogfood): `complete` used to read false whenever ANY open obligation named this
+    # agent's lineage as owner — even ancient backlog this session never touched (a
+    # manager's project always has SOME open obligation, so complete could never read true
+    # in practice). An open Thread is already durably RECORDED — that is exactly what
+    # open_thread's write accomplishes — so it is not "unwritten state a compaction could
+    # lose" the way a missing box or an uncommitted git file is. The compaction-safety
+    # question this tool answers is "is THIS session's own state deposited," which the
+    # boxes (and the git check) answer completely on their own. Obligations stay in the
+    # receipt — surfaced, never hidden — but carried forward informationally; they no
+    # longer gate `complete`.
     obligations = await _owned_open_threads(pool, ident.agent_id)
     git_dir = repo_path or ident.cwd
     uncommitted = await uncommitted_git_work(git_dir)
-    complete = not missing and not obligations and not uncommitted
+    complete = not missing and not uncommitted
     reasons = []
     if missing:
         reasons.append(f"{len(missing)} missing box(es)")
     if uncommitted:
         reasons.append(f"{len(uncommitted)} uncommitted git file(s)")
-    if obligations:
-        reasons.append(f"{len(obligations)} open obligation(s)")
+    carried_note = (f" ({len(obligations)} open obligation(s) carried forward — "
+                    "informational, already durably recorded, never blocks this)"
+                    if obligations else "")
     return {
         "complete": complete,
         "boxes": boxes,
@@ -3369,7 +3381,7 @@ async def settle(
         "uncommitted_git_files": uncommitted,
         "git_checked_path": git_dir,
         "accepted": accepted,
-        "note": ("compaction-safe by construction" if complete else
+        "note": (f"compaction-safe by construction{carried_note}" if complete else
                  f"still unsettled ({', '.join(reasons)}) — settle again once they're "
                  "closed, or accept them in your next call"),
     }

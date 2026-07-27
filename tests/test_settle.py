@@ -399,11 +399,17 @@ async def test_settle_tool_repo_path_overrides_the_office_cwd(
     assert out["complete"] is False, out
 
 
-async def test_settle_tool_surfaces_my_own_open_obligations_fleet_wide(
+async def test_settle_tool_carries_open_obligations_without_blocking_complete(
     actions: Actions,
 ) -> None:
-    """A pure surface call (no payload) is safe and read-only — and an obligation this
-    agent owns, opened in an EARLIER call, keeps it incomplete until resolved."""
+    """thread f0511eed (found on Thoth's first live dogfood): `complete` used to read False
+    whenever ANY open obligation named this agent's lineage as owner — even ancient
+    backlog this session never touched, so a manager's project (which always has SOME
+    open obligation) could never read complete. An open Thread is already durably
+    RECORDED — that is what open_thread's write accomplishes — so it is not "unwritten
+    state a compaction could lose" the way a missing box or a dirty git tree is.
+    Obligations still surface in the receipt (carried forward, informational) but no
+    longer gate `complete` — a pure surface call is safe and read-only either way."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
 
@@ -427,6 +433,7 @@ async def test_settle_tool_surfaces_my_own_open_obligations_fleet_wide(
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
-    assert out["complete"] is False
+    assert out["complete"] is True
     assert any("obligation settleob1 owes" in o["summary"] for o in out["open_obligations"])
+    assert "carried forward" in out["note"]
     assert out["accepted"] == {"decisions": [], "threads_opened": [], "threads_resolved": []}
