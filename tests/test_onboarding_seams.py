@@ -28,6 +28,7 @@ from src.orchestrator.agents import (
     register_agent,
     seat_holders,
 )
+from src.orchestrator.capture import record_decision
 from src.orchestrator.heal import heal_husks
 from src.orchestrator.lineage import register_spawn
 from src.orchestrator.liveness import observe_liveness
@@ -83,14 +84,40 @@ async def test_the_debounce_heals_in_the_REGISTER_path_too(actions: Actions) -> 
 
 async def test_a_COMPACTION_mint_never_debounces(actions: Actions) -> None:
     """A context death is a death: the weights survive, the memory does not (a882b334). Only
-    MODEL flapping heals — a compact whose model happens to round-trip still minted a mind."""
+    MODEL flapping heals via the ROUND-TRIP debounce (_debounce_roundtrip stays gated on
+    minted_because IN ('live-swap','model-succession') — unchanged, still never fires for
+    a compaction). A WITNESSED compaction head is never absorbed by anything: this heir
+    does real work (the decision below) before the next seam, so the zero-turn fold (ruling
+    d3531cd8, a distinct mechanism from the round-trip debounce) has nothing to fold either
+    — see test_two_SILENT_compactions_do_fold for what changed."""
     await _register(actions, "aaaa0003", OPUS, T0)
     heir = await _register(actions, "aaaa0003", OPUS, datetime.now(UTC),
                            mint_reason="compaction")
     assert heir == "agent:aaaa0003-ii"
+    await record_decision(actions, "aaaa0003-ii did real work", source=heir)
     again = await _register(actions, "aaaa0003", OPUS, datetime.now(UTC),
                             mint_reason="compaction")
     assert again == "agent:aaaa0003-iii", "a compaction is never settings churn"
+
+
+async def test_two_SILENT_compactions_do_fold(actions: Actions) -> None:
+    """SUCCESSION FOLLOWS TURNS, NOT HARNESS EVENTS (ruling d3531cd8): two compactions
+    back-to-back with NO witnessed act between them is exactly the canonical repro's shape
+    (/compact then /model, zero turns between) — the first compaction's heir never lived,
+    so the second compaction mints straight off the ORIGINAL root, reusing its numeral,
+    rather than stacking a third generation on a phantom nobody ever was."""
+    await _register(actions, "bbbb0003", OPUS, T0)
+    heir = await _register(actions, "bbbb0003", OPUS, datetime.now(UTC),
+                           mint_reason="compaction")
+    assert heir == "agent:bbbb0003-ii"
+    again = await _register(actions, "bbbb0003", OPUS, datetime.now(UTC),
+                            mint_reason="compaction")
+    assert again == "agent:bbbb0003-ii", "the silent first heir folds; the numeral is reused"
+    # NOT asserted here, and flagged as a known open question rather than papered over: the
+    # reused canonical still carries whatever false_mint stamp its FIRST (folded) life left
+    # behind — false_mint is never cleared on reuse, a gap this fold shares with the
+    # pre-existing _debounce_roundtrip heal (same numeral-reuse shape). See the direct
+    # _fold_zero_turn_ancestors unit tests for the stamp's own behavior in isolation.
 
 
 # ═══ NOTIFY-AT-SEAM (thread aeae9977) — a compacting worker DMs its own manager, with the
@@ -290,9 +317,13 @@ async def test_a_genuinely_new_target_still_mints_after_an_idempotent_repair(
 
 async def test_idempotency_never_absorbs_a_COMPACTION_head(actions: Actions) -> None:
     """A compaction mint stamps no model_succession at all — _already_reached has nothing
-    to compare against and must never mistake silence for a match."""
+    to compare against and must never mistake silence for a match. Gives '-ii' a witnessed
+    act first (ruling d3531cd8): without one, this is exactly the zero-turn-fold shape
+    (compaction mint immediately superseded, no acts between) and '-ii' would fold instead
+    of surviving to be the idempotency check's own subject."""
     a = await actions.create_or_find_object("Agent", "agent:1de40003", "test")
     await mint_heir(actions, "agent:1de40003", a, because="compaction", succession=None)
+    await record_decision(actions, "1de40003-ii did real work", source="agent:1de40003-ii")
     await save_mount(actions.pool, job_dir="/home/t/.claude/jobs/1de40003",
                      agent_id="agent:1de40003-ii", project="osiris", cwd="/t",
                      model=FABLE, session_key="sid:test")
@@ -300,6 +331,31 @@ async def test_idempotency_never_absorbs_a_COMPACTION_head(actions: Actions) -> 
     out = await live_succession(actions, session_id="1de40003aaaa-bbbb", observed_model=OPUS)
 
     assert out.get("minted") == "agent:1de40003-iii"
+
+
+async def test_live_succession_folds_a_SILENT_compaction_head(actions: Actions) -> None:
+    """THE CANONICAL REPRO ITSELF (ruling d3531cd8, msg 1398): /compact mints a phantom
+    (zero acts, zero turns), then /model — surfaced to the heartbeat as live_succession —
+    fires before the phantom ever did anything. The live-swap heir must chain onto the
+    ORIGINAL root, not the phantom; without the fix this reads '-iii', chaining a mint onto
+    a mind that never was (see test_idempotency_never_absorbs_a_COMPACTION_head for the
+    same setup WITH a witnessed act, which must still reach '-iii')."""
+    a = await actions.create_or_find_object("Agent", "agent:1de40004", "test")
+    phantom, _ = await mint_heir(actions, "agent:1de40004", a, because="compaction",
+                                 succession=None)
+    assert phantom == "agent:1de40004-ii"
+    await save_mount(actions.pool, job_dir="/home/t/.claude/jobs/1de40004",
+                     agent_id=phantom, project="osiris", cwd="/t",
+                     model=FABLE, session_key="sid:test")
+
+    out = await live_succession(actions, session_id="1de40004aaaa-bbbb", observed_model=OPUS)
+
+    assert out.get("minted") == "agent:1de40004-ii", "the numeral is reused — the phantom folded"
+    assert out.get("from") == "agent:1de40004", "chains onto the ROOT, skipping the phantom"
+    assert await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='false_mint' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", phantom) == "true"
 
 
 async def test_a_promoted_mount_row_FOLLOWS_the_lineage_head(

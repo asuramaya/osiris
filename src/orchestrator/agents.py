@@ -808,6 +808,78 @@ async def _last_anchored_stamp(
     return row["v"], row["observed_at"]
 
 
+_PHANTOM_FOLD_SRC = "phantom-fold"
+
+
+async def _fold_zero_turn_ancestors(
+    actions: Actions, ancestor_id: str, ancestor_oid: uuid.UUID, now: datetime,
+) -> tuple[str, uuid.UUID]:
+    """SUCCESSION FOLLOWS TURNS, NOT HARNESS EVENTS (operator ruling d3531cd8, 2026-07-27):
+    'the mind claiming to be your predecessor didn't have any TURNS' is not a predecessor —
+    a generation minted but never acted upon must never appear as a link in the inheritance
+    chain, count a reign numeral, or intercept a handoff. Canonical repro: /compact then
+    /model back-to-back with zero turns between minted TWO generations (a phantom, then its
+    heir) for one real seam.
+
+    Called by BOTH real mint call sites (live_succession, register_agent) right before
+    they call mint_heir — not from inside mint_heir itself, since mint_heir's return tuple
+    is unpacked by ~20 test call sites and threading the resolved ancestor back out would
+    mean touching every one of them for a fact the caller already has before it calls in.
+    Two call sites is a tractable, by-hand audit surface (grep mint_heir\\( in src/ to
+    verify — there are exactly two).
+
+    Walks up through any CONSECUTIVE run of zero-turn ancestors (the same 64-iteration
+    bound mint_heir's own grave-avoidance loop uses), un-minting each — the IDENTICAL
+    stamps/estate-transfer _debounce_roundtrip already uses to heal a round-trip (kept as
+    its own separate block, not shared code, deliberately: two independent healers for two
+    independent triggers is safer here than one abstraction two fragile paths lean on) —
+    until the chain lands on either a REAL (witnessed) ancestor or the lineage root. A root
+    (no succeeded_from of its own — nothing minted it) is NEVER folded; it has nothing to
+    fold into. Idempotent: an already-folded phantom (false_mint already true) halts
+    immediately, unchanged — safe to re-run the fleet sweep below as often as wanted."""
+    cur_id, cur_oid = ancestor_id, ancestor_oid
+    for _ in range(64):
+        meta = {r["name"]: (r["v"], r["at"]) for r in await actions.pool.fetch(
+            "SELECT DISTINCT ON (name) name, value #>> '{}' AS v, observed_at AS at "
+            "FROM current_assertions WHERE object_id=$1 "
+            "AND name IN ('succeeded_from', 'minted_because', 'false_mint') "
+            "ORDER BY name, confidence DESC, observed_at DESC", cur_oid)}
+        if meta.get("false_mint", (None, None))[0] == "true":
+            break  # already folded — nothing further to do from here
+        if "minted_because" not in meta:
+            break  # a root — nothing minted it, nothing to fold
+        grandancestor, _ = meta.get("succeeded_from", (None, None))
+        minted_at = meta["minted_because"][1]
+        if not grandancestor:
+            break
+        grand_oid = await actions.pool.fetchval(
+            "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", grandancestor)
+        if grand_oid is None:
+            break
+        if await agent_has_acted(actions, cur_id, exclude=[cur_oid, grand_oid],
+                                 settled_after=minted_at):
+            break  # a real mind lived here — nothing to fold
+        do = EvidenceClass.DIRECT_OBSERVATION
+        conf = confidence_for(do)
+        for k, v in (("false_mint", True), ("retired", True),
+                     ("retired_by", _PHANTOM_FOLD_SRC),
+                     ("false_mint_because",
+                      "zero-turn generation folded at supersession (ruling d3531cd8) — "
+                      "minted but never acted upon before the next seam")):
+            await actions.assert_property(cur_oid, k, v, _PHANTOM_FOLD_SRC, now, conf,
+                                          evidence_class=do.value)
+        await actions.assert_property(grand_oid, "succeeded_by", "", _PHANTOM_FOLD_SRC, now,
+                                      conf, evidence_class=do.value)
+        await actions.pool.execute(
+            "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
+            grandancestor, cur_id)
+        from src.orchestrator.seats import follow_binding
+        await follow_binding(actions, ancestor_oid=cur_oid, heir=grandancestor,
+                             heir_oid=grand_oid, now=now)
+        cur_id, cur_oid = grandancestor, grand_oid
+    return cur_id, cur_oid
+
+
 async def mint_heir(
     actions: Actions, ancestor_id: str, ancestor_oid: uuid.UUID, *,
     because: str, succession: str | None, now: datetime | None = None,
@@ -818,7 +890,14 @@ async def mint_heir(
     compaction), not just session death. Stamps the succession chain on both sides, passes the
     seat (handle) down, and re-addresses the ancestor's unread DMs to the heir — the mailbox is
     part of the estate (a DM sent to the old mind must reach whoever now holds the seat, or
-    every compaction would orphan in-flight mail)."""
+    every compaction would orphan in-flight mail).
+
+    Takes `ancestor_id`/`ancestor_oid` AS GIVEN — folding any zero-turn phantom off the
+    front of the chain (ruling d3531cd8) is the CALLER's job, done via
+    _fold_zero_turn_ancestors BEFORE this is called (both real callers do). Kept out of
+    here on purpose: this function's return tuple is unpacked by ~20 call sites across the
+    test suite, and threading the resolved ancestor back out would mean changing every one
+    of them for a fact the caller already has in hand before it calls in."""
     now = now or datetime.now(UTC)
     heir = next_generation(ancestor_id)
     # A MINT NEVER LANDS ON A GRAVE (Ra's resurrection, 2026-07-17): after a same-lineage
@@ -966,6 +1045,37 @@ async def mint_heir(
         " SELECT message_id, $1, delivered_at, read_at, deliveries FROM message_recipients"
         " WHERE agent_id=$2 ON CONFLICT (message_id, agent_id) DO NOTHING", heir, ancestor_id)
     return heir, a
+
+
+async def fold_existing_zero_turn_phantoms(actions: Actions) -> list[dict[str, Any]]:
+    """RETROACTIVE CLEANUP (ruling d3531cd8, msg 1398: 'Fold existing zero-turn phantoms') —
+    the going-forward fix (mint sites call _fold_zero_turn_ancestors before minting) does
+    nothing for generations already minted before this fix landed, like the canonical repro
+    itself (xxv, minted by /compact, superseded by /model before its first turn). Sweeps
+    every ALREADY-SUPERSEDED, ALREADY-MINTED Agent (has succeeded_from AND succeeded_by, so
+    a live descendant exists) that isn't already false_mint, folding each one exactly the
+    live path would have. Safe to run repeatedly — an already-folded phantom carries
+    false_mint and is excluded by construction. Returns what it folded, for the record."""
+    # A GENEROUS pre-filter, deliberately: every minted (non-root) Agent, live head included
+    # — correctness rests on _fold_zero_turn_ancestors's own agent_has_acted gate, not on
+    # this query, so a live head with real acts (or an already-folded phantom, whose walk
+    # halts at itself just as harmlessly) is a fast, safe no-op rather than something this
+    # query must itself get exactly right (the value-comparison this would otherwise need —
+    # 'is succeeded_by CURRENTLY non-empty' — is exactly the winning-row read the SQL
+    # hygiene tripwire exists to keep out of a bare EXISTS).
+    candidates = await actions.pool.fetch(
+        "SELECT o.id, o.canonical FROM objects o "
+        "WHERE o.type='Agent' AND o.status='active' "
+        "AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='minted_because')")
+    now = datetime.now(UTC)
+    folded: list[dict[str, Any]] = []
+    for row in candidates:
+        restored_id, restored_oid = await _fold_zero_turn_ancestors(
+            actions, row["canonical"], row["id"], now)
+        if restored_id != row["canonical"]:
+            folded.append({"phantom": row["canonical"], "restored_to": restored_id})
+    return folded
 
 
 # NOTIFY-AT-SEAM (thread aeae9977, Ra's ask #1): "a compacting bodied worker's manager learns
@@ -1226,6 +1336,11 @@ async def live_succession(
         except OSError:
             deliberate = False
         ancestor_oid = await actions.create_or_find_object("Agent", head, head)
+        # SUCCESSION FOLLOWS TURNS (ruling d3531cd8): fold any zero-turn phantom off the
+        # front of the chain BEFORE minting on top of it — head/ancestor_oid below name
+        # whoever this heir actually succeeds, not a compaction-minted phantom that never
+        # took a turn.
+        head, ancestor_oid = await _fold_zero_turn_ancestors(actions, head, ancestor_oid, now)
         seam = f"{old} → {observed}" + (" [operator /model]" if deliberate else "")
         heir, heir_oid = await mint_heir(actions, head, ancestor_oid, because="live-swap",
                                          succession=seam, now=now,
@@ -1351,6 +1466,12 @@ async def register_agent(
                 identity.model_succession = None
                 mint_because = None
         if mint_because:
+            # SUCCESSION FOLLOWS TURNS (ruling d3531cd8): fold any zero-turn phantom off
+            # the front of the chain BEFORE minting — succeeded_from must land on whoever
+            # this heir actually succeeds, not a phantom that never took a turn (the exact
+            # gap that left orient()'s inheritance block blind on a double-mint, e749036e).
+            identity.agent_id, a = await _fold_zero_turn_ancestors(
+                actions, identity.agent_id, a, now)
             identity.succeeded_from = identity.agent_id
             heir, a = await mint_heir(actions, identity.agent_id, a, because=mint_because,
                                       succession=identity.model_succession, now=now,

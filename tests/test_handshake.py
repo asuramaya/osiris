@@ -130,7 +130,12 @@ async def test_compaction_mints_the_next_mind(actions: Actions, tmp_path: Path) 
     assert await actions.pool.fetchval(
         "SELECT agent_id FROM agent_mounts WHERE job_dir LIKE '%/jobs/' || $1",
         SID[:8]) == "agent:39fb22a2-ii"
-    # a SECOND compaction is a second death — the numeral keeps counting
+    # a SECOND compaction is a second death — the numeral keeps counting, PROVIDED "-ii"
+    # actually lived (ruling d3531cd8): give it a witnessed act first, or this is exactly
+    # the zero-turn-fold's own shape (two compactions, no acts between) and "-ii" folds
+    # instead of "-iii" ever minting — see test_two_zero_turn_compactions_fold below.
+    from src.orchestrator.capture import record_decision
+    await record_decision(actions, "39fb22a2-ii did real work", source="agent:39fb22a2-ii")
     third = await automount(actions, session_id=SID, cwd="/w/osiris", actor="analyst:operator",
                             root=root, jobs_home=tmp_path / "jobs", source="compact")
     assert third["agent"] == "agent:39fb22a2-iii" and third["seat"] == "Thoth III"
@@ -138,6 +143,37 @@ async def test_compaction_mints_the_next_mind(actions: Actions, tmp_path: Path) 
     resumed = await automount(actions, session_id=SID, cwd="/w/osiris", actor="analyst:operator",
                               root=root, jobs_home=tmp_path / "jobs", source="resume")
     assert resumed["agent"] == "agent:39fb22a2-iii"
+
+
+async def test_two_zero_turn_compactions_fold(actions: Actions, tmp_path: Path) -> None:
+    """SUCCESSION FOLLOWS TURNS, NOT HARNESS EVENTS (ruling d3531cd8) — the canonical repro,
+    through the REAL production whisper path: two SessionStart source='compact' events
+    back-to-back with no witnessed act between them (the exact shape of /compact then
+    /model, zero turns) must not chain a third generation onto a mind that never lived.
+    The second compaction's heir lands on the ORIGINAL agent, reusing '-ii', not '-iii'."""
+    from src.orchestrator.agents import claim_name, register_agent, resolve_identity
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/osiris")
+    await automount(actions, session_id=SID, cwd="/w/osiris", actor="analyst:operator",
+                    root=root, jobs_home=tmp_path / "jobs", source="startup")
+    ident = resolve_identity(cwd="/w/osiris", job_dir=str(tmp_path / "jobs" / SID[:8]),
+                             root=root)
+    await register_agent(actions, ident, actor="analyst:operator")
+    await claim_name(actions, "agent:39fb22a2", "Thoth", source="agent:39fb22a2")
+
+    reborn = await automount(actions, session_id=SID, cwd="/w/osiris", actor="analyst:operator",
+                             root=root, jobs_home=tmp_path / "jobs", source="compact")
+    assert reborn["agent"] == "agent:39fb22a2-ii"
+
+    # NO witnessed act here — the phantom's whole life is this one silent mint
+    third = await automount(actions, session_id=SID, cwd="/w/osiris", actor="analyst:operator",
+                            root=root, jobs_home=tmp_path / "jobs", source="compact")
+    assert third["agent"] == "agent:39fb22a2-ii", "the silent '-ii' folds; the numeral is reused"
+    assert await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='agent:39fb22a2-ii' AND a.name='false_mint' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1") == "true"
 
 
 async def test_the_whisper_honors_a_bound_seat(actions: Actions, tmp_path: Path) -> None:

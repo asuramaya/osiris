@@ -285,6 +285,11 @@ async def test_succession_seam_mints_a_lineage_linked_heir(actions: Actions) -> 
     a3 = await register_agent(actions, again, actor="analyst:operator")
     assert a3 == a2 and again.agent_id == "agent:0806072e-ii"
     assert again.succeeded_from is None and again.model_succession is None
+    # SUCCESSION FOLLOWS TURNS (ruling d3531cd8): "-ii" is a WITNESSED mind (this decision
+    # is its act) — without one, the next seam would fold it as a zero-turn phantom instead
+    # of chaining a third generation onto it (see test_fold_zero_turn_ancestors_* in this
+    # file for the direct unit coverage of that fold logic).
+    await record_decision(actions, "fable did real work here", source=successor.agent_id)
     # a SECOND real seam (fable head → haiku context) mints the third generation
     third = _anchored("claude-haiku-4-5-20251001")
     a4 = await register_agent(actions, third, actor="analyst:operator")
@@ -1282,3 +1287,118 @@ async def test_mint_stamps_the_parallel_pulse(actions: Actions) -> None:
     assert await actions.pool.fetchval(
         "SELECT 1 FROM current_assertions "
         "WHERE object_id=$1 AND name='predecessor_last_seen'", hoid2) == 1
+
+
+# ═══════════ SUCCESSION FOLLOWS TURNS, NOT HARNESS EVENTS (ruling d3531cd8, msg 1398) ═══════════
+
+async def _false_mint(actions: Actions, canonical: str) -> str | None:
+    return await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='false_mint' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", canonical)
+
+
+async def test_fold_zero_turn_ancestors_folds_an_unwitnessed_mint(actions: Actions) -> None:
+    """The canonical repro, minimal: a mint with ZERO acts since — /compact then /model
+    back-to-back — folds, and the walk returns the grandancestor it should have chained
+    onto instead."""
+    from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir
+
+    root = await actions.create_or_find_object("Agent", "agent:zt0001", "test")
+    phantom, phantom_oid = await mint_heir(actions, "agent:zt0001", root, because="compaction",
+                                           succession=None)
+    now = datetime.now(UTC)
+    restored_id, restored_oid = await _fold_zero_turn_ancestors(
+        actions, phantom, phantom_oid, now)
+    assert restored_id == "agent:zt0001" and restored_oid == root
+    assert await _false_mint(actions, phantom) == "true"
+    assert await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='succeeded_by' ORDER BY confidence DESC, observed_at DESC LIMIT 1",
+        root) == ""
+
+
+async def test_fold_zero_turn_ancestors_leaves_a_witnessed_mint_alone(actions: Actions) -> None:
+    """A mind that acted — however small the act — is never folded, whatever minted it."""
+    from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir
+
+    root = await actions.create_or_find_object("Agent", "agent:zt0002", "test")
+    heir, heir_oid = await mint_heir(actions, "agent:zt0002", root, because="live-swap",
+                                     succession="a → b")
+    await record_decision(actions, "zt0002-ii did real work", source=heir)
+    now = datetime.now(UTC)
+    restored_id, restored_oid = await _fold_zero_turn_ancestors(actions, heir, heir_oid, now)
+    assert restored_id == heir and restored_oid == heir_oid
+    assert await _false_mint(actions, heir) is None
+
+
+async def test_fold_zero_turn_ancestors_walks_a_chain_of_phantoms(actions: Actions) -> None:
+    """root -> A (compaction, silent) -> B (live-swap, silent): folding from B walks BOTH
+    phantoms and lands on root, not just the nearest one."""
+    from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir
+
+    root = await actions.create_or_find_object("Agent", "agent:zt0003", "test")
+    a_id, a_oid = await mint_heir(actions, "agent:zt0003", root, because="compaction",
+                                  succession=None)
+    b_id, b_oid = await mint_heir(actions, a_id, a_oid, because="live-swap", succession="x → y")
+    now = datetime.now(UTC)
+    restored_id, restored_oid = await _fold_zero_turn_ancestors(actions, b_id, b_oid, now)
+    assert restored_id == "agent:zt0003" and restored_oid == root
+    assert await _false_mint(actions, a_id) == "true"
+    assert await _false_mint(actions, b_id) == "true"
+
+
+async def test_fold_zero_turn_ancestors_never_folds_a_root(actions: Actions) -> None:
+    """A root has no succeeded_from — nothing minted it, so there is nothing to fold it
+    into. It survives the walk unchanged even though it, too, has zero acts."""
+    from src.orchestrator.agents import _fold_zero_turn_ancestors
+
+    root = await actions.create_or_find_object("Agent", "agent:zt0004", "test")
+    now = datetime.now(UTC)
+    restored_id, restored_oid = await _fold_zero_turn_ancestors(
+        actions, "agent:zt0004", root, now)
+    assert restored_id == "agent:zt0004" and restored_oid == root
+    assert await _false_mint(actions, "agent:zt0004") is None
+
+
+async def test_fold_zero_turn_ancestors_is_idempotent(actions: Actions) -> None:
+    """Re-running the fold on an already-folded phantom halts immediately, unchanged —
+    the fleet sweep's own safety-to-re-run rests on this."""
+    from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir
+
+    root = await actions.create_or_find_object("Agent", "agent:zt0005", "test")
+    phantom, phantom_oid = await mint_heir(actions, "agent:zt0005", root, because="compaction",
+                                           succession=None)
+    now = datetime.now(UTC)
+    first = await _fold_zero_turn_ancestors(actions, phantom, phantom_oid, now)
+    assert first == ("agent:zt0005", root)
+    second = await _fold_zero_turn_ancestors(actions, phantom, phantom_oid, now)
+    assert second == (phantom, phantom_oid), (
+        "calling it again ON THE PHANTOM ITSELF halts at the phantom, already folded — "
+        "same contract as the live call sites, which always start from the CURRENT head")
+
+
+async def test_fold_existing_zero_turn_phantoms_sweeps_the_fleet(actions: Actions) -> None:
+    """RETROACTIVE CLEANUP (msg 1398: 'Fold existing zero-turn phantoms') — finds an
+    already-superseded, already-silent generation the going-forward fix never saw (it
+    predates this code), folds it, and leaves a real, witnessed lineage untouched. Safe to
+    re-run: the second sweep reports nothing new."""
+    from src.orchestrator.agents import fold_existing_zero_turn_phantoms, mint_heir
+
+    root = await actions.create_or_find_object("Agent", "agent:zt0006", "test")
+    phantom, phantom_oid = await mint_heir(actions, "agent:zt0006", root, because="compaction",
+                                           succession=None)
+    real_root = await actions.create_or_find_object("Agent", "agent:zt0007", "test")
+    real_heir, real_heir_oid = await mint_heir(actions, "agent:zt0007", real_root,
+                                               because="live-swap", succession="a → b")
+    await record_decision(actions, "zt0007-ii did real work", source=real_heir)
+
+    folded = await fold_existing_zero_turn_phantoms(actions)
+    entries = {f["phantom"]: f["restored_to"] for f in folded}
+    assert entries.get(phantom) == "agent:zt0006"
+    assert real_heir not in entries
+    assert await _false_mint(actions, phantom) == "true"
+    assert await _false_mint(actions, real_heir) is None
+
+    again = await fold_existing_zero_turn_phantoms(actions)
+    assert phantom not in {f["phantom"] for f in again}
