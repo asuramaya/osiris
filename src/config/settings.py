@@ -101,6 +101,12 @@ class Settings(BaseSettings):
     # idle; grows to this under concurrency). 20 << PG max_connections=100, vs the old
     # per-agent 10 × 56 = 560 that would have exhausted it.
     osiris_mcp_pool_size: int = 20
+    # chrome (the read-only HTTP console, src/api/app.py) — a SEPARATE process/port from
+    # osiris-mcp, run via `uvicorn --factory src.api.app:create_app` (deploy/osiris-console.
+    # service). No prior settings field existed for this; it was a bare convention baked into
+    # the uvicorn invocation. The smoke verb (thread bb763977/1849d800, task #63) is the first
+    # caller that needs to know it as configuration rather than hardcoding the port.
+    osiris_console_base_url: str = "http://127.0.0.1:8011"
     # Session-sensing (the last unsensed source): path to the Claude Code projects root
     # (usually ~/.claude/projects) whose session transcripts the worker senses on a cron —
     # distill → redact → extract → DERIVED backfill of decisions/threads/obligations the
