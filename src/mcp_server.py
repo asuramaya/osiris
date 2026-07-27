@@ -3538,10 +3538,18 @@ async def _boot_check() -> None:
     from src.orchestrator.deploy_guard import alarm_schema_drift, check_schema_drift
 
     try:
-        pool = await _pool_get()
-        drift = await check_schema_drift(pool)
-        if drift:
-            await alarm_schema_drift(pool, drift, service="osiris-mcp")
+        # A THROWAWAY pool on this short-lived boot loop — NEVER _pool_get()'s global pool.
+        # asyncio.run(_boot_check()) closes THIS loop before mcp.run() starts the serving loop;
+        # a global pool created here binds to the now-dead loop and breaks EVERY DB-backed tool
+        # call with "Event loop is closed" (the fleet-wide regression this comment prevents).
+        # The global pool must be created lazily on the server's OWN serving loop.
+        pool = await create_pool(get_settings().database_url, max_size=1)
+        try:
+            drift = await check_schema_drift(pool)
+            if drift:
+                await alarm_schema_drift(pool, drift, service="osiris-mcp")
+        finally:
+            await pool.close()
     except Exception as exc:  # noqa: BLE001 — the guard must never become the thing it guards against
         logging.getLogger("osiris.deploy_guard").warning(
             "deploy_guard check failed at mcp boot: %r", exc)
