@@ -13,7 +13,13 @@ from pathlib import Path
 import pytest
 from src.actions.core import Actions
 from src.orchestrator import mounts as mounts_mod
-from src.orchestrator.handshake import automount, office_claim, record_session_anchor
+from src.orchestrator.handshake import (
+    automount,
+    bridged_seat,
+    office_claim,
+    record_bridge_anchor,
+    record_session_anchor,
+)
 from src.orchestrator.mailbox import send_message
 
 SID = "39fb22a2-0000-4000-8000-000000000000"
@@ -740,6 +746,107 @@ async def test_the_ledger_remembers_every_sid_of_a_lineage(actions: Actions) -> 
     assert await record_session_anchor(actions, agent_id="agent:9a9a0001",
                                        session_id=sid_a, actor="t") is False
     assert await ledger_seat(actions, sid_prefix="bbbb2222") == "agent:9a9a0001"
+
+
+async def test_bridged_seat_rebinds_a_known_bridge_id_never_minting(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """task #68 binding leg: a background-job fork's CLAUDE_CODE_BRIDGE_SESSION_ID rebinds
+    to its lineage's living head — the class fork_seat cannot see, because this kind of
+    fork's transcript starts fresh (sessionKind='bg') and shares no record uuid with its
+    ancestor's at all."""
+    root = tmp_path / "projects"
+    o = await actions.create_or_find_object("Agent", "agent:5198945f", "agent:5198945f")
+    now = datetime.now(UTC)
+    await actions.assert_property(o, "handle", "Imhotep", "agent:5198945f", now, 0.9,
+                                  evidence_class="self_declared")
+    bridge = "session_01Ckh2yDH5pi945rm4iLBsfa"
+    wrote = await record_bridge_anchor(actions, agent_id="agent:5198945f",
+                                       bridge_session_id=bridge, actor="agent:5198945f")
+    assert wrote is True
+
+    fork_sid = "e08c3850-4180-4876-b313-fafef21d368a"
+    _transcript(root, "/w/imhotep-repo")
+    out = await automount(actions, session_id=fork_sid, cwd="/w/imhotep-repo",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
+                          source="startup", bridge_session_id=bridge)
+    assert out["agent"] == "agent:5198945f"           # rebound via the bridge
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' "
+        "AND canonical='agent:e08c3850'") == 0         # no sixth identity minted
+
+
+async def test_no_bridge_id_never_touches_the_bridge_door(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A session with no CLAUDE_CODE_BRIDGE_SESSION_ID (the ordinary case, still the vast
+    majority) must resolve exactly as before — the bridge door is additive, never a
+    default-path regression."""
+    root = tmp_path / "projects"
+    _transcript(root, "/w/no-bridge-repo")
+    out = await automount(actions, session_id=SID, cwd="/w/no-bridge-repo",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
+                          source="startup")
+    assert out["agent"] == f"agent:{SID[:8]}"
+
+
+async def test_the_whisper_files_a_bridge_binding(actions: Actions, tmp_path: Path) -> None:
+    """THE BRIDGE, write side: a session bound to a NAMED identity files its bridge id at the
+    whisper (same gate record_session_anchor's own write-side test uses — a genuine stranger
+    mints no object at all, per the full visitor gate, so there is nothing yet to stamp)."""
+    from src.orchestrator.mounts import save_mount
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/bridge-repo")
+    await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / SID[:8]),
+                     agent_id="agent:0ffab001", project="offahouse",
+                     cwd="/w/bridge-repo", model=None, session_key=None)
+    await automount(actions, session_id=SID, cwd="/w/bridge-repo",
+                    actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
+                    source="startup", bridge_session_id="session_bridgetest01")
+    filed = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "JOIN objects o ON o.id=a.object_id "
+        "WHERE a.name='bridge_session_id' AND o.canonical='agent:0ffab001'")
+    assert filed == "session_bridgetest01"
+
+
+async def test_automount_rebinds_via_the_bridge_even_while_the_ancestor_is_alive(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The whole point of the bridge door: office_seat REFUSES to crown a new session when
+    the office's own lineage still has a live pulse ('two parallel fresh contexts must
+    never both be the seat' — office_seat's own law, correct for a cwd-GUESS). The bridge is
+    not a guess — the harness said so directly — so it must succeed exactly where office_hint
+    would decline and mint a guest. This is the exact shape of Imhotep's own six-id
+    biography: a fork landing while its ancestor is still live and running."""
+    from src.orchestrator.mounts import save_mount
+
+    root = tmp_path / "projects"
+    offices = tmp_path / "seats"
+    office = offices / "nefer"
+    office.mkdir(parents=True)
+    o = await actions.create_or_find_object("Agent", "agent:aaaa1111", "agent:aaaa1111")
+    now = datetime.now(UTC)
+    await actions.assert_property(o, "handle", "Nefer", "agent:aaaa1111", now, 0.9,
+                                  evidence_class="self_declared")
+    # a LIVE pulse for the ancestor (save_mount's own alive=True default) — exactly what
+    # makes office_seat refuse and mint a guest instead, the bug this door fixes.
+    await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "aaaa1111"),
+                     agent_id="agent:aaaa1111", project="neferhouse",
+                     cwd=str(office), model=None, session_key=None)
+    bridge = "session_livefork01"
+    assert await record_bridge_anchor(actions, agent_id="agent:aaaa1111",
+                                      bridge_session_id=bridge, actor="t") is True
+
+    fork_sid = "bbbb2222-0000-4000-8000-000000000000"
+    out = await automount(actions, session_id=fork_sid, cwd=str(office),
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
+                          office_root=offices, source="startup", bridge_session_id=bridge)
+    assert out["agent"] == "agent:aaaa1111"           # rebound, not a guest
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' "
+        "AND canonical='agent:bbbb2222'") == 0
 
 
 async def test_a_seat_walking_home_files_its_own_deed(

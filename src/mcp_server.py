@@ -2681,14 +2681,30 @@ async def rebind_seat(seat: str, new_cwd: str, extract: bool = False,
     `extract=True` is the SEAT-OFFICES move (ruling ed5f5ce2): the seat leaves a SHARED cwd
     (e.g. into its ~/.osiris/seats/<handle>/ office) taking ONLY its own lineage's
     transcripts — co-resident sessions' history stays; the old path remains a living
-    project. Use it whenever other minds also work at the old path."""
+    project. Use it whenever other minds also work at the old path.
+
+    THE STALE-BANNER BUG (thread d8535bff, cross-house corroborated): the durable DB rows
+    (agent_mounts.cwd, the Seat's anchor_cwd) move immediately, but any LIVE connection's
+    cached AgentIdentity (`_agents`, populated once at mount()/re-attach and read straight
+    off by orient() and everything else) does not — so a session that rebinds itself and
+    then calls orient() moments later still measures the swap banner's intended_model
+    against the OLD cwd's `.osiris`, missing the pin this call just wrote at `new_cwd`.
+    Patch every live cached identity in the rebound lineage in place, below, so the very
+    next read on any of those connections sees the new anchor without a fresh mount()."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a rebind is a mind's act, and the graph must know whose",
                 "why": _anchorless(ctx)}
     from src.orchestrator.mounts import rebind_seat as _rebind
-    return await _rebind(Actions(await _pool_get()), seat_or_agent=seat, new_cwd=new_cwd,
-                         actor=ident.agent_id, extract=extract)
+    result = await _rebind(Actions(await _pool_get()), seat_or_agent=seat, new_cwd=new_cwd,
+                           actor=ident.agent_id, extract=extract)
+    moved = result.get("agent")
+    if moved and not result.get("error"):
+        base = _generation(moved)[0]
+        for cached in _agents.values():
+            if _generation(cached.agent_id)[0] == base:
+                cached.cwd = new_cwd
+    return result
 
 
 @mcp.tool()
@@ -3490,7 +3506,10 @@ async def automount_route(request: Any) -> Any:
             # the declared child (the wake-orphan cure): the spawner's exported parentage,
             # carried by the whisper from the session's own environment
             spawned_by=(str(body.get("spawned_by") or "") or None),
-            spawn_type=(str(body.get("spawn_type") or "") or None))
+            spawn_type=(str(body.get("spawn_type") or "") or None),
+            # THE BRIDGE (task #68 binding leg): CLAUDE_CODE_BRIDGE_SESSION_ID, carried by
+            # the whisper from a background-job fork's own environment
+            bridge_session_id=(str(body.get("bridge_session_id") or "") or None))
         # a mint rode this whisper (compact/clear): the ancestor's connection outlives it —
         # purge the dead mind from the hot cache so no tool call answers as it again
         _evict_stale_minds(out.get("minted"))

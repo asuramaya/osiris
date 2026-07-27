@@ -209,6 +209,69 @@ async def ledger_seat(actions: Actions, *, sid_prefix: str) -> str | None:
     return max(same, key=lambda c: _generation(c)[1], default=str(owner))
 
 
+async def bridged_seat(actions: Actions, *, bridge_session_id: str) -> str | None:
+    """THE BRIDGE (task #68 binding leg, 2026-07-27): a second fork class `fork_seat` cannot
+    see. `--fork-session --resume` COPIES a transcript (fork_seat/forks.py's own door, keyed
+    on a shared first-record uuid) — but the harness's own background-job fork (an Agent-tool
+    or task-orchestration spawn, `sessionKind: 'bg'` in the transcript) starts a genuinely
+    FRESH record chain: no shared uuid, no parentSessionId field, nothing forks.py's
+    archaeology can find. It IS nobody's child to that mechanism — exactly the gap that let
+    Imhotep's own fork mint an unrelated sixth identity in one afternoon.
+
+    What the harness DOES give this class: CLAUDE_CODE_BRIDGE_SESSION_ID, a stable identifier
+    present in the child's environment at birth, naming the one continuing conversation
+    across however many process-level forks/resumes/compactions occur. A KNOWN bridge id
+    REBINDS to its lineage's living head, exactly as `ledger_seat` does for a known sid —
+    never mints a stranger who merely happens to share a room."""
+    from src.orchestrator.agents import _generation
+
+    bid = (bridge_session_id or "").strip()
+    if not bid:
+        return None
+    owner = await actions.pool.fetchval(
+        "SELECT o.canonical FROM current_assertions a "
+        "JOIN objects o ON o.id=a.object_id AND o.type='Agent' AND o.status='active' "
+        "WHERE a.name='bridge_session_id' AND a.value #>> '{}' = $1 "
+        "ORDER BY a.observed_at DESC LIMIT 1", bid)
+    if owner is None:
+        return None
+    base = _generation(str(owner))[0]
+    gens = [str(r["canonical"]) for r in await actions.pool.fetch(
+        "SELECT canonical FROM objects WHERE type='Agent' AND status='active' "
+        "AND (canonical=$1 OR canonical LIKE $1||'-%')", base)]
+    same = [c for c in gens if _generation(c)[0] == base]
+    return max(same, key=lambda c: _generation(c)[1], default=str(owner))
+
+
+async def record_bridge_anchor(
+    actions: Actions, *, agent_id: str, bridge_session_id: str, actor: str,
+) -> bool:
+    """File the bridge_session_id -> soul fact, once, at birth — the SAME law
+    `record_session_anchor` follows: a process environment is a witness that dies (it cannot
+    answer for this lineage's next fork once this session ends), so the fact must be
+    captured while it is still observable, never re-derived from a live process later.
+    Idempotent: a bridge id already on any active agent's record files nothing."""
+    from datetime import UTC, datetime
+
+    bid = (bridge_session_id or "").strip()
+    if not bid:
+        return False
+    exists = await actions.pool.fetchval(
+        "SELECT 1 FROM current_assertions a "
+        "JOIN objects o ON o.id=a.object_id AND o.type='Agent' AND o.status='active' "
+        "WHERE a.name='bridge_session_id' AND a.value #>> '{}' = $1 LIMIT 1", bid)
+    if exists:
+        return False
+    obj = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Agent' AND status='active'",
+        agent_id)
+    if obj is None:
+        return False
+    await actions.assert_property(obj, "bridge_session_id", bid, actor, datetime.now(UTC),
+                                  0.9, evidence_class="direct_observation")
+    return True
+
+
 async def record_session_anchor(
     actions: Actions, *, agent_id: str, session_id: str, actor: str,
 ) -> bool:
@@ -299,6 +362,7 @@ async def automount(
     seat_id: str | None = None, attach_token: str | None = None,
     transcript_path: str | None = None, office_root: Path | None = None,
     spawned_by: str | None = None, spawn_type: str | None = None,
+    bridge_session_id: str | None = None,
 ) -> dict[str, Any]:
     """Mount a just-started session and return its whisper payload. Identical semantics to
     the mount() tool (same resolution, same registration, same durable row — idempotent on
@@ -317,7 +381,13 @@ async def automount(
     leaves its session row pointing at that seat. The whisper must NEVER override a binding by
     re-deriving from the session id — it asserted a hash twin over a claimed seat in
     authoritative voice, and fleet writes landed on the wrong soul. When the session row's
-    agent is a different lineage than the session would derive, the row IS the identity."""
+    agent is a different lineage than the session would derive, the row IS the identity.
+
+    `bridge_session_id` (task #68 binding leg) is CLAUDE_CODE_BRIDGE_SESSION_ID, the harness's
+    stable cross-fork identifier for a background-job fork (an Agent-tool/task-orchestration
+    spawn) — a class `fork_seat` cannot see (that door matches a COPIED transcript's shared
+    first-record uuid; a background fork's transcript starts fresh, sessionKind='bg', sharing
+    nothing). See `bridged_seat`."""
     # the greet ledger (the resume race): stamp BEFORE any slow work, so a SessionEnd
     # racing this greeting sees the stamp however the awaits interleave
     mounts.note_greeting(session_id)
@@ -338,13 +408,21 @@ async def automount(
     # a wiped registry row can no longer orphan a living mind into a fresh identity.
     ledgered = (await ledger_seat(actions, sid_prefix=session_id)
                 if bound is None and forked is None and viewed is None else None)
+    # THE BRIDGE (task #68 binding leg): a background-job fork's own environment names the
+    # stable conversation it continues — an OBSERVED fact, not a guess, so it takes priority
+    # over office_hint below and, unlike office_hint, is never refused just because the
+    # ancestor lineage is still alive (that refusal is correct for a cwd-guess; it is wrong
+    # for something the harness actually told us).
+    bridged = (await bridged_seat(actions, bridge_session_id=bridge_session_id)
+               if bound is None and forked is None and viewed is None and ledgered is None
+               and bridge_session_id else None)
     # THE OFFICE (the fourth door, re-cut by 16e3cee9): the whisper no longer MINTS here —
     # it fires for plumbing exactly as for minds, and a title-generator stub was crowned
     # once. The greeting only HINTS whose office this is; the mint waits for the first
     # ACT (office_claim at mount()/re-attach). Identity is earned, never granted.
     office_hint = (await office_seat(actions, cwd=cwd, office_root=office_root)
                    if bound is None and forked is None and viewed is None
-                   and ledgered is None else None)
+                   and ledgered is None and bridged is None else None)
     # you can only DIE if you LIVED — a fork has lived under its ancestor's name, and a
     # ledgered sid IS a lived mind whatever became of its registry row. Post-gate, a
     # whisper ROW alone is not a life: the row is the gate's own artifact (an address),
@@ -352,7 +430,7 @@ async def automount(
     # a row-only stranger's compact re-fire would mint a base AND a phantom heir in one
     # greeting.
     from src.orchestrator.agents import _generation
-    lived = forked is not None or ledgered is not None
+    lived = forked is not None or ledgered is not None or bridged is not None
     if not lived and bound is not None:
         _base = _generation(bound.agent_id)[0]
         if _base != f"agent:{(session_id or '')[:8].lower()}":
@@ -385,6 +463,10 @@ async def automount(
     elif ledgered is not None:
         # a known sid: the graph remembers who this session IS — rebind, never mint
         ident.agent_id = ledgered
+    elif bridged is not None:
+        # a known bridge id: the harness's own word for who this session continues —
+        # rebind to the lineage's living head, never mint an unrelated sixth identity
+        ident.agent_id = bridged
     # THE FULL VISITOR GATE (Phase 1b of ruling 120fcc81; extends the office gate
     # f580762 to EVERY threshold): no greeting mints an object ANYWHERE. A stranger —
     # no lived lineage, no viewed transcript — gets a registry row and nothing else;
@@ -423,6 +505,15 @@ async def automount(
                                     session_id=session_id, actor=actor)
     except Exception:  # noqa: BLE001 — the whisper must land whatever the ledger does
         pass
+    # THE BRIDGE, write side (task #68 binding leg): filed unconditionally, same as the
+    # session ledger above — even a session that mints fresh here may be the FIRST of its
+    # bridge id, and a LATER fork of the same conversation needs something to find.
+    if bridge_session_id:
+        try:
+            await record_bridge_anchor(actions, agent_id=ident.agent_id,
+                                       bridge_session_id=bridge_session_id, actor=actor)
+        except Exception:  # noqa: BLE001 — the whisper must land whatever the bridge does
+            pass
     # THE DEED SELF-FILES (a2d06410): a claimed seat breathing at its own office writes
     # the durable fact the fourth door reads — a LIVE migration deeds itself the moment
     # the seat walks home; the ceremony deeds the dead. Fail-open: a deed is a bonus at

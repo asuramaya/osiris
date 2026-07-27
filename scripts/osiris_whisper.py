@@ -223,6 +223,13 @@ def main() -> int:
     # transcript belongs to the session it shows — the server adopts instead of minting a clone.
     if hook.get("transcript_path"):
         body["transcript_path"] = str(hook["transcript_path"])
+    # THE BRIDGE (task #68 binding leg, 2026-07-27): the harness's own background-job fork
+    # (an Agent-tool/task-orchestration spawn) stamps CLAUDE_CODE_BRIDGE_SESSION_ID into the
+    # child's environment — a stable id for the ONE conversation it continues, distinct from
+    # --fork-session --resume's transcript-copy fork (fork_seat's own door). A dying witness
+    # (the process env), so it is carried here, once, at birth.
+    if os.environ.get("CLAUDE_CODE_BRIDGE_SESSION_ID"):
+        body["bridge_session_id"] = os.environ["CLAUDE_CODE_BRIDGE_SESSION_ID"]
     try:
         req = urllib.request.Request(
             AUTOMOUNT, data=json.dumps(body).encode(),
