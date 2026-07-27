@@ -18,6 +18,7 @@ from src.cli import (
     cmd_attach,
     cmd_deploy,
     cmd_launch,
+    cmd_migrate,
     cmd_seed,
     commit_deployed_notes,
     composition_gap_note,
@@ -609,3 +610,141 @@ async def test_cmd_deploy_restart_failure_is_honest(actions: Actions, tmp_path: 
     out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [],
                            restart=_failing_restart, pool=actions.pool)
     assert out == 1
+
+
+# --- osiris migrate + osiris deploy's migration gate (thread c4681c38) ---------------------------
+# a fake `state`/`run_migrations` pair instead of a real alembic.ini or a real DB revision —
+# never risk running a real upgrade, or mutating the shared test DB's alembic_version row.
+
+async def test_cmd_migrate_undeterminable_head_is_honest(actions: Actions, tmp_path: Path) -> None:
+    async def _state(pool: Any, root: Path) -> tuple[str | None, str | None]:
+        return None, None  # no alembic.ini under this repo_root
+
+    out = await cmd_migrate(repo_root=tmp_path, pool=actions.pool, state=_state)
+    assert out == 1
+
+
+async def test_cmd_migrate_up_to_date_never_runs_anything(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    async def _state(pool: Any, root: Path) -> tuple[str | None, str | None]:
+        return "0038", "0038"
+
+    async def _unreachable(root: Path) -> None:
+        raise AssertionError("must never be called — nothing is pending")
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_migrate(repo_root=tmp_path, pool=actions.pool, state=_state,
+                                run_migrations=_unreachable)
+    assert out == 0
+    assert "up to date" in buf.getvalue()
+
+
+async def test_cmd_migrate_check_reports_without_applying(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    async def _state(pool: Any, root: Path) -> tuple[str | None, str | None]:
+        return "0034", "0038"
+
+    async def _unreachable(root: Path) -> None:
+        raise AssertionError("--check must never apply anything")
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_migrate(repo_root=tmp_path, pool=actions.pool, state=_state,
+                                run_migrations=_unreachable, check=True)
+    assert out == 1
+    assert "PENDING" in buf.getvalue()
+    assert "0034" in buf.getvalue() and "0038" in buf.getvalue()
+
+
+async def test_cmd_migrate_applies_when_pending(actions: Actions, tmp_path: Path) -> None:
+    async def _state(pool: Any, root: Path) -> tuple[str | None, str | None]:
+        return "0034", "0038"
+
+    calls: list[Path] = []
+
+    async def _run(root: Path) -> None:
+        calls.append(root)
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_migrate(repo_root=tmp_path, pool=actions.pool, state=_state,
+                                run_migrations=_run)
+    assert out == 0
+    assert calls == [tmp_path]
+    assert "applied" in buf.getvalue()
+
+
+async def test_cmd_migrate_upgrade_failure_is_honest(actions: Actions, tmp_path: Path) -> None:
+    async def _state(pool: Any, root: Path) -> tuple[str | None, str | None]:
+        return "0034", "0038"
+
+    async def _run(root: Path) -> None:
+        raise RuntimeError("could not connect to server")
+
+    out = await cmd_migrate(repo_root=tmp_path, pool=actions.pool, state=_state,
+                            run_migrations=_run)
+    assert out == 1
+
+
+async def test_cmd_deploy_applies_pending_migrations_before_restarting(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The whole point of leg 2: a deploy is atomic from the schema's point of view — the
+    migration must run and land BEFORE anything restarts, never after."""
+    order: list[str] = []
+
+    async def _state(pool: Any, root: Path) -> tuple[str | None, str | None]:
+        return "0037", "0038"
+
+    async def _run(root: Path) -> None:
+        order.append("migrate")
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        order.append("restart")
+        return 0, "done"
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                         pool=actions.pool, migration_state=_state, run_migrations=_run)
+    assert order == ["migrate", "restart"]
+    assert "0037" in buf.getvalue() and "0038" in buf.getvalue() and "applied" in buf.getvalue()
+
+
+async def test_cmd_deploy_refuses_when_migration_fails_and_never_restarts(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    async def _state(pool: Any, root: Path) -> tuple[str | None, str | None]:
+        return "0037", "0038"
+
+    async def _failing_run(root: Path) -> None:
+        raise RuntimeError("could not connect to server")
+
+    async def _unreachable(units: list[str]) -> tuple[int, str]:
+        raise AssertionError("must never be called — the migration gate refuses first")
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [],
+                               restart=_unreachable, pool=actions.pool,
+                               migration_state=_state, run_migrations=_failing_run)
+    assert out == 1
+    assert "REFUSED" in buf.getvalue()

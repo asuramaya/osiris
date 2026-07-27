@@ -116,6 +116,23 @@ retired sessions collapsed to a count. `--full` expands everything; the bare for
 glanceable tree. Reach for this the same moment you'd otherwise open the console's `/fleet`
 page from a terminal that has no browser.
 
+## `osiris migrate [--check]`
+
+The ENV-CORRECT migration verb (thread `c4681c38` leg 1) — `alembic upgrade head`, run
+**in-process** via alembic's own command API, never a subprocess `alembic` rune. That
+distinction is the whole point: a bare `alembic upgrade head` typed at a shell connects to
+the prod-shaped `5432` default, because `alembic/env.py` reads `DATABASE_URL` and nothing set
+the dev fallback first in *that* shell — exactly the footgun class ruling `45b074bf` bans.
+Running it in-process means `apply_dev_fallback()` (the same call every DB-backed subcommand
+makes) has already set `os.environ["DATABASE_URL"]` before alembic's own env.py ever reads
+it — no rune, no passthrough, nothing for a human to get wrong.
+
+`--check` reports a pending revision without applying it — for a human who wants to know, or
+for `osiris deploy`'s own gate below, which uses the identical comparison to decide
+refuse-or-run. Bare `osiris migrate` applies: up to date prints and exits clean; a pending
+revision runs `upgrade head` and reports what it applied (`0037..0038 applied`); a failed
+upgrade is reported honestly and exits nonzero — never a raw traceback.
+
 ## `osiris deploy`
 
 The deploy ritual as one guarded verb (thread `e51a841c`) — it replaces the by-hand
@@ -126,7 +143,7 @@ WIP, and the three services import straight from the working tree — only a by-
 status`, done at exactly the right moment, caught it before a restart would have shipped a
 half-written edit.
 
-Four steps, always in this order:
+Five steps, always in this order:
 
 1. **The dirty-tree guard.** Any tracked file under `src/` with an uncommitted change (staged
    or not — everything but a brand-new untracked file, which nothing imports yet) REFUSES the
@@ -137,14 +154,21 @@ Four steps, always in this order:
    operator-recoverable (commit or stash, then re-run), which is exactly why refusing rather
    than restarting anyway is the safe default here — unlike a serving-path guard, where a
    refusal has its own cost.
-2. **Restart** `osiris-mcp`, `osiris-worker`, `osiris-console` (`systemctl --user restart`).
-3. **Smoke**, per-surface (the same probe `osiris smoke` runs).
-4. **Un-run steps, named by comparison, never assumed.** The DB's actual composition count
-   against `DEFAULT_COMPOSITIONS`'s own length; the DB's `alembic_version` against the latest
-   migration's revision id on disk (read straight off the migration files, no DB connection
-   needed for that half). A mismatch on either prints exactly what to run
-   (`osiris seed` / `alembic upgrade head`) rather than leaving you to guess whether a step
-   happened.
+2. **The migration gate, BEFORE anything restarts** (thread `c4681c38` leg 2). The DB's
+   `alembic_version` is compared against the latest migration's revision id on disk; a match
+   prints `migrations: up to date` and proceeds. A pending revision RUNS it (the same
+   `osiris migrate` machinery) and prints what it applied; a failed upgrade REFUSES the whole
+   deploy outright — nothing restarts, nothing is left half-migrated. This closes a real near
+   miss: batch 6's own deploy restarted `osiris-mcp` onto code expecting a column the DB
+   didn't have yet, and only reported the pending migration *after* — a window where new code
+   ran against the old schema, surviving only because those particular writes happened to be
+   fail-open. A deploy is now atomic from the schema's point of view: the restart simply never
+   happens until the schema underneath it is current, or the deploy refuses and says why.
+3. **Restart** `osiris-mcp`, `osiris-worker`, `osiris-console` (`systemctl --user restart`).
+4. **Smoke**, per-surface (the same probe `osiris smoke` runs).
+5. **The composition seeder gap, named by comparison, never assumed.** The DB's actual
+   composition count against `DEFAULT_COMPOSITIONS`'s own length — a shortfall prints exactly
+   what to run (`osiris seed`) rather than leaving you to guess whether it happened.
 
 ### The deploy taxonomy: two classes of surface
 
@@ -164,7 +188,7 @@ implying a hold protects everything:
   that has no bearing on the surface in question would be theater, not a guard. For these,
   review has to happen *before* the commit, not after.
 
-## The house law behind all six
+## The house law behind all seven
 
 `osiris` is one of exactly two ways into this system — the other is the MCP tool surface an
 agent uses. Both exist so that "how do I do X" always has a documented, honest, idempotent

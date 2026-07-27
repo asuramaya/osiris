@@ -1,5 +1,5 @@
 """osiris — the operator's console-script (task #69, ruling 45b074bf, thread 16a0c76b: "no
-bash runes; the user never debugs the machinery"). Five thin subcommands, each wrapping an
+bash runes; the user never debugs the machinery"). Thin subcommands, each wrapping an
 EXISTING verb rather than re-deriving it:
 
   osiris attach <handle>            resolve handle -> a live PTY session, hand off to
@@ -20,18 +20,29 @@ EXISTING verb rather than re-deriving it:
                                      src.manager.attach.py already stands in for)
   osiris fleet [--full]             the same fleet() the MCP tool answers, called over the
                                      wire (never a second implementation of what it computes)
+  osiris migrate [--check]          env-correct `alembic upgrade head` (thread c4681c38 leg
+                                     1) — IN-PROCESS via alembic's own command API, never a
+                                     subprocess rune (a bare `alembic upgrade head` connects
+                                     to the prod-shaped 5432 default because env.py reads
+                                     DATABASE_URL and nothing set the dev fallback first —
+                                     exactly the class ruling 45b074bf bans). `--check`
+                                     reports a pending revision without applying it.
   osiris deploy                     the deploy ritual as one verb (thread e51a841c): refuse
                                      on a dirty tracked src/ tree (a live near-miss shipped a
-                                     half-written edit this way), restart osiris-mcp/worker/
-                                     console, run smoke, and name any un-run seeder/migration
-                                     step by comparison instead of assuming one happened
+                                     half-written edit this way), compare migrations and
+                                     refuse-or-run them BEFORE anything restarts (thread
+                                     c4681c38 leg 2 — a deploy is atomic from the schema's
+                                     point of view), restart osiris-mcp/worker/console, run
+                                     smoke, and name any un-run seeder step by comparison
+                                     instead of assuming one happened
 
 CANONICAL ENV RESOLUTION (the actual root-fix, 3e96c10e's cousin): every DB-backed command
 applies src.config.dev_env.apply_dev_fallback() first — a bare invocation must target the
 SAME dev instance the systemd user units already inline, never silently fall to Settings'
 prod-shaped 5432/6379 default. `attach`/`launch`'s manager-socket calls and `smoke`/`fleet`'s
-MCP round-trip need no such fallback (neither touches Postgres directly); only `seed` and
-`launch`'s own seat-facts lookup + honesty check do.
+MCP round-trip need no such fallback (neither touches Postgres directly); only `seed`,
+`launch`'s own seat-facts lookup + honesty check, `migrate`, and `deploy`'s migration gate
+do.
 
 Every error is honest and names the next step — no raw traceback reaches the operator's
 terminal for a condition this module can anticipate (a dark daemon, an unreachable database,
@@ -609,20 +620,32 @@ async def _real_restart_services(units: list[str]) -> tuple[int, str]:
     return proc.returncode or 0, out.decode(errors="replace")
 
 
+def _alembic_config(repo_root: Path) -> Any | None:
+    """The alembic.ini Config this repo's migrations use, or None when `repo_root` carries no
+    alembic.ini/alembic/ at all — a repo_root that isn't this project's own checkout shape.
+    Shared by `_alembic_head` (disk-only, no DB) and `_real_run_migrations` (actually applies
+    them) so both read the exact same script_location."""
+    from alembic.config import Config
+
+    if not (repo_root / "alembic.ini").is_file():
+        return None
+    cfg = Config(str(repo_root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(repo_root / "alembic"))
+    return cfg
+
+
 def _alembic_head(repo_root: Path) -> str | None:
     """The latest migration's own revision id, read off the version files on disk — no DB
     connection needed for this half of the comparison. None (never a raised CommandError)
     when `repo_root` carries no alembic.ini/alembic/ at all — a repo_root that isn't this
     project's own checkout shape is a different problem than a migration gap, and
     alembic_gap_note treats None as 'could not be determined', never as a false mismatch."""
-    from alembic.config import Config
     from alembic.script import ScriptDirectory
     from alembic.util.exc import CommandError
 
-    if not (repo_root / "alembic.ini").is_file():
+    cfg = _alembic_config(repo_root)
+    if cfg is None:
         return None
-    cfg = Config(str(repo_root / "alembic.ini"))
-    cfg.set_main_option("script_location", str(repo_root / "alembic"))
     try:
         return ScriptDirectory.from_config(cfg).get_current_head()
     except CommandError:
@@ -643,15 +666,129 @@ def alembic_gap_note(current: str | None, head: str | None) -> str | None:
            "run `alembic upgrade head`.")
 
 
-async def _seeder_migration_gaps(pool: asyncpg.Pool, repo_root: Path) -> list[str]:
+async def _composition_gaps(pool: asyncpg.Pool) -> list[str]:
+    """Composition seeding only — the alembic half moved to `_apply_pending_migrations`
+    (thread c4681c38 leg 2), which now runs BEFORE the restart rather than being reported
+    alongside this end-of-deploy note."""
     from src.orchestrator.compositions import DEFAULT_COMPOSITIONS
 
     db_count = await pool.fetchval("SELECT count(*) FROM compositions")
+    note = composition_gap_note(db_count, len(DEFAULT_COMPOSITIONS))
+    return [note] if note is not None else []
+
+
+MigrationState = Callable[[asyncpg.Pool, Path], Awaitable[tuple[str | None, str | None]]]
+MigrateRunner = Callable[[Path], Awaitable[None]]
+
+
+async def _real_migration_state(
+    pool: asyncpg.Pool, repo_root: Path,
+) -> tuple[str | None, str | None]:
     current = await pool.fetchval("SELECT version_num FROM alembic_version")
-    head = _alembic_head(repo_root)
-    notes = [composition_gap_note(db_count, len(DEFAULT_COMPOSITIONS)),
-             alembic_gap_note(current, head)]
-    return [n for n in notes if n is not None]
+    return current, _alembic_head(repo_root)
+
+
+async def _real_run_migrations(repo_root: Path) -> None:
+    """The one place this module ever actually runs `alembic upgrade head` — IN-PROCESS via
+    alembic's own command API (`tests/conftest.py`'s own pattern for the test DB), never a
+    subprocess `alembic` rune: a bare `alembic` invocation connects to the prod-shaped 5432
+    default because alembic/env.py's `os.environ.get("DATABASE_URL", ...)` sees whatever the
+    CALLING shell happened to export (usually nothing on this dev box) — exactly the class
+    ruling 45b074bf bans. Running it in-process means `apply_dev_fallback()` (already called
+    by whichever command reached here — `cmd_migrate`/`cmd_deploy`) has ALREADY set
+    os.environ["DATABASE_URL"] before this ever executes, so env.py reads the right value
+    with no rune, no passthrough, nothing for a human to get wrong. `command.upgrade` is
+    synchronous (real DDL, not worth a fake async wrapper) — off the event loop via
+    to_thread, same discipline as every other blocking call this module makes."""
+    from alembic import command
+
+    cfg = _alembic_config(repo_root)
+    if cfg is None:
+        raise RuntimeError(f"no alembic.ini found under {repo_root}")
+    await asyncio.to_thread(command.upgrade, cfg, "head")
+
+
+async def _apply_pending_migrations(
+    pool: asyncpg.Pool, repo_root: Path, *,
+    state: MigrationState = _real_migration_state,
+    run_migrations: MigrateRunner = _real_run_migrations,
+) -> tuple[bool, str]:
+    """THE MIGRATION GATE (thread c4681c38 leg 2): compares FIRST and refuses-or-runs BEFORE
+    any restart, so a deploy is atomic from the schema's point of view. Batch 6's own near
+    miss is exactly what this closes: the old order restarted services onto new code, THEN
+    reported the pending migration as an end-of-deploy note — a window where new code ran
+    against the old schema, surviving only because the new writes happened to be fail-open.
+    Returns (ok, note); ok=False means REFUSE — the caller must not restart anything past
+    this point. head=None (no alembic.ini under this repo_root — e.g. a test fixture's
+    tmp_path) is undeterminable, not a mismatch, and never gates — same non-blocking
+    discipline `alembic_gap_note` already establishes."""
+    current, head = await state(pool, repo_root)
+    gap = alembic_gap_note(current, head)
+    if gap is None:
+        return True, ("migrations: up to date" if head is not None else
+                      "migrations: undeterminable here (no alembic.ini under this repo_root) "
+                      "— not gating")
+    try:
+        await run_migrations(repo_root)
+    except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, refuse, never restart
+        return False, f"migrations: REFUSED — {gap} ({exc}). NOTHING was restarted."
+    return True, f"migrations: {current!r}..{head!r} applied"
+
+
+async def cmd_migrate(
+    *, check: bool = False, repo_root: Path | None = None, pool: asyncpg.Pool | None = None,
+    state: MigrationState = _real_migration_state,
+    run_migrations: MigrateRunner = _real_run_migrations,
+) -> int:
+    """osiris migrate [--check] (thread c4681c38 leg 1): the ENV-CORRECT migration verb —
+    `apply_dev_fallback()` runs before alembic ever reads DATABASE_URL (see
+    `_real_run_migrations`'s own docstring for the exact footgun this closes: a bare
+    `alembic upgrade head` silently targeting the prod-shaped 5432 default). `--check` only
+    REPORTS a pending revision — never applies — for a human (or `osiris deploy`'s own gate,
+    leg 2) who wants to know without acting."""
+    root = repo_root if repo_root is not None else _find_repo_root()
+    if root is None:
+        print("osiris migrate: not inside a git repository — cd into the osiris checkout "
+              "first.", file=sys.stderr)
+        return 1
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=2)
+        except Exception as exc:  # noqa: BLE001
+            print(f"osiris migrate: could not reach postgres at {settings.database_url} — "
+                  f"{exc}.", file=sys.stderr)
+            return 1
+    try:
+        current, head = await state(pool, root)
+        if head is None:
+            print(f"osiris migrate: no alembic.ini/alembic/ under {root} — nothing to "
+                  "migrate here.", file=sys.stderr)
+            return 1
+        gap = alembic_gap_note(current, head)
+        if gap is None:
+            print(f"osiris migrate: up to date (revision {head!r})")
+            return 0
+        if check:
+            print(f"osiris migrate --check: PENDING — {gap}")
+            return 1
+        try:
+            await run_migrations(root)
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris migrate: upgrade failed — {exc}", file=sys.stderr)
+            return 1
+        print(f"osiris migrate: applied {current!r} -> {head!r}")
+        return 0
+    finally:
+        if owns_pool:
+            await pool.close()
 
 
 async def _real_list_tools() -> dict[str, str] | str:
@@ -667,6 +804,8 @@ async def cmd_deploy(
     *, repo_root: Path | None = None, git_status: GitStatus = _real_git_status,
     restart: RestartServices = _real_restart_services, pool: asyncpg.Pool | None = None,
     list_tools: ListTools = _real_list_tools,
+    migration_state: MigrationState = _real_migration_state,
+    run_migrations: MigrateRunner = _real_run_migrations,
 ) -> int:
     """The deploy ritual as one verb (thread e51a841c): a live near-miss held batch 3 because
     src/orchestrator/handshake.py carried another agent's uncommitted WIP and the three
@@ -674,9 +813,12 @@ async def cmd_deploy(
     before a restart would have shipped a half-written identity edit. Replaces that by-hand
     protocol: (1) refuse on a dirty tracked src/ tree, naming the files (never guesses whose
     WIP it is — check project mail for a collision-watch broadcast instead of trusting a
-    fragile heuristic); (2) restart osiris-mcp/worker/console; (3) run smoke, per-surface,
-    with a bounded wait-for-up so a still-binding uvicorn never reads as a false failure;
-    (4) name any un-run seeder/migration step by comparison, never by assumption. Also names
+    fragile heuristic); (2) compare migrations and refuse-or-run them BEFORE anything
+    restarts (thread c4681c38 leg 2 — batch 6's own near miss: the old order restarted onto
+    new code, then only reported the pending migration AFTER, a window where new code ran
+    against the old schema); (3) restart osiris-mcp/worker/console; (4) run smoke,
+    per-surface, with a bounded wait-for-up so a still-binding uvicorn never reads as a false
+    failure; (5) name any un-run seeder step by comparison, never by assumption. Also names
     (informationally, never gating) any dirty COMMIT-DEPLOYED script — a oneshot timer unit
     reads straight off disk, so nothing here can hold it back (msg 1481) — and (thread
     6a78e64b leg 2) diffs the MCP tool list before vs after the restart, so a deploy names
@@ -701,37 +843,6 @@ async def cmd_deploy(
     for note in commit_deployed_notes(status, oneshot_deployed_scripts(root)):
         print(f"NOTE: {note}")
 
-    tools_before = await list_tools()
-
-    rc, out = await restart(list(DEPLOY_UNITS))
-    if rc != 0:
-        print(f"osiris deploy: restart failed (exit {rc}): {out}", file=sys.stderr)
-        return 1
-    print(f"osiris deploy: restarted {', '.join(DEPLOY_UNITS)}")
-
-    fails, waited = await _wait_for_smoke()
-    if fails:
-        print(f"SMOKE FAILURES (after waiting {waited:.0f}s for the restart to come up):")
-        for f in fails:
-            print(" -", f)
-    elif waited:
-        print(f"smoke: all green (came up after {waited:.0f}s)")
-    else:
-        print("smoke: all green")
-
-    tools_after = await list_tools()
-    if isinstance(tools_before, str) or isinstance(tools_after, str):
-        side = "before" if isinstance(tools_before, str) else "after"
-        print(f"tool list: could not compare — the {side}-restart round-trip failed "
-              f"({tools_before if side == 'before' else tools_after})")
-    else:
-        delta = diff_tool_lists(tools_before, tools_after)
-        if delta:
-            print(f"TOOL LIST CHANGED: {', '.join(delta)} — connected sessions see the old "
-                  "list until their own client refreshes.")
-        else:
-            print("tool list: unchanged")
-
     owns_pool = pool is None
     if pool is None:
         from src.config.dev_env import apply_dev_fallback
@@ -743,22 +854,59 @@ async def cmd_deploy(
         try:
             pool = await create_pool(settings.database_url, min_size=1, max_size=2)
         except Exception as exc:  # noqa: BLE001
-            print(f"osiris deploy: could not reach postgres to check seeder/migration state "
-                  f"— {exc}. Restart + smoke above still stand.", file=sys.stderr)
-            return 1 if fails else 0
+            print(f"osiris deploy: REFUSED — could not reach postgres to check migrations "
+                  f"— {exc}. NOTHING was restarted.", file=sys.stderr)
+            return 1
     try:
-        gaps = await _seeder_migration_gaps(pool, root)
+        migrated_ok, migration_note = await _apply_pending_migrations(
+            pool, root, state=migration_state, run_migrations=run_migrations)
+        print(migration_note)
+        if not migrated_ok:
+            return 1
+
+        tools_before = await list_tools()
+
+        rc, out = await restart(list(DEPLOY_UNITS))
+        if rc != 0:
+            print(f"osiris deploy: restart failed (exit {rc}): {out}", file=sys.stderr)
+            return 1
+        print(f"osiris deploy: restarted {', '.join(DEPLOY_UNITS)}")
+
+        fails, waited = await _wait_for_smoke()
+        if fails:
+            print(f"SMOKE FAILURES (after waiting {waited:.0f}s for the restart to come up):")
+            for f in fails:
+                print(" -", f)
+        elif waited:
+            print(f"smoke: all green (came up after {waited:.0f}s)")
+        else:
+            print("smoke: all green")
+
+        tools_after = await list_tools()
+        if isinstance(tools_before, str) or isinstance(tools_after, str):
+            side = "before" if isinstance(tools_before, str) else "after"
+            print(f"tool list: could not compare — the {side}-restart round-trip failed "
+                  f"({tools_before if side == 'before' else tools_after})")
+        else:
+            delta = diff_tool_lists(tools_before, tools_after)
+            if delta:
+                print(f"TOOL LIST CHANGED: {', '.join(delta)} — connected sessions see the "
+                      "old list until their own client refreshes.")
+            else:
+                print("tool list: unchanged")
+
+        gaps = await _composition_gaps(pool)
+        if gaps:
+            print("UN-RUN STEPS:")
+            for g in gaps:
+                print(" -", g)
+        else:
+            print("compositions: up to date")
+
+        return 1 if fails else 0
     finally:
         if owns_pool:
             await pool.close()
-    if gaps:
-        print("UN-RUN STEPS:")
-        for g in gaps:
-            print(" -", g)
-    else:
-        print("seeder/migrations: up to date")
-
-    return 1 if fails else 0
 
 
 # --- argv dispatch -----------------------------------------------------------------------------
@@ -787,7 +935,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_fleet = sub.add_parser("fleet", help="the fleet roster, grouped by project")
     p_fleet.add_argument("--full", action="store_true")
 
-    sub.add_parser("deploy", help="the deploy ritual: dirty-guard, restart, smoke, "
+    p_migrate = sub.add_parser("migrate", help="env-correct `alembic upgrade head` "
+                               "(--check reports without applying)")
+    p_migrate.add_argument("--check", action="store_true",
+                           help="report a pending revision without applying it")
+
+    sub.add_parser("deploy", help="the deploy ritual: dirty-guard, migrate, restart, smoke, "
                    "un-run-step report")
 
     return p
@@ -805,6 +958,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_launch(args.handle, model=args.model, debug=args.debug))
     if args.command == "fleet":
         return asyncio.run(cmd_fleet(full=args.full))
+    if args.command == "migrate":
+        return asyncio.run(cmd_migrate(check=args.check))
     if args.command == "deploy":
         return asyncio.run(cmd_deploy())
     return 2  # pragma: no cover - argparse's own `required=True` makes this unreachable
