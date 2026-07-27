@@ -3146,6 +3146,7 @@ async def settle(
     decisions: list[dict[str, Any]] | None = None,
     threads_open: list[dict[str, Any]] | None = None,
     threads_resolve: list[dict[str, Any]] | None = None,
+    repo_path: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -3170,11 +3171,17 @@ async def settle(
     and safe to call repeatedly through a session — later calls only add to what's already
     written, never duplicate it (same discipline as record_decision/open_thread).
 
-    SURFACE also runs `git status --porcelain` in your mounted cwd (`uncommitted_git_files`
-    in the receipt) — the one box that isn't in the graph (operator ruling, 2026-07-26: an
-    agent asked 'safe to compact?' had to check this by hand). None means it couldn't be
-    evaluated there (no repo at that cwd — the common case for a seat-office agent, whose
-    code lives elsewhere) and never blocks `complete`; a non-empty list does."""
+    SURFACE also runs `git status --porcelain` (`uncommitted_git_files` in the receipt) —
+    the one box that isn't in the graph (operator ruling, 2026-07-26: an agent asked 'safe
+    to compact?' had to check this by hand). PASS `repo_path` NAMING YOUR CODE REPO — your
+    mounted cwd is checked ONLY as a fallback, and for a seat-office agent (most of this
+    fleet) that cwd is the OFFICE, never the repo it governs (CLAUDE.md: 'code lives
+    elsewhere'), so an office-mounted call with no `repo_path` reads None here even with a
+    dirty tree sitting uncommitted in your actual repo — the exact gap that motivated this
+    box in the first place (Thoth, msg 1381). The receipt's `git_checked_path` names
+    whichever directory was actually used, so you can tell at a glance whether it's the
+    right one. None on `uncommitted_git_files` means unevaluable there (no repo at that
+    path) and never blocks `complete`; a non-empty list does."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — settle is a mind's own ritual, the graph must "
@@ -3226,7 +3233,8 @@ async def settle(
                                    mounted_at=mounted["mounted_at"], cwd=ident.cwd)
         missing = missing_boxes(boxes)
     obligations = await _owned_open_threads(pool, ident.agent_id)
-    uncommitted = await uncommitted_git_work(ident.cwd)
+    git_dir = repo_path or ident.cwd
+    uncommitted = await uncommitted_git_work(git_dir)
     complete = not missing and not obligations and not uncommitted
     reasons = []
     if missing:
@@ -3241,6 +3249,7 @@ async def settle(
         "missing_boxes": missing,
         "open_obligations": obligations,
         "uncommitted_git_files": uncommitted,
+        "git_checked_path": git_dir,
         "accepted": accepted,
         "note": ("compaction-safe by construction" if complete else
                  f"still unsettled ({', '.join(reasons)}) — settle again once they're "

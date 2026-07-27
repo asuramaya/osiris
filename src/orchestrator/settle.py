@@ -96,7 +96,7 @@ def missing_boxes(boxes: dict[str, bool | None]) -> list[str]:
     return [label for label, ok in boxes.items() if ok is False]
 
 
-async def uncommitted_git_work(cwd: str | None, *, timeout_s: float = 2.0) -> list[str] | None:
+async def uncommitted_git_work(repo_dir: str | None, *, timeout_s: float = 2.0) -> list[str] | None:
     """THE ONE BOX NOT IN THE GRAPH (operator, 2026-07-26, watching a live compaction: an
     agent asked "safe to compact?" had to run `git status` BY HAND before answering —
     mechanical, and a wasted expensive turn). /settle-only: unlike settle_boxes above, this
@@ -104,17 +104,24 @@ async def uncommitted_git_work(cwd: str | None, *, timeout_s: float = 2.0) -> li
     docstring is explicit about — a subprocess against a large working tree has no place
     racing that clock for a question the hook never asks.
 
-    None (fails open) when cwd is empty, not inside a git worktree, git itself errors, or
-    the check outruns `timeout` — the common, INNOCENT case for a seat-office agent, whose
-    cwd is the office, not the repo it governs (CLAUDE.md: 'work on it with absolute
-    paths'). A [] means clean; a non-empty list is `git status --porcelain` lines verbatim
-    (' M path', '?? path', ...) — the file, not just a boolean, since 'what' is the whole
-    point of the box."""
-    if not cwd:
+    `repo_dir` is deliberately NOT assumed to be the caller's mount cwd (Thoth's catch,
+    2026-07-27, msg 1381): every seat-office agent mounts at its OFFICE
+    (~/.osiris/seats/<handle>), which is never a git repo — the code it governs lives
+    elsewhere (~/code/<project>). Passing the mount cwd there reads None for the entire
+    seat-office fleet, including the exact case that started this — silently NOT solving
+    the operator's complaint. The caller (settle(), in mcp_server.py) decides what
+    `repo_dir` means; this function only ever checks the directory it's given.
+
+    None (fails open) when repo_dir is empty, not inside a git worktree, git itself
+    errors, or the check outruns `timeout_s` — the honest 'could not evaluate' case, never
+    silently treated as clean. A [] means clean; a non-empty list is `git status
+    --porcelain` lines verbatim (' M path', '?? path', ...) — the file, not just a
+    boolean, since 'what' is the whole point of the box."""
+    if not repo_dir:
         return None
     try:
         proc = await asyncio.create_subprocess_exec(
-            "git", "-C", cwd, "status", "--porcelain",
+            "git", "-C", repo_dir, "status", "--porcelain",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
         )
     except OSError:

@@ -343,7 +343,60 @@ async def test_settle_tool_uncommitted_git_work_blocks_complete_and_is_named(
     assert out["complete"] is False, out
     assert out["uncommitted_git_files"] is not None
     assert any("dirty.txt" in line for line in out["uncommitted_git_files"])
+    assert out["git_checked_path"] == str(tmp_path)  # no repo_path given — falls back to cwd
     assert "uncommitted git file" in out["note"]
+
+
+async def test_settle_tool_repo_path_overrides_the_office_cwd(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE FIX for Thoth's catch (msg 1381): a seat-office agent's mounted cwd is the
+    OFFICE, never the repo it governs — checking cwd alone reads None for the entire
+    seat-office fleet and never solves the operator's complaint. `repo_path` names the
+    real repo explicitly; it must be checked INSTEAD of cwd, not merely in addition."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.mounts import save_mount
+
+    office = tmp_path / "office"  # never a git repo — matches ~/.osiris/seats/<handle>
+    office.mkdir()
+    repo = tmp_path / "repo"  # the code the agent actually governs
+    repo.mkdir()
+    _git(repo, "init")
+    (repo / "dirty.txt").write_text("uncommitted\n")
+
+    agent = "agent:settlerp1"
+    job_dir = str(tmp_path / "jobs" / "settlerp")  # EXACTLY 8 chars
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="settleproj",
+                     cwd=str(office), model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET mounted_at=$1 WHERE job_dir=$2", mounted_at, job_dir)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=agent, session="settlerp1", project="settleproj", model=None,
+        cwd=str(office))
+    try:
+        no_repo_path = await srv.settle(ctx=ctx)
+        assert no_repo_path["uncommitted_git_files"] is None  # office cwd — can't evaluate
+        assert no_repo_path["git_checked_path"] == str(office)
+
+        out = await srv.settle(repo_path=str(repo), ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["git_checked_path"] == str(repo)
+    assert out["uncommitted_git_files"] is not None
+    assert any("dirty.txt" in line for line in out["uncommitted_git_files"])
+    assert out["complete"] is False, out
 
 
 async def test_settle_tool_surfaces_my_own_open_obligations_fleet_wide(
