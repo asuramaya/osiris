@@ -46,6 +46,7 @@ from src.ontology.schema import catalog
 from src.orchestrator import capture, census, digest, handshake, mailbox, mounts
 from src.orchestrator import compositions as comp
 from src.orchestrator import dispose as dispose_seam
+from src.orchestrator import succession as comp_succession
 from src.orchestrator.agents import (
     AgentIdentity,
     _generation,
@@ -847,12 +848,29 @@ async def dossier(object_ref: str) -> dict[str, Any]:
     accepts a UUID, an 8-char short id (the same one a composition row's own "id" column
     hands out), a canonical, or a name. For an AGENT specifically, this is where succession
     lives: `succeeded_from`/`minted_because` show up both as properties and as a
-    `succeeded_from` relationship edge naming the predecessor — one hop back per call (task
-    #64, ruling ad19a779; walking a FULL multi-generation chain still needs one call per hop
-    until a dedicated lineage-walk verb exists)."""
+    `succeeded_from` relationship edge naming the predecessor — one hop back per call. To
+    walk the FULL multi-generation chain in one bounded call, use `succession_chain` instead
+    (task #64, ruling ad19a779)."""
     pool = await _pool_get()
     oid = await _resolve(pool, object_ref)
     return await entity_dossier(pool, oid) if oid else {"error": f"no object {object_ref!r}"}
+
+
+@mcp.tool()
+async def succession_chain(ref: str, max_hops: int = 10) -> dict[str, Any]:
+    """An agent's succession lineage, one entry per generation walked backward:
+    {agent_id, generation, minted_because, wrote_anything}. The bounded chain read task #64
+    (ruling ad19a779) named as missing — dossier() only gives one hop, so answering "for
+    generations xxiv/xxv/xxvi: succeeded_from + minted_because for each" used to cost one
+    dossier() call per hop; this is one call. `ref` accepts anything dossier does (UUID,
+    short id, canonical, name). Stops at a root (no predecessor) or `max_hops` (default 10)
+    — never widens into an unbounded search. Complementary to, not a replacement for,
+    `nearest_handoff_ancestor` (agents.py, backing orient()'s own succession-note block):
+    that JUMPS to the nearest ancestor with a real handoff for orient()'s internal use; this
+    WALKS and reports every hop for a caller asking to see the whole chain."""
+    pool = await _pool_get()
+    chain = await comp_succession.succession_chain(pool, ref, max_hops=max_hops)
+    return {"ref": ref, "chain": chain} if chain else {"error": f"no agent matches {ref!r}"}
 
 
 @mcp.tool()
