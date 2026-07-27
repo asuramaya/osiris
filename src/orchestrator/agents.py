@@ -1587,6 +1587,22 @@ async def register_agent(
             do = EvidenceClass.DIRECT_OBSERVATION
             await actions.assert_property(a, "model_swapped", swap_marker(verdict), src, now,
                                           confidence_for(do), evidence_class=do.value)
+        if verdict.deliberate and verdict.to_model:
+            # THE STANDING-CHOICE WRITE SIDE (operator ruling e0e0955d, confirming his own
+            # 1aca1fcc from 2026-07-19): the operator's own /model command on the record IS
+            # the operator re-pinning this seat's standing choice — auto-stamp intended_model
+            # so the choice persists across successions and relaunches with no manual
+            # re-pinning. The READ side already exists (mint_seat's own pin, launch()'s
+            # precedence since 70ae3c3); this is the one write it was missing. Gated on
+            # `deliberate` specifically (never `swapped` alone — swaps.py's own law: only a
+            # WITNESSED /model transition sets it, never a harness rug-pull or a cold
+            # divergence guessed from the intent alone).
+            from src.orchestrator.seats import held_seat
+            seat = await held_seat(actions.pool, identity.agent_id)
+            if seat:
+                soid = await actions.create_or_find_object("Seat", seat["seat_id"], src)
+                await actions.assert_property(soid, "intended_model", verdict.to_model, src,
+                                              now, _CONF, evidence_class=_EC)
     if identity.project:
         await actions.assert_property(a, "project", identity.project, src, now, _CONF,
                                       evidence_class=_EC)

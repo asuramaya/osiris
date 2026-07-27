@@ -248,6 +248,79 @@ async def test_register_stamps_intent_and_the_swap(actions: Actions, tmp_path: P
     assert row["swap_ec"] == EvidenceClass.DIRECT_OBSERVATION.value
 
 
+async def _seat_intended_model(actions: Actions, seat_id: str) -> str | None:
+    return await actions.pool.fetchval(
+        "SELECT x.value #>> '{}' FROM current_assertions x JOIN objects o ON o.id=x.object_id "
+        "WHERE o.canonical=$1 AND x.name='intended_model' "
+        "ORDER BY x.confidence DESC, x.observed_at DESC LIMIT 1", seat_id)
+
+
+async def test_a_deliberate_swap_stamps_the_seats_intended_model(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE STANDING-CHOICE WRITE SIDE (operator ruling e0e0955d, confirming his own 1aca1fcc
+    from 2026-07-19): a /model command on the record IS the operator re-pinning this seat's
+    standing choice — register_agent now auto-stamps intended_model on the held Seat so
+    successions and relaunches inherit it with no manual re-pin. The READ side already
+    existed (mint_seat's own pin, launch()'s precedence since 70ae3c3); this is the write."""
+    from src.orchestrator.agents import claim_name
+    from src.orchestrator.seats import held_seat
+
+    proj = tmp_path / "-home-x-code-osiris"
+    proj.mkdir()
+    lines = [
+        json.dumps({"type": "assistant", "message": {"model": "claude-fable-5", "content": []}}),
+        json.dumps({"type": "user", "message": {
+            "role": "user", "content": "<command-name>/model</command-name>\n"
+                                       "<command-message>model</command-message>"}}),
+        json.dumps({"type": "assistant",
+                    "message": {"model": "claude-haiku-4-5", "content": []}}),
+    ]
+    (proj / "deadbeef-1111-2222-3333-444455556666.jsonl").write_text("\n".join(lines) + "\n")
+    ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef",
+                             store_reading=_store_reading(tmp_path, "/j/jobs/deadbeef"))
+    assert ident.model_deliberate is True   # sanity: this fixture IS the /model-on-record case
+
+    await register_agent(actions, ident, actor="analyst:operator")   # mints the Agent, no seat
+    await claim_name(actions, ident.agent_id, "Deliberato", source=ident.agent_id)
+
+    await register_agent(actions, ident, actor="analyst:operator", expected_model="claude-fable-5")
+
+    seat = await held_seat(actions.pool, ident.agent_id)
+    assert seat is not None
+    assert await _seat_intended_model(actions, seat["seat_id"]) == "claude-haiku-4-5"
+
+
+async def test_an_unexplained_swap_never_overwrites_the_standing_choice(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The other half of e0e0955d: a rug-pull (no /model on the record — the harness's own
+    silent demotion) must NEVER overwrite the seat's standing choice. Pre-seeds an existing
+    intended_model to prove it survives untouched, not merely that a fresh one is absent."""
+    from src.orchestrator.agents import claim_name
+    from src.orchestrator.seats import held_seat
+
+    proj = tmp_path / "-home-x-code-osiris"
+    proj.mkdir()
+    _transcript_lines(proj, "claude-fable-5", "claude-opus-4-8")   # no /model command
+    ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef",
+                             store_reading=_store_reading(tmp_path, "/j/jobs/deadbeef"))
+    assert ident.model_deliberate is False   # sanity: this fixture is the rug-pull case
+
+    await register_agent(actions, ident, actor="analyst:operator")
+    await claim_name(actions, ident.agent_id, "Rugpuller", source=ident.agent_id)
+    seat = await held_seat(actions.pool, ident.agent_id)
+    assert seat is not None
+    now = datetime.now(UTC)
+    soid = await actions.create_or_find_object("Seat", seat["seat_id"], "test")
+    await actions.assert_property(soid, "intended_model", "claude-sonnet-5", "test", now, 0.9,
+                                  evidence_class="self_declared")
+
+    await register_agent(actions, ident, actor="analyst:operator", expected_model="claude-fable-5")
+
+    assert await _seat_intended_model(actions, seat["seat_id"]) == "claude-sonnet-5"  # untouched
+
+
 def _anchored(model: str, *, history: tuple[str, ...] | None = None) -> AgentIdentity:
     """A job_dir-anchored identity for agent:0806072e — the succession-seam fixture (bug #51)."""
     return AgentIdentity(agent_id="agent:0806072e", session="0806072e", project="sibling-two",
