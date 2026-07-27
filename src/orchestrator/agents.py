@@ -752,6 +752,48 @@ async def lineage_head(pool: asyncpg.Pool, canonical: str) -> str:
     return head
 
 
+async def nearest_handoff_ancestor(
+    pool: asyncpg.Pool, start_id: str, *, max_hops: int = 5,
+) -> tuple[str, list[dict[str, Any]]] | None:
+    """Bounded chain-walk to the nearest ancestor bearing a handoff (thread e749036e,
+    2026-07-27, Thoth LX's diagnosis): a one-hop-only succession-note read goes blind the
+    moment the IMMEDIATE ancestor is a phantom (or simply never wrote a handoff) even
+    though a real one sits one more hop back — the morning's own repro: xxiv (wrote a
+    handoff) -> xxv (zero-turn, wrote nothing) -> xxvi (arrived blind, one hop from xxv
+    only). SHARED by orient()'s succession-note block and the boot whisper's own
+    succession-steering — one implementation, not two copies drifting.
+
+    STRUCTURED FIRST, PROSE AS FALLBACK (ruling c5b184cd): an is_handoff='true' property
+    (settle()'s own typed stamp) is the reliable half; the ILIKE '%handoff%'/'%letter%'
+    text match stays for handoffs minted before that existed. Walks succeeded_from up to
+    `max_hops` links (mint_heir's own kind of bound), returning the FIRST ancestor found
+    with a handoff-bearing Thread/Decision and its 2 freshest picks — or None if nothing
+    is found within the bound (never widens into an unbounded search)."""
+    cur = start_id
+    for _ in range(max_hops):
+        rows = await pool.fetch(
+            "SELECT DISTINCT ON (o.id) o.type, a.value #>> '{}' AS summary, a.observed_at "
+            "FROM current_assertions a JOIN objects o ON o.id = a.object_id "
+            "WHERE a.name = 'summary' AND a.source_id = $1 "
+            "AND a.evidence_class = 'self_declared' "
+            "AND o.type IN ('Thread','Decision') AND o.status = 'active' "
+            "AND (EXISTS (SELECT 1 FROM current_assertions h WHERE h.object_id = o.id "
+            "             AND h.name = 'is_handoff' AND h.value #>> '{}' = 'true') "
+            "     OR a.value #>> '{}' ILIKE '%handoff%' OR a.value #>> '{}' ILIKE '%letter%') "
+            "ORDER BY o.id, a.confidence DESC, a.observed_at DESC", cur)
+        picks = sorted(rows, key=lambda r: r["observed_at"], reverse=True)[:2]
+        if picks:
+            return cur, [dict(r) for r in picks]
+        nxt = await pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+            "WHERE o.canonical=$1 AND a.name='succeeded_from' "
+            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", cur)
+        if not nxt:
+            return None
+        cur = str(nxt)
+    return None
+
+
 @asynccontextmanager
 async def mint_lock(pool: asyncpg.Pool, lineage_root: str) -> AsyncIterator[None]:
     """Serialize generation-minting per LINEAGE (a pg advisory lock on the root). Two

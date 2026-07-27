@@ -17,7 +17,7 @@ from src.ingest.harness import ModelReading
 from src.ingest.harness.claude_jsonl import ClaudeJsonlAdapter
 from src.ingest.transcript_store import _reading_from_turns
 from src.orchestrator.agents import AgentIdentity, register_agent, resolve_identity
-from src.orchestrator.capture import record_decision
+from src.orchestrator.capture import open_thread, record_decision
 from src.parsers.base import EvidenceClass
 
 
@@ -1402,3 +1402,55 @@ async def test_fold_existing_zero_turn_phantoms_sweeps_the_fleet(actions: Action
 
     again = await fold_existing_zero_turn_phantoms(actions)
     assert phantom not in {f["phantom"] for f in again}
+
+
+# ═══════════ THE BOUNDED CHAIN-WALK (thread e749036e, msg 1398) ═══════════
+
+async def test_nearest_handoff_ancestor_finds_the_immediate_one(actions: Actions) -> None:
+    """The common case: one hop, exactly what the old one-hop-only read already covered."""
+    from src.orchestrator.agents import nearest_handoff_ancestor
+
+    did = await record_decision(actions, "the estate is settled", kind="choice",
+                                source="agent:nha0001", repo="nhaproj")
+    await actions.assert_property(did, "is_handoff", "true", "agent:nha0001",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    found = await nearest_handoff_ancestor(actions.pool, "agent:nha0001")
+    assert found is not None and found[0] == "agent:nha0001"
+
+
+async def test_nearest_handoff_ancestor_walks_past_silence_within_the_bound(
+    actions: Actions,
+) -> None:
+    """Two silent hops, a real handoff on the third — still within max_hops=5."""
+    from src.orchestrator.agents import nearest_handoff_ancestor
+
+    await open_thread(actions, "HANDOFF — three hops back and still findable",
+                      source="agent:nha0010", repo="nhaproj")
+    await actions.create_or_find_object("Agent", "agent:nha0010", "agent:nha0010")
+    a11 = await actions.create_or_find_object("Agent", "agent:nha0011", "agent:nha0011")
+    a12 = await actions.create_or_find_object("Agent", "agent:nha0012", "agent:nha0012")
+    now = datetime.now(UTC)
+    await actions.assert_property(a11, "succeeded_from", "agent:nha0010", "agent:nha0011",
+                                  now, 0.9, evidence_class="direct_observation")
+    await actions.assert_property(a12, "succeeded_from", "agent:nha0011", "agent:nha0012",
+                                  now, 0.9, evidence_class="direct_observation")
+    found = await nearest_handoff_ancestor(actions.pool, "agent:nha0012")
+    assert found is not None and found[0] == "agent:nha0010"
+
+
+async def test_nearest_handoff_ancestor_gives_up_past_the_bound(actions: Actions) -> None:
+    """A handoff 6 hops back (past max_hops=5) is never found — bounded on purpose, never
+    an unbounded search."""
+    from src.orchestrator.agents import nearest_handoff_ancestor
+
+    await open_thread(actions, "HANDOFF — too far back to matter",
+                      source="agent:nhb0000", repo="nhbproj")
+    now = datetime.now(UTC)
+    prev = "agent:nhb0000"
+    for i in range(1, 7):  # 6 hops of silence between nhb0000 and nhb0006
+        cur = f"agent:nhb000{i}"
+        obj = await actions.create_or_find_object("Agent", cur, cur)
+        await actions.assert_property(obj, "succeeded_from", prev, cur, now, 0.9,
+                                      evidence_class="direct_observation")
+        prev = cur
+    assert await nearest_handoff_ancestor(actions.pool, "agent:nhb0006") is None

@@ -7,6 +7,7 @@ payload the hook prints (mail/desk/away), and idempotence on hook re-fire.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -889,3 +890,53 @@ async def test_succession_owner_match_finds_a_specific_incarnation_never_a_rebas
     assert succ is not None
     assert "owned by a specific past incarnation" in succ["thread_summary"]
     assert "decoy" not in succ["thread_summary"]
+
+
+async def test_the_whisper_carries_the_handoff_specifically(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thread e749036e (Thoth LX): the whisper's succession steering finds the newest OPEN
+    obligation — deliberately never claimed to be a handoff (Thoth LI's amend, msg 861).
+    This is the OTHER half: a REAL handoff (is_handoff='true') rides alongside it under its
+    own `handoff` key, found via the same bounded chain-walk orient() uses — never
+    confused with an ordinary fresh-but-unrelated open thread."""
+    from src.orchestrator.agents import claim_name, register_agent, resolve_identity
+    from src.orchestrator.capture import open_thread
+
+    root = tmp_path / "projects"
+    offices = tmp_path / "seats"
+    office = offices / "envoy"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "envoyhouse"\n')
+    _transcript(root, str(office))
+
+    ident = resolve_identity(cwd=str(office), job_dir=str(tmp_path / "jobs" / SID[:8]), root=root)
+    await register_agent(actions, ident, actor="analyst:operator")
+    await claim_name(actions, ident.agent_id, "Envoy", source=ident.agent_id)
+    await automount(actions, session_id=SID, cwd=str(office), actor="analyst:operator",
+                    root=root, jobs_home=tmp_path / "jobs", office_root=offices,
+                    source="startup")
+
+    # an ordinary open obligation — NOT a handoff, must never be reported as one
+    await open_thread(actions, "just an ordinary open obligation, unrelated to any handoff",
+                      repo="envoyhouse", kind="obligation", owner="envoyhouse")
+    # the REAL handoff, structurally marked, sourced by the mind that's about to be superseded
+    now = datetime.now(UTC)
+    handoff_obj = await actions.create_or_find_object("Decision", "decision:envoy-marker",
+                                                       ident.agent_id)
+    await actions.assert_property(handoff_obj, "summary", "the estate is settled structurally",
+                                  ident.agent_id, now, 0.9, evidence_class="self_declared")
+    await actions.assert_property(handoff_obj, "is_handoff", "true", ident.agent_id, now, 0.9,
+                                  evidence_class="self_declared")
+
+    reborn = await automount(actions, session_id=SID, cwd=str(office),
+                             actor="analyst:operator", root=root,
+                             jobs_home=tmp_path / "jobs", office_root=offices,
+                             source="compact")
+    succ = reborn.get("succession")
+    assert succ is not None
+    assert "ordinary open obligation" in succ.get("thread_summary", "")
+    handoff = succ.get("handoff")
+    assert handoff is not None, "the structurally-marked handoff must ride along, separately"
+    assert handoff["from"] == ident.agent_id
+    assert "estate is settled structurally" in " ".join(n["text"] for n in handoff["notes"])

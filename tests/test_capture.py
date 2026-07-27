@@ -707,6 +707,49 @@ async def test_orient_surfaces_the_ancestors_parting_words(actions: Actions) -> 
     assert "parting words" in note["note"]
 
 
+async def test_orient_succession_note_walks_past_a_silent_ancestor(actions: Actions) -> None:
+    """THE BOUNDED CHAIN-WALK (thread e749036e, Thoth LX's diagnosis, 2026-07-27): the
+    morning's own repro — elder6 wrote a handoff, elder7 was a zero-turn phantom that wrote
+    NOTHING, elder8 arrives blind if orient only reads one hop back. nearest_handoff_ancestor
+    walks past the silent hop and finds elder6's words, naming elder6 (not elder7) as
+    'from' — the words came from whoever actually wrote them."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.capture import open_thread
+
+    elder6, elder7 = "agent:elder-vi", "agent:elder-vii"
+    await open_thread(actions, "HANDOFF — six's own estate, read before you touch anything",
+                      repo="chainproj", source=elder6)
+    # the succession chain itself: elder7 succeeded elder6, on the graph (not just AgentIdentity)
+    await actions.create_or_find_object("Agent", elder6, elder6)
+    o7 = await actions.create_or_find_object("Agent", elder7, elder7)
+    now = datetime.now(UTC)
+    await actions.assert_property(o7, "succeeded_from", elder6, elder7, now, 0.9,
+                                  evidence_class="direct_observation")
+    # elder7 wrote NOTHING — the zero-turn phantom's whole point
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:elder-viii", session="elder8s01", project="chainproj",
+        model=None, cwd=None, succeeded_from=elder7)
+    try:
+        out = await srv.orient(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    note = out.get("succession_note")
+    assert note is not None, "one-hop-only would find nothing here and go blind"
+    assert note["from"] == elder6, "the words came from whoever actually wrote them"
+    assert "six's own estate" in " ".join(n["text"] for n in note["notes"])
+
+
 async def test_orient_names_the_live_siblings_in_your_project(actions: Actions) -> None:
     """Co-agent blindness (Deckard XXVI, msg 258): a live sibling sharing your repo is the
     one blindness that costs unrecoverable work — orient names them and the shared-tree

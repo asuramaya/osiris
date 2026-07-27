@@ -610,12 +610,27 @@ async def automount(
                     os.path.exists, f"{office_path}/charter.md")
                 charter_path = (f"{office_path}/charter.md" if has_charter
                                 else f"{office_path}/CLAUDE.md")
-            if charter_path or (newest and newest["summary"]):
+            # THE HANDOFF, SPECIFICALLY (thread e749036e, 2026-07-27): the newest-obligation
+            # steering above is deliberately NOT a handoff claim (Thoth LI's amend, msg 861)
+            # — this is the OTHER half, the same bounded chain-walk orient()'s succession-note
+            # uses (nearest_handoff_ancestor, agents.py), so a successor's very first breath
+            # can carry the real parting words even when the immediate ancestor never wrote
+            # one (a phantom, or simply silent) and a real one sits a hop or two further back.
+            from src.orchestrator.agents import nearest_handoff_ancestor
+            handoff_found = await nearest_handoff_ancestor(actions.pool, ident.succeeded_from)
+            handoff = None
+            if handoff_found:
+                handoff_from, handoff_picks = handoff_found
+                handoff = {"from": handoff_from,
+                          "notes": [{"kind": r["type"].lower(), "text": r["summary"][:800]}
+                                    for r in handoff_picks]}
+            if charter_path or (newest and newest["summary"]) or handoff:
                 succession = {
                     **({"charter_file": charter_path} if charter_path else {}),
                     **({"thread_id": str(newest["id"])[:8],
                         "thread_summary": newest["summary"]}
                        if newest and newest["summary"] else {}),
+                    **({"handoff": handoff} if handoff else {}),
                 }
         except Exception:  # noqa: BLE001 — the whisper must never break on this
             succession = None

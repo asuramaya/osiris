@@ -49,6 +49,7 @@ from src.orchestrator import dispose as dispose_seam
 from src.orchestrator.agents import (
     AgentIdentity,
     _generation,
+    nearest_handoff_ancestor,
     read_project_model,
     register_agent,
     resolve_identity,
@@ -1965,22 +1966,17 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
     # is_handoff='true' property (stamped by settle(), a typed query) is the reliable half;
     # the ILIKE '%handoff%'/'%letter%' text match stays ONLY for handoffs minted before this
     # existed, never removed, never the sole check for anything settle() writes going forward.
+    # BOUNDED CHAIN-WALK (thread e749036e, 2026-07-27): a one-hop-only read goes blind the
+    # moment the IMMEDIATE ancestor never wrote a handoff (a phantom, or simply silent) even
+    # though a real one sits further back — nearest_handoff_ancestor (agents.py) walks up to
+    # 5 succeeded_from links, shared with the boot whisper so both read one implementation.
     inheritance = None
     if ident and ident.succeeded_from:
-        rows = await pool.fetch(
-            "SELECT DISTINCT ON (o.id) o.type, a.value #>> '{}' AS summary, a.observed_at "
-            "FROM current_assertions a JOIN objects o ON o.id = a.object_id "
-            "WHERE a.name = 'summary' AND a.source_id = $1 "
-            "AND a.evidence_class = 'self_declared' "
-            "AND o.type IN ('Thread','Decision') AND o.status = 'active' "
-            "AND (EXISTS (SELECT 1 FROM current_assertions h WHERE h.object_id = o.id "
-            "             AND h.name = 'is_handoff' AND h.value #>> '{}' = 'true') "
-            "     OR a.value #>> '{}' ILIKE '%handoff%' OR a.value #>> '{}' ILIKE '%letter%') "
-            "ORDER BY o.id, a.confidence DESC, a.observed_at DESC", ident.succeeded_from)
-        picks = sorted(rows, key=lambda r: r["observed_at"], reverse=True)[:2]
-        if picks:
+        found = await nearest_handoff_ancestor(pool, ident.succeeded_from)
+        if found:
+            from_id, picks = found
             inheritance = {
-                "from": ident.succeeded_from,
+                "from": from_id,
                 "notes": [{"kind": r["type"].lower(), "text": r["summary"][:800]}
                           for r in picks],
                 "note": "your ancestor's own parting words — read before taking up work",
