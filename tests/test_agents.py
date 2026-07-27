@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from src.actions.core import Actions
@@ -1359,6 +1359,28 @@ async def test_fold_zero_turn_ancestors_never_folds_a_root(actions: Actions) -> 
         actions, "agent:zt0004", root, now)
     assert restored_id == "agent:zt0004" and restored_oid == root
     assert await _false_mint(actions, "agent:zt0004") is None
+
+
+async def test_fold_zero_turn_ancestors_respects_the_mint_gates_own_window(
+    actions: Actions,
+) -> None:
+    """EXTENDS THE MINT GATE, NOT A NEW ONE BESIDE IT (Thoth LX, msg 1402): this fold shares
+    _debounce_roundtrip's own _SEAM_DEBOUNCE_SECS window, not a second one — a zero-turn
+    phantom minted long ago (outside the window) is no longer 'back-to-back' with anything
+    and must never fold, however silent it's stayed."""
+    from src.orchestrator.agents import _SEAM_DEBOUNCE_SECS, _fold_zero_turn_ancestors, mint_heir
+
+    root = await actions.create_or_find_object("Agent", "agent:zt0008", "test")
+    old_mint_time = datetime.now(UTC) - timedelta(seconds=_SEAM_DEBOUNCE_SECS + 60)
+    phantom, phantom_oid = await mint_heir(actions, "agent:zt0008", root, because="compaction",
+                                           succession=None, now=old_mint_time)
+    now = datetime.now(UTC)
+    restored_id, restored_oid = await _fold_zero_turn_ancestors(
+        actions, phantom, phantom_oid, now)
+    assert restored_id == phantom and restored_oid == phantom_oid, (
+        "outside the window — never folded, whatever the acts-check would have said"
+    )
+    assert await _false_mint(actions, phantom) is None
 
 
 async def test_fold_zero_turn_ancestors_is_idempotent(actions: Actions) -> None:

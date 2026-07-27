@@ -870,15 +870,29 @@ async def _fold_zero_turn_ancestors(
     Two call sites is a tractable, by-hand audit surface (grep mint_heir\\( in src/ to
     verify — there are exactly two).
 
-    Walks up through any CONSECUTIVE run of zero-turn ancestors (the same 64-iteration
-    bound mint_heir's own grave-avoidance loop uses), un-minting each — the IDENTICAL
-    stamps/estate-transfer _debounce_roundtrip already uses to heal a round-trip (kept as
-    its own separate block, not shared code, deliberately: two independent healers for two
-    independent triggers is safer here than one abstraction two fragile paths lean on) —
-    until the chain lands on either a REAL (witnessed) ancestor or the lineage root. A root
-    (no succeeded_from of its own — nothing minted it) is NEVER folded; it has nothing to
-    fold into. Idempotent: an already-folded phantom (false_mint already true) halts
-    immediately, unchanged — safe to re-run the fleet sweep below as often as wanted."""
+    EXTENDS THE MINT GATE, NOT A NEW ONE BESIDE IT (Thoth LX, msg 1402, 2026-07-27, citing
+    ruling a882b334 + thread a3d49d91/decision 0adfd32f — the SEAM PING-PONG cure that
+    built _debounce_roundtrip): that cure coalesces DUPLICATE OBSERVATIONS of ONE real seam
+    event (two observers racing the same /model). This is the OTHER residual class its own
+    post-mortem named (decision 035029ae): TWO REAL, DIFFERENT seam events back-to-back
+    (compact, then swap) with no turns between. The OUTCOME has to differ, deliberately —
+    a round-trip returns to a value THIS LINEAGE ALREADY HAD, so nothing new ever happened
+    and _debounce_roundtrip heals to NO mint at all; a compact-then-swap reaches a
+    GENUINELY NEW model, which a882b334 says still deserves a numeral — coalescing here
+    means MINT ONCE, not MINT ZERO, so this folds the phantom and lets the caller's normal
+    mint_heir call proceed against the corrected ancestor, rather than returning a heal
+    dict that skips minting the way _debounce_roundtrip's own round-trip case correctly
+    does. What IS shared, on purpose: the SAME window (_SEAM_DEBOUNCE_SECS — this is the
+    mint gate's actless-head window, not a second one), the SAME acts-check
+    (agent_has_acted), and the SAME false_mint/retired stamp shape.
+
+    Walks up through any CONSECUTIVE run of zero-turn ancestors within that window (the
+    same 64-iteration bound mint_heir's own grave-avoidance loop uses), un-minting each,
+    until the chain lands on either a REAL (witnessed) ancestor, the lineage root, or a
+    hop outside the window. A root (no succeeded_from of its own — nothing minted it) is
+    NEVER folded; it has nothing to fold into. Idempotent: an already-folded phantom
+    (false_mint already true) halts immediately, unchanged — safe to re-run the fleet
+    sweep below as often as wanted."""
     cur_id, cur_oid = ancestor_id, ancestor_oid
     for _ in range(64):
         meta = {r["name"]: (r["v"], r["at"]) for r in await actions.pool.fetch(
@@ -894,6 +908,8 @@ async def _fold_zero_turn_ancestors(
         minted_at = meta["minted_because"][1]
         if not grandancestor:
             break
+        if minted_at is None or (now - minted_at).total_seconds() > _SEAM_DEBOUNCE_SECS:
+            break  # outside the mint gate's own window — too old to call 'back-to-back'
         grand_oid = await actions.pool.fetchval(
             "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", grandancestor)
         if grand_oid is None:
