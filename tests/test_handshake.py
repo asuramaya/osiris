@@ -15,7 +15,6 @@ from src.actions.core import Actions
 from src.orchestrator import mounts as mounts_mod
 from src.orchestrator.handshake import (
     automount,
-    bridged_seat,
     office_claim,
     record_bridge_anchor,
     record_session_anchor,

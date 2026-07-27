@@ -8,6 +8,7 @@ graph in the SAME shape the miner produces, so it renders in the real `decision-
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from src.actions.core import Actions
 from src.ingest.mined import consolidate_memory
@@ -668,6 +669,65 @@ async def test_swap_banner_stands_down_for_a_triage_wake_on_the_economy_model(
             "VALUES ('wakeland','agent:sender',1,'mint')")
         out2 = await srv.orient(ctx=ctx)
         assert "ECONOMY" in out2.get("swap", "") and "not a rug-pull" in out2["swap"]
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+
+async def test_swap_banner_honors_the_osiris_pin_after_a_rebind(
+        actions: Actions, tmp_path: Path) -> None:
+    """thread d8535bff (cross-house, John IV/redmonth): rebind_seat writes the new office's
+    .osiris pin (and repoints agent_mounts.cwd) immediately, but a LIVE connection's cached
+    AgentIdentity.cwd — read straight off by orient()'s swap banner via _expected_model —
+    stayed frozen at the OLD cwd until the connection's next mount(), so the very next
+    orient() on the SAME connection still measured the banner against the old, un-pinned
+    cwd and kept confessing a swap the operator had already settled with the pin. The
+    rebind_seat tool now patches every live cached identity in the rebound lineage in
+    place, so the very next read sees the new anchor with no fresh mount() needed."""
+    from datetime import UTC, datetime
+
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity, claim_name
+
+    old_cwd = str(tmp_path / "old-office")
+    new_cwd = str(tmp_path / "new-office")
+    Path(old_cwd).mkdir()
+
+    a = await actions.create_or_find_object("Agent", "agent:rebindo1", "agent:rebindo1")
+    await actions.assert_property(a, "project", "rebindland", "agent:rebindo1",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await claim_name(actions, "agent:rebindo1", "Rebindo", source="agent:rebindo1")
+    await srv.mounts.save_mount(actions.pool, job_dir="/jobs/rebindo1", agent_id="agent:rebindo1",
+                                project="rebindland", cwd=old_cwd, model="claude-sonnet-5",
+                                session_key="k")
+    ident = AgentIdentity(agent_id="agent:rebindo1", session="rebindo1", project="rebindland",
+                          model="claude-sonnet-5", cwd=old_cwd, model_method="job_dir",
+                          model_history=("claude-sonnet-5",))
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = ident
+    try:
+        # no pin anywhere yet: diverging from the fleet default earns the banner
+        out = await srv.orient(ctx=ctx)
+        assert out.get("swap")
+
+        # the new office already carries the pin (extract's real shape: the operator
+        # seeds/confirms the new office's .osiris as part of the move)
+        Path(new_cwd).mkdir()
+        (Path(new_cwd) / ".osiris").write_text('model = "claude-sonnet-5"\n')
+        await srv.rebind_seat(seat="Rebindo", new_cwd=new_cwd, extract=True, ctx=ctx)
+
+        # the very next orient() on this SAME connection must see the settled pin
+        out2 = await srv.orient(ctx=ctx)
+        assert not out2.get("swap")
+        assert ident.cwd == new_cwd
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
