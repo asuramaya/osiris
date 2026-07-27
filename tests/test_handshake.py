@@ -215,6 +215,42 @@ async def test_the_whisper_honors_a_bound_seat(actions: Actions, tmp_path: Path)
     ) == 0  # the hash twin was never born
 
 
+async def test_the_whisper_reads_the_current_seat_generation_not_a_text_max(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """thread 43c84fa9 (stale generation label): _seat_of used to pick seat_generation via
+    a bare MAX(value) TEXT aggregate across EVERY current_assertions row for the property,
+    instead of the one CURRENT (highest-confidence, most-recent) value that seat_bearings
+    already reads correctly — current_assertions can carry more than one non-superseded
+    row per (object, name) under multiple writers (a real, live-confirmed condition), and a
+    bare text MAX picks whichever sorts highest as a STRING, not the right one: '9' text-
+    sorts above '12' even though 12 is the true, higher-confidence generation. This is
+    exactly why the resume-hook whisper (automount -> _seat_of) could announce a stale
+    numeral while orient() (-> seat_bearings), moments later in the same session, read
+    correctly."""
+    from src.orchestrator.agents import claim_name
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/text-max")
+    seat = await actions.create_or_find_object("Agent", "agent:7e57c0de", "agent:7e57c0de")
+    await claim_name(actions, "agent:7e57c0de", "Deckard", source="agent:7e57c0de")
+    now = datetime.now(UTC)
+    # the correct, current generation — high confidence, from the normal minting writer
+    await actions.assert_property(seat, "seat_generation", "12", "agent:7e57c0de", now, 0.9,
+                                  evidence_class="self_declared")
+    # a conflicting stray from another writer — LOWER confidence, but text-sorts ABOVE "12"
+    await actions.assert_property(seat, "seat_generation", "9", "agent:stray-writer", now, 0.4,
+                                  evidence_class="self_declared")
+    session_row = str(tmp_path / "jobs" / SID[:8])
+    await mounts_mod.save_mount(actions.pool, job_dir=session_row, agent_id="agent:7e57c0de",
+                                project="text-max", cwd="/w/text-max",
+                                model="claude-fable-5", session_key="k")
+    out = await automount(actions, session_id=SID, cwd="/w/text-max",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
+                          source="resume")
+    assert out["seat"] == "Deckard XII"
+
+
 async def test_a_stranger_compacting_at_birth_mints_nothing(actions: Actions,
                                                             tmp_path: Path) -> None:
     """You can only die if you lived: a session whose FIRST whisper arrives at a compact

@@ -761,12 +761,20 @@ async def session_end(
 
 
 async def _seat_of(actions: Actions, agent_id: str) -> str | None:
-    from src.orchestrator.agents import seat_label
-    row = await actions.pool.fetchrow(
-        "SELECT max(value#>>'{}') FILTER (WHERE a.name='handle') AS handle, "
-        "       max(value#>>'{}') FILTER (WHERE a.name='seat_generation') AS gen "
-        "FROM current_assertions a JOIN objects o ON o.id=a.object_id "
-        "WHERE o.canonical=$1 AND a.name IN ('handle','seat_generation')", agent_id)
-    if not row or not row["handle"]:
-        return None
-    return seat_label(agent_id, row["handle"], int(row["gen"]) if row["gen"] else None)
+    """The agent's claimed seat label ('Ra V'), or None if still anonymous. Delegates to
+    `seat_bearings` (agents.py) — the correctly-ordered read (`ORDER BY confidence DESC,
+    observed_at DESC LIMIT 1` per property) that orient()/mount() already use for the same
+    question. A PRIOR VERSION reimplemented this with a bare `max(value)` aggregate across
+    every current_assertions row for the name, instead of the one CURRENT (non-superseded)
+    value — current_assertions can legitimately carry more than one non-superseded row per
+    (object, name) under multiple writers (the house's own standing SQL-hygiene rule), and
+    a real one was found live: `agent:ad1a1cb0-g40-xxiv` carries two current
+    `seat_generation` values ('58' from a different agent, '2' self-declared). A bare
+    text MAX() picks whichever sorts highest as a STRING, not the highest-confidence/most-
+    recent one — an arbitrary, sometimes-wrong pick. That divergence from seat_bearings'
+    correct read is why the resume-hook whisper (automount() -> here) and mount() could
+    announce a stale/wrong generation label while orient(), moments later in the same
+    session, read correctly (thread 43c84fa9)."""
+    from src.orchestrator.agents import seat_bearings
+    bearings = await seat_bearings(actions.pool, agent_id)
+    return bearings.get("seat")
