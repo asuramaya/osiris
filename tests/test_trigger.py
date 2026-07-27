@@ -9,7 +9,6 @@ woken (it has no repo — the human reads it, membrane #6's upward lane).
 from __future__ import annotations
 
 import json
-import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -2258,26 +2257,30 @@ async def test_launch_defaults_to_the_harness_native_lane_with_an_honest_receipt
     assert len(spawned) == 1
     call = spawned[0]
     assert call["repo"] == "/tmp/sobek" and call["name"] == "[OS] Sobek"
-    assert call["session_id"] == trigger_module._seat_session_id(worker_seat)
-    assert call["seat_id"] == worker_seat
-    assert call["attach_token"]  # identity at birth — a non-empty one-time token
+    assert "session_id" not in call  # --bg ignores it; never passed (live finding 2026-07-27)
+    assert "job_dir" not in call  # env vars never reach a --bg spare either (same finding)
+    # THE BOOT PROMPT (live finding, 2026-07-27): identity rides the session's own first
+    # turn, not env stamping — it must tell the session to mount at this exact office and
+    # claim this exact handle, or a fresh launch mounts anonymous.
+    assert "/tmp/sobek" in call["prompt"]
+    assert 'claim_name("Sobek")' in call["prompt"]
 
 
 async def test_launch_harness_lane_is_idempotent_returns_the_live_body_not_a_twin(
     actions: Actions,
 ) -> None:
-    """A live `claude agents --json` row already wearing this seat's deterministic session id
-    → RETURN it, never spawn a twin (the same one-body law as the PTY lane, b3a86a7d)."""
+    """A live `claude agents --json` row already sitting at this seat's own office cwd →
+    RETURN it, never spawn a twin (the same one-body law as the PTY lane, b3a86a7d). Matched
+    on cwd, not session id: `--bg` assigns its own id and ignores any we present."""
     worker_seat, _manager_seat = await _managed_pair(
         actions, worker_agent="agent:hw02", manager_agent="agent:hm02",
         worker_handle="Anubis", house="osiris")
     await _office(actions, worker_seat, "/tmp/anubis")
-    sid = trigger_module._seat_session_id(worker_seat)
     spawned: list[dict[str, Any]] = []
     d = await trigger_module.launch_seat(
         actions, caller="agent:hm02", target=worker_seat,
         spawn=_fake_spawn(spawned),
-        agents_json=_fake_agents_json([[{"sessionId": sid, "name": "[OS] Anubis"}]]))
+        agents_json=_fake_agents_json([[{"cwd": "/tmp/anubis", "name": "[OS] Anubis"}]]))
 
     assert d["status"] == "already-live"
     assert d["body_exists"] is True and d["can_receive"] is True
@@ -2289,16 +2292,16 @@ async def test_launch_harness_lane_can_receive_true_when_the_session_comes_up_li
     actions: Actions,
 ) -> None:
     """The post-spawn READ is real, not hard-coded false — when the fresh session already
-    shows up in `claude agents --json`, can_receive reports it."""
+    shows up in `claude agents --json` at the seat's own office cwd, can_receive reports it."""
     worker_seat, _manager_seat = await _managed_pair(
         actions, worker_agent="agent:hw03", manager_agent="agent:hm03",
         worker_handle="Bastet", house="osiris")
     await _office(actions, worker_seat, "/tmp/bastet")
-    sid = trigger_module._seat_session_id(worker_seat)
     d = await trigger_module.launch_seat(
         actions, caller="agent:hm03", target=worker_seat,
         spawn=_fake_spawn([]),
-        agents_json=_fake_agents_json([[], [{"sessionId": sid, "name": "[OS] Bastet"}]]))
+        agents_json=_fake_agents_json(
+            [[], [{"cwd": "/tmp/bastet", "sessionId": "real-abc", "name": "[OS] Bastet"}]]))
 
     assert d["status"] == "launched"
     assert d["body_exists"] is True and d["can_receive"] is True
@@ -2335,7 +2338,9 @@ async def test_launch_harness_lane_records_the_unpriced_cost_honestly(actions: A
     await _office(actions, worker_seat, "/tmp/khepri")
     d = await trigger_module.launch_seat(
         actions, caller="agent:hm05", target=worker_seat,
-        spawn=_fake_spawn([]), agents_json=_fake_agents_json([[]]),
+        spawn=_fake_spawn([]),
+        agents_json=_fake_agents_json(
+            [[], [{"cwd": "/tmp/khepri", "sessionId": "khepri-sess", "name": "[OS] Khepri"}]]),
         cost_reader=_fake_cost_reader(
             {"priced": False, "reason": "claude agents --json carries no cost field"}))
 
@@ -2343,6 +2348,30 @@ async def test_launch_harness_lane_records_the_unpriced_cost_honestly(actions: A
     rows = await _launch_usage_rows(actions)
     assert len(rows) == 1
     assert rows[0]["purpose"] == "launch" and rows[0]["cost_usd"] is None
+
+
+async def test_launch_harness_lane_skips_metering_when_not_yet_visible(actions: Actions) -> None:
+    """A launch not yet showing up in `claude agents --json` has no REAL session id to look
+    up cost for — it is simply not metered THIS cycle, never metered on a guessed id (the
+    cost_reader must not even be called)."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:hw08", manager_agent="agent:hm08",
+        worker_handle="Tefnut-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/tefnut-test")
+    calls: list[str] = []
+
+    async def _cost(session_id: str, *, cwd: str | None = None) -> dict[str, Any]:
+        calls.append(session_id)
+        return {"priced": False, "reason": "should never be called"}
+
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm08", target=worker_seat,
+        spawn=_fake_spawn([]), agents_json=_fake_agents_json([[], []]), cost_reader=_cost)
+
+    assert d["status"] == "launched" and d["can_receive"] is False
+    assert calls == []
+    rows = await _launch_usage_rows(actions)
+    assert len(rows) == 0
 
 
 async def test_launch_harness_lane_records_a_real_price_if_the_reader_has_one(
@@ -2356,7 +2385,9 @@ async def test_launch_harness_lane_records_a_real_price_if_the_reader_has_one(
     await _office(actions, worker_seat, "/tmp/wadjet")
     d = await trigger_module.launch_seat(
         actions, caller="agent:hm06", target=worker_seat,
-        spawn=_fake_spawn([]), agents_json=_fake_agents_json([[]]),
+        spawn=_fake_spawn([]),
+        agents_json=_fake_agents_json(
+            [[], [{"cwd": "/tmp/wadjet", "sessionId": "wadjet-sess", "name": "[OS] Wadjet"}]]),
         cost_reader=_fake_cost_reader({"priced": True, "cost_usd": 0.17}))
 
     assert d["status"] == "launched"
@@ -2393,20 +2424,11 @@ async def test_launch_harness_lane_delivers_the_opening_brief_over_the_mail_lane
 # monkeypatched, never a real `claude` process.
 
 
-def test_seat_session_id_is_deterministic_and_seat_specific() -> None:
-    """The substrate's join key: same seat_id -> same session id, every time (uuid5, never a
-    fresh roll) — and two different seats never collide."""
-    a1 = trigger_module._seat_session_id("seat:fe041bc5")
-    a2 = trigger_module._seat_session_id("seat:fe041bc5")
-    b = trigger_module._seat_session_id("seat:34f4e5fa")
-    assert a1 == a2
-    assert a1 != b
-    uuid.UUID(a1)  # a valid UUID string — the exact shape --session-id requires
-
-
 async def test_spawn_claude_bg_issues_the_documented_bg_flags(monkeypatch: Any) -> None:
-    """`--bg` + `-n` + `--model` + `--session-id` — the sanctioned flags the spike verified,
-    never the undocumented daemon claim-socket. Fire-and-forget: NOTHING here awaits the
+    """`--bg` + `-n` + `--model` + a trailing prompt — the sanctioned flags the spike
+    verified, never the undocumented daemon claim-socket, and NEVER `--session-id` (live
+    finding, 2026-07-27: `--bg` manages its own session id and silently ignores an explicit
+    one — see _spawn_claude_bg's own docstring). Fire-and-forget: NOTHING here awaits the
     process (same B1 scar _spawn_claude's tests guard), so a fake proc with just a pid
     satisfies the call."""
     from src.orchestrator import trigger
@@ -2422,22 +2444,22 @@ async def test_spawn_claude_bg_issues_the_documented_bg_flags(monkeypatch: Any) 
         return _Proc()
 
     monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
-    sid = trigger._seat_session_id("seat:deadbeef")
     await trigger._spawn_claude_bg(
         "/home/asuramaya/.osiris/seats/nefer", name="[OS] Nefer",
-        model="claude-sonnet-5", session_id=sid, job_dir="/tmp/jobs/nefer")
+        model="claude-sonnet-5", prompt="mount and claim_name")
 
     assert captured["args"][:2] == ("claude", "--bg")
     pairs = _pairs(captured["args"])
     assert ("-n", "[OS] Nefer") in pairs
     assert ("--model", "claude-sonnet-5") in pairs
-    assert ("--session-id", sid) in pairs
-    assert captured["env"]["CLAUDE_JOB_DIR"] == "/tmp/jobs/nefer"
+    assert not any(a == "--session-id" for a in captured["args"])
+    assert captured["args"][-1] == "mount and claim_name"  # the trailing positional prompt
 
 
 async def test_spawn_claude_bg_never_leaks_the_spawners_own_anchor(monkeypatch: Any) -> None:
     """Same anchor discipline as _spawn_claude (the collision class, 2294e95d): the spawner's
-    own CLAUDE_JOB_DIR must never reach the child unless explicitly re-minted for it."""
+    own CLAUDE_JOB_DIR must never reach the child — inert for --bg today (no env var reaches
+    a claimed spare either way, live finding 2026-07-27) but cheap and harmless to scrub."""
     from src.orchestrator import trigger
 
     captured: dict[str, Any] = {}
@@ -2455,48 +2477,25 @@ async def test_spawn_claude_bg_never_leaks_the_spawners_own_anchor(monkeypatch: 
     assert "CLAUDE_JOB_DIR" not in captured["env"]
 
 
-async def test_spawn_claude_bg_stamps_identity_at_birth_when_given_a_seat(
+async def test_spawn_claude_bg_omits_the_prompt_argument_when_none_given(
     monkeypatch: Any,
 ) -> None:
-    """THE ATTACH CEREMONY (identity core, 5cef856b), parity with the daemon's own
-    `_op_pty_spawn`: bypassing osiris-manager for this substrate must not also bypass the
-    seat_id/attach_token env stamp, or a launched body comes up an anonymous stranger."""
+    """No prompt → no trailing positional arg at all, never an empty string (the CLI would
+    treat "" as a real, if useless, prompt)."""
     from src.orchestrator import trigger
 
     captured: dict[str, Any] = {}
 
     class _Proc:
-        pid = 7
+        pid = 9
 
     async def _fake_exec(*args: Any, **kwargs: Any) -> _Proc:
-        captured["env"] = kwargs.get("env")
+        captured["args"] = args
         return _Proc()
 
     monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
-    await trigger._spawn_claude_bg(
-        "/repo/demo", seat_id="seat:deadbeef", attach_token="tok-abc123")
-    assert captured["env"]["OSIRIS_SEAT_ID"] == "seat:deadbeef"
-    assert captured["env"]["OSIRIS_ATTACH_TOKEN"] == "tok-abc123"
-
-
-async def test_spawn_claude_bg_stamps_nothing_without_a_seat(monkeypatch: Any) -> None:
-    """No seat_id/attach_token given → no stamp at all, never a half-written pair — a
-    caller error should fail LOUD at the attach ceremony downstream, not silently."""
-    from src.orchestrator import trigger
-
-    captured: dict[str, Any] = {}
-
-    class _Proc:
-        pid = 8
-
-    async def _fake_exec(*args: Any, **kwargs: Any) -> _Proc:
-        captured["env"] = kwargs.get("env")
-        return _Proc()
-
-    monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
-    await trigger._spawn_claude_bg("/repo/demo")
-    assert "OSIRIS_SEAT_ID" not in captured["env"]
-    assert "OSIRIS_ATTACH_TOKEN" not in captured["env"]
+    await trigger._spawn_claude_bg("/repo/demo", name="bare")
+    assert captured["args"] == ("claude", "--bg", "-n", "bare")
 
 
 async def test_claude_agents_json_parses_a_real_shaped_sample(monkeypatch: Any) -> None:

@@ -2575,27 +2575,37 @@ async def launch(target: str, message: str = "", model: str | None = None,
                  ctx: Context | None = None) -> dict[str, Any]:
     """Give a seat a BODY — the create-verb wake() is the speak-verb of (thread 9f566244 piece
     D, ruling 43b84c5e). wake() knocks on a body that already exists; launch() summons a fresh
-    `claude` into the target seat's own office via the manager daemon's pty_spawn, with the
-    seat's identity minted into the child before its first breath (it self-binds, no whisper
-    guessing — §4.2). DISTINCT from wake in two ways that matter: it is DOWNWARD-ONLY (you may
-    only body a seat you MANAGE — a worker can wake its manager but never spawn it a body,
-    78e3734e), and it is CREATE not inject — a new session, never a turn forged into an existing
-    one, so it is not the frozen reply lane.
+    `claude` into the target seat's own office. DISTINCT from wake in two ways that matter: it
+    is DOWNWARD-ONLY (you may only body a seat you MANAGE — a worker can wake its manager but
+    never spawn it a body, 78e3734e), and it is CREATE not inject — a new session, never a turn
+    forged into an existing one, so it is not the frozen reply lane.
+
+    THE DEFAULT SUBSTRATE IS HARNESS-NATIVE (task #68 default flip, rulings 0fe36e59 +
+    33d6a2eb clause 3): a `claude --bg` background session, visible in the operator's own
+    `claude agents` list BY CONSTRUCTION — no daemon, no PTY. It self-binds via its own FIRST
+    TURN (a boot prompt telling it to mount() then claim_name(<handle>) — the same adoption
+    path a human follows into a fresh office), not env-stamped credentials: a real spawn
+    proved `--bg` claims a pre-forked spare whose environment is fixed before this call ever
+    runs, so nothing this call sets (CLAUDE_JOB_DIR included) reaches it. The old osiris
+    PTY-broker lane (identity minted into the child before its first breath via the manager
+    daemon's pty_spawn, §4.2) survives as an explicit fallback (`osiris_launch_substrate`),
+    never the default again.
 
     Idempotent: a live body already holding the seat is RETURNED, never twinned. `message`, if
-    given, is delivered as the body's opening brief over the ordinary mail lane (the trigger
-    types it into the fresh window once alive) — never a hand-forged turn.
+    given, is delivered as the body's opening brief over the ordinary mail lane — never a
+    hand-forged turn; the body reads it via inbox() once it has mounted.
 
     THE OPERATOR NEVER CALLS THIS, ON PURPOSE: there is no operator parameter — an override a
     caller can assert is an override that can be forged; the operator's real hand stays
     out-of-band. The receipt is HONEST (Ra's requirement, 53ae1a87): `body_exists` (the window
     was created) and `can_receive` (an independent read confirms it is live) are SEPARATE — a
     freshly-spawned claude takes seconds to boot, so a launch usually returns body_exists=true,
-    can_receive=false, and `detail` says to confirm via pty_list/occupancy. `status` is one of:
-    `launched`, `already-live` (idempotent hit), `manager-cold` (the manager daemon is down —
-    ask the operator to start osiris-manager; nothing spawned), `refused-not-your-worker` (no
-    downward managed_by edge — nothing spawned), `refused-no-office`/`refused-no-handle` (the
-    seat is not ready to be bodied), or `refused-spawn` (the daemon declined — see `detail`)."""
+    can_receive=false, and `detail` says to confirm via `claude agents --json` (or pty_list /
+    occupancy on the PTY fallback). `status` is one of: `launched`, `already-live` (idempotent
+    hit), `manager-cold` (the PTY fallback's daemon is down — ask the operator to start
+    osiris-manager; nothing spawned), `refused-not-your-worker` (no downward managed_by edge —
+    nothing spawned), `refused-no-office`/`refused-no-handle` (the seat is not ready to be
+    bodied), or `refused-spawn` (the spawn declined — see `detail`)."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a launch must say who "

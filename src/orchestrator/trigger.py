@@ -23,7 +23,6 @@ import os
 import re
 import tempfile
 import time
-import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -1445,36 +1444,46 @@ async def launch_seat(
         # Every body this creates is visible in the operator's own `claude agents` list BY
         # CONSTRUCTION (clause 3, "front end wide open", made mechanical instead of patched
         # around) — see the spike verdict f2dc98549521 and _spawn_claude_bg's own docstring.
-        session_id = _seat_session_id(target_seat)
+        #
+        # IDEMPOTENCY MATCHES ON THE SEAT'S OWN OFFICE CWD, NOT A SESSION ID (live finding,
+        # 2026-07-27, replacing the original design): `claude --bg` MANAGES ITS OWN SESSION ID
+        # and silently ignores an explicit `--session-id` ("warning: --bg manages the session
+        # id; ignoring --session-id" on stderr, which a fire-and-forget spawn never reads) —
+        # confirmed against a real spawn, not assumed. A seat's office is 1:1 with the seat by
+        # construction (establish_office/mint_seat), so any live process already sitting there
+        # IS its body, whatever session id the harness gave it.
         try:
             roster = await agents_json(cwd=office)
         except (OSError, TimeoutError, ValueError):
             roster = []
         live = next((r for r in roster
-                    if isinstance(r, dict) and r.get("sessionId") == session_id), None)
+                    if isinstance(r, dict) and r.get("cwd") == office), None)
         if live is not None:
             return {"status": "already-live", "window": live.get("name"), "seat": target_seat,
                     "body_exists": True, "can_receive": True, "attach": attach,
                     "detail": f"a live body already holds {handle} — not minting a twin"}
 
-        # THE ATTACH CEREMONY, WITHOUT THE DAEMON (identity core, 5cef856b): this substrate
-        # bypasses osiris-manager entirely, so `_op_pty_spawn`'s own ensure_seat +
-        # mint_attach_token call never runs for it. Do it here instead — or a launched body
-        # comes up an anonymous stranger on its first breath (THE FULL VISITOR GATE,
-        # handshake.py), failing the very acceptance case this flip exists to pass ("identity
-        # binds, no anon"). ensure_seat is idempotent by (house, handle): this returns the
-        # SAME target_seat, never a twin.
-        from src.orchestrator.seats import ensure_seat, mint_attach_token
-        seated = await ensure_seat(actions, house=house, handle=handle, anchor_cwd=office,
-                                   source="osiris-trigger")
-        if seated.get("error"):
-            return {"status": "refused-spawn", "seat": target_seat,
-                    "detail": f"seat refused: {seated['error']}"}
-        token = await mint_attach_token(pool, seat_id=seated["seat_id"],
-                                        minted_by="osiris-trigger")
+        # IDENTITY, VIA THE SESSION'S OWN FIRST TURN, NOT ENV STAMPING (live finding,
+        # 2026-07-27, replacing the original design): `--bg` claims a PRE-FORKED spare
+        # process off a claim-socket (confirmed via `ps`/`/proc/<pid>/environ` on a real
+        # spawn — the spare's env is fixed at fork time, long before this call), so NEITHER
+        # CLAUDE_JOB_DIR NOR any OSIRIS_*-prefixed var this call sets ever reaches the
+        # claimed session — a real launch mounted anonymous (agent:<sid8>, seat=null) with
+        # every one of them stamped. `claude [options] [prompt]` DOES deliver a trailing
+        # positional prompt as the session's genuine first turn (confirmed live) — so the
+        # boot instruction rides THAT, telling the session to bind itself via mount() +
+        # claim_name(handle), the same proven, independently-tested adoption path a human
+        # follows into a fresh office (claim_name: a name matching an already-vacant seat is
+        # ADOPTED, never twinned — see mint_seat's own receipt: '...or start a session in
+        # the office and have it claim_name itself').
+        boot_prompt = (
+            f'You have just been launched into your own seat\'s office. Call '
+            f'mount(cwd="{office}", job_dir="{anchor}"), then claim_name("{handle}") — that '
+            f"exact name — to bind to the seat already waiting for you. Then inbox() for "
+            f"your opening brief."
+        )
         try:
-            await spawn(office, name=name, model=argv_model, session_id=session_id,
-                       job_dir=anchor, seat_id=seated["seat_id"], attach_token=token)
+            await spawn(office, name=name, model=argv_model, prompt=boot_prompt)
         except OSError as exc:
             return {"status": "refused-spawn", "seat": target_seat,
                     "detail": f"claude --bg failed to start ({exc}); NOTHING was spawned"}
@@ -1483,18 +1492,19 @@ async def launch_seat(
         # word; can_receive is a SEPARATE, independent read — `claude --bg` returns as soon as
         # the harness's own background-agent daemon takes the session over, which can be
         # seconds before it necessarily shows up in `claude agents --json`.
-        alive = False
+        alive_row: dict[str, Any] | None = None
         try:
-            alive = any(isinstance(r, dict) and r.get("sessionId") == session_id
-                       for r in await agents_json(cwd=office))
+            alive_row = next((r for r in await agents_json(cwd=office)
+                              if isinstance(r, dict) and r.get("cwd") == office), None)
         except (OSError, TimeoutError, ValueError):
             pass
         out = {
             "status": "launched", "window": name, "seat": target_seat,
-            "body_exists": True, "can_receive": alive, "spawned_model": argv_model,
-            "detail": ("body created and live" if alive else
+            "body_exists": True, "can_receive": alive_row is not None,
+            "spawned_model": argv_model,
+            "detail": ("body created and live" if alive_row is not None else
                        "body created; mount NOT yet confirmed — the claude is booting and "
-                       "will self-bind via its attach token; confirm with `claude agents "
+                       "will self-bind via its own boot prompt; confirm with `claude agents "
                        "--json`"),
             "attach": attach,
         }
@@ -1506,16 +1516,23 @@ async def launch_seat(
         # the honest UNPRICED/blind class today (confirmed live, 2026-07-27 — no cost field
         # exists on this surface at all) — never folded into 0, which the ceiling would
         # silently read as a free call. Fail-open: a metering failure must never cost a launch.
-        try:
-            priced = await cost_reader(session_id, cwd=office)
-            from src.ingest.providers import Usage
-            from src.ingest.usage import record_usage
-            await record_usage(
-                pool, purpose="launch",
-                usage=Usage(model=argv_model or "unknown",
-                           cost_usd=priced.get("cost_usd") if priced.get("priced") else None))
-        except Exception:  # noqa: BLE001 — a metering failure must never cost a launch
-            _log.debug("launch cost-metering failed for %s", session_id, exc_info=True)
+        # Needs the REAL session id the harness assigned (the live roster row, just read for
+        # can_receive) — a launch not yet visible there has nothing to look up YET; it is
+        # simply not metered this cycle rather than metered on a guessed id.
+        real_session_id = (alive_row or {}).get("sessionId")
+        if real_session_id:
+            try:
+                priced = await cost_reader(str(real_session_id), cwd=office)
+                from src.ingest.providers import Usage
+                from src.ingest.usage import record_usage
+                await record_usage(
+                    pool, purpose="launch",
+                    usage=Usage(model=argv_model or "unknown",
+                               cost_usd=(priced.get("cost_usd")
+                                         if priced.get("priced") else None)))
+            except Exception:  # noqa: BLE001 — a metering failure must never cost a launch
+                _log.debug("launch cost-metering failed for %s", real_session_id,
+                          exc_info=True)
 
     # THE OPENING BRIEF rides the ordinary mail→poke lane, never a hand-forged turn: sent as a
     # graded ask to the new seat, the trigger types it into the fresh window once it is alive.
@@ -1701,23 +1718,9 @@ async def _spawn_in_body(
 # open") made mechanical, not patched around (contrast the attach-line receipt, part 2 of this
 # task, which is an interim fix for the OLD substrate's blind spot, not a replacement for this).
 
-_SEAT_SESSION_NAMESPACE = uuid.UUID("b3f6b6b0-3f77-4b1a-9f3e-2f7a2b6b6b6b")
-
-
-def _seat_session_id(seat_id: str) -> str:
-    """A deterministic `--session-id` per seat — presenting the SAME seat_id always derives
-    the SAME harness session id, so a relaunch/resume of one seat targets the one underlying
-    claude session instead of osiris inferring identity from a fresh job_dir every time (the
-    binding leg's own join key, clause 1 of 33d6a2eb, once that lands). uuid5, never uuid4:
-    must be reproducible from the seat_id alone, never randomly re-rolled."""
-    return str(uuid.uuid5(_SEAT_SESSION_NAMESPACE, seat_id))
-
-
 async def _spawn_claude_bg(
     repo: str, *, name: str | None = None, model: str | None = None,
-    session_id: str | None = None, job_dir: str | None = None,
-    allowed_tools: str | None = None, seat_id: str | None = None,
-    attach_token: str | None = None,
+    prompt: str | None = None, allowed_tools: str | None = None,
 ) -> None:
     """`claude --bg` in `repo` — the harness's own documented background-session surface.
     SAME fire-and-forget discipline as `_spawn_claude`/`_spawn_in_body` (B1's scar: an arq
@@ -1725,38 +1728,44 @@ async def _spawn_claude_bg(
     itself returns almost immediately once the harness's background-agent daemon has taken
     the session over, so this call confirms only that the command was ISSUED, never that the
     session completed; poll `_claude_agents_json` for that, the same surface the operator's
-    own front end reads. `session_id` should be `_seat_session_id(seat_id)` — presenting it
-    is what makes a later relaunch of the same seat rebind instead of minting a twin.
+    own front end reads.
 
-    `seat_id`/`attach_token` (the default-flip's parity fix, task #68 wave): THE ATTACH
-    CEREMONY (identity core, 5cef856b) is how a spawned body self-binds with no whisper
-    guessing — the daemon's own `_op_pty_spawn` has always stamped these into the child's
-    env before its first breath. Bypassing the daemon for this substrate must not also
-    bypass that ceremony, or a launch's acceptance test ('identity binds, no anon') fails on
-    every FIRST launch of a seat (no prior mount row at this anchor for `bound` to find)."""
+    NO ENV-VAR IDENTITY CHANNEL (the default-flip's live correction, task #68 wave,
+    2026-07-27): an earlier build of this primitive (commit 33b3984) set CLAUDE_JOB_DIR /
+    OSIRIS_SEAT_ID / OSIRIS_ATTACH_TOKEN here and presented a deterministic
+    `--session-id`, on the theory that a spawned child inherits this call's env like any
+    other subprocess. A real spawn proved that wrong on BOTH counts: `--bg` claims a
+    PRE-FORKED spare off a claim-socket (confirmed via `ps`/a real spare's own
+    `/proc/<pid>/environ` — its env was fixed at fork time, long before this call, and NONE
+    of those three vars ever reached it) and separately ignores an explicit `--session-id`
+    outright ('warning: --bg manages the session id; ignoring --session-id' on stderr,
+    which this fire-and-forget spawn never reads). Neither env vars nor a chosen session id
+    are a working channel into a `--bg` session's identity.
+
+    `prompt` IS a working channel — `claude [options] [prompt]` delivers a trailing
+    positional prompt as the session's genuine first turn (confirmed live) — so
+    launch_seat now hands the session its own boot instruction there (mount + claim_name,
+    with cwd/job_dir as literal strings in the text, needing no env passthrough at all) and
+    idempotency matches on the seat's own office cwd instead of a session id (see
+    launch_seat's harness-lane comment)."""
     env = os.environ.copy()
     # same anchor discipline as _spawn_claude: a spawner's own anchor must never leak into
-    # the child (the anchor-collision class, 2294e95d) — the child gets the one minted below.
+    # the child (the anchor-collision class, 2294e95d) — inert for --bg today (env vars
+    # don't reach the claimed spare either way) but cheap and harmless to keep scrubbed.
     env.pop("CLAUDE_JOB_DIR", None)
     cmd = ["claude", "--bg"]
     if name:
         cmd += ["-n", name]
     if model:
         cmd += ["--model", model]
-    if session_id:
-        cmd += ["--session-id", session_id]
     if allowed_tools:
         cmd += ["--allowedTools", allowed_tools]
-    if job_dir:
-        env["CLAUDE_JOB_DIR"] = job_dir
-    if seat_id and attach_token:
-        env["OSIRIS_SEAT_ID"] = seat_id
-        env["OSIRIS_ATTACH_TOKEN"] = attach_token
+    if prompt:
+        cmd.append(prompt)
     proc = await asyncio.create_subprocess_exec(
         *cmd, cwd=repo, env=env,
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-    _log.info("trigger: bg-spawned %s in %s (pid %s, session %s)",
-              name or "(unnamed)", repo, proc.pid, session_id or "none")
+    _log.info("trigger: bg-spawned %s in %s (pid %s)", name or "(unnamed)", repo, proc.pid)
 
 
 async def _claude_agents_json(
