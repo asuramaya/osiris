@@ -952,16 +952,28 @@ async def focus_object(object_ref: str, ctx: Context | None = None) -> dict[str,
 
 
 @mcp.tool()
-async def run_composition(name: str, subject: str | None = None,
-                          ctx: Context | None = None) -> dict[str, Any]:
+async def run_composition(
+    name: str, subject: str | None = None,
+    fields: list[str] | None = None, take: int | None = None, depth: int | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
     """Run a saved composition, optionally against a subject object (UUID or name), AND light
     it up on the operator's live screen. Returns its result — an object set (each named), a
-    value list, or aggregate rows."""
+    value list, or aggregate rows.
+
+    `fields`/`take`/`depth` (ruling ad19a779, task #64) bound a large result at the SOURCE
+    instead of shipping it whole: `fields` keeps only the named columns per row (e.g.
+    ["id","summary"]), `take` caps each list to its first N, `depth` caps how many nested
+    levels (a roadmap's own section→arc→owner) get walked before collapsing to a count.
+    Omit all three for the full result, unchanged — a roadmap-sized composition (61K chars
+    unbounded) can now be asked for narrow and small in one call: run_composition("roadmap",
+    subject="osiris", fields=["id","summary"], take=5, depth=2)."""
     pool = await _pool_get()
     ident = await _ident_for(ctx)
     sid = await _resolve(pool, subject) if subject else None
     res = await comp.run_composition(pool, name, sid,
-                                     caller=(ident.agent_id if ident else None))
+                                     caller=(ident.agent_id if ident else None),
+                                     fields=fields, take=take, depth=depth)
     # drive the front end: show this composition (and its subject, so a subject-lens reproduces)
     await _set_console(pool, by="claude", composition=name,
                        **({"focused_object_id": sid} if sid else {}))

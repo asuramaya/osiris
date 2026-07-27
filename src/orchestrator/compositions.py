@@ -2546,15 +2546,76 @@ async def _package(pool: asyncpg.Pool, res: Result) -> Any:
     return res.values
 
 
+def _count_leaves(node: Any) -> int:
+    """How many actual rows a nested "data" dict holds — NOT `len(dict)` (top-level KEYS,
+    what `run_spec`'s own `count` field already means and keeps meaning; this is the honest
+    total `take`/`depth` bound against, the number the ROADMAP-sized-blob problem is
+    actually about). A dict recurses (section→arc→owner…); a list is that many rows; a
+    scalar is one."""
+    if isinstance(node, dict):
+        return sum(_count_leaves(v) for v in node.values())
+    if isinstance(node, list):
+        return len(node)
+    return 1
+
+
+def _bound_items(
+    items: Any, *, fields: list[str] | None, take: int | None, depth: int | None,
+) -> tuple[Any, dict[str, dict[str, int]]]:
+    """THE LENS doing its own job (ruling ad19a779, task #64) instead of leaning on
+    `budget.fit()`'s blind backstop — a caller who KNOWS they want 3 rows of 2 fields
+    should never have to receive 53 full rows and pay the trim after. Same "no silent
+    caps" law as `fit()` (same "shown"/"of" shape too, so a reader who's seen one has seen
+    both): every path this actually trims is reported, never a quiet drop. Structural dict
+    nesting (a `group`'s own section/arc/owner keys) is walked, never filtered by `fields`
+    — `fields` only ever prunes a LEAF row's own columns; `depth` collapses everything
+    below the requested level to its honest count rather than silently rendering it flat
+    (a caller who asked for depth=1 must not be quietly handed depth=3)."""
+    dropped: dict[str, dict[str, int]] = {}
+
+    def walk(node: Any, path: tuple[str, ...], remaining_depth: int | None) -> Any:
+        if isinstance(node, dict):
+            if remaining_depth is not None and remaining_depth <= 0:
+                total = _count_leaves(node)
+                dropped[".".join(path) or "(root)"] = {"shown": 0, "of": total}
+                return {"_count": total}
+            next_depth = None if remaining_depth is None else remaining_depth - 1
+            return {k: walk(v, (*path, str(k)), next_depth) for k, v in node.items()}
+        if isinstance(node, list):
+            kept = node[:take] if take is not None else node
+            if take is not None and len(node) > take:
+                dropped[".".join(path) or "(root)"] = {"shown": len(kept), "of": len(node)}
+            return [_bound_row(x, fields) for x in kept]
+        return node
+
+    return walk(items, (), depth), dropped
+
+
+def _bound_row(item: Any, fields: list[str] | None) -> Any:
+    if fields and isinstance(item, dict):
+        return {k: item[k] for k in fields if k in item}
+    return item
+
+
 async def run_spec(
     pool: asyncpg.Pool, spec: dict[str, Any], subject: uuid.UUID | None = None,
     name: str = "(spec)", caller: str | None = None,
+    *, fields: list[str] | None = None, take: int | None = None, depth: int | None = None,
 ) -> dict[str, Any]:
     """Evaluate an op-tree and package the Result for the generic renderer. The inline
     composer (W4) runs an EPHEMERAL working spec through here as you edit chips — no save.
     `caller` is who is reading (an agent id, 'operator'/'console' for the human's own
     surfaces, None for anonymous) — the reflection ACL's input (6c18709f), carried to the
-    ops on a contextvar so a nested select inherits it without parameter-threading."""
+    ops on a contextvar so a nested select inherits it without parameter-threading.
+
+    `fields`/`take`/`depth` (ruling ad19a779, task #64 — projection/pagination) bound the
+    PACKAGED result before it ever reaches a caller: `fields` keeps only the named columns
+    on each leaf row, `take` caps each list to its first N (composition ops already put the
+    most relevant rows first — rank/order run inside the op-tree, this never re-sorts),
+    `depth` caps how many nested dict levels (a `group`'s own section/arc/owner structure)
+    get walked before collapsing to an honest count. None (the default, every existing
+    caller) is a complete no-op — untouched items, unchanged shape, byte-identical to before
+    this ruling existed."""
     token = _ACL_CALLER.set(caller) if caller is not None else None
     try:
         res = await _eval(pool, spec, subject)
@@ -2563,19 +2624,36 @@ async def run_spec(
         if token is not None:
             _ACL_CALLER.reset(token)
     count = len(items) if isinstance(items, list | dict) else 1
-    return {"composition": name, "kind": res.kind, "count": count, "items": items, "spec": spec}
+    out: dict[str, Any] = {"composition": name, "kind": res.kind, "count": count,
+                           "items": items, "spec": spec}
+    if fields or take is not None or depth is not None:
+        out["items"], dropped = _bound_items(items, fields=fields, take=take, depth=depth)
+        if dropped:
+            # `_projected`, never `_bounded` — `budget.fit()` (the LATER, generic backstop
+            # every MCP tool result passes through, mcp_server.BoundedMCP.call_tool) writes
+            # its OWN `_bounded` key if the response is STILL over budget after this; a
+            # shared key name would let one silently clobber the other's honest receipt.
+            out["_projected"] = {"tool": "run_composition", "note": (
+                "you asked for a bounded view — this names exactly what's not shown, same "
+                "as an unrequested trim would."), "dropped": dropped}
+    return out
 
 
 async def run_composition(
     pool: asyncpg.Pool, ref: str, subject: uuid.UUID | None = None,
     caller: str | None = None,
+    *, fields: list[str] | None = None, take: int | None = None, depth: int | None = None,
 ) -> dict[str, Any]:
     """Execute a saved composition (by name or id), optionally against a subject.
-    `caller` = who is reading (the reflection ACL's input — see run_spec)."""
+    `caller` = who is reading (the reflection ACL's input — see run_spec). `fields`/`take`/
+    `depth` — see run_spec; a roadmap-sized composition (task #64's own proof case: 61K
+    chars, 53 threads, unbounded) can now be asked for narrow and small in one call instead
+    of shipping whole and getting post-processed by hand."""
     spec = await _spec_of(pool, ref)
     if spec is None:
         return {"error": f"no composition {ref!r}"}
-    return await run_spec(pool, spec, subject, name=ref, caller=caller)
+    return await run_spec(pool, spec, subject, name=ref, caller=caller,
+                          fields=fields, take=take, depth=depth)
 
 
 # --- default compositions (templates — the engine's opinions, now forkable) --

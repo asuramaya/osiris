@@ -345,6 +345,132 @@ async def test_nested_ops_work_inside_a_function_sourced_partition(actions: Acti
     assert res["items"]["agent:y"][0]["summary"] == "only-y"
 
 
+# --- projection/pagination (ruling ad19a779, task #64): a caller who knows they want 3 rows
+# of 2 fields must never have to receive 53 full rows and pay the trim after. Proven against
+# the SAME nested shape (group-by-arc-then-owner) that produced the real 61K-char roadmap
+# blob this ruling names. -----------------------------------------------------------------
+
+async def _arc_owner_threads(actions: Actions) -> None:
+    for cik, arc, owner, amt in [
+        ("30", "ai", "agent:x", "1"), ("31", "ai", "agent:x", "2"),
+        ("32", "ai", "agent:y", "3"), ("33", "bio", "agent:x", "4"),
+    ]:
+        o = await actions.create_or_find_object("Organization", f"cik:{cik}", "edgar")
+        await actions.assert_property(o, "sector", arc, "edgar", NOW, 0.85)
+        await actions.assert_property(o, "owner_field", owner, "edgar", NOW, 0.85)
+        await actions.assert_property(o, "amount", amt, "edgar", NOW, 0.85)
+
+
+async def test_no_bound_params_is_a_byte_identical_no_op(actions: Actions) -> None:
+    await _filings(actions)
+    spec = {"op": "select", "object_type": "Organization"}
+    name = await _save(actions, "no-bound", spec)
+    plain = await run_composition(actions.pool, name)
+    bounded_but_unset = await run_composition(actions.pool, name, fields=None, take=None,
+                                              depth=None)
+    assert plain == bounded_but_unset
+    assert "_projected" not in plain
+
+
+async def test_take_caps_a_flat_list_and_reports_the_real_total(actions: Actions) -> None:
+    await _filings(actions)
+    spec = {"op": "select", "object_type": "Organization"}
+    res = await run_composition(actions.pool, await _save(actions, "take-flat", spec), take=1)
+    assert len(res["items"]) == 1
+    assert res["_projected"]["dropped"]["(root)"] == {"shown": 1, "of": 3}
+
+
+async def test_fields_keeps_only_the_named_columns_per_row(actions: Actions) -> None:
+    await _filings(actions)
+    spec = {"op": "table", "from": {"op": "select", "object_type": "Organization"},
+            "columns": [{"property": "sector"}, {"property": "amount"}]}
+    res = await run_composition(actions.pool, await _save(actions, "fields-flat", spec),
+                                fields=["sector"])
+    assert res["items"]
+    assert all(set(row) == {"sector"} for row in res["items"])
+
+
+async def test_depth_collapses_below_the_requested_level_to_an_honest_count(
+    actions: Actions,
+) -> None:
+    await _arc_owner_threads(actions)
+    spec = {"op": "group", "by": "sector",
+            "from": {"op": "select", "object_type": "Organization"},
+            "body": {"op": "group", "by": "owner_field", "from": {"op": "these"},
+                     "body": {"op": "table", "from": {"op": "these"},
+                              "columns": [{"property": "amount"}]}}}
+    name = await _save(actions, "depth-nested", spec)
+
+    full = await run_composition(actions.pool, name)
+    assert full["items"]["ai"]["agent:x"] == [{"amount": "1"}, {"amount": "2"}]
+
+    depth1 = await run_composition(actions.pool, name, depth=1)
+    assert depth1["items"]["ai"] == {"_count": 3}   # ai: agent:x(2) + agent:y(1)
+    assert depth1["items"]["bio"] == {"_count": 1}
+    assert depth1["_projected"]["dropped"]["ai"] == {"shown": 0, "of": 3}
+
+    # depth=2 walks BOTH dict levels this shape has (sector, owner_field) — nothing left to
+    # collapse, so the leaf lists come through intact; `depth` bounds dict STRUCTURE only,
+    # `take` bounds LIST length (composed together in the roadmap-shaped test below).
+    depth2 = await run_composition(actions.pool, name, depth=2)
+    assert depth2["items"]["ai"]["agent:x"] == [{"amount": "1"}, {"amount": "2"}]
+    assert "_projected" not in depth2
+
+    depth2_take1 = await run_composition(actions.pool, name, depth=2, take=1)
+    assert depth2_take1["items"]["ai"]["agent:x"] == [{"amount": "1"}]
+
+
+async def test_fields_take_and_depth_compose_on_the_real_roadmap_shape(
+    actions: Actions,
+) -> None:
+    """The actual proof case named in the ruling: arc->owner->threads, asked for narrow AND
+    small in one call — not the full nested tree, not a flat post-processed dump."""
+    from src.orchestrator.capture import open_thread
+    from src.orchestrator.compositions import ROADMAP
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:pgtest", "test")
+    await actions.assert_property(proj, "name", "pgtest", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    for i in range(5):
+        await open_thread(actions, f"duty {i}", repo="pgtest", arc="Fleet-Hygiene",
+                          owner="agent:x", source="agent:me")
+    await save_composition(actions.pool, "roadmap", ROADMAP)
+
+    res = await run_composition(actions.pool, "roadmap", proj,
+                                fields=["id", "summary"], take=2, depth=3)
+    open_arc = res["items"]["open"]["Fleet-Hygiene"]["agent:x"]
+    assert len(open_arc) == 2
+    assert all(set(row) == {"id", "summary"} for row in open_arc)
+    assert res["_projected"]["dropped"]["open.Fleet-Hygiene.agent:x"] == {"shown": 2, "of": 5}
+
+
+async def test_the_mcp_run_composition_tool_wires_bound_params_through(
+    actions: Actions,
+) -> None:
+    """srv._pool swap (mirrors test_describe.py's own pattern) — proves the ACTUAL tool
+    passes fields/take/depth to the core function, not just that the core function works."""
+    from src import mcp_server as srv
+
+    await _filings(actions)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.run_composition("all-orgs-live", take=1)
+    finally:
+        srv._pool = saved_pool
+    # a nonexistent composition name still round-trips cleanly through the wiring
+    assert out == {"error": "no composition 'all-orgs-live'"}
+    await save_composition(actions.pool, "orgs-mcp", {"op": "select",
+                                                       "object_type": "Organization"})
+    srv._pool = actions.pool
+    try:
+        out = await srv.run_composition("orgs-mcp", take=1)
+    finally:
+        srv._pool = saved_pool
+    assert len(out["items"]) == 1
+    assert out["_projected"]["dropped"]["(root)"]["of"] == 3
+
+
 # --- persistence / forkability ----------------------------------------------
 
 async def test_save_run_fork_roundtrip(actions: Actions) -> None:
