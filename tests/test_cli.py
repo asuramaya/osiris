@@ -21,6 +21,7 @@ from src.cli import (
     cmd_seed,
     commit_deployed_notes,
     composition_gap_note,
+    diff_tool_lists,
     dirty_tracked_src_files,
     match_session,
     oneshot_deployed_scripts,
@@ -418,6 +419,38 @@ async def test_wait_for_smoke_backoff_is_capped() -> None:
     assert max(slept) == 8.0
 
 
+# --- diff_tool_lists: pure --------------------------------------------------------------------
+
+def test_diff_tool_lists_no_change_is_empty() -> None:
+    same = {"smoke": "aaa", "fleet": "bbb"}
+    assert diff_tool_lists(same, dict(same)) == []
+
+
+def test_diff_tool_lists_names_an_addition() -> None:
+    before = {"smoke": "aaa"}
+    after = {"smoke": "aaa", "retire_assertion": "ccc"}
+    assert diff_tool_lists(before, after) == ["+retire_assertion"]
+
+
+def test_diff_tool_lists_names_a_removal() -> None:
+    before = {"smoke": "aaa", "old_tool": "zzz"}
+    after = {"smoke": "aaa"}
+    assert diff_tool_lists(before, after) == ["-old_tool removed"]
+
+
+def test_diff_tool_lists_names_a_signature_change() -> None:
+    before = {"smoke": "aaa"}
+    after = {"smoke": "bbb"}
+    assert diff_tool_lists(before, after) == ["~smoke changed"]
+
+
+def test_diff_tool_lists_composes_all_three_kinds_in_thoths_own_example_shape() -> None:
+    before = {"smoke": "aaa", "old_tool": "zzz"}
+    after = {"smoke": "bbb", "retire_assertion": "ccc"}
+    assert diff_tool_lists(before, after) == [
+        "+retire_assertion", "-old_tool removed", "~smoke changed"]
+
+
 # --- cmd_deploy: fake git_status/restart, a real pool for the seeder/migration comparison ------
 
 async def test_cmd_deploy_refuses_on_a_dirty_src_tree(actions: Actions, tmp_path: Path) -> None:
@@ -447,18 +480,28 @@ async def test_cmd_deploy_restarts_and_reports_smoke_and_gaps(
     actions: Actions, tmp_path: Path,
 ) -> None:
     calls: list[list[str]] = []
+    tool_snapshots = iter([{"smoke": "aaa"}, {"smoke": "bbb", "retire_assertion": "ccc"}])
 
     async def _restart(units: list[str]) -> tuple[int, str]:
         calls.append(units)
         return 0, "done"
 
-    out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
-                           pool=actions.pool)
+    async def _list_tools() -> dict[str, str]:
+        return next(tool_snapshots)
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                               pool=actions.pool, list_tools=_list_tools)
     assert calls == [list(DEPLOY_UNITS)]
     # a blank test DB has no compositions/alembic_version rows seeded — this exercises the
     # gap-reporting path without asserting exact counts (that's composition_gap_note's own
     # unit test's job); only that cmd_deploy runs the comparison and returns cleanly either way.
     assert out in (0, 1)
+    assert "TOOL LIST CHANGED: +retire_assertion, ~smoke changed" in buf.getvalue()
 
 
 async def test_cmd_deploy_restart_failure_is_honest(actions: Actions, tmp_path: Path) -> None:

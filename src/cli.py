@@ -177,6 +177,19 @@ async def _wait_for_smoke(
     return fails, elapsed
 
 
+def diff_tool_lists(before: dict[str, str], after: dict[str, str]) -> list[str]:
+    """Named additions/removals/changes between two MCP tool-list snapshots (thread 6a78e64b
+    leg 2) — pure, so the exact wording is testable without a live server. `+name` a tool the
+    after-list has that the before-list didn't; `-name removed` the reverse; `~name changed`
+    the same name with a different fingerprint (a signature or docstring edit) — so a deploy
+    names exactly which verbs are arriving, not just that something changed somewhere."""
+    added = sorted(set(after) - set(before))
+    removed = sorted(set(before) - set(after))
+    changed = sorted(n for n in (set(before) & set(after)) if before[n] != after[n])
+    return ([f"+{n}" for n in added] + [f"-{n} removed" for n in removed]
+           + [f"~{n} changed" for n in changed])
+
+
 async def cmd_smoke() -> int:
     fails = await _run_smoke_probes()
     if not fails:
@@ -534,9 +547,19 @@ async def _seeder_migration_gaps(pool: asyncpg.Pool, repo_root: Path) -> list[st
     return [n for n in notes if n is not None]
 
 
+async def _real_list_tools() -> dict[str, str] | str:
+    from src.orchestrator.mcp_client import list_mcp_tools
+
+    return await list_mcp_tools(await _mcp_url())
+
+
+ListTools = Callable[[], Awaitable[dict[str, str] | str]]
+
+
 async def cmd_deploy(
     *, repo_root: Path | None = None, git_status: GitStatus = _real_git_status,
     restart: RestartServices = _real_restart_services, pool: asyncpg.Pool | None = None,
+    list_tools: ListTools = _real_list_tools,
 ) -> int:
     """The deploy ritual as one verb (thread e51a841c): a live near-miss held batch 3 because
     src/orchestrator/handshake.py carried another agent's uncommitted WIP and the three
@@ -544,10 +567,13 @@ async def cmd_deploy(
     before a restart would have shipped a half-written identity edit. Replaces that by-hand
     protocol: (1) refuse on a dirty tracked src/ tree, naming the files (never guesses whose
     WIP it is — check project mail for a collision-watch broadcast instead of trusting a
-    fragile heuristic); (2) restart osiris-mcp/worker/console; (3) run smoke, per-surface;
+    fragile heuristic); (2) restart osiris-mcp/worker/console; (3) run smoke, per-surface,
+    with a bounded wait-for-up so a still-binding uvicorn never reads as a false failure;
     (4) name any un-run seeder/migration step by comparison, never by assumption. Also names
     (informationally, never gating) any dirty COMMIT-DEPLOYED script — a oneshot timer unit
-    reads straight off disk, so nothing here can hold it back (msg 1481)."""
+    reads straight off disk, so nothing here can hold it back (msg 1481) — and (thread
+    6a78e64b leg 2) diffs the MCP tool list before vs after the restart, so a deploy names
+    exactly which verbs are arriving rather than leaving that to be discovered by accident."""
     root = repo_root if repo_root is not None else _find_repo_root()
     if root is None:
         print("osiris deploy: not inside a git repository — cd into the osiris checkout "
@@ -568,6 +594,8 @@ async def cmd_deploy(
     for note in commit_deployed_notes(status, oneshot_deployed_scripts(root)):
         print(f"NOTE: {note}")
 
+    tools_before = await list_tools()
+
     rc, out = await restart(list(DEPLOY_UNITS))
     if rc != 0:
         print(f"osiris deploy: restart failed (exit {rc}): {out}", file=sys.stderr)
@@ -583,6 +611,19 @@ async def cmd_deploy(
         print(f"smoke: all green (came up after {waited:.0f}s)")
     else:
         print("smoke: all green")
+
+    tools_after = await list_tools()
+    if isinstance(tools_before, str) or isinstance(tools_after, str):
+        side = "before" if isinstance(tools_before, str) else "after"
+        print(f"tool list: could not compare — the {side}-restart round-trip failed "
+              f"({tools_before if side == 'before' else tools_after})")
+    else:
+        delta = diff_tool_lists(tools_before, tools_after)
+        if delta:
+            print(f"TOOL LIST CHANGED: {', '.join(delta)} — connected sessions see the old "
+                  "list until their own client refreshes.")
+        else:
+            print("tool list: unchanged")
 
     owns_pool = pool is None
     if pool is None:
