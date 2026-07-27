@@ -15,6 +15,11 @@ EXISTING verb rather than re-deriving it:
                                      same one src.manager.attach.py already stands in for
   osiris fleet [--full]             the same fleet() the MCP tool answers, called over the
                                      wire (never a second implementation of what it computes)
+  osiris deploy                     the deploy ritual as one verb (thread e51a841c): refuse
+                                     on a dirty tracked src/ tree (a live near-miss shipped a
+                                     half-written edit this way), restart osiris-mcp/worker/
+                                     console, run smoke, and name any un-run seeder/migration
+                                     step by comparison instead of assuming one happened
 
 CANONICAL ENV RESOLUTION (the actual root-fix, 3e96c10e's cousin): every DB-backed command
 applies src.config.dev_env.apply_dev_fallback() first — a bare invocation must target the
@@ -129,7 +134,9 @@ async def cmd_attach(handle: str, *, manager: ManagerCall = _default_manager) ->
 
 # --- smoke -----------------------------------------------------------------------------------
 
-async def cmd_smoke() -> int:
+async def _run_smoke_probes() -> list[str]:
+    """The two probes, composed — shared by `cmd_smoke` and `cmd_deploy` so neither
+    re-derives it. Returns the flat failure list (empty = all green)."""
     import httpx
 
     from src.config.settings import get_settings
@@ -145,7 +152,11 @@ async def cmd_smoke() -> int:
             return await smoke_chrome(client)
 
     chrome, mcp_result = await asyncio.gather(local_chrome(), call_mcp_smoke(url))
-    fails = summarize_failures(chrome, mcp_result)
+    return summarize_failures(chrome, mcp_result)
+
+
+async def cmd_smoke() -> int:
+    fails = await _run_smoke_probes()
     if not fails:
         print("smoke: all green (8 chrome routes + the live mcp pool)")
         return 0
@@ -354,6 +365,230 @@ async def cmd_fleet(*, full: bool) -> int:
     return 0
 
 
+# --- deploy ----------------------------------------------------------------------------------
+
+DEPLOY_UNITS = ("osiris-mcp", "osiris-worker", "osiris-console")
+
+GitStatus = Callable[[Path], list[tuple[str, str]]]
+RestartServices = Callable[[list[str]], Awaitable[tuple[int, str]]]
+
+
+def _find_repo_root(start: Path | None = None) -> Path | None:
+    """`git rev-parse --show-toplevel` from `start` (default CWD) — reuses git's own worktree
+    resolution rather than hand-walking for `.git`, so it works from any subdirectory of the
+    checkout, not just its root. None (never a raised exception) when CWD isn't inside a git
+    repo at all — deploy is inherently tied to a specific checkout, unlike the DB/daemon/MCP-
+    backed subcommands above, which is why this is the one place a bare CWD dependency is
+    correct rather than the bug task #69 otherwise closes."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], cwd=start, capture_output=True,
+            text=True, timeout=5, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    return Path(out.stdout.strip())
+
+
+def _real_git_status(repo_root: Path) -> list[tuple[str, str]]:
+    """(status_code, path) for every line of `git status --porcelain`, path relative to
+    `repo_root`. `--porcelain` is stable, script-friendly output — not `git status`'s own
+    human-formatted default."""
+    import subprocess
+
+    out = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=repo_root, capture_output=True, text=True,
+        timeout=10, check=False)
+    lines = []
+    for line in out.stdout.splitlines():
+        if not line:
+            continue
+        lines.append((line[:2], line[3:]))
+    return lines
+
+
+def dirty_tracked_src_files(status: list[tuple[str, str]]) -> list[str]:
+    """Tracked (never `??` — a brand-new untracked file is imported by nothing yet, so it
+    cannot be a half-shipped edit to already-running code) src/ files with a staged or
+    unstaged modification. This is the exact shape of the near-miss the guard exists for:
+    src/orchestrator/handshake.py carrying another agent's uncommitted WIP while the three
+    services import straight from the working tree."""
+    return sorted(path for code, path in status if path.startswith("src/") and code != "??")
+
+
+def oneshot_deployed_scripts(repo_root: Path) -> dict[str, str]:
+    """script path (repo-relative) -> unit name, for every `Type=oneshot` unit under deploy/
+    whose ExecStart names a scripts/ file — the COMMIT-DEPLOYED class (operator ruling via
+    Thoth, msg 1481): a oneshot timer reads its script fresh off disk at every fire, so
+    nothing about a restart (or a hold) gates it — the commit (or even just the working
+    tree, if uncommitted) IS the deploy. Derived from deploy/*.service rather than a
+    hardcoded list, so a newly added oneshot unit is picked up automatically."""
+    import re
+
+    out: dict[str, str] = {}
+    deploy_dir = repo_root / "deploy"
+    if not deploy_dir.is_dir():
+        return out
+    for unit_file in sorted(deploy_dir.glob("*.service")):
+        text = unit_file.read_text()
+        if not re.search(r"^Type=oneshot\s*$", text, re.MULTILINE):
+            continue
+        m = re.search(r"^ExecStart=.*?(scripts/\S+)", text, re.MULTILINE)
+        if m:
+            out[m.group(1)] = unit_file.stem
+    return out
+
+
+def commit_deployed_notes(status: list[tuple[str, str]], oneshot: dict[str, str]) -> list[str]:
+    """For every dirty (staged OR unstaged, `??` included — an uncommitted NEW oneshot script
+    is just as immediately live as a modified one) path that backs a known oneshot unit, name
+    it plainly: this is not gated by anything `osiris deploy` does."""
+    notes = []
+    for code, path in status:
+        unit = oneshot.get(path)
+        if unit is None:
+            continue
+        notes.append(f"{path} (backs oneshot timer {unit!r}, status {code.strip() or '??'}) — "
+                     "read fresh from disk at every fire; NOT gated by a restart or a hold. "
+                     "Whatever's there now is already effectively live — review it directly.")
+    return notes
+
+
+async def _real_restart_services(units: list[str]) -> tuple[int, str]:
+    """The one place this module ever actually restarts a service — `systemctl --user
+    restart`. Every test of the surrounding deploy logic injects a fake here instead."""
+    proc = await asyncio.create_subprocess_exec(
+        "systemctl", "--user", "restart", *units,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    out, _ = await proc.communicate()
+    return proc.returncode or 0, out.decode(errors="replace")
+
+
+def _alembic_head(repo_root: Path) -> str | None:
+    """The latest migration's own revision id, read off the version files on disk — no DB
+    connection needed for this half of the comparison. None (never a raised CommandError)
+    when `repo_root` carries no alembic.ini/alembic/ at all — a repo_root that isn't this
+    project's own checkout shape is a different problem than a migration gap, and
+    alembic_gap_note treats None as 'could not be determined', never as a false mismatch."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from alembic.util.exc import CommandError
+
+    if not (repo_root / "alembic.ini").is_file():
+        return None
+    cfg = Config(str(repo_root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(repo_root / "alembic"))
+    try:
+        return ScriptDirectory.from_config(cfg).get_current_head()
+    except CommandError:
+        return None
+
+
+def composition_gap_note(db_count: int, expected: int) -> str | None:
+    if db_count >= expected:
+        return None
+    return (f"compositions: DB has {db_count}, DEFAULT_COMPOSITIONS defines {expected} — "
+           "run `osiris seed` (or `osiris seed --compositions-only`).")
+
+
+def alembic_gap_note(current: str | None, head: str | None) -> str | None:
+    if head is None or current == head:
+        return None
+    return (f"alembic: DB is at revision {current!r}, the latest migration is {head!r} — "
+           "run `alembic upgrade head`.")
+
+
+async def _seeder_migration_gaps(pool: asyncpg.Pool, repo_root: Path) -> list[str]:
+    from src.orchestrator.compositions import DEFAULT_COMPOSITIONS
+
+    db_count = await pool.fetchval("SELECT count(*) FROM compositions")
+    current = await pool.fetchval("SELECT version_num FROM alembic_version")
+    head = _alembic_head(repo_root)
+    notes = [composition_gap_note(db_count, len(DEFAULT_COMPOSITIONS)),
+             alembic_gap_note(current, head)]
+    return [n for n in notes if n is not None]
+
+
+async def cmd_deploy(
+    *, repo_root: Path | None = None, git_status: GitStatus = _real_git_status,
+    restart: RestartServices = _real_restart_services, pool: asyncpg.Pool | None = None,
+) -> int:
+    """The deploy ritual as one verb (thread e51a841c): a live near-miss held batch 3 because
+    src/orchestrator/handshake.py carried another agent's uncommitted WIP and the three
+    services import straight from the working tree — only a by-hand `git status` caught it
+    before a restart would have shipped a half-written identity edit. Replaces that by-hand
+    protocol: (1) refuse on a dirty tracked src/ tree, naming the files (never guesses whose
+    WIP it is — check project mail for a collision-watch broadcast instead of trusting a
+    fragile heuristic); (2) restart osiris-mcp/worker/console; (3) run smoke, per-surface;
+    (4) name any un-run seeder/migration step by comparison, never by assumption. Also names
+    (informationally, never gating) any dirty COMMIT-DEPLOYED script — a oneshot timer unit
+    reads straight off disk, so nothing here can hold it back (msg 1481)."""
+    root = repo_root if repo_root is not None else _find_repo_root()
+    if root is None:
+        print("osiris deploy: not inside a git repository — cd into the osiris checkout "
+              "first.", file=sys.stderr)
+        return 1
+
+    status = git_status(root)
+    dirty_src = dirty_tracked_src_files(status)
+    if dirty_src:
+        print("osiris deploy: REFUSED — tracked src/ files have uncommitted changes:")
+        for f in dirty_src:
+            print(f"  - {f}")
+        print("Restarting now would ship a half-written edit. Commit or stash first — check "
+              "project mail for a collision-watch broadcast naming these files before "
+              "assuming they're abandoned.")
+        return 1
+
+    for note in commit_deployed_notes(status, oneshot_deployed_scripts(root)):
+        print(f"NOTE: {note}")
+
+    rc, out = await restart(list(DEPLOY_UNITS))
+    if rc != 0:
+        print(f"osiris deploy: restart failed (exit {rc}): {out}", file=sys.stderr)
+        return 1
+    print(f"osiris deploy: restarted {', '.join(DEPLOY_UNITS)}")
+
+    fails = await _run_smoke_probes()
+    if fails:
+        print("SMOKE FAILURES:")
+        for f in fails:
+            print(" -", f)
+    else:
+        print("smoke: all green")
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=2)
+        except Exception as exc:  # noqa: BLE001
+            print(f"osiris deploy: could not reach postgres to check seeder/migration state "
+                  f"— {exc}. Restart + smoke above still stand.", file=sys.stderr)
+            return 1 if fails else 0
+    try:
+        gaps = await _seeder_migration_gaps(pool, root)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if gaps:
+        print("UN-RUN STEPS:")
+        for g in gaps:
+            print(" -", g)
+    else:
+        print("seeder/migrations: up to date")
+
+    return 1 if fails else 0
+
+
 # --- argv dispatch -----------------------------------------------------------------------------
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -377,6 +612,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_fleet = sub.add_parser("fleet", help="the fleet roster, grouped by project")
     p_fleet.add_argument("--full", action="store_true")
 
+    sub.add_parser("deploy", help="the deploy ritual: dirty-guard, restart, smoke, "
+                   "un-run-step report")
+
     return p
 
 
@@ -392,6 +630,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_launch(args.handle, model=args.model))
     if args.command == "fleet":
         return asyncio.run(cmd_fleet(full=args.full))
+    if args.command == "deploy":
+        return asyncio.run(cmd_deploy())
     return 2  # pragma: no cover - argparse's own `required=True` makes this unreachable
 
 

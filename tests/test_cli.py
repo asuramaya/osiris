@@ -6,14 +6,23 @@ spawning a claude process is exactly what these tests must never risk doing by a
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from src.actions.core import Actions
 from src.cli import (
+    DEPLOY_UNITS,
+    _find_repo_root,
+    alembic_gap_note,
     cmd_attach,
+    cmd_deploy,
     cmd_launch,
     cmd_seed,
+    commit_deployed_notes,
+    composition_gap_note,
+    dirty_tracked_src_files,
     match_session,
+    oneshot_deployed_scripts,
     resolve_model,
 )
 from src.orchestrator.seats import ensure_seat
@@ -245,3 +254,149 @@ async def test_cmd_launch_names_a_model_mismatch_honestly(actions: Actions) -> N
     assert out == 0
     assert "MISMATCH" in buf.getvalue()
     assert "claude-fable-5" in buf.getvalue()
+
+
+# --- osiris deploy: pure decision layer (task e51a841c) -----------------------------------------
+
+def test_dirty_tracked_src_files_flags_modified_tracked_files() -> None:
+    status = [(" M", "src/foo.py"), ("M ", "src/bar.py"), ("??", "src/new_untracked.py"),
+             (" M", "tests/test_foo.py"), ("D ", "src/gone.py")]
+    assert dirty_tracked_src_files(status) == ["src/bar.py", "src/foo.py", "src/gone.py"]
+
+
+def test_dirty_tracked_src_files_ignores_untracked_and_non_src() -> None:
+    status = [("??", "src/brand_new.py"), (" M", "docs/README.md"), (" M", "scripts/x.py")]
+    assert dirty_tracked_src_files(status) == []
+
+
+def test_dirty_tracked_src_files_clean_tree_is_empty() -> None:
+    assert dirty_tracked_src_files([]) == []
+
+
+def test_oneshot_deployed_scripts_reads_real_deploy_dir() -> None:
+    """Against the REAL repo's own deploy/ — proves the parser actually matches this
+    project's real oneshot units rather than a synthetic fixture only."""
+    repo_root = Path(__file__).resolve().parent.parent
+    found = oneshot_deployed_scripts(repo_root)
+    assert found.get("scripts/osiris_preflight.py") == "osiris-preflight"
+    assert found.get("scripts/osiris_backup.sh") == "osiris-backup"
+    # a non-oneshot unit (Type=simple, e.g. osiris-mcp.service) must never appear
+    assert not any(unit == "osiris-mcp" for unit in found.values())
+
+
+def test_oneshot_deployed_scripts_missing_deploy_dir_is_empty(tmp_path: Path) -> None:
+    assert oneshot_deployed_scripts(tmp_path) == {}
+
+
+def test_commit_deployed_notes_names_a_dirty_oneshot_script() -> None:
+    status = [(" M", "scripts/osiris_preflight.py"), (" M", "src/foo.py")]
+    oneshot = {"scripts/osiris_preflight.py": "osiris-preflight"}
+    notes = commit_deployed_notes(status, oneshot)
+    assert len(notes) == 1
+    assert "scripts/osiris_preflight.py" in notes[0]
+    assert "osiris-preflight" in notes[0]
+    assert "NOT gated" in notes[0]
+
+
+def test_commit_deployed_notes_untracked_oneshot_script_still_named() -> None:
+    """An uncommitted NEW oneshot script is just as immediately live as a modified one."""
+    status = [("??", "scripts/osiris_preflight.py")]
+    oneshot = {"scripts/osiris_preflight.py": "osiris-preflight"}
+    assert len(commit_deployed_notes(status, oneshot)) == 1
+
+
+def test_commit_deployed_notes_clean_is_silent() -> None:
+    status = [(" M", "src/foo.py")]
+    oneshot = {"scripts/osiris_preflight.py": "osiris-preflight"}
+    assert commit_deployed_notes(status, oneshot) == []
+
+
+def test_composition_gap_note_flags_a_shortfall() -> None:
+    note = composition_gap_note(10, 22)
+    assert note is not None
+    assert "10" in note and "22" in note
+
+
+def test_composition_gap_note_silent_when_caught_up() -> None:
+    assert composition_gap_note(22, 22) is None
+    assert composition_gap_note(30, 22) is None  # more than expected is never a gap
+
+
+def test_alembic_gap_note_flags_a_mismatch() -> None:
+    note = alembic_gap_note("0034", "0036")
+    assert note is not None
+    assert "0034" in note and "0036" in note
+
+
+def test_alembic_gap_note_silent_when_current() -> None:
+    assert alembic_gap_note("0036", "0036") is None
+
+
+def test_alembic_gap_note_silent_when_head_undeterminable() -> None:
+    """A None head means 'couldn't be read locally', never 'assume a mismatch'."""
+    assert alembic_gap_note("0034", None) is None
+
+
+def test_alembic_head_missing_alembic_ini_is_none_not_a_crash(tmp_path: Path) -> None:
+    from src.cli import _alembic_head
+
+    assert _alembic_head(tmp_path) is None
+
+
+def test_alembic_head_reads_this_repos_real_migrations() -> None:
+    from src.cli import _alembic_head
+
+    repo_root = Path(__file__).resolve().parent.parent
+    assert _alembic_head(repo_root) is not None
+
+
+# --- cmd_deploy: fake git_status/restart, a real pool for the seeder/migration comparison ------
+
+async def test_cmd_deploy_refuses_on_a_dirty_src_tree(actions: Actions, tmp_path: Path) -> None:
+    def _dirty(root: Path) -> list[tuple[str, str]]:
+        return [(" M", "src/orchestrator/handshake.py")]
+
+    async def _unreachable(units: list[str]) -> tuple[int, str]:
+        raise AssertionError("must never be called — the dirty guard refuses first")
+
+    out = await cmd_deploy(repo_root=tmp_path, git_status=_dirty, restart=_unreachable,
+                           pool=actions.pool)
+    assert out == 1
+
+
+def test_find_repo_root_outside_any_repo_is_none(tmp_path: Path) -> None:
+    assert _find_repo_root(tmp_path) is None
+
+
+def test_find_repo_root_finds_this_repo_from_a_subdirectory() -> None:
+    here = Path(__file__).resolve().parent  # tests/, a subdirectory of the repo root
+    root = _find_repo_root(here)
+    assert root is not None
+    assert (root / "pyproject.toml").is_file()
+
+
+async def test_cmd_deploy_restarts_and_reports_smoke_and_gaps(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        calls.append(units)
+        return 0, "done"
+
+    out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                           pool=actions.pool)
+    assert calls == [list(DEPLOY_UNITS)]
+    # a blank test DB has no compositions/alembic_version rows seeded — this exercises the
+    # gap-reporting path without asserting exact counts (that's composition_gap_note's own
+    # unit test's job); only that cmd_deploy runs the comparison and returns cleanly either way.
+    assert out in (0, 1)
+
+
+async def test_cmd_deploy_restart_failure_is_honest(actions: Actions, tmp_path: Path) -> None:
+    async def _failing_restart(units: list[str]) -> tuple[int, str]:
+        return 1, "Unit osiris-mcp.service not found."
+
+    out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [],
+                           restart=_failing_restart, pool=actions.pool)
+    assert out == 1
