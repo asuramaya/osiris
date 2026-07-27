@@ -2018,6 +2018,76 @@ async def test_launch_bodies_a_managed_seat_with_an_honest_receipt(actions: Acti
     assert req["env"]["CLAUDE_JOB_DIR"] == req["job_dir"]  # the body's anchor, not inherited
 
 
+async def test_launch_resolves_a_vacant_seat_by_handle(actions: Actions) -> None:
+    """task #68 (finding b): a freshly minted, never-launched seat has NO Agent bound to it
+    at all — the old Agent-centric resolve_seat fallback returns no seat_id for such a seat
+    (it only walks Agent objects that claimed a handle), so launch(target=<handle>) could
+    never body a seat mint_seat had just made. The worker here is deliberately vacant (no
+    bind_holder call) and still resolves by its bare handle."""
+    manager_seat = (await ensure_seat(actions, house="demo", handle="Manager",
+                                      source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=manager_seat, agent_id="agent:vm01")
+    worker_seat = (await ensure_seat(actions, house="demo", handle="Nefer",
+                                     source="test"))["seat_id"]  # never bound — VACANT
+    await _office(actions, worker_seat, "/tmp/nefer")
+    w_oid = await actions.create_or_find_object("Seat", worker_seat, "test")
+    m_oid = await actions.create_or_find_object("Seat", manager_seat, "test")
+    await actions.create_link(w_oid, m_oid, "managed_by", "test", NOW, 0.9)
+
+    record: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:vm01", target="Nefer",
+        manager=_fake_manager(record), windows=_fake_windows([]))
+
+    assert d["status"] == "launched"
+    assert len(record) == 1 and record[0]["seat"]["handle"] == "Nefer"
+
+
+async def test_launch_prefers_the_seats_stamped_model_over_the_global_default(
+    actions: Actions,
+) -> None:
+    """task #68 (finding #7, thread 20e4feb6): the old precedence never read the seat's own
+    stamped intended_model at all — only an explicit param or the trigger's global default —
+    which is why a seat pinned to sonnet-5 could spawn on whatever osiris_wake_model happened
+    to be configured, silently. The stamp must win over the global default."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:mw01", manager_agent="agent:mm01",
+        worker_handle="Ptah", house="osiris")
+    await _office(actions, worker_seat, "/tmp/ptah")
+    oid = await actions.create_or_find_object("Seat", worker_seat, "test")
+    await actions.assert_property(oid, "intended_model", "claude-sonnet-5", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    record: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:mm01", target=worker_seat,
+        manager=_fake_manager(record), windows=_fake_windows([]),
+        settings=_settings(enabled=True, wake_model="claude-haiku-4-5"))
+
+    assert d["status"] == "launched"
+    assert d["spawned_model"] == "claude-sonnet-5"
+    assert "model_mismatch" not in d
+    assert record[0]["argv"][-2:] == ["--model", "claude-sonnet-5"]
+
+
+async def test_launch_flags_a_model_mismatch_loudly(actions: Actions) -> None:
+    """An explicit caller-supplied model still wins over the stamp (an intentional override),
+    but the receipt must NAME the mismatch rather than silently spawning off-pin."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:xw01", manager_agent="agent:xm01",
+        worker_handle="Sekhmet", house="osiris")
+    await _office(actions, worker_seat, "/tmp/sekhmet")
+    oid = await actions.create_or_find_object("Seat", worker_seat, "test")
+    await actions.assert_property(oid, "intended_model", "claude-sonnet-5", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    record: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:xm01", target=worker_seat, model="claude-haiku-4-5",
+        manager=_fake_manager(record), windows=_fake_windows([]))
+
+    assert d["spawned_model"] == "claude-haiku-4-5"
+    assert "model_mismatch" in d and "claude-sonnet-5" in d["model_mismatch"]
+
+
 async def test_launch_can_receive_true_when_the_window_comes_up_live(actions: Actions) -> None:
     """When the post-spawn READ shows the window ALIVE, can_receive is true — the separate read
     is real, not a hard-coded false."""

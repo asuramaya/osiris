@@ -13,7 +13,7 @@ import pytest
 from src.actions.core import Actions
 from src.orchestrator.greatfold import fold_census
 from src.orchestrator.mintseat import _resolve_seat_ref, mint_seat
-from src.orchestrator.seats import ensure_seat
+from src.orchestrator.seats import ensure_seat, seat_facts
 
 NOW = datetime(2026, 7, 20, tzinfo=UTC)
 
@@ -75,6 +75,40 @@ async def test_a_intended_model_is_configurable(actions: Actions, tmp_path: Path
     assert out["intended_model"] == "claude-opus-4-8"
     pin = (offices / "vajra" / ".osiris").read_text()
     assert 'model = "claude-opus-4-8"' in pin
+
+
+async def test_a_fresh_mint_stamps_anchor_cwd_to_its_own_office(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """task #68: a fresh mint used to scaffold an office on disk but never told the Seat
+    object where it lived — launch() (which reads anchor_cwd) refused every never-launched
+    seat with 'no anchor_cwd — establish_office first', a circular ask for a room that
+    already existed. anchor_cwd must land in the SAME act as the mint, at the exact path
+    the office scaffold uses."""
+    await _seat(actions, "Steward", "osiris")
+
+    out = await mint_seat(actions, manager="Steward", handle="Vajra",
+                          office_root=tmp_path / "seats", actor="agent:steward01")
+
+    facts = await seat_facts(actions.pool, out["seat_id"])
+    assert facts["anchor_cwd"] == str(tmp_path / "seats" / "vajra")
+
+
+async def test_adopted_hollow_seat_backfills_anchor_cwd(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The adopt path (Tantra's shape) never calls ensure_seat, so a pre-existing seat
+    minted before this fix (or hand-made by the operator) can carry no anchor_cwd at all —
+    fill-missing-only backfills it here, the same law intended_model already gets."""
+    await _seat(actions, "Alfred", "bytebye", source="operator")
+    await _seat(actions, "Tantra", "sutrahouse", source="operator")
+    offices = tmp_path / "seats"
+
+    out = await mint_seat(actions, manager="Alfred", handle="Tantra", office_root=offices,
+                          actor="operator")
+
+    facts = await seat_facts(actions.pool, out["seat_id"])
+    assert facts["anchor_cwd"] == str(offices / "tantra")
 
 
 # ═══════════ (b) IDEMPOTENT RE-MINT ═══════════

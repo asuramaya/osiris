@@ -235,6 +235,7 @@ async def mint_seat(
 
     now = datetime.now(UTC)
     root = office_root or _DEFAULT_OFFICE_ROOT
+    office_path = root / handle.lower()
     existing_seat_id = await _resolve_seat_ref(actions.pool, handle)
     if existing_seat_id is not None:
         # THE ADOPT PATH (Tantra's shape): no new identity, no house crossing to refuse —
@@ -261,7 +262,8 @@ async def mint_seat(
                              f"{manager_house!r}) may not mint a seat in house {house!r} — "
                              "only the operator's own hand crosses a house boundary"}
         seat_result = await ensure_seat(
-            actions, house=resolved_house, handle=handle, source=actor)
+            actions, house=resolved_house, handle=handle, source=actor,
+            anchor_cwd=str(office_path))
         if "error" in seat_result:
             return seat_result
         worker_seat_id = seat_result["seat_id"]
@@ -285,6 +287,12 @@ async def mint_seat(
         await actions.assert_property(worker_obj, "intended_model", intended_model, actor,
                                       now, _CONF, evidence_class=_EC)
         stamped_model = True
+    if not worker_facts.get("anchor_cwd"):
+        # FILL-MISSING-ONLY, same law as intended_model above — an ADOPTED seat (Tantra's
+        # shape) never had ensure_seat mint its anchor_cwd, so a hollow shell still needs it
+        # backfilled here or launch() can never find its office (trigger.py's own refusal).
+        await actions.assert_property(worker_obj, "anchor_cwd", str(office_path), actor,
+                                      now, _CONF, evidence_class=_EC)
 
     manager_obj = await actions.create_or_find_object("Seat", manager_seat_id, actor)
     already_linked = await actions.pool.fetchval(
@@ -305,7 +313,7 @@ async def mint_seat(
     occ = await seat_occupancy(actions.pool, worker_seat_id)
     next_step = {
         "vacant": "no session has ever attached — furniture until a body sits in it; "
-                 "launch one (launch(), once it exists) or start a session in the "
+                 f"launch(target={handle!r}) to body it, or start a session in the "
                  "office and have it claim_name itself",
         "occupied": "already live — no next step, someone's home",
         "cold": "held, but nobody's live right now — its holder resumes on its own "

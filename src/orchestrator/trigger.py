@@ -1030,10 +1030,21 @@ async def _seat_for_target(actions: Actions, target: str) -> str | None:
             "SELECT 1 FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
             target)
         return target if exists else None
-    from src.orchestrator.seats import held_seat
+    from src.orchestrator.seats import held_seat, seats_by_handle
     if target.startswith("agent:"):
         held = await held_seat(actions.pool, target)
         return held["seat_id"] if held else None
+    # THE VACANT-SEAT FIX (task #68): resolve_seat below is AGENT-centric — it walks Agent
+    # objects that claimed a handle, so a freshly minted, never-launched seat (no Agent has
+    # ever attached to it) was unresolvable by its own handle, and launch() could never body
+    # it. The Seat object itself already carries the handle mint_seat/ensure_seat stamped;
+    # try that FIRST. An unambiguous hit is the same seat_id the occupied-case fallback below
+    # would find anyway (one seat, one handle), so this changes nothing for the already-
+    # working case — it only adds the vacant one. A twin handle (2+ matches) falls through to
+    # the legacy resolver rather than guessing which one the caller meant.
+    by_handle = await seats_by_handle(actions.pool, target)
+    if len(by_handle) == 1:
+        return by_handle[0]
     from src.orchestrator.agents import resolve_seat
     resolved = await resolve_seat(actions, target)
     return resolved.get("seat_id")
@@ -1340,7 +1351,12 @@ async def launch_seat(
 
     st = settings or get_settings()
     argv = ["claude"]
-    argv_model = model or st.osiris_wake_model or None
+    # MODEL PRECEDENCE (task #68, finding #7, thread 20e4feb6): an explicit caller param wins,
+    # then the SEAT'S OWN stamped intended_model (mint_seat's pin — the whole point of naming
+    # a model per worker), and only then the trigger's own global default. The old order
+    # skipped the stamp entirely, which is why a seat pinned to sonnet-5 could spawn on
+    # whatever osiris_wake_model happened to be that day, silently.
+    argv_model = model or facts.get("intended_model") or st.osiris_wake_model or None
     if argv_model:
         argv += ["--model", argv_model]
     name = f"[{_house_tag(house)}] {handle}"
@@ -1389,11 +1405,16 @@ async def launch_seat(
 
     out: dict[str, Any] = {
         "status": "launched", "window": spawned, "seat": res.get("seat_id", target_seat),
-        "body_exists": bool(spawned), "can_receive": alive,
+        "body_exists": bool(spawned), "can_receive": alive, "spawned_model": argv_model,
         "detail": ("body created and live" if alive else
                    "body created; mount NOT yet confirmed — the claude is booting and will "
                    "self-bind via its attach token; confirm with pty_list / occupancy"),
     }
+    stamped_model = facts.get("intended_model")
+    if stamped_model and argv_model != stamped_model:
+        out["model_mismatch"] = (
+            f"spawned on {argv_model!r} but the seat's own stamped intended_model is "
+            f"{stamped_model!r} — never silent (thread 20e4feb6)")
     if brief_id is not None:
         out["brief_message_id"] = brief_id
     if res.get("room_busy"):
