@@ -155,6 +155,28 @@ async def _run_smoke_probes() -> list[str]:
     return summarize_failures(chrome, mcp_result)
 
 
+async def _wait_for_smoke(
+    probe: Callable[[], Awaitable[list[str]]] = _run_smoke_probes, *,
+    ceiling_secs: float = 30.0, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> tuple[list[str], float]:
+    """A BOUNDED wait-for-up loop (never indefinite): a service that just restarted (uvicorn
+    still binding, the MCP pool still warming) needs a few seconds — a single immediate probe
+    cried wolf on a genuinely healthy deploy (found live, batch 4's maiden `osiris deploy`
+    run: all-red immediately, all-green five seconds later). Retries with backoff (2s, 4s,
+    8s, 8s, ... capped at `ceiling_secs`) until the probe comes back clean or the ceiling
+    elapses. Returns (fails, elapsed) — an empty `fails` past elapsed>0 means it recovered;
+    a non-empty `fails` once elapsed>=ceiling_secs is a REAL finding, not a false alarm."""
+    elapsed = 0.0
+    delay = 2.0
+    fails = await probe()
+    while fails and elapsed < ceiling_secs:
+        await sleep(delay)
+        elapsed += delay
+        delay = min(delay * 2, 8.0)
+        fails = await probe()
+    return fails, elapsed
+
+
 async def cmd_smoke() -> int:
     fails = await _run_smoke_probes()
     if not fails:
@@ -552,11 +574,13 @@ async def cmd_deploy(
         return 1
     print(f"osiris deploy: restarted {', '.join(DEPLOY_UNITS)}")
 
-    fails = await _run_smoke_probes()
+    fails, waited = await _wait_for_smoke()
     if fails:
-        print("SMOKE FAILURES:")
+        print(f"SMOKE FAILURES (after waiting {waited:.0f}s for the restart to come up):")
         for f in fails:
             print(" -", f)
+    elif waited:
+        print(f"smoke: all green (came up after {waited:.0f}s)")
     else:
         print("smoke: all green")
 

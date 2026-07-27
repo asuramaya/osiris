@@ -13,6 +13,7 @@ from src.actions.core import Actions
 from src.cli import (
     DEPLOY_UNITS,
     _find_repo_root,
+    _wait_for_smoke,
     alembic_gap_note,
     cmd_attach,
     cmd_deploy,
@@ -348,6 +349,73 @@ def test_alembic_head_reads_this_repos_real_migrations() -> None:
 
     repo_root = Path(__file__).resolve().parent.parent
     assert _alembic_head(repo_root) is not None
+
+
+# --- _wait_for_smoke: a bounded retry-with-backoff, no real sleeping in tests ------------------
+
+async def test_wait_for_smoke_clean_on_first_try_never_sleeps() -> None:
+    calls = []
+
+    async def _probe() -> list[str]:
+        calls.append(1)
+        return []
+
+    async def _no_sleep(_delay: float) -> None:
+        raise AssertionError("must never sleep when the first probe is already clean")
+
+    fails, waited = await _wait_for_smoke(_probe, sleep=_no_sleep)
+    assert fails == []
+    assert waited == 0.0
+    assert len(calls) == 1
+
+
+async def test_wait_for_smoke_recovers_after_one_retry() -> None:
+    """The exact live shape (batch 4's maiden osiris deploy run): all-red immediately,
+    all-green shortly after — never reported as a false alarm."""
+    attempts = [["chrome /desk: connection refused"], []]
+    slept: list[float] = []
+
+    async def _probe() -> list[str]:
+        return attempts.pop(0)
+
+    async def _fake_sleep(delay: float) -> None:
+        slept.append(delay)
+
+    fails, waited = await _wait_for_smoke(_probe, sleep=_fake_sleep)
+    assert fails == []
+    assert slept == [2.0]
+    assert waited == 2.0
+
+
+async def test_wait_for_smoke_gives_up_at_the_ceiling_and_reports_honestly() -> None:
+    """A genuinely down service is still reported — the bound protects against false alarms
+    on a SLOW startup, it must never hide a real, sustained failure."""
+    async def _always_fails() -> list[str]:
+        return ["osiris-mcp round-trip: error: connection refused"]
+
+    slept: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        slept.append(delay)
+
+    fails, waited = await _wait_for_smoke(_always_fails, ceiling_secs=10.0, sleep=_fake_sleep)
+    assert fails == ["osiris-mcp round-trip: error: connection refused"]
+    assert waited >= 10.0
+    assert slept == [2.0, 4.0, 8.0]  # 2+4=6 (<10, keep going), +8=14 (>=10, stop)
+
+
+async def test_wait_for_smoke_backoff_is_capped() -> None:
+    async def _always_fails() -> list[str]:
+        return ["still down"]
+
+    slept: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        slept.append(delay)
+
+    await _wait_for_smoke(_always_fails, ceiling_secs=30.0, sleep=_fake_sleep)
+    assert slept == [2.0, 4.0, 8.0, 8.0, 8.0]  # doubles until 8, never exceeds it
+    assert max(slept) == 8.0
 
 
 # --- cmd_deploy: fake git_status/restart, a real pool for the seeder/migration comparison ------
