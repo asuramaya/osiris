@@ -33,6 +33,7 @@ import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from difflib import SequenceMatcher
+from typing import Any
 
 import asyncpg
 
@@ -249,6 +250,46 @@ async def _thread_summary(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | Non
         "AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
         thread_id,
     )
+
+
+# PRIOR-ART SURFACING (thread 44635c42, task #67, from the re-derivation post-mortem):
+# a ruling contradicting standing law must not mint frictionlessly. Canonical failure this
+# prevents: decision 636a8648 minted in direct contradiction of naming-v3 (a882b334) with
+# zero friction — the operator caught it, the verb didn't. `search`'s own fused engine
+# (lexical + semantic doors) is topical, not lexical — the exact property needed here, since
+# a contradicting ruling rarely reuses its predecessor's wording. `via` in ('id', 'both')
+# means an independent SECOND door corroborated the match (an id-exact hit, or both the
+# textual and semantic doors agreeing) — that agreement, not a magic rank cutoff, is what
+# "strong" means, so the flag doesn't need recalibrating as the corpus grows.
+_PRIOR_ART_STRONG_VIA = ("id", "both")
+
+
+def prior_art_from_hits(
+    hits: list[dict[str, Any]], *, exclude: set[uuid.UUID] | None = None, limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Shape a `search()` result into a record_decision receipt's `prior_art` — standing
+    (unsuperseded) Decision hits only, everything else is a different question this verb
+    doesn't answer. Excludes the decision just recorded and any explicit `supersedes`
+    target — those are already handled by that verb, naming them again as "prior art"
+    would just be noise. LOUD, NEVER A REFUSAL (the SPOF principle): this only shapes data
+    for the receipt to display — the caller decides whether a hit is strong enough to flag."""
+    exclude_s = {str(e) for e in (exclude or set())}
+    out: list[dict[str, Any]] = []
+    for h in hits:
+        if h.get("type") != "Decision" or h.get("id") in exclude_s or h.get("superseded"):
+            continue
+        out.append({"id": str(h["id"])[:8], "summary": h.get("snippet") or "",
+                    "grade": h.get("grade"), "via": h.get("via")})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def prior_art_is_strong(prior_art: list[dict[str, Any]]) -> bool:
+    """Does the TOP prior-art hit warrant the loud flag ('a standing ruling covers this
+    ground — supersede it explicitly or cite it')? See `prior_art_from_hits` for why
+    cross-door agreement, not a rank number, is the bar."""
+    return bool(prior_art) and prior_art[0].get("via") in _PRIOR_ART_STRONG_VIA
 
 
 def _ref_slug(title: str) -> str:

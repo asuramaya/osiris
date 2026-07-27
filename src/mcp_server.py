@@ -3021,14 +3021,37 @@ async def record_decision(
             return {"error": f"resolves matched no thread: {resolves!r} — quote its UUID, "
                              "8-char short id, or a summary substring"}
         answered.append(single)
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
     d = await capture.record_decision(
         Actions(pool), summary, kind=kind, rationale=rationale, repo=repo,
-        source=await _actor_for(ctx, subagent_id, subagent_type), grounds=gids,
+        source=actor, grounds=gids,
         protocol=protocol, supersedes=str(old) if old else None,
         resolves=[str(a) for a in answered] if isinstance(resolves, list) else
                  (str(answered[0]) if answered else None),
     )
     out: dict[str, Any] = {"id": str(d), "kind": kind, "summary": summary}
+    # PRIOR-ART SURFACING (thread 44635c42, task #67): before a ruling stands, name what
+    # standing law already covers this ground — search is the same fused engine `search()`
+    # exposes, topical (lexical + semantic) rather than lexical-only, since a contradicting
+    # ruling rarely reuses its predecessor's exact wording (the canonical failure: 636a8648
+    # minted in direct contradiction of naming-v3/a882b334 with zero friction). Fail-open:
+    # a search hiccup must never block recording the decision itself.
+    try:
+        search_out = await comp.run_spec(
+            pool, {"op": "function", "name": "search",
+                   "args": {"q": f"{summary} {rationale or ''}"[:300], "limit": 15,
+                            "caller": actor}},
+            None, name="search", caller=actor)
+        prior = capture.prior_art_from_hits(
+            search_out["items"]["hits"], exclude={d} | ({old} if old else set()))
+    except Exception:  # noqa: BLE001 — never block a ruling on a search-side failure
+        prior = []
+    if prior:
+        out["prior_art"] = prior
+        if capture.prior_art_is_strong(prior):
+            out["prior_art_flag"] = (
+                f"a standing ruling ({prior[0]['id']}) covers this ground — supersede it "
+                "explicitly (supersedes=...) or cite it (grounds=...)")
     if obsoletes:
         killed = []
         for statement in obsoletes:

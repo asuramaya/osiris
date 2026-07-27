@@ -17,6 +17,8 @@ from src.orchestrator.capture import (
     link_repo,
     measurement_smell,
     open_thread,
+    prior_art_from_hits,
+    prior_art_is_strong,
     reclassify_thread,
     record_blind_spot,
     record_decision,
@@ -1180,6 +1182,70 @@ async def test_record_decision_protocol_makes_a_ruling_rerunnable(actions: Actio
         "ORDER BY confidence DESC, observed_at DESC LIMIT 1", d)
     assert row is not None and "--n-trials 64" in row["v"]
     assert row["evidence_class"] == "self_declared"
+
+
+async def test_record_decision_surfaces_prior_art_against_a_standing_ruling(
+    actions: Actions,
+) -> None:
+    """Task #67 (thread 44635c42, from the re-derivation post-mortem): a ruling
+    contradicting standing law must not mint frictionlessly. Canonical failure this
+    prevents: decision 636a8648 minted in direct contradiction of naming-v3 (a882b334)
+    with zero friction — the operator caught it, the verb didn't. Re-records 636a8648's
+    actual text against a fixture graph containing a882b334's actual text and asserts the
+    receipt's `prior_art` carries it."""
+    from src import mcp_server as srv
+
+    standing = await record_decision(
+        actions,
+        "RULING — mind-keyed generations (naming v3, operator, 2026-07-09). The roman "
+        "numeral tracks WHICH MIND, not which tenure. A mind = one contiguous run of one "
+        "model on one unbroken context. Seams that MINT an heir: (1) model change on the "
+        "seat's main loop, ANY change including mid-session live-swaps — and oscillation "
+        "mints every time (Fable→Opus→Fable = three minds; the returning model is a "
+        "THIRD mind, no same-as-grandfather exception); (2) COMPACTION.",
+        kind="ruling", repo="osiris", source="agent:naming-v3")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.record_decision(
+            "OPERATOR RULING: THE DOUBLE-MINT IS THE BUG, NOT THE READ SIDE — 'the double "
+            "hop/mint on model swap is super broken and lame.' A live model swap must NOT "
+            "mint a new generation: it is the same mind continuing on a different engine, "
+            "and model_history on the EXISTING agent already records it. Generation mints "
+            "are reserved for REAL seams (compaction, fresh session, deliberate "
+            "succession).",
+            kind="ruling", repo="osiris")
+    finally:
+        srv._pool = saved_pool
+    prior_ids = {p["id"] for p in out.get("prior_art", [])}
+    assert str(standing)[:8] in prior_ids
+
+
+def test_prior_art_from_hits_excludes_self_supersede_target_and_buried_law() -> None:
+    """Pure shaping logic (no DB): only standing Decision hits survive, minus whatever the
+    caller already named explicitly (the decision just recorded, its supersedes target)."""
+    self_id = "11111111-1111-1111-1111-111111111111"
+    old_id = "22222222-2222-2222-2222-222222222222"
+    standing_id = "33333333-3333-3333-3333-333333333333"
+    hits = [
+        {"id": self_id, "type": "Decision", "snippet": "the new one itself",
+         "grade": "self_declared"},
+        {"id": old_id, "type": "Decision", "snippet": "the explicit supersede target",
+         "grade": "self_declared"},
+        {"id": standing_id, "type": "Decision", "snippet": "unrelated standing law",
+         "grade": "self_declared", "via": "both"},
+        {"id": "44444444-4444-4444-4444-444444444444", "type": "Decision",
+         "snippet": "dead law", "grade": "self_declared", "superseded": "by decision aaaa1111"},
+        {"id": "55555555-5555-5555-5555-555555555555", "type": "Thread",
+         "snippet": "not even a Decision", "grade": "self_declared"},
+    ]
+    import uuid as _uuid
+    out = prior_art_from_hits(
+        hits, exclude={_uuid.UUID(self_id), _uuid.UUID(old_id)})
+    assert [p["id"] for p in out] == [standing_id[:8]]
+    assert prior_art_is_strong(out)  # the surviving hit's via='both' is the strong signal
+    assert not prior_art_is_strong([])
+    assert not prior_art_is_strong([{"id": standing_id[:8], "via": "semantic"}])
 
 
 async def test_ingest_reference_cites_wires_paper_lineage(actions: Actions) -> None:
