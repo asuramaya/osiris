@@ -1804,28 +1804,22 @@ async def _fn_roadmap_open(
     piece that stays a Function rather than a pure op-tree, and deliberately so: echo-
     filtering (`open_thread_wall`'s exclusion of untouched miner guesses) inspects EVIDENCE
     PROVENANCE across a thread's whole assertion history, which `select`'s property-only
-    `where` cannot express — real domain logic, exactly what a Function is for. A Function's
-    output is also a LEAF in this architecture (it can't feed a further `group`), so the
-    arc->owner nesting happens here too, in Python, reusing roadmap.py's own arc lookup and
-    owner-grouping rather than re-deriving them. This is the discipline the migration is
-    proving: real judgment stays a Function, pure layout stays ops, `sections` composes both."""
-    from src.orchestrator.roadmap import _arc_map, _owner_groups
+    `where` cannot express — real domain logic, exactly what a Function is for. Unlike a
+    Function's output BEFORE task #60 (the function-output-re-entering-the-op-tree
+    follow-on), this is no longer a dead-end leaf: returning a flat, arc/owner-tagged list
+    lets the composition's own `group by=arc` then `group by=owner` do the nesting via the
+    op-tree — the SAME shape `_roadmap_status_group` already uses for resolved/retracted —
+    instead of hand-rolling it here in Python. This is the discipline the migration is
+    proving: real judgment (the echo-filter) stays a Function, pure layout stays ops."""
+    from src.orchestrator.roadmap import _arc_map
 
     assert subject is not None  # the op guard requires a subject (the project)
     wall, _echoes = await open_thread_wall(pool, subject)
     ranked, _more = rank_open_threads(wall)
     arcs = await _arc_map(pool, [str(t["id"])[:8] for t in ranked])
-    for t in ranked:
-        t["arc"] = arcs.get(str(t["id"])[:8]) or "unsorted"
-    by_arc: dict[str, Any] = {}
-    for arc in sorted({t["arc"] for t in ranked}):
-        arc_items = [t for t in ranked if t["arc"] == arc]
-        by_arc[arc] = {
-            owner: [{"id": str(x["id"])[:8], "summary": x["summary"], "kind": x.get("kind")}
-                    for x in items]
-            for owner, items in _owner_groups(arc_items).items()
-        }
-    return by_arc
+    return [{"id": str(t["id"])[:8], "summary": t["summary"], "kind": t.get("kind"),
+             "arc": arcs.get(str(t["id"])[:8]) or "unsorted",
+             "owner": t.get("owner") or "unowned"} for t in ranked]
 
 
 async def _fn_desk_decisions(
@@ -1895,13 +1889,6 @@ MAX_AGGREGATE_DIMS = 3
 # cap, not arbitrary — arc->status->owner (roadmap's real depth) is exactly 3.
 MAX_GROUP_DEPTH = 3
 
-# `group`'s body evaluates against "this partition's members" — threaded the same way
-# `_ACL_CALLER` already threads the reflection ACL through nested `_eval` calls (a contextvar,
-# not a new parameter on every op handler): a nested `group`'s own `{"op":"these"}` shadows the
-# outer one, exactly the lexical scoping a reader expects.
-_THESE: ContextVar[list[uuid.UUID] | None] = ContextVar("_THESE", default=None)
-_GROUP_DEPTH: ContextVar[int] = ContextVar("_GROUP_DEPTH", default=0)
-
 
 @dataclass
 class Result:
@@ -1912,6 +1899,17 @@ class Result:
     values: list[str] = field(default_factory=list)
     rows: list[dict[str, Any]] = field(default_factory=list)
     data: Any = None  # a Function's native output (list/dict) — opaque to the ops
+
+
+# `group`'s body evaluates against "this partition's members" — threaded the same way
+# `_ACL_CALLER` already threads the reflection ACL through nested `_eval` calls (a contextvar,
+# not a new parameter on every op handler): a nested `group`'s own `{"op":"these"}` shadows the
+# outer one, exactly the lexical scoping a reader expects. Holds the partition's own raw
+# `Result` (task #60, the function-output-re-entering-the-op-tree follow-on) — not just a bare
+# UUID list — so a Function-sourced partition (kind="rows") nests `group`/`order`/`take` under
+# its own body exactly like an object-sourced one (kind="objects"), no second leaf type needed.
+_THESE: ContextVar[Result | None] = ContextVar("_THESE", default=None)
+_GROUP_DEPTH: ContextVar[int] = ContextVar("_GROUP_DEPTH", default=0)
 
 
 def _coerce(v: Any) -> Any:
@@ -1974,8 +1972,11 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         # the nearest enclosing `group`'s own partition — see _THESE above. Empty outside a
         # group body (never an error: an author testing a fragment standalone gets an empty
         # set, not a crash, same "guess never poisons a real answer" spirit as the rest of
-        # this dispatcher).
-        return Result("objects", objects=list(_THESE.get() or []))
+        # this dispatcher). Returns the partition's own Result verbatim — "objects" for a
+        # DB-sourced partition, "rows" for a Function-sourced one (task #60) — so whatever
+        # nests under `body` (a further group/order/take/table) sees the same kind it would
+        # from any other op.
+        return _THESE.get() or Result("objects")
 
     if op == "select":
         ot = node.get("object_type")
@@ -2148,13 +2149,32 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         if not body:
             raise ValueError("group requires 'body'")
         base = await _eval(pool, node["from"], subject)
-        buckets = await _group_by(pool, base.objects, [str(by)])
+        # Two sources of members to partition: real objects (DB-driven, re-derives the `by`
+        # property per object like `aggregate` always has) or a Function's own already-
+        # materialized rows (task #60 — the function-output-re-entering-the-op-tree follow-on:
+        # a Function's list-of-dicts output arrives here as kind="rows", see the `function` op
+        # below). Both converge into the SAME title -> Result map before the existing
+        # per-partition eval loop, which doesn't care which source produced it.
+        bucket_results: dict[str, Result] = {}
+        if base.kind == "rows":
+            row_buckets: dict[str, list[dict[str, Any]]] = {}
+            for row in base.rows:
+                key = row.get(by) if isinstance(row, dict) else None
+                title = str(key) if key is not None else "(none)"
+                row_buckets.setdefault(title, []).append(row)
+            bucket_results = {t: Result("rows", rows=rs) for t, rs in row_buckets.items()}
+        else:
+            buckets = await _group_by(pool, base.objects, [str(by)])
+            bucket_results = {
+                (str(key[0]) if key and key[0] is not None else "(none)"):
+                    Result("objects", objects=[oid for oid, _ in members])
+                for key, members in buckets.items()
+            }
         partitions: dict[str, Any] = {}
         depth_token = _GROUP_DEPTH.set(depth + 1)
         try:
-            for key, members in buckets.items():
-                title = str(key[0]) if key and key[0] is not None else "(none)"
-                these_token = _THESE.set([oid for oid, _ in members])
+            for title, members in bucket_results.items():
+                these_token = _THESE.set(members)
                 try:
                     partitions[title] = await _package(pool, await _eval(pool, body, subject))
                 finally:
@@ -2170,7 +2190,17 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
             raise ValueError(f"unknown function: {name!r}")
         if subject is None and name not in _SUBJECT_FREE:
             raise ValueError(f"function {name!r} requires a subject")
-        return Result("data", data=await fn(pool, subject, node.get("args", {}) or {}))
+        data = await fn(pool, subject, node.get("args", {}) or {})
+        # task #60 (the function-output-re-entering-the-op-tree follow-on): a Function whose
+        # own output is already row-shaped (a list of dicts — `desk_decisions`'s messages,
+        # `roadmap_open`'s ranked threads) is no longer a dead-end leaf. Shape-based, not an
+        # opt-in flag on the Function itself: `group`/`order`/`take` already branch on
+        # Result.kind, so this one reclassification is what lets them all reach a Function's
+        # output for free. A dict-shaped Function (sections-like output — `pulse`, `wall`)
+        # stays kind="data"; nothing there is orderable/groupable and nothing should be.
+        if isinstance(data, list) and all(isinstance(x, dict) for x in data):
+            return Result("rows", rows=data)
+        return Result("data", data=data)
 
     raise ValueError(f"unknown composition op: {op!r}")
 
@@ -2702,18 +2732,34 @@ def _roadmap_status_group(status: str) -> dict[str, Any]:
     }
 
 
+def _roadmap_open_group() -> dict[str, Any]:
+    """arc -> owner over the OPEN bucket — task #60 (the function-output-re-entering-the-
+    op-tree follow-on): `roadmap_open` still has to be a Function (the echo-filter is real
+    evidence-provenance logic no `select` can express), but its output is no longer a
+    dead-end leaf, so the arc/owner nesting is the SAME `group`-by-arc-then-owner op-tree
+    `_roadmap_status_group` already uses for resolved/retracted — just sourced from a
+    Function instead of a `select`. No `table` step needed at the leaf: `roadmap_open`'s
+    own rows already carry exactly the columns a table step would fetch."""
+    return {
+        "op": "group", "by": "arc", "from": {"op": "function", "name": "roadmap_open"},
+        "body": {"op": "group", "by": "owner", "from": {"op": "these"},
+                 "body": {"op": "these"}},
+    }
+
+
 # THE MIGRATED ROADMAP (ruling c5b184cd, thread d56e7073/#44 — the composition-abstraction
-# READ half, the proof case). `sections` keyed by STATUS, not arc — the real reason, named
-# rather than hidden: `open` needs `_fn_roadmap_open`'s echo-filter, a genuine Function
-# (evidence-provenance logic no `select` can express), and a Function is a LEAF in this
-# architecture (its output can't feed a further `group`) — so arc can't be the single shared
-# outer level across a Function-sourced section and two pure-op-tree ones without inventing
-# a way for Function output to re-enter the op-tree, which this build does not do. `resolved`
-# and `retracted` are pure `group`-by-arc-then-owner, proving the extension on live data.
+# READ half, the proof case; task #60 restored `open` to a pure `group`-by-arc-then-owner
+# tree too, once a Function's output could re-enter the op-tree). `sections` stays keyed by
+# STATUS, not arc, at the TOP level — deliberately (Thoth, msg 1390): arc as the single
+# top-level axis across all three statuses would need unioning a Function-sourced set with
+# two `select`-sourced ones under one grouping, a bigger, structurally different change
+# `group` consuming a function-node doesn't by itself imply. All three sections are now the
+# SAME shape one level down — arc -> owner -> threads — `open` via `_roadmap_open_group`,
+# `resolved`/`retracted` via `_roadmap_status_group`.
 ROADMAP: dict[str, Any] = {
     "op": "sections",
     "sections": [
-        {"title": "open", "body": {"op": "function", "name": "roadmap_open"}},
+        {"title": "open", "body": _roadmap_open_group()},
         {"title": "resolved", "body": _roadmap_status_group("resolved")},
         {"title": "retracted", "body": _roadmap_status_group("retracted")},
     ],

@@ -56,7 +56,9 @@ async def test_coinvest_function_is_byte_equal(actions: Actions) -> None:
     await seed_default_compositions(actions.pool)
     direct = await coinvestment_ties(actions.pool, neuralink)
     via = await run_composition(actions.pool, "co-investment-ties", neuralink)
-    assert via["kind"] == "data"
+    # "rows", not "data" (task #60): a list-of-dicts Function output is reclassified so
+    # group/order/take can reach it — `items` itself is unaffected, still byte-equal.
+    assert via["kind"] == "rows"
     assert via["items"] == direct           # the precise tie list, unchanged
     assert direct[0]["company"] == "OpenAI"  # and it's the REAL (non-degraded) analytic
     assert direct[0]["shared_operators"] == 2

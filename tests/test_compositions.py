@@ -272,6 +272,79 @@ async def test_group_requires_by_and_body(actions: Actions) -> None:
             actions, "no-body", {"op": "group", "by": "sector", **base}))
 
 
+# --- Function output re-entering the op-tree (task #60, follow-on to ruling c5b184cd): a
+# Function's own output is no longer a dead-end leaf — group/order/take can consume a
+# `{"op":"function"}` node whose data is a flat list of dicts. Proven against `desk_decisions`,
+# a real registered Function, not a test-only stand-in. ---------------------------------------
+
+async def _desk_decision(actions: Actions, from_agent: str, body: str) -> None:
+    from src.orchestrator.mailbox import send_message
+
+    await send_message(actions.pool, from_agent=from_agent, from_project="osiris",
+                        to_project="operator", body=body, desk_kind="decision")
+
+
+async def test_function_output_is_reclassified_as_rows_when_list_of_dicts(
+    actions: Actions,
+) -> None:
+    """The shape-based promotion in the `function` op handler: a list-of-dicts Function
+    output becomes kind="rows" (order/take-able), not kind="data" (a leaf)."""
+    await _desk_decision(actions, "agent:x", "a real call")
+    res = await run_composition(actions.pool, await _save(
+        actions, "fn-rows", {"op": "function", "name": "desk_decisions"}))
+    assert res["kind"] == "rows"
+
+
+async def test_dict_shaped_function_output_stays_data_not_rows(actions: Actions) -> None:
+    """The reclassification is shape-based, not a blanket promotion — a Function returning a
+    dict (sections-like output, e.g. `wall`) stays kind="data"; nothing there is list-shaped
+    to group/order/take over."""
+    res = await run_composition(actions.pool, await _save(
+        actions, "fn-data", {"op": "function", "name": "wall", "args": {"me": ["operator"]}}))
+    assert res["kind"] == "data"
+
+
+async def test_group_consumes_a_function_node_yielding_a_list(actions: Actions) -> None:
+    """The proof case: a Function's output can be the `from` of a `group` — partitioned in
+    Python from the already-materialized rows, no re-query of the (nonexistent) objects."""
+    await _desk_decision(actions, "agent:x", "call A")
+    await _desk_decision(actions, "agent:y", "call B")
+    spec = {"op": "group", "by": "from", "from": {"op": "function", "name": "desk_decisions"},
+            "body": {"op": "these"}}
+    res = await run_composition(actions.pool, await _save(actions, "fn-group", spec))
+    assert res["kind"] == "data"
+    assert {d["summary"] for d in res["items"]["agent:x"]} == {"call A"}
+    assert {d["summary"] for d in res["items"]["agent:y"]} == {"call B"}
+
+
+async def test_order_and_take_already_worked_over_a_function_node(actions: Actions) -> None:
+    """order/take needed NO code changes for this — they already branched on Result.kind.
+    Pins that a function-sourced "rows" result orders/takes exactly like `table`'s does."""
+    await _desk_decision(actions, "agent:x", "zzz-last")
+    await _desk_decision(actions, "agent:x", "aaa-first")
+    spec = {"op": "take", "n": 1, "from": {
+        "op": "order", "by": "summary", "from": {"op": "function", "name": "desk_decisions"}}}
+    res = await run_composition(actions.pool, await _save(actions, "fn-order-take", spec))
+    assert len(res["items"]) == 1
+    assert res["items"][0]["summary"] == "aaa-first"
+
+
+async def test_nested_ops_work_inside_a_function_sourced_partition(actions: Actions) -> None:
+    """The real payoff of widening `_THESE` to hold the partition's raw Result, not a bare
+    UUID list: a Function-sourced partition's own body can itself order/take further — not
+    just render its rows flat via a bare `{"op":"these"}`."""
+    await _desk_decision(actions, "agent:x", "zzz-x-last")
+    await _desk_decision(actions, "agent:x", "aaa-x-first")
+    await _desk_decision(actions, "agent:y", "only-y")
+    spec = {"op": "group", "by": "from", "from": {"op": "function", "name": "desk_decisions"},
+            "body": {"op": "take", "n": 1, "from": {
+                "op": "order", "by": "summary", "from": {"op": "these"}}}}
+    res = await run_composition(actions.pool, await _save(actions, "fn-nested", spec))
+    assert len(res["items"]["agent:x"]) == 1
+    assert res["items"]["agent:x"][0]["summary"] == "aaa-x-first"
+    assert res["items"]["agent:y"][0]["summary"] == "only-y"
+
+
 # --- persistence / forkability ----------------------------------------------
 
 async def test_save_run_fork_roundtrip(actions: Actions) -> None:
@@ -430,7 +503,10 @@ async def test_desk_decisions_function_finds_unresolved_decision_briefs(
 
     spec = {"op": "function", "name": "desk_decisions"}
     res = await run_composition(actions.pool, await _save(actions, "decisions", spec))
-    assert res["kind"] == "data"
+    # "rows", not "data" (task #60, the function-output-re-entering-the-op-tree follow-on):
+    # a list-of-dicts Function output is reclassified so group/order/take can reach it —
+    # `items` itself is unchanged, `_package` passes rows/data through identically.
+    assert res["kind"] == "rows"
     bodies = [d["summary"] for d in res["items"]]
     assert any("which approach" in b for b in bodies)
     assert not any("all done here" in b for b in bodies)  # fyi, not a decision — excluded
