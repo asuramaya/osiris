@@ -9,6 +9,11 @@ docs, the substrate `consult_canon` reads), so a fresh box has a working console
 `alembic upgrade head`.
 
     python -m src.init
+    python -m src.init --compositions-only   # deploy step: sync DEFAULT_COMPOSITIONS + rooms
+                                              # into a LIVE DB, skip the (slow, unrelated) canon
+                                              # ingest — ruling 2ee43411, task #63: adding a
+                                              # default composition is a first-class deploy step,
+                                              # never a raw asyncpg heredoc against the live DB.
 
 Idempotent: rooms/compositions upsert by name, the canon find-or-creates on canonical — so
 re-running only fixes drift and never duplicates (asserted in tests/test_init.py).
@@ -124,12 +129,23 @@ def _print_next_steps(result: dict[str, Any]) -> None:  # pragma: no cover - CLI
 
 
 def main() -> None:  # pragma: no cover - CLI
+    import argparse
     import asyncio
     import os
     from pathlib import Path
 
     from src.config.settings import get_settings
     from src.db.pool import create_pool
+
+    # ruling 2ee43411 (task #63, thread bb763977): adding a DEFAULT composition needs a
+    # first-class deploy step, never a raw asyncpg heredoc against the live DB — this flag
+    # IS `init()`'s existing `canon=False` path (seed + room compositions, skip the slow,
+    # unrelated doc ingest), just reachable without a full fresh-install run.
+    p = argparse.ArgumentParser()
+    p.add_argument("--compositions-only", action="store_true",
+                    help="seed + room DEFAULT_COMPOSITIONS only; skip rooms' canon ingest step "
+                         "(rooms themselves still upsert — idempotent, safe on a live DB)")
+    args = p.parse_args()
 
     # the canon step reads repo-relative doc paths; run from the repo root regardless of CWD
     # (src/init.py → src → repo root).
@@ -138,7 +154,7 @@ def main() -> None:  # pragma: no cover - CLI
     async def run() -> None:
         pool = await create_pool(get_settings().database_url)
         try:
-            _print_next_steps(await init(Actions(pool)))
+            _print_next_steps(await init(Actions(pool), canon=not args.compositions_only))
         finally:
             await pool.close()
 

@@ -73,6 +73,18 @@ async def test_init_seeds_rooms_compositions_and_canon(actions: Actions) -> None
     assert await p.fetchval("SELECT count(*) FROM objects WHERE type='Reference'") >= 7
 
 
+async def test_init_compositions_only_skips_canon(actions: Actions) -> None:
+    """`python -m src.init --compositions-only` (ruling 2ee43411, task #63, thread bb763977)
+    routes to `canon=False` — a deploy step for syncing a new DEFAULT_COMPOSITIONS entry into
+    a live DB without also paying for a canon re-ingest. Compositions + rooms still seed."""
+    res = await init(actions, canon=False)
+    assert res["canon"] is None
+    p = actions.pool
+    assert await p.fetchval("SELECT count(*) FROM compositions") == len(DEFAULT_COMPOSITIONS)
+    assert await p.fetchval("SELECT count(*) FROM compositions WHERE room_id IS NULL") == 0
+    assert await p.fetchval("SELECT count(*) FROM objects WHERE type='Reference'") == 0
+
+
 async def test_init_is_idempotent(actions: Actions) -> None:
     """Running init twice adds nothing — rooms/compositions/canon counts stable."""
     await init(actions)
