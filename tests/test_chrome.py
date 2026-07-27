@@ -7,13 +7,12 @@ from datetime import UTC, datetime
 from src.actions.core import Actions
 from src.api.chrome import (
     page,
+    render_composition,
     render_desk,
     render_desk_project,
-    render_docs,
     render_fleet,
     render_mail_box,
     render_mail_overview,
-    render_roadmap,
 )
 from src.orchestrator.capture import open_thread
 from src.parsers.base import EvidenceClass
@@ -430,114 +429,82 @@ def test_render_overhead_telemetry_band() -> None:
     assert "retained telemetry" not in render_overhead(_overhead_data(), None)
 
 
-# ── /roadmap ─────────────────────────────────────────────────────────────────────────────
+# ── /roadmap — render_roadmap RETIRED (ruling c5b184cd, thread d56e7073/#44) ───────────────
+# /roadmap now reads compositions.ROADMAP through render_composition — its own tests live
+# in test_compositions.py (the composition end to end) and the render_composition section
+# just below (the generic renderer, fixture-fed, same as every other pure renderer here).
 
-def _roadmap_data(project: str = "seats") -> dict:
-    return {
-        "project": project,
-        "arcs": [
-            {"arc": "Security", "statuses": [
-                {"status": "open", "owners": [
-                    {"owner": "unowned", "threads": [
-                        {"id": "aaaa1111", "summary": "an open duty",
-                         "kind": "obligation"}]},
-                    {"owner": "operator", "threads": [
-                        {"id": "bbbb2222", "summary": "an operator blocker"}]},
-                ]},
-                {"status": "resolved", "owners": [
-                    {"owner": "agent:builder", "threads": [
-                        {"id": "cccc3333", "summary": "shipped work"}]},
-                ]},
-            ]},
-            {"arc": "unsorted", "statuses": [
-                {"status": "open", "owners": [
-                    {"owner": "unowned", "threads": [
-                        {"id": "dddd4444", "summary": "an untagged duty"}]},
-                ]},
-            ]},
-        ],
-        "note": "v2: arc→status→owner (thread 8df8e611)",
-    }
+# --- render_composition (ruling c5b184cd, thread d56e7073/#44): the generic composition ->
+# chrome-HTML renderer, zero domain knowledge — fed run_composition's own {kind,items} shape.
+
+def test_render_composition_walks_nested_dicts_as_bands() -> None:
+    """A `group`-produced data result (dict of dicts of lists) recurses into nested
+    collapsible bands — exactly what render_roadmap's own arc->status->owner hand-wrote,
+    now generic."""
+    result = {"kind": "data", "count": 2, "items": {
+        "Identity-Succession": {"open": [{"summary": "a duty"}]},
+        "Compaction-Resilience": {"open": [{"summary": "another"}]},
+    }}
+    html = render_composition(result)
+    assert "Identity-Succession" in html and "Compaction-Resilience" in html
+    assert "a duty" in html and "another" in html
+    assert html.count("<details") >= 4  # 2 arcs + 2 statuses, each its own band
 
 
-def test_render_roadmap_bands_by_arc_then_status_then_owner() -> None:
-    html = render_roadmap(_roadmap_data())
-    assert "roadmap" in html and "seats" in html
-    assert "4 threads" in html
-    assert 'id="rm-arc-Security"' in html and 'id="rm-arc-unsorted"' in html
-    assert html.index('id="rm-arc-Security"') < html.index('id="rm-arc-unsorted"')
-    assert 'id="rm-open"' in html and 'id="rm-resolved"' in html
-    assert html.index('id="rm-open"') < html.index('id="rm-resolved"')  # fixed status order
-    assert "an open duty" in html and "operator" in html
-    assert "shipped work" in html and "agent:builder" in html
-    assert "an untagged duty" in html
-    assert '<span class="pill">obligation</span>' in html
-    assert "arc→status→owner" in html
+def test_render_composition_none_bucket_collapses_by_default() -> None:
+    result = {"kind": "data", "count": 1, "items": {"(none)": [{"summary": "untagged"}]}}
+    html = render_composition(result)
+    assert '<details class="proj">' in html  # no `open` attribute — collapsed
 
 
-def test_render_roadmap_every_real_arc_is_expanded_unsorted_is_not() -> None:
-    html = render_roadmap(_roadmap_data())
-    assert '<details class="proj" id="rm-arc-Security" open>' in html
-    assert '<details class="proj" id="rm-arc-unsorted">' in html
+def test_render_composition_named_bucket_opens_by_default() -> None:
+    result = {"kind": "data", "count": 1, "items": {"real-arc": [{"summary": "x"}]}}
+    html = render_composition(result)
+    assert '<details class="proj" open>' in html
 
 
-def test_render_roadmap_open_band_is_expanded_others_are_not() -> None:
-    html = render_roadmap(_roadmap_data())
-    assert '<details class="band" id="rm-open" open>' in html
-    assert '<details class="band" id="rm-resolved">' in html
+def test_render_composition_rows_and_objects_render_as_items() -> None:
+    rows = render_composition({"kind": "rows", "count": 1,
+                               "items": [{"summary": "a row", "amount": "5"}]})
+    assert "a row" in rows and "amount=5" in rows
+    objects = render_composition({"kind": "objects", "count": 1,
+                                  "items": [{"id": "x", "type": "Thread", "label": "an object"}]})
+    assert "an object" in objects
 
 
-def test_render_roadmap_refuses_honestly() -> None:
-    html = render_roadmap({"error": "no such project: 'ghost'"})
-    assert "no such project" in html
+def test_render_composition_values_render_as_a_list() -> None:
+    html = render_composition({"kind": "values", "count": 2, "items": ["US", "UAE"]})
+    assert "<li>US</li>" in html and "<li>UAE</li>" in html
 
 
-def test_render_roadmap_empty_project_says_so() -> None:
-    html = render_roadmap({"project": "quietproj", "arcs": [], "note": "v2..."})
-    assert "nothing tracked yet" in html and "quietproj" in html
+def test_render_composition_empty_says_so_not_a_blank_page() -> None:
+    assert "—" in render_composition({"kind": "objects", "count": 0, "items": []})
+    assert "—" in render_composition({"kind": "values", "count": 0, "items": []})
 
 
-def test_render_roadmap_is_generic_across_projects() -> None:
-    """Same renderer, two different projects — nothing here hardcodes 'osiris' or 'seats'
-    (the operator's 'every project needs it' — a primitive, not an osiris page)."""
-    for project in ("seats", "some-other-project"):
-        html = render_roadmap(_roadmap_data(project))
-        assert project in html
+def test_render_composition_refuses_honestly() -> None:
+    html = render_composition({"error": "no composition 'ghost'"})
+    assert "no composition" in html
 
 
-# ── /docs ────────────────────────────────────────────────────────────────────────────────
-
-def _docs_data() -> dict:
-    return {
-        "sections": [
-            {"topic": "getting-started", "docs": [
-                {"canonical": "ref:install", "name": "INSTALL", "vendor": "osiris"}]},
-            {"topic": "reference", "docs": [
-                {"canonical": "ref:palantir-object-sets", "name": "Object Sets",
-                 "vendor": "palantir"}]},
-        ],
-    }
+def test_render_composition_caps_a_long_item_list() -> None:
+    items = [{"summary": f"item {i}"} for i in range(40)]
+    html = render_composition({"kind": "rows", "count": 40, "items": items})
+    assert "item 0" in html and "item 24" in html and "item 25" not in html
+    assert "+15 more" in html
 
 
-def test_render_docs_sections_by_topic() -> None:
-    html = render_docs(_docs_data(), "seats")
-    assert "docs" in html and "seats" in html
-    assert "2 docs" in html
-    assert 'id="doc-getting-started"' in html and 'id="doc-reference"' in html
-    assert "INSTALL" in html and "osiris" in html
-    assert "Object Sets" in html and "palantir" in html
+def test_render_composition_a_scalar_leaf_is_a_fact_line_not_dropped() -> None:
+    """The same law renderData follows — a shape this renderer doesn't expect (here, a
+    scalar nested under a dict key) is rendered AS ITSELF, never silently discarded."""
+    result = {"kind": "data", "count": 1, "items": {"totals": {"open": 12}}}
+    html = render_composition(result)
+    assert "open: 12" in html
 
 
-def test_render_docs_empty_says_so() -> None:
-    html = render_docs({"sections": []}, "seats")
-    assert "nothing ingested yet" in html
-    assert "python -m src.ingest.reference" in html
-
-
-def test_render_docs_is_generic_across_projects() -> None:
-    for project in ("seats", "some-other-project"):
-        html = render_docs(_docs_data(), project)
-        assert project in html
+# ── /docs — render_docs RETIRED (ruling c5b184cd, thread d56e7073/#44) ─────────────────────
+# /canon now reads compositions.DOCS through render_composition — its own tests live in
+# test_compositions.py (the composition end to end) and the render_composition section above.
 
 
 def test_page_shell_includes_the_new_nav_tabs() -> None:

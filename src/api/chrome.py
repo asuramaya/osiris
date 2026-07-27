@@ -723,108 +723,114 @@ def render_fleet(data: dict[str, Any]) -> str:
     return "".join(out)
 
 
-# ── /roadmap ─────────────────────────────────────────────────────────────────────────────
-# GENERIC PER-PROJECT (the operator: "every project needs it" — a primitive, not an osiris
-# page): the renderer takes whatever `src.orchestrator.roadmap.roadmap()` computed for
-# WHATEVER project the route asked for; nothing here assumes osiris is the only tenant.
+# ── the generic composition renderer (ruling c5b184cd, thread d56e7073/#44) ────────────────
+# THE READ HALF, FINISHED: mirrors osiris.js's renderResult/renderData EXACTLY (dispatch by
+# `kind`; a dict recurses into nested bands, a list becomes items, a scalar becomes a line;
+# a shape this renderer doesn't expect is rendered AS ITSELF, never discarded or dropped).
+# Zero domain knowledge — this function has never heard of "arc" or "status" or "owner";
+# whatever a composition's op-tree computed, this renders it generically. The ONE thing it
+# knows about depth (not domain): alternate two collapsible styles by nesting level, purely
+# for visual hierarchy, and default-collapse a "(none)" bucket (a structural convention, not
+# a fact about any particular property) — everything else opens.
 
-def _roadmap_thread_row(t: dict[str, Any]) -> str:
-    return (f'<div class="debt"><code>{_e(str(t["id"]))}</code> {_e(t["summary"])}'
-            + (' <span class="pill">obligation</span>'
-               if t.get("kind") == "obligation" else "")
-            + "</div>")
-
-
-_STATUS_HDR = {"open": "hdr-decision", "resolved": "hdr-fyi", "retracted": "hdr-fyi"}
-
-
-def _roadmap_status_band(s: dict[str, Any]) -> str:
-    """One status, its owner sub-groups inside — the same collapsible band shape as
-    /desk's _guesses_band/_dimmed_band, one level deeper (status → owner → threads)."""
-    status = s["status"]
-    owners = s.get("owners") or []
-    n = sum(len(o["threads"]) for o in owners)
-    body = []
-    for o in owners:
-        body.append(f'<h3 class="who">{_e(o["owner"])} '
-                    f'<span class="pill">{len(o["threads"])}</span></h3>')
-        body.extend(_roadmap_thread_row(t) for t in o["threads"])
-    return (f'<details class="band" id="rm-{_e(status)}"{" open" if status == "open" else ""}>'
-            f'<summary class="{_STATUS_HDR.get(status, "hdr-fyi")}">{_e(status)} '
-            f'<span class="pill">{n}</span></summary>' + "".join(body) + "</details>")
+_COMPOSITION_CAP = 25
+_COMP_SALIENT = ("summary", "name", "title", "label", "subject")
+_COMP_SKIP = frozenset({"id", "props", "canonical", *_COMP_SALIENT})
 
 
-def _roadmap_arc_band(a: dict[str, Any]) -> str:
-    """One arc, its status bands nested inside — the top grouping level. Reuses `.proj`
-    (the border-accent box render_desk_project already established) so the arc level
-    reads as visually one step ABOVE the `.band` status level inside it."""
-    arc = a["arc"]
-    statuses = a.get("statuses") or []
-    n = sum(len(o["threads"]) for s in statuses for o in s["owners"])
-    body = "".join(_roadmap_status_band(s) for s in statuses)
-    # every real arc opens by default; the "unsorted" catch-all collapses so a project
-    # with a lot of not-yet-tagged history doesn't dominate the page on first load
-    open_attr = "" if arc == "unsorted" else " open"
-    return (f'<details class="proj" id="rm-arc-{_e(arc)}"{open_attr}>'
-            f'<summary>{_e(arc)} <span class="pill">{n}</span></summary>'
-            + body + "</details>")
+def _comp_label(item: dict[str, Any]) -> str:
+    """The one salient field to lead with — the same 'pick a summary, don't dump every
+    column' law osiris.js's own timelineList/_pickSummary follows, generalized past objects
+    to any row/dict shape a composition might hand back."""
+    for k in _COMP_SALIENT:
+        v = item.get(k)
+        if v:
+            return str(v)
+    oid = item.get("id")
+    return str(oid) if oid else "—"
 
 
-def render_roadmap(data: dict[str, Any]) -> str:
-    """One project's Threads/obligations, arc→status→owner (thread 521ae613a6f4 / d56e7073
-    / 8df8e611). `data` is `roadmap()`'s own receipt (composing open_thread_wall +
-    rank_open_threads for the open band, resolved/retracted, and the arc lookup) — this
-    function does no fetching, no ranking, only layout, same discipline as every other
-    renderer here."""
-    if "error" in data:
-        return f'<p class="dim">{_e(data["error"])}</p>'
-    project = data["project"]
-    arcs = data.get("arcs") or []
-    total = sum(len(o["threads"]) for a in arcs for s in a["statuses"] for o in s["owners"])
-    out = [f'<h2>roadmap <span class="who">{_e(project)}</span> '
-           f'<span class="pill">{total} thread{"s" if total != 1 else ""}</span></h2>']
-    if not arcs:
-        out.append(f'<p class="dim">nothing tracked yet for <b>{_e(project)}</b>.</p>')
-    out.extend(_roadmap_arc_band(a) for a in arcs)
-    if data.get("note"):
-        out.append(f'<p class="dim">{_e(data["note"])}</p>')
-    return "".join(out)
+def _comp_item(item: Any) -> str:
+    if not isinstance(item, dict):
+        return f'<div class="debt">{_e(item)}</div>'
+    label = _e(_comp_label(item))
+    extras = ", ".join(f"{_e(k)}={_e(v)}" for k, v in item.items() if v and k not in _COMP_SKIP)
+    return (f'<div class="debt">{label}'
+            + (f' <span class="dim">{extras}</span>' if extras else "") + "</div>")
 
 
-# ── /canon (the "docs" tab — routed at /canon, NOT /docs: FastAPI reserves /docs for its
-# own Swagger UI, discovered live when the first route test hit the swagger page instead of
-# this renderer. The nav LABEL stays "docs" (page()'s active-tab match is on the tab name,
-# never the href); only the URL moves, to a word the codebase already uses for exactly this
-# — "the design canon", ingest_canon.) ─────────────────────────────────────────────────────
+def _comp_items(items: list[Any]) -> str:
+    if not items:
+        return '<p class="dim">—</p>'
+    shown = items[:_COMPOSITION_CAP]
+    rows = "".join(_comp_item(i) for i in shown)
+    more = (f'<p class="dim">+{len(items) - len(shown)} more — narrow the composition '
+            "to see the rest.</p>" if len(items) > len(shown) else "")
+    return rows + more
 
-def render_docs(data: dict[str, Any], project: str) -> str:
-    """The doc canon, topic-sectioned (thread 521ae613a6f4) — flat, one level: no hierarchy
-    link type exists between References (`cites` means "draws from," not "subsection of";
-    Thoth's call, msg 1227, not bent into tree structure). `project` names which project's
-    chrome this is viewed from, for the heading only — `docs()` itself is not yet
-    project-scoped (References carry no reliable per-project link), so every project's
-    canon page currently shows the SAME set. Flagged here, not hidden; the fix is a real
-    per-project scoping mechanism on Reference, not something this renderer can paper over."""
-    sections = data.get("sections") or []
-    total = sum(len(s["docs"]) for s in sections)
-    out = [f'<h2>docs <span class="who">{_e(project)}</span> '
-           f'<span class="pill">{total} doc{"s" if total != 1 else ""}</span></h2>']
-    if not sections:
-        out.append('<p class="dim">nothing ingested yet — seed with '
-                    "<code>python -m src.ingest.reference</code>.</p>")
-    for s in sections:
-        rows = "".join(
-            f'<div class="debt">{_e(d["name"] or d["canonical"])}'
-            + (f' <span class="dim">{_e(d["vendor"])}</span>' if d.get("vendor") else "")
-            + "</div>"
-            for d in s["docs"])
-        out.append(
-            f'<details class="band" id="doc-{_e(s["topic"])}" open>'
-            f'<summary class="hdr-fyi">{_e(s["topic"])} '
-            f'<span class="pill">{len(s["docs"])}</span></summary>' + rows + "</details>")
-    out.append('<p class="dim">the same canon renders under every project until '
-               "References get their own project scoping.</p>")
-    return "".join(out)
+
+def _comp_count(value: Any) -> int:
+    if isinstance(value, dict):
+        return sum(_comp_count(v) for v in value.values())
+    if isinstance(value, list):
+        return len(value)
+    return 1
+
+
+def _comp_band(title: str, value: Any, depth: int) -> str:
+    """One nested band. A dict recurses (another collapsible level, style alternating by
+    depth for readability only); a list renders as items; anything else is a fact line —
+    same three-way split renderData makes (dicts → recurse, lists → table, scalars → chip)."""
+    if isinstance(value, dict):
+        body = "".join(_comp_band(k, v, depth + 1) for k, v in value.items())
+    elif isinstance(value, list):
+        body = _comp_items(value)
+    else:
+        return f'<div class="debt">{_e(title)}: {_e(value)}</div>'
+    cls = "proj" if depth % 2 == 0 else "band"
+    # "(none)" (group's own convention for a missing property value) is the one generic,
+    # structural reason to default-collapse — never a fact about what the value IS.
+    open_attr = "" if title == "(none)" else " open"
+    return (f'<details class="{cls}"{open_attr}>'
+            f'<summary>{_e(title)} <span class="pill">{_comp_count(value)}</span></summary>'
+            f"{body}</details>")
+
+
+def render_composition(result: dict[str, Any], *, title: str | None = None) -> str:
+    """The generic composition -> chrome-HTML renderer. `result` is exactly what
+    `run_composition`/`run_spec` return ({kind, count, items, ...}) — this function is the
+    piece that was missing; the op-tree and the client-side renderer were already there."""
+    if "error" in result:
+        return f'<p class="dim">{_e(result["error"])}</p>'
+    kind, items = result.get("kind"), result.get("items")
+    # `run_spec`'s own `count` is len(items) — correct for a flat list, but for a nested
+    # "data" dict (sections/group) that counts SECTION KEYS, not the underlying items. The
+    # heading means "how much is here," so a nested result recounts the real leaves.
+    count = _comp_count(items) if kind == "data" and isinstance(items, dict) \
+        else result.get("count", 0)
+    heading = f'<h2>{_e(title)} <span class="pill">{count}</span></h2>' if title else ""
+    if kind == "data" and isinstance(items, dict):
+        return heading + "".join(_comp_band(k, v, 0) for k, v in items.items())
+    if kind in ("objects", "rows") and isinstance(items, list):
+        return heading + _comp_items(items)
+    if kind == "values" and isinstance(items, list):
+        return heading + (
+            f'<ul>{"".join(f"<li>{_e(v)}</li>" for v in items)}</ul>' if items
+            else '<p class="dim">—</p>')
+    return heading + f'<p class="dim">{_e(items)}</p>'
+
+
+# ── /roadmap — RETIRED as a bespoke renderer (ruling c5b184cd, thread d56e7073/#44) ────────
+# The hand-written arc/status/owner band renderer that used to live here is gone; /roadmap
+# now reads compositions.ROADMAP through `render_composition` (above), the generic
+# composition -> chrome-HTML renderer. See app.py's roadmap_page for the route.
+
+
+# ── /canon — render_docs RETIRED (ruling c5b184cd, thread d56e7073/#44) ────────────────────
+# Routed at /canon, not /docs: FastAPI reserves /docs for its own Swagger UI (discovered live
+# when the first route test hit the swagger page instead of this renderer). The nav LABEL
+# stays "docs" (page()'s active-tab match is on the tab name, never the href). /canon now
+# reads compositions.DOCS through render_composition — see app.py's canon_page.
 
 
 # ── /overhead ────────────────────────────────────────────────────────────────────────────

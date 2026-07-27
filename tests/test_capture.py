@@ -1518,3 +1518,16 @@ async def test_record_reflection_is_kept_and_never_a_work_item(actions: Actions)
     briefing = await actions.pool.fetch(
         "SELECT o.id FROM objects o WHERE o.type='Thread' AND o.id=$1", r)
     assert briefing == []
+
+
+async def test_open_thread_refuses_an_arc_outside_the_locked_taxonomy(
+    actions: Actions,
+) -> None:
+    """The core function's own guard (capture.ARCS, thread 8df8e611, roadmap v2) — a typo
+    must never silently mint a permanently-empty arc. Moved here from test_roadmap.py when
+    roadmap() retired to a composition (ruling c5b184cd, thread d56e7073/#44); this tests
+    open_thread() itself, distinct from test_wall.py's MCP-wrapper-level coverage."""
+    import pytest
+
+    with pytest.raises(ValueError, match="arc must be one of"):
+        await open_thread(actions, "bad arc", arc="Not-A-Real-Arc", source="agent:me")

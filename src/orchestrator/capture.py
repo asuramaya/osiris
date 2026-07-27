@@ -383,7 +383,7 @@ ARCS = ("Identity-Succession", "Compaction-Resilience", "Model-Identity", "Token
 async def open_thread(
     actions: Actions, summary: str, *, repo: str | None = None, kind: str | None = None,
     owner: str | None = None, assignee: str | None = None, arc: str | None = None,
-    source: str = _SOURCE,
+    severity: str | None = None, source: str = _SOURCE,
 ) -> uuid.UUID:
     """Open a thread at source — an unresolved question / next-step for the next session
     to inherit. Same shape as a mined Thread (props summary + status=open) so it appears in
@@ -413,8 +413,15 @@ async def open_thread(
     above) this thread belongs to — the roadmap screen's top-level grouping, one level
     above `status`. Raises ValueError on anything outside `ARCS`: a locked taxonomy that
     silently accepted typos would fragment into permanently-empty arcs nobody finds
-    again. Omitted (the common case for now) leaves the thread arc-less; roadmap.py
-    buckets those as "unsorted" rather than guessing."""
+    again. Omitted (the common case for now) leaves the thread arc-less; the roadmap
+    composition's own open half (`compositions._fn_roadmap_open`) buckets those as
+    "unsorted" rather than guessing.
+
+    `severity` (ruling c5b184cd, thread d56e7073/#44 — the live-desk composition's
+    drift_alarms leg) names an alarm-shaped open in a real, filterable property instead
+    of text-matching a summary for "DRIFT"/"CRITICAL". Deliberately UNLOCKED (unlike
+    `arc`) — Thoth's ask was the property, not a whole new taxonomy; the first (and so
+    far only) real caller is `deploy_guard.alarm_schema_drift`, stamping `"alarm"`."""
     if arc is not None and arc not in ARCS:
         raise ValueError(f"arc must be one of {ARCS}, got {arc!r}")
     observed = datetime.now(UTC)
@@ -432,6 +439,9 @@ async def open_thread(
                                     evidence_class=_EC)
         if arc:
             await a.assert_property(t, "arc", arc, source, observed, _CONF,
+                                    evidence_class=_EC)
+        if severity:
+            await a.assert_property(t, "severity", severity, source, observed, _CONF,
                                     evidence_class=_EC)
         if effective_owner:
             await a.assert_property(t, "owner", effective_owner.strip(), source, observed,

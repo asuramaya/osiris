@@ -106,10 +106,12 @@ async def test_subject_report_function_is_byte_equal(actions: Actions, case_id: 
 
 async def test_function_registry_is_listable(actions: Actions) -> None:
     # `briefing`/`decisions` are NOT here — they decomposed into op-trees (see the tests below).
-    assert list_functions() == ["canon", "coinvest", "echoes", "family",
+    # `roadmap_open`/`desk_decisions` (ruling c5b184cd, thread d56e7073/#44) ARE here — real
+    # domain logic (echo-filtering, fleet_messages) neither op-tree nor `group` can express.
+    assert list_functions() == ["canon", "coinvest", "desk_decisions", "echoes", "family",
                                 "family_drift", "lap", "lint", "portfolio", "project",
-                                "pulse", "screen_network", "search", "subject_report",
-                                "wall"]
+                                "pulse", "roadmap_open", "screen_network", "search",
+                                "subject_report", "wall"]
 
 
 async def test_briefing_is_a_sections_op_tree(actions: Actions) -> None:

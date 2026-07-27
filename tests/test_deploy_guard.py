@@ -72,6 +72,20 @@ async def test_alarm_opens_one_durable_thread_and_briefs_the_desk(actions: Actio
     assert brief is not None and "0034" in brief["body"]
 
 
+async def test_alarm_stamps_a_real_severity_property(actions: Actions) -> None:
+    """Ruling c5b184cd, thread d56e7073/#44 (the live-desk composition's drift_alarms leg):
+    a real, filterable property, not a summary a reader has to text-match."""
+    await alarm_schema_drift(actions.pool, "code expects '0036', DB is at '0034'",
+                             service="osiris-worker")
+    severity = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "JOIN objects o ON o.id = a.object_id "
+        "WHERE o.type = 'Thread' AND a.name = 'severity' "
+        "AND EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id = o.id "
+        "  AND s.name = 'summary' AND s.value #>> '{}' ILIKE '%SCHEMA DRIFT%')")
+    assert severity == "alarm"
+
+
 async def test_alarm_is_idempotent_on_the_same_drift_text(actions: Actions) -> None:
     """A persistent drift across many restarts must not mint a duplicate Thread every boot —
     open_thread's own summary-hash idempotency is the mechanism, reused here, not rebuilt."""

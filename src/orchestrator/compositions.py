@@ -32,6 +32,14 @@ Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
        one titled read-model (Notion's page-of-blocks). Each body is its own op-tree; the
        result is {title: rendered-items}. This is what a "briefing"/"dossier" IS — a page of
        compositions, not bespoke code.
+  {"op":"group","from":N,"by":P,"body":N}          -> one section PER DISTINCT VALUE of
+       property P (a DYNAMIC `sections` — titles come from the data, not the spec). `body`
+       is evaluated once per partition; {"op":"these"} inside it means "this partition's
+       members," so `body` may itself be another `group` — arc->status->owner IS three of
+       these nested, nothing more (ruling c5b184cd, thread d56e7073/#44). Capped at
+       MAX_GROUP_DEPTH so nesting stays closed, not open-ended.
+  {"op":"these"}                                    -> the nearest enclosing `group`'s own
+       partition (empty outside one) — {"op":"subject"}'s sibling for a group body.
   {"op":"function","name":,"args":{}}              -> a registered Function (the escape hatch)
 
 The old `discrepancy` read-model is just one composition (opinion left the engine):
@@ -1784,6 +1792,57 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                     "confirmed — they are NOT debt. Focus a project to see its own graded wall."}
 
 
+async def _fn_roadmap_open(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """The OPEN half of the migrated roadmap (ruling c5b184cd, thread d56e7073/#44) — the one
+    piece that stays a Function rather than a pure op-tree, and deliberately so: echo-
+    filtering (`open_thread_wall`'s exclusion of untouched miner guesses) inspects EVIDENCE
+    PROVENANCE across a thread's whole assertion history, which `select`'s property-only
+    `where` cannot express — real domain logic, exactly what a Function is for. A Function's
+    output is also a LEAF in this architecture (it can't feed a further `group`), so the
+    arc->owner nesting happens here too, in Python, reusing roadmap.py's own arc lookup and
+    owner-grouping rather than re-deriving them. This is the discipline the migration is
+    proving: real judgment stays a Function, pure layout stays ops, `sections` composes both."""
+    from src.orchestrator.roadmap import _arc_map, _owner_groups
+
+    assert subject is not None  # the op guard requires a subject (the project)
+    wall, _echoes = await open_thread_wall(pool, subject)
+    ranked, _more = rank_open_threads(wall)
+    arcs = await _arc_map(pool, [str(t["id"])[:8] for t in ranked])
+    for t in ranked:
+        t["arc"] = arcs.get(str(t["id"])[:8]) or "unsorted"
+    by_arc: dict[str, Any] = {}
+    for arc in sorted({t["arc"] for t in ranked}):
+        arc_items = [t for t in ranked if t["arc"] == arc]
+        by_arc[arc] = {
+            owner: [{"id": str(x["id"])[:8], "summary": x["summary"], "kind": x.get("kind")}
+                    for x in items]
+            for owner, items in _owner_groups(arc_items).items()
+        }
+    return by_arc
+
+
+async def _fn_desk_decisions(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """The 'decisions-awaiting-a-call' leg of live-desk (ruling c5b184cd, thread d56e7073/#44)
+    — a Function, not a pure op: `fleet_messages` (the operator's desk) isn't part of the
+    object graph `select`/`traverse` operate over at all, so this can't be expressed as ops
+    regardless of how the property-matching vocabulary grows. Wraps the SAME thread-lead,
+    undismissed predicate every other desk count already uses (`mailbox._DESK_BRIEF_ROW`),
+    narrowed to `desk_kind='decision'` — "a call only they can make," per `send()`'s own
+    docstring for that triage value."""
+    from src.orchestrator.mailbox import _DESK_BRIEF_ROW, OPERATOR_ADDR
+
+    q = ("SELECT m.id, m.from_agent, m.from_project, m.body, m.created_at FROM fleet_messages m "
+         "WHERE " + _DESK_BRIEF_ROW + " AND m.desk_kind='decision' "
+         "ORDER BY m.created_at DESC").replace("$op", "$1")
+    rows = await pool.fetch(q, OPERATOR_ADDR)
+    return [{"id": str(r["id"]), "from": r["from_agent"], "project": r["from_project"],
+             "summary": r["body"][:200], "when": str(r["created_at"])} for r in rows]
+
+
 _FUNCTIONS: dict[str, Function] = {
     "coinvest": _fn_coinvest,
     "subject_report": _fn_subject_report,
@@ -1797,6 +1856,8 @@ _FUNCTIONS: dict[str, Function] = {
     "project": _fn_project,
     "lap": _fn_lap,
     "lint": _fn_lint,
+    "roadmap_open": _fn_roadmap_open,
+    "desk_decisions": _fn_desk_decisions,
     "echoes": _fn_echoes,
     "wall": _fn_wall,
 }
@@ -1809,7 +1870,7 @@ _FUNCTIONS: dict[str, Function] = {
 # opinion → primitives the user owns.
 # `lap` anchors on args.ref OR the subject; `lint` audits the whole graph, no anchor at all.
 _SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "pulse", "project",
-                 "lap", "lint", "echoes", "wall"}
+                 "lap", "lint", "echoes", "wall", "desk_decisions"}
 
 
 def list_functions() -> list[str]:
@@ -1821,6 +1882,16 @@ def list_functions() -> list[str]:
 # Guardrails adopted from Palantir's Object Set API (load-tested, not arbitrary).
 MAX_TRAVERSE_HOPS = 3
 MAX_AGGREGATE_DIMS = 3
+# `group`'s own cap (ruling c5b184cd, thread d56e7073/#44): matches aggregate's own dimension
+# cap, not arbitrary — arc->status->owner (roadmap's real depth) is exactly 3.
+MAX_GROUP_DEPTH = 3
+
+# `group`'s body evaluates against "this partition's members" — threaded the same way
+# `_ACL_CALLER` already threads the reflection ACL through nested `_eval` calls (a contextvar,
+# not a new parameter on every op handler): a nested `group`'s own `{"op":"these"}` shadows the
+# outer one, exactly the lexical scoping a reader expects.
+_THESE: ContextVar[list[uuid.UUID] | None] = ContextVar("_THESE", default=None)
+_GROUP_DEPTH: ContextVar[int] = ContextVar("_GROUP_DEPTH", default=0)
 
 
 @dataclass
@@ -1889,6 +1960,13 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
 
     if op == "subject":
         return Result("objects", objects=[subject] if subject else [])
+
+    if op == "these":
+        # the nearest enclosing `group`'s own partition — see _THESE above. Empty outside a
+        # group body (never an error: an author testing a fragment standalone gets an empty
+        # set, not a crash, same "guess never poisons a real answer" spirit as the rest of
+        # this dispatcher).
+        return Result("objects", objects=list(_THESE.get() or []))
 
     if op == "select":
         ot = node.get("object_type")
@@ -2043,6 +2121,38 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
             data[title] = await _package(pool, res)
         return Result("data", data=data)
 
+    if op == "group":
+        # THE DYNAMIC section (ruling c5b184cd, thread d56e7073/#44): `sections` needs its
+        # titles hardcoded in the spec; `aggregate` groups but keeps only a metric. `group`
+        # is the missing middle — one section PER DISTINCT VALUE of a property, each holding
+        # its own full sub-result (nestable: a partition's `body` may itself be another
+        # `group`, resolving `{"op":"these"}` to THIS partition — arc -> status -> owner is
+        # three of these composed, nothing more).
+        depth = _GROUP_DEPTH.get()
+        if depth >= MAX_GROUP_DEPTH:
+            raise ValueError(f"group nesting exceeds {MAX_GROUP_DEPTH} levels")
+        by = node.get("by")
+        if not by:
+            raise ValueError("group requires 'by'")
+        body = node.get("body")
+        if not body:
+            raise ValueError("group requires 'body'")
+        base = await _eval(pool, node["from"], subject)
+        buckets = await _group_by(pool, base.objects, [str(by)])
+        partitions: dict[str, Any] = {}
+        depth_token = _GROUP_DEPTH.set(depth + 1)
+        try:
+            for key, members in buckets.items():
+                title = str(key[0]) if key and key[0] is not None else "(none)"
+                these_token = _THESE.set([oid for oid, _ in members])
+                try:
+                    partitions[title] = await _package(pool, await _eval(pool, body, subject))
+                finally:
+                    _THESE.reset(these_token)
+        finally:
+            _GROUP_DEPTH.reset(depth_token)
+        return Result("data", data=partitions)
+
     if op == "function":
         name = str(node.get("name", ""))
         fn = _FUNCTIONS.get(name)
@@ -2142,6 +2252,21 @@ async def _rollup(pool: asyncpg.Pool, oid: uuid.UUID, spec: dict[str, Any]) -> A
     return None
 
 
+async def _group_by(
+    pool: asyncpg.Pool, objects: list[uuid.UUID], group_by: list[str],
+) -> dict[tuple[str | None, ...], list[tuple[uuid.UUID, dict[str, str]]]]:
+    """Bucket objects by one or more property values — the ONE grouping loop shared by
+    `aggregate` (which collapses each bucket to a metric, discarding the rest) and `group`
+    (which keeps each bucket as its own renderable sub-result). Each bucket keeps (object id,
+    its already-fetched facts) so neither caller re-queries the same properties twice."""
+    groups: dict[tuple[str | None, ...], list[tuple[uuid.UUID, dict[str, str]]]] = {}
+    for oid in objects:
+        facts = await _props(pool, oid)
+        key = tuple(facts.get(g) for g in group_by)
+        groups.setdefault(key, []).append((oid, facts))
+    return groups
+
+
 async def _aggregate(
     pool: asyncpg.Pool, objects: list[uuid.UUID], group_by: list[str], metric: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -2149,18 +2274,14 @@ async def _aggregate(
     Notion rollup). group_by=[] aggregates the whole set into a single row."""
     mtype = metric.get("type", "count")
     field_name = metric.get("field")
-    groups: dict[tuple[str | None, ...], list[dict[str, str]]] = {}
-    for oid in objects:
-        facts = await _props(pool, oid)
-        key = tuple(facts.get(g) for g in group_by)
-        groups.setdefault(key, []).append(facts)
+    groups = await _group_by(pool, objects, group_by)
     rows: list[dict[str, Any]] = []
     for key, members in groups.items():
         group = {g: k for g, k in zip(group_by, key, strict=True)}
         if mtype == "count":
             value: float | int = len(members)
         else:
-            raw = [m.get(field_name) for m in members] if field_name else []
+            raw = [m[1].get(field_name) for m in members] if field_name else []
             if mtype == "cardinality":
                 value = len({v for v in raw if v is not None})
             else:
@@ -2528,12 +2649,104 @@ PROJECT_BRIEFING: dict[str, Any] = {
 }
 
 
+def _roadmap_status_group(status: str) -> dict[str, Any]:
+    """arc -> owner over one project's threads at a given status — pure op-tree, no Function
+    needed: closing a thread is itself a self_declared act (capture.py/dispose.py), so an
+    untouched resolved/retracted thread cannot exist by construction — the echo-filter the
+    OPEN section still needs (see `_fn_roadmap_open`) simply does not apply here."""
+    return {
+        "op": "group", "by": "arc", "body": {
+            "op": "group", "by": "owner", "from": {"op": "these"}, "body": {
+                "op": "table", "from": {"op": "these"},
+                "columns": [{"property": "id"}, {"property": "summary"},
+                           {"property": "kind"}]}},
+        "from": {"op": "intersect", "sets": [
+            {"op": "select", "object_type": "Thread",
+             "where": [{"property": "status", "op": "eq", "value": status}]},
+            {"op": "traverse", "from": {"op": "subject"}, "direction": "in",
+             "link_type": "in_repo", "hops": 1}]},
+    }
+
+
+# THE MIGRATED ROADMAP (ruling c5b184cd, thread d56e7073/#44 — the composition-abstraction
+# READ half, the proof case). `sections` keyed by STATUS, not arc — the real reason, named
+# rather than hidden: `open` needs `_fn_roadmap_open`'s echo-filter, a genuine Function
+# (evidence-provenance logic no `select` can express), and a Function is a LEAF in this
+# architecture (its output can't feed a further `group`) — so arc can't be the single shared
+# outer level across a Function-sourced section and two pure-op-tree ones without inventing
+# a way for Function output to re-enter the op-tree, which this build does not do. `resolved`
+# and `retracted` are pure `group`-by-arc-then-owner, proving the extension on live data.
+ROADMAP: dict[str, Any] = {
+    "op": "sections",
+    "sections": [
+        {"title": "open", "body": {"op": "function", "name": "roadmap_open"}},
+        {"title": "resolved", "body": _roadmap_status_group("resolved")},
+        {"title": "retracted", "body": _roadmap_status_group("retracted")},
+    ],
+}
+
+
+# THE MIGRATED DOCS (ruling c5b184cd, thread d56e7073/#44) — simpler than roadmap, no
+# Function needed at all: `topic` is a real stored property, one `group` level is the whole
+# shape. `where: topic present` excludes an untopiced Reference entirely (deliberate,
+# unchanged from docs.py's own note: `topic` is exactly what marks the seeded docs canon,
+# never a catch-all bucket a plain fleet-wide Reference would fall into). The fixed section
+# ORDER (getting-started/concepts/...) is presentation policy, not a fact about the data —
+# same "keep ranking out of the op-tree" call PROJECT_BRIEFING's own open_threads section
+# already makes; the route reorders the returned dict, same thin post-step precedent.
+DOCS: dict[str, Any] = {
+    "op": "group", "by": "topic",
+    "from": {"op": "select", "object_type": "Reference",
+             "where": [{"property": "topic", "op": "present"}]},
+    "body": {"op": "table", "from": {"op": "these"},
+             "columns": [{"property": "canonical"}, {"property": "name"},
+                        {"property": "vendor"}]},
+}
+
+DOCS_SECTION_ORDER = ("getting-started", "concepts", "reference", "deployment", "history")
+
+
+# THE LIVE DESK (ruling c5b184cd, thread d56e7073/#44) — "what's actionable for the operator
+# right now," the wedge meant to end the briefs rot. Expressible TODAY with existing ops +
+# Functions, no `group` needed — three flat sections. Resolved/stale fall out BY
+# CONSTRUCTION: `status=open` in each select excludes them, nothing further to build.
+# `decisions_awaiting_a_call` is a Function (fleet_messages isn't the object graph, so it
+# can't be a pure op, same class as `desk_decisions`'s own docstring explains). `drift_alarms`
+# depends on `severity` actually being stamped — today only `alarm_schema_drift` does.
+LIVE_DESK: dict[str, Any] = {
+    "op": "sections",
+    "sections": [
+        {"title": "owed_to_you", "body": {
+            "op": "table", "columns": [{"property": "id"}, {"property": "summary"},
+                                       {"property": "kind"}],
+            "from": {"op": "order", "by": "recency", "dir": "desc", "from": {
+                "op": "select", "object_type": "Thread", "where": [
+                    {"property": "status", "op": "eq", "value": "open"},
+                    {"property": "owner", "op": "eq", "value": "operator"}]}}}},
+        {"title": "decisions_awaiting_a_call",
+         "body": {"op": "function", "name": "desk_decisions"}},
+        {"title": "drift_alarms", "body": {
+            "op": "table", "columns": [{"property": "id"}, {"property": "summary"}],
+            "from": {"op": "order", "by": "recency", "dir": "desc", "from": {
+                "op": "select", "object_type": "Thread", "where": [
+                    {"property": "status", "op": "eq", "value": "open"},
+                    {"property": "severity", "op": "eq", "value": "alarm"}]}}}},
+    ],
+}
+
+
 DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "operational-vs-disclosed-geography": GEOGRAPHY_DISCREPANCY,
     # the arrival briefing — a `sections` op-tree, no longer a hand-written Function.
     "briefing": BRIEFING,
     # the SCOPED briefing — orient's per-project bearings, subject = a SoftwareProject (#20).
     "project-briefing": PROJECT_BRIEFING,
+    # the migrated roadmap (ruling c5b184cd, thread d56e7073/#44) — subject = a SoftwareProject.
+    "roadmap": ROADMAP,
+    # the migrated docs canon (ruling c5b184cd, thread d56e7073/#44) — no subject needed.
+    "docs": DOCS,
+    # the live desk (ruling c5b184cd, thread d56e7073/#44) — no subject needed.
+    "live-desk": LIVE_DESK,
     # the former bespoke read-models, now forkable compositions over named Functions —
     # opinion left engine code (no more hardcoded read-model + bespoke MCP tool per lens).
     "co-investment-ties": {"op": "function", "name": "coinvest"},
@@ -2602,6 +2815,8 @@ _COMP_META: dict[str, tuple[str, str]] = {
     "briefing": ("arrive", "start here — the graded wall, recent work, what self-healed"),
     "pulse-digest": ("arrive", "what the autonomic loop sensed lately"),
     "the-wall": ("wall", "what is GENUINELY unresolved — obligations first, echoes counted"),
+    "live-desk": ("wall", "what's actionable for the operator right now — owed, decisions, "
+                          "drift alarms"),
     "open threads": ("wall", "the raw unresolved list (ungraded — prefer the-wall)"),
     "echoes": ("wall", "the triage pile: untouched miner echoes, oldest first"),
     "decision-log": ("memory", "every decision with its WHY; superseded entries grayed"),

@@ -74,7 +74,7 @@ async def alarm_schema_drift(pool: asyncpg.Pool, drift: str, *, service: str) ->
         f"SCHEMA DRIFT at {service} boot: {drift}. Code is running ahead of (or behind) the "
         "database's own migrations — run `alembic upgrade head` against the real DB before "
         "trusting any feature the missing migration(s) touch.",
-        kind="obligation", arc="Fleet-Hygiene", source=f"boot:{service}",
+        kind="obligation", arc="Fleet-Hygiene", severity="alarm", source=f"boot:{service}",
     )
     with contextlib.suppress(Exception):  # the desk being unreachable must not compound the alarm
         await send_message(

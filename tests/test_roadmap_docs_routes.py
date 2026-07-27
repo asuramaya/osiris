@@ -16,6 +16,7 @@ from src.actions.core import Actions
 from src.api.app import create_app
 from src.ingest.reference import ingest_reference_doc
 from src.orchestrator.capture import open_thread
+from src.orchestrator.compositions import DOCS, ROADMAP, save_composition
 
 NOW = datetime(2026, 7, 25, tzinfo=UTC)
 
@@ -33,6 +34,10 @@ async def client(actions: Actions) -> AsyncIterator[httpx.AsyncClient]:
 async def test_roadmap_route_defaults_to_osiris_and_switches_on_p(
     actions: Actions, client: httpx.AsyncClient,
 ) -> None:
+    # the route reads compositions.ROADMAP by name from the DB (ruling c5b184cd,
+    # thread d56e7073/#44) — a real deploy seeds this via seed_default_compositions;
+    # the test seeds it directly, same as any other composition-route test.
+    await save_composition(actions.pool, "roadmap", ROADMAP)
     proj = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "test")
     await actions.assert_property(proj, "name", "osiris", "test", NOW, 0.9,
                                   evidence_class="self_declared")
@@ -57,6 +62,7 @@ async def test_docs_route_serves_the_ingested_canon(
 ) -> None:
     from pathlib import Path
 
+    await save_composition(actions.pool, "docs", DOCS)
     doc = Path(str(tmp_path)) / "SOME-DOC.md"
     doc.write_text("<!-- topic: concepts -->\n\n# Some Doc\n\nBody.\n")
     await ingest_reference_doc(actions, str(doc))

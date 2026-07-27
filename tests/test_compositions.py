@@ -188,6 +188,90 @@ async def test_aggregate_dimension_cap(actions: Actions) -> None:
         await run_composition(actions.pool, await _save(actions, "too-wide", spec))
 
 
+# --- `group` (ruling c5b184cd, thread d56e7073/#44): the dynamic-titled sibling of `sections`,
+# and the middle `aggregate` never had — one section PER DISTINCT VALUE, keeping members. ------
+
+async def test_group_is_a_dynamic_sections_keeping_members(actions: Actions) -> None:
+    """One partition per distinct sector, each holding its own real objects (not a metric) —
+    exactly what aggregate discards and sections can't produce (no static titles here)."""
+    await _filings(actions)
+    spec = {"op": "group", "by": "sector", "from": {"op": "select", "object_type": "Organization"},
+            "body": {"op": "table", "from": {"op": "these"}, "columns": [{"property": "amount"}]}}
+    res = await run_composition(actions.pool, await _save(actions, "by-sector", spec))
+    assert res["kind"] == "data"
+    assert {r["amount"] for r in res["items"]["ai"]} == {"100", "300"}
+    assert {r["amount"] for r in res["items"]["bio"]} == {"50"}
+
+
+async def test_group_untagged_objects_bucket_as_none(actions: Actions) -> None:
+    """A missing property value groups under the SAME literal osiris.js's own aggregate
+    renderer already uses for a missing group dimension — one convention, not two."""
+    org = await actions.create_or_find_object("Organization", "cik:99", "edgar")
+    await actions.assert_property(org, "amount", "10", "edgar", NOW, 0.85)  # no `sector`
+    spec = {"op": "group", "by": "sector", "from": {"op": "select", "object_type": "Organization"},
+            "body": {"op": "table", "from": {"op": "these"}, "columns": [{"property": "amount"}]}}
+    res = await run_composition(actions.pool, await _save(actions, "untagged", spec))
+    assert list(res["items"].keys()) == ["(none)"]
+
+
+async def test_group_nests_via_its_own_body(actions: Actions) -> None:
+    """arc->status->owner IS just group-in-group's-body, nothing more — proved with sector
+    then a second dimension, each {"op":"these"} resolving to the RIGHT enclosing partition."""
+    for cik, sector, amt in [("20", "ai", "1"), ("21", "ai", "2"), ("22", "bio", "3")]:
+        o = await actions.create_or_find_object("Organization", f"cik:{cik}", "edgar")
+        await actions.assert_property(o, "sector", sector, "edgar", NOW, 0.85)
+        await actions.assert_property(o, "band", "hi" if amt != "3" else "lo", "edgar", NOW, 0.85)
+    spec = {"op": "group", "by": "sector", "from": {"op": "select", "object_type": "Organization"},
+            "body": {"op": "group", "by": "band", "from": {"op": "these"},
+                     "body": {"op": "table", "from": {"op": "these"},
+                              "columns": [{"property": "id"}]}}}
+    res = await run_composition(actions.pool, await _save(actions, "nested", spec))
+    assert len(res["items"]["ai"]["hi"]) == 2
+    assert len(res["items"]["bio"]["lo"]) == 1
+    assert "ai" not in res["items"].get("bio", {})  # sibling partitions never leak into each other
+
+
+async def test_group_depth_is_capped(actions: Actions) -> None:
+    """The same closed-set discipline as aggregate's own ≤3-dimension cap (MAX_AGGREGATE_DIMS)
+    — group nesting must not become an unbounded recursion an author can accidentally write."""
+    from src.orchestrator.compositions import MAX_GROUP_DEPTH
+
+    def _nested(n: int) -> dict:
+        leaf = {"op": "table", "from": {"op": "these"}, "columns": [{"property": "sector"}]}
+        node = leaf
+        for _ in range(n):
+            node = {"op": "group", "by": "sector", "from": {"op": "these"}, "body": node}
+        return node
+
+    await _filings(actions)
+    spec = _nested(MAX_GROUP_DEPTH)  # MAX_GROUP_DEPTH nested groups, each depth 0..N-1: fine
+    spec["from"] = {"op": "select", "object_type": "Organization"}  # the outermost anchors for real
+    await run_composition(actions.pool, await _save(actions, "at-cap", spec))  # must not raise
+
+    too_deep = _nested(MAX_GROUP_DEPTH + 1)
+    too_deep["from"] = {"op": "select", "object_type": "Organization"}
+    with pytest.raises(ValueError, match="nesting"):
+        await run_composition(actions.pool, await _save(actions, "over-cap", too_deep))
+
+
+async def test_these_outside_a_group_is_empty_not_an_error(actions: Actions) -> None:
+    """A fragment tested standalone (the inline composer, W4) gets an empty set, never a
+    crash — same 'a guess never poisons a real answer' spirit as the rest of this dispatcher."""
+    res = await run_composition(actions.pool, await _save(actions, "bare-these", {"op": "these"}))
+    assert res["kind"] == "objects" and res["count"] == 0
+
+
+async def test_group_requires_by_and_body(actions: Actions) -> None:
+    await _filings(actions)
+    base = {"from": {"op": "select", "object_type": "Organization"}}
+    with pytest.raises(ValueError, match="'by'"):
+        await run_composition(actions.pool, await _save(
+            actions, "no-by", {"op": "group", "body": {"op": "these"}, **base}))
+    with pytest.raises(ValueError, match="'body'"):
+        await run_composition(actions.pool, await _save(
+            actions, "no-body", {"op": "group", "by": "sector", **base}))
+
+
 # --- persistence / forkability ----------------------------------------------
 
 async def test_save_run_fork_roundtrip(actions: Actions) -> None:
@@ -235,3 +319,156 @@ async def test_object_items_resolves_props_by_grade_not_recency(actions: Actions
     items = await object_items(actions.pool, [o])
     status = next(it["props"]["status"] for it in items if it["id"] == str(o))
     assert status == "resolved"   # GRADE wins over the fresher DERIVED re-open (was "open")
+
+
+# --- the migrated ROADMAP (ruling c5b184cd, thread d56e7073/#44): the proof case for the
+# Function/op line — `open` stays a Function (echo-filter, a real domain gap), `resolved`/
+# `retracted` are pure `group`-by-arc-then-owner over live data. ---------------------------
+
+async def test_roadmap_composition_open_section_is_echo_filtered_and_arc_grouped(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.capture import open_thread
+    from src.orchestrator.compositions import ROADMAP
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:rmcomp", "test")
+    await actions.assert_property(proj, "name", "rmcomp", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await open_thread(actions, "a real duty", repo="rmcomp", arc="Fleet-Hygiene",
+                      owner="agent:x", source="agent:me")
+    # a miner echo: derived-only, never touched by a self_declared assertion
+    echo = await actions.create_or_find_object("Thread", "thread:echo-rm", "session-miner")
+    for n, v in (("summary", "a guessed duty nobody touched"), ("status", "open"),
+                 ("kind", "obligation")):
+        await actions.assert_property(echo, n, v, "session-miner", NOW, 0.4,
+                                      evidence_class="derived")
+    await actions.create_link(echo, proj, "in_repo", "session-miner", NOW, 0.4,
+                              evidence_class="derived")
+
+    await save_composition(actions.pool, "roadmap", ROADMAP)
+    res = await run_composition(actions.pool, "roadmap", proj)
+    open_data = res["items"]["open"]
+    assert "Fleet-Hygiene" in open_data
+    assert any(t["summary"] == "a real duty" for t in open_data["Fleet-Hygiene"]["agent:x"])
+    # the echo never appears anywhere in the open section — the filter is real, not cosmetic
+    assert "a guessed duty nobody touched" not in str(open_data)
+
+
+async def test_roadmap_composition_resolved_is_pure_op_tree_group(actions: Actions) -> None:
+    from src.orchestrator.capture import open_thread, resolve_thread
+    from src.orchestrator.compositions import ROADMAP
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:rmcomp2", "test")
+    await actions.assert_property(proj, "name", "rmcomp2", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    tid = await open_thread(actions, "shipped work", repo="rmcomp2", arc="Token-Cost",
+                            owner="agent:builder", source="agent:me")
+    await resolve_thread(actions, str(tid), because="done", source="agent:me")
+
+    await save_composition(actions.pool, "roadmap", ROADMAP)
+    res = await run_composition(actions.pool, "roadmap", proj)
+    resolved = res["items"]["resolved"]
+    assert list(resolved["Token-Cost"]["agent:builder"])[0]["summary"] == "shipped work"
+    assert res["items"]["retracted"] == {}  # nothing retracted — an empty group, not missing
+
+
+async def test_roadmap_composition_renders_via_the_generic_renderer(actions: Actions) -> None:
+    """End to end: the composition's own output feeds render_composition with no adapter —
+    the whole point of a shared {kind,items} contract between the op-tree and the renderer."""
+    from src.api.chrome import render_composition
+    from src.orchestrator.capture import open_thread
+    from src.orchestrator.compositions import ROADMAP
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:rmcomp3", "test")
+    await actions.assert_property(proj, "name", "rmcomp3", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await open_thread(actions, "a tracked duty", repo="rmcomp3", arc="Fleet-Hygiene",
+                      owner="agent:x", source="agent:me")
+    await save_composition(actions.pool, "roadmap", ROADMAP)
+    res = await run_composition(actions.pool, "roadmap", proj)
+    html = render_composition(res, title="roadmap")
+    assert "a tracked duty" in html and "Fleet-Hygiene" in html
+
+
+# --- the migrated DOCS (ruling c5b184cd, thread d56e7073/#44): the simpler proof case — no
+# Function at all, one `group by=topic` level, subject-free. ---------------------------------
+
+async def test_docs_composition_groups_by_topic_and_excludes_untopiced(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.compositions import DOCS
+
+    doc = await actions.create_or_find_object("Reference", "ref:some-doc", "test")
+    await actions.assert_property(doc, "name", "Some Doc", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(doc, "topic", "concepts", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    stray = await actions.create_or_find_object("Reference", "ref:no-topic", "test")
+    await actions.assert_property(stray, "name", "Stray Doc", "test", NOW, 0.9,
+                                  evidence_class="self_declared")  # deliberately no topic
+
+    await save_composition(actions.pool, "docs", DOCS)
+    res = await run_composition(actions.pool, "docs")  # no subject needed
+    assert res["kind"] == "data"
+    assert res["items"]["concepts"][0]["name"] == "Some Doc"
+    assert "Stray Doc" not in str(res["items"])  # untopiced -> excluded, not a catch-all
+
+
+# --- desk_decisions (ruling c5b184cd, thread d56e7073/#44): the live-desk composition's
+# 'decisions-awaiting-a-call' leg — a Function, since fleet_messages isn't the object graph.
+
+async def test_desk_decisions_function_finds_unresolved_decision_briefs(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.mailbox import send_message
+
+    await send_message(actions.pool, from_agent="agent:x", from_project="osiris",
+                       to_project="operator", body="needs your call: which approach?",
+                       desk_kind="decision")
+    await send_message(actions.pool, from_agent="agent:x", from_project="osiris",
+                       to_project="operator", body="fyi, all done here", desk_kind="fyi")
+
+    spec = {"op": "function", "name": "desk_decisions"}
+    res = await run_composition(actions.pool, await _save(actions, "decisions", spec))
+    assert res["kind"] == "data"
+    bodies = [d["summary"] for d in res["items"]]
+    assert any("which approach" in b for b in bodies)
+    assert not any("all done here" in b for b in bodies)  # fyi, not a decision — excluded
+
+
+# --- LIVE_DESK end to end (ruling c5b184cd, thread d56e7073/#44): the wedge that ends the
+# briefs rot — "what's actionable for the operator right now," built with existing ops +
+# Functions, no `group` needed. Resolved/stale fall out by construction (status=open).
+
+async def test_live_desk_composition_end_to_end(actions: Actions) -> None:
+    from src.orchestrator.capture import open_thread, resolve_thread
+    from src.orchestrator.compositions import LIVE_DESK
+    from src.orchestrator.deploy_guard import alarm_schema_drift
+    from src.orchestrator.mailbox import send_message
+
+    # owed_to_you: open, owner=operator
+    await open_thread(actions, "operator must pick a direction", owner="operator",
+                      source="agent:me")
+    # NOT owed_to_you: someone else's open thread
+    await open_thread(actions, "not the operator's", owner="agent:builder", source="agent:me")
+    # resolved/stale: must fall out by construction (still owner=operator, but closed)
+    stale = await open_thread(actions, "an old operator debt, now closed", owner="operator",
+                              source="agent:me")
+    await resolve_thread(actions, str(stale), because="handled", source="agent:me")
+    # decisions_awaiting_a_call
+    await send_message(actions.pool, from_agent="agent:x", from_project="osiris",
+                       to_project="operator", body="which design should we ship?",
+                       desk_kind="decision")
+    # drift_alarms
+    await alarm_schema_drift(actions.pool, "code expects '0036', DB is at '0034'",
+                             service="osiris-worker")
+
+    await save_composition(actions.pool, "live-desk", LIVE_DESK)
+    res = await run_composition(actions.pool, "live-desk")
+    assert res["kind"] == "data"
+    owed = str(res["items"]["owed_to_you"])
+    assert "operator must pick a direction" in owed
+    assert "not the operator's" not in owed
+    assert "now closed" not in owed  # resolved -- fell out by construction, no extra logic
+    assert "which design should we ship" in str(res["items"]["decisions_awaiting_a_call"])
+    assert "SCHEMA DRIFT" in str(res["items"]["drift_alarms"])

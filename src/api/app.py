@@ -35,7 +35,7 @@ from pydantic import BaseModel
 
 from src.actions.core import Actions
 from src.api import chrome
-from src.api.membrane import render_membrane
+from src.api.membrane import _e, render_membrane
 from src.config.settings import get_settings
 from src.connectors.leases import LeaseStore
 from src.connectors.osint4all import suggest_manifests
@@ -1046,13 +1046,22 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         p_: str = Query("osiris", alias="p"), partial: int = 0,
         p: asyncpg.Pool = Depends(get_pool),
     ) -> Response:
-        """A project's obligations/threads, status→owner (thread 521ae613a6f4) — GENERIC
-        per-project, `?p=<project>` switches (defaults to osiris's own). Reading leases
-        nothing; roadmap() does the ranking, this route only feeds the graph in."""
-        from src.orchestrator.roadmap import roadmap
-        data = await roadmap(p, p_)
-        inner = chrome.render_roadmap(data)
+        """A project's obligations/threads (thread 521ae613a6f4, migrated to a composition —
+        ruling c5b184cd, thread d56e7073/#44) — GENERIC per-project, `?p=<project>` switches
+        (defaults to osiris's own). Reads the "roadmap" composition (compositions.ROADMAP)
+        through the generic renderer — the hardcoded roadmap.py/render_roadmap retire in
+        favor of it. Requires `seed_default_compositions` to have run against this DB at
+        least once since the composition was added; an unseeded DB degrades to an honest
+        "no composition" line, never a crash."""
         title = f"roadmap · {p_}"
+        proj = await p.fetchval(
+            "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
+            f"repo:{p_}")
+        if proj is None:
+            inner = f'<p class="dim">no such project: {_e(p_)!r}</p>'
+        else:
+            res = await run_composition(p, "roadmap", proj)
+            inner = chrome.render_composition(res)
         return Response(inner if partial else chrome.page(title, "roadmap", inner),
                         media_type="text/html")
 
@@ -1061,16 +1070,24 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         p_: str = Query("osiris", alias="p"), partial: int = 0,
         p: asyncpg.Pool = Depends(get_pool),
     ) -> Response:
-        """The doc canon, topic-sectioned (thread 521ae613a6f4) — the "docs" nav tab, routed
-        at /canon rather than /docs: FastAPI reserves /docs for its own Swagger UI, and a
-        second route at the same path is silently shadowed by it (caught live by the route
-        test). `?p=<project>` names which project's chrome this is (defaults to osiris's
-        own) — docs() itself is not yet project-scoped, so every project currently renders
-        the same canon; see render_docs's own docstring."""
-        from src.orchestrator.docs import docs
-        data = await docs(p)
-        inner = chrome.render_docs(data, p_)
+        """The doc canon, topic-sectioned (thread 521ae613a6f4, migrated to a composition —
+        ruling c5b184cd, thread d56e7073/#44) — the "docs" nav tab, routed at /canon rather
+        than /docs: FastAPI reserves /docs for its own Swagger UI, and a second route at the
+        same path is silently shadowed by it (caught live by the route test). `?p=<project>`
+        names which project's chrome this is (defaults to osiris's own) — the "docs"
+        composition itself is not yet project-scoped, so every project currently renders the
+        same canon. The fixed section order is presentation policy, not a composition
+        concern (same "ranking stays out of the op-tree" call PROJECT_BRIEFING already
+        makes) — this thin re-sort is that policy's one home."""
+        from src.orchestrator.compositions import DOCS_SECTION_ORDER
         title = f"docs · {p_}"
+        res = await run_composition(p, "docs")
+        if res.get("kind") == "data" and isinstance(res.get("items"), dict):
+            items = res["items"]
+            ordered = [t for t in DOCS_SECTION_ORDER if t in items] + sorted(
+                t for t in items if t not in DOCS_SECTION_ORDER)
+            res["items"] = {t: items[t] for t in ordered}
+        inner = chrome.render_composition(res)
         return Response(inner if partial else chrome.page(title, "docs", inner),
                         media_type="text/html")
 
