@@ -6,6 +6,7 @@ payload the hook prints (mail/desk/away), and idempotence on hook re-fire.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,7 +15,9 @@ import pytest
 from src.actions.core import Actions
 from src.orchestrator import mounts as mounts_mod
 from src.orchestrator.handshake import (
+    BridgeAmbiguity,
     automount,
+    bridged_seat,
     office_claim,
     record_bridge_anchor,
     record_session_anchor,
@@ -846,6 +849,94 @@ async def test_automount_rebinds_via_the_bridge_even_while_the_ancestor_is_alive
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Agent' "
         "AND canonical='agent:bbbb2222'") == 0
+
+
+async def test_record_bridge_anchor_serializes_concurrent_writers(actions: Actions) -> None:
+    """The write-side half of ruling 61e00f25 (thread dc9d1eed, Khnum VII's review finding
+    d224f186): two concurrent automounts carrying the IDENTICAL bridge id — the exact shape
+    of several background forks of one conversation booting near-simultaneously — must not
+    both land the anchor. Before the mint_lock wrap, both racers could pass the exists-check
+    before either committed; the lock makes the loser's own exists-check see the winner's
+    committed row and no-op."""
+    now = datetime.now(UTC)
+    for cid in ("agent:c0000001", "agent:c0000002"):
+        o = await actions.create_or_find_object("Agent", cid, cid)
+        await actions.assert_property(o, "handle", "racer", cid, now, 0.9,
+                                       evidence_class="self_declared")
+    bridge = "session_racecondition01"
+    results = await asyncio.gather(
+        record_bridge_anchor(actions, agent_id="agent:c0000001",
+                             bridge_session_id=bridge, actor="agent:c0000001"),
+        record_bridge_anchor(actions, agent_id="agent:c0000002",
+                             bridge_session_id=bridge, actor="agent:c0000002"),
+    )
+    assert sorted(results) == [False, True]  # exactly one writer wins, never both
+    owners = await actions.pool.fetch(
+        "SELECT o.canonical FROM current_assertions a "
+        "JOIN objects o ON o.id=a.object_id "
+        "WHERE a.name='bridge_session_id' AND a.value #>> '{}' = $1", bridge)
+    assert len(owners) == 1  # never landed on two different lineages
+
+
+async def test_bridged_seat_refuses_on_multi_owner_ambiguity(actions: Actions) -> None:
+    """The read-side half: ambiguity already minted (a race the lock doesn't cover, or one
+    that pre-dates this fix) must be refused loudly, never guessed away by picking whichever
+    lineage happened to write last — the exact silent-mis-resolve d224f186 found."""
+    now = datetime.now(UTC)
+    for cid in ("agent:d1111111", "agent:d2222222"):
+        o = await actions.create_or_find_object("Agent", cid, cid)
+        await actions.assert_property(o, "handle", "racer", cid, now, 0.9,
+                                      evidence_class="self_declared")
+        await actions.assert_property(o, "bridge_session_id", "session_ambiguous01", cid, now,
+                                      0.9, evidence_class="direct_observation")
+    with pytest.raises(BridgeAmbiguity):
+        await bridged_seat(actions, bridge_session_id="session_ambiguous01")
+
+
+async def test_bridged_seat_same_lineage_repeat_write_is_not_ambiguous(
+    actions: Actions,
+) -> None:
+    """One lineage bridging more than once (ordinary repeated forking of the same
+    conversation) must never be mistaken for the multi-lineage race — both rows agree on
+    the SAME base, so this resolves to the lineage's living head exactly as before."""
+    now = datetime.now(UTC)
+    base = await actions.create_or_find_object("Agent", "agent:e1111111", "agent:e1111111")
+    heir = await actions.create_or_find_object(
+        "Agent", "agent:e1111111-ii", "agent:e1111111-ii")
+    for cid, obj in (("agent:e1111111", base), ("agent:e1111111-ii", heir)):
+        await actions.assert_property(obj, "handle", "racer", cid, now, 0.9,
+                                      evidence_class="self_declared")
+        await actions.assert_property(obj, "bridge_session_id", "session_samelineage01", cid,
+                                      now, 0.9, evidence_class="direct_observation")
+    result = await bridged_seat(actions, bridge_session_id="session_samelineage01")
+    assert result == "agent:e1111111-ii"  # the lineage's head, no ambiguity raised
+
+
+async def test_automount_falls_through_to_office_hint_on_bridge_ambiguity(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The whisper must never die of an ambiguous bridge (ruling 61e00f25's 'refuse loudly,
+    but the whisper itself never dies of one' — same law as the attach ceremony and the
+    resume heal): it falls through to the ordinary stranger resolution exactly as a bare
+    'no known bridge id' would, and confesses the ambiguity in the payload instead of
+    silently swallowing or crashing on it."""
+    now = datetime.now(UTC)
+    for cid in ("agent:f1111111", "agent:f2222222"):
+        o = await actions.create_or_find_object("Agent", cid, cid)
+        await actions.assert_property(o, "handle", "racer", cid, now, 0.9,
+                                      evidence_class="self_declared")
+        await actions.assert_property(o, "bridge_session_id", "session_ambiguous02", cid, now,
+                                      0.9, evidence_class="direct_observation")
+    root = tmp_path / "projects"
+    sid = "ffff3333-0000-4000-8000-000000000000"
+    _transcript(root, "/w/ambiguous-bridge-repo")
+    out = await automount(actions, session_id=sid, cwd="/w/ambiguous-bridge-repo",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
+                          source="startup", bridge_session_id="session_ambiguous02")
+    assert out["agent"] == f"agent:{sid[:8]}"  # falls through, exactly as no-bridge-id would
+    assert "session_ambiguous02" in out["bridge_ambiguity"]
+    assert "agent:f1111111" in out["bridge_ambiguity"]
+    assert "agent:f2222222" in out["bridge_ambiguity"]
 
 
 async def test_a_seat_walking_home_files_its_own_deed(

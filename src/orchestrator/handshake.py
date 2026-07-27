@@ -209,6 +209,15 @@ async def ledger_seat(actions: Actions, *, sid_prefix: str) -> str | None:
     return max(same, key=lambda c: _generation(c)[1], default=str(owner))
 
 
+class BridgeAmbiguity(Exception):
+    """A bridge_session_id names more than one living lineage — the write-side race
+    (see `record_bridge_anchor`) landed it on two different souls before the lock existed,
+    or landed via some other path the lock doesn't cover. current_assertions permits this
+    as a legitimate multi-source SET; the read side must not silently pick a winner (thread
+    dc9d1eed, ruling 61e00f25) — it refuses loudly and lets the caller fall back to the
+    next door (office_hint) instead."""
+
+
 async def bridged_seat(actions: Actions, *, bridge_session_id: str) -> str | None:
     """THE BRIDGE (task #68 binding leg, 2026-07-27): a second fork class `fork_seat` cannot
     see. `--fork-session --resume` COPIES a transcript (fork_seat/forks.py's own door, keyed
@@ -222,25 +231,37 @@ async def bridged_seat(actions: Actions, *, bridge_session_id: str) -> str | Non
     present in the child's environment at birth, naming the one continuing conversation
     across however many process-level forks/resumes/compactions occur. A KNOWN bridge id
     REBINDS to its lineage's living head, exactly as `ledger_seat` does for a known sid —
-    never mints a stranger who merely happens to share a room."""
+    never mints a stranger who merely happens to share a room.
+
+    RAISES `BridgeAmbiguity` (ruling 61e00f25, thread dc9d1eed) when the bridge id's current
+    assertions span more than one lineage — a bare `ORDER BY observed_at DESC LIMIT 1` would
+    silently pick whichever wrote last, which is exactly how a TOCTOU race between two
+    concurrent automounts used to rebind onto the wrong seat. One lineage writing the SAME
+    bridge id more than once (ordinary repeated bridging) is not ambiguous and never raises."""
     from src.orchestrator.agents import _generation
 
     bid = (bridge_session_id or "").strip()
     if not bid:
         return None
-    owner = await actions.pool.fetchval(
+    owners = [str(r["canonical"]) for r in await actions.pool.fetch(
         "SELECT o.canonical FROM current_assertions a "
         "JOIN objects o ON o.id=a.object_id AND o.type='Agent' AND o.status='active' "
         "WHERE a.name='bridge_session_id' AND a.value #>> '{}' = $1 "
-        "ORDER BY a.observed_at DESC LIMIT 1", bid)
-    if owner is None:
+        "ORDER BY a.observed_at DESC", bid)]
+    if not owners:
         return None
-    base = _generation(str(owner))[0]
+    bases = {_generation(c)[0] for c in owners}
+    if len(bases) > 1:
+        raise BridgeAmbiguity(
+            f"bridge id {bid!r} names {len(bases)} different lineages "
+            f"({', '.join(sorted(bases))}) — refusing to guess the last writer; this "
+            "must be resolved by hand (retire_assertion on the stray row), not guessed away")
+    base = next(iter(bases))
     gens = [str(r["canonical"]) for r in await actions.pool.fetch(
         "SELECT canonical FROM objects WHERE type='Agent' AND status='active' "
         "AND (canonical=$1 OR canonical LIKE $1||'-%')", base)]
     same = [c for c in gens if _generation(c)[0] == base]
-    return max(same, key=lambda c: _generation(c)[1], default=str(owner))
+    return max(same, key=lambda c: _generation(c)[1], default=base)
 
 
 async def record_bridge_anchor(
@@ -250,26 +271,39 @@ async def record_bridge_anchor(
     `record_session_anchor` follows: a process environment is a witness that dies (it cannot
     answer for this lineage's next fork once this session ends), so the fact must be
     captured while it is still observable, never re-derived from a live process later.
-    Idempotent: a bridge id already on any active agent's record files nothing."""
+    Idempotent: a bridge id already on any active agent's record files nothing.
+
+    SERIALIZED under the SAME `mint_lock` discipline `register_agent` uses (ruling 61e00f25,
+    thread dc9d1eed), keyed on the bridge id itself rather than a lineage root — the lineage
+    is exactly what's undecided until this call resolves. Two concurrent automounts carrying
+    the identical CLAUDE_CODE_BRIDGE_SESSION_ID (plausible: several background forks of one
+    conversation booting near-simultaneously) used to both pass the exists-check before
+    either committed, landing the SAME bridge id on two different lineages — a TOCTOU race
+    the bare read-then-write below had no defense against. The lock makes the loser's
+    exists-check see the winner's committed row and no-op, exactly as register_agent's own
+    lock makes a losing mint see the winner's fresh generation."""
     from datetime import UTC, datetime
+
+    from src.orchestrator.agents import mint_lock
 
     bid = (bridge_session_id or "").strip()
     if not bid:
         return False
-    exists = await actions.pool.fetchval(
-        "SELECT 1 FROM current_assertions a "
-        "JOIN objects o ON o.id=a.object_id AND o.type='Agent' AND o.status='active' "
-        "WHERE a.name='bridge_session_id' AND a.value #>> '{}' = $1 LIMIT 1", bid)
-    if exists:
-        return False
-    obj = await actions.pool.fetchval(
-        "SELECT id FROM objects WHERE canonical=$1 AND type='Agent' AND status='active'",
-        agent_id)
-    if obj is None:
-        return False
-    await actions.assert_property(obj, "bridge_session_id", bid, actor, datetime.now(UTC),
-                                  0.9, evidence_class="direct_observation")
-    return True
+    async with mint_lock(actions.pool, bid):
+        exists = await actions.pool.fetchval(
+            "SELECT 1 FROM current_assertions a "
+            "JOIN objects o ON o.id=a.object_id AND o.type='Agent' AND o.status='active' "
+            "WHERE a.name='bridge_session_id' AND a.value #>> '{}' = $1 LIMIT 1", bid)
+        if exists:
+            return False
+        obj = await actions.pool.fetchval(
+            "SELECT id FROM objects WHERE canonical=$1 AND type='Agent' AND status='active'",
+            agent_id)
+        if obj is None:
+            return False
+        await actions.assert_property(obj, "bridge_session_id", bid, actor, datetime.now(UTC),
+                                      0.9, evidence_class="direct_observation")
+        return True
 
 
 async def record_session_anchor(
@@ -413,9 +447,17 @@ async def automount(
     # over office_hint below and, unlike office_hint, is never refused just because the
     # ancestor lineage is still alive (that refusal is correct for a cwd-guess; it is wrong
     # for something the harness actually told us).
-    bridged = (await bridged_seat(actions, bridge_session_id=bridge_session_id)
-               if bound is None and forked is None and viewed is None and ledgered is None
-               and bridge_session_id else None)
+    bridge_ambiguity: str | None = None
+    bridged = None
+    if (bound is None and forked is None and viewed is None and ledgered is None
+            and bridge_session_id):
+        try:
+            bridged = await bridged_seat(actions, bridge_session_id=bridge_session_id)
+        except BridgeAmbiguity as e:
+            # refuse loudly, never crash the whisper (ruling 61e00f25): fall through to
+            # office_hint exactly as a bare "no known bridge id" would, but confess the
+            # ambiguity in the payload instead of silently swallowing it
+            bridge_ambiguity = str(e)
     # THE OFFICE (the fourth door, re-cut by 16e3cee9): the whisper no longer MINTS here —
     # it fires for plumbing exactly as for minds, and a title-generator stub was crowned
     # once. The greeting only HINTS whose office this is; the mint waits for the first
@@ -777,6 +819,10 @@ async def automount(
         **({"seat_binding": binding} if binding else {}),
         # the resume heal's receipt (empty = nothing listed here needed re-addressing)
         **({"transcripts_healed": heal} if heal else {}),
+        # the bridge door's refusal (thread dc9d1eed): a bridge id named more than one
+        # lineage — this whisper fell through to office_hint rather than guess, and the
+        # ambiguity still needs a hand (retire_assertion on the stray row)
+        **({"bridge_ambiguity": bridge_ambiguity} if bridge_ambiguity else {}),
         # the tab-view adoption's confession: this whisper fired for a WINDOW onto the
         # named session, and the window registered as that soul — no clone was minted
         **({"view_of": Path(transcript_path or "").name[:8]} if viewed else {}),
