@@ -125,6 +125,26 @@ def fit(result: Any, *, tool: str, budget: int = BUDGET_CHARS) -> Any:
             name = ".".join(path)
             dropped.setdefault(name, {"shown": MAX_STR, "of": len(text)})
 
-    if dropped:
+    # task #64's own measurement (ruling ad19a779): MANY SMALL-BUT-VERBOSE rows defeat both
+    # phases above — every list is already ≤MIN_KEEP, every string already ≤MAX_STR, yet the
+    # SUM is still over budget. Neither phase has anything left to cut (candidates=[] breaks
+    # the loop early; no string qualifies for the truncation pass), so the OLD code returned
+    # silently — no `_bounded` key at all when `dropped` stayed empty, or an unqualified one
+    # implying success when it wasn't. That is exactly the lie this module's own docstring
+    # forbids ("a cap that hides what it dropped"), just at one remove: it hid that it
+    # DIDN'T cap. This backstop still does not get smarter here on purpose — going below
+    # MIN_KEEP would violate its own "still shows you the shape" law, and the real fix is
+    # the LENS (a tool's own fields/take/depth, e.g. run_composition's — task #64's other
+    # leg) asking narrower in the first place, not this net trying harder to catch it blind.
+    still_over = _size(result) > budget
+    if dropped or still_over:
         result["_bounded"] = {"tool": tool, "note": _NOTE, "dropped": dropped}
+        if still_over:
+            result["_bounded"]["still_over_budget"] = True
+            result["_bounded"]["note"] = (
+                f"{_NOTE} STILL over budget after trimming every list to {MIN_KEEP} and "
+                f"every string to {MAX_STR} chars — the cost is many small, individually "
+                "modest items whose SUM is too large, a shape this backstop cannot reduce "
+                "further on its own. Ask the tool for a narrower query (fewer fields, a "
+                "smaller take/limit) instead of retrying the same call.")
     return result

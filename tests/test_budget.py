@@ -89,3 +89,34 @@ def test_the_tool_result_is_not_mutated_in_place() -> None:
 def test_non_dict_results_pass_through() -> None:
     assert fit("just a string", tool="t") == "just a string"
     assert fit(None, tool="t") is None
+
+
+# --- task #64's own live measurement (ruling ad19a779): MANY SMALL-BUT-VERBOSE rows defeat
+# both phases above — every list already ≤MIN_KEEP, every string already ≤MAX_STR, yet the
+# SUM stays over budget. The old code returned silently over budget in this shape (empty
+# `dropped` never sets `_bounded` at all) — exactly the "hides what it dropped" lie the
+# module's own docstring forbids, just at one remove (it hid that it didn't cap). ------------
+
+def _many_small_verbose_groups(n: int, per_group: int = MIN_KEEP) -> dict[str, list[dict]]:
+    """`n` groups, each already AT the keep-floor (never a list-halving candidate), each row
+    individually well under MAX_STR — only the SUM is a firehose."""
+    return {f"group{g}": [{"summary": "x" * 2000} for _ in range(per_group)]
+            for g in range(n)}
+
+
+def test_many_small_verbose_lists_are_named_honestly_when_fit_cannot_reduce_further() -> None:
+    result = {"items": _many_small_verbose_groups(30)}
+    assert len(json.dumps(result, default=str)) > BUDGET_CHARS  # confirms the fixture is real
+    out = fit(result, tool="t")
+    assert len(json.dumps(out, default=str)) > BUDGET_CHARS  # genuinely could not be reduced
+    assert out["_bounded"]["still_over_budget"] is True
+    assert "cannot reduce further" in out["_bounded"]["note"]
+    # nothing was silently cut either — every group is still fully present, untouched
+    assert all(len(g) == MIN_KEEP for g in out["items"].values())
+
+
+def test_a_normal_successful_trim_never_claims_still_over_budget() -> None:
+    """The new honesty flag must never leak into the ORDINARY successful-trim case."""
+    out = fit({"rows": _big(5000)}, tool="fleet")
+    assert len(json.dumps(out, default=str)) <= BUDGET_CHARS
+    assert "still_over_budget" not in out["_bounded"]
