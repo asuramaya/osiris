@@ -13,6 +13,17 @@ coordinating only through Postgres + Redis (no RPC mesh between them):
 This is **Cut 1** of the deployment ladder in [`../ROADMAP.md`](../ROADMAP.md): same box,
 two units, fate-isolated. Everything before this ran in one process.
 
+## Routine deploys: `osiris deploy`
+
+Everything below this section is about **standing the box up the first time**. Once it's
+up, the day-to-day deploy — restart the services that hold new code, prove they came back
+healthy, and catch anything that needed a seed or a migration and didn't get one — is one
+command: `osiris deploy` (see [`CLI.md`](CLI.md#osiris-deploy) for the full ritual). It
+refuses outright on an uncommitted change under `src/` rather than silently shipping a
+half-written edit, which is exactly the failure the by-hand `systemctl --user restart
+osiris-mcp osiris-worker osiris-console && python scripts/osiris_smoke.py` protocol this
+replaces once caught only by a manager's own well-timed `git status`.
+
 ## The discipline: nothing heavy runs in a request path
 
 The API **enqueues** heavy work onto the worker and returns immediately; it never runs
