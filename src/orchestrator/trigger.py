@@ -1476,12 +1476,7 @@ async def launch_seat(
         # follows into a fresh office (claim_name: a name matching an already-vacant seat is
         # ADOPTED, never twinned — see mint_seat's own receipt: '...or start a session in
         # the office and have it claim_name itself').
-        boot_prompt = (
-            f'You have just been launched into your own seat\'s office. Call '
-            f'mount(cwd="{office}", job_dir="{anchor}"), then claim_name("{handle}") — that '
-            f"exact name — to bind to the seat already waiting for you. Then inbox() for "
-            f"your opening brief."
-        )
+        boot_prompt = _bg_boot_prompt(office=office, anchor=anchor, handle=handle)
         try:
             await spawn(office, name=name, model=argv_model, prompt=boot_prompt)
         except OSError as exc:
@@ -1717,6 +1712,20 @@ async def _spawn_in_body(
 # session is visible in `claude agents --json` BY CONSTRUCTION — clause 3 ("front end wide
 # open") made mechanical, not patched around (contrast the attach-line receipt, part 2 of this
 # task, which is an interim fix for the OLD substrate's blind spot, not a replacement for this).
+
+def _bg_boot_prompt(*, office: str, anchor: str, handle: str) -> str:
+    """The harness-native lane's boot instruction (see `_spawn_claude_bg`'s own docstring for
+    why this replaces env-var identity stamping): a `--bg` session's genuine first turn tells
+    it to bind itself via the same proven mount()+claim_name() path a human follows into a
+    fresh office. Shared by `launch_seat` and `osiris launch` (task #72, thread 842aa184) —
+    one wording, never two copies to drift apart."""
+    return (
+        f'You have just been launched into your own seat\'s office. Call '
+        f'mount(cwd="{office}", job_dir="{anchor}"), then claim_name("{handle}") — that '
+        f"exact name — to bind to the seat already waiting for you. Then inbox() for "
+        f"your opening brief."
+    )
+
 
 async def _spawn_claude_bg(
     repo: str, *, name: str | None = None, model: str | None = None,

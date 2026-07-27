@@ -66,28 +66,47 @@ one-time design-canon ingest (repo-relative doc paths that only make sense on a 
 install); bare `osiris seed` runs the full ritual. Idempotent either way — a second run never
 duplicates a composition or a room, it only heals forward.
 
-## `osiris launch <handle> [--model]`
+## `osiris launch <handle> [--model] [--debug]`
 
-Bodies a seat: spawns its `claude` process via the manager daemon directly. Deliberately
-**not** `trigger.py`'s `launch_seat()` — that verb's own docstring is explicit ("THE OPERATOR
-NEVER CALLS THIS... the operator's hand stays out-of-band"), because it's a *seat-to-seat*
-verb gated by a `managed_by` graph edge. A human driving this CLI already **is** the
-out-of-band hand — the same trust boundary `src.manager.attach` already stands in for — so
-`osiris launch` talks to the daemon's `pty_spawn` op directly, with its own correct model
-precedence (`--model` flag > the target seat's own stamped `intended_model` > the wake-lane
-economy default), never the launch-lane's own still-open bug (thread `20e4feb6`: a spawn
-silently landing on the wrong model because nothing read the seat's stamp).
+Bodies a seat. **Default lane (task #72, following `trigger.launch_seat`'s own flip, rulings
+`0fe36e59` + `33d6a2eb` clause 3): `claude --bg`** — the harness's own background-session
+surface. Every body this creates is visible in the operator's own `claude agents` list *by
+construction*; identity rides the session's own first turn (a boot prompt telling it to
+`mount()` then `claim_name(handle)`, the same proven adoption path a human follows into a
+fresh office), since `--bg`'s claimed process has no channel for env-var identity stamping
+(confirmed live — see `_spawn_claude_bg`'s own docstring for the full autopsy).
 
-It does not just fire and hope. After spawning, it polls (a few seconds, bounded — never an
-indefinite wait) for two honest facts: is the window actually alive, and has a fresh body
-mounted at the office and self-reported *which* model it's actually running. If those two
-disagree — the receipt says `MISMATCH` and names both models — that is thread `20e4feb6`'s
-own bug class, caught mechanically instead of by a human re-deriving it from `doors()`/
-`dossier()` by hand (as this exact incident once required, decision `8e9c48d9`).
+**`--debug` keeps the original osiris PTY-broker lane alive** as an explicit fallback — the
+manager daemon's `pty_spawn` op, called directly, attachable via `osiris attach <handle>` —
+for an incident, or a build with no `claude --bg`. It is no longer the default; the harness-
+native lane's own body is *not* attachable this way (it has no PTY osiris ever opened), so
+reach for `--debug` specifically when you need an interactive terminal on the fresh process.
+
+Neither lane is `trigger.py`'s `launch_seat()` — that verb's own docstring is explicit ("THE
+OPERATOR NEVER CALLS THIS... the operator's hand stays out-of-band"), because it's a
+*seat-to-seat* verb gated by a `managed_by` graph edge. A human driving this CLI already **is**
+the out-of-band hand — the same trust boundary `src.manager.attach` already stands in for —
+so both lanes mirror `launch_seat`'s own primitives directly (same `claude --bg`/`claude
+agents --json` calls, same boot-prompt wording, same `pty_spawn` op) rather than calling it.
+
+Both lanes share the same correct model precedence (`--model` flag > the target seat's own
+stamped `intended_model` > the wake-lane economy default) and the same bounded-poll honesty
+discipline — never a bare `launched: true`:
+
+- **`--debug` (PTY) lane**: polls a few seconds (bounded — never an indefinite wait) for two
+  facts, is the window actually alive and has a fresh body mounted at the office and
+  self-reported *which* model it's running. If those two disagree — the receipt says
+  `MISMATCH` and names both models — that is thread `20e4feb6`'s own bug class, caught
+  mechanically instead of by a human re-deriving it from `doors()`/`dossier()` by hand (as
+  this exact incident once required, decision `8e9c48d9`).
+- **Default (`--bg`) lane**: polls `claude agents --json` (bounded, same discipline) for the
+  spawned body to appear, then reports it confirmed — `find it in claude agents as
+  '[house] handle'` — plus the harness's own session id when the roster carries one.
 
 If a live body already holds the handle, `launch` returns that instead of minting a twin —
-never launch a second body onto a seat that's already occupied; `osiris attach <handle>` to
-reach the one that's there.
+never launch a second body onto a seat that's already occupied. In the default lane that
+body is reachable via `claude agents`/`claude resume`, never `osiris attach` (that door is
+`--debug`'s PTY lane only).
 
 ## `osiris fleet [--full]`
 

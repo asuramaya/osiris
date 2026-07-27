@@ -8,11 +8,16 @@ EXISTING verb rather than re-deriving it:
                                      the operator was handed before this build)
   osiris smoke                      the same probe src.orchestrator.smoke runs for the fleet
   osiris seed [--compositions-only] src.init's seeder (task #63's own deploy-step flag)
-  osiris launch <handle> [--model]  body a seat via the manager daemon DIRECTLY — never
-                                     trigger.py's launch_seat(), which is explicitly a
-                                     seat-to-seat verb ("THE OPERATOR NEVER CALLS THIS"); a
-                                     human at this CLI is a different trust boundary, the
-                                     same one src.manager.attach.py already stands in for
+  osiris launch <handle> [--model]  body a seat via `claude --bg` by default (task #72,
+             [--debug]              following trigger.launch_seat's own flip, rulings
+                                     0fe36e59 + 33d6a2eb clause 3) — every body lands in the
+                                     operator's own `claude agents` list by construction.
+                                     `--debug` keeps the original osiris PTY-broker lane alive
+                                     (the manager daemon directly, never trigger.py's
+                                     launch_seat() — that verb is explicitly seat-to-seat
+                                     only, "THE OPERATOR NEVER CALLS THIS"; a human at this
+                                     CLI is a different trust boundary, the same one
+                                     src.manager.attach.py already stands in for)
   osiris fleet [--full]             the same fleet() the MCP tool answers, called over the
                                      wire (never a second implementation of what it computes)
   osiris deploy                     the deploy ritual as one verb (thread e51a841c): refuse
@@ -46,6 +51,8 @@ import asyncpg
 from src.manager.client import default_socket_path, manager_call
 
 ManagerCall = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+SpawnClaudeBg = Callable[..., Awaitable[None]]
+AgentsJson = Callable[..., Awaitable[list[dict[str, Any]]]]
 
 
 async def _default_manager(req: dict[str, Any]) -> dict[str, Any]:
@@ -267,19 +274,190 @@ async def _await_launch_confirmation(
     return alive, mounted_model
 
 
+async def _resolve_launch_target(pool: asyncpg.Pool, handle: str) -> dict[str, Any] | None:
+    """Handle -> seat facts (with `seat_id` folded in), or None with an honest stderr message
+    already printed. Shared by both launch lanes below — the seat lookup and its error cases
+    don't change with the substrate, only what happens once a target is found."""
+    from src.orchestrator.seats import seat_facts, seats_by_handle
+
+    seat_ids = await seats_by_handle(pool, handle)
+    if not seat_ids:
+        print(f"osiris launch: no living Seat holds handle {handle!r}.", file=sys.stderr)
+        return None
+    if len(seat_ids) > 1:
+        print(f"osiris launch: {handle!r} is ambiguous — {len(seat_ids)} seats share it: "
+              f"{seat_ids}. Use a more specific handle.", file=sys.stderr)
+        return None
+    facts = await seat_facts(pool, seat_ids[0])
+    if not facts["handle"]:
+        print(f"osiris launch: {seat_ids[0]} carries no handle assertion — a body cannot "
+              "be named for a nameless seat.", file=sys.stderr)
+        return None
+    if not facts["anchor_cwd"]:
+        print(f"osiris launch: {facts['handle']} ({seat_ids[0]}) has no anchor_cwd — "
+              "establish_office first; a body needs a room to be born in.", file=sys.stderr)
+        return None
+    facts["seat_id"] = seat_ids[0]
+    return facts
+
+
+async def _cmd_launch_harness(
+    handle: str, *, model: str | None, pool: asyncpg.Pool, wake_default: str | None,
+    spawn: SpawnClaudeBg, agents_json: AgentsJson,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> int:
+    """THE DEFAULT LANE (task #72, following trigger.launch_seat's own flip, rulings 0fe36e59
+    + 33d6a2eb clause 3): `claude --bg` + `claude agents --json`, the harness's own front-end
+    surface — every body this creates is visible in the operator's own `claude agents` list
+    BY CONSTRUCTION. Mirrors launch_seat's harness lane exactly (same spawn/agents_json
+    primitives, same boot-prompt wording via `_bg_boot_prompt` — one wording, never two to
+    drift apart) but skips its managed_by/caller-seat gate: launch_seat's own docstring is
+    explicit that the operator is a different trust boundary and never calls it directly —
+    this function IS that boundary, same as the PTY lane below it."""
+    from src.orchestrator.trigger import _bg_boot_prompt
+
+    facts = await _resolve_launch_target(pool, handle)
+    if facts is None:
+        return 1
+    office = facts["anchor_cwd"]
+
+    try:
+        roster = await agents_json(cwd=office)
+    except (OSError, TimeoutError, ValueError):
+        roster = []
+    live = next((r for r in roster if isinstance(r, dict) and r.get("cwd") == office), None)
+    if live is not None:
+        live_name = live.get("name")
+        print(f"osiris launch: a live body already holds {handle!r} — not minting a twin. "
+              f"Find it in `claude agents` as {live_name!r}.")
+        return 0
+
+    resolved_model = resolve_model(model, facts["intended_model"], wake_default)
+    name = f"[{_house_tag(facts['house'])}] {facts['handle']}"
+    anchor = str(Path.home() / ".claude" / "jobs" / facts["seat_id"].replace(":", "-"))
+    boot_prompt = _bg_boot_prompt(office=office, anchor=anchor, handle=facts["handle"])
+
+    try:
+        await spawn(office, name=name, model=resolved_model, prompt=boot_prompt)
+    except OSError as exc:
+        print(f"osiris launch: claude --bg failed to start ({exc}) — nothing was spawned.",
+              file=sys.stderr)
+        return 1
+    print(f"osiris launch: spawned {name!r} via claude --bg, requested model="
+          f"{resolved_model or '(claude CLI default)'}")
+
+    alive_row: dict[str, Any] | None = None
+    for _ in range(8):
+        try:
+            alive_row = next((r for r in await agents_json(cwd=office)
+                              if isinstance(r, dict) and r.get("cwd") == office), None)
+        except (OSError, TimeoutError, ValueError):
+            alive_row = None
+        if alive_row is not None:
+            break
+        await sleep(1.0)
+    if alive_row is None:
+        print("  not yet visible in `claude agents --json` — it may still be booting or "
+              "self-binding; re-check with `osiris fleet` in a few seconds.")
+        return 0
+    session_id = alive_row.get("sessionId")
+    print(f"  confirmed: find it in `claude agents` as {name!r}"
+          + (f" (session {session_id})" if session_id else ""))
+    return 0
+
+
+async def _cmd_launch_pty(
+    handle: str, *, model: str | None, pool: asyncpg.Pool, manager: ManagerCall,
+    wake_default: str | None,
+) -> int:
+    """`--debug`'s FALLBACK LANE: bodies a seat via the manager daemon DIRECTLY (pty_spawn),
+    never trigger.py's launch_seat() — same trust-boundary reasoning as the harness lane
+    above. Kept alive for an incident, or a build with no `claude --bg` — attachable via
+    `osiris attach`, which the harness-native lane's own body is not. Reports the model it
+    actually confirms mounted, honestly and within a bounded wait — never a bare
+    'launched: true'."""
+    facts = await _resolve_launch_target(pool, handle)
+    if facts is None:
+        return 1
+
+    try:
+        roster = await manager({"op": "pty_list"})
+    except (OSError, TimeoutError) as exc:
+        print(f"osiris launch: the manager daemon is unreachable ({exc}) — is "
+              "osiris-manager running?", file=sys.stderr)
+        return 1
+    sessions = roster.get("sessions")
+    sessions = sessions if isinstance(sessions, list) else []
+    existing, _ = match_session(sessions, handle)
+    if existing:
+        print(f"osiris launch: a live body already holds {handle!r} — {existing!r}. Not "
+              f"minting a twin (attach to it: `osiris attach {handle}`).")
+        return 0
+
+    resolved_model = resolve_model(model, facts["intended_model"], wake_default)
+    argv = ["claude", *(["--model", resolved_model] if resolved_model else [])]
+    name = f"[{_house_tag(facts['house'])}] {facts['handle']}"
+    anchor = str(Path.home() / ".claude" / "jobs" / facts["seat_id"].replace(":", "-"))
+    child_env = {k: v for k, v in os.environ.items() if k != "CLAUDE_JOB_DIR"}
+    child_env["CLAUDE_JOB_DIR"] = anchor
+
+    try:
+        res = await manager(
+            {"op": "pty_spawn", "name": name, "argv": argv, "cwd": facts["anchor_cwd"],
+             "seat": {"handle": facts["handle"], "house": facts["house"]},
+             "job_dir": anchor, "env": child_env})
+    except (OSError, TimeoutError) as exc:
+        print(f"osiris launch: manager unreachable mid-spawn ({exc}) — nothing confirmed "
+              "spawned.", file=sys.stderr)
+        return 1
+    if not isinstance(res, dict) or res.get("error"):
+        detail = res.get("error") if isinstance(res, dict) else str(res)
+        print(f"osiris launch: spawn refused — {detail}", file=sys.stderr)
+        return 1
+
+    spawned = res.get("spawned")
+    if not isinstance(spawned, str):
+        print(f"osiris launch: manager accepted the spawn but named no window ({res!r}) — "
+              "cannot confirm anything; check with `osiris fleet`.", file=sys.stderr)
+        return 1
+    print(f"osiris launch: spawned {spawned!r}, requested model="
+          f"{resolved_model or '(claude CLI default)'}")
+    alive, mounted_model = await _await_launch_confirmation(
+        pool, manager, spawned_name=spawned, anchor_cwd=facts["anchor_cwd"])
+    print(f"  window alive: {alive}" + ("" if alive else
+          " (not yet — re-check with `osiris fleet` shortly; if this persists, "
+          "systemctl --user status osiris-manager)"))
+    if mounted_model is None:
+        print("  mount not yet observed within the wait — the claude is still booting or "
+              "self-binding; re-check with `osiris fleet` in a few seconds.")
+    elif resolved_model and mounted_model != resolved_model:
+        print(f"  MISMATCH: requested model={resolved_model!r} but the body that mounted "
+              f"reports model={mounted_model!r} — this is thread 20e4feb6's own bug class "
+              "(launch spawning the wrong model, silently); check the manager daemon's "
+              "argv handling before assuming this launch is healthy.")
+    else:
+        print(f"  confirmed: a body mounted at {facts['anchor_cwd']} reporting "
+              f"model={mounted_model!r}")
+    return 0
+
+
 async def cmd_launch(
     handle: str, *, model: str | None, pool: asyncpg.Pool | None = None,
     manager: ManagerCall = _default_manager, wake_default: str | None = None,
+    debug: bool = False, spawn: SpawnClaudeBg | None = None,
+    agents_json: AgentsJson | None = None,
 ) -> int:
-    """Bodies a seat via the manager daemon DIRECTLY (pty_spawn), never trigger.py's
-    launch_seat(): that verb is explicitly seat-to-seat only ("THE OPERATOR NEVER CALLS
-    THIS... an override a caller can assert in an argument is an override that can be forged;
-    the operator's hand stays out-of-band") — a human driving this CLI already IS the
-    out-of-band hand, the same trust boundary src.manager.attach.py stands in for. Reports
-    the model it actually confirms mounted, honestly and within a bounded wait — never a bare
-    'launched: true'. `pool`/`manager`/`wake_default` are injectable (mirrors launch_seat's
-    own test seam) — production callers (main()) leave them at their real defaults."""
-    from src.orchestrator.seats import seat_facts, seats_by_handle
+    """Bodies a seat. DEFAULT LANE (task #72): harness-native `claude --bg`, following
+    trigger.launch_seat's own flip (rulings 0fe36e59 + 33d6a2eb clause 3) — every body lands
+    in the operator's own `claude agents` list by construction. `debug=True` (the CLI's
+    `--debug`) keeps the original osiris PTY-broker lane alive as an explicit fallback for an
+    incident or a build with no `claude --bg` — attachable via `osiris attach`, which the
+    default lane's body is not. `pool`/`manager`/`wake_default`/`spawn`/`agents_json` are all
+    injectable (mirrors launch_seat's own test seam) — production callers (main()) leave them
+    at their real defaults."""
+    from src.orchestrator.trigger import _claude_agents_json, _spawn_claude_bg
+    spawn = spawn or _spawn_claude_bg
+    agents_json = agents_json or _claude_agents_json
 
     owns_pool = pool is None
     if pool is None:
@@ -297,83 +475,12 @@ async def cmd_launch(
                   f"{exc}.", file=sys.stderr)
             return 1
     try:
-        seat_ids = await seats_by_handle(pool, handle)
-        if not seat_ids:
-            print(f"osiris launch: no living Seat holds handle {handle!r}.", file=sys.stderr)
-            return 1
-        if len(seat_ids) > 1:
-            print(f"osiris launch: {handle!r} is ambiguous — {len(seat_ids)} seats share it: "
-                  f"{seat_ids}. Use a more specific handle.", file=sys.stderr)
-            return 1
-        facts = await seat_facts(pool, seat_ids[0])
-        if not facts["handle"]:
-            print(f"osiris launch: {seat_ids[0]} carries no handle assertion — a body cannot "
-                  "be named for a nameless seat.", file=sys.stderr)
-            return 1
-        if not facts["anchor_cwd"]:
-            print(f"osiris launch: {facts['handle']} ({seat_ids[0]}) has no anchor_cwd — "
-                  "establish_office first; a body needs a room to be born in.", file=sys.stderr)
-            return 1
-
-        try:
-            roster = await manager({"op": "pty_list"})
-        except (OSError, TimeoutError) as exc:
-            print(f"osiris launch: the manager daemon is unreachable ({exc}) — is "
-                  "osiris-manager running?", file=sys.stderr)
-            return 1
-        sessions = roster.get("sessions")
-        sessions = sessions if isinstance(sessions, list) else []
-        existing, _ = match_session(sessions, handle)
-        if existing:
-            print(f"osiris launch: a live body already holds {handle!r} — {existing!r}. Not "
-                  f"minting a twin (attach to it: `osiris attach {handle}`).")
-            return 0
-
-        resolved_model = resolve_model(model, facts["intended_model"], wake_default)
-        argv = ["claude", *(["--model", resolved_model] if resolved_model else [])]
-        name = f"[{_house_tag(facts['house'])}] {facts['handle']}"
-        anchor = str(Path.home() / ".claude" / "jobs" / seat_ids[0].replace(":", "-"))
-        child_env = {k: v for k, v in os.environ.items() if k != "CLAUDE_JOB_DIR"}
-        child_env["CLAUDE_JOB_DIR"] = anchor
-
-        try:
-            res = await manager(
-                {"op": "pty_spawn", "name": name, "argv": argv, "cwd": facts["anchor_cwd"],
-                 "seat": {"handle": facts["handle"], "house": facts["house"]},
-                 "job_dir": anchor, "env": child_env})
-        except (OSError, TimeoutError) as exc:
-            print(f"osiris launch: manager unreachable mid-spawn ({exc}) — nothing confirmed "
-                  "spawned.", file=sys.stderr)
-            return 1
-        if not isinstance(res, dict) or res.get("error"):
-            detail = res.get("error") if isinstance(res, dict) else str(res)
-            print(f"osiris launch: spawn refused — {detail}", file=sys.stderr)
-            return 1
-
-        spawned = res.get("spawned")
-        if not isinstance(spawned, str):
-            print(f"osiris launch: manager accepted the spawn but named no window ({res!r}) — "
-                  "cannot confirm anything; check with `osiris fleet`.", file=sys.stderr)
-            return 1
-        print(f"osiris launch: spawned {spawned!r}, requested model="
-              f"{resolved_model or '(claude CLI default)'}")
-        alive, mounted_model = await _await_launch_confirmation(
-            pool, manager, spawned_name=spawned, anchor_cwd=facts["anchor_cwd"])
-        print(f"  window alive: {alive}" + ("" if alive else
-              " (not yet — re-check with `osiris fleet` shortly; if this persists, "
-              "systemctl --user status osiris-manager)"))
-        if mounted_model is None:
-            print("  mount not yet observed within the wait — the claude is still booting or "
-                  "self-binding; re-check with `osiris fleet` in a few seconds.")
-        elif resolved_model and mounted_model != resolved_model:
-            print(f"  MISMATCH: requested model={resolved_model!r} but the body that mounted "
-                  f"reports model={mounted_model!r} — this is thread 20e4feb6's own bug class "
-                  "(launch spawning the wrong model, silently); check the manager daemon's "
-                  "argv handling before assuming this launch is healthy.")
-        else:
-            print(f"  confirmed: a body mounted at {facts['anchor_cwd']} reporting "
-                  f"model={mounted_model!r}")
-        return 0
+        if debug:
+            return await _cmd_launch_pty(handle, model=model, pool=pool, manager=manager,
+                                         wake_default=wake_default)
+        return await _cmd_launch_harness(handle, model=model, pool=pool,
+                                         wake_default=wake_default, spawn=spawn,
+                                         agents_json=agents_json)
     finally:
         if owns_pool:
             await pool.close()
@@ -673,6 +780,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_launch = sub.add_parser("launch", help="body a seat (spawn its claude process)")
     p_launch.add_argument("handle")
     p_launch.add_argument("--model", default=None)
+    p_launch.add_argument("--debug", action="store_true",
+                          help="use the osiris PTY-broker lane instead of the default "
+                               "`claude --bg` — for an incident or a build with no --bg")
 
     p_fleet = sub.add_parser("fleet", help="the fleet roster, grouped by project")
     p_fleet.add_argument("--full", action="store_true")
@@ -692,7 +802,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "seed":
         return asyncio.run(cmd_seed(compositions_only=args.compositions_only))
     if args.command == "launch":
-        return asyncio.run(cmd_launch(args.handle, model=args.model))
+        return asyncio.run(cmd_launch(args.handle, model=args.model, debug=args.debug))
     if args.command == "fleet":
         return asyncio.run(cmd_fleet(full=args.full))
     if args.command == "deploy":

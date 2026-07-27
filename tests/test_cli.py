@@ -145,7 +145,7 @@ async def test_cmd_launch_unknown_handle_is_honest(actions: Actions) -> None:
         raise AssertionError("should never be called — the seat lookup fails first")
 
     out = await cmd_launch("no-such-handle-at-all", model=None, pool=actions.pool,
-                           manager=_unreachable)
+                           manager=_unreachable, debug=True)
     assert out == 1
 
 
@@ -156,7 +156,8 @@ async def test_cmd_launch_ambiguous_handle_is_honest(actions: Actions) -> None:
     async def _unreachable(req: dict[str, Any]) -> dict[str, Any]:
         raise AssertionError("should never be called — the ambiguity check fails first")
 
-    assert await cmd_launch("twin", model=None, pool=actions.pool, manager=_unreachable) == 1
+    assert await cmd_launch("twin", model=None, pool=actions.pool, manager=_unreachable,
+                           debug=True) == 1
 
 
 async def test_cmd_launch_no_anchor_cwd_is_honest(actions: Actions) -> None:
@@ -166,7 +167,7 @@ async def test_cmd_launch_no_anchor_cwd_is_honest(actions: Actions) -> None:
         raise AssertionError("should never be called — the office check fails first")
 
     assert await cmd_launch("roomless", model=None, pool=actions.pool,
-                            manager=_unreachable) == 1
+                            manager=_unreachable, debug=True) == 1
 
 
 async def test_cmd_launch_returns_the_existing_window_instead_of_twinning(
@@ -181,7 +182,8 @@ async def test_cmd_launch_returns_the_existing_window_instead_of_twinning(
         calls.append(req)
         return {"sessions": [{"name": "[OS] already-live", "alive": True}]}
 
-    out = await cmd_launch("already-live", model=None, pool=actions.pool, manager=_fake)
+    out = await cmd_launch("already-live", model=None, pool=actions.pool, manager=_fake,
+                           debug=True)
     assert out == 0
     # only the roster was ever asked for — pty_spawn was never reached
     assert [c["op"] for c in calls] == ["pty_list"]
@@ -194,7 +196,8 @@ async def test_cmd_launch_reports_a_dark_manager_after_facts_resolve(actions: Ac
     async def _dark(req: dict[str, Any]) -> dict[str, Any]:
         raise TimeoutError("no reply")
 
-    assert await cmd_launch("darkbody", model=None, pool=actions.pool, manager=_dark) == 1
+    assert await cmd_launch("darkbody", model=None, pool=actions.pool, manager=_dark,
+                           debug=True) == 1
 
 
 async def test_cmd_launch_spawns_and_confirms_an_honest_mount(actions: Actions) -> None:
@@ -219,7 +222,7 @@ async def test_cmd_launch_spawns_and_confirms_an_honest_mount(actions: Actions) 
         return {"spawned": req["name"]}
 
     out = await cmd_launch("freshbody", model="claude-sonnet-5", pool=actions.pool,
-                           manager=_fake)
+                           manager=_fake, debug=True)
     assert out == 0
     ops = [c["op"] for c in calls]
     assert ops[0] == "pty_list"
@@ -252,10 +255,105 @@ async def test_cmd_launch_names_a_model_mismatch_honestly(actions: Actions) -> N
     buf = io.StringIO()
     with redirect_stdout(buf):
         out = await cmd_launch("wrongmodel", model="claude-sonnet-5", pool=actions.pool,
-                               manager=_fake)
+                               manager=_fake, debug=True)
     assert out == 0
     assert "MISMATCH" in buf.getvalue()
     assert "claude-fable-5" in buf.getvalue()
+
+
+# --- cmd_launch harness-native default lane (task #72) — same "never risk a real spawn" law,
+# a fake spawn/agents_json instead of a fake manager ---------------------------------------------
+
+async def test_cmd_launch_harness_unknown_handle_is_honest(actions: Actions) -> None:
+    async def _unreachable(*a: Any, **k: Any) -> Any:
+        raise AssertionError("should never be called — the seat lookup fails first")
+
+    out = await cmd_launch("no-such-handle-at-all", model=None, pool=actions.pool,
+                           spawn=_unreachable, agents_json=_unreachable)
+    assert out == 1
+
+
+async def test_cmd_launch_harness_returns_the_existing_body_instead_of_twinning(
+    actions: Actions,
+) -> None:
+    await ensure_seat(actions, house="osiris", handle="already-live-bg",
+                      anchor_cwd="/home/x/.osiris/seats/already-live-bg", source="test")
+
+    async def _spawn(*a: Any, **k: Any) -> None:
+        raise AssertionError("should never be called — a live body already holds this seat")
+
+    async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        return [{"name": "[OS] already-live-bg", "cwd": cwd, "sessionId": "sess-1"}]
+
+    out = await cmd_launch("already-live-bg", model=None, pool=actions.pool,
+                           spawn=_spawn, agents_json=_agents_json)
+    assert out == 0
+
+
+async def test_cmd_launch_harness_spawns_and_confirms(actions: Actions) -> None:
+    """The full honest path: no live body yet, `claude --bg` fires with the mount+claim_name
+    boot prompt, then a bounded poll confirms the body shows up in `claude agents --json` —
+    the fake resolves on the FIRST poll iteration, so this needs no real sleep-bound wait."""
+    await ensure_seat(actions, house="osiris", handle="freshbg",
+                      anchor_cwd="/home/x/.osiris/seats/freshbg", source="test")
+
+    spawn_calls: list[dict[str, Any]] = []
+    poll_count = 0
+
+    async def _spawn(repo: str, *, name: str, model: str | None, prompt: str) -> None:
+        spawn_calls.append({"repo": repo, "name": name, "model": model, "prompt": prompt})
+
+    async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        nonlocal poll_count
+        poll_count += 1
+        if poll_count < 2:  # call 1 = the pre-spawn already-live check: nothing there yet
+            return []
+        return [{"name": "[OS] freshbg", "cwd": cwd, "sessionId": "sess-fresh"}]
+
+    out = await cmd_launch("freshbg", model="claude-sonnet-5", pool=actions.pool,
+                           spawn=_spawn, agents_json=_agents_json)
+    assert out == 0
+    assert len(spawn_calls) == 1
+    assert spawn_calls[0]["repo"] == "/home/x/.osiris/seats/freshbg"
+    assert spawn_calls[0]["model"] == "claude-sonnet-5"
+    assert 'mount(cwd="/home/x/.osiris/seats/freshbg"' in spawn_calls[0]["prompt"]
+    assert 'claim_name("freshbg")' in spawn_calls[0]["prompt"]
+
+
+async def test_cmd_launch_harness_gives_up_honestly_when_never_visible(
+    actions: Actions,
+) -> None:
+    """The bounded-poll honesty law (same discipline as `_await_launch_confirmation` and
+    `_wait_for_smoke`): a body that never shows up in `claude agents --json` gets a plain
+    confession, never a false 'launched: true', and the poll itself is bounded — never an
+    indefinite wait."""
+    from src.cli import _cmd_launch_harness
+
+    await ensure_seat(actions, house="osiris", handle="neverup",
+                      anchor_cwd="/home/x/.osiris/seats/neverup", source="test")
+
+    async def _spawn(*a: Any, **k: Any) -> None:
+        return None
+
+    async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        return []
+
+    slept: list[float] = []
+
+    async def _no_sleep(secs: float) -> None:
+        slept.append(secs)
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await _cmd_launch_harness("neverup", model=None, pool=actions.pool,
+                                        wake_default=None, spawn=_spawn,
+                                        agents_json=_agents_json, sleep=_no_sleep)
+    assert out == 0
+    assert len(slept) == 8  # the full bounded poll, never an indefinite wait
+    assert "not yet visible" in buf.getvalue()
 
 
 # --- osiris deploy: pure decision layer (task e51a841c) -----------------------------------------
