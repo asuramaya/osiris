@@ -842,7 +842,13 @@ async def consolidate() -> dict[str, int]:
 
 @mcp.tool()
 async def dossier(object_ref: str) -> dict[str, Any]:
-    """Who is this? Identity properties + the named relationship network."""
+    """Who is this? Identity properties + the named relationship network. `object_ref`
+    accepts a UUID, an 8-char short id (the same one a composition row's own "id" column
+    hands out), a canonical, or a name. For an AGENT specifically, this is where succession
+    lives: `succeeded_from`/`minted_because` show up both as properties and as a
+    `succeeded_from` relationship edge naming the predecessor — one hop back per call (task
+    #64, ruling ad19a779; walking a FULL multi-generation chain still needs one call per hop
+    until a dedicated lineage-walk verb exists)."""
     pool = await _pool_get()
     oid = await _resolve(pool, object_ref)
     return await entity_dossier(pool, oid) if oid else {"error": f"no object {object_ref!r}"}
