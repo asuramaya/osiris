@@ -53,6 +53,11 @@ ROOM_COMPOSITIONS: dict[str, tuple[str, ...]] = {
         "echoes",
         # the ONE WALL LAW (ruling 923c380f): the graded unresolved view, operator-eyed.
         "the-wall",
+        # thread 36352764: roadmap/docs/live-desk (ruling c5b184cd, thread d56e7073/#44) were
+        # in DEFAULT_COMPOSITIONS but never roomed — orphaned to the "All" scope, and roadmap/
+        # docs also seeded with no shelf section (see _COMP_META below). All three are
+        # developer project-memory lenses, the same class as briefing/decision-log/the-wall.
+        "roadmap", "docs", "live-desk",
     ),
     "analyst": (
         "who-is-this", "operational-vs-disclosed-geography", "co-investment-ties",

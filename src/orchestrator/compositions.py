@@ -2910,6 +2910,8 @@ _COMP_META: dict[str, tuple[str, str]] = {
     "echoes": ("wall", "the triage pile: untouched miner echoes, oldest first"),
     "decision-log": ("memory", "every decision with its WHY; superseded entries grayed"),
     "design-canon": ("memory", "the design memory — ask it before re-deriving"),
+    "docs": ("memory", "the docs canon by topic — getting-started, concepts, reference, "
+                       "deployment, history"),
     "recent work": ("memory", "latest commits across the graph"),
     "changelog by area": ("memory", "what changed, grouped by area"),
     "fable-commits": ("memory", "commits authored by fleet sessions"),
@@ -2919,6 +2921,7 @@ _COMP_META: dict[str, tuple[str, str]] = {
     "project": ("fleet", "one repo's brief — focus a repo or pass args.repo"),
     "project-briefing": ("fleet", "a project's scoped briefing (what orient reads)"),
     "portfolio": ("fleet", "the operator's repos as a portfolio"),
+    "roadmap": ("fleet", "a project's work map — open/resolved/retracted, arc then owner"),
     "graph-lint": ("engine", "the graph auditing itself — findings, not verdicts"),
     "family-consistency": ("engine", "config families that should agree but don't"),
     "family-drift": ("engine", "how config families drift over time"),

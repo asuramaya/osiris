@@ -25,6 +25,17 @@ def test_room_compositions_are_real_and_cover_the_defaults() -> None:
     assert set(ROOM_COMPOSITIONS) == set(ROOM_CONFIG)          # same rooms both maps
 
 
+def test_comp_meta_covers_every_default_composition() -> None:
+    """thread 36352764: roadmap/docs shipped with no `_COMP_META` entry and silently seeded
+    with section=None — present in the DB, invisible in the sidebar, no error anywhere. Every
+    DEFAULT_COMPOSITIONS name must have shelf metadata (a superset is fine — `_COMP_META` also
+    covers agent-authored twins the seeder's second pass reaches by name, see
+    compositions.seed_default_compositions)."""
+    from src.orchestrator.compositions import _COMP_META
+
+    assert set(DEFAULT_COMPOSITIONS) <= set(_COMP_META)
+
+
 async def test_init_seeds_rooms_compositions_and_canon(actions: Actions) -> None:
     res = await init(actions)
     p = actions.pool
@@ -42,6 +53,10 @@ async def test_init_seeds_rooms_compositions_and_canon(actions: Actions) -> None
     assert await p.fetchval("SELECT count(*) FROM compositions") == len(DEFAULT_COMPOSITIONS)
     assert await p.fetchval(
         "SELECT count(*) FROM compositions WHERE room_id IS NULL") == 0
+    # every default landed on a real shelf section — thread 36352764: roadmap/docs silently
+    # seeded with section=None (invisible in the sidebar) until caught live in production
+    assert await p.fetchval(
+        "SELECT count(*) FROM compositions WHERE section IS NULL") == 0
     # the specific attachments the console lands on
     for room, comps in ROOM_COMPOSITIONS.items():
         rid = await p.fetchval("SELECT id FROM rooms WHERE name=$1", room)
