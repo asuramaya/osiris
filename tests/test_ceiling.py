@@ -81,9 +81,29 @@ async def test_an_UNPRICED_call_is_not_a_FREE_call(actions: Actions) -> None:
     c = await ceiling(actions.pool, cap=10.0)
     assert c.spent == 1.00, "an unpriced call must not be summed as zero"
     assert c.blind == 2
-    _, why = await may_spend(actions.pool, cap=10.0)
+    ok, why = await may_spend(actions.pool, cap=10.0)
+    # thread 24c3cc74: the doctrine and the enforcement used to disagree — this asserted only
+    # the STRING, never that blindness alone actually refuses (spent=$1 under a $10 cap never
+    # exercised a refusal before this fix).
+    assert not ok, "a producer that cannot price itself may not spend — regardless of $ spent"
     assert "NO PRICE" in why and "INVISIBLE" in why
     assert "cannot price itself may not spend" in why
+
+
+async def test_BLIND_ALONE_refuses_even_at_ZERO_dollars_spent(actions: Actions) -> None:
+    """The gap thread 24c3cc74 named precisely: `may_spend`'s boolean was `unlimited or spent
+    < cap` — `blind` never appeared in it, so a ledger with real dollars nowhere near the cap
+    always passed, no matter how many calls were invisible to the ceiling. This is the
+    keyed-API failure mode verbatim: providers.py's AnthropicClient path records cost_usd=None,
+    so on a real deployment spent stays $0 while every call is blind — the ceiling must not
+    wave that through."""
+    await _spend(actions, None)
+    c = await ceiling(actions.pool, cap=10.0)
+    assert c.spent == 0.0 and c.blind == 1
+    ok, why = await may_spend(actions.pool, cap=10.0)
+    assert not ok, "$0.00 spent must not mean 'safe to spend' when the spend is unseen"
+    assert "REFUSED" in why and "blind" in why.lower()
+    assert "CEILING REACHED" not in why, "the dollar cap was never touched — say so honestly"
 
 
 def test_spend_is_metered_only_on_the_KEYED_api_backend() -> None:

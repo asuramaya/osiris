@@ -80,7 +80,12 @@ class Ceiling:
 
     @property
     def may_spend(self) -> bool:
-        return self.unlimited or self.spent < self.cap
+        # thread 24c3cc74: the docstring's own doctrine ("A PRODUCER THAT CANNOT PRICE ITSELF
+        # MAY NOT SPEND") was never wired into this boolean — `blind` sat in `why()`'s string
+        # only, so a call that recorded NO price was quietly waved through as long as the
+        # PRICED spend stayed under cap. `unlimited` still bypasses everything: the operator
+        # chose to run with no ceiling to defend, so an unseen call threatens no budget.
+        return self.unlimited or (self.blind == 0 and self.spent < self.cap)
 
     def why(self) -> str:
         """One line a human can act on. NEVER a bare boolean: a refusal that cannot explain
@@ -89,12 +94,17 @@ class Ceiling:
             out = f"NO CEILING (cap < 0 — the operator's explicit choice). ${self.spent:.2f} spent"
         elif self.cap == 0:
             out = "STOPPED — the ceiling is 0. That is a kill switch, and it is named as one"
+        elif self.spent >= self.cap:
+            out = (f"CEILING REACHED — ${self.spent:.2f} of ${self.cap:.2f} in {WINDOW_HOURS}h. "
+                   f"Osiris stops spending until the window rolls forward")
         elif self.may_spend:
             out = (f"${self.spent:.2f} of ${self.cap:.2f} spent in {WINDOW_HOURS}h — "
                    f"${self.remaining:.2f} left")
         else:
-            out = (f"CEILING REACHED — ${self.spent:.2f} of ${self.cap:.2f} in {WINDOW_HOURS}h. "
-                   f"Osiris stops spending until the window rolls forward")
+            # under the DOLLAR cap, but refused anyway — blindness alone is the reason, named
+            # here so this never reads as the (untrue) "CEILING REACHED" case above.
+            out = (f"${self.spent:.2f} of ${self.cap:.2f} spent in {WINDOW_HOURS}h — REFUSED: "
+                   f"blind calls make the true spend unknown, not the dollar cap")
         if self.blind:
             # NOT folded into `spent`. An unpriced call is not a cheap call, it is an unseen one,
             # and silently scoring it $0 is precisely how the ghost farm ran for a week.
