@@ -681,6 +681,23 @@ async def search(
 
 
 @mcp.tool()
+async def practices(
+    surface: str | None = None, limit: int = 50, ctx: Context | None = None
+) -> list[dict[str, Any]]:
+    """THE THAW's technique log (ruling 1e6d7367) — ON-DEMAND only, never in orient's
+    ambient payload (per the ruling's own scoping: surfacing happens on a write-collision
+    or here, nowhere else). `surface` narrows to one domain (BlindSpot's own vocabulary,
+    e.g. 'deploy', 'succession'); omitted, every active Practice, most-confirmed first.
+    `confirmed` is the live `witnesses` link count, never a stored number. A refuted
+    Practice still lists, carrying `refuted_by` — flagged, never hidden."""
+    pool = await _pool_get()
+    spec = {"op": "function", "name": "practices", "args": {"surface": surface, "limit": limit}}
+    out = await comp.run_spec(pool, spec, None, name="practices")
+    items: list[dict[str, Any]] = out["items"]
+    return items
+
+
+@mcp.tool()
 async def lap(ref: str, limit: int = 200, ctx: Context | None = None) -> dict[str, Any]:
     """ONE object's full provenance timeline — how the graph came to believe what it
     believes about it. Every assertion (with supersession fate), every link (both
@@ -3037,7 +3054,10 @@ async def record_decision(
     repo: str | None = None, grounds: list[str] | None = None,
     protocol: str | None = None, supersedes: str | None = None,
     resolves: str | list[str] | None = None,
-    obsoletes: list[str] | None = None, subagent_id: str | None = None,
+    obsoletes: list[str] | None = None,
+    confirms: list[str] | None = None, refutes: str | None = None,
+    implements: str | None = None, ack_prior_art: bool = False,
+    subagent_id: str | None = None,
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -3078,7 +3098,27 @@ async def record_decision(
     Superstition, searchable forever, and orient announces recent kills FLEET-WIDE so any
     mind whose memory carries the practice strikes it. USE IT whenever your fix makes a
     known workaround unnecessary — a fix that kills a practice silently leaves every heir
-    paying a bug tax that no longer exists."""
+    paying a bug tax that no longer exists.
+    `confirms` = the Practice(s) this decision RE-DERIVES (THE THAW, ruling 1e6d7367): a
+    `witnesses` link is minted to each — NEVER automatic on a mere topical match, the same
+    discipline grounds/obsoletes/supersedes already follow. Resolves like `resolves`'s
+    list form: each entry independent, a miss reported not fatal. `confirmed` (the
+    composition's count) is this link count, read at query time — nothing else increments it.
+    `refutes` = a Practice this decision DISPROVES (UUID, 8-char short id, or a statement
+    substring): converts it to a dead Superstition, same kill-verb `obsoletes` uses,
+    reusing the Practice's own statement. The Practice itself stays ACTIVE carrying
+    `refuted_by` — never retired, because a half-remembered refuted lesson is exactly what
+    must stay findable. Same strictness as `supersedes`: a target that matches nothing
+    errors and NOTHING is recorded.
+    `implements` = a standing Decision (a ruling) this one is a SPECIFIC EXECUTION of —
+    the parent stays alive, unlike `supersedes` (thread 169398d6's third path: the
+    commonest true relation to a matched standing law is neither supersede nor cite, and
+    `grounds` can't express it since it takes References, not Decisions). Same strictness
+    as `supersedes`.
+    `ack_prior_art` = when this call's own `prior_art_flag` fires and none of supersedes/
+    implements/confirms/grounds already answers it, pass True to record the dismissal
+    ('related standing law, reviewed, no action needed') as a graph event instead of a
+    shrug that leaves no trace."""
     pool = await _pool_get()
     gids: list[uuid.UUID] = []
     grounded: list[dict[str, str]] = []
@@ -3096,6 +3136,18 @@ async def record_decision(
         if old is None:
             return {"error": f"supersedes matched no decision: {supersedes!r} — quote its "
                              "UUID, 8-char short id, or a summary substring"}
+    impl_id: uuid.UUID | None = None
+    if implements:  # same resolve-before-record strictness as supersedes
+        impl_id = await capture._find_decision(pool, implements)
+        if impl_id is None:
+            return {"error": f"implements matched no decision: {implements!r} — quote its "
+                             "UUID, 8-char short id, or a summary substring"}
+    refute_id: uuid.UUID | None = None
+    if refutes:  # same strictness — a refutation that can't name its target has refuted nothing
+        refute_id = await capture._find_practice(pool, refutes)
+        if refute_id is None:
+            return {"error": f"refutes matched no practice: {refutes!r} — quote its UUID, "
+                             "8-char short id, or a statement substring"}
     # resolve BEFORE recording, same discipline as supersedes — a single string keeps the
     # original all-or-nothing strictness; a list resolves each entry independently and
     # reports (never raises) on a miss, so one typo can't veto the rest of the set.
@@ -3119,6 +3171,19 @@ async def record_decision(
             return {"error": f"resolves matched no thread: {resolves!r} — quote its UUID, "
                              "8-char short id, or a summary substring"}
         answered.append(single)
+    # confirms resolves the same best-effort way as resolves's list form — one bad ref
+    # must not veto the practices that DID match
+    confirm_ids: list[uuid.UUID] = []
+    confirm_receipt: list[dict[str, str]] = []
+    for ref in confirms or []:
+        pid = await capture._find_practice(pool, ref)
+        if pid is None:
+            confirm_receipt.append({"ref": ref, "matched": "false",
+                                    "note": "matched no practice — quote its UUID, "
+                                            "8-char short id, or a statement substring"})
+            continue
+        confirm_ids.append(pid)
+        confirm_receipt.append({"ref": ref, "matched": "true", "id": str(pid)[:8]})
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     d = await capture.record_decision(
         Actions(pool), summary, kind=kind, rationale=rationale, repo=repo,
@@ -3128,12 +3193,13 @@ async def record_decision(
                  (str(answered[0]) if answered else None),
     )
     out: dict[str, Any] = {"id": str(d), "kind": kind, "summary": summary}
-    # PRIOR-ART SURFACING (thread 44635c42, task #67): before a ruling stands, name what
-    # standing law already covers this ground — search is the same fused engine `search()`
-    # exposes, topical (lexical + semantic) rather than lexical-only, since a contradicting
-    # ruling rarely reuses its predecessor's exact wording (the canonical failure: 636a8648
-    # minted in direct contradiction of naming-v3/a882b334 with zero friction). Fail-open:
-    # a search hiccup must never block recording the decision itself.
+    # PRIOR-ART SURFACING (thread 44635c42, task #67; UNIFIED across {Decisions, Practices,
+    # Superstitions} by THE THAW, ruling 1e6d7367): before a ruling stands, name what
+    # standing law/technique already covers this ground — search is the same fused engine
+    # `search()` exposes, topical (lexical + semantic) rather than lexical-only, since a
+    # contradicting ruling rarely reuses its predecessor's exact wording (the canonical
+    # failure: 636a8648 minted in direct contradiction of naming-v3/a882b334 with zero
+    # friction). Fail-open: a search hiccup must never block recording the decision itself.
     try:
         search_out = await comp.run_spec(
             pool, {"op": "function", "name": "search",
@@ -3141,15 +3207,66 @@ async def record_decision(
                             "caller": actor}},
             None, name="search", caller=actor)
         prior = capture.prior_art_from_hits(
-            search_out["items"]["hits"], exclude={d} | ({old} if old else set()))
+            search_out["items"]["hits"], exclude={d} | ({old} if old else set()),
+            kinds=capture.UNIFIED_PRIOR_ART_KINDS)
     except Exception:  # noqa: BLE001 — never block a ruling on a search-side failure
         prior = []
+    strong = capture.prior_art_is_strong(prior)
     if prior:
         out["prior_art"] = prior
-        if capture.prior_art_is_strong(prior):
-            out["prior_art_flag"] = (
-                f"a standing ruling ({prior[0]['id']}) covers this ground — supersede it "
-                "explicitly (supersedes=...) or cite it (grounds=...)")
+        if strong:
+            top = prior[0]
+            top_kind = top.get("type") or "Decision"
+            if top_kind == "Practice":
+                out["prior_art_flag"] = (
+                    f"this looks like a re-derivation of standing Practice {top['id']} — "
+                    f"confirm it as evidence (confirms=['{top['id']}']) if it's the same "
+                    "lesson, or acknowledge it (ack_prior_art=True) if coincidental")
+            elif top_kind == "Superstition":
+                out["prior_art_flag"] = (
+                    f"a dead Superstition ({top['id']}) already covers this ground — check "
+                    "you're not reviving a workaround its own fix already killed "
+                    "(acknowledge with ack_prior_art=True if this is intentional/unrelated)")
+            else:
+                out["prior_art_flag"] = (
+                    f"a standing ruling ({top['id']}) covers this ground — supersede it "
+                    "explicitly (supersedes=...), cite it (grounds=...), name this as what "
+                    "it executes (implements=...), or acknowledge it (ack_prior_art=True)")
+        # INSTRUMENT IT (THE THAW piece 6): every strong hit is a MEASURED re-derivation
+        # event, logged regardless of whether the caller acts on it — the population,
+        # aggregated over time, IS the fleet's re-derivation ratchet metric.
+        try:
+            await pool.execute(
+                "UPDATE search_log SET prior_art_kind=$1, prior_art_strong=$2 "
+                "WHERE id = (SELECT id FROM search_log ORDER BY id DESC LIMIT 1)",
+                (prior[0].get("type") or "Decision") if prior else None, strong)
+        except Exception:  # noqa: BLE001 — telemetry must never block the ruling
+            pass
+    if ack_prior_art:
+        if prior and strong:
+            await capture.acknowledge_prior_art(Actions(pool), d, prior[0]["id"], actor)
+            out["prior_art_acknowledged"] = f"noted — {prior[0]['id']} reviewed, no action needed"
+        else:
+            out["prior_art_acknowledged"] = "no strong prior-art hit was found to acknowledge"
+    if impl_id is not None:
+        await capture.mint_implements(Actions(pool), d, impl_id, actor)
+        out["implements"] = f"{str(impl_id)[:8]} — this decision is a specific execution of it"
+    if confirm_ids:
+        witnessed = []
+        for pid in confirm_ids:
+            minted = await capture._witness_link(Actions(pool), pid, d, actor, datetime.now(UTC))
+            n = await capture.practice_confirmed_count(pool, pid)
+            witnessed.append({"id": str(pid)[:8], "new_witness": minted, "confirmed": n})
+        out["confirmed_practices"] = witnessed
+    if confirm_receipt:
+        out["confirms_resolution"] = confirm_receipt
+    if refute_id is not None:
+        converted = await capture.refute_practice(
+            Actions(pool), str(refute_id), killed_by=str(d), repo=repo, source=actor)
+        if converted:
+            out["refuted_practice"] = (
+                f"{str(converted['practice'])[:8]} converted to Superstition "
+                f"{str(converted['superstition'])[:8]} — the Practice stays active, flagged")
     if obsoletes:
         killed = []
         for statement in obsoletes:
@@ -3186,6 +3303,78 @@ async def record_decision(
         out["unresolved_grounds"] = missing
         out["note"] = ("unresolved grounds were SKIPPED — ingest_reference them first, "
                        "then re-run record_decision (idempotent) to attach the edges")
+    return out
+
+
+@mcp.tool()
+async def record_practice(
+    statement: str, failure_prevented: str | None = None, surface: str | None = None,
+    repo: str | None = None, witnesses: list[str] | None = None,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    session_anchor: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Write back a TRANSFERABLE TECHNIQUE — Superstition's positive twin (THE THAW,
+    operator ruling 1e6d7367: the graph could hold what to STOP believing but nothing held
+    engineering technique that outlives any single repo or date, so two houses re-derived
+    the same install-order lesson independently in the same hour). `statement` is the
+    imperative one-liner (e.g. 'arm before you seal — one ceremony, not two') — quote it as
+    you'd want a future mind to inherit it, not as narration. `failure_prevented` is the
+    concrete symptom that makes it findable MID-FAILURE, not just on reflection.
+    `surface` reuses BlindSpot's domain vocabulary (a rough area: 'deploy', 'succession',
+    'search'). `witnesses` links the Decision(s)/Commit(s)/Thread(s) that are this
+    Practice's evidence (ids or short ids) — one witness is a hunch, four is law; a miss is
+    reported, never fatal. Idempotent on the normalized statement — recording the same
+    lesson again enriches the same node rather than minting a twin.
+    Timeless: never moment-stamped, unlike a Decision. If this Practice is later disproven,
+    kill it via record_decision(refutes=...), not here — a Practice never refutes itself.
+    Runs the SAME unified prior-art check record_decision does (over Decisions/Practices/
+    Superstitions), so recording a near-duplicate technique gets flagged before it mints a
+    twin the fused engine's wording just doesn't happen to match."""
+    pool = await _pool_get()
+    wids: list[uuid.UUID] = []
+    receipt: list[dict[str, str]] = []
+    for ref in witnesses or []:
+        rid = await _resolve(pool, ref)
+        if rid is not None:
+            wids.append(rid)
+            receipt.append({"ref": ref, "matched": "true", "id": str(rid)[:8]})
+        else:
+            receipt.append({"ref": ref, "matched": "false",
+                            "note": "matched no object — quote its UUID or 8-char short id"})
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
+    p = await capture.record_practice(
+        Actions(pool), statement, failure_prevented=failure_prevented, surface=surface,
+        repo=repo, witnesses=wids, source=actor)
+    out: dict[str, Any] = {"id": str(p), "statement": statement,
+                           "confirmed": await capture.practice_confirmed_count(pool, p)}
+    if receipt:
+        out["witnesses_resolution"] = receipt
+    try:
+        search_out = await comp.run_spec(
+            pool, {"op": "function", "name": "search",
+                   "args": {"q": f"{statement} {failure_prevented or ''}"[:300], "limit": 15,
+                            "caller": actor}},
+            None, name="search", caller=actor)
+        prior = capture.prior_art_from_hits(
+            search_out["items"]["hits"], exclude={p}, kinds=capture.UNIFIED_PRIOR_ART_KINDS)
+    except Exception:  # noqa: BLE001 — never block a record on a search-side failure
+        prior = []
+    strong = capture.prior_art_is_strong(prior)
+    if prior:
+        out["prior_art"] = prior
+        if strong:
+            top = prior[0]
+            out["prior_art_flag"] = (
+                f"{top.get('type') or 'Decision'} {top['id']} already covers similar "
+                "ground — check this isn't the same lesson under different words before "
+                "it stands as a separate Practice")
+        try:
+            await pool.execute(
+                "UPDATE search_log SET prior_art_kind=$1, prior_art_strong=$2 "
+                "WHERE id = (SELECT id FROM search_log ORDER BY id DESC LIMIT 1)",
+                (prior[0].get("type") or "Decision") if prior else None, strong)
+        except Exception:  # noqa: BLE001 — telemetry must never block the record
+            pass
     return out
 
 

@@ -156,6 +156,23 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                "record_decision(obsoletes=[…]) mints these, and orient announces recent kills "
                "fleet-wide so every mind whose memory carries the practice strikes it.",
                ("superstition:",)),
+    ObjectType("Practice", "Software", "#3fb950", "diamond",
+               "A TRANSFERABLE TECHNIQUE — Superstition's positive twin, closing the "
+               "ontology's learn/unlearn asymmetry (Alfred IX's filing, operator ruling "
+               "1e6d7367: 'install.sh doesn't ship the vendored set' was found "
+               "independently by two houses in the same hour because nothing held the "
+               "lesson — only markdown files nobody else's search reaches). SHAPE: "
+               "statement (imperative, one line) · failure_prevented (the concrete "
+               "symptom, findable mid-failure) · surface (BlindSpot's domain vocabulary). "
+               "Timeless, never moment-stamped — unlike a Decision ('we chose X here, "
+               "then'), a Practice is true regardless of repo or date. `confirmed` is "
+               "DERIVED (count of `witnesses` links), never a stored counter — an "
+               "incremented-on-write scalar would need read-then-write-under-lock, the "
+               "same race class thread dc9d1eed found live in bridged_seat. REFUTED "
+               "converts to a Superstition (record_decision(refutes=…)): the Practice "
+               "stays ACTIVE carrying `refuted_by`, never retired — a half-remembered "
+               "refuted lesson must stay findable, surfaced WITH the flag.",
+               ("practice:",)),
     ObjectType("Reflection", "Software", "#b083f0", "ellipse",
                "A memory lived for its own sake — the operator's ruling bfb3ae26 ('they "
                "need a home and I want them remembered; they are not exactly work "
@@ -280,8 +297,9 @@ _LINK_TYPES: tuple[LinkType, ...] = (
     LinkType("authored_by", "Commit authored by a developer.", ("Commit",), ("Person",)),
     LinkType("in_repo", "Belongs to a repository — commits and files from the git ingest, "
              "and captured session items (decisions, threads, tensions, reflections, blind "
-             "spots) filed to their project by link_repo.",
-             ("Commit", "File", "Decision", "Thread", "Tension", "Reflection", "BlindSpot"),
+             "spots, superstitions, practices) filed to their project by link_repo.",
+             ("Commit", "File", "Decision", "Thread", "Tension", "Reflection", "BlindSpot",
+              "Superstition", "Practice"),
              ("SoftwareProject",)),
     LinkType("follows", "Commit follows its parent (the history DAG).",
              ("Commit",), ("Commit",)),
@@ -309,6 +327,20 @@ _LINK_TYPES: tuple[LinkType, ...] = (
                         "record_decision(resolves=…), which closes the thread in the same act, "
                         "so a ruling that names its question never leaves the question lit.",
              ("Decision",), ("Thread",)),
+    LinkType("witnesses", "This Decision/Commit/Thread is EVIDENCE for the Practice — one "
+             "witness is a hunch, four is law (Alfred IX's own words, msg 1418). Minted "
+             "explicitly by record_decision(confirms=…)/record_practice(witnesses=…), "
+             "never auto-linked on a mere search-topical match (the same discipline "
+             "grounds/obsoletes/supersedes already follow) — `confirmed` is this link's "
+             "count, read at query time.",
+             ("Practice",), ("Decision", "Commit", "Thread")),
+    LinkType("implements", "This Decision is a SPECIFIC EXECUTION of that standing ruling "
+             "— the parent stays alive, unlike supersedes (thread 169398d6, "
+             "prior_art_flag's third path: the commonest true relation to a matched "
+             "standing law is neither supersede nor cite, and `grounds` can't express it "
+             "since it takes References, not Decisions). Same general-to-specific edge "
+             "family as `witnesses`.",
+             ("Decision",), ("Decision",)),
     LinkType("managed_by", "THE ORG CHART (task #50, ruling cabc28f5): a worker Seat's "
              "manager of record — the seat that minted it, or the seat it was adopted "
              "under. The org chart's FIRST real link type: Seat-to-Seat, distinct from "

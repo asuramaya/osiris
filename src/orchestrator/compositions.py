@@ -150,6 +150,12 @@ _GRADE_W = ("CASE a.evidence_class WHEN 'self_declared' THEN 1.0 "
             "WHEN 'direct_observation' THEN 0.8 WHEN 'derived' THEN 0.5 "
             "ELSE 0.35 END")
 
+# THE INDEXED FIELDS (THE THAW, ruling 1e6d7367, migration 0037): must match
+# ix_assertions_fts's partial predicate exactly, or the planner falls off the index. Long
+# excluded 'statement' — Superstition's own field has never been searchable since it
+# shipped (a latent gap this build heals alongside making Practice findable).
+_FTS_FIELDS = "'name','summary','rationale','statement'"
+
 
 def _fuse_ranked(
     lex: list[dict[str, Any]], sem: list[dict[str, Any]], limit: int, *, k: int = 60,
@@ -343,7 +349,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         "     AS rank "
         "  FROM current_assertions a JOIN objects o ON o.id = a.object_id "
         "   AND o.status = 'active', tq "
-        "  WHERE a.name IN ('name','summary','rationale') "
+        "  WHERE a.name IN (" + _FTS_FIELDS + ") "
         "    AND to_tsvector('english', a.value #>> '{}') @@ tq.v "
         "  ORDER BY o.id, rank DESC), "
         "top AS (SELECT * FROM cand ORDER BY rank DESC LIMIT $2) "
@@ -418,6 +424,20 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         for h in hits:
             if h["id"] in buried:
                 h["superseded"] = f"by decision {buried[h['id']][:8]} — read the successor"
+        # a refuted Practice must stay findable (THE THAW, ruling 1e6d7367: 'a half-
+        # remembered refuted lesson is exactly what must remain findable'), unlike a
+        # superseded Decision it is NEVER hidden or buried — only flagged, same batched
+        # shape as the supersedes lookup above
+        refuted = {str(r["object_id"]): r["v"] for r in await pool.fetch(
+            "SELECT DISTINCT ON (object_id) object_id, value #>> '{}' AS v "
+            "FROM current_assertions WHERE name='refuted_by' "
+            "AND object_id = ANY($1::uuid[]) "
+            "ORDER BY object_id, confidence DESC, observed_at DESC",
+            [h["id"] for h in hits]) if (r["v"] or "").strip()}
+        for h in hits:
+            if h["id"] in refuted:
+                h["refuted"] = (f"by decision {refuted[h['id']][:8]} — a dead lesson, "
+                                "not standing law")
     await pool.execute(
         "INSERT INTO search_log (query, caller, hits, top_rank, relaxed, fuzzy, semantic) "
         "VALUES ($1,$2,$3,$4,$5,$6,$7)",
@@ -448,7 +468,7 @@ _RELAX_SQL = (
     "   to_tsvector('english', a.value #>> '{}') AS tv, " + _GRADE_W + " AS gw "
     "  FROM current_assertions a JOIN objects o ON o.id = a.object_id "
     "   AND o.status = 'active' "
-    "  WHERE a.name IN ('name','summary','rationale')), "
+    "  WHERE a.name IN (" + _FTS_FIELDS + ")), "
     "n AS (SELECT count(*)::float + 1 AS total FROM corpus), "
     "df AS (SELECT w.w, count(*) + 1 AS d FROM words w "
     "       JOIN corpus c ON c.tv @@ plainto_tsquery('english', w.w) GROUP BY w.w), "
@@ -479,7 +499,7 @@ _TRGM_SQL = (
     "     AS rank "
     "  FROM current_assertions a JOIN objects o ON o.id = a.object_id "
     "   AND o.status = 'active' "
-    "  WHERE a.name IN ('name','summary','rationale') "
+    "  WHERE a.name IN (" + _FTS_FIELDS + ") "
     "    AND (SELECT min(word_similarity(words.w, a.value #>> '{}')) FROM words) > 0.4 "
     "  ORDER BY o.id, rank DESC), "
     "top AS (SELECT * FROM cand ORDER BY rank DESC LIMIT $2) "
@@ -1881,6 +1901,49 @@ async def _fn_desk_decisions(
              "_action": {"action": "settle", "args": {"ids": [r["id"]]}}} for r in rows]
 
 
+async def _fn_practices(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """THE THAW's practices composition (ruling 1e6d7367) — surface-scoped, ON-DEMAND
+    only (the ruling's own words: 'orient stays lean — surfacing on write-collision + on-
+    demand composition only'). Never wired into orient's ambient payload. `surface` narrows
+    to one domain vocabulary (BlindSpot's own scoping, e.g. 'deploy', 'succession'); omitted,
+    every active Practice. `confirmed` is the live `witnesses` link count — DERIVED, never a
+    stored scalar (the same race class thread dc9d1eed found live in bridged_seat/
+    record_bridge_anchor would apply to an incremented counter; a link COUNT cannot desync
+    from the links it counts). A refuted Practice still lists — flagged, never hidden."""
+    surface = str(args.get("surface") or "").strip() or None
+    limit = max(1, min(int(args.get("limit") or 50), 200))
+    rows = await pool.fetch(
+        "WITH p AS ("
+        "  SELECT o.id, "
+        "   (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "    AND a.name='statement' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "     AS statement, "
+        "   (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "    AND a.name='failure_prevented' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "    LIMIT 1) AS failure_prevented, "
+        "   (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "    AND a.name='surface' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "     AS surface, "
+        "   (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "    AND a.name='refuted_by' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "     AS refuted_by, "
+        "   (SELECT count(*) FROM links l WHERE l.from_id=o.id AND l.type='witnesses') "
+        "     AS confirmed "
+        "  FROM objects o WHERE o.type='Practice' AND o.status='active') "
+        "SELECT * FROM p WHERE $1::text IS NULL OR surface = $1 "
+        "ORDER BY confirmed DESC, statement ASC LIMIT $2",
+        surface, limit)
+    return [
+        {"id": str(r["id"]), "statement": r["statement"],
+         "failure_prevented": r["failure_prevented"], "surface": r["surface"],
+         "confirmed": r["confirmed"],
+         **({"refuted_by": r["refuted_by"]} if r["refuted_by"] else {})}
+        for r in rows
+    ]
+
+
 _FUNCTIONS: dict[str, Function] = {
     "coinvest": _fn_coinvest,
     "subject_report": _fn_subject_report,
@@ -1898,6 +1961,7 @@ _FUNCTIONS: dict[str, Function] = {
     "desk_decisions": _fn_desk_decisions,
     "echoes": _fn_echoes,
     "wall": _fn_wall,
+    "practices": _fn_practices,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
@@ -1908,7 +1972,7 @@ _FUNCTIONS: dict[str, Function] = {
 # opinion → primitives the user owns.
 # `lap` anchors on args.ref OR the subject; `lint` audits the whole graph, no anchor at all.
 _SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "pulse", "project",
-                 "lap", "lint", "echoes", "wall", "desk_decisions"}
+                 "lap", "lint", "echoes", "wall", "desk_decisions", "practices"}
 
 
 def list_functions() -> list[str]:

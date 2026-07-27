@@ -264,21 +264,36 @@ async def _thread_summary(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | Non
 _PRIOR_ART_STRONG_VIA = ("id", "both")
 
 
+_PRIOR_ART_KINDS = frozenset({"Decision"})
+# THE THAW (ruling 1e6d7367): the unified check widens past Decision-only, Imhotep's own
+# deliberately-left-open plug (decision 5640f234) — every write-path caller that wants the
+# fuller corpus passes this instead of the (still-default, backward-compatible) bare set.
+UNIFIED_PRIOR_ART_KINDS = frozenset({"Decision", "Practice", "Superstition"})
+
+
 def prior_art_from_hits(
     hits: list[dict[str, Any]], *, exclude: set[uuid.UUID] | None = None, limit: int = 5,
+    kinds: frozenset[str] = _PRIOR_ART_KINDS,
 ) -> list[dict[str, Any]]:
-    """Shape a `search()` result into a record_decision receipt's `prior_art` — standing
-    (unsuperseded) Decision hits only, everything else is a different question this verb
-    doesn't answer. Excludes the decision just recorded and any explicit `supersedes`
-    target — those are already handled by that verb, naming them again as "prior art"
-    would just be noise. LOUD, NEVER A REFUSAL (the SPOF principle): this only shapes data
-    for the receipt to display — the caller decides whether a hit is strong enough to flag."""
+    """Shape a `search()` result into a record_decision/record_practice receipt's
+    `prior_art` — standing, non-buried hits of the given `kinds` only (default Decision-
+    only, unchanged for existing callers; pass UNIFIED_PRIOR_ART_KINDS for the THE THAW's
+    unified check over {Decisions, Practices, Superstitions}). Excludes the item just
+    recorded and any explicit `supersedes`/`refutes` target — those are already handled by
+    that verb, naming them again as "prior art" would just be noise. A `superseded`
+    Decision or a `refuted` Practice is dead testimony for THIS purpose (it no longer
+    stands for anything a new record could be redundant with), so both are excluded here
+    even though search() itself still surfaces them, flagged, for direct lookup. LOUD,
+    NEVER A REFUSAL (the SPOF principle): this only shapes data for the receipt to
+    display — the caller decides whether a hit is strong enough to flag."""
     exclude_s = {str(e) for e in (exclude or set())}
     out: list[dict[str, Any]] = []
     for h in hits:
-        if h.get("type") != "Decision" or h.get("id") in exclude_s or h.get("superseded"):
+        if (h.get("type") not in kinds or h.get("id") in exclude_s
+                or h.get("superseded") or h.get("refuted")):
             continue
-        out.append({"id": str(h["id"])[:8], "summary": h.get("snippet") or "",
+        out.append({"id": str(h["id"])[:8], "type": h.get("type"),
+                    "summary": h.get("snippet") or "",
                     "grade": h.get("grade"), "via": h.get("via")})
         if len(out) >= limit:
             break
@@ -783,6 +798,146 @@ async def kill_superstition(
         await link_repo(actions, s, repo, observed, source=source, evidence_class=_EC,
                         confidence=_CONF)
     return s
+
+
+async def _find_practice(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
+    """A Practice by UUID, by short-id PREFIX, then by `statement` substring (shortest
+    statement wins) — same resolution ladder as `_find_decision`/`_find_thread`."""
+    try:
+        return uuid.UUID(ref)
+    except (ValueError, AttributeError):
+        pass
+    short = (ref or "").strip().lower()
+    if re.fullmatch(r"[0-9a-f]{8}[0-9a-f-]*", short):
+        pid = await pool.fetchval(
+            "SELECT id FROM objects WHERE type='Practice' AND status='active' "
+            "AND id::text LIKE $1 || '%' LIMIT 1", short)
+        if pid is not None:
+            return uuid.UUID(str(pid))
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT o.id FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+        "WHERE o.type='Practice' AND o.status='active' AND a.name='statement' "
+        "AND a.value #>> '{}' ILIKE '%'||$1||'%' ORDER BY length(a.value #>> '{}') ASC LIMIT 1",
+        ref,
+    )
+
+
+async def _witness_link(
+    actions: Actions, practice_id: uuid.UUID, evidence_id: uuid.UUID,
+    source: str, observed: datetime,
+) -> bool:
+    """Mint `witnesses` (Practice -> Decision/Commit/Thread) idempotently — one witness is
+    a hunch, four is law (Alfred IX's own words). NEVER minted from a mere search-topical
+    match: only an explicit caller (record_practice's `witnesses=`, record_decision's
+    `confirms=`) creates one, the same discipline grounds/obsoletes/supersedes already
+    follow. Returns whether a NEW link was minted (false = already witnessed, a no-op)."""
+    exists = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='witnesses'",
+        practice_id, evidence_id)
+    if exists:
+        return False
+    await actions.create_link(practice_id, evidence_id, "witnesses", source, observed, _CONF,
+                              evidence_class=_EC)
+    return True
+
+
+async def practice_confirmed_count(pool: asyncpg.Pool, practice_id: uuid.UUID) -> int:
+    """`confirmed` is DERIVED, never a stored/incremented scalar — the count of `witnesses`
+    links at read time. An incremented-on-write counter would need read-then-write-under-
+    lock, the exact race class thread dc9d1eed found live in bridged_seat/
+    record_bridge_anchor; a link COUNT can never desync from the links it counts."""
+    n = await pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='witnesses'", practice_id)
+    return int(n or 0)
+
+
+async def record_practice(
+    actions: Actions, statement: str, *, failure_prevented: str | None = None,
+    surface: str | None = None, repo: str | None = None,
+    witnesses: list[uuid.UUID] | None = None, source: str = _SOURCE,
+) -> uuid.UUID:
+    """Capture a TRANSFERABLE TECHNIQUE — Superstition's positive twin (operator ruling
+    1e6d7367, from Alfred IX's filing msg 1418: the graph could hold what to STOP believing
+    but nothing held engineering technique that outlives any single repo or date, so two
+    houses re-derived the same lesson independently in the same hour). `statement` is the
+    imperative one-liner (e.g. 'arm before you seal — one ceremony, not two'); `failure_
+    prevented` is the concrete symptom that makes it findable MID-FAILURE, not just on
+    reflection; `surface` reuses BlindSpot's domain vocabulary. Timeless — never moment-
+    stamped, true regardless of repo or date, unlike a Decision. `witnesses` links the
+    Decisions/Commits/Threads that are this Practice's evidence AT BIRTH; `confirms=` on a
+    LATER record_decision call is how a re-encounter adds one more (see practice_confirmed_
+    count — `confirmed` is that link count, never a separate stored number). Idempotent on
+    the normalized statement."""
+    observed = datetime.now(UTC)
+    key = " ".join(statement.split()).lower()
+    p = await actions.create_or_find_object("Practice", _canon("practice", key), source)
+    await actions.assert_property(p, "statement", statement.strip(), source, observed, _CONF,
+                                  evidence_class=_EC)
+    if failure_prevented:
+        await actions.assert_property(p, "failure_prevented", failure_prevented, source,
+                                      observed, _CONF, evidence_class=_EC)
+    if surface:
+        await actions.assert_property(p, "surface", surface, source, observed, _CONF,
+                                      evidence_class=_EC)
+    if repo:
+        await link_repo(actions, p, repo, observed, source=source, evidence_class=_EC,
+                        confidence=_CONF)
+    for w in witnesses or []:
+        await _witness_link(actions, p, w, source, observed)
+    return p
+
+
+async def mint_implements(
+    actions: Actions, from_decision: uuid.UUID, to_decision: uuid.UUID, source: str = _SOURCE,
+) -> bool:
+    """This Decision is a SPECIFIC EXECUTION of that standing ruling (thread 169398d6,
+    prior_art_flag's third path) — the parent stays alive, unlike supersedes. Idempotent:
+    returns whether a NEW link was minted."""
+    exists = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='implements'",
+        from_decision, to_decision)
+    if exists:
+        return False
+    await actions.create_link(from_decision, to_decision, "implements", source,
+                              datetime.now(UTC), _CONF, evidence_class=_EC)
+    return True
+
+
+async def acknowledge_prior_art(
+    actions: Actions, decision_id: uuid.UUID, prior_art_id: str, source: str = _SOURCE,
+) -> None:
+    """'Related standing law, reviewed, no action needed' as a GRAPH EVENT (thread
+    169398d6's small-stage fix), not a shrug swallowed in prose — the third path
+    prior_art_flag's two-verb (supersede-or-cite) prompt was missing."""
+    await actions.assert_property(decision_id, "prior_art_acknowledged", prior_art_id,
+                                  source, datetime.now(UTC), _CONF, evidence_class=_EC)
+
+
+async def refute_practice(
+    actions: Actions, practice_ref: str, *, killed_by: str, repo: str | None = None,
+    source: str = _SOURCE,
+) -> dict[str, uuid.UUID] | None:
+    """THE POLARITY FLIP (ruling 1e6d7367's lifecycle clause): a Practice REFUTED converts
+    to a Superstition — same family, same kill-verb (`kill_superstition`), reusing the
+    Practice's OWN statement so the dead workaround is searchable under the exact words it
+    propagated as. The Practice itself is never retired: it stays ACTIVE carrying
+    `refuted_by`, because a half-remembered refuted lesson is exactly the thing that must
+    stay findable — surfaced WITH the flag, not erased. Returns None (no write) when
+    `practice_ref` matches no Practice — same all-or-nothing strictness as `supersedes`/
+    `resolves`: a refutation that can't name its target has not refuted anything."""
+    pool = actions.pool
+    pid = await _find_practice(pool, practice_ref)
+    if pid is None:
+        return None
+    observed = datetime.now(UTC)
+    statement = await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='statement' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", pid)
+    await actions.assert_property(pid, "refuted_by", killed_by, source, observed, _CONF,
+                                  evidence_class=_EC)
+    sid = await kill_superstition(actions, statement or practice_ref, killed_by=killed_by,
+                                  repo=repo, source=source)
+    return {"practice": pid, "superstition": sid}
 
 
 async def recent_dead_superstitions(

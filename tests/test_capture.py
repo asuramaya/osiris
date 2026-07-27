@@ -7,6 +7,7 @@ graph in the SAME shape the miner produces, so it renders in the real `decision-
 """
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -1026,7 +1027,6 @@ async def test_orient_briefing_ranks_obligations_first_and_caps(actions: Actions
     """End to end through the real composition: orient's open_threads floats a DUTY above
     ordinary threads even when it is the LEAST recent, caps the wall at the display limit, and
     notes the remainder — a bounded, ranked query, not a 500-line scroll. Ranking only."""
-    import uuid
 
     from src.mcp_server import _ORIENT_OPEN_THREADS, _project_briefing
 
@@ -1756,3 +1756,280 @@ async def test_open_thread_refuses_an_arc_outside_the_locked_taxonomy(
 
     with pytest.raises(ValueError, match="arc must be one of"):
         await open_thread(actions, "bad arc", arc="Not-A-Real-Arc", source="agent:me")
+
+
+# --- THE THAW (ruling 1e6d7367): Practice, Superstition's positive twin ------------------
+
+async def test_record_practice_is_idempotent_and_confirmed_starts_at_zero(
+    actions: Actions,
+) -> None:
+    """Mirrors kill_superstition's shape exactly: idempotent on the normalized statement,
+    a first-class Practice object. `confirmed` is DERIVED (a witnesses link count), never a
+    stored scalar — zero witnesses at birth reads as zero, not absence."""
+    from src.orchestrator.capture import practice_confirmed_count, record_practice
+
+    p = await actions.create_or_find_object("Thread", "thread:evidence-a", "session")
+    p1 = await record_practice(
+        actions, "arm before you seal — one ceremony, not two",
+        failure_prevented="a release ships pre-arming and only self-verifies next release",
+        surface="deploy", witnesses=[p])
+    row = await actions.pool.fetchrow(
+        "SELECT type, canonical, status FROM objects WHERE id=$1", p1)
+    assert row["type"] == "Practice"
+    assert row["canonical"].startswith("practice:")
+    assert row["status"] == "active"
+    assert await practice_confirmed_count(actions.pool, p1) == 1  # the birth witness counts
+    # idempotent — re-recording the SAME statement (any casing/whitespace) finds, not mints
+    p2 = await record_practice(actions, "  Arm before you seal —  one ceremony, not two  ")
+    assert p2 == p1
+
+
+async def test_refute_practice_converts_to_superstition_but_stays_active(
+    actions: Actions,
+) -> None:
+    """THE POLARITY FLIP: a refuted Practice is NEVER retired — a half-remembered refuted
+    lesson must stay findable, flagged, not erased. The Superstition it mints reuses the
+    Practice's own statement, same kill-verb obsoletes already uses."""
+    from src.orchestrator.capture import record_practice, refute_practice
+
+    p = await record_practice(actions, "always retry three times on a timeout")
+    converted = await refute_practice(actions, str(p), killed_by="decision:fix123")
+    assert converted is not None
+    assert converted["practice"] == p
+    prow = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE id=$1", p)
+    assert prow["status"] == "active"  # never retired
+    refuted_by = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='refuted_by'", p)
+    assert refuted_by == "decision:fix123"
+    srow = await actions.pool.fetchrow(
+        "SELECT canonical, status FROM objects WHERE id=$1", converted["superstition"])
+    assert srow["status"] == "active"
+    statement = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='statement'", converted["superstition"])
+    assert statement == "always retry three times on a timeout"
+    # unmatched target: same all-or-nothing strictness as supersedes — nothing written
+    assert await refute_practice(actions, "no-such-practice-ever", killed_by="x") is None
+
+
+async def test_prior_art_from_hits_widens_to_unified_kinds_and_excludes_dead_testimony() -> None:
+    """kinds= is the plug Imhotep's own decision 5640f234 flagged as deliberately left
+    open — default stays Decision-only (existing callers unchanged); UNIFIED_PRIOR_ART_
+    KINDS additionally surfaces Practice/Superstition hits, but a refuted Practice or
+    superseded Decision is dead testimony for THIS purpose (excluded), even though
+    search() itself still lists both, flagged, for direct lookup."""
+    from src.orchestrator.capture import UNIFIED_PRIOR_ART_KINDS, prior_art_from_hits
+
+    hits = [
+        {"id": "aaaaaaaa-0000-0000-0000-000000000000", "type": "Decision",
+         "snippet": "a standing ruling", "grade": "self_declared", "via": "both"},
+        {"id": "bbbbbbbb-0000-0000-0000-000000000000", "type": "Practice",
+         "snippet": "arm before you seal", "grade": "self_declared", "via": "id"},
+        {"id": "cccccccc-0000-0000-0000-000000000000", "type": "Practice",
+         "snippet": "a refuted one", "grade": "self_declared", "via": "id",
+         "refuted": "by decision aaaa1111 — a dead lesson, not standing law"},
+        {"id": "dddddddd-0000-0000-0000-000000000000", "type": "Superstition",
+         "snippet": "a dead workaround", "grade": "self_declared", "via": "both"},
+    ]
+    default = prior_art_from_hits(hits)  # Decision-only default, unchanged
+    assert [h["id"] for h in default] == ["aaaaaaaa"]
+    unified = prior_art_from_hits(hits, kinds=UNIFIED_PRIOR_ART_KINDS)
+    assert [h["id"] for h in unified] == ["aaaaaaaa", "bbbbbbbb", "dddddddd"]  # refuted excluded
+    assert unified[1]["type"] == "Practice"
+
+
+async def test_record_decision_confirms_witnesses_and_refutes_converts(
+    actions: Actions,
+) -> None:
+    """End-to-end at the MCP tool layer: `confirms=` mints a witnesses link and reports the
+    live confirmed count; `refutes=` performs the polarity flip in one call; an unresolved
+    ref in either is reported (confirms, best-effort) or errors with nothing recorded
+    (refutes, supersedes-strictness)."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import record_decision as rd_tool
+    from src.mcp_server import record_practice as rp_tool
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.capture import practice_confirmed_count
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:thaw1", session="thaw1", project="thaw-land", model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        rec = await rp_tool("swap srv._pool before any mcp_server-tool test", ctx=ctx)
+        pid = rec["id"]
+        confirm_out = await rd_tool(
+            "paid for this again in THE THAW's own tests", kind="decision",
+            confirms=[pid], ctx=ctx)
+        assert confirm_out["confirmed_practices"][0]["id"] == pid[:8]
+        assert confirm_out["confirmed_practices"][0]["new_witness"] is True
+        assert confirm_out["confirmed_practices"][0]["confirmed"] >= 1
+        assert await practice_confirmed_count(actions.pool, uuid.UUID(pid)) >= 1
+
+        bad_confirm = await rd_tool(
+            "a decision confirming nothing real", kind="decision",
+            confirms=["no-such-practice-at-all"], ctx=ctx)
+        assert bad_confirm["confirms_resolution"][0]["matched"] == "false"
+        assert "confirmed_practices" not in bad_confirm
+
+        refute_out = await rd_tool(
+            "we no longer believe swap srv._pool is optional", kind="decision",
+            refutes=pid, ctx=ctx)
+        assert pid[:8] in refute_out["refuted_practice"]
+
+        bad_refute = await rd_tool("refuting nothing", kind="decision",
+                                   refutes="totally-unknown-practice-xyz", ctx=ctx)
+        assert "error" in bad_refute
+        assert "refutes matched no practice" in bad_refute["error"]
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
+async def test_record_decision_implements_and_ack_prior_art(actions: Actions) -> None:
+    """`implements` mints the general-to-specific link (thread 169398d6's third path) and
+    validates strictly like supersedes; `ack_prior_art` records the dismissal as a graph
+    event when — and only when — a strong prior-art hit actually fired."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import record_decision as rd_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:thaw2", session="thaw2", project="thaw-land-2", model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        standing = await rd_tool(
+            "THE STANDING RULING implements will point at", kind="ruling", ctx=ctx)
+        out = await rd_tool(
+            "one specific execution of the standing ruling above", kind="decision",
+            implements=standing["id"], ctx=ctx)
+        assert standing["id"][:8] in out["implements"]
+        edge = await actions.pool.fetchval(
+            "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='implements'",
+            uuid.UUID(out["id"]), uuid.UUID(standing["id"]))
+        assert edge == 1
+
+        bad = await rd_tool("implements nothing real", kind="decision",
+                            implements="not-a-real-decision-xyz", ctx=ctx)
+        assert "error" in bad
+        assert "implements matched no decision" in bad["error"]
+
+        # ack_prior_art with no strong hit: honest no-op, never fabricates an acknowledgment
+        lonely = await rd_tool(
+            "a totally unrelated one-off decision about lonely widgets", kind="decision",
+            ack_prior_art=True, ctx=ctx)
+        assert lonely["prior_art_acknowledged"] == (
+            "no strong prior-art hit was found to acknowledge")
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
+async def test_unified_prior_art_check_surfaces_a_practice_via_the_statement_field(
+    actions: Actions,
+) -> None:
+    """THE END-TO-END PROOF: migration 0037's widened GIN index + _fn_search's SQL fix +
+    prior_art_from_hits's kinds widening must ALL be correct together, or a Practice's
+    `statement` never surfaces as prior art at all — this is Alfred IX's own reported
+    failure mode (search returning noise for a lesson recorded hours earlier), now
+    verified fixed for the exact field Superstition/Practice actually use."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import record_decision as rd_tool
+    from src.mcp_server import record_practice as rp_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:thaw3", session="thaw3", project="thaw-land-3", model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        practice = await rp_tool(
+            "vendored dependency sets must ship in the install bundle from day one",
+            failure_prevented="a fresh install works until the first update, then dies "
+                               "on an import of a package the bundle never shipped",
+            ctx=ctx)
+        # the id door (a match cross-door-corroborated by construction, independent of
+        # whether the semantic embedder is configured in THIS test environment) proves
+        # the widened `kinds` filter reaches the search hit deterministically, not just
+        # when a topical match happens to also land on a second door
+        out = await rd_tool(
+            "vendored dependency sets must ship in the install bundle from day one",
+            kind="decision", rationale=f"re-deriving practice {practice['id']}", ctx=ctx)
+        assert "prior_art" in out
+        assert any(h["type"] == "Practice" for h in out["prior_art"])
+        assert "prior_art_flag" in out
+        assert "re-derivation" in out["prior_art_flag"]
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
+async def test_practices_composition_filters_by_surface_and_shows_confirmed_count(
+    actions: Actions,
+) -> None:
+    """Surface-scoped, on-demand (the ruling's own words) — never in orient's ambient
+    payload; this test only proves the composition itself, not orient's silence."""
+    from src.orchestrator.capture import record_decision, record_practice
+    from src.orchestrator.compositions import run_spec
+
+    d = await record_decision(actions, "a decision that will witness a practice")
+    await record_practice(actions, "deploy surface lesson one", surface="deploy",
+                          witnesses=[d])
+    await record_practice(actions, "search surface lesson two", surface="search")
+
+    deploy_only = await run_spec(
+        actions.pool, {"op": "function", "name": "practices", "args": {"surface": "deploy"}})
+    statements = [r["statement"] for r in deploy_only["items"]]
+    assert statements == ["deploy surface lesson one"]
+    assert deploy_only["items"][0]["confirmed"] == 1
+
+    everything = await run_spec(
+        actions.pool, {"op": "function", "name": "practices", "args": {}})
+    assert {r["statement"] for r in everything["items"]} >= {
+        "deploy surface lesson one", "search surface lesson two"}
+
+
+async def test_search_indexes_the_statement_field_and_flags_a_refuted_practice(
+    actions: Actions,
+) -> None:
+    """The latent gap this build heals: Superstition's own `statement` field has never
+    been searchable since Superstition shipped — migration 0037 fixes it for both types
+    at once. A refuted Practice still surfaces (never hidden, unlike a superseded
+    Decision's own burial), carrying the `refuted` flag."""
+    from src.orchestrator.capture import record_practice, refute_practice
+    from src.orchestrator.compositions import run_spec
+
+    p = await record_practice(
+        actions, "quarantine the flaky test before you silence its assertion")
+    hits = (await run_spec(
+        actions.pool, {"op": "function", "name": "search",
+                       "args": {"q": "quarantine the flaky test", "limit": 10}}))["items"]["hits"]
+    assert any(h["id"] == str(p) for h in hits)
+
+    await refute_practice(actions, str(p), killed_by="decision:whatever")
+    hits2 = (await run_spec(
+        actions.pool, {"op": "function", "name": "search",
+                       "args": {"q": "quarantine the flaky test", "limit": 10}}))["items"]["hits"]
+    match = next(h for h in hits2 if h["id"] == str(p))
+    assert "refuted" in match  # flagged, never hidden
