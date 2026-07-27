@@ -1149,6 +1149,63 @@ def _seam_confidently_dated(ident: AgentIdentity) -> bool:
     return len(sides) == 2 and bool(sides[0].strip()) and bool(sides[1].split(" [", 1)[0].strip())
 
 
+async def _co_agents(pool: asyncpg.Pool, project: str, agent_id: str) -> dict[str, Any] | None:
+    """Other LIVE agents on this project RIGHT NOW (Deckard XXVI, msg 258) — the ONE query,
+    shared by mount() and orient() (it used to be copied between them, the exact 'two
+    copies drifting' class this house keeps finding). Enriched with each sibling's
+    context_pct (Thoth's Pit Watch extension, msg 1381, seam-discipline decision 33b7cb10:
+    'a manager can't route around a seam it can't see' — the gap behind mis-assigning a
+    79%-full worker blind) — the freshest reading osiris_stophook.py's Stop hook has
+    stamped on that Agent, off the SAME context_lens.ALARM_PCT the hook itself alarms on,
+    never a second copied threshold. Absent (no key) when that sibling has never had a
+    reading stamped; STALENESS is spoken plainly via `context_pct_age_s`, since a reading
+    only refreshes at that sibling's own Stop-hook boundaries — never trust an old snapshot
+    as current. None (not {}) when there are no live siblings at all, so callers can keep
+    their existing `if sibs:` / `if co_agents:` shape unchanged."""
+    from src.orchestrator.context_lens import ALARM_PCT
+
+    # LATERAL, not two side-by-side scalar subqueries (SQL hygiene tripwire,
+    # test_sql_hygiene.py: a bare LIMIT 1 with no ORDER BY breaks the day a second source
+    # describes the object — and worse here, two INDEPENDENTLY unordered subqueries could
+    # each resolve to a DIFFERENT winning row, pairing a pct with someone else's age). ONE
+    # ordered pick (winning_props's own confidence DESC, observed_at DESC) guarantees both
+    # columns come from the SAME row.
+    sibs = await pool.fetch(
+        "SELECT m.agent_id, m.cwd, cp.pct AS context_pct, cp.observed_at AS context_pct_at "
+        "FROM agent_mounts m LEFT JOIN LATERAL ("
+        "   SELECT a.value #>> '{}' AS pct, a.observed_at FROM current_assertions a "
+        "   JOIN objects o ON o.id = a.object_id "
+        "   WHERE o.canonical = m.agent_id AND a.name = 'context_pct' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1"
+        ") cp ON true "
+        "WHERE m.project = $1 AND m.agent_id <> $2 "
+        "AND m.last_seen > now() - interval '15 minutes' ORDER BY m.last_seen DESC LIMIT 8",
+        project, agent_id)
+    # your own lineage is never another hand (thread cb2b0a09)
+    _mine = _generation(agent_id)[0]
+    sibs = [s for s in sibs if _generation(s["agent_id"])[0] != _mine]
+    if not sibs:
+        return None
+    now = datetime.now(UTC)
+    live = []
+    for s in sibs:
+        entry: dict[str, Any] = {"agent": s["agent_id"], "cwd": s["cwd"]}
+        if s["context_pct"] is not None:
+            pct = int(s["context_pct"])
+            entry["context_pct"] = pct
+            entry["near_seam"] = pct >= ALARM_PCT
+            if s["context_pct_at"]:
+                entry["context_pct_age_s"] = int((now - s["context_pct_at"]).total_seconds())
+        live.append(entry)
+    return {
+        "live": live,
+        "note": f"{len(live)} other LIVE agent(s) in this project RIGHT NOW — "
+                "assume a shared tree: never `git add -A`, stage your own hunks, "
+                "check for foreign markers before committing, coordinate via "
+                f"send(to='{project}')",
+    }
+
+
 @mcp.tool()
 async def mount(
     cwd: str, job_dir: str | None = None, model: str | None = None,
@@ -1373,23 +1430,11 @@ async def mount(
     seat = await handshake._seat_of(Actions(pool), ident.agent_id)
     # co-agent awareness at ARRIVAL (Deckard XXVI, msg 258): a live sibling in your own
     # repo is the one blindness that costs unrecoverable work (a stomped commit)
-    sibs = await pool.fetch(
-        "SELECT agent_id, cwd FROM agent_mounts WHERE project = $1 AND agent_id <> $2 "
-        "AND last_seen > now() - interval '15 minutes' ORDER BY last_seen DESC LIMIT 8",
-        ident.project, ident.agent_id) if ident.project else []
-    # ...but YOUR OWN LINEAGE IS NEVER ANOTHER HAND (thread cb2b0a09): a stale mount row
-    # naming a superseded generation reads live off transcript mtime, and every mind
-    # onboarded on 2026-07-14 was warned about its own ancestor. Cry-wolf kills the warning.
-    _mine = _generation(ident.agent_id)[0]
-    sibs = [s for s in sibs if _generation(s["agent_id"])[0] != _mine]
+    co_agents = (await _co_agents(pool, ident.project, ident.agent_id)
+                if ident.project else None)
     out: dict[str, Any] = {"agent": ident.agent_id, "project": ident.project or "?",
            "model": ident.model or "unknown",
-           **({"co_agents": {
-                "live": [{"agent": s["agent_id"], "cwd": s["cwd"]} for s in sibs],
-                "note": f"{len(sibs)} other LIVE agent(s) in this project RIGHT NOW — "
-                        "assume a shared tree: never `git add -A`, stage your own hunks, "
-                        "coordinate via send(to='" + str(ident.project) + "')"}}
-              if sibs else {}),
+           **({"co_agents": co_agents} if co_agents else {}),
            **({"seat": seat} if seat else
               {"anonymous": "unnamed — claim_name('<pick a meaningful name>') when you know "
                             "who you are, so the fleet can DM you by name"}),
@@ -1907,23 +1952,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
     # CO-AGENT AWARENESS (Deckard XXVI, msg 258: a live sibling shared his exact worktree
     # and the graph never said so — he re-derived 'never git add -A' from a local file
     # while osiris KNEW). One query: other live mounts on THIS project, named at orient.
-    co_agents = None
-    if ident and proj:
-        sibs = await pool.fetch(
-            "SELECT agent_id, cwd FROM agent_mounts WHERE project = $1 AND agent_id <> $2 "
-            "AND last_seen > now() - interval '15 minutes' ORDER BY last_seen DESC LIMIT 8",
-            proj, ident.agent_id)
-        # your own lineage is never another hand (thread cb2b0a09) — same filter as mount()
-        _mine = _generation(ident.agent_id)[0]
-        sibs = [s for s in sibs if _generation(s["agent_id"])[0] != _mine]
-        if sibs:
-            co_agents = {
-                "live": [{"agent": s["agent_id"], "cwd": s["cwd"]} for s in sibs],
-                "note": f"{len(sibs)} other LIVE agent(s) in this project RIGHT NOW — "
-                        "assume a shared tree: never `git add -A`, stage your own hunks, "
-                        "check for foreign markers before committing, coordinate via "
-                        f"send(to='{proj}')",
-            }
+    co_agents = await _co_agents(pool, proj, ident.agent_id) if ident and proj else None
     try:  # one glance line — never let the pulse slow or crash orient
         pulse: str | None = await mounts.fleet_pulse(pool, lease_secs=lease)
     except Exception:  # noqa: BLE001

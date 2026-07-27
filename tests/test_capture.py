@@ -744,6 +744,62 @@ async def test_orient_names_the_live_siblings_in_your_project(actions: Actions) 
         srv._agents.pop(srv._conn_key(ctx), None)
 
 
+async def test_orient_shows_a_live_siblings_context_pct_and_near_seam(
+    actions: Actions,
+) -> None:
+    """Thoth's Pit Watch extension (msg 1381, seam-discipline decision 33b7cb10): 'a
+    manager can't route around a seam it can't see' — a sibling's Stop-hook-stamped
+    context_pct rides along in co_agents, near_seam derived off the SAME ALARM_PCT the
+    hook itself alarms on, with an explicit age so a stale reading is never mistaken for
+    a fresh one. A sibling with no stamp at all carries neither key — absence, not a
+    guessed 0%."""
+    from src import mcp_server as srv
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import AgentIdentity
+
+    now = datetime.now(UTC)
+    hot = await actions.create_or_find_object("Agent", "agent:sib-hot", "agent:sib-hot")
+    await actions.assert_property(hot, "context_pct", "90", "agent:sib-hot", now, 1.0,
+                                  evidence_class="direct_observation")
+    await mounts.save_mount(actions.pool, job_dir="/h/.claude/jobs/sibhot01",
+                            agent_id="agent:sib-hot", project="pctproj", cwd="/x",
+                            model=None, session_key="k1")
+    cool = await actions.create_or_find_object("Agent", "agent:sib-cool", "agent:sib-cool")
+    await actions.assert_property(cool, "context_pct", "20", "agent:sib-cool", now, 1.0,
+                                  evidence_class="direct_observation")
+    await mounts.save_mount(actions.pool, job_dir="/h/.claude/jobs/sibcool1",
+                            agent_id="agent:sib-cool", project="pctproj", cwd="/y",
+                            model=None, session_key="k2")
+    await mounts.save_mount(actions.pool, job_dir="/h/.claude/jobs/sibnone1",
+                            agent_id="agent:sib-none", project="pctproj", cwd="/z",
+                            model=None, session_key="k3")  # never stamped at all
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:me-pct", session="mepct001", project="pctproj",
+        model=None, cwd=None)
+    try:
+        out = await srv.orient(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    by_agent = {s["agent"]: s for s in out["co_agents"]["live"]}
+    assert by_agent["agent:sib-hot"]["context_pct"] == 90
+    assert by_agent["agent:sib-hot"]["near_seam"] is True
+    assert by_agent["agent:sib-hot"]["context_pct_age_s"] >= 0
+    assert by_agent["agent:sib-cool"]["context_pct"] == 20
+    assert by_agent["agent:sib-cool"]["near_seam"] is False
+    assert "context_pct" not in by_agent["agent:sib-none"]
+    assert "near_seam" not in by_agent["agent:sib-none"]
+
+
 def test_rank_open_threads_orders_obligations_first_and_caps() -> None:
     """The pure ranker (orient's wall → a bounded query): obligations float above ordinary
     threads, the composition's recency order is preserved WITHIN each group (stable sort),

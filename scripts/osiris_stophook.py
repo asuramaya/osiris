@@ -111,6 +111,14 @@ async def _deliverable(
 # built to spec — targeted, one-shot, and reading occupancy off the ONE authority's own
 # primitives (context_lens.ALARM_PCT / last_usage / occupancy / window_for) instead of a
 # second, disagreeing threshold and a second tail-parse.
+#
+# TWO-TIER RE-ARM (Thoth, msg 1381, seam-discipline decision 33b7cb10): block-once-then-
+# silent-forever let a session climb straight through the alarm line unnudged once tripped
+# — "block-once-then-silent is exactly how Seshat climbed 80->past-seam unnudged." A SECOND
+# marker, gated on a harder line (HARD_ALARM_PCT), re-arms the ritual once more near the
+# ceiling — never a third time, never a loop; this policy stays hook-local (WHEN to
+# enforce), same as the original one-shot design.
+HARD_ALARM_PCT = 95
 
 async def _offload_boxes(
     session_id: str, cwd: str,
@@ -136,17 +144,20 @@ async def _offload_boxes(
         await conn.close()
 
 
-def _offload_marker(session_id: str) -> Path | None:
+def _offload_marker(session_id: str, *, hard: bool = False) -> Path | None:
     """The block-once marker's path — same convention as the swap/death-rite markers
-    (a file under this session's durable anchor dir), None for an id too short to trust."""
+    (a file under this session's durable anchor dir), None for an id too short to trust.
+    `hard` names the SECOND tier's own marker (HARD_ALARM_PCT) — a distinct file, so the
+    soft (ALARM_PCT) and hard blocks each fire once, independently."""
     sid = (session_id or "")[:8]
     if len(sid) < 8:
         return None
-    return Path.home() / ".claude" / "jobs" / sid / ".osiris_offload_blocked"
+    name = ".osiris_offload_blocked_hard" if hard else ".osiris_offload_blocked"
+    return Path.home() / ".claude" / "jobs" / sid / name
 
 
-def _offload_already_blocked(session_id: str) -> bool:
-    marker = _offload_marker(session_id)
+def _offload_already_blocked(session_id: str, *, hard: bool = False) -> bool:
+    marker = _offload_marker(session_id, hard=hard)
     if marker is None:
         return False
     try:
@@ -155,8 +166,8 @@ def _offload_already_blocked(session_id: str) -> bool:
         return False  # can't tell → never trap a session on a filesystem hiccup
 
 
-def _offload_mark_blocked(session_id: str) -> None:
-    marker = _offload_marker(session_id)
+def _offload_mark_blocked(session_id: str, *, hard: bool = False) -> None:
+    marker = _offload_marker(session_id, hard=hard)
     if marker is None:
         return
     try:
@@ -190,11 +201,12 @@ def _offload_pct(payload: dict[str, Any], window_hint: int | None) -> tuple[int 
 
 def _offload_verdict(
     *, pct: int | None, window_assumed: bool, already_blocked: bool,
-    boxes: dict[str, bool | None] | None,
+    boxes: dict[str, bool | None] | None, hard: bool = False,
 ) -> dict[str, Any] | None:
     """THE WHOLE POLICY, pure — no I/O, no clock (pct/boxes are supplied, not derived
     here), so every law is a direct unit test. BLOCK ONCE THEN ALLOW: `already_blocked`
-    short-circuits everything — a dying session is never trapped in a refusal loop.
+    short-circuits everything — a dying session is never trapped in a refusal loop
+    (`hard` names WHICH tier's marker the caller already checked — see HARD_ALARM_PCT).
     NEVER on an unknown or assumed window (the Anubis VII false-eulogy law, msg 127) or
     below context_lens.ALARM_PCT. And even above the line, a refusal fires only when
     something is GENUINELY unwritten — `boxes` with nothing False (all satisfied, or
@@ -206,14 +218,19 @@ def _offload_verdict(
     if not missing:
         return None
     listed = "; ".join(missing)
+    tier_note = (
+        "this is the harder nudge — nothing further will interrupt you this session, so "
+        "settle now" if hard else
+        f"a harder nudge fires again near {HARD_ALARM_PCT}% if you keep going without settling"
+    )
     return {
         "decision": "block",
         "reason": (f"Osiris offload ritual: context {pct}% full — a compaction (a death, "
                    f"ruling a882b334) can land any turn, and this session hasn't written "
-                   f"back: {listed}. charter.md is your offload target for live state the "
-                   "graph's typed objects can't hold — write there, and record_decision / "
-                   "open_thread (kind='obligation') / resolve_thread for the rest. This "
-                   "refusal fires once per session; the next stop is never blocked again."),
+                   f"back: {listed}. Call settle() — it runs every one of these checks "
+                   "itself (decisions/threads/charter.md/handoff/uncommitted git work; "
+                   "pass repo_path naming your code repo if you're a seat-office agent, "
+                   f"since settle can't see it there otherwise). {tier_note}."),
     }
 
 
@@ -413,7 +430,27 @@ async def _assert_pending(agent_id: str) -> None:
         await pool.close()
 
 
-async def _stage_a_async(payload: dict[str, Any]) -> None:
+async def _assert_context_pct(agent_id: str, pct: int) -> None:
+    """MANAGER-VISIBLE OCCUPANCY (Thoth, msg 1381, extending Pit Watch's own 'pending is a
+    state, not a silence' idiom: 'a manager can't route around a seam it can't see' — the
+    exact gap behind mis-assigning a 79%-full worker blind). Fires for ANY resolved agent,
+    seat-bound or not — a live co-agent's fresh reading is useful to whoever's looking, not
+    only to a manager. Same codec-registered-pool need as _assert_pending, same reason."""
+    from src.actions.core import Actions
+    from src.db.pool import create_pool
+
+    pool = await create_pool(DSN, min_size=1, max_size=1)
+    try:
+        actions = Actions(pool)
+        obj = await actions.create_or_find_object("Agent", agent_id, agent_id)
+        await actions.assert_property(
+            obj, "context_pct", str(pct), agent_id, datetime.now(UTC), 1.0,
+            evidence_class="direct_observation")
+    finally:
+        await pool.close()
+
+
+async def _stage_a_async(payload: dict[str, Any], pct: int | None = None) -> None:
     cwd = str(payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
     session_id = str(payload.get("session_id") or "")
     import asyncpg
@@ -421,9 +458,14 @@ async def _stage_a_async(payload: dict[str, Any]) -> None:
     conn = await asyncpg.connect(DSN, timeout=1.0)
     try:
         identity = await _resolve_worker_identity(conn, session_id, cwd)
-        if identity is None or not identity.get("seat_id"):
-            return  # nobody to attribute this to, or an unclaimed seat — nothing to confess
-        agent_id, seat_id = identity["agent_id"], identity["seat_id"]
+        if identity is None:
+            return  # nobody to attribute this to
+        agent_id = identity["agent_id"]
+        if pct is not None:
+            await _assert_context_pct(agent_id, pct)
+        if not identity.get("seat_id"):
+            return  # unclaimed seat — nothing further to confess
+        seat_id = identity["seat_id"]
         leased = await _leased_assignment(conn, seat_id, agent_id)
         if leased is None:
             await _assert_pending(agent_id)
@@ -442,13 +484,15 @@ async def _stage_a_async(payload: dict[str, Any]) -> None:
         await conn.close()
 
 
-def _stage_a(payload: dict[str, Any]) -> None:
+def _stage_a(payload: dict[str, Any], pct: int | None = None) -> None:
     """Best-effort, fire-and-forget — the whole point is that a failure here costs a missed
     courtesy note, never a broken stop. Called only from ALLOW paths in main(): confessing
     'stopping' on a path that ends up BLOCKED (mail waits, or the offload ritual refuses)
-    would be a lie — the session isn't actually stopping there."""
+    would be a lie — the session isn't actually stopping there. `pct` (when known-good —
+    not None, not window-assumed) rides along for the context_pct stamp; None is simply
+    skipped, never guessed."""
     try:
-        asyncio.run(asyncio.wait_for(_stage_a_async(payload), timeout=1.5))
+        asyncio.run(asyncio.wait_for(_stage_a_async(payload, pct), timeout=1.5))
     except Exception:  # noqa: BLE001 — never turn a clean stop into a broken one
         pass
 
@@ -497,28 +541,32 @@ def main() -> None:
         }))
         return
     # THE OFFLOAD RITUAL (queue item 4, #49 piece 3): mail outranks it (above); fail-open
-    # throughout; NEVER traps a dying session (the marker check is the whole escape hatch,
-    # and it runs FIRST — a session already refused this cycle pays no further cost).
-    if _offload_already_blocked(session_id):
-        _stage_a(payload)
-        return
+    # throughout; NEVER traps a dying session. pct is computed FIRST now (msg 1381) — the
+    # two-tier re-arm needs to know which marker (soft/hard) applies before checking it,
+    # and a good reading rides along on EVERY _stage_a call below for the context_pct
+    # stamp, not only ones that end up blocked.
     pct, window_assumed = _offload_pct(payload, window)
+    good_pct = pct if (pct is not None and not window_assumed) else None
     if pct is None or window_assumed or pct < ALARM_PCT:
-        _stage_a(payload)
+        _stage_a(payload, good_pct)
         return  # never alarms on an unknown/assumed window or below the line (law 1 + 3)
+    hard = pct >= HARD_ALARM_PCT
+    if _offload_already_blocked(session_id, hard=hard):
+        _stage_a(payload, good_pct)
+        return
     try:
         boxes = asyncio.run(
             asyncio.wait_for(_offload_boxes(session_id, cwd), timeout=1.5))
     except Exception:  # noqa: BLE001 — graph down = allow the stop, same as the mail check
-        _stage_a(payload)
+        _stage_a(payload, good_pct)
         return
     verdict = _offload_verdict(
-        pct=pct, window_assumed=window_assumed, already_blocked=False, boxes=boxes)
+        pct=pct, window_assumed=window_assumed, already_blocked=False, boxes=boxes, hard=hard)
     if verdict:
-        _offload_mark_blocked(session_id)
+        _offload_mark_blocked(session_id, hard=hard)
         print(json.dumps(verdict))
         return
-    _stage_a(payload)
+    _stage_a(payload, good_pct)
 
 
 if __name__ == "__main__":

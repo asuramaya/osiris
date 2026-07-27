@@ -59,6 +59,26 @@ def test_d_an_unknown_or_assumed_window_never_blocks() -> None:
         boxes={"anything": False}) is None
 
 
+def test_offload_verdict_names_settle_and_the_harder_line_still_ahead() -> None:
+    """Leg 1 (Thoth, msg 1381, decision 33b7cb10): the soft tier points at settle() by
+    name and names the harder line still ahead, rather than the pre-/settle raw-verb copy."""
+    v = stophook._offload_verdict(
+        pct=85, window_assumed=False, already_blocked=False,
+        boxes={"decisions recorded this session": False}, hard=False)
+    assert v is not None
+    assert "settle()" in v["reason"]
+    assert f"{stophook.HARD_ALARM_PCT}%" in v["reason"]
+
+
+def test_offload_verdict_hard_tier_says_this_was_the_last_nudge() -> None:
+    v = stophook._offload_verdict(
+        pct=97, window_assumed=False, already_blocked=False,
+        boxes={"decisions recorded this session": False}, hard=True)
+    assert v is not None
+    assert "harder nudge" in v["reason"]
+    assert "settle now" in v["reason"]
+
+
 def test_nothing_missing_never_blocks_even_above_the_line() -> None:
     """Fail open per box: True (satisfied) or None (unevaluable) both mean 'nothing to
     enforce' — a refusal fires only when something is genuinely, provably unwritten."""
@@ -79,6 +99,23 @@ def test_marker_lifecycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     assert stophook._offload_already_blocked(sid) is False
     stophook._offload_mark_blocked(sid)
     assert stophook._offload_already_blocked(sid) is True
+
+
+def test_marker_soft_and_hard_tiers_are_independent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The two-tier re-arm (Thoth, msg 1381: 'block-once-then-silent is exactly how Seshat
+    climbed 80->past-seam unnudged'): the soft (ALARM_PCT) block firing must NOT silence
+    the hard (HARD_ALARM_PCT) block, and vice versa — distinct markers, distinct fates."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    sid = "deadbeef-0000-4000-8000-000000000000"
+    assert stophook._offload_already_blocked(sid, hard=False) is False
+    assert stophook._offload_already_blocked(sid, hard=True) is False
+    stophook._offload_mark_blocked(sid, hard=False)
+    assert stophook._offload_already_blocked(sid, hard=False) is True
+    assert stophook._offload_already_blocked(sid, hard=True) is False  # unaffected
+    stophook._offload_mark_blocked(sid, hard=True)
+    assert stophook._offload_already_blocked(sid, hard=True) is True
 
 
 def test_marker_needs_a_trustworthy_session_id(
@@ -354,6 +391,22 @@ async def test_assert_pending_writes_a_readable_state(
     assert state == "pending"
 
 
+async def test_assert_context_pct_writes_a_readable_value(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
+) -> None:
+    """Leg 2 (Thoth, msg 1381, decision 33b7cb10): the manager-visible occupancy stamp,
+    same idiom as _assert_pending above, same reason — a manager can't route around a
+    seam it can't see."""
+    monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    agent = "agent:pctwrite1"
+    await stophook._assert_context_pct(agent, 83)
+    pct = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='context_pct' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent)
+    assert pct == "83"
+
+
 # ═══════════ INTEGRATION — _stage_a_async end to end ═══════════
 
 async def test_stage_a_sends_the_confession_when_the_manager_is_owed_a_reply(
@@ -414,6 +467,63 @@ async def test_stage_a_asserts_pending_when_nothing_is_leased(
         "WHERE o.canonical=$1 AND a.name='state' "
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent)
     assert state == "pending"
+
+
+async def test_stage_a_stamps_context_pct_alongside_pending_when_both_apply(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
+) -> None:
+    """Leg 2 integration: a seated worker with nothing leased gets BOTH state='pending'
+    (Pit Watch, unchanged) AND context_pct (new) from the SAME stop, when a good pct
+    rides along."""
+    monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    agent, seat = "agent:pctstage1", "seat:pctstage1"
+    seat_obj = await actions.create_or_find_object("Seat", seat, agent)
+    now = datetime.now(UTC)
+    await actions.assert_property(seat_obj, "handle", "workerpct", agent, now, 0.9,
+                                  evidence_class="self_declared")
+    await bind_holder(actions, seat_id=seat, agent_id=agent)
+    job_dir = str(tmp_path / "jobs" / "pctstage")  # EXACTLY 8 chars — find_session_row's contract
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="testhouse",
+                     cwd=str(tmp_path / "officepct"), model=None, session_key=None)
+    sid = "pctstage1-0000-4000-8000-000000000000"  # sid[:8] == "pctstage"
+
+    await stophook._stage_a_async(
+        {"cwd": str(tmp_path / "officepct"), "session_id": sid}, 88)
+    row = await actions.pool.fetchrow(
+        "SELECT "
+        " (SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "   WHERE o.canonical=$1 AND a.name='state' LIMIT 1) AS state, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "   WHERE o.canonical=$1 AND a.name='context_pct' LIMIT 1) AS pct", agent)
+    assert row["state"] == "pending"
+    assert row["pct"] == "88"
+
+
+async def test_stage_a_stamps_context_pct_even_for_an_unseated_agent(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
+) -> None:
+    """context_pct is useful to any co-agent glancing at orient(), not only a manager —
+    it must not be gated on seat-binding the way the confession/pending machinery is."""
+    monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    agent = "agent:pctnoseat1"
+    await actions.create_or_find_object("Agent", agent, agent)
+    job_dir = str(tmp_path / "jobs" / "pctnosea")  # EXACTLY 8 chars — find_session_row's contract
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="testhouse",
+                     cwd=str(tmp_path / "office10"), model=None, session_key=None)
+    sid = "pctnoseat-0000-4000-8000-000000000000"  # sid[:8] == "pctnosea"
+
+    await stophook._stage_a_async(
+        {"cwd": str(tmp_path / "office10"), "session_id": sid}, 45)
+    pct = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='context_pct' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent)
+    assert pct == "45"
+    state = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='state' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent)
+    assert state is None  # pending is a seat-scoped concept — never invented for no seat
 
 
 def test_stage_a_never_raises_when_the_database_is_unreachable(
