@@ -348,6 +348,41 @@ async def test_broker_spawn_get_list_close_and_name_collisions() -> None:
     await broker.close("seat-1")  # unknown name: idempotent no-op, same as bodies.dissolve
 
 
+@requires_pty
+async def test_broker_spawn_reaps_a_dead_registration_and_respawns() -> None:
+    """finding #8 (mint-lane wave, task #68): a body killed outside pty_close (or one that
+    simply exits on its own) leaves its name registered with returncode set — list()'s own
+    `alive` already reports it dead. A same-name respawn used to refuse with
+    SessionExistsError forever, even though nothing live holds the name; it must reap the
+    corpse and spawn fresh instead."""
+    broker = PtyBroker()
+    dead = await broker.spawn("seat-2", ["sh", "-c", "exit 0"])
+    await asyncio.wait_for(dead.exited.wait(), timeout=2.0)
+    assert broker.list()[0].alive is False  # dead, but still registered under its old name
+
+    fresh = await broker.spawn("seat-2", ["sh", "-c", "cat"])  # must NOT raise
+    try:
+        assert fresh is not dead
+        assert broker.get("seat-2") is fresh
+        assert broker.list()[0].alive is True
+        assert dead.returncode is not None  # the corpse was actually reaped, not just replaced
+    finally:
+        await broker.close("seat-2")
+
+
+@requires_pty
+async def test_broker_spawn_still_refuses_a_live_name_collision() -> None:
+    """The other half of the same fix: a LIVE session under the name is still untouchable —
+    only a corpse gets reaped, never a working body twinned or clobbered."""
+    broker = PtyBroker()
+    await broker.spawn("seat-3", ["sh", "-c", "cat"])
+    try:
+        with pytest.raises(SessionExistsError):
+            await broker.spawn("seat-3", ["sh", "-c", "cat"])
+    finally:
+        await broker.close("seat-3")
+
+
 # --- backpressure: bounded queues + force-detach (doctrine 3 — nothing in the sacred proc ---
 # --- may grow without bound; a stalled face is disconnected, never accumulated)            ---
 

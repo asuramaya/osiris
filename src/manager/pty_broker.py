@@ -675,8 +675,18 @@ class PtyBroker:
         cwd: str | None = None, term: str = DEFAULT_TERM, rows: int = 24, cols: int = 80,
         ring_size: int | None = None, queue_maxsize: int = DEFAULT_ATTACH_QUEUE_CHUNKS,
     ) -> PtySession:
-        if name in self._sessions:
-            raise SessionExistsError(f"a PTY session named {name!r} already exists")
+        existing = self._sessions.get(name)
+        if existing is not None:
+            if existing.returncode is None:
+                raise SessionExistsError(f"a PTY session named {name!r} already exists")
+            # DEAD-BODY REAP (mint-lane finding #8): the child behind this name already
+            # exited — killed outside pty_close, or exited on its own — but the registration
+            # survived under its old name. list()'s own `alive` already reports this session
+            # as dead; refusing a same-name respawn on top of a corpse was the bug, not a
+            # safety rail (the SessionExistsError above still guards the one case that
+            # matters: never twin a name onto a LIVE session). Reap it and proceed.
+            await existing.close()
+            self._sessions.pop(name, None)
         session = await PtySession.spawn(
             argv, env=env, cwd=cwd, term=term, rows=rows, cols=cols,
             ring_size=ring_size if ring_size is not None else self._ring_size,

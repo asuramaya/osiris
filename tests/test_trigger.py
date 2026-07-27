@@ -2016,6 +2016,32 @@ async def test_launch_bodies_a_managed_seat_with_an_honest_receipt(actions: Acti
     assert req["cwd"] == "/home/asuramaya/.osiris/seats/tefnut"
     assert req["seat"] == {"handle": "Tefnut", "house": "osiris"}
     assert req["env"]["CLAUDE_JOB_DIR"] == req["job_dir"]  # the body's anchor, not inherited
+    # THE ATTACH LINE (ruling 0fe36e59, thread c171a3de): office dir + session anchor + a
+    # command that works TODAY, independent of where the spawn's cwd happens to register in
+    # the harness's own per-project session list.
+    assert d["attach"]["office"] == "/home/asuramaya/.osiris/seats/tefnut"
+    assert d["attach"]["session_anchor"] == req["job_dir"]
+    assert d["attach"]["command"] == 'python -m src.manager.attach "[OS] Tefnut"'
+
+
+async def test_launch_hands_the_attach_line_on_the_idempotent_path_too(
+    actions: Actions,
+) -> None:
+    """A caller who launches into an already-live seat still needs to reach it — the
+    already-live receipt must carry the same attach line, not just the fresh-spawn one."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:alw01", manager_agent="agent:alm01",
+        worker_handle="Anhur", house="osiris")
+    await _office(actions, worker_seat, "/tmp/anhur")
+    record: list[dict[str, Any]] = []
+    existing = _fake_windows([{"name": "[OS] Anhur", "alive": True, "seat_id": worker_seat}])
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:alm01", target=worker_seat,
+        manager=_fake_manager(record), windows=existing)
+
+    assert d["status"] == "already-live"
+    assert d["attach"]["office"] == "/tmp/anhur"
+    assert d["attach"]["command"] == 'python -m src.manager.attach "[OS] Anhur"'
 
 
 async def test_launch_resolves_a_vacant_seat_by_handle(actions: Actions) -> None:

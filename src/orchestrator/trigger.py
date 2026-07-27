@@ -1336,6 +1336,16 @@ async def launch_seat(
                 "detail": f"{handle} ({target_seat}) has no anchor_cwd — establish_office first; "
                           "a body needs a room to be born in"}
 
+    # THE ATTACH LINE (ruling 0fe36e59, thread c171a3de finding #6): spawn location must never
+    # matter, so REACHING the body can never depend on which harness project slug its cwd
+    # happened to register under — every receipt below hands the operator everything needed
+    # to get there directly, independent of that. `command` uses the plumbing that's actually
+    # live today (src/manager/attach.py); `osiris attach <handle>` is the same door once that
+    # CLI build (thread 16a0c76b) lands.
+    anchor = _launch_anchor(target_seat)
+    attach = {"office": office, "session_anchor": anchor,
+             "command": f'python -m src.manager.attach "[{_house_tag(house)}] {handle}"'}
+
     # IDEMPOTENCY — a live window already holding this seat is RETURNED, never twinned (the
     # one-body-at-a-time discipline; Ra's stale-liveness collision, b3a86a7d). Fail-open on a dark
     # daemon: an empty roster means nothing to collide with, and the spawn below reports its state.
@@ -1346,7 +1356,7 @@ async def launch_seat(
     for w in roster:
         if isinstance(w, dict) and w.get("seat_id") == target_seat and w.get("alive"):
             return {"status": "already-live", "window": w.get("name"), "seat": target_seat,
-                    "body_exists": True, "can_receive": True,
+                    "body_exists": True, "can_receive": True, "attach": attach,
                     "detail": f"a live body already holds {handle} — not minting a twin"}
 
     st = settings or get_settings()
@@ -1360,7 +1370,6 @@ async def launch_seat(
     if argv_model:
         argv += ["--model", argv_model]
     name = f"[{_house_tag(house)}] {handle}"
-    anchor = _launch_anchor(target_seat)
     # A FULL env, minus the launcher's own CLAUDE_JOB_DIR (never inherit an anchor — the
     # collision class, 2294e95d), plus the body's own stable anchor so it matches the window's
     # job_dir metadata. pty_spawn adds OSIRIS_SEAT_ID + OSIRIS_ATTACH_TOKEN on top (identity at
@@ -1409,6 +1418,7 @@ async def launch_seat(
         "detail": ("body created and live" if alive else
                    "body created; mount NOT yet confirmed — the claude is booting and will "
                    "self-bind via its attach token; confirm with pty_list / occupancy"),
+        "attach": attach,
     }
     stamped_model = facts.get("intended_model")
     if stamped_model and argv_model != stamped_model:

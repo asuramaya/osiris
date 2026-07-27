@@ -495,6 +495,43 @@ async def test_pty_spawn_then_list_shows_it_and_rejects_a_name_collision(
 
 
 @requires_pty
+async def test_pty_spawn_reaps_a_dead_registration_instead_of_refusing(
+    tmp_path: Path,
+) -> None:
+    """finding #8 (mint-lane wave, task #68): 'a PTY session named [OS] imhotep already
+    exists' after the body was killed OUTSIDE pty_close (the ordinary case — a session dies
+    on its own, or the operator kills the process directly) — the roster's own liveness
+    already reports it dead, so refusing a same-name respawn forever was the bug. The daemon
+    op must reap the corpse and spawn fresh."""
+    manager = Manager(
+        socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
+        runner=_make_runner())
+    await manager.start()
+    try:
+        client = await _connect(manager._socket_path)
+        try:
+            spawned = await client.send(
+                {"op": "pty_spawn", "name": "s1", "argv": ["sh", "-c", "exit 0"]})
+            assert spawned == {"spawned": "s1"}
+            dead = manager._broker.get("s1")
+            assert dead is not None
+            await asyncio.wait_for(dead.exited.wait(), timeout=2.0)  # exits on its own
+
+            listed = await client.send({"op": "pty_list"})
+            assert listed["sessions"][0]["alive"] is False  # dead, still registered as "s1"
+
+            respawned = await client.send(
+                {"op": "pty_spawn", "name": "s1", "argv": ["sh", "-c", "cat"]})
+            assert respawned == {"spawned": "s1"}  # no error — the corpse was reaped
+            assert manager._broker.get("s1") is not dead
+            assert (await client.send({"op": "pty_list"}))["sessions"][0]["alive"] is True
+        finally:
+            await client.close()
+    finally:
+        await manager.close()
+
+
+@requires_pty
 async def test_pty_poke_types_a_turn_with_idle_gate_and_dedup(tmp_path: Path) -> None:
     """THE WAKE LAW's op (Stage A+C of the wake arc): pty_poke types one message into the
     EXISTING window. Policy lives at the daemon — `min_idle_secs` refuses a busy window
