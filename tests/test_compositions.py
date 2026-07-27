@@ -553,6 +553,33 @@ async def test_roadmap_composition_open_section_is_echo_filtered_and_arc_grouped
     assert "a guessed duty nobody touched" not in str(open_data)
 
 
+async def test_roadmap_open_section_names_its_own_dropped_tail(actions: Actions) -> None:
+    """Thoth's own finding, live (2026-07-27): rank_open_threads' cap (ORIENT_OPEN_THREADS)
+    was silently dropping everything past 25 — a "no silent caps" violation. The Function
+    must stay list-shaped for `group` to consume it (task #60), so the honest count rides
+    IN the list as one distinctly-tagged trailing row rather than a sidecar dict key
+    (`_fn_wall`'s own pattern, unavailable here) — forming its own visible bucket, never
+    mixed into a real arc/owner's own threads."""
+    from src.orchestrator.capture import open_thread
+    from src.orchestrator.compositions import ORIENT_OPEN_THREADS, ROADMAP
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:rmmore", "test")
+    await actions.assert_property(proj, "name", "rmmore", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    total = ORIENT_OPEN_THREADS + 2
+    for i in range(total):
+        await open_thread(actions, f"duty {i}", repo="rmmore", arc="Fleet-Hygiene",
+                          owner="agent:x", source="agent:me")
+
+    await save_composition(actions.pool, "roadmap", ROADMAP)
+    res = await run_composition(actions.pool, "roadmap", proj)
+    open_data = res["items"]["open"]
+    real_shown = len(open_data["Fleet-Hygiene"]["agent:x"])
+    assert real_shown == ORIENT_OPEN_THREADS
+    more_row = open_data["(more)"]["(more)"][0]
+    assert "2 more open threads not shown" in more_row["summary"]
+
+
 async def test_roadmap_composition_resolved_is_pure_op_tree_group(actions: Actions) -> None:
     from src.orchestrator.capture import open_thread, resolve_thread
     from src.orchestrator.compositions import ROADMAP

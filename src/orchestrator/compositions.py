@@ -1827,16 +1827,34 @@ async def _fn_roadmap_open(
     lets the composition's own `group by=arc` then `group by=owner` do the nesting via the
     op-tree — the SAME shape `_roadmap_status_group` already uses for resolved/retracted —
     instead of hand-rolling it here in Python. This is the discipline the migration is
-    proving: real judgment (the echo-filter) stays a Function, pure layout stays ops."""
+    proving: real judgment (the echo-filter) stays a Function, pure layout stays ops.
+
+    `rank_open_threads`'s own cap (ORIENT_OPEN_THREADS) was silently dropping the tail — a
+    "no silent caps" violation Thoth caught live: the open section showed a subset of a
+    project's real open threads with no line saying so. `_fn_wall` (this function's own
+    sibling) already reports its `more` honestly, but as a DICT sidecar key — not available
+    here, since this Function must stay list-shaped for `group` to consume it (task #60).
+    So the honesty rides IN the list instead: one synthetic trailing row, arc/owner-tagged
+    distinctly (never a real ARCS value or a real owner) so it forms its own visible,
+    clearly-labeled bucket rather than hiding inside real data — "a count line in the
+    section," the generic renderer needing zero special-case code to show it."""
     from src.orchestrator.roadmap import _arc_map
 
     assert subject is not None  # the op guard requires a subject (the project)
     wall, _echoes = await open_thread_wall(pool, subject)
-    ranked, _more = rank_open_threads(wall)
+    ranked, more = rank_open_threads(wall)
     arcs = await _arc_map(pool, [str(t["id"])[:8] for t in ranked])
-    return [{"id": str(t["id"])[:8], "summary": t["summary"], "kind": t.get("kind"),
+    items = [{"id": str(t["id"])[:8], "summary": t["summary"], "kind": t.get("kind"),
              "arc": arcs.get(str(t["id"])[:8]) or "unsorted",
              "owner": t.get("owner") or "unowned"} for t in ranked]
+    if more:
+        items.append({
+            "id": None, "kind": None,
+            "summary": f"{more} more open thread{'s' if more != 1 else ''} not shown here "
+                       f"(ranked lower) — narrow the query or ask for a wider view",
+            "arc": "(more)", "owner": "(more)",
+        })
+    return items
 
 
 async def _fn_desk_decisions(
