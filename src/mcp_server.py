@@ -3168,7 +3168,13 @@ async def settle(
     fragility behind every 'Thoth II'-style mislabel this house has hit): your successor's
     orient() finds it directly, no ILIKE guess on the word 'handoff' required. Idempotent
     and safe to call repeatedly through a session — later calls only add to what's already
-    written, never duplicate it (same discipline as record_decision/open_thread)."""
+    written, never duplicate it (same discipline as record_decision/open_thread).
+
+    SURFACE also runs `git status --porcelain` in your mounted cwd (`uncommitted_git_files`
+    in the receipt) — the one box that isn't in the graph (operator ruling, 2026-07-26: an
+    agent asked 'safe to compact?' had to check this by hand). None means it couldn't be
+    evaluated there (no repo at that cwd — the common case for a seat-office agent, whose
+    code lives elsewhere) and never blocks `complete`; a non-empty list does."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — settle is a mind's own ritual, the graph must "
@@ -3211,7 +3217,7 @@ async def settle(
 
     # CONFIRM: re-check against the now-updated graph — a no-op re-derivation when nothing
     # was accepted above, which is exactly the pure-SURFACE call shape.
-    from src.orchestrator.settle import missing_boxes, settle_boxes
+    from src.orchestrator.settle import missing_boxes, settle_boxes, uncommitted_git_work
     mounted = await mounts.find_session_row(pool, ident.session)
     boxes: dict[str, bool | None] = {}
     missing: list[str] = []
@@ -3220,14 +3226,24 @@ async def settle(
                                    mounted_at=mounted["mounted_at"], cwd=ident.cwd)
         missing = missing_boxes(boxes)
     obligations = await _owned_open_threads(pool, ident.agent_id)
+    uncommitted = await uncommitted_git_work(ident.cwd)
+    complete = not missing and not obligations and not uncommitted
+    reasons = []
+    if missing:
+        reasons.append(f"{len(missing)} missing box(es)")
+    if uncommitted:
+        reasons.append(f"{len(uncommitted)} uncommitted git file(s)")
+    if obligations:
+        reasons.append(f"{len(obligations)} open obligation(s)")
     return {
-        "complete": not missing and not obligations,
+        "complete": complete,
         "boxes": boxes,
         "missing_boxes": missing,
         "open_obligations": obligations,
+        "uncommitted_git_files": uncommitted,
         "accepted": accepted,
-        "note": ("compaction-safe by construction" if not missing and not obligations else
-                 "still unwritten — settle again once the missing boxes/obligations are "
+        "note": ("compaction-safe by construction" if complete else
+                 f"still unsettled ({', '.join(reasons)}) — settle again once they're "
                  "closed, or accept them in your next call"),
     }
 

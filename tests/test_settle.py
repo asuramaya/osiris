@@ -2,12 +2,22 @@
 /settle MCP tool, so the two never drift into disagreeing copies."""
 from __future__ import annotations
 
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from src.actions.core import Actions
 from src.orchestrator.capture import open_thread, record_decision
-from src.orchestrator.settle import charter_touched, missing_boxes, settle_boxes
+from src.orchestrator.settle import (
+    charter_touched,
+    missing_boxes,
+    settle_boxes,
+    uncommitted_git_work,
+)
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True)
 
 
 def test_charter_touched_absent_file_cannot_be_evaluated(tmp_path: Path) -> None:
@@ -33,6 +43,31 @@ def test_missing_boxes_only_names_explicit_false() -> None:
     assert missing_boxes({"a": True, "b": False, "c": None, "d": False}) == ["b", "d"]
     assert missing_boxes({"a": True, "b": None}) == []
     assert missing_boxes({}) == []
+
+
+async def test_uncommitted_git_work_none_cwd_cannot_be_evaluated() -> None:
+    assert await uncommitted_git_work(None) is None
+
+
+async def test_uncommitted_git_work_a_non_repo_dir_cannot_be_evaluated(tmp_path: Path) -> None:
+    """The common, innocent case: a seat-office cwd, or any ordinary non-repo directory —
+    fails open, same as charter_touched on a missing file."""
+    assert await uncommitted_git_work(str(tmp_path)) is None
+
+
+async def test_uncommitted_git_work_a_clean_repo_reports_empty(tmp_path: Path) -> None:
+    _git(tmp_path, "init")
+    (tmp_path / "committed.txt").write_text("hi\n")
+    _git(tmp_path, "add", "committed.txt")
+    _git(tmp_path, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-m", "seed")
+    assert await uncommitted_git_work(str(tmp_path)) == []
+
+
+async def test_uncommitted_git_work_names_the_dirty_files(tmp_path: Path) -> None:
+    _git(tmp_path, "init")
+    (tmp_path / "untracked.txt").write_text("new\n")
+    out = await uncommitted_git_work(str(tmp_path))
+    assert out is not None and any("untracked.txt" in line for line in out)
 
 
 async def test_settle_boxes_works_against_a_pool_not_just_a_raw_connection(
@@ -261,6 +296,54 @@ async def test_settle_tool_confirms_complete_after_a_full_dump(
     assert out["missing_boxes"] == []
     assert out["open_obligations"] == []
     assert out["note"] == "compaction-safe by construction"
+
+
+async def test_settle_tool_uncommitted_git_work_blocks_complete_and_is_named(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE NEW BOX (operator, 2026-07-26, watching a live compaction): even with every
+    graph box satisfied and no open obligations, dirty git state in the mounted cwd keeps
+    `complete` False and names the file — the one check that was never in the graph."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.mounts import save_mount
+
+    agent = "agent:settlegit1"
+    job_dir = str(tmp_path / "jobs" / "settlegi")  # EXACTLY 8 chars — the find_session_row contract
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="settleproj",
+                     cwd=str(tmp_path), model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET mounted_at=$1 WHERE job_dir=$2", mounted_at, job_dir)
+    _git(tmp_path, "init")
+    (tmp_path / "charter.md").write_text("# notes\n")
+    (tmp_path / "dirty.txt").write_text("uncommitted\n")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=agent, session="settlegit1", project="settleproj", model=None,
+        cwd=str(tmp_path))
+    try:
+        out = await srv.settle(
+            decisions=[{"summary": "settlegit1's own ruling, written by the dump"}],
+            threads_open=[{"summary": "settlegit1's own thread, written by the dump"}],
+            ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["missing_boxes"] == []
+    assert out["open_obligations"] == []
+    assert out["complete"] is False, out
+    assert out["uncommitted_git_files"] is not None
+    assert any("dirty.txt" in line for line in out["uncommitted_git_files"])
+    assert "uncommitted git file" in out["note"]
 
 
 async def test_settle_tool_surfaces_my_own_open_obligations_fleet_wide(

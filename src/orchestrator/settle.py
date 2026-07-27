@@ -14,6 +14,7 @@ fetch/fetchval surface, so one implementation genuinely serves both callers.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -93,3 +94,37 @@ def missing_boxes(boxes: dict[str, bool | None]) -> list[str]:
     evaluated) or True (satisfied). Pure; the one line both the hook's verdict and
     /settle's own confirm step share instead of each re-deriving it."""
     return [label for label, ok in boxes.items() if ok is False]
+
+
+async def uncommitted_git_work(cwd: str | None, *, timeout_s: float = 2.0) -> list[str] | None:
+    """THE ONE BOX NOT IN THE GRAPH (operator, 2026-07-26, watching a live compaction: an
+    agent asked "safe to compact?" had to run `git status` BY HAND before answering —
+    mechanical, and a wasted expensive turn). /settle-only: unlike settle_boxes above, this
+    is NOT shared with the Stop hook, which runs on a strict ~1s budget the hook's own
+    docstring is explicit about — a subprocess against a large working tree has no place
+    racing that clock for a question the hook never asks.
+
+    None (fails open) when cwd is empty, not inside a git worktree, git itself errors, or
+    the check outruns `timeout` — the common, INNOCENT case for a seat-office agent, whose
+    cwd is the office, not the repo it governs (CLAUDE.md: 'work on it with absolute
+    paths'). A [] means clean; a non-empty list is `git status --porcelain` lines verbatim
+    (' M path', '?? path', ...) — the file, not just a boolean, since 'what' is the whole
+    point of the box."""
+    if not cwd:
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "-C", cwd, "status", "--porcelain",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError:
+        return None
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return None
+    if proc.returncode != 0:
+        return None
+    return [line for line in out.decode("utf-8", errors="replace").splitlines() if line]
