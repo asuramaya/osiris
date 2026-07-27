@@ -1,7 +1,11 @@
 """Preflight — the audit that can't be forgotten. The judgments are pure; so are these."""
 from __future__ import annotations
 
-from scripts.osiris_preflight import evaluate
+import subprocess
+import sys
+from pathlib import Path
+
+from scripts.osiris_preflight import _run_check, evaluate
 
 
 def _green() -> dict:
@@ -103,3 +107,51 @@ def test_a_real_schema_drift_is_named_loudly() -> None:
     m["schema_drift"] = "code expects migration head '0036', DB is at '0034'"
     fails = "\n".join(evaluate(m))
     assert "SCHEMA DRIFT" in fails and "0034" in fails and "alembic upgrade head" in fails
+
+
+# --- thread 3e96c10e: a dead check must ALARM, never quietly pass as green -------------------
+
+async def _boom() -> None:
+    raise ModuleNotFoundError("No module named 'src'")
+
+
+async def _down() -> None:
+    raise ConnectionRefusedError("connection refused")
+
+
+def test_a_broken_check_is_named_not_swallowed() -> None:
+    """The canonical failure: an import-time error inside a collector used to be caught by a
+    bare `except Exception` and degrade to a quiet None — preflight then reported "all green"
+    while the check never actually ran. Now it surfaces as its own named failure."""
+    result, broken = _run_check("collect_miner", _boom())
+    assert result is None
+    assert broken is not None
+    assert "collect_miner check is BROKEN" in broken
+    assert "ModuleNotFoundError" in broken
+    assert "did NOT actually run" in broken
+
+
+def test_a_genuinely_unreachable_db_still_degrades_quietly() -> None:
+    """The distinction this fix must preserve: the DB actually being down is already reported
+    by the unit/container checks — a collector failing on THAT is not a second, redundant
+    alarm, so it still degrades to a quiet None exactly as before."""
+    result, broken = _run_check("collect_schema_drift", _down())
+    assert result is None
+    assert broken is None
+
+
+def test_backfill_bare_invocation_never_raises_module_not_found(tmp_path: Path) -> None:
+    """The exact repro from thread 3e96c10e: `.venv/bin/python scripts/backfill_thread_arc.py`
+    from the repo root, PYTHONPATH deliberately unset — sys.path[0] is the script's own
+    directory, never CWD, so its top-level `from src...` imports crashed immediately. `--help`
+    exercises exactly that import path (argparse prints usage and exits before any DB touch,
+    so this stays hermetic — no real Postgres needed, unlike osiris_preflight.py's collectors,
+    which this file's `_run_check` tests above cover without a subprocess)."""
+    repo_root = Path(__file__).resolve().parent.parent
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}  # explicitly no PYTHONPATH
+    out = subprocess.run(
+        [sys.executable, "scripts/backfill_thread_arc.py", "--help"], cwd=repo_root, env=env,
+        capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0
+    assert "ModuleNotFoundError" not in out.stderr
+    assert "usage:" in out.stdout

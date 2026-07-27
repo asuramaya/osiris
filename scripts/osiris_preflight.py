@@ -24,7 +24,17 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Coroutine
 from pathlib import Path
+from typing import Any
+
+import asyncpg
+
+# `from src...` (deferred, below) needs the repo root importable regardless of PYTHONPATH —
+# osiris_fleet_glance.py's own precedent (thread 3e96c10e: this script's deferred `from
+# src...` imports failed ModuleNotFoundError on the exact bare invocation its own docstring
+# documents, since sys.path[0] is the script's own directory, never CWD).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 DSN = "postgresql://osiris:osiris@127.0.0.1:5601/osiris"
 UNITS = ["osiris-mcp", "osiris-worker", "osiris-pulse", "osiris-console"]
@@ -238,17 +248,32 @@ async def brief_operator(fails: list[str]) -> None:
         await pool.close()
 
 
+# A check genuinely can't reach the DB — already reported as a unit/container failure, so
+# degrading quietly to None here is correct, not a cover-up. Anything OUTSIDE this set (an
+# import-time ModuleNotFoundError, a renamed function, any other programming defect) is the
+# CHECK ITSELF broken, not the database — that must alarm, never degrade to a quiet None
+# (thread 3e96c10e: this exact class of bug silently passed both weekly checks for a while).
+_DB_UNREACHABLE = (OSError, TimeoutError, asyncpg.PostgresError)
+
+
+def _run_check(name: str, coro: Coroutine[Any, Any, Any]) -> tuple[Any, str | None]:
+    """(result, broken_msg). `broken_msg` is None on success OR a genuine DB-unreachable
+    degrade; set only when the check itself failed to run at all."""
+    try:
+        return asyncio.run(coro), None
+    except _DB_UNREACHABLE:
+        return None, None
+    except Exception as e:  # noqa: BLE001 — the alarm IS the handling; nothing swallowed
+        return None, (f"{name} check is BROKEN ({type(e).__name__}: {e}) — it did NOT "
+                      "actually run this pass")
+
+
 def main() -> int:
     m = collect()
-    try:
-        m["miner"] = asyncio.run(collect_miner())
-    except Exception:  # noqa: BLE001 — DB unreachable is already a unit/container failure
-        m["miner"] = None
-    try:
-        m["schema_drift"] = asyncio.run(collect_schema_drift())
-    except Exception:  # noqa: BLE001 — DB unreachable is already a unit/container failure
-        m["schema_drift"] = None
+    m["miner"], miner_broken = _run_check("collect_miner", collect_miner())
+    m["schema_drift"], drift_broken = _run_check("collect_schema_drift", collect_schema_drift())
     fails = evaluate(m)
+    fails.extend(b for b in (miner_broken, drift_broken) if b)
     if "--drill" in sys.argv and m.get("newest_dump"):
         d = drill(m["newest_dump"])
         if d:

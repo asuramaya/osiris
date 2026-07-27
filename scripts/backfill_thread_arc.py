@@ -27,11 +27,25 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import sys
 from datetime import UTC, datetime
+from pathlib import Path
 
-from src.actions.core import Actions
-from src.db.pool import create_pool
-from src.orchestrator.capture import _CONF, _EC, ARCS, _find_thread, open_thread, resolve_thread
+# repo root importable regardless of PYTHONPATH (thread 3e96c10e: these top-level `from
+# src...` imports failed ModuleNotFoundError on the exact bare invocation this script's own
+# docstring documents, since sys.path[0] is the script's own directory, never CWD).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from src.actions.core import Actions  # noqa: E402
+from src.db.pool import create_pool  # noqa: E402
+from src.orchestrator.capture import (  # noqa: E402
+    _CONF,
+    _EC,
+    ARCS,
+    _find_thread,
+    open_thread,
+    resolve_thread,
+)
 
 DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/osiris")
 SOURCE = "agent:c38f8f3b-v"
