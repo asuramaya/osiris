@@ -1878,6 +1878,12 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
     # I reconstructed my inheritance from an open thread'): a successor's orient surfaces
     # the ancestor's own parting words — its HANDOFF thread and LETTER decision — verbatim,
     # instead of promising a field that never existed.
+    #
+    # STRUCTURED FIRST, PROSE AS FALLBACK (ruling c5b184cd, /settle): word-matching identity
+    # is the disease behind every 'Thoth II'-style mislabel this house has hit — an
+    # is_handoff='true' property (stamped by settle(), a typed query) is the reliable half;
+    # the ILIKE '%handoff%'/'%letter%' text match stays ONLY for handoffs minted before this
+    # existed, never removed, never the sole check for anything settle() writes going forward.
     inheritance = None
     if ident and ident.succeeded_from:
         rows = await pool.fetch(
@@ -1886,7 +1892,9 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             "WHERE a.name = 'summary' AND a.source_id = $1 "
             "AND a.evidence_class = 'self_declared' "
             "AND o.type IN ('Thread','Decision') AND o.status = 'active' "
-            "AND (a.value #>> '{}' ILIKE '%handoff%' OR a.value #>> '{}' ILIKE '%letter%') "
+            "AND (EXISTS (SELECT 1 FROM current_assertions h WHERE h.object_id = o.id "
+            "             AND h.name = 'is_handoff' AND h.value #>> '{}' = 'true') "
+            "     OR a.value #>> '{}' ILIKE '%handoff%' OR a.value #>> '{}' ILIKE '%letter%') "
             "ORDER BY o.id, a.confidence DESC, a.observed_at DESC", ident.succeeded_from)
         picks = sorted(rows, key=lambda r: r["observed_at"], reverse=True)[:2]
         if picks:
@@ -3131,6 +3139,97 @@ async def resolve_thread(
             "closure-miner will not find this close"
         )
     return out
+
+
+@mcp.tool()
+async def settle(
+    decisions: list[dict[str, Any]] | None = None,
+    threads_open: list[dict[str, Any]] | None = None,
+    threads_resolve: list[dict[str, Any]] | None = None,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """THE END-OF-CONTEXT RITUAL (operator ruling c5b184cd): the mechanistic brain-dump a
+    session calls at every seam before compaction, so nothing it knows lives only in a
+    context about to be destroyed. COMPOSES record_decision/open_thread/resolve_thread —
+    never reimplements their writes — plus the same completeness boxes the Stop hook's
+    offload ritual checks (now one shared implementation, src.orchestrator.settle).
+
+    Call with NO arguments to just SURFACE status (safe, read-only — the boxes, and your
+    own open obligations fleet-wide). Call WITH `decisions`/`threads_open`/`threads_resolve`
+    to ACCEPT a dump in the same act — each list item is a dict of that verb's own keyword
+    arguments (decisions: summary/kind/rationale/repo/resolves; threads_open: summary/repo/
+    kind/owner; threads_resolve: ref/because/artifact) — settle dispatches each to the real
+    verb, unchanged, then CONFIRMS by re-checking the boxes and your obligations against the
+    now-updated graph. `complete` is only true when nothing is left explicitly unwritten.
+
+    `is_handoff: true` on a decision or thread item MINTS A STRUCTURED HANDOFF MARKER on
+    that object (a typed property, not a summary text the reader greps for — the ROOT
+    fragility behind every 'Thoth II'-style mislabel this house has hit): your successor's
+    orient() finds it directly, no ILIKE guess on the word 'handoff' required. Idempotent
+    and safe to call repeatedly through a session — later calls only add to what's already
+    written, never duplicate it (same discipline as record_decision/open_thread)."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — settle is a mind's own ritual, the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    pool = await _pool_get()
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
+    now = datetime.now(UTC)
+
+    accepted: dict[str, list[Any]] = {"decisions": [], "threads_opened": [], "threads_resolved": []}
+    for item in decisions or []:
+        item = dict(item)
+        is_handoff = bool(item.pop("is_handoff", False))
+        did = await capture.record_decision(
+            Actions(pool), item.pop("summary"), kind=item.pop("kind", "ruling"),
+            rationale=item.pop("rationale", None), repo=item.pop("repo", None),
+            resolves=item.pop("resolves", None), source=actor)
+        if is_handoff:
+            await Actions(pool).assert_property(did, "is_handoff", "true", actor, now, 0.9,
+                                                evidence_class="self_declared")
+        accepted["decisions"].append({"id": str(did)[:8], "is_handoff": is_handoff})
+    for item in threads_open or []:
+        item = dict(item)
+        is_handoff = bool(item.pop("is_handoff", False))
+        tid = await capture.open_thread(
+            Actions(pool), item.pop("summary"), repo=item.pop("repo", None),
+            kind=item.pop("kind", None), owner=item.pop("owner", None), source=actor)
+        if is_handoff:
+            await Actions(pool).assert_property(tid, "is_handoff", "true", actor, now, 0.9,
+                                                evidence_class="self_declared")
+        accepted["threads_opened"].append({"id": str(tid)[:8], "is_handoff": is_handoff})
+    for item in threads_resolve or []:
+        item = dict(item)
+        resolved_ref = item.get("ref")
+        rid = await capture.resolve_thread(
+            Actions(pool), item.pop("ref"), because=item.pop("because", None),
+            artifact=item.pop("artifact", None), source=actor)
+        accepted["threads_resolved"].append(
+            {"id": str(rid)[:8]} if rid is not None else
+            {"error": f"no open thread matches {resolved_ref!r}"})
+
+    # CONFIRM: re-check against the now-updated graph — a no-op re-derivation when nothing
+    # was accepted above, which is exactly the pure-SURFACE call shape.
+    from src.orchestrator.settle import missing_boxes, settle_boxes
+    mounted = await mounts.find_session_row(pool, ident.session)
+    boxes: dict[str, bool | None] = {}
+    missing: list[str] = []
+    if mounted is not None and mounted["mounted_at"]:
+        boxes = await settle_boxes(pool, agent_id=ident.agent_id,
+                                   mounted_at=mounted["mounted_at"], cwd=ident.cwd)
+        missing = missing_boxes(boxes)
+    obligations = await _owned_open_threads(pool, ident.agent_id)
+    return {
+        "complete": not missing and not obligations,
+        "boxes": boxes,
+        "missing_boxes": missing,
+        "open_obligations": obligations,
+        "accepted": accepted,
+        "note": ("compaction-safe by construction" if not missing and not obligations else
+                 "still unwritten — settle again once the missing boxes/obligations are "
+                 "closed, or accept them in your next call"),
+    }
 
 
 @mcp.tool()

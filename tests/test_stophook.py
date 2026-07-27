@@ -90,19 +90,9 @@ def test_marker_needs_a_trustworthy_session_id(
     stophook._offload_mark_blocked("short")  # a no-op, never raises
 
 
-# ═══════════ THE CHARTER-FILE WITNESS ═══════════
-
-def test_charter_touched_absent_file_cannot_be_evaluated(tmp_path: Path) -> None:
-    """No charter.md here at all — a repo cwd, not an office — fails open, never punished."""
-    assert stophook._charter_touched(str(tmp_path), datetime.now(UTC)) is None
-
-
-def test_charter_touched_checks_mtime_against_session_start(tmp_path: Path) -> None:
-    charter = tmp_path / "charter.md"
-    charter.write_text("# notes\n")
-    now = datetime.now(UTC)
-    assert stophook._charter_touched(str(tmp_path), now - timedelta(minutes=5)) is True
-    assert stophook._charter_touched(str(tmp_path), now + timedelta(minutes=5)) is False
+# ═══════════ THE CHARTER-FILE WITNESS — moved to tests/test_settle.py (ruling c5b184cd):
+# charter_touched now lives in src.orchestrator.settle, promoted out of this hook so /settle
+# and the Stop hook read one implementation. ═══════════
 
 
 # ═══════════ OCCUPANCY, OFF THE ONE AUTHORITY ═══════════

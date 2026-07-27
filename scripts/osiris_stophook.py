@@ -115,17 +115,14 @@ async def _deliverable(
 async def _offload_boxes(
     session_id: str, cwd: str,
 ) -> dict[str, bool | None] | None:
-    """The boxes the ritual checks for THIS session, best-effort per box — a box this
-    query could not evaluate is None and never appears in a refusal (fail open per-box,
-    the same law the whole hook runs on). Returns None only when the session itself can't
-    be resolved to an agent (nothing to check at all — the caller treats that exactly like
-    'everything satisfied').
-
-    `mounted_at` (agent_mounts) is this session's own first-mount stamp — set once at
-    INSERT, never touched by a re-attach's UPDATE — so it is session start, not a guess.
-    Decisions/threads are 'this session's' when their defining assertion's source_id is
-    this EXACT agent_id (the identity that mounted this job_dir) at or after mounted_at."""
+    """This session's own boxes — resolves session_id -> agent_id/mounted_at (hook-specific
+    context the shared checker shouldn't need to know about), then delegates the actual box
+    logic to settle.settle_boxes (ruling c5b184cd) so the hook and the /settle MCP tool read
+    ONE implementation, never two drifting copies. Returns None only when the session itself
+    can't be resolved to an agent (nothing to check at all — the caller treats that exactly
+    like 'everything satisfied')."""
     import asyncpg
+    from src.orchestrator.settle import settle_boxes
 
     conn = await asyncpg.connect(DSN, timeout=1.0)
     try:
@@ -133,62 +130,10 @@ async def _offload_boxes(
         row = await find_session_row(conn, session_id or "")
         if row is None or not row["agent_id"] or not row["mounted_at"]:
             return None
-        agent_id = str(row["agent_id"])
-        mounted_at = row["mounted_at"]
-        boxes: dict[str, bool | None] = {}
-        try:
-            boxes["decisions recorded this session"] = bool(await conn.fetchval(
-                "SELECT 1 FROM assertions a JOIN objects o ON o.id = a.object_id "
-                "WHERE o.type = 'Decision' AND a.name = 'summary' AND a.source_id = $1 "
-                "AND a.observed_at >= $2 LIMIT 1", agent_id, mounted_at))
-        except Exception:  # noqa: BLE001 — one box's failure never dooms the others
-            boxes["decisions recorded this session"] = None
-        try:
-            boxes["threads trued this session (opened or resolved)"] = bool(await conn.fetchval(
-                "SELECT 1 FROM assertions a JOIN objects o ON o.id = a.object_id "
-                "WHERE o.type = 'Thread' AND a.name IN ('summary', 'status') "
-                "AND a.source_id = $1 AND a.observed_at >= $2 LIMIT 1", agent_id, mounted_at))
-        except Exception:  # noqa: BLE001
-            boxes["threads trued this session (opened or resolved)"] = None
-        boxes["charter.md touched this session"] = _charter_touched(cwd, mounted_at)
-        # a live succession/handoff note — ONLY asked of a session whose own agent object
-        # was itself born by a mint (minted_because stamped at birth, permanent on that
-        # exact generation): a fresh heir owes its OWN heir at least one obligation left
-        # behind, not just mail settled. No content-classifier (Thoth LI's amend, msg
-        # 861's law extends here too) — the primitive is 'opened an obligation', not
-        # 'looks like a handoff'.
-        try:
-            minted = bool(await conn.fetchval(
-                "SELECT 1 FROM current_assertions a JOIN objects o ON o.id = a.object_id "
-                "WHERE o.canonical = $1 AND a.name = 'minted_because' LIMIT 1", agent_id))
-        except Exception:  # noqa: BLE001
-            minted = False
-        if minted:
-            try:
-                boxes["a live succession/handoff note (this lineage was minted)"] = bool(
-                    await conn.fetchval(
-                        "SELECT 1 FROM assertions a JOIN objects o ON o.id = a.object_id "
-                        "WHERE o.type = 'Thread' AND a.name = 'kind' "
-                        "AND a.value #>> '{}' = 'obligation' AND a.source_id = $1 "
-                        "AND a.observed_at >= $2 LIMIT 1", agent_id, mounted_at))
-            except Exception:  # noqa: BLE001
-                boxes["a live succession/handoff note (this lineage was minted)"] = None
-        return boxes
+        return await settle_boxes(conn, agent_id=str(row["agent_id"]),
+                                  mounted_at=row["mounted_at"], cwd=cwd)
     finally:
         await conn.close()
-
-
-def _charter_touched(cwd: str, mounted_at: datetime) -> bool | None:
-    """None (can't evaluate, fails open) when this cwd has no charter.md at all — a
-    session working in an ordinary repo, not an office, is never punished for a file
-    that was never scaffolded here. Present: mtime at or after session start."""
-    try:
-        charter = Path(cwd) / "charter.md"
-        if not charter.exists():
-            return None
-        return charter.stat().st_mtime >= mounted_at.timestamp()
-    except OSError:
-        return None
 
 
 def _offload_marker(session_id: str) -> Path | None:
@@ -256,7 +201,8 @@ def _offload_verdict(
     everything fog-of-war None) has nothing to enforce and never blocks."""
     if already_blocked or pct is None or window_assumed or pct < ALARM_PCT or not boxes:
         return None
-    missing = [label for label, ok in boxes.items() if ok is False]
+    from src.orchestrator.settle import missing_boxes
+    missing = missing_boxes(boxes)
     if not missing:
         return None
     listed = "; ".join(missing)
