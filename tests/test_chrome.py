@@ -502,6 +502,34 @@ def test_render_composition_a_scalar_leaf_is_a_fact_line_not_dropped() -> None:
     assert "open: 12" in html
 
 
+# --- row_action -> a real button (ruling c5b184cd, thread d56e7073/#44, the write leg) ------
+
+def test_render_composition_renders_a_button_for_a_row_action() -> None:
+    result = {"kind": "rows", "count": 1, "items": [
+        {"summary": "a real duty", "_action": {"action": "resolve_thread",
+                                                "args": {"ref": "aaaa1111"}}}]}
+    html = render_composition(result)
+    assert 'data-action="resolve_thread"' in html
+    assert 'data-args="' in html and "aaaa1111" in html
+    assert ">resolve<" in html  # the cosmetic label, not the raw verb name
+
+
+def test_render_composition_action_args_are_html_escaped() -> None:
+    """A summary/arg containing a quote must never break out of the data-args attribute."""
+    result = {"kind": "rows", "count": 1, "items": [
+        {"summary": 'a "quoted" duty', "_action": {"action": "resolve_thread",
+                                                    "args": {"ref": "a's-id"}}}]}
+    html = render_composition(result)
+    assert "&#x27;" in html or "&quot;" in html  # the quote landed escaped, not raw
+
+
+def test_render_composition_no_button_without_an_action() -> None:
+    result = {"kind": "rows", "count": 1, "items": [{"summary": "plain, no control"}]}
+    html = render_composition(result)
+    assert "<button" not in html
+    assert "_action" not in html  # the private key itself never leaks into the extras text
+
+
 # ── /docs — render_docs RETIRED (ruling c5b184cd, thread d56e7073/#44) ─────────────────────
 # /canon now reads compositions.DOCS through render_composition — its own tests live in
 # test_compositions.py (the composition end to end) and the render_composition section above.

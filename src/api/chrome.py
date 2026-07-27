@@ -13,6 +13,7 @@ Renderers are PURE (fixture-fed in tests); the routes in app.py feed them the li
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -82,12 +83,18 @@ button[disabled]{opacity:.4;cursor:default}
 # never holds state and can never disagree with the record.
 _ACTIONS = """<script>
 document.addEventListener('click',async e=>{
-  const b=e.target.closest('button[data-act]');if(!b)return;
+  const b=e.target.closest('button[data-act],button[data-action]');if(!b)return;
   e.preventDefault();e.stopPropagation();
   const J={'content-type':'application/json'};
   b.disabled=true;const was=b.textContent;b.textContent='…';
   try{
-    if(b.dataset.act==='settle'){
+    if(b.dataset.action){
+      // the generic action-binding path (ruling c5b184cd, thread d56e7073/#44) — the row's
+      // OWN args, resolved server-side by row_action, echoed back verbatim; this handler
+      // never constructs args itself.
+      await fetch('/act',{method:'POST',headers:J,body:JSON.stringify(
+        {action:b.dataset.action,args:JSON.parse(b.dataset.args||'{}')})});
+    }else if(b.dataset.act==='settle'){
       await fetch('/desk/settle',{method:'POST',headers:J,body:JSON.stringify(
         {ids:b.dataset.ids.split(',').map(Number)})});
     }else{
@@ -122,8 +129,8 @@ async function tick(){
 setInterval(tick,4000);
 </script>"""
 
-_TABS = (("desk", "/desk"), ("mail", "/mail"), ("fleet", "/fleet"),
-         ("roadmap", "/roadmap"), ("docs", "/canon"),
+_TABS = (("desk", "/desk"), ("live-desk", "/live-desk"), ("mail", "/mail"),
+         ("fleet", "/fleet"), ("roadmap", "/roadmap"), ("docs", "/canon"),
          ("overhead", "/overhead"), ("membrane", "/membrane"))
 
 
@@ -735,7 +742,18 @@ def render_fleet(data: dict[str, Any]) -> str:
 
 _COMPOSITION_CAP = 25
 _COMP_SALIENT = ("summary", "name", "title", "label", "subject")
-_COMP_SKIP = frozenset({"id", "props", "canonical", *_COMP_SALIENT})
+# "_action" is a PRIVATE key (compositions._table's row_action, ruling c5b184cd, thread
+# d56e7073/#44) — a control this row carries, never a displayed fact; skip it same as id/
+# props/canonical, which are structural too.
+_COMP_SKIP = frozenset({"id", "props", "canonical", "_action", *_COMP_SALIENT})
+
+# The one verb-name -> button-label map this renderer is allowed to know — NOT because it
+# has domain knowledge (it still never calls anything, only labels a button), but because
+# "resolve_thread" as raw button text would be unreadable chrome. Anything not listed here
+# falls back to its own action name verbatim — new registry entries need no renderer change.
+_ACTION_LABELS = {"resolve_thread": "resolve", "assign_thread": "not mine",
+                  "defer_thread": "later", "reclassify_thread": "reclassify",
+                  "settle": "settle"}
 
 
 def _comp_label(item: dict[str, Any]) -> str:
@@ -750,13 +768,27 @@ def _comp_label(item: dict[str, Any]) -> str:
     return str(oid) if oid else "—"
 
 
+def _comp_action_button(action: dict[str, Any]) -> str:
+    """One row's declared control (compositions._table's `row_action`) rendered as an
+    actual button — zero domain knowledge past the cosmetic label map above. The click
+    handler (chrome.py's `_ACTIONS` script) POSTs {action, args} to /act verbatim; this
+    function never calls anything, it only describes what to render."""
+    name = str(action.get("action") or "")
+    label = _ACTION_LABELS.get(name, name)
+    args = _e(json.dumps(action.get("args") or {}))
+    return (f'<button data-action="{_e(name)}" data-args="{args}">{_e(label)}</button>')
+
+
 def _comp_item(item: Any) -> str:
     if not isinstance(item, dict):
         return f'<div class="debt">{_e(item)}</div>'
     label = _e(_comp_label(item))
     extras = ", ".join(f"{_e(k)}={_e(v)}" for k, v in item.items() if v and k not in _COMP_SKIP)
+    action = item.get("_action")
+    button = _comp_action_button(action) if action and action.get("action") else ""
     return (f'<div class="debt">{label}'
-            + (f' <span class="dim">{extras}</span>' if extras else "") + "</div>")
+            + (f' <span class="dim">{extras}</span>' if extras else "")
+            + (f' <span class="verbs">{button}</span>' if button else "") + "</div>")
 
 
 def _comp_items(items: list[Any]) -> str:

@@ -822,6 +822,23 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
                 **({"skipped": out["skipped"]} if out["skipped"] else {}),
                 "note": "dismissed by the human's own click"}
 
+    @app.post("/act")
+    async def act(body: ActBody, p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        """THE GENERIC ACTION-BINDING INVOCATION (ruling c5b184cd, thread d56e7073/#44) — any
+        composition-rendered row carrying `_action` fires here through ONE shared route,
+        instead of one bespoke endpoint per verb family (/threads/triage, /desk/settle).
+        Same write-safety those two already established, just no longer per-route: `action`
+        is looked up in a CLOSED registry (actions.ACTION_VERBS) — an unknown name refuses,
+        never falls through to anything dynamic; each registry entry reads only its own
+        named `args` keys and hardcodes `source="analyst:operator"` itself — this route
+        never trusts the request body for WHO is acting, only WHAT."""
+        from src.api.actions import ACTION_VERBS
+        verb = ACTION_VERBS.get(body.action)
+        if verb is None:
+            return {"error": f"unknown action {body.action!r} — "
+                             f"must be one of {sorted(ACTION_VERBS)}"}
+        return await verb(p, body.args)
+
     # ---- the shared console cursor (real-time Claude↔front sync) -------------
     @app.get("/console")
     async def console_get(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
@@ -1030,6 +1047,21 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             inner = chrome.render_mail_overview(await chrome.mail_overview(p))
         return Response(inner if partial else chrome.page("mail", "mail", inner),
                         media_type="text/html")
+
+    @app.get("/live-desk")
+    async def live_desk_page(partial: int = 0, p: asyncpg.Pool = Depends(get_pool)) -> Response:
+        """"What's actionable for the operator right now" (ruling c5b184cd, thread
+        d56e7073/#44) — owed_to_you / decisions_awaiting_a_call / drift_alarms, read AND
+        write: the composition's own `_action` rows render real buttons here (`actions=True`
+        arms the click handler, same as /desk). Resolved/stale fall out by construction —
+        this page has no bespoke filtering of its own, only the composition + the generic
+        renderer. Requires `seed_default_compositions` to have run at least once since
+        "live-desk" was added; an unseeded DB degrades to an honest "no composition" line."""
+        res = await run_composition(p, "live-desk")
+        inner = chrome.render_composition(res)
+        return Response(
+            inner if partial else chrome.page("live desk", "live-desk", inner, actions=True),
+            media_type="text/html")
 
     @app.get("/fleet")
     async def fleet_page(partial: int = 0, p: asyncpg.Pool = Depends(get_pool)) -> Response:
@@ -1334,6 +1366,17 @@ class ThreadTriageBody(BaseModel):
 class DeskSettleBody(BaseModel):
     """The operator DISMISSING briefs from his own desk — his click, his signature."""
     ids: list[int]
+
+
+class ActBody(BaseModel):
+    """The generic action-binding invocation (ruling c5b184cd, thread d56e7073/#44) — a
+    composition-declared control's own click, POSTed exactly as `_action` named it. `action`
+    is looked up in `actions.ACTION_VERBS` (a closed registry); `args` is whatever that
+    specific row's own `row_action` template resolved to server-side (see
+    `compositions._table`) — the client never constructs `args` itself, only echoes what the
+    row it clicked already carried."""
+    action: str
+    args: dict[str, Any] = {}
 
 
 class ConsoleBody(BaseModel):

@@ -20,12 +20,17 @@ Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
   {"op":"union","sets":[N,...]}                     -> combine sets (.union)
   {"op":"intersect","sets":[N,...]}                 -> objects/values in ALL sets (.intersect)
   {"op":"aggregate","from":N,"group_by":[],"metric":{...}} -> group + a metric (.groupBy / rollup)
-  {"op":"table","from":N,"columns":[...]}          -> one ROW per object, columns = a property
-       OR a rollup-over-a-link (Notion's database+rollups / Palantir's object-set+per-object
-       aggregate). column = {"name":,"property":P} | {"name":,"rollup":{"direction":in|out|both,
-       "link_type":?,"object_type":?,"of":count|first|max|min|sum|avg,"property":?}}. `first` =
-       Notion's show-original (pluck a single relation's value, incl. an object column like
-       `canonical` — how a linked commit/entity is named).
+  {"op":"table","from":N,"columns":[...],"row_action":?} -> one ROW per object, columns = a
+       property OR a rollup-over-a-link (Notion's database+rollups / Palantir's object-set+
+       per-object aggregate). column = {"name":,"property":P} | {"name":,"rollup":
+       {"direction":in|out|both,"link_type":?,"object_type":?,
+       "of":count|first|max|min|sum|avg,"property":?}}. `first` = Notion's show-original
+       (pluck a single relation's value, incl. an object column like `canonical` — how a
+       linked commit/entity is named). `row_action` (ruling c5b184cd, thread d56e7073/#44 —
+       the write leg) declares a CONTROL every row carries, not a column:
+       {"action":<name>,"args":{<argname>:{"property":P}}}, resolved per-row into a private
+       `_action` key the renderer turns into a button — the op-tree only ever DECLARES the
+       shape; `/act`'s own registry is what enforces which actions/args are real.
   {"op":"order","from":N,"by":?,"dir":}            -> rank a set/rows (.orderBy)
   {"op":"take","from":N,"n":K}                      -> top-N (.take)
   {"op":"sections","sections":[{"title":,"body":N},...]} -> stack named sub-compositions into
@@ -1839,8 +1844,12 @@ async def _fn_desk_decisions(
          "WHERE " + _DESK_BRIEF_ROW + " AND m.desk_kind='decision' "
          "ORDER BY m.created_at DESC").replace("$op", "$1")
     rows = await pool.fetch(q, OPERATOR_ADDR)
+    # THE WRITE LEG (ruling c5b184cd, DM 1374): a Function's output is Python-native, so its
+    # own `_action` is attached directly here — no `row_action` templating applies to a
+    # Function (that's `table`'s own mechanism, over object properties this isn't).
     return [{"id": str(r["id"]), "from": r["from_agent"], "project": r["from_project"],
-             "summary": r["body"][:200], "when": str(r["created_at"])} for r in rows]
+             "summary": r["body"][:200], "when": str(r["created_at"]),
+             "_action": {"action": "settle", "args": {"ids": [r["id"]]}}} for r in rows]
 
 
 _FUNCTIONS: dict[str, Function] = {
@@ -2097,7 +2106,8 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
 
     if op == "table":
         base = await _eval(pool, node["from"], subject)
-        return Result("rows", rows=await _table(pool, base.objects, node.get("columns", []) or []))
+        return Result("rows", rows=await _table(
+            pool, base.objects, node.get("columns", []) or [], node.get("row_action")))
 
     if op == "order":
         base = await _eval(pool, node["from"], subject)
@@ -2165,32 +2175,56 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
     raise ValueError(f"unknown composition op: {op!r}")
 
 
+def _col_value(oid: uuid.UUID, facts: dict[str, str], prop: str) -> Any:
+    """The value one property name resolves to for one row — shared by column resolution and
+    `row_action`'s own arg templates, so both name properties the same way. `id` is special
+    (task #60, thread b81b0fac): not an assertion — a row is a candidate object, not a fact
+    ABOUT one — so it never lives in `facts`. Same 8-char short-id convention every other
+    read site uses (_owned_open_threads' substring(o.id::text,1,8), the open-thread wall's
+    own ids)."""
+    if prop == "id":
+        return str(oid)[:8]
+    return facts.get(prop)
+
+
 async def _table(
-    pool: asyncpg.Pool, objects: list[uuid.UUID], columns: list[dict[str, Any]]
+    pool: asyncpg.Pool, objects: list[uuid.UUID], columns: list[dict[str, Any]],
+    row_action: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """One ROW per object; each column is a property value or a rollup over a link (Notion's
     database+rollups / Palantir's object-set + per-object aggregate). Over a bounded set (a
     select/traverse result), so per-object queries are fine — the whole point is that the SET
-    is already candidate-gated by the op that produced it."""
+    is already candidate-gated by the op that produced it.
+
+    `row_action` (ruling c5b184cd, thread d56e7073/#44 — the write leg) declares a CONTROL
+    every row carries, not a displayed column: `{"action":<name>,"args":{<argname>:
+    {"property":P}}}`. Each row's own args get resolved HERE, from that SAME row's own
+    already-fetched facts (the identical `_col_value` a column would use), and attached as a
+    private `_action` key the renderer reads — never a column, never sent to the client as
+    displayed data. The op-tree only ever DECLARES the shape; `/act`'s own registry (a
+    separate, closed dispatch table) is what actually enforces which actions and args are
+    real — this function has no opinion on that, same discipline as everywhere else in this
+    dispatcher (a Function/op computes DATA, it never decides what's SAFE to write)."""
     rows: list[dict[str, Any]] = []
     for oid in objects:
         facts = await _props(pool, oid)
         row: dict[str, Any] = {}
         for col in columns:
             name = str(col.get("name") or col.get("property") or "col")
-            if col.get("property") == "id":
-                # THE ROW'S OWN IDENTITY (task #60, thread b81b0fac): not an assertion — a
-                # row is a candidate object, not a fact ABOUT one — so it never lived in
-                # `facts`. Same 8-char short-id convention every other read site uses
-                # (_owned_open_threads' substring(o.id::text,1,8), the open-thread wall's
-                # own ids). Lets a caller recover a summary this table truncated.
-                row[name] = str(oid)[:8]
-            elif "property" in col:
-                row[name] = facts.get(str(col["property"]))
+            if "property" in col:
+                row[name] = _col_value(oid, facts, str(col["property"]))
             elif "rollup" in col:
                 row[name] = await _rollup(pool, oid, col["rollup"])
             else:
                 row[name] = None
+        if row_action:
+            row["_action"] = {
+                "action": row_action.get("action"),
+                "args": {
+                    arg: _col_value(oid, facts, str(spec.get("property")))
+                    for arg, spec in (row_action.get("args") or {}).items()
+                },
+            }
         rows.append(row)
     return rows
 
@@ -2713,12 +2747,20 @@ DOCS_SECTION_ORDER = ("getting-started", "concepts", "reference", "deployment", 
 # `decisions_awaiting_a_call` is a Function (fleet_messages isn't the object graph, so it
 # can't be a pure op, same class as `desk_decisions`'s own docstring explains). `drift_alarms`
 # depends on `severity` actually being stamped — today only `alarm_schema_drift` does.
+#
+# THE WRITE LEG (same ruling, DM 1374): `owed_to_you`/`drift_alarms` carry a `row_action`
+# resolving a real thread — `resolve_thread`. `decisions_awaiting_a_call`'s own action
+# (`settle`) is attached directly inside `_fn_desk_decisions` itself, not here: a Function's
+# output is Python-native, no `row_action` templating applies to it.
+_RESOLVE_ACTION = {"action": "resolve_thread", "args": {"ref": {"property": "id"}}}
+
 LIVE_DESK: dict[str, Any] = {
     "op": "sections",
     "sections": [
         {"title": "owed_to_you", "body": {
             "op": "table", "columns": [{"property": "id"}, {"property": "summary"},
                                        {"property": "kind"}],
+            "row_action": _RESOLVE_ACTION,
             "from": {"op": "order", "by": "recency", "dir": "desc", "from": {
                 "op": "select", "object_type": "Thread", "where": [
                     {"property": "status", "op": "eq", "value": "open"},
@@ -2727,6 +2769,7 @@ LIVE_DESK: dict[str, Any] = {
          "body": {"op": "function", "name": "desk_decisions"}},
         {"title": "drift_alarms", "body": {
             "op": "table", "columns": [{"property": "id"}, {"property": "summary"}],
+            "row_action": _RESOLVE_ACTION,
             "from": {"op": "order", "by": "recency", "dir": "desc", "from": {
                 "op": "select", "object_type": "Thread", "where": [
                     {"property": "status", "op": "eq", "value": "open"},
