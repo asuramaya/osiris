@@ -466,18 +466,38 @@ def test_parked_on_a_question_pure() -> None:
 
 
 def test_practice_violation_pure() -> None:
-    """PRACTICE v2 layer 3: a reversal cue ALONE is too cheap a trigger (most turns say
-    'stop'/'avoid' about something no Practice has ever touched) — topical overlap with
-    the practice's own statement is required too. Neither signal alone should fire."""
+    """PRACTICE v2 layer 3 v2 (Thoth, msgs 1800/1801, DO-BEFORE-DEPLOY): a reversal cue
+    ALONE is too cheap a trigger, and topical overlap alone is too — both are required
+    IN THE SAME SENTENCE, not merely co-present anywhere in a long turn (SPECIMEN 2:
+    Imhotep's settle turn tripped on "rather than" in one sentence while the practice's
+    topic only appeared in an unrelated later sentence). Quoting the practice's own
+    wording verbatim is citation, not reversal, and must not fire either (SPECIMEN 1:
+    quoting Practice 0e6ce6f5 verbatim tripped its own "never")."""
     practices = [{"id": "abc12345",
                  "statement": "batch small commits into one PR for this class of change"}]
+    # a genuine violation: reversal cue + on-topic, but reworded/reordered — not a quote
     hit = stophook._practice_violation(
-        "never batch small commits into one PR for this class of change", practices)
+        "Let's stop doing small batch commits for this kind of change — one big commit "
+        "instead. Done.", practices)
     assert hit == {"practice_id": "abc12345",
-                   "statement": practices[0]["statement"], "cues": ["never"]}
+                   "statement": practices[0]["statement"], "cues": ["stop"]}
+    # SPECIMEN 1: quoting the practice's own text verbatim is citation, not reversal —
+    # even when the practice's own wording itself carries a cue word
+    quoting_practice = [{"id": "de456789",
+                         "statement": "never batch small commits into one PR for this "
+                                      "class of change"}]
+    assert stophook._practice_violation(
+        "As recorded: never batch small commits into one PR for this class of change.",
+        quoting_practice) is None
+    # SPECIMEN 2: a reversal cue in one sentence, the practice's topic only mentioned in
+    # an UNRELATED later sentence of the same turn — not proximate, so not flagged
+    assert stophook._practice_violation(
+        "Let's do this rather than the other approach, for unrelated reasons. Separately, "
+        "batch small commits into one PR for this class of change, as usual.",
+        practices) is None
     # cue present, but no topical overlap with any standing practice — no false positive
     assert stophook._practice_violation("never eat the last slice of pizza", practices) is None
-    # topical overlap present, but no reversal cue — a plain mention, not a violation
+    # topical overlap present, but no reversal cue anywhere — a plain mention
     assert stophook._practice_violation(
         "batch small commits into one PR for this class of change, as usual", practices) is None
     assert stophook._practice_violation(None, practices) is None
@@ -637,8 +657,8 @@ async def test_stage_a_confesses_when_a_turn_violates_a_standing_practice(
     _write_transcript(
         transcript,
         {"type": "assistant", "isSidechain": False, "message": {"content":
-            "Actually, never batch small commits into one PR for this class of change — "
-            "going with one big commit instead. Done."}},
+            "Let's stop doing small batch commits for this kind of change — one big "
+            "commit instead. Done."}},
     )
     job_dir = str(tmp_path / "jobs" / "pviolat1")
     await save_mount(actions.pool, job_dir=job_dir, agent_id=worker_agent, project="testhouse",
@@ -657,7 +677,7 @@ async def test_stage_a_confesses_when_a_turn_violates_a_standing_practice(
     assert row["grade"] == "fyi"
     assert "may have violated standing Practice" in row["body"]
     assert "batch small commits into one PR for this class of change" in row["body"]
-    assert "never" in row["body"]
+    assert "stop" in row["body"]
 
 
 async def test_stage_a_does_not_confess_when_a_turn_merely_mentions_a_practice_topic(
@@ -697,6 +717,48 @@ async def test_stage_a_does_not_confess_when_a_turn_merely_mentions_a_practice_t
         {"cwd": str(office), "session_id": sid, "transcript_path": str(transcript)})
     after = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
     assert after == before  # topical mention only, no reversal cue — nothing to flag
+
+
+async def test_stage_a_does_not_confess_when_the_turn_quotes_the_practice_verbatim(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
+) -> None:
+    """The live specimen (Thoth, msg 1800): a settle turn that QUOTES a standing
+    Practice's own text back verbatim tripped the Practice's own "never" — citation,
+    not reversal. Reproduces it end to end: the practice's own statement carries a cue
+    word, and the turn cites it directly."""
+    monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    worker_agent, worker_seat = "agent:pviol003", "seat:pviol003"
+    manager_agent, manager_seat = "agent:pvmgr003", "seat:pvmgr003"
+    worker_obj = await actions.create_or_find_object("Seat", worker_seat, worker_agent)
+    manager_obj = await actions.create_or_find_object("Seat", manager_seat, manager_agent)
+    now = datetime.now(UTC)
+    await actions.assert_property(worker_obj, "handle", "pviolworker3", worker_agent, now,
+                                  0.9, evidence_class="self_declared")
+    await actions.create_link(worker_obj, manager_obj, "managed_by", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await bind_holder(actions, seat_id=worker_seat, agent_id=worker_agent)
+    await record_practice(
+        actions, "never batch small commits into one PR for this class of change")
+
+    office = tmp_path / "office3"
+    office.mkdir()
+    transcript = tmp_path / "t3.jsonl"
+    _write_transcript(
+        transcript,
+        {"type": "assistant", "isSidechain": False, "message": {"content":
+            "As recorded: never batch small commits into one PR for this class of "
+            "change. Settling now."}},
+    )
+    job_dir = str(tmp_path / "jobs" / "pviolat3")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=worker_agent, project="testhouse",
+                     cwd=str(office), model=None, session_key=None)
+    sid = "pviolat3-0000-4000-8000-000000000000"
+
+    before = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    await stophook._stage_a_async(
+        {"cwd": str(office), "session_id": sid, "transcript_path": str(transcript)})
+    after = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    assert after == before  # quoting the practice's own text is citation, not reversal
 
 
 # ═══════════ INTEGRATION — _stage_a_async end to end ═══════════

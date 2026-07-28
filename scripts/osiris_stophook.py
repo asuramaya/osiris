@@ -578,31 +578,71 @@ async def _active_practices(conn: Any, limit: int = 25) -> list[dict[str, Any]]:
     return [{"id": str(r["id"]), "statement": r["statement"]} for r in rows if r["statement"]]
 
 
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
+_QUOTE_NGRAM = 5
+
+
+def _quotes_the_practice(sentence_words: list[str], stmt_words: list[str]) -> bool:
+    """Deterministic quoting detector, no NLP: a sentence that reproduces a contiguous
+    N-word run of the practice's OWN wording is citing it, not reversing it (Thoth's
+    live specimen, msg 1800: quoting Practice 0e6ce6f5 verbatim tripped its own "never" —
+    the practice's text and a genuine reversal of it are not the same shape; a real
+    reversal reuses a few TOPIC words in a DIFFERENT sentence structure, a quote
+    reproduces the practice's exact word sequence). Ratio-based overlap (checked instead
+    of this once) over-suppresses short statements, where any on-topic sentence
+    necessarily reuses most of the practice's few content words regardless of quoting —
+    this checks WORD ORDER, not vocabulary density."""
+    if len(stmt_words) < _QUOTE_NGRAM:
+        return False
+    joined = " ".join(sentence_words)
+    return any(
+        " ".join(stmt_words[i:i + _QUOTE_NGRAM]) in joined
+        for i in range(len(stmt_words) - _QUOTE_NGRAM + 1)
+    )
+
+
 def _practice_violation(
     text: str | None, practices: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     """Pure, no DB, no NLP: the SAME lexical reversal fingerprint layer 1 uses at write
     time (capture.practice_contradiction_cues), applied here to a turn's raw tail text
     instead of a Decision's summary — a turn can violate standing law without ever
-    recording one (c54e8176's own second case). A cue alone is too cheap a trigger (most
-    turns say 'stop'/'avoid' about something no Practice has ever touched), so this ALSO
-    requires topical overlap with the practice's own statement: at least 2 shared
-    significant words (len >= 4, crude but stopword-free by construction). Returns the
-    first (highest-confirmed, since `practices` arrives pre-ordered) match, or None — a
-    miss is not proof of compliance, only that this fingerprint found nothing; the
-    caller's job is a courtesy nudge, never a verdict."""
+    recording one (c54e8176's own second case).
+
+    TWO LIVE FALSE POSITIVES fixed here (Thoth, msgs 1800/1801, DO-BEFORE-DEPLOY): (1)
+    quoting a Practice's own text verbatim tripped its own reversal cue ("never" is
+    IN Practice 0e6ce6f5's statement) — `_quotes_the_practice` suppresses a sentence
+    that reproduces the practice's own wording. (2) a cue word co-present ANYWHERE in a
+    long turn with a practice's topic ANYWHERE else in that same turn, unrelated to each
+    other ("rather than" in ordinary prose, the practice's topic mentioned in a
+    different sentence entirely) — checking PER SENTENCE instead of the whole tail
+    means the cue and the topical overlap must be NEAR each other (the same sentence),
+    not merely co-present. A cue alone is still too cheap a trigger on its own, so each
+    sentence also requires topical overlap with the practice's own statement: at least 2
+    shared significant words (len >= 4, crude but stopword-free by construction).
+    Returns the first (highest-confirmed, since `practices` arrives pre-ordered) match,
+    or None — a miss is not proof of compliance, only that this fingerprint found
+    nothing; the caller's job is a courtesy nudge, never a verdict."""
     if not text or not practices:
         return None
     from src.orchestrator.capture import practice_contradiction_cues
 
-    cues = practice_contradiction_cues(text)
-    if not cues:
-        return None
-    words = set(re.findall(r"[a-z]{4,}", text.lower()))
-    for p in practices:
-        stmt_words = set(re.findall(r"[a-z]{4,}", (p.get("statement") or "").lower()))
-        if len(words & stmt_words) >= 2:
-            return {"practice_id": p["id"][:8], "statement": p["statement"], "cues": cues}
+    for sentence in _SENTENCE_SPLIT.split(text):
+        cues = practice_contradiction_cues(sentence)
+        if not cues:
+            continue
+        sent_words = re.findall(r"[a-z]{4,}", sentence.lower())
+        if not sent_words:
+            continue
+        sent_topic = set(sent_words)
+        for p in practices:
+            stmt = p.get("statement") or ""
+            stmt_topic = set(re.findall(r"[a-z]{4,}", stmt.lower()))
+            if len(sent_topic & stmt_topic) < 2:
+                continue
+            if _quotes_the_practice(sentence.lower().split(), stmt.lower().split()):
+                continue
+            return {"practice_id": p["id"][:8], "statement": stmt, "cues": cues}
     return None
 
 
