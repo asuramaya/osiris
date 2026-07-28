@@ -189,6 +189,87 @@ async def test_short_id_ref_beats_a_summary_that_quotes_it(actions: Actions) -> 
     assert await resolve_thread(actions, "cites the campaign", because="also done") == quoter
 
 
+# --- ref disambiguation (thread ac3333f7, Khnum IX's own near-miss, msg 1807) ---------------
+
+async def test_resolve_thread_by_bare_canonical_suffix(actions: Actions) -> None:
+    """The exact shape of the near-miss: a bare 12-hex canonical SUFFIX (no 'thread:'
+    prefix) must resolve the object it actually names via an exact canonical match, never
+    fall through to substring text."""
+    import hashlib
+
+    t = await open_thread(actions, "the canonical-suffix resolution target")
+    suffix = hashlib.sha1(b"the canonical-suffix resolution target").hexdigest()[:12]
+    assert await resolve_thread(actions, suffix, because="done") == t
+
+
+async def test_resolve_thread_by_full_canonical(actions: Actions) -> None:
+    import hashlib
+
+    t = await open_thread(actions, "the full-canonical resolution target")
+    canonical = "thread:" + hashlib.sha1(b"the full-canonical resolution target").hexdigest()[:12]
+    assert await resolve_thread(actions, canonical, because="done") == t
+
+
+async def test_hex_shaped_ref_refuses_rather_than_quietly_matching_a_quoting_summary(
+    actions: Actions,
+) -> None:
+    """The actual bug: a hex-shaped ref that matches NO real canonical and NO real short-id
+    must REFUSE (None) — it must never fall through to a substring match against some
+    unrelated thread's summary that merely happens to quote the same string. Before the
+    fix this returned the quoting thread; now it returns nothing, forcing the caller to be
+    honest about not having a real target."""
+    quoter = await open_thread(
+        actions, "a duplicate object's canonical was deadbeefcafe — see the fold report")
+    tid = await resolve_thread(actions, "deadbeefcafe", because="should not land")
+    assert tid is None
+    # the quoting thread is untouched and still resolvable by its own words
+    assert await resolve_thread(actions, "fold report", because="done") == quoter
+
+
+async def test_short_id_prefix_collision_raises_ambiguous(actions: Actions) -> None:
+    """The pre-existing LIMIT-1 silent-pick-one gap, closed by the same fix: two live
+    Threads whose real object ids happen to share an 8-char prefix must raise
+    RefAmbiguous naming BOTH candidates, never arbitrarily resolve to whichever the DB
+    happened to return first."""
+    from src.orchestrator.capture import RefAmbiguous, _find_thread
+
+    shared = "deadbeef"
+    id_a = uuid.UUID(f"{shared}-0000-4000-8000-000000000001")
+    id_b = uuid.UUID(f"{shared}-0000-4000-8000-000000000002")
+    for oid, summary in ((id_a, "collision candidate A"), (id_b, "collision candidate B")):
+        await actions.pool.execute(
+            "INSERT INTO objects (id, type, canonical, status) VALUES ($1, 'Thread', $2, "
+            "'active')", oid, f"thread:manual-{oid}")
+        await actions.assert_property(oid, "summary", summary, "test", datetime.now(UTC), 0.9,
+                                      evidence_class="self_declared")
+    try:
+        await _find_thread(actions.pool, shared)
+        raise AssertionError("expected RefAmbiguous")
+    except RefAmbiguous as exc:
+        assert exc.ref == shared and exc.type_ == "Thread"
+        assert {c["id"] for c in exc.candidates} == {str(id_a), str(id_b)}
+
+
+async def test_find_decision_resolves_by_canonical_suffix(actions: Actions) -> None:
+    import hashlib
+
+    from src.orchestrator.capture import _find_decision
+
+    d = await record_decision(actions, "the decision canonical-suffix target")
+    suffix = hashlib.sha1(b"the decision canonical-suffix target").hexdigest()[:12]
+    assert await _find_decision(actions.pool, suffix) == d
+
+
+async def test_find_practice_resolves_by_canonical_suffix(actions: Actions) -> None:
+    import hashlib
+
+    from src.orchestrator.capture import _find_practice, record_practice
+
+    p = await record_practice(actions, "the practice canonical-suffix target")
+    suffix = hashlib.sha1(b"the practice canonical-suffix target").hexdigest()[:12]
+    assert await _find_practice(actions.pool, suffix) == p
+
+
 async def test_status_resolution_honors_grade_over_recency(actions: Actions) -> None:
     """A thread's status, on every read surface, is the WINNING assertion by evidence GRADE —
     not 'any source says open', not most-recent-wins. The miner opens a thread (DERIVED), a

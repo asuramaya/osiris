@@ -219,28 +219,86 @@ async def record_decision(
     return d
 
 
-async def _find_decision(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
-    """A Decision by UUID, by short-id PREFIX, then by summary substring (shortest summary
-    wins) — the same resolution ladder as _find_thread, and for the same reason: the fleet
-    quotes decisions by 8-char short id inside other summaries, so the prefix leg must run
-    before the text leg."""
+class RefAmbiguous(Exception):
+    """Raised by `_resolve_ref` when a short-id PREFIX genuinely matches more than one
+    live object — the one case thread ac3333f7's fix actually needs a real disambiguation
+    list for (an EXACT canonical match can never be ambiguous: `objects` carries a
+    UNIQUE(type, canonical) constraint). `.candidates` is the real, capped list — never
+    picked-for-you via an arbitrary LIMIT 1. Orchestrator-level callers that already
+    treat a failed ref resolution as an all-or-nothing refusal (record_decision's
+    resolves/supersedes, which already raises ValueError on a plain miss) let this
+    propagate unchanged — an ambiguous ref deserves a LOUDER failure than a silent guess,
+    not a quieter one. MCP tool wrappers that want to render the list to a human catch it
+    directly."""
+
+    def __init__(self, ref: str, type_: str, candidates: list[dict[str, str]]) -> None:
+        self.ref = ref
+        self.type_ = type_
+        self.candidates = candidates
+        super().__init__(
+            f"{ref!r} matches {len(candidates)} {type_} objects by short-id prefix — "
+            "quote more characters, or the full UUID, to disambiguate")
+
+
+async def _resolve_ref(
+    pool: asyncpg.Pool, type_: str, ref: str, *, text_field: str,
+) -> uuid.UUID | None:
+    """The shared resolution ladder every `_find_*` helper in this module is built on
+    (thread ac3333f7, Khnum IX's own near-miss, msg 1807): a ref that LOOKS like an
+    identifier must resolve DETERMINISTICALLY or refuse — it must never silently fall
+    through to a fuzzy text search, because a hex-looking string can coincidentally
+    substring-match a COMPLETELY DIFFERENT object's text field (exactly what happened: a
+    bare canonical suffix substring-matched a bug-report thread that merely quoted it).
+
+    Ladder: (1) a full UUID — exact `id` match. (2) this type's own canonical scheme
+    (`_canon`'s `<type>:<12hex>`, with or without the caller supplying the `type:` prefix)
+    — an EXACT `canonical` match, never ambiguous by the UNIQUE constraint. (3) a
+    short-id PREFIX (the pre-existing 8+ hex/dash convention, unchanged) — exactly one
+    hit resolves it; zero hits REFUSES (returns None; does NOT fall through to (4) — a
+    deliberate behavior change from before this fix, where id-shaped input that missed
+    the prefix leg still got a free-text search); two or more hits raises
+    `RefAmbiguous` with the real candidates instead of an arbitrary LIMIT 1 pick. ONLY
+    when `ref` matches NEITHER the canonical shape NOR the short-id shape at all does
+    this fall through to (4), the pre-existing fuzzy `ILIKE` substring match (shortest
+    match wins) — genuinely free-text queries are exactly as forgiving as before."""
     try:
         return uuid.UUID(ref)
     except (ValueError, AttributeError):
         pass
-    short = (ref or "").strip().lower()
-    if re.fullmatch(r"[0-9a-f]{8}[0-9a-f-]*", short):
-        did = await pool.fetchval(
-            "SELECT id FROM objects WHERE type='Decision' AND status='active' "
-            "AND id::text LIKE $1 || '%' LIMIT 1", short)
-        if did is not None:
-            return uuid.UUID(str(did))
+    raw = (ref or "").strip().lower()
+    canon_prefix = f"{type_.lower()}:"
+    hex_part = raw[len(canon_prefix):] if raw.startswith(canon_prefix) else raw
+    if re.fullmatch(r"[0-9a-f]{12}", hex_part):
+        cid = await pool.fetchval(
+            "SELECT id FROM objects WHERE type=$1 AND status='active' AND canonical=$2",
+            type_, f"{canon_prefix}{hex_part}")
+        if cid is not None:
+            return uuid.UUID(str(cid))
+    if re.fullmatch(r"[0-9a-f]{8}[0-9a-f-]*", raw):
+        rows = await pool.fetch(
+            "SELECT o.id, a.value #>> '{}' AS text FROM objects o "
+            "LEFT JOIN current_assertions a ON a.object_id=o.id AND a.name=$3 "
+            "WHERE o.type=$1 AND o.status='active' AND o.id::text LIKE $2 || '%' LIMIT 6",
+            type_, raw, text_field)
+        if len(rows) == 1:
+            return uuid.UUID(str(rows[0]["id"]))
+        if len(rows) > 1:
+            raise RefAmbiguous(ref, type_, [
+                {"id": str(r["id"]), text_field: r["text"]} for r in rows])
+        return None  # id-shaped but matched nothing anywhere — refuse, never fall through
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT o.id FROM objects o JOIN current_assertions a ON a.object_id=o.id "
-        "WHERE o.type='Decision' AND o.status='active' AND a.name='summary' "
-        "AND a.value #>> '{}' ILIKE '%'||$1||'%' ORDER BY length(a.value #>> '{}') ASC LIMIT 1",
-        ref,
+        "WHERE o.type=$1 AND o.status='active' AND a.name=$3 "
+        "AND a.value #>> '{}' ILIKE '%'||$2||'%' ORDER BY length(a.value #>> '{}') ASC LIMIT 1",
+        type_, ref, text_field,
     )
+
+
+async def _find_decision(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
+    """A Decision by UUID, by canonical, by short-id PREFIX, then by summary substring
+    (shortest summary wins) — see `_resolve_ref` for the full ladder and why it refuses
+    rather than guesses on identifier-shaped input."""
+    return await _resolve_ref(pool, "Decision", ref, text_field="summary")
 
 
 async def _thread_summary(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | None:
@@ -544,28 +602,17 @@ async def _current_owner(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | None
 
 
 async def _find_thread(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
-    """A Thread by UUID, by short-id PREFIX, then by summary substring (shortest summary
-    wins — closest to the query). The prefix leg runs BEFORE summary text because the fleet
-    quotes threads by their 8-char short id INSIDE other summaries: '5c57f54d' must resolve
-    to thread 5c57f54d-…, never to whichever thread's summary happens to mention it (that
-    mis-resolve closed the wrong obligation on 2026-07-10)."""
-    try:
-        return uuid.UUID(ref)
-    except (ValueError, AttributeError):
-        pass
-    short = (ref or "").strip().lower()
-    if re.fullmatch(r"[0-9a-f]{8}[0-9a-f-]*", short):
-        tid = await pool.fetchval(
-            "SELECT id FROM objects WHERE type='Thread' AND status='active' "
-            "AND id::text LIKE $1 || '%' LIMIT 1", short)
-        if tid is not None:
-            return uuid.UUID(str(tid))
-    return await pool.fetchval(  # type: ignore[no-any-return]
-        "SELECT o.id FROM objects o JOIN current_assertions a ON a.object_id=o.id "
-        "WHERE o.type='Thread' AND o.status='active' AND a.name='summary' "
-        "AND a.value #>> '{}' ILIKE '%'||$1||'%' ORDER BY length(a.value #>> '{}') ASC LIMIT 1",
-        ref,
-    )
+    """A Thread by UUID, by canonical (`thread:<12hex>`, with or without the prefix), by
+    short-id PREFIX, then by summary substring (shortest summary wins — closest to the
+    query). The prefix leg runs BEFORE summary text because the fleet quotes threads by
+    their 8-char short id INSIDE other summaries: '5c57f54d' must resolve to thread
+    5c57f54d-…, never to whichever thread's summary happens to mention it (that mis-
+    resolve closed the wrong obligation on 2026-07-10) — and, since ac3333f7, an
+    identifier-shaped ref that matches NEITHER the canonical NOR the short-id leg REFUSES
+    outright rather than falling through to that same substring text (Khnum IX's own
+    near-miss, msg 1807: a bare canonical suffix silently matched a bug-report thread
+    that merely quoted it). See `_resolve_ref` for the full ladder."""
+    return await _resolve_ref(pool, "Thread", ref, text_field="summary")
 
 
 # the triage verbs' kinds (ruling 758ded94): adopt = obligation (owed work, testimony),
@@ -826,25 +873,10 @@ async def kill_superstition(
 
 
 async def _find_practice(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
-    """A Practice by UUID, by short-id PREFIX, then by `statement` substring (shortest
-    statement wins) — same resolution ladder as `_find_decision`/`_find_thread`."""
-    try:
-        return uuid.UUID(ref)
-    except (ValueError, AttributeError):
-        pass
-    short = (ref or "").strip().lower()
-    if re.fullmatch(r"[0-9a-f]{8}[0-9a-f-]*", short):
-        pid = await pool.fetchval(
-            "SELECT id FROM objects WHERE type='Practice' AND status='active' "
-            "AND id::text LIKE $1 || '%' LIMIT 1", short)
-        if pid is not None:
-            return uuid.UUID(str(pid))
-    return await pool.fetchval(  # type: ignore[no-any-return]
-        "SELECT o.id FROM objects o JOIN current_assertions a ON a.object_id=o.id "
-        "WHERE o.type='Practice' AND o.status='active' AND a.name='statement' "
-        "AND a.value #>> '{}' ILIKE '%'||$1||'%' ORDER BY length(a.value #>> '{}') ASC LIMIT 1",
-        ref,
-    )
+    """A Practice by UUID, by canonical, by short-id PREFIX, then by `statement`
+    substring (shortest statement wins) — same resolution ladder as
+    `_find_decision`/`_find_thread`; see `_resolve_ref`."""
+    return await _resolve_ref(pool, "Practice", ref, text_field="statement")
 
 
 async def _witness_link(
