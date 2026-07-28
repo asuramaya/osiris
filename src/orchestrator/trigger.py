@@ -1583,6 +1583,106 @@ async def launch_seat(
     return out
 
 
+async def _transcript_activity(
+    pool: asyncpg.Pool, holder: str, st: Settings,
+) -> tuple[bool, bool]:
+    """(transcript_checked, fresh) for `holder`'s own resumable session, by the transcript's
+    newest TIMESTAMPED line — never mtime (the Aegis phantom: a session 13h dead wore a
+    seconds-old mtime, bumped by something in the chrome/daemon that is not a turn). The
+    same `_turn_fresh_sync` reads dispatch_dm's own mid-turn gate already trusts. No
+    findable transcript at all → (False, False): not evidence of life, just nothing more
+    to check beyond the roster."""
+    resume = await _agent_resumable(pool, holder, st)
+    if resume is None:
+        return False, False
+    root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
+        else Path.home() / ".claude" / "projects"
+    fresh = await asyncio.to_thread(_turn_fresh_sync, root, resume[0], st.osiris_dm_active_secs)
+    return True, fresh
+
+
+async def vacate_dead_seat(
+    actions: Actions, *, seat_id: str, actor: str, because: str,
+    agents_json: Any = None, settings: Settings | None = None,
+    transcript_activity: Any = None,
+) -> dict[str, Any]:
+    """THE VACATE-DEAD-HOLDER VERB (thread 445a7356, Thoth's ruling msg 1611) — the
+    evidence-gathering complement to seats.vacate_holder's bare write, and to
+    seats.retire_seat's stale-holder refusal (never its bypass: that refusal stays
+    exactly as-is, correctly declining to evict a live mind — this exists for the one
+    case it correctly can't resolve alone, a holder whose PROCESS actually died without
+    ever calling retire() on itself; found live during task #68's acceptance demo).
+
+    GATED ON REAL LIVENESS EVIDENCE, CONJUNCTIVELY — refuses loudly, never guesses, if
+    EITHER signal disagrees with the other:
+      (1) the harness roster (`claude agents --json`) shows NO live session at the
+          seat's own office cwd — the substrate-agnostic front door (works for a
+          harness-native body same as a PTY one, since both register under the office);
+      (2) the holder's own transcript's newest TIMESTAMPED LINE is stale — NOT mtime
+          (the Aegis phantom, 2026-07-21: a session 13h dead wore a seconds-old mtime,
+          bumped by something in the chrome/daemon that is not a turn) — the same
+          `_turn_fresh_sync` reads dispatch_dm's own mid-turn gate already trusts.
+    Neither signal alone is enough: a fresh mtime with no roster entry could be a
+    just-exited process the roster hasn't dropped yet; a roster miss with a genuinely
+    fresh transcript line could be a body whose live process sits outside this office's
+    own cwd tracking. Both agreeing is the bar. A holder with NO findable transcript at
+    all is not treated as ambiguous — the roster (a direct, present-tense signal) already
+    settles it, and being unable to find MORE evidence of life is not evidence of life.
+
+    AUTO-INVOCATION IS OUT OF SCOPE (reaper #59, stays operator-gated per Thoth's
+    ruling) — this is for a deliberate hand, called once on a specific seat, never a
+    sweep."""
+    st = settings or get_settings()
+    agents_json = agents_json or _claude_agents_json
+    transcript_activity = transcript_activity or _transcript_activity
+    pool = actions.pool
+    from src.orchestrator.seats import seat_facts, seat_receipt, vacate_holder
+
+    receipt = await seat_receipt(pool, seat_id)
+    holder = (receipt or {}).get("holder") if receipt else None
+    if not holder:
+        return {"status": "refused-vacant", "seat": seat_id,
+                "detail": f"{seat_id} is already vacant — nothing to vacate"}
+    facts = await seat_facts(pool, seat_id)
+    office = facts.get("anchor_cwd")
+    if not office:
+        return {"status": "refused-no-office", "seat": seat_id,
+                "detail": f"{seat_id} has no anchor_cwd on record — a liveness check with "
+                          "nowhere to look is not evidence of death"}
+
+    # SIGNAL 1 — the harness roster, the substrate-agnostic front door.
+    try:
+        roster = await agents_json(cwd=office)
+    except (OSError, TimeoutError, ValueError):
+        return {"status": "refused-ambiguous", "seat": seat_id,
+                "detail": "the harness roster could not be read — a liveness check that "
+                          "cannot see is not evidence of death; refusing rather than "
+                          "guessing"}
+    live_row = next((r for r in roster if isinstance(r, dict) and r.get("cwd") == office),
+                    None)
+    if live_row is not None:
+        return {"status": "refused-live", "seat": seat_id,
+                "detail": f"a live session ({live_row.get('name', 'unnamed')!r}) still "
+                          f"sits at {office} — never evicts a live mind"}
+
+    # SIGNAL 2 — the holder's own transcript, by its newest TIMESTAMPED line (never mtime).
+    transcript_checked, fresh = await transcript_activity(pool, holder, st)
+    if fresh:
+        return {"status": "refused-live", "seat": seat_id,
+                "detail": f"{holder}'s own transcript shows a turn within the last "
+                          f"{st.osiris_dm_active_secs}s — mtime alone lies (the Aegis "
+                          "phantom); this reads the transcript's own timestamped "
+                          "content and it disagrees with the roster"}
+
+    out = await vacate_holder(actions, seat_id=seat_id, actor=actor, because=because)
+    if "error" in out:
+        return {"status": "refused", "seat": seat_id, "detail": out["error"]}
+    return {"status": "vacated", "seat": seat_id, "was_held_by": out["was_held_by"],
+            "evidence": {"roster_checked": True, "transcript_checked": transcript_checked},
+            "detail": f"no live process at {office} and no fresh transcript activity from "
+                      f"{holder} — vacated"}
+
+
 def _receipt_path(job_dir: str | None, resume_session: str | None) -> Path | None:
     """Where this wake drops the CLI's cost envelope. None when we have nowhere to put it — and
     a wake with nowhere to put its receipt is a wake nobody can ever cost, which the log says

@@ -884,3 +884,50 @@ async def retire_seat(actions: Actions, seat_id: str, *, reason: str = "", actor
         await actions.assert_property(row["id"], "retired_because", reason.strip(), actor,
                                       datetime.now(UTC), _CONF, evidence_class=_EC)
     return {"retired": seat_id}
+
+
+async def vacate_holder(
+    actions: Actions, *, seat_id: str, actor: str, because: str,
+) -> dict[str, Any]:
+    """Release a seat's ACTIVE holder(s) WITHOUT binding a new one (thread 445a7356,
+    Thoth's ruling msg 1611) — the deliberate-hand COMPLEMENT to bind_holder (which only
+    ever MOVES the link onto a new holder) and to retire_seat's own stale-holder refusal
+    (which is right to refuse — retire_seat closes the ROLE, and evicting a live mind is
+    not its business). This is for the one case that refusal correctly can't resolve on
+    its own: a holder whose PROCESS is confirmed dead without ever calling retire() on
+    itself (found live during task #68's acceptance demo — a `claude stop`ped body leaves
+    its `holds` link stale forever, with nothing to release it).
+
+    THIS VERB TRUSTS ITS CALLER. It does no liveness check of its own — that evidence is
+    trigger.py's job (vacate_dead_seat, the only sanctioned caller), which reads the real
+    process roster and the transcript's own timestamped content before ever reaching
+    here, exactly as retire_seat's docstring already distinguishes "the graph's word"
+    from "an actual eviction." Calling this directly on a genuinely live holder is a
+    caller error, not a refusal this function can catch.
+
+    Refuses LOUDLY on: an unknown/inactive seat, a blank `because` (the same law
+    set_seat_attended already holds — a seat's occupancy changing this way belongs on
+    the record), or a seat with no active holder (nothing to vacate)."""
+    if not because.strip():
+        return {"error": "because is required — vacating a seat's holder is a deliberate "
+                         "act on the record"}
+    seat_id = (seat_id or "").strip()
+    row = await actions.pool.fetchrow(
+        "SELECT id, status FROM objects WHERE canonical=$1 AND type='Seat'", seat_id)
+    if row is None:
+        return {"error": f"no such seat: {seat_id!r}"}
+    if row["status"] != "active":
+        return {"error": f"{seat_id} is already {row['status']} — nothing to vacate"}
+    now = datetime.now(UTC)
+    holders = await actions.pool.fetch(
+        "SELECT f.id AS fid, f.canonical AS holder FROM links l "
+        "JOIN objects f ON f.id=l.from_id "
+        "WHERE l.to_id=$1 AND l.type='holds' AND f.type='Agent' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", row["id"])
+    if not holders:
+        return {"error": f"{seat_id} has no active holder — nothing to vacate"}
+    for h in holders:
+        await actions.invalidate_link(h["fid"], row["id"], "holds", actor, now)
+    await actions.assert_property(row["id"], "vacated_because", because.strip(), actor, now,
+                                  _CONF, evidence_class=_EC)
+    return {"vacated": seat_id, "was_held_by": [str(h["holder"]) for h in holders]}

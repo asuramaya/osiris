@@ -2866,6 +2866,35 @@ async def retire_seat(seat_id: str, reason: str = "",
 
 
 @mcp.tool()
+async def vacate_seat(seat_id: str, because: str, ctx: Context | None = None) -> dict[str, Any]:
+    """Release a seat's holder WITHOUT retiring the seat itself (thread 445a7356) — for
+    the one case retire_seat correctly can't resolve on its own: a holder whose PROCESS
+    actually died without ever calling retire() on itself (a `claude stop`ped or killed
+    body leaves its `holds` link stale forever, and retire_seat rightly refuses a seat
+    with an active holder). This is that refusal's complement, never its bypass.
+
+    GATED ON REAL LIVENESS EVIDENCE, checked here, not assumed: the harness roster
+    (`claude agents --json`) must show no live session at the seat's own office, AND the
+    holder's own transcript's newest TIMESTAMPED line must be stale (never mtime alone —
+    the Aegis phantom lied with a fresh one on a 13h-dead session). Either signal alone
+    showing life is refused loudly as `refused-live`; an unreadable roster refuses as
+    `refused-ambiguous` rather than guessing. `status` is one of: `vacated`,
+    `refused-vacant` (nothing to release), `refused-no-office`, `refused-live`,
+    `refused-ambiguous`, or `refused` (seats.vacate_holder's own graph-level refusal —
+    see `detail`).
+
+    AUTO-INVOCATION IS OUT OF SCOPE (reaper #59 stays operator-gated) — this is for a
+    deliberate hand, on one named seat, never a sweep."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — vacating a seat's holder is a deliberate act on "
+                         "the record", "why": _anchorless(ctx)}
+    from src.orchestrator.trigger import vacate_dead_seat
+    return await vacate_dead_seat(Actions(await _pool_get()), seat_id=seat_id,
+                                  actor=ident.agent_id, because=because)
+
+
+@mcp.tool()
 async def correct_agent_house(agent_id: str, project: str | None = None,
                               seat_generation: int | None = None,
                               ctx: Context | None = None) -> dict[str, Any]:

@@ -2467,6 +2467,133 @@ async def test_launch_harness_lane_delivers_the_opening_brief_over_the_mail_lane
     assert row is not None and "mount and orient" in row["body"]
 
 
+# ═══ vacate_dead_seat (thread 445a7356, Thoth's ruling msg 1611) — the evidence-gathering
+# complement to seats.vacate_holder / seats.retire_seat's stale-holder refusal, never its
+# bypass. `agents_json`/`transcript_activity` are injected so tests assert the DECISION
+# without a real `claude` binary or real transcript files.
+
+def _fake_transcript_activity(checked: bool, fresh: bool) -> Any:
+    async def _t(pool: Any, holder: str, st: Any) -> tuple[bool, bool]:
+        return checked, fresh
+    return _t
+
+
+async def test_vacate_dead_seat_refuses_a_vacant_seat(actions: Actions) -> None:
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:vd1holdr", manager_agent="agent:vd1mgr0",
+        worker_handle="Ptah-Vacant", house="osiris")
+    await _office(actions, worker_seat, "/tmp/ptah-vacant")
+    # unbind: no holder at all — the fixture above binds one, so start from a fresh seat
+    from src.orchestrator import trigger as tm
+    seat2 = "seat:vd1empty"
+    await actions.create_or_find_object("Seat", seat2, "test")
+
+    d = await tm.vacate_dead_seat(actions, seat_id=seat2, actor="test", because="dead")
+    assert d["status"] == "refused-vacant"
+
+
+async def test_vacate_dead_seat_refuses_no_office(actions: Actions) -> None:
+    from src.orchestrator import trigger as tm
+    from src.orchestrator.seats import bind_holder
+
+    seat_id = "seat:vd2noofc"
+    await actions.create_or_find_object("Seat", seat_id, "test")
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:vd2holdr", source="test")
+
+    d = await tm.vacate_dead_seat(actions, seat_id=seat_id, actor="test", because="dead")
+    assert d["status"] == "refused-no-office"
+
+
+async def test_vacate_dead_seat_refuses_when_the_roster_shows_a_live_session(
+    actions: Actions,
+) -> None:
+    """Signal 1 alone showing life is enough to refuse — the transcript check never even
+    runs (the fake would raise if called, proving short-circuit)."""
+    from src.orchestrator import trigger as tm
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:vd3holdr", manager_agent="agent:vd3mgr0",
+        worker_handle="Sekhmet-Alive", house="osiris")
+    await _office(actions, worker_seat, "/tmp/sekhmet-alive")
+
+    async def _boom(pool: Any, holder: str, st: Any) -> tuple[bool, bool]:
+        raise AssertionError("transcript check must not run when the roster shows life")
+
+    d = await tm.vacate_dead_seat(
+        actions, seat_id=worker_seat, actor="test", because="dead",
+        agents_json=_fake_agents_json(
+            [[{"cwd": "/tmp/sekhmet-alive", "name": "[OS] Sekhmet-Alive"}]]),
+        transcript_activity=_boom)
+    assert d["status"] == "refused-live"
+    assert "Sekhmet-Alive" in d["detail"]
+
+
+async def test_vacate_dead_seat_refuses_when_the_transcript_is_fresh(
+    actions: Actions,
+) -> None:
+    """Signal 1 (roster) is silent, but signal 2 (the transcript's own timestamped
+    content) disagrees — refused, the Aegis-phantom case (mtime alone would have lied
+    the other way)."""
+    from src.orchestrator import trigger as tm
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:vd4holdr", manager_agent="agent:vd4mgr0",
+        worker_handle="Bastet-Working", house="osiris")
+    await _office(actions, worker_seat, "/tmp/bastet-working")
+
+    d = await tm.vacate_dead_seat(
+        actions, seat_id=worker_seat, actor="test", because="dead",
+        agents_json=_fake_agents_json([[]]),
+        transcript_activity=_fake_transcript_activity(checked=True, fresh=True))
+    assert d["status"] == "refused-live"
+    assert "agent:vd4holdr" in d["detail"]
+
+
+async def test_vacate_dead_seat_refuses_ambiguous_on_an_unreadable_roster(
+    actions: Actions,
+) -> None:
+    from src.orchestrator import trigger as tm
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:vd5holdr", manager_agent="agent:vd5mgr0",
+        worker_handle="Nut-Unreadable", house="osiris")
+    await _office(actions, worker_seat, "/tmp/nut-unreadable")
+
+    async def _boom(*, cwd: str | None = None,
+                    include_completed: bool = False) -> list[dict[str, Any]]:
+        raise OSError("no such file or directory: claude")
+
+    d = await tm.vacate_dead_seat(actions, seat_id=worker_seat, actor="test",
+                                  because="dead", agents_json=_boom)
+    assert d["status"] == "refused-ambiguous"
+
+
+async def test_vacate_dead_seat_vacates_when_both_signals_confirm_death(
+    actions: Actions,
+) -> None:
+    """The core: no live roster entry AND a stale (or absent) transcript → vacated —
+    proof this reaches seats.vacate_holder's own write, not just a receipt shape."""
+    from src.orchestrator import trigger as tm
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:vd6corps", manager_agent="agent:vd6mgr0",
+        worker_handle="Khepri-Dead", house="osiris")
+    await _office(actions, worker_seat, "/tmp/khepri-dead")
+
+    d = await tm.vacate_dead_seat(
+        actions, seat_id=worker_seat, actor="test", because="process confirmed dead",
+        agents_json=_fake_agents_json([[]]),
+        transcript_activity=_fake_transcript_activity(checked=False, fresh=False))
+    assert d["status"] == "vacated"
+    assert d["was_held_by"] == ["agent:vd6corps"]
+    assert d["evidence"] == {"roster_checked": True, "transcript_checked": False}
+    holder = await actions.pool.fetchval(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", worker_seat)
+    assert holder is None
+
+
 # ═══ THE HARNESS-NATIVE SUBSTRATE (task #68 item 9, ruling 33d6a2eb; spike f2dc98549521) ══════
 # `claude --bg` + `claude agents --json` instead of the manager daemon's PTY broker. Same
 # hermetic discipline as _spawn_claude's own tests: `trigger.asyncio.create_subprocess_exec` is

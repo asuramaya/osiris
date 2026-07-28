@@ -1502,3 +1502,65 @@ async def test_retire_seat_refuses_an_unknown_seat(actions: Actions) -> None:
 
     out = await retire_seat(actions, "seat:rs3ghost", actor="test")
     assert "no such seat" in out["error"]
+
+
+# ═══ vacate_holder (thread 445a7356) — retire_seat's stale-holder refusal is correct;
+# this is its complement, releasing a holder WITHOUT closing the seat. It trusts its
+# caller (trigger.vacate_dead_seat gathers the liveness evidence) and does the write.
+
+async def test_vacate_holder_releases_the_active_holder(actions: Actions) -> None:
+    from src.orchestrator.seats import bind_holder, vacate_holder
+
+    await actions.create_or_find_object("Seat", "seat:vh1dead0", "test")
+    await bind_holder(actions, seat_id="seat:vh1dead0", agent_id="agent:vh1corps",
+                      source="test")
+
+    out = await vacate_holder(actions, seat_id="seat:vh1dead0", actor="test",
+                              because="process confirmed dead")
+    assert out == {"vacated": "seat:vh1dead0", "was_held_by": ["agent:vh1corps"]}
+    holder = await actions.pool.fetchval(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", "seat:vh1dead0")
+    assert holder is None
+    because = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+        "AND a.name='vacated_because' WHERE o.canonical=$1", "seat:vh1dead0")
+    assert because == "process confirmed dead"
+    # the seat itself is untouched — never retired, still ready for a fresh claim
+    status = await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE canonical=$1", "seat:vh1dead0")
+    assert status == "active"
+
+
+async def test_vacate_holder_refuses_a_blank_because(actions: Actions) -> None:
+    from src.orchestrator.seats import bind_holder, vacate_holder
+
+    await actions.create_or_find_object("Seat", "seat:vh2blank", "test")
+    await bind_holder(actions, seat_id="seat:vh2blank", agent_id="agent:vh2holdr",
+                      source="test")
+    out = await vacate_holder(actions, seat_id="seat:vh2blank", actor="test", because="  ")
+    assert "because is required" in out["error"]
+    # nothing written — the holder is still bound
+    holder = await actions.pool.fetchval(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", "seat:vh2blank")
+    assert holder == "agent:vh2holdr"
+
+
+async def test_vacate_holder_refuses_an_unknown_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import vacate_holder
+
+    out = await vacate_holder(actions, seat_id="seat:vh3ghost", actor="test",
+                              because="dead")
+    assert "no such seat" in out["error"]
+
+
+async def test_vacate_holder_refuses_an_already_vacant_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import vacate_holder
+
+    await actions.create_or_find_object("Seat", "seat:vh4empty", "test")
+    out = await vacate_holder(actions, seat_id="seat:vh4empty", actor="test",
+                              because="dead")
+    assert "nothing to vacate" in out["error"]
