@@ -2895,6 +2895,28 @@ async def vacate_seat(seat_id: str, because: str, ctx: Context | None = None) ->
 
 
 @mcp.tool()
+async def retire_project(project: str, because: str,
+                         ctx: Context | None = None) -> dict[str, Any]:
+    """Retire a dead SoftwareProject stub (msg 1675, the stub cull) — status flip to
+    'retired' via a compensating event, never a DELETE. `project` resolves to a
+    SoftwareProject ONLY (UUID, 8-char short id, canonical `repo:<name>`, or its `name`
+    property) — never a Seat or Agent of the same name, even for a name like 'seshat' or
+    'ra' that also happens to be a seat's handle.
+
+    Refuses LOUDLY on: blank `because`; an unresolved or already-non-active project; any
+    commit recorded against it; any open Thread pointing in (`in_repo`, status='active');
+    or a mount seen against it within the last 15 minutes (live signal — this verb never
+    evicts a project actually in use)."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — retiring a project is a deliberate act on the "
+                         "record", "why": _anchorless(ctx)}
+    from src.orchestrator.projects import retire_project as _retire_project
+    return await _retire_project(Actions(await _pool_get()), project=project,
+                                 actor=ident.agent_id, because=because)
+
+
+@mcp.tool()
 async def correct_agent_house(agent_id: str, project: str | None = None,
                               seat_generation: int | None = None,
                               ctx: Context | None = None) -> dict[str, Any]:
