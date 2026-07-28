@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from src.actions.core import Actions
-from src.orchestrator.folds import canonical_agent, fold_agent, living_head
+from src.orchestrator.folds import canonical_agent, fold_agent, living_head, unfold_agent
 from src.orchestrator.mailbox import send_message, unread_count
 from src.orchestrator.mounts import save_mount
 
@@ -343,6 +343,170 @@ async def test_archaeologist_charter_match_prefers_the_resident(
     assert mine and mine[0]["into_label"] == "agent:4e51den7"
     assert abs(float(mine[0]["score"]) - 0.55) < 1e-6  # several souls — hand-verify
     assert "agent:b055a1f4" in str(mine[0]["signals"])  # the supervisor is named
+
+
+async def test_unfold_reverses_a_fold_dry_run_writes_nothing(actions: Actions) -> None:
+    await _mk_agent(actions, "agent:un1dead0")
+    await _mk_agent(actions, "agent:un1live0")
+    await fold_agent(actions, dupe="agent:un1dead0", into="agent:un1live0",
+                     evidence="census: co-timed sessions, same cwd", actor="agent:test")
+
+    out = await unfold_agent(actions, dupe="agent:un1dead0",
+                             because="wrongful fold — a real second mind",
+                             actor="agent:judge")
+
+    assert out["execute"] is False
+    assert out["was_merged_into"] == "agent:un1live0"
+    assert any(p["op"] == "unmerge_objects" for p in out["plan"])
+    st = await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE canonical='agent:un1dead0'")
+    assert st == "merged"  # dry run never writes
+
+
+async def test_unfold_executed_restores_the_dupe(actions: Actions) -> None:
+    await _mk_agent(actions, "agent:un2dead0")
+    await _mk_agent(actions, "agent:un2live0")
+    await fold_agent(actions, dupe="agent:un2dead0", into="agent:un2live0",
+                     evidence="census: co-timed sessions, same cwd", actor="agent:test")
+
+    out = await unfold_agent(actions, dupe="agent:un2dead0",
+                             because="a real second mind, wrongly folded",
+                             actor="agent:judge", execute=True)
+
+    assert out["unmerged"] is True
+    row = await actions.pool.fetchrow(
+        "SELECT status, merged_into FROM objects WHERE canonical='agent:un2dead0'")
+    assert row["status"] == "active" and row["merged_into"] is None
+    # the merge event and same_as link stay as witnesses (unmerge_objects' own contract)
+    same_as = await actions.pool.fetchval(
+        "SELECT 1 FROM links l JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
+        "WHERE f.canonical='agent:un2dead0' AND t.canonical='agent:un2live0' "
+        "AND l.type='same_as'")
+    assert same_as == 1
+
+
+async def test_unfold_refuses_a_never_folded_dupe(actions: Actions) -> None:
+    await _mk_agent(actions, "agent:un3free0")
+    out = await unfold_agent(actions, dupe="agent:un3free0", because="x", actor="agent:judge")
+    assert "not folded" in out["error"]
+
+
+async def test_unfold_refuses_a_blank_because(actions: Actions) -> None:
+    await _mk_agent(actions, "agent:un4dead0")
+    await _mk_agent(actions, "agent:un4live0")
+    await fold_agent(actions, dupe="agent:un4dead0", into="agent:un4live0",
+                     evidence="x", actor="agent:test")
+    out = await unfold_agent(actions, dupe="agent:un4dead0", because="   ",
+                             actor="agent:judge")
+    assert "because" in out["error"]
+
+
+async def test_unfold_refuses_an_unknown_dupe(actions: Actions) -> None:
+    out = await unfold_agent(actions, dupe="agent:nobody99", because="x", actor="agent:judge")
+    assert "unknown" in out["error"]
+
+
+async def test_unfold_refuses_an_operator_blessed_fold_without_fresh_operator_word(
+    actions: Actions,
+) -> None:
+    await _mk_agent(actions, "agent:un5dead0")
+    await _mk_agent(actions, "agent:un5live0")
+    await fold_agent(actions, dupe="agent:un5dead0", into="agent:un5live0",
+                     evidence="the operator confirmed these are one mind, 2026-07-01",
+                     actor="agent:test")
+
+    out = await unfold_agent(actions, dupe="agent:un5dead0",
+                             because="I think this was wrong", actor="agent:judge")
+    assert "operator" in out["error"]
+    st = await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE canonical='agent:un5dead0'")
+    assert st == "merged"  # refused, nothing written
+
+    out2 = await unfold_agent(
+        actions, dupe="agent:un5dead0",
+        because="the operator's fresh word, 2026-07-28: this fold was wrong",
+        actor="agent:judge", execute=True)
+    assert out2["unmerged"] is True
+
+
+async def test_unfold_clears_a_cross_lineage_succeeded_by_stitch(actions: Actions) -> None:
+    p = actions.pool
+    await _mk_agent(actions, "agent:un6dead0")
+    await _mk_agent(actions, "agent:un6live0")
+    dupe_oid = await p.fetchval("SELECT id FROM objects WHERE canonical='agent:un6dead0'")
+    now = datetime.now(UTC)
+    # a stitch: dupe's succeeded_by wrongly points into the WINNER's own lineage
+    await actions.assert_property(dupe_oid, "succeeded_by", "agent:un6live0-ii",
+                                  "agent:bad-heal", now, 0.9, evidence_class="self_declared")
+    await fold_agent(actions, dupe="agent:un6dead0", into="agent:un6live0",
+                     evidence="x", actor="agent:test")
+
+    out = await unfold_agent(actions, dupe="agent:un6dead0", because="a real second mind",
+                             actor="agent:judge", execute=True)
+
+    assert out["chain_restored"] is True
+    sb = await p.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='agent:un6dead0' AND a.name='succeeded_by' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1")
+    assert sb == ""  # the stitch is cleared — dupe reads as its own lineage's tail again
+
+
+async def test_unfold_never_touches_a_real_same_lineage_successor(actions: Actions) -> None:
+    p = actions.pool
+    await _mk_agent(actions, "agent:un7dead0")
+    await _mk_agent(actions, "agent:un7dead0-ii")   # a REAL successor, same base
+    await _mk_agent(actions, "agent:un7live0")
+    dupe_oid = await p.fetchval("SELECT id FROM objects WHERE canonical='agent:un7dead0'")
+    now = datetime.now(UTC)
+    await actions.assert_property(dupe_oid, "succeeded_by", "agent:un7dead0-ii",
+                                  "agent:un7dead0-ii", now, 0.6,
+                                  evidence_class="direct_observation")
+    await fold_agent(actions, dupe="agent:un7dead0", into="agent:un7live0",
+                     evidence="x", actor="agent:test")
+
+    out = await unfold_agent(actions, dupe="agent:un7dead0", because="wrongly folded",
+                             actor="agent:judge", execute=True)
+
+    assert out["chain_restored"] is False
+    sb = await p.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='agent:un7dead0' AND a.name='succeeded_by' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1")
+    assert sb == "agent:un7dead0-ii"  # real succession is never this verb's business
+
+
+async def test_unfold_reports_unreturnable_mail_and_restores_reversible_threads(
+    actions: Actions,
+) -> None:
+    p = actions.pool
+    await _mk_agent(actions, "agent:un8dead0")
+    await _mk_agent(actions, "agent:un8live0")
+    # mail sent BEFORE the fold, still unread — lands on the winner at fold time
+    await send_message(p, from_agent="agent:sender", from_project="osiris",
+                       to_agent="agent:un8dead0", body="a question for the dupe")
+    tid = await actions.create_or_find_object("Thread", "thread:un8t0001", "agent:un8dead0")
+    now = datetime.now(UTC)
+    await actions.assert_property(tid, "owner", "agent:un8dead0", "agent:un8dead0", now, 0.9,
+                                  evidence_class="self_declared")
+    await fold_agent(actions, dupe="agent:un8dead0", into="agent:un8live0",
+                     evidence="x", actor="agent:test")
+
+    out = await unfold_agent(actions, dupe="agent:un8dead0", because="wrongly folded",
+                             actor="agent:judge")  # dry run
+
+    assert len(out["estate_unreturnable"]["mail"]) == 1
+    assert any(p2["op"] == "assert_property" and p2["target"] == "thread:un8t0001"
+              for p2 in out["plan"])
+
+    out2 = await unfold_agent(actions, dupe="agent:un8dead0", because="wrongly folded",
+                              actor="agent:judge", execute=True)
+    assert out2["threads_reowned"] == 1
+    owner = await p.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='thread:un8t0001' AND a.name='owner' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1")
+    assert owner == "agent:un8dead0"
 
 
 async def test_living_head_follows_a_cross_base_succession(actions: Actions) -> None:

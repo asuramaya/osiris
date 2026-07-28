@@ -157,6 +157,150 @@ async def fold_agent(
                  "event; nothing was deleted."),
     }
 
+async def unfold_agent(
+    actions: Actions, *, dupe: str, because: str, actor: str, execute: bool = False,
+) -> dict[str, Any]:
+    """Reverse a wrongful fold — the promise `fold_agent`'s own docstring makes
+    ("reversible by compensating event") and the primitive that never existed to keep it
+    (THE UNFOLD, Ferryman's resurrection, operator's word 2026-07-28). DRY RUN IS THE
+    DEFAULT (`execute=False`): returns the exact plan — the kernel unmerge, any chain-
+    integrity fix, and the estate items that CAN'T cleanly return — without writing
+    anything. `execute=True` performs it.
+
+    Refuses LOUDLY (an error dict, nothing written) when: `because` is blank; `dupe` is
+    unknown or not currently folded (status != 'merged' — nothing to unfold); the
+    ORIGINAL fold's own justification cites the operator's word and `because` does not
+    ALSO carry a fresh one — a fold the operator blessed by name is not quietly undone by
+    a different hand's say-so; it takes the same authority to reverse it that it took to
+    make it. (Heuristic, not NLP: "cites the operator" = the word 'operator' appears in
+    the original justification text.)
+
+    CHAIN INTEGRITY: if `dupe`'s own `succeeded_by` currently points at a label from a
+    DIFFERENT lineage (a cross-base pointer — successors are always same-base, by
+    `_generation`'s own definition), that pointer is the fold's other half — a stitch,
+    not a real succession — and gets cleared (asserted empty, superseding; the old value
+    stays on the record, never deleted) so `dupe` reads as its own lineage's tail again.
+    A same-base successor is never touched — real succession is not this verb's business.
+
+    ESTATE: `fold_agent`'s mail/mount transfer is a raw UPDATE, not an event — the
+    original `to_agent`/`agent_id` is gone the moment it moves, so nothing can PROVE
+    which pre-fold messages or mount rows were `dupe`'s versus already the living head's
+    own. Reported as `estate_unreturnable` for a human to read and judge, never guessed
+    back. Thread ownership, by contrast, moved via `assert_property` (event-sourced): any
+    thread whose CURRENT owner is the fold's living head but whose SUPERSEDED owner
+    assertion names `dupe` is cleanly reversible, and `execute=True` re-asserts it."""
+    from datetime import UTC, datetime
+
+    from src.orchestrator.agents import _generation
+
+    dupe, because = (dupe or "").strip(), (because or "").strip()
+    if not because:
+        return {"error": "an unfold without a because is an un-audited reversal — cite "
+                         "the evidence/ruling that proves the fold was wrong"}
+    if not dupe:
+        return {"error": "unfold_agent needs a dupe label"}
+    row = await actions.pool.fetchrow(
+        "SELECT id, status, merged_into FROM objects WHERE canonical=$1 AND type='Agent'",
+        dupe)
+    if row is None:
+        return {"error": f"unknown agent: {dupe} — an unfold never invents a label"}
+    if row["status"] != "merged":
+        return {"error": f"{dupe} is not folded (status={row['status']}) — nothing to "
+                         "unfold"}
+    into_canon = await actions.pool.fetchval(
+        "SELECT canonical FROM objects WHERE id=$1", row["merged_into"])
+    ev = await actions.pool.fetchrow(
+        "SELECT payload, actor, created_at FROM object_events "
+        "WHERE event_type='merge' AND related_id=$1 ORDER BY created_at DESC LIMIT 1",
+        row["id"])
+    original_evidence = str((ev["payload"] or {}).get("justification", "")) if ev else ""
+    if "operator" in original_evidence.lower() and "operator" not in because.lower():
+        return {"error": f"{dupe}'s fold was justified by citing the operator's word "
+                         f"({original_evidence!r}) — an unfold needs the operator's word "
+                         "too; add it to `because` or get it first"}
+    head = await living_head(actions.pool, str(into_canon))
+    fold_time = ev["created_at"] if ev else datetime.now(UTC)
+
+    # CHAIN INTEGRITY — a cross-base succeeded_by is the fold's other half
+    cur_base = _generation(dupe)[0]
+    succ = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='succeeded_by' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        row["id"])
+    stitch = bool(succ) and _generation(str(succ))[0] != cur_base
+
+    # ESTATE — mail/mounts moved by a raw UPDATE (no event) can't be proven back;
+    # thread ownership moved via assert_property (event-sourced) can be
+    unreturnable_mail = [dict(r) for r in await actions.pool.fetch(
+        "SELECT id, from_agent, created_at, read_at, left(body,120) AS body "
+        "FROM fleet_messages WHERE to_agent=$1 AND created_at < $2 ORDER BY created_at",
+        head, fold_time)]
+    unreturnable_mounts = [dict(r) for r in await actions.pool.fetch(
+        "SELECT job_dir, project, cwd, mounted_at FROM agent_mounts "
+        "WHERE agent_id=$1 AND mounted_at < $2 ORDER BY mounted_at", head, fold_time)]
+    reversible_threads = [dict(r) for r in await actions.pool.fetch(
+        "SELECT o.id, o.canonical, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS summary "
+        "FROM objects o "
+        "JOIN current_assertions cur ON cur.object_id=o.id AND cur.name='owner' "
+        "  AND cur.value #>> '{}' = $1 "
+        "WHERE o.type='Thread' AND EXISTS ("
+        "  SELECT 1 FROM assertions old WHERE old.object_id=o.id AND old.name='owner' "
+        "  AND old.value #>> '{}' = $2)", head, dupe)]
+
+    plan: list[dict[str, Any]] = [
+        {"op": "unmerge_objects", "target": dupe, "detail": f"status merged→active, "
+         f"merged_into cleared (was {into_canon})"}]
+    if stitch:
+        plan.append({"op": "assert_property", "target": dupe, "detail":
+                    f"succeeded_by {succ!r} → '' (cross-lineage stitch cleared, {dupe} "
+                    "becomes its own lineage's tail again)"})
+    for t in reversible_threads:
+        plan.append({"op": "assert_property", "target": t["canonical"], "detail":
+                    f"owner {head} → {dupe} (restoring the pre-fold assertion)"})
+
+    report: dict[str, Any] = {
+        "dupe": dupe, "was_merged_into": into_canon, "living_head": head,
+        "fold_actor": ev["actor"] if ev else None, "fold_justification": original_evidence,
+        "fold_at": fold_time.isoformat() if hasattr(fold_time, "isoformat") else fold_time,
+        "plan": plan,
+        "estate_unreturnable": {
+            "mail": unreturnable_mail, "mounts": unreturnable_mounts,
+            "note": ("pre-fold UPDATEs overwrote to_agent/agent_id in place — these "
+                     "predate the fold and still sit on the living head, but nothing "
+                     "proves they were EVER addressed to the dupe rather than already "
+                     "the head's own; read them and judge by hand, never auto-moved")
+                    if (unreturnable_mail or unreturnable_mounts) else
+                    "none found — no pre-fold mail or mount rows sit unclaimed on the head",
+        },
+        "execute": execute,
+    }
+    if not execute:
+        return report
+
+    await actions.unmerge_objects(row["id"], because, actor)
+    now = datetime.now(UTC)
+    if stitch:
+        await actions.assert_property(row["id"], "succeeded_by", "", actor, now, 0.95,
+                                      evidence_class="direct_observation")
+    for t in reversible_threads:
+        await actions.assert_property(t["id"], "owner", dupe, actor, now, 0.9,
+                                      evidence_class="self_declared")
+    report.update({
+        "unmerged": True, "chain_restored": stitch, "threads_reowned": len(reversible_threads),
+        "note": (f"{dupe} is active again — provenance for the folded era stays on the "
+                 f"record (the merge event and same_as link are witnesses, never erased). "
+                 + (f"succeeded_by cleared; {dupe} is its own lineage's tail. "
+                    if stitch else "")
+                 + f"{len(reversible_threads)} thread(s) re-owned. "
+                 + ("Unreturnable estate items are listed above for a human to judge by "
+                    "hand." if (unreturnable_mail or unreturnable_mounts) else "")),
+    })
+    return report
+
+
 async def find_agent_fold_candidates(
     pool: asyncpg.Pool, *, projects_root: Path | None = None,
     jobs_home: Path | None = None,
