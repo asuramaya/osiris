@@ -192,6 +192,69 @@ async def test_lint_surfaces_coin_flip_winners(actions: Actions) -> None:
     assert _by_check(out2, "contradiction") == []
 
 
+async def test_lint_contradiction_excludes_a_non_active_subject(actions: Actions) -> None:
+    """thread 4a7da43a/12a210ab (reap Stage 1b, 2026-07-28): a merged/historical/archived
+    object's internal coin-flips are history, not live ambiguity — nothing in the read-path
+    (lineage_head resolves merged_into before ever touching a loser's own properties) ever
+    surfaces them. Prove the exclusion is doing real work: the SAME tie flags while active,
+    and goes quiet the moment status flips away from active."""
+    t = "agent:teller"
+    c = await actions.create_or_find_object("Organization", "org:grave", t)
+    await actions.assert_property(c, "hq", "Berlin", "agent:one", NOW, 0.9, evidence_class=_SD)
+    await actions.assert_property(c, "hq", "Munich", "agent:two", NOW + timedelta(minutes=1),
+                                  0.9, evidence_class=_SD)
+    out = await _fn(actions, "lint", {})
+    assert len(_by_check(out, "contradiction")) == 1
+    await actions.pool.execute("UPDATE objects SET status='merged' WHERE id=$1", c)
+    out2 = await _fn(actions, "lint", {})
+    assert _by_check(out2, "contradiction") == []
+
+
+async def test_lint_contradiction_excludes_a_healed_debounce_guess(actions: Actions) -> None:
+    """thread 4a7da43a/12a210ab: seam-debounce and husk-heal both write succeeded_by=''
+    at debounce/heal time as a "no successor seen yet" placeholder; once a real generation
+    self-declares succeeded_from back at the predecessor, the guess is permanently stale but
+    never a live dispute — resolver noise from a known automated observer, not a coin-flip a
+    mind needs to referee (walked and verified live against lineage_head: decision c41f74a6).
+    The exclusion is narrow: a genuine tie on succeeded_by from two OTHER real sources still
+    flags, and an empty value from a source OTHER than the two known debouncers still flags."""
+    t = "agent:teller"
+    a = await actions.create_or_find_object("Agent", "agent:debounced0001", t)
+    await actions.assert_property(a, "succeeded_by", "", "seam-debounce", NOW, 0.6,
+                                  evidence_class="direct_observation")
+    await actions.assert_property(a, "succeeded_by", "agent:debounced0001-ii",
+                                  "agent:debounced0001-ii", NOW + timedelta(minutes=1), 0.6,
+                                  evidence_class="direct_observation")
+    b = await actions.create_or_find_object("Agent", "agent:healed0002", t)
+    await actions.assert_property(b, "succeeded_by", "", "husk-heal", NOW, 0.6,
+                                  evidence_class="direct_observation")
+    await actions.assert_property(b, "succeeded_by", "agent:healed0002-ii",
+                                  "agent:healed0002-ii", NOW + timedelta(minutes=1), 0.6,
+                                  evidence_class="direct_observation")
+    out = await _fn(actions, "lint", {})
+    con = _by_check(out, "contradiction")
+    assert not any(f["subject"] in ("agent:debounced0001", "agent:healed0002") for f in con)
+    # a real tie on succeeded_by (neither source is a known debouncer, neither value empty)
+    # still flags — the exclusion never widens into "succeeded_by is exempt"
+    d = await actions.create_or_find_object("Agent", "agent:disputed0003", t)
+    await actions.assert_property(d, "succeeded_by", "agent:disputed0003-ii", "agent:one",
+                                  NOW, 0.9, evidence_class=_SD)
+    await actions.assert_property(d, "succeeded_by", "agent:disputed0003-iii", "agent:two",
+                                  NOW + timedelta(minutes=1), 0.9, evidence_class=_SD)
+    out2 = await _fn(actions, "lint", {})
+    disputed = _by_check(out2, "contradiction")
+    assert any(f["subject"] == "agent:disputed0003" for f in disputed)
+    # an empty rival from an UNKNOWN source is not the debounce/heal case — still flags
+    e = await actions.create_or_find_object("Agent", "agent:strayempty0004", t)
+    await actions.assert_property(e, "succeeded_by", "", "some-other-source", NOW, 0.6,
+                                  evidence_class="direct_observation")
+    await actions.assert_property(e, "succeeded_by", "agent:strayempty0004-ii",
+                                  "agent:strayempty0004-ii", NOW + timedelta(minutes=1), 0.6,
+                                  evidence_class="direct_observation")
+    out3 = await _fn(actions, "lint", {})
+    assert any(f["subject"] == "agent:strayempty0004" for f in _by_check(out3, "contradiction"))
+
+
 async def test_lint_status_lifecycle_is_not_a_war(actions: Actions) -> None:
     """The first live run's lesson (23 findings, zero real): open→resolved from another
     hand is the state machine WORKING — never a contradiction. The one true failure mode —

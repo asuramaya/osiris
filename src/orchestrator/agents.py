@@ -724,7 +724,17 @@ async def lineage_head(pool: asyncpg.Pool, canonical: str) -> str:
     so the walk still traverses it — but the HEAD is the last generation still standing.
     Without this, every resolution walked back into the graveyard the merge had just closed.
     And a walk that STARTS on a merged node resolves through merged_into first — a row bound
-    to a folded phantom must come home to the winner, not testify for the grave."""
+    to a folded phantom must come home to the winner, not testify for the grave.
+
+    A HEALED HUSK IS ALSO NOT A HEAD (thread 4a7da43a, reap Stage 1b, 2026-07-28): false_mint
+    healing (heal.py / seam-debounce) never flips objects.status — a husk stays 'active'
+    forever, same gap as retire_seat leaving Seat.status active — so a walk that landed on a
+    husk as its FINAL hop would wrongly call it the head. Walked live and confirmed this
+    doesn't currently misroute anything (decision c41f74a6: every husk checked still had its
+    own real succeeded_by continuing the chain, so the walk already reached the true tail by
+    just not stopping) — this closes the latent edge case where a husk IS the current tail
+    (no real successor minted yet). Walk CONTINUATION is unchanged: `cur` still steps through
+    a husk exactly as before, only the returned `head` now also requires false_mint absent."""
     cur = canonical
     for _ in range(10):
         winner = await pool.fetchval(
@@ -745,9 +755,13 @@ async def lineage_head(pool: asyncpg.Pool, canonical: str) -> str:
             return head
         seen.add(nxt)
         cur = str(nxt)
-        active = await pool.fetchval(
-            "SELECT status='active' FROM objects WHERE canonical=$1 AND type='Agent'", cur)
-        if active:
+        row = await pool.fetchrow(
+            "SELECT o.status='active' AS active, "
+            " (SELECT ca.value #>> '{}' FROM current_assertions ca WHERE ca.object_id=o.id "
+            "   AND ca.name='false_mint' ORDER BY ca.confidence DESC, ca.observed_at DESC "
+            "   LIMIT 1) = 'true' AS false_mint "
+            "FROM objects o WHERE o.canonical=$1 AND o.type='Agent'", cur)
+        if row and row["active"] and not row["false_mint"]:
             head = cur
     return head
 

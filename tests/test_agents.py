@@ -1325,6 +1325,53 @@ async def test_lineage_head_resolves_a_merged_start_to_the_winner(
     assert await lineage_head(actions.pool, "agent:22c0ffee-ii") == "agent:22c0ffee"
 
 
+async def test_lineage_head_never_lands_on_a_healed_husk(actions: Actions) -> None:
+    """thread 4a7da43a (reap Stage 1b, 2026-07-28): false_mint healing (heal.py /
+    seam-debounce) never flips objects.status — a husk stays 'active' forever, same gap
+    as retire_seat leaving Seat.status active. A husk that is the chain's CURRENT tail
+    (no real successor minted yet) must not be handed back as the head."""
+    from src.orchestrator.agents import lineage_head
+
+    now = datetime.now(UTC)
+    c1 = await actions.create_or_find_object("Agent", "agent:33c0ffee", "agent:33c0ffee")
+    await actions.create_or_find_object("Agent", "agent:33c0ffee-ii", "agent:33c0ffee-ii")
+    await actions.assert_property(c1, "succeeded_by", "agent:33c0ffee-ii",
+                                  "agent:33c0ffee", now, 0.9, evidence_class="self_declared")
+    assert await lineage_head(actions.pool, "agent:33c0ffee") == "agent:33c0ffee-ii"
+    # the -ii mint is diagnosed as a phantom: healed, but its status stays 'active'
+    husk = await actions.create_or_find_object("Agent", "agent:33c0ffee-ii",
+                                                "agent:33c0ffee-ii")
+    await actions.assert_property(husk, "false_mint", True, "seam-debounce", now, 0.6,
+                                  evidence_class="direct_observation")
+    still = await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE canonical='agent:33c0ffee-ii'")
+    assert still == "active"                          # the same gap retire_seat has
+    assert await lineage_head(actions.pool, "agent:33c0ffee") == "agent:33c0ffee"
+
+
+async def test_lineage_head_walks_through_a_healed_husk_to_the_real_tail(
+    actions: Actions,
+) -> None:
+    """Walk CONTINUATION is unchanged: `cur` still steps through a husk exactly as before
+    (verified live against real data, decision c41f74a6 — every husk checked still had its
+    own real succeeded_by continuing the chain) — only the RETURNED head now also requires
+    false_mint absent. A husk mid-chain is traversed, never returned."""
+    from src.orchestrator.agents import lineage_head
+
+    now = datetime.now(UTC)
+    d1 = await actions.create_or_find_object("Agent", "agent:44c0ffee", "agent:44c0ffee")
+    d2 = await actions.create_or_find_object("Agent", "agent:44c0ffee-ii",
+                                             "agent:44c0ffee-ii")
+    await actions.create_or_find_object("Agent", "agent:44c0ffee-iii", "agent:44c0ffee-iii")
+    await actions.assert_property(d1, "succeeded_by", "agent:44c0ffee-ii",
+                                  "agent:44c0ffee", now, 0.9, evidence_class="self_declared")
+    await actions.assert_property(d2, "succeeded_by", "agent:44c0ffee-iii",
+                                  "agent:44c0ffee-ii", now, 0.9, evidence_class="self_declared")
+    await actions.assert_property(d2, "false_mint", True, "seam-debounce", now, 0.6,
+                                  evidence_class="direct_observation")
+    assert await lineage_head(actions.pool, "agent:44c0ffee") == "agent:44c0ffee-iii"
+
+
 async def test_mint_stamps_the_parallel_pulse(actions: Actions) -> None:
     """THE PARALLEL-LIVES STAMP (thread 4bcd6541): rows are hot state, so the pulse
     evidence at mint time is captured AT the mint — predecessor_last_seen always, and

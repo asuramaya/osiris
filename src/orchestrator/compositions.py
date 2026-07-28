@@ -1205,6 +1205,19 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     # ruling 64adf08a, the 94ddca1f adjudication: keep both witnesses, never pick one to
     # satisfy the lint). The family's one true failure mode — a close being overridden —
     # gets its own check below (status-regression).
+    #
+    # TWO MORE EXCLUSIONS (thread 4a7da43a/12a210ab, reap Stage 1b leg 1, 2026-07-28):
+    # (1) NON-ACTIVE SUBJECTS — a merged/historical/archived object's internal coin-flips
+    # are history, not live ambiguity: nothing in the read-path (lineage_head resolves
+    # merged_into before ever touching a loser's own properties) ever surfaces them, so
+    # flagging them is the same "cry wolf" class the orphan-link check already excludes for
+    # the same reason. (2) SUCCEEDED_BY VS AN EMPTY DEBOUNCE/HEAL GUESS — seam-debounce and
+    # husk-heal both write succeeded_by='' at debounce/heal time as a "no successor seen
+    # yet" placeholder; once a real generation self-declares succeeded_from back at the
+    # predecessor, the guess is permanently stale but NEVER a live dispute (walked and
+    # verified live: lineage_head's walk continues through the winner regardless of whether
+    # it later gets healed as false_mint itself — decision c41f74a6 — so this is resolver
+    # noise from a known automated observer, not a coin-flip a mind needs to referee).
     con = await pool.fetch(
         "WITH multi AS (SELECT object_id, name FROM current_assertions "
         "  WHERE name NOT IN ('status', 'resolved_in', 'resolved_because') "
@@ -1221,6 +1234,9 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "JOIN objects o ON o.id=w.object_id "
         "WHERE w.v IS DISTINCT FROM r.v AND w.source_id <> r.source_id "
         "  AND w.confidence - r.confidence <= $1 "
+        "  AND o.status = 'active' "
+        "  AND NOT (w.name = 'succeeded_by' AND r.v = '' "
+        "    AND r.source_id IN ('seam-debounce', 'husk-heal')) "
         "ORDER BY o.canonical, w.name", eps)
     land("contradiction", "warn", [
         {"subject": r["canonical"], "field": r["field"],
