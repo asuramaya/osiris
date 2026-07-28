@@ -777,22 +777,23 @@ async def dispatch_dm(
     target = await living_head(pool, await canonical_agent(pool, target))
     if seat_id is None:
         seat_id = ((await held_seat(pool, target)) or {}).get("seat_id")
-    # THE HUMAN-ATTENDED GUARD (Thoth LIII 2026-07-21, ruling d8a77f80). The daemon reply lane
-    # FORGES a human turn (the confirmed RCE), so a nudge/poke into a session the operator drives
-    # lands in the operator's OWN input turn — caught live. In this house the operator works at
-    # the MANAGER tier; a seat that MANAGES someone (the to-side of a managed_by edge, minted
-    # worker→manager at mintseat.py) is human-attended and perceives mail by PULL — its mailbox +
-    # the stop-hook — never by injection. Only agent-driven WORKERS are woken by the daemon. This
-    # yields the right asymmetry for free: manager→worker injects (wakes the worker), worker→
-    # manager does NOT (the report waits in the box, surfaces on the human's next turn). It runs
-    # EVEN WITH the trigger on — a manager is never a nudge target, period. LIMIT (known): it does
-    # not cover the operator ATTENDING a worker session directly; that needs a real attached
-    # signal the daemon does not expose — banked, the manager tier is the operator's actual surface.
-    if seat_id and await _manages_someone(pool, seat_id):
+    # THE HUMAN-ATTENDED GUARD (Thoth LIII 2026-07-21, ruling d8a77f80; the proxy REPLACED by
+    # thread 96f62338). The daemon reply lane FORGES a human turn (the confirmed RCE), so a
+    # nudge/poke into a session the operator drives lands in the operator's OWN input turn —
+    # caught live. The ORIGINAL guard read 'seat manages someone' as 'a human drives this
+    # session' — true only while Thoth was the sole manager, and broken the day workers started
+    # minting sub-workers and test seats of their own (Imhotep's own flip-test mints made him a
+    # manager; alfred's #50-pilot workers did too — both silently lost their push lane forever).
+    # THE REAL SIGNAL now: `_is_human_attended` reads the seat's own explicit `attended`
+    # property (set_seat_attended, operator-approved to change) — never infers it from the org
+    # chart. This yields the same asymmetry the guard always wanted (manager→worker injects,
+    # worker→manager waits in the box) but keyed on WHO IS ATTENDED, not who manages. It runs
+    # EVEN WITH the trigger on — a human-attended seat is never a nudge target, period.
+    if seat_id and await _is_human_attended(pool, seat_id):
         return {"mode": "queued-human",
-                "detail": f"{target} is a human-attended (manager) seat — the daemon never "
-                          "injects a human's live turn; the mail waits in its box and surfaces "
-                          "on its next turn (perceived by pull, not a forged injection)"}
+                "detail": f"{target} is a human-attended seat — the daemon never injects a "
+                          "human's live turn; the mail waits in its box and surfaces on its "
+                          "next turn (perceived by pull, not a forged injection)"}
     faces = [c for c in {addressee, target, seat_id} if c]
     # wall #2 — the gate: an explicit pause, or needs-input (ask-then-silence)
     paused_on = await _paused(pool, faces)
@@ -1051,15 +1052,49 @@ async def _seat_for_target(actions: Actions, target: str) -> str | None:
 
 
 async def _manages_someone(pool: asyncpg.Pool, seat_id: str) -> bool:
-    """True if this seat is the MANAGER side of an active managed_by edge — the house's proxy
-    for 'a human drives this session'. managed_by is minted worker→manager (mintseat.py), so a
-    manager is the TO-side: workers point up to it. The operator works at the manager tier, so a
-    manager perceives mail by pull (mailbox + stop-hook), never by a forged-human daemon injection
-    into its live turn (the human-attended guard in dispatch_dm; ruling d8a77f80)."""
+    """True if this seat is the MANAGER side of an active managed_by edge — managed_by is
+    minted worker→manager (mintseat.py), so a manager is the TO-side: workers point up to it.
+
+    NO LONGER dispatch_dm's human-attended proxy (thread 96f62338 replaced it — 'manages
+    someone' stopped meaning 'a human drives this session' the day workers started minting
+    their own sub-workers and test seats; see `_is_human_attended`). Still a correct, plain
+    org-chart predicate in its own right — kept for whatever else asks "does X manage Y"."""
     return bool(await pool.fetchval(
         "SELECT 1 FROM links l JOIN objects t ON t.id=l.to_id "
         "WHERE t.canonical=$1 AND l.type='managed_by' "
         "AND (l.valid_until IS NULL OR l.valid_until > now()) LIMIT 1", seat_id))
+
+
+async def _seat_attendance(pool: asyncpg.Pool, seat_id: str) -> str | None:
+    """A seat's own explicit `attended` stamp ('human' or 'worker'), or None if it has never
+    been stamped — the common case today, since rollout is deliberate and per-seat
+    (set_seat_attended, thread 96f62338)."""
+    value = await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND o.type='Seat' AND o.status='active' AND a.name='attended' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", seat_id)
+    return str(value) if value is not None else None
+
+
+async def _is_human_attended(pool: asyncpg.Pool, seat_id: str) -> bool:
+    """THE HUMAN-ATTENDED GUARD'S REAL SIGNAL (thread 96f62338, replacing ruling d8a77f80's
+    broken `_manages_someone` proxy). Reads the seat's own explicit `attended` property
+    first — no more inference from the org chart, so a worker that mints a test seat or a
+    sub-worker of its own no longer silently loses its push lane forever (Imhotep's own
+    flip-test mints, alfred's #50-pilot workers — both hit exactly this).
+
+    NO PROPERTY YET (the rollout is deliberate, most seats are never stamped) falls back
+    CLOSED — human-attended — ONLY for thoth's own seat (belt while the rollout is
+    incomplete: never silently start injecting into the one seat that IS actually
+    operator-driven just because nobody has stamped it yet) and OPEN for everyone else —
+    the actual fix: a seat that merely manages a sub-worker or a test seat is no longer
+    misclassified."""
+    attended = await _seat_attendance(pool, seat_id)
+    if attended is not None:
+        return attended == "human"
+    from src.orchestrator.seats import seat_facts
+    facts = await seat_facts(pool, seat_id)
+    return (facts.get("handle") or "").strip().lower() == "thoth"
 
 
 async def _managed_edge(pool: asyncpg.Pool, seat_a: str, seat_b: str) -> bool:

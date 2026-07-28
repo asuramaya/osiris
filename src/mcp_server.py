@@ -2913,6 +2913,27 @@ async def retire_assertion(ref: str, name: str, superseded_id: int, value: str, 
 
 
 @mcp.tool()
+async def set_seat_attended(seat_id: str, attended: str, because: str,
+                            ctx: Context | None = None) -> dict[str, Any]:
+    """THE HUMAN-ATTENDED GUARD'S REAL SIGNAL (thread 96f62338) — stamps a seat's own explicit
+    `attended` property ('human' or 'worker'), read directly by dispatch_dm's human-attended
+    guard instead of its old, broken `managed_by` proxy (true only while Thoth was the sole
+    manager; false since workers started minting their own sub-workers and test seats).
+
+    OPERATOR-APPROVED TO CHANGE: this verb exists so the write CAN happen on the operator's
+    word — it does not itself decide who is human-attended. `attended='human'` marks a seat
+    the operator actually fronts; `attended='worker'` reverses a prior stamp. Refuses loudly
+    on a value outside {'human','worker'}, a blank `because`, or an unknown/retired seat."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a seat's attendance signal is a mind's act, and the "
+                         "graph must know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.seats import set_seat_attended as _set_seat_attended
+    return await _set_seat_attended(Actions(await _pool_get()), seat_id=seat_id,
+                                    attended=attended, because=because, actor=ident.agent_id)
+
+
+@mcp.tool()
 async def fold_candidates(ctx: Context | None = None) -> dict[str, Any]:
     """THE ARCHAEOLOGIST'S TRAY (thread b975851b) — sweep the registry and disk for
     anonymous agents that evidence says were never distinct minds (view-aliases: a mount

@@ -420,6 +420,52 @@ async def seat_facts(pool: asyncpg.Pool, seat_id: str) -> dict[str, Any]:
             "intended_model": row["intended_model"], "anchor_cwd": row["anchor_cwd"]}
 
 
+_ATTENDED_VALUES = {"human", "worker"}
+
+
+async def set_seat_attended(
+    actions: Actions, *, seat_id: str, attended: str, actor: str, because: str,
+) -> dict[str, Any]:
+    """Stamp a seat's REAL attendance signal (thread 96f62338) — replaces ruling `d8a77f80`'s
+    broken proxy in `dispatch_dm` ('a seat that manages someone is human-attended'), true only
+    while Thoth was the sole manager and false the day workers started minting sub-workers and
+    test seats of their own (Imhotep's flip-test mints reclassified him; alfred's #50-pilot
+    workers did too — both silently lost their push lane forever). `attended='human'` marks a
+    seat the operator actually fronts; `attended='worker'` marks the ordinary case explicitly,
+    for reversing a prior stamp. The human-attended guard reads this directly and no longer
+    infers anything from managed_by.
+
+    OPERATOR-APPROVED TO CHANGE, deliberately: this verb only builds the write path — the
+    actual stamp on thoth's own seat waits for the operator's explicit word, not this build.
+
+    Refuses LOUDLY on: a value outside {'human','worker'} (no silent typo landing as
+    'not human'); a blank `because` (a safety guard reads this property — the reason it
+    changed belongs on the record); an unknown or retired seat (a Seat's `status` column
+    stays 'active' forever — retirement is the `retired` property `retire_seat` stamps, the
+    same signal checked here)."""
+    if attended not in _ATTENDED_VALUES:
+        return {"error": f"attended must be one of {sorted(_ATTENDED_VALUES)}, not "
+                         f"{attended!r}"}
+    if not because.strip():
+        return {"error": "because is required — a seat's attendance signal gates a safety "
+                         "guard (dispatch_dm's human-attended check); the reason it changed "
+                         "must be on the record"}
+    row = await actions.pool.fetchrow(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
+        seat_id)
+    if row is None:
+        return {"error": f"no such seat: {seat_id!r}"}
+    retired = await actions.pool.fetchval(
+        "SELECT 1 FROM current_assertions a WHERE a.object_id=$1 AND a.name='retired' "
+        "AND a.value #>> '{}' = 'true'", row["id"])
+    if retired:
+        return {"error": f"{seat_id} is retired — cannot stamp attendance on a retired seat"}
+    now = datetime.now(UTC)
+    await actions.assert_property(row["id"], "attended", attended, actor, now, _CONF,
+                                  evidence_class=_EC)
+    return {"seat": seat_id, "attended": attended, "because": because}
+
+
 async def bind_holder(
     actions: Actions, *, seat_id: str, agent_id: str, source: str | None = None,
 ) -> None:

@@ -18,7 +18,7 @@ import pytest
 from src.actions.core import Actions
 from src.orchestrator import trigger as trigger_module
 from src.orchestrator.mailbox import OPERATOR_ADDR, read_inbox, send_message
-from src.orchestrator.seats import bind_holder, ensure_seat
+from src.orchestrator.seats import bind_holder, ensure_seat, set_seat_attended
 from src.orchestrator.trigger import (
     _WAKE_PROMPT,
     _wake_marker,
@@ -1698,22 +1698,67 @@ async def test_manages_someone_is_the_MANAGER_side(actions: Actions) -> None:
     assert await _manages_someone(actions.pool, worker_seat) is False
 
 
-async def test_dispatch_dm_never_injects_a_MANAGER(actions: Actions) -> None:
-    """THE HUMAN-ATTENDED GUARD (Thoth LIII 2026-07-21, ruling d8a77f80). The operator works at
-    the manager tier, so a manager seat is human-attended — mail to it waits in the box and is
-    perceived by PULL (mailbox + stop-hook), never a forged-human daemon injection into the
-    operator's live turn. Here agent:abcd1234 is the MANAGER of the pair: dispatch returns
-    pull-only and NOTHING is injected, spawned, or poked — even with the trigger on."""
-    await _managed_pair(actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
+async def test_dispatch_dm_never_injects_an_explicitly_attended_seat(actions: Actions) -> None:
+    """THE HUMAN-ATTENDED GUARD'S REAL SIGNAL (thread 96f62338, replacing ruling d8a77f80's
+    managed_by proxy). agent:abcd1234's seat is stamped attended='human' via set_seat_attended
+    — mail to it waits in the box and is perceived by PULL (mailbox + stop-hook), never a
+    forged-human daemon injection into the operator's live turn. Merely MANAGING someone is no
+    longer sufficient on its own (see the regression test right below this one) — the explicit
+    stamp is what gates it now."""
+    _, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
+    await set_seat_attended(actions, seat_id=manager_seat, attended="human", actor="test",
+                            because="test: this seat IS the operator-fronted one")
 
     async def _boom(*a: Any, **kw: Any) -> Any:
-        raise AssertionError("a manager must never be injected / spawned / poked")
+        raise AssertionError("a human-attended seat must never be injected / spawned / poked")
 
     msg_id = await _dm_to_owner(actions)  # a DM to agent:abcd1234 (the manager)
     d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
                           sender="agent:sender", settings=_settings(enabled=True),
                           spawn=_boom, nudge=_boom, poke=_boom, windows=_no_windows)
-    assert d["mode"] == "queued-human" and "manager" in d["detail"]
+    assert d["mode"] == "queued-human" and "human-attended" in d["detail"]
+
+
+async def test_dispatch_dm_no_longer_infers_attendance_from_managing_someone(
+    actions: Actions,
+) -> None:
+    """THE REGRESSION THIS THREAD FIXES (96f62338): a seat that merely manages a sub-worker or
+    a test seat — Imhotep's own flip-test mints, alfred's #50-pilot workers — must NOT be
+    silently reclassified as human-attended just because managed_by points at it. With no
+    `attended` stamp and a handle that isn't thoth's, dispatch proceeds normally (never
+    queued-human) — the old proxy would have wrongly queued this and starved the push lane."""
+    await _managed_pair(actions, worker_agent="agent:sender", manager_agent="agent:abcd1234",
+                        manager_handle="Imhotep")
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        return None
+
+    msg_id = await _dm_to_owner(actions)
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender", settings=_settings(enabled=True),
+                          spawn=_spawn, windows=_no_windows)
+    assert d["mode"] != "queued-human"
+
+
+async def test_dispatch_dm_falls_back_closed_for_thoths_own_unstamped_seat(
+    actions: Actions,
+) -> None:
+    """The rollout belt (96f62338): a seat with NO explicit attended stamp yet still falls
+    back to human-attended if — and only if — its handle is thoth's, so the one seat that
+    actually IS operator-driven never starts being injected just because nobody has stamped
+    it yet. Everyone else defaults OPEN (the prior test)."""
+    await _managed_pair(actions, worker_agent="agent:sender", manager_agent="agent:abcd1234",
+                        manager_handle="Thoth")
+
+    async def _boom(*a: Any, **kw: Any) -> Any:
+        raise AssertionError("thoth's own seat must never be injected while unstamped")
+
+    msg_id = await _dm_to_owner(actions)
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender", settings=_settings(enabled=True),
+                          spawn=_boom, nudge=_boom, poke=_boom, windows=_no_windows)
+    assert d["mode"] == "queued-human"
 
 
 async def test_wake_refuses_an_unseated_caller(actions: Actions) -> None:
@@ -1773,6 +1818,10 @@ async def test_wake_authorizes_worker_to_manager(actions: Actions, tmp_path: Pat
     sense = await _stale_resumable_owner(actions, tmp_path)
     worker_seat, manager_seat = await _managed_pair(
         actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
+    # thread 96f62338: attendance is an explicit stamp now, not inferred from managed_by —
+    # this manager IS the operator-fronted one for this test's purpose, so it's stamped.
+    await set_seat_attended(actions, seat_id=manager_seat, attended="human", actor="test",
+                            because="test: this seat is the operator-fronted one")
     _land_marker(sense, _wake_marker("agent:sender", worker_seat, "Worker"))
     calls: list[tuple[str, dict[str, Any]]] = []
 
@@ -1783,10 +1832,10 @@ async def test_wake_authorizes_worker_to_manager(actions: Actions, tmp_path: Pat
                           message="blocked, need your word",
                           settings=_settings(enabled=True, sense=str(sense)),
                           spawn=_spawn, windows=_no_windows)
-    # the manager is HUMAN-ATTENDED (human-attended guard, d8a77f80): the knock is authorized
-    # but delivered by PULL — it waits in the manager's box and surfaces on its next turn / the
-    # stop-hook, never a forged injection into the operator's live turn. 16722273's "the worker
-    # can reach up" is preserved; only the delivery mechanism changes.
+    # the manager is HUMAN-ATTENDED (the real signal now, thread 96f62338): the knock is
+    # authorized but delivered by PULL — it waits in the manager's box and surfaces on its
+    # next turn / the stop-hook, never a forged injection into the operator's live turn.
+    # 16722273's "the worker can reach up" is preserved; only the delivery mechanism changes.
     assert d["status"] == "queued-human-attended" and d["raw_mode"] == "queued-human"
     assert d["seat"] == manager_seat
     assert not calls  # NOTHING injected or spawned — the human perceives it via the mailbox

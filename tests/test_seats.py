@@ -1282,6 +1282,76 @@ async def test_seat_facts_all_none_for_an_unknown_seat(actions: Actions) -> None
         "handle": None, "house": None, "intended_model": None, "anchor_cwd": None}
 
 
+# ═══ ATTENDANCE (thread 96f62338, replacing ruling d8a77f80's broken managed_by proxy) ═══
+
+async def _attended_value(actions: Actions, seat_id: str) -> str | None:
+    return await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND o.type='Seat' AND a.name='attended' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", seat_id)
+
+
+async def test_set_seat_attended_stamps_and_is_read_back(actions: Actions) -> None:
+    from src.orchestrator.seats import set_seat_attended
+
+    seat = (await ensure_seat(actions, house="demo", handle="Attendee",
+                              source="test"))["seat_id"]
+    out = await set_seat_attended(actions, seat_id=seat, attended="human", actor="test",
+                                  because="this seat is operator-fronted")
+    assert out == {"seat": seat, "attended": "human", "because": "this seat is operator-fronted"}
+    assert await _attended_value(actions, seat) == "human"
+
+    # a later stamp reversing it supersedes cleanly — one current value, not a pile-up
+    await set_seat_attended(actions, seat_id=seat, attended="worker", actor="test",
+                            because="handed off to full automation")
+    assert await _attended_value(actions, seat) == "worker"
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='attended'", seat) == 1
+
+
+async def test_set_seat_attended_refuses_a_value_outside_the_closed_set(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import set_seat_attended
+
+    seat = (await ensure_seat(actions, house="demo", handle="Typo",
+                              source="test"))["seat_id"]
+    out = await set_seat_attended(actions, seat_id=seat, attended="humann", actor="test",
+                                  because="a typo must never silently land as 'not human'")
+    assert "error" in out and "human" in out["error"] and "worker" in out["error"]
+    assert await _attended_value(actions, seat) is None
+
+
+async def test_set_seat_attended_refuses_a_blank_because(actions: Actions) -> None:
+    from src.orchestrator.seats import set_seat_attended
+
+    seat = (await ensure_seat(actions, house="demo", handle="Blank",
+                              source="test"))["seat_id"]
+    out = await set_seat_attended(actions, seat_id=seat, attended="human", actor="test",
+                                  because="   ")
+    assert "error" in out
+    assert await _attended_value(actions, seat) is None
+
+
+async def test_set_seat_attended_refuses_an_unknown_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import set_seat_attended
+
+    out = await set_seat_attended(actions, seat_id="seat:nosuchsea", attended="human",
+                                  actor="test", because="no such seat exists")
+    assert out == {"error": "no such seat: 'seat:nosuchsea'"}
+
+
+async def test_set_seat_attended_refuses_a_retired_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import retire_seat, set_seat_attended
+
+    seat = (await ensure_seat(actions, house="demo", handle="Gone", source="test"))["seat_id"]
+    await retire_seat(actions, seat, reason="role is over", actor="test")
+    out = await set_seat_attended(actions, seat_id=seat, attended="human", actor="test",
+                                  because="attempting to stamp a dead seat")
+    assert "error" in out and "retired" in out["error"]
+
+
 # ═══ SEAT LIFECYCLE (ruling ff6148b0's completion, decision 87953278, thread cb374585) ═══
 
 
