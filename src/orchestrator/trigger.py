@@ -287,7 +287,20 @@ def _wake_job_dir(project: str) -> str:
 async def wake_status(pool: asyncpg.Pool, project: str, st: Settings) -> str:
     """What the trigger would do for this project right now — the sender-visible signal
     (send() surfaces it so 'busy listener' is distinguishable from 'feature off'). The
-    operator address is a desk, not a repo: 'operator (read at the desk, never woken)'."""
+    operator address is a desk, not a repo: 'operator (read at the desk, never woken)'.
+
+    THE POKE-ONLY HONESTY FIX (thread aa58c1e4): a BROADCAST has NO daemon-reply lane at
+    all (that hop is dispatch_dm-only, targeted DMs exclusively) — its only push path is
+    owner-live -> poke -> resume/mint, and osiris_trigger_poke_only=1 (a live, standing
+    config) makes the ladder terminate at a permanent 'held' for any project with no open
+    manager-hosted window: no resume, no mint, ever, no matter how long the sweep keeps
+    retrying every ~60s. This used to fall through to the same generic 'armed' every DM
+    gets — the exact lying-receipt shape a live incident exposed (the operator watched 23
+    minutes of apparent silence and concluded the messages didn't land; measured diagnosis:
+    decision 636c8abd — the daemon hop itself is near-instant, 0.32s in the one case
+    checked; the broadcast simply had no push mechanism available under this config at
+    all). Checked ONLY when it would otherwise say 'armed' (an extra manager round-trip on
+    every other verdict would be spent on an answer nobody needed)."""
     if project == OPERATOR_ADDR:
         return "operator (read at the desk, never woken)"
     allow = {p.strip() for p in st.osiris_trigger_projects.split(",") if p.strip()}
@@ -306,7 +319,27 @@ async def wake_status(pool: asyncpg.Pool, project: str, st: Settings) -> str:
     if reason == "budget-deferred":
         return "budget-deferred (non-urgent near the hourly ceiling — urgent mail and " \
                "aged mail still wake)"
-    return reason if reason is not None else "armed"
+    if reason == "disabled":
+        # NOT a transient brake — the kill switch itself is off; no autonomous retry ever
+        # fires until a human re-enables osiris_trigger_enabled, so no cadence applies
+        return "disabled"
+    if reason is not None:
+        # rate-capped / budget-exhausted / wake-grace: genuinely transient sliding-window
+        # brakes the sweep re-checks and clears on its own — attempts/attempt_limit are
+        # never passed here, so should_wake can't return 'unsettleable' from this call site
+        return f"{reason} (the sweep runs every ~60s and retries once it clears)"
+    if st.osiris_trigger_poke_only:
+        sids = {Path(r["job_dir"]).name[:8] for r in await pool.fetch(
+            "SELECT job_dir FROM agent_mounts WHERE project=$1 "
+            "AND job_dir IS NOT NULL", project)}
+        wins = await _manager_windows()
+        if _window_for(wins, sids) is None:
+            return ("poke-only, no open manager window for this project — a broadcast has "
+                    "NO daemon-reply lane (that hop is DM-only) and poke-only mode never "
+                    "resumes or mints, so this will NOT be pushed to anyone; it reaches a "
+                    "reader only when one is already live or next opens this project on "
+                    "their own")
+    return "armed"
 
 
 async def _repo_path(pool: asyncpg.Pool, project: str) -> str | None:
@@ -841,7 +874,8 @@ async def dispatch_dm(
     if cap > 0 and await _seat_wakes(pool, target, seat_id, 3600) >= cap:
         return {"mode": "braked",
                 "detail": f"the per-seat rate brake: {cap} wakes/h already landed on this "
-                          "addressee — the next tick past the window retries"}
+                          "addressee — the backstop sweep runs every ~60s and retries once "
+                          "the hourly window clears"}
     row = await pool.fetchrow(
         "SELECT project FROM agent_mounts WHERE agent_id=$1 "
         "ORDER BY last_seen DESC LIMIT 1", target)
@@ -873,7 +907,8 @@ async def dispatch_dm(
         urgent=(sender or "").startswith("operator"))
     if reason is not None:
         return {"mode": "skipped-" + reason,
-                "detail": f"the fleet's own brakes held it ({reason}); the sweep retries"}
+                "detail": f"the fleet's own brakes held it ({reason}) — the backstop sweep "
+                          "runs every ~60s and retries once the brake clears"}
     # the dollar wall: a resume is a real turn — but only a BILLED one. On a subscription the
     # CLI's cost is notional and this gate is inert (spend_is_metered=False); it bites only when
     # Osiris runs on a keyed API backend.
@@ -949,10 +984,18 @@ async def dispatch_dm(
                     "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
                     "VALUES ($1,$2,$3,'dm-reply')", project, sender, msg_id)
         if nudged:
+            # RECEIPT HONESTY (thread aa58c1e4): 'nudged' means the daemon ACCEPTED the
+            # injection ({ok:true} on its own control socket) — the confirmed hop, not an
+            # observed one (ruling 986b12f0's own distinction: reply() returning True means
+            # QUEUED, not SEEN). Measured empirically (decision 636c8abd): this hop lands as
+            # an actually-submitted turn in ~0.3s in the one case checked — fast enough that
+            # 'nudged' stays the honest label for it — but the wording no longer claims the
+            # turn already happened, only that the daemon took it.
             shown = job.get("name") or job.get("short") or "the job"
             return {"mode": "nudged",
-                    "detail": f"the mail envelope landed as {shown}'s next turn via the "
-                              "harness daemon — visible live in the agents view"}
+                    "detail": f"the harness daemon ACCEPTED the mail envelope as {shown}'s "
+                              "next turn (typically lands within a second or two, per "
+                              "measurement — visible live in the agents view once it does)"}
         # the daemon refused (version seam, dead socket, missing key) — fall open
     # the poke lane: a manager-hosted OPEN window holding this lineage's session gets
     # the mail typed in as a turn — never a second process beside an open window

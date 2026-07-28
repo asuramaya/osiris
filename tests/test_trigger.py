@@ -244,10 +244,46 @@ async def test_wake_status_is_the_sender_visible_signal(actions: Actions) -> Non
     assert "never woken" in await wake_status(p, OPERATOR_ADDR, _settings(enabled=True))
     await p.execute("INSERT INTO agent_wakes (to_project, from_agent, message_id) "
                     "VALUES ('demo','agent:x',NULL)")
-    assert await wake_status(p, "demo", _settings(enabled=True, rate_cap=1)) == "rate-capped"
+    # RECEIPT HONESTY (thread aa58c1e4): a skip reason now names its own retry cadence —
+    # 'the sweep retries' told a sender nothing about WHEN; '~60s' is measured (decision
+    # 636c8abd), not a guess
+    rate_capped = await wake_status(p, "demo", _settings(enabled=True, rate_cap=1))
+    assert rate_capped.startswith("rate-capped") and "~60s" in rate_capped
     # a recent wake under the cap → 'wake-grace', so a sender sees 'processing' not 'off'/'capped'
-    assert await wake_status(
-        p, "demo", _settings(enabled=True, rate_cap=5, grace=300)) == "wake-grace"
+    grace_status = await wake_status(
+        p, "demo", _settings(enabled=True, rate_cap=5, grace=300))
+    assert grace_status.startswith("wake-grace") and "~60s" in grace_status
+
+
+async def test_wake_status_poke_only_names_the_real_limit_instead_of_a_blanket_armed(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE LYING-RECEIPT FIX (thread aa58c1e4, decision 636c8abd): a broadcast has NO
+    daemon-reply lane (DM-only) — under poke-only mode with no open manager window for the
+    project, the ladder is GUARANTEED to terminate at 'held' (no resume, no mint, ever), so
+    the old blanket 'armed' was a lie a sender had no way to see through. With a window
+    present, poke really would succeed, so 'armed' stays honest."""
+    p = actions.pool
+    st = _settings(enabled=True, poke_only=True)
+    # _dark_manager (autouse) darkens _manager_windows to [] for this whole module — the
+    # no-window case is the default here, nothing extra to arrange
+    status = await wake_status(p, "demo", st)
+    assert "poke-only" in status and "will NOT be pushed" in status
+    assert "no daemon-reply lane" in status.lower()
+    # a real manager window for THIS project flips the verdict back to armed — poke
+    # genuinely would deliver it. wake_status's window check reads agent_mounts (the
+    # durable mount row), not the graph — mounts.save_mount is the real write path
+    # every other test in this module uses for the same table.
+    from src.orchestrator import mounts
+    await mounts.save_mount(actions.pool, job_dir="/tmp/jobs/windowed-sess",
+                            agent_id="agent:windowed", project="demo", cwd="/repo/demo",
+                            model=None, session_key=None)
+
+    async def _windowed() -> list[dict[str, Any]]:
+        return [{"name": "demo-window", "alive": True, "job_dir": "/tmp/jobs/windowed-sess"}]
+
+    monkeypatch.setattr(trigger_module, "_manager_windows", _windowed)
+    assert await wake_status(p, "demo", st) == "armed"
 
 
 async def test_wake_grace_prevents_the_double_wake(actions: Actions) -> None:
@@ -1468,6 +1504,11 @@ async def test_a_nudged_message_is_never_renudged(
                            sender="agent:sender", settings=st, spawn=_spawn,
                            windows=_no_windows, jobs=_jobs, nudge=_nudge)
     assert d1["mode"] == "nudged" and d2["mode"] == "skipped-once-per-message"
+    # RECEIPT HONESTY (thread aa58c1e4, decision 636c8abd): 'nudged' means the daemon
+    # ACCEPTED the injection, never that the turn already ran — 'landed as X's next turn'
+    # overclaimed a confirmed outcome from a bare queue success (ruling 986b12f0's own
+    # distinction)
+    assert "ACCEPTED" in d1["detail"] and "landed as" not in d1["detail"]
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM agent_wakes WHERE message_id=$1", msg_id) == 1
 
