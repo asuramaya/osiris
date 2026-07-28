@@ -2051,6 +2051,96 @@ async def test_unified_prior_art_check_surfaces_a_practice_via_the_statement_fie
         assert any(h["type"] == "Practice" for h in out["prior_art"])
         assert "prior_art_flag" in out
         assert "re-derivation" in out["prior_art_flag"]
+        assert out["prior_art_polarity"] == "rederive"
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
+def test_practice_contradiction_cues_is_a_pure_lexical_fingerprint() -> None:
+    """No NLP, no DB — a deterministic substring check, documented as a heuristic nudge
+    never a verdict (see the docstring on capture._CONTRADICTION_CUES)."""
+    from src.orchestrator.capture import practice_contradiction_cues
+
+    assert practice_contradiction_cues("never do X") == ["never"]
+    assert practice_contradiction_cues("do X instead of Y, rather than Z") == [
+        "instead of", "rather than"]
+    assert practice_contradiction_cues("confirming the same lesson again") == []
+
+
+async def test_record_decision_flags_contradiction_when_reversal_language_matches_a_practice(
+    actions: Actions,
+) -> None:
+    """PRACTICE v2 layer 1 (Thoth LXII's DM 1785; grounds c54e8176 + thread 54a5c842): the
+    v1 gap was that EVERY Practice hit got the same "re-derivation" nudge whether the new
+    decision agreed with it or silently reversed it. A lexical reversal fingerprint now
+    flags an unlabeled contradiction loud and distinctly from a plain uncited restatement
+    (see the passing case above, `prior_art_polarity == "rederive"`) — and the classification
+    reaches search_log's telemetry (migration 0039), not just the receipt."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import record_decision as rd_tool
+    from src.mcp_server import record_practice as rp_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:thaw6", session="thaw6", project="thaw-land-6", model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        practice = await rp_tool(
+            "batch small commits into one PR for this class of change", ctx=ctx)
+        out = await rd_tool(
+            "never batch small commits into one PR for this class of change",
+            kind="decision", rationale=f"undoing practice {practice['id']}", ctx=ctx)
+        assert out["prior_art_polarity"] == "contradict"
+        assert "CONTRADICT" in out["prior_art_flag"]
+        assert "never" in out["prior_art_flag"]
+        assert "confirm it as evidence" not in out["prior_art_flag"]
+        row = await actions.pool.fetchrow(
+            "SELECT prior_art_polarity FROM search_log ORDER BY id DESC LIMIT 1")
+        assert row["prior_art_polarity"] == "contradict"
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
+async def test_record_decision_flags_overturning_when_refutes_names_the_matched_practice(
+    actions: Actions,
+) -> None:
+    """An explicit refutes= naming the SAME practice the search matched is a SETTLED
+    reversal, not a defensive maybe — the receipt says so plainly instead of nagging the
+    caller to do what they just did (distinct wording from the bare-cues case above)."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import record_decision as rd_tool
+    from src.mcp_server import record_practice as rp_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:thaw7", session="thaw7", project="thaw-land-7", model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        practice = await rp_tool(
+            "route every dispatch through the DM lane, not a broadcast reply", ctx=ctx)
+        out = await rd_tool(
+            "broadcast replies are fine for dispatch after all", kind="decision",
+            rationale=f"retiring practice {practice['id']}",
+            refutes=practice["id"], ctx=ctx)
+        assert out["prior_art_polarity"] == "contradict"
+        assert "OVERTURNS" in out["prior_art_flag"]
+        assert "refuted_practice" in out
     finally:
         srv._pool = saved_pool
         _agents.pop(_conn_key(ctx), None)

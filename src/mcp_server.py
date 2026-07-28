@@ -3456,10 +3456,32 @@ async def record_decision(
             top = prior[0]
             top_kind = top.get("type") or "Decision"
             if top_kind == "Practice":
-                out["prior_art_flag"] = (
-                    f"this looks like a re-derivation of standing Practice {top['id']} — "
-                    f"confirm it as evidence (confirms=['{top['id']}']) if it's the same "
-                    "lesson, or acknowledge it (ack_prior_art=True) if coincidental")
+                # PRACTICE v2 layer 1 (Thoth LXII's DM 1785): a Practice hit is no longer
+                # always treated as a re-derivation — an explicit refutes= targeting this
+                # SAME practice means the caller already named it a reversal (handled by
+                # the refute_practice conversion below); otherwise a lexical reversal
+                # fingerprint (practice_contradiction_cues) distinguishes an unlabeled
+                # CONTRADICTION from a plain, uncited RE-DERIVATION.
+                overturning = refute_id is not None and str(refute_id)[:8] == top["id"]
+                cues = capture.practice_contradiction_cues(f"{summary} {rationale or ''}")
+                if overturning:
+                    out["prior_art_flag"] = (
+                        f"this OVERTURNS standing Practice {top['id']} — handled below via "
+                        "refutes= (converts it to a dead Superstition, flagged not retired)")
+                    out["prior_art_polarity"] = "contradict"
+                elif cues:
+                    out["prior_art_flag"] = (
+                        f"this may CONTRADICT standing Practice {top['id']} rather than cite "
+                        f"it — reversal language found ({', '.join(cues)}); if you mean to "
+                        f"overturn it, say so explicitly (refutes=['{top['id']}']), or "
+                        "acknowledge it (ack_prior_art=True) if this wording is coincidental")
+                    out["prior_art_polarity"] = "contradict"
+                else:
+                    out["prior_art_flag"] = (
+                        f"this looks like a re-derivation of standing Practice {top['id']} — "
+                        f"confirm it as evidence (confirms=['{top['id']}']) if it's the same "
+                        "lesson, or acknowledge it (ack_prior_art=True) if coincidental")
+                    out["prior_art_polarity"] = "rederive"
             elif top_kind == "Superstition":
                 out["prior_art_flag"] = (
                     f"a dead Superstition ({top['id']}) already covers this ground — check "
@@ -3475,9 +3497,11 @@ async def record_decision(
         # aggregated over time, IS the fleet's re-derivation ratchet metric.
         try:
             await pool.execute(
-                "UPDATE search_log SET prior_art_kind=$1, prior_art_strong=$2 "
+                "UPDATE search_log SET prior_art_kind=$1, prior_art_strong=$2, "
+                "prior_art_polarity=$3 "
                 "WHERE id = (SELECT id FROM search_log ORDER BY id DESC LIMIT 1)",
-                (prior[0].get("type") or "Decision") if prior else None, strong)
+                (prior[0].get("type") or "Decision") if prior else None, strong,
+                out.get("prior_art_polarity"))
         except Exception:  # noqa: BLE001 — telemetry must never block the ruling
             pass
     if ack_prior_art:

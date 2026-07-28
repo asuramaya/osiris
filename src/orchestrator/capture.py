@@ -307,6 +307,31 @@ def prior_art_is_strong(prior_art: list[dict[str, Any]]) -> bool:
     return bool(prior_art) and prior_art[0].get("via") in _PRIOR_ART_STRONG_VIA
 
 
+# CONTRADICT vs RE-DERIVE (PRACTICE v2 layer 1, Thoth LXII's DM 1785; grounds c54e8176 +
+# thread 54a5c842): a strong hit against a standing Practice gets the SAME "looks like a
+# re-derivation" nudge today whether the new decision merely restates the Practice or
+# silently reverses it — the exact failure c54e8176 traces (a fixed mistake recurring,
+# caught only because a write happened to fire the check at all; Alfred X's framing in
+# 54a5c842: the missing property is "asserted at the point of application"). Telling the
+# two apart needs no semantic classifier: a reversal leaves a lexical fingerprint
+# (negation/override language) a plain restatement does not. This is a HEURISTIC, not a
+# verdict — an empty cue list is not proof of agreement, only that this fingerprint is
+# absent; the flag stays a nudge a mind reviews, never a block (the SPOF principle).
+_CONTRADICTION_CUES = (
+    "never", "don't", "do not", "doesn't", "does not", "stop", "instead of",
+    "rather than", "no longer", "avoid", "skip", "reverse", "abandon", "override",
+    "opposite", "wrong to", "should not", "shouldn't", "must not", "mustn't", "not to",
+)
+
+
+def practice_contradiction_cues(text: str) -> list[str]:
+    """Which contradiction-flavored cue phrases appear in `text` (case-insensitive
+    substring match, deterministic, no NLP). See `_CONTRADICTION_CUES` for why this is a
+    lexical fingerprint check, not an entailment classifier."""
+    low = text.lower()
+    return [cue for cue in _CONTRADICTION_CUES if cue in low]
+
+
 def _ref_slug(title: str) -> str:
     """ref:<slug> — the SAME canonical scheme as the doc ingester (src/ingest/reference.py),
     so an agent citing "Attention Is All You Need" and a later doc-ingest of the same title
