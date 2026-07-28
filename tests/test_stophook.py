@@ -407,6 +407,163 @@ async def test_assert_context_pct_writes_a_readable_value(
     assert pct == "83"
 
 
+# ═══════════ THE PARKED CONFESSION, STAGE B — thread 3c4fe1dc ═══════════
+# A turn that ends on a question mark with no mail ask actually sent is a question asked
+# into an empty room — the exact failure the operator caught live (Imhotep, 2026-07-27).
+
+def _write_transcript(path: Path, *entries: dict) -> None:
+    path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+
+def test_last_assistant_text_reads_the_final_real_assistant_turn(tmp_path: Path) -> None:
+    t = tmp_path / "t.jsonl"
+    _write_transcript(
+        t,
+        {"type": "assistant", "isSidechain": False,
+         "message": {"content": "an older turn, not the answer"}},
+        {"type": "user", "message": {"content": "noise in between"}},
+        {"type": "assistant", "isSidechain": False,
+         "message": {"content": "Want me to proceed straight into that now?"}},
+    )
+    assert stophook._last_assistant_text(str(t)) == "Want me to proceed straight into that now?"
+
+
+def test_last_assistant_text_extracts_from_content_blocks(tmp_path: Path) -> None:
+    t = tmp_path / "t.jsonl"
+    _write_transcript(
+        t,
+        {"type": "assistant", "isSidechain": False, "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {}},
+            {"type": "text", "text": "should I proceed?"},
+        ]}},
+    )
+    assert stophook._last_assistant_text(str(t)) == "should I proceed?"
+
+
+def test_last_assistant_text_skips_sidechain_and_missing_file(tmp_path: Path) -> None:
+    t = tmp_path / "t.jsonl"
+    _write_transcript(
+        t,
+        {"type": "assistant", "isSidechain": True,
+         "message": {"content": "a subagent turn, not mine"}},
+    )
+    assert stophook._last_assistant_text(str(t)) is None
+    assert stophook._last_assistant_text(str(tmp_path / "missing.jsonl")) is None
+    assert stophook._last_assistant_text("") is None
+
+
+def test_parked_on_a_question_pure() -> None:
+    assert stophook._parked_on_a_question("proceed straight into that now?") is True
+    assert stophook._parked_on_a_question("trailing whitespace after the mark? \n") is True
+    assert stophook._parked_on_a_question("done. committed 76ead13.") is False
+    assert stophook._parked_on_a_question("") is False
+    assert stophook._parked_on_a_question(None) is False
+
+
+async def test_sent_a_real_ask_true_only_for_a_recent_ask_from_this_agent(
+    actions: Actions,
+) -> None:
+    agent = "agent:asktest1"
+    await send_message(actions.pool, from_agent=agent, from_project="osiris",
+                       to_project="osiris", body="a real question", grade="ask")
+    assert await stophook._sent_a_real_ask(actions.pool, agent) is True
+    assert await stophook._sent_a_real_ask(actions.pool, "agent:neverasked") is False
+
+
+async def test_sent_a_real_ask_ignores_an_old_ask_outside_the_window(
+    actions: Actions,
+) -> None:
+    agent = "agent:askstale1"
+    r = await send_message(actions.pool, from_agent=agent, from_project="osiris",
+                           to_project="osiris", body="an old question", grade="ask")
+    await actions.pool.execute(
+        "UPDATE fleet_messages SET created_at=now() - interval '1 hour' WHERE id=$1", r["id"])
+    assert await stophook._sent_a_real_ask(actions.pool, agent, within_secs=300) is False
+
+
+async def test_stage_a_confesses_when_parked_on_a_question_with_no_mail_ask_sent(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
+) -> None:
+    monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    worker_agent, worker_seat = "agent:parked001", "seat:parked001"
+    manager_agent, manager_seat = "agent:parkmgr01", "seat:parkmgr01"
+    worker_obj = await actions.create_or_find_object("Seat", worker_seat, worker_agent)
+    manager_obj = await actions.create_or_find_object("Seat", manager_seat, manager_agent)
+    now = datetime.now(UTC)
+    await actions.assert_property(worker_obj, "handle", "parkedworker", worker_agent, now,
+                                  0.9, evidence_class="self_declared")
+    await actions.create_link(worker_obj, manager_obj, "managed_by", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await bind_holder(actions, seat_id=worker_seat, agent_id=worker_agent)
+
+    office = tmp_path / "office"
+    office.mkdir()
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(
+        transcript,
+        {"type": "assistant", "isSidechain": False,
+         "message": {"content": "Want me to proceed straight into that now?"}},
+    )
+    job_dir = str(tmp_path / "jobs" / "prkedqst")  # EXACTLY 8 chars — find_session_row's contract
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=worker_agent, project="testhouse",
+                     cwd=str(office), model=None, session_key=None)
+    sid = "prkedqst-0000-4000-8000-000000000000"  # sid[:8] == "prkedqst"
+
+    before = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    await stophook._stage_a_async(
+        {"cwd": str(office), "session_id": sid, "transcript_path": str(transcript)})
+    after = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    assert after == before + 1
+    row = await actions.pool.fetchrow(
+        "SELECT from_agent, to_agent, body, grade FROM fleet_messages ORDER BY id DESC LIMIT 1")
+    assert row["from_agent"] == worker_agent
+    assert row["to_agent"] == manager_seat
+    assert row["grade"] == "fyi"
+    assert "likely parked" in row["body"]
+    assert "proceed straight into that now?" in row["body"]
+
+
+async def test_stage_a_does_not_confess_when_the_question_already_went_out_as_mail(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
+) -> None:
+    """The fine case: a real ask already left via mail (grade='ask') — the trailing '?' in
+    the transcript is just narrating a question someone WILL actually see, not one asked
+    into an empty room. No duplicate confession."""
+    monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    worker_agent, worker_seat = "agent:parked002", "seat:parked002"
+    manager_agent, manager_seat = "agent:parkmgr02", "seat:parkmgr02"
+    worker_obj = await actions.create_or_find_object("Seat", worker_seat, worker_agent)
+    manager_obj = await actions.create_or_find_object("Seat", manager_seat, manager_agent)
+    now = datetime.now(UTC)
+    await actions.assert_property(worker_obj, "handle", "parkedworker2", worker_agent, now,
+                                  0.9, evidence_class="self_declared")
+    await actions.create_link(worker_obj, manager_obj, "managed_by", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await bind_holder(actions, seat_id=worker_seat, agent_id=worker_agent)
+    await send_message(actions.pool, from_agent=worker_agent, from_project="osiris",
+                       to_agent=manager_seat, body="Want me to proceed straight into that now?",
+                       grade="ask")
+
+    office = tmp_path / "office2"
+    office.mkdir()
+    transcript = tmp_path / "t2.jsonl"
+    _write_transcript(
+        transcript,
+        {"type": "assistant", "isSidechain": False,
+         "message": {"content": "Want me to proceed straight into that now?"}},
+    )
+    job_dir = str(tmp_path / "jobs" / "prkedqs2")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=worker_agent, project="testhouse",
+                     cwd=str(office), model=None, session_key=None)
+    sid = "prkedqs2-0000-4000-8000-000000000000"
+
+    before = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    await stophook._stage_a_async(
+        {"cwd": str(office), "session_id": sid, "transcript_path": str(transcript)})
+    after = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    assert after == before  # no NEW confession — the real ask already covers it
+
+
 # ═══════════ INTEGRATION — _stage_a_async end to end ═══════════
 
 async def test_stage_a_sends_the_confession_when_the_manager_is_owed_a_reply(

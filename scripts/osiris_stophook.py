@@ -21,7 +21,7 @@ import asyncio
 import json
 import os
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -314,6 +314,13 @@ def _swap_confession(payload: dict[str, Any]) -> str | None:
 # who's stopping — unconditional, no succession-liveness gate (handshake.office_seat's gate
 # answers 'who gets BORN into a quiet seat', a different question from 'who already lives
 # here and is mid-turn').
+#
+# STAGE B (thread 3c4fe1dc): a third mechanism, same fail-open discipline — (3) THE PARKED
+# CONFESSION: a turn that ends on a question mark with no grade='ask' mail actually sent is
+# a question asked into an empty room (a spawned/resumed body inherits ask-before-proceeding
+# etiquette from attended-session training; nobody there to answer it). Detection only, via
+# the same courtesy-DM surfacing Stage A already proves works — no PTY poke, no auto-continue;
+# actuation is later, operator-gated work (Thoth, DM 1644), not this leg.
 
 async def _resolve_worker_identity(
     conn: Any, session_id: str, cwd: str,
@@ -393,6 +400,66 @@ async def _mail_gap(
     return manager_to_me, me_to_manager
 
 
+def _last_assistant_text(transcript_path: str) -> str | None:
+    """The literal text of the most recent real assistant turn — same tail-read shape as
+    `_swap_confession`'s model scan (share the file, share the gotchas: filter isSidechain,
+    and unlike the model scan do NOT skip an empty-text entry — a turn that ends on a bare
+    tool call has no visible question either, and that IS the answer, not a reason to keep
+    scanning backward for an older one). None only when the tail can't be read or has no
+    real assistant line at all."""
+    if not transcript_path:
+        return None
+    try:
+        tp = Path(transcript_path)
+        with tp.open("rb") as fh:
+            fh.seek(max(0, tp.stat().st_size - 524_288))
+            tail = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in reversed(tail.splitlines()):
+        if '"assistant"' not in line:
+            continue
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if e.get("type") != "assistant" or e.get("isSidechain"):
+            continue
+        content = (e.get("message") or {}).get("content")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            return "\n".join(
+                b.get("text", "") for b in content
+                if isinstance(b, dict) and b.get("type") == "text").strip()
+        return ""
+    return None
+
+
+def _parked_on_a_question(text: str | None) -> bool:
+    """THE EMPTY-ROOM CHECK (thread 3c4fe1dc): a turn that ends on a question mark is a
+    turn waiting for someone to answer it — fine if that someone is real (a live human
+    attending the window), a bug if the room is empty (a spawned or resumed body with
+    nobody there). Pure text, no judgment about WHO — `_sent_a_real_ask` carries that half."""
+    return bool(text) and text.rstrip().endswith("?")
+
+
+async def _sent_a_real_ask(conn: Any, agent_id: str, within_secs: int = 300) -> bool:
+    """True when this agent already sent a grade='ask' message inside the last
+    `within_secs` — the signal that a trailing '?' is a REAL mail-routed ask (a manager or
+    the operator's desk will actually see it), not a question narrated into an empty room.
+    Lineage-matched the same way `_mail_gap` already does, since the sending session's own
+    generation suffix shouldn't cost it credit for mail it just sent."""
+    from src.orchestrator.agents import _generation
+
+    base = _generation(agent_id)[0]
+    since = datetime.now(UTC) - timedelta(seconds=within_secs)
+    row = await conn.fetchval(
+        "SELECT 1 FROM fleet_messages WHERE (from_agent=$1 OR from_agent LIKE $1 || '-%') "
+        "AND grade='ask' AND created_at >= $2 LIMIT 1", base, since)
+    return row is not None
+
+
 def _stage_a_confession(
     *, leased: dict[str, Any], manager_dm_at: datetime | None, my_dm_at: datetime | None,
 ) -> str | None:
@@ -450,6 +517,29 @@ async def _assert_context_pct(agent_id: str, pct: int) -> None:
         await pool.close()
 
 
+async def _confess_if_parked(
+    conn: Any, *, payload: dict[str, Any], agent_id: str, cwd: str, manager_seat: str,
+) -> None:
+    """STAGE B (thread 3c4fe1dc): DETECTION ONLY, no actuation — the operator caught a
+    spawned body complete its intake correctly, then stall on 'Want me to proceed straight
+    into that now?' typed into a room nobody was attending. Surfaced the SAME way Stage A's
+    own stop confession already proves out — a courtesy fyi DM to the manager — rather than
+    a new graph property nobody reads (state='pending' has had zero readers since Stage A
+    shipped; this doesn't repeat that gap). Never pokes a PTY: auto-continuation is future,
+    operator-gated work paired with the reaper class (Thoth, DM 1644), not this leg."""
+    text = _last_assistant_text(str(payload.get("transcript_path") or ""))
+    if not _parked_on_a_question(text) or await _sent_a_real_ask(conn, agent_id):
+        return
+    assert text is not None
+    q = text.strip().splitlines()[-1].strip()[-200:]
+    from src.orchestrator.mailbox import send_message
+    await send_message(
+        conn, from_agent=agent_id, from_project=Path(cwd).name, to_agent=manager_seat,
+        body=f"stopping; last turn ended on an unanswered question with no mail ask sent "
+             f"— likely parked, nobody's in the room to answer it: “{q}”",
+        grade="fyi")
+
+
 async def _stage_a_async(payload: dict[str, Any], pct: int | None = None) -> None:
     cwd = str(payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
     session_id = str(payload.get("session_id") or "")
@@ -466,11 +556,14 @@ async def _stage_a_async(payload: dict[str, Any], pct: int | None = None) -> Non
         if not identity.get("seat_id"):
             return  # unclaimed seat — nothing further to confess
         seat_id = identity["seat_id"]
+        manager_seat = await _manager_seat(conn, seat_id)
+        if manager_seat is not None:
+            await _confess_if_parked(
+                conn, payload=payload, agent_id=agent_id, cwd=cwd, manager_seat=manager_seat)
         leased = await _leased_assignment(conn, seat_id, agent_id)
         if leased is None:
             await _assert_pending(agent_id)
             return
-        manager_seat = await _manager_seat(conn, seat_id)
         if manager_seat is None:
             return  # no manager of record — nobody to confess to
         manager_dm_at, my_dm_at = await _mail_gap(conn, seat_id, manager_seat, agent_id)

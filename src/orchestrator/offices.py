@@ -49,6 +49,13 @@ Launch here, resume here — this path never moves again, whatever happens to th
 - Seat-local state (notes, scratch, drafts) belongs HERE — never in a repo behind a
   fragile .gitignore. That class of mess is what this office exists to end.
 
+## Ending a turn
+Never end a turn on a permission question asked to an empty room — a spawned or
+resumed body has no one there to read it. Proceed on the brief instead of pausing for
+confirmation. A genuine ask still has a home: `send(..., grade='ask')` to your manager,
+or `send(to='operator')` for the human's desk — that's where someone will actually see
+it. End a turn only on completion, a real blocker, or a natural seam.
+
 ## Ritual (unchanged)
 Write back AS YOU GO: `record_decision` / `open_thread` (kind='obligation') /
 `resolve_thread`. A session can die at any instant; what is not in the graph does not

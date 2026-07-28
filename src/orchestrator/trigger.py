@@ -1901,7 +1901,9 @@ def _bg_boot_prompt(*, office: str, anchor: str, handle: str) -> str:
         f'You have just been launched into your own seat\'s office. Call '
         f'mount(cwd="{office}", job_dir="{anchor}"), then claim_name("{handle}") — that '
         f"exact name — to bind to the seat already waiting for you. Then inbox() for "
-        f"your opening brief."
+        f"your opening brief. No one is watching this window: work the brief to "
+        f"completion, a real blocker, or a seam — never park on a question typed into "
+        f"this empty room; a genuine ask goes out as mail (grade='ask')."
     )
 
 
