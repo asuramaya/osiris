@@ -1611,6 +1611,26 @@ async def test_retire_seat_refuses_an_unknown_seat(actions: Actions) -> None:
     assert "no such seat" in out["error"]
 
 
+async def test_retire_seat_refuses_a_peered_seat(actions: Actions) -> None:
+    """THE PEER GUARD (Khnum IX's review, msg 1774): unpeer requires BOTH seats active to
+    resolve them — nothing stopped retiring a peered seat first, stranding the bond
+    pointing at a dead seat forever with no sanctioned verb able to heal it. unpeer first,
+    same discipline as the active-holder guard."""
+    from src.orchestrator.seats import peer_seats, retire_seat
+
+    await actions.create_or_find_object("Seat", "seat:rs5peer0", "test")
+    await actions.create_or_find_object("Seat", "seat:rs5peer1", "test")
+    await peer_seats(actions, "seat:rs5peer0", "seat:rs5peer1", because="test bond",
+                     actor="test")
+
+    out = await retire_seat(actions, "seat:rs5peer0", actor="test")
+    assert "peered with seat:rs5peer1" in out["error"]
+    # refused loudly — nothing written; the seat is still active and still peered
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='seat:rs5peer0'")
+    assert row["status"] == "active"
+
+
 # ═══ vacate_holder (thread 445a7356) — retire_seat's stale-holder refusal is correct;
 # this is its complement, releasing a holder WITHOUT closing the seat. It trusts its
 # caller (trigger.vacate_dead_seat gathers the liveness evidence) and does the write.

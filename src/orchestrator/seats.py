@@ -928,7 +928,9 @@ async def retire_seat(actions: Actions, seat_id: str, *, reason: str = "", actor
 
     Refuses LOUDLY on: unknown or already-inactive seat; an ACTIVE holder (a live mind
     sitting in a seat is not this verb's business to evict — transfer or let it vacate
-    first, the same discipline fold_agent already holds for agents).
+    first, the same discipline fold_agent already holds for agents); an active peer_of
+    edge (a peered seat retiring first would leave the bond pointing at a dead seat
+    forever — unpeer first, same reasoning as the holder guard).
 
     THE STATUS GAP (Seshat msg 1686, live specimen operator-caught msg 1713): this used
     to stamp only the `retired` PROPERTY, leaving objects.status reading 'active' forever
@@ -936,7 +938,15 @@ async def retire_seat(actions: Actions, seat_id: str, *, reason: str = "", actor
     stopped a fresh claim from re-binding to a seat that LOOKED retired. Now flips both
     layers: the property (for anything already reading it) AND objects.status via
     Actions.set_status (the real compensating event, same pattern as retire_project),
-    so a retired seat is actually inert, not just labeled."""
+    so a retired seat is actually inert, not just labeled.
+
+    THE PEER GUARD (Khnum IX's review, msg 1774, of the peer_of build): unpeer requires
+    BOTH seats active to resolve them, so retiring a peered seat first — nothing else
+    stopped that — left the bond stuck active forever, pointing at a dead seat with no
+    sanctioned verb able to heal it (the identical class of bug as a fold/bond that
+    outlives the object it names). Refusing here, symmetrically with the holder check,
+    keeps the fix on the RETIRE side rather than loosening unpeer's own active-seat
+    guard, which would weaken a real invariant elsewhere."""
     seat_id = (seat_id or "").strip()
     row = await actions.pool.fetchrow(
         "SELECT id, status FROM objects WHERE canonical=$1 AND type='Seat'", seat_id)
@@ -951,6 +961,10 @@ async def retire_seat(actions: Actions, seat_id: str, *, reason: str = "", actor
     if holder:
         return {"error": f"{seat_id} is actively held by {holder} — retire_seat never "
                          "evicts a live mind; transfer or vacate the seat first"}
+    peer = await _active_peer(actions.pool, row["id"])
+    if peer is not None:
+        return {"error": f"{seat_id} is peered with {peer['peer']} — retiring it would "
+                         "strand that bond pointing at a dead seat forever; unpeer first"}
     await actions.assert_property(row["id"], "retired", "true", actor, datetime.now(UTC),
                                   _CONF, evidence_class=_EC)
     if (reason or "").strip():
