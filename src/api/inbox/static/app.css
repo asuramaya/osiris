@@ -1,0 +1,302 @@
+/* THE INBOX — frozen paper-terminal stylesheet (task #71, research-design-layer.md).
+   FROZEN: agents never write CSS; this file and templates/catalog.html.j2 are the only
+   two places markup/style is authored. No Tailwind, no utility classes, no inline style=,
+   no <style> blocks anywhere else — every value here is a var(); nothing is a magic
+   number in the markup. A 13th-and-beyond component (Button already approved, msg 1818)
+   requires a human commit here + a new golden-HTML baseline (test_inbox_catalog.py) —
+   friction where it belongs.
+
+   LIGHT FIRST: what's loved about the harness is typographic restraint, not a black
+   background. Dark mode is a later token flip, not a rewrite. */
+
+/* ============================== TOKENS (~40) ============================== */
+:root {
+  /* --- color: warm paper, one accent, three status hues legal ONLY in .status --- */
+  --color-paper: #FAF9F2;
+  --color-ink: #1A1A18;
+  --color-rule: #DDD9CE;
+  --color-muted: #6B6B66;
+  --color-accent: #2B5C8A;
+  --color-accent-weak: #E8EEF3;
+  --color-status-ok: #4B7A54;
+  --color-status-wait: #A8792B;
+  --color-status-fail: #A8402F;
+  --color-surface: #FFFFFF;
+
+  /* --- type: two faces, provenance readable from the face alone --- */
+  --font-serif: "Source Serif 4", Georgia, serif;
+  --font-mono: "IBM Plex Mono", "iA Quattro", ui-monospace, monospace;
+  --size-1: 12px;
+  --size-2: 13.5px;
+  --size-3: 16px;
+  --size-4: 20px;
+  --size-5: 25px;
+  --leading: 1.5;
+  --leading-tight: 1.3;
+  --measure: 70ch;
+
+  /* --- space: multiples of the 24px line-height grid --- */
+  --space-0: 3px;
+  --space-1: 6px;
+  --space-2: 12px;
+  --space-3: 24px;
+  --space-4: 48px;
+  --space-5: 72px;
+
+  /* --- shape: one radius, one border, no shadows, no gradients --- */
+  --radius: 2px;
+  --border-width: 1px;
+  --border: var(--border-width) solid var(--color-rule);
+  --row-height: 32px;          /* ~2x --size-3 */
+  --row-height-compact: 22px;  /* >=1.4x --size-3 */
+  --focus-ring: 2px solid var(--color-accent);
+}
+
+/* ============================== BASE ============================== */
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-serif);
+  font-size: var(--size-3);
+  line-height: var(--leading);
+}
+
+a { color: var(--color-accent); }
+a:focus-visible, button:focus-visible, [tabindex]:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.mono { font-family: var(--font-mono); }
+
+/* ============================== 1. masthead ============================== */
+.masthead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--size-2);
+}
+
+.masthead .masthead-title {
+  font-family: var(--font-serif);
+  font-size: var(--size-4);
+}
+
+/* ============================== 2. queue-row (inbox) ============================== */
+.queue-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--row-height);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--size-2);
+}
+
+.queue-row .queue-row-glyph {
+  flex: none;
+  width: 1.4em;
+  text-align: center;
+  color: var(--color-ink);
+}
+
+.queue-row .queue-row-title {
+  flex: 1 1 auto;
+  font-family: var(--font-serif);
+  font-size: var(--size-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-row .queue-row-age {
+  flex: none;
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.queue-row .queue-row-actions {
+  flex: none;
+}
+
+/* ============================== 3. strip-row (fleet) ============================== */
+/* reserved for the fleet-strip module (0b3dd431's second builder) — tokens only, no
+   slice-one markup consumes this yet. ch-columns + box-drawing tree per design-layer. */
+.strip-row {
+  display: flex;
+  gap: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--size-1);
+  white-space: pre;
+}
+
+/* ============================== 4. status (the ONLY colored thing) ============ */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0);
+  font-family: var(--font-mono);
+  font-size: var(--size-2);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius);
+}
+
+.status--neutral { color: var(--color-muted); }
+.status--ok       { color: var(--color-status-ok); }
+.status--wait     { color: var(--color-status-wait); }
+.status--fail     { color: var(--color-status-fail); }
+
+/* ============================== 5. data-table ============================== */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: var(--size-2);
+}
+
+.data-table th, .data-table td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: var(--border);
+  text-align: left;
+}
+
+.data-table td.numeric, .data-table th.numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table.compact th, .data-table.compact td {
+  padding: 0 var(--space-2);
+  height: var(--row-height-compact);
+}
+
+.data-table:not(.compact) th, .data-table:not(.compact) td {
+  height: var(--row-height);
+}
+
+/* ============================== 6. kv (dossier facts) ============================== */
+.kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-1) var(--space-2);
+  font-size: var(--size-2);
+}
+
+.kv dt { font-family: var(--font-mono); color: var(--color-muted); }
+.kv dd { margin: 0; font-family: var(--font-serif); }
+
+/* ============================== 7. section ============================== */
+.section {
+  border-top: var(--border);
+  padding-top: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.section > summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--size-2);
+  color: var(--color-muted);
+}
+
+/* ============================== 8. answer ============================== */
+.answer {
+  max-width: var(--measure);
+  font-family: var(--font-serif);
+  font-size: var(--size-3);
+}
+
+.answer .answer-provenance {
+  margin-top: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--size-1);
+  color: var(--color-muted);
+}
+
+/* ============================== 9. log-entry ============================== */
+.log-entry {
+  font-family: var(--font-mono);
+  font-size: var(--size-2);
+  padding: var(--space-0) 0;
+  border-bottom: var(--border);
+}
+
+/* ============================== 10. note ============================== */
+.note {
+  border-left: 3px solid var(--color-rule);
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-muted);
+  font-size: var(--size-2);
+}
+
+/* ============================== 11. kbd-hint ============================== */
+.kbd-hint {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: var(--size-1);
+  padding: 0 var(--space-0);
+  border: var(--border);
+  border-radius: var(--radius);
+  color: var(--color-muted);
+}
+
+/* ============================== 12. empty ============================== */
+.empty {
+  padding: var(--space-4) var(--space-3);
+  text-align: center;
+  color: var(--color-muted);
+  font-family: var(--font-serif);
+  font-size: var(--size-3);
+}
+
+/* ============================== 13. button (gated 13th, msg 1818) ============ */
+.btn {
+  font-family: var(--font-mono);
+  font-size: var(--size-2);
+  padding: var(--space-0) var(--space-2);
+  border-radius: var(--radius);
+  border: var(--border);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  cursor: pointer;
+}
+
+.btn--quiet { background: var(--color-surface); }
+
+.btn--primary {
+  background: var(--color-accent-weak);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.action-row {
+  display: flex;
+  gap: var(--space-1);
+}
+
+/* ============================== text / page / region scaffolding ============ */
+.text--body  { font-family: var(--font-serif); }
+.text--muted { font-family: var(--font-serif); color: var(--color-muted); }
+.text--mono  { font-family: var(--font-mono); font-size: var(--size-2); }
+
+.page { min-height: 100vh; display: flex; flex-direction: column; }
+
+.region--main   { flex: 1 1 auto; }
+.region--aside  { flex: none; border-top: var(--border); }
+.region--footer {
+  flex: none;
+  border-top: var(--border);
+  padding: var(--space-1) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--size-1);
+  color: var(--color-muted);
+}

@@ -1,0 +1,19 @@
+{# shell.html.j2 — FROZEN. The page shell: doctype, head (vendored datastar.js + app.css,
+   no CDN), and the body wrapping whatever Page block render.py has already turned into
+   HTML via catalog.html.j2. The shell never touches the block vocabulary itself —
+   render.py renders the Page's regions through catalog.html.j2 first and passes the
+   resulting markup in as `body_html`. One SSE connection per page (data-on-load), same
+   loop the fleet-strip/dossier builders will reuse later — no second transport. #}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script type="module" src="/static/datastar.js"></script>
+</head>
+<body data-on-load="@get('/stream')">
+{{ body_html | safe }}
+</body>
+</html>

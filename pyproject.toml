@@ -24,6 +24,9 @@ dependencies = [
     "mcp>=1.28.1",
     "model2vec>=0.5",     # local static embeddings — the semantic search door (no GPU, no key)
     "numpy>=1.26",        # cosine over the cached vector matrix (semantics.py)
+    "jinja2>=3.1.6",       # THE INBOX (task #71) — the sole renderer for src/api/inbox/render.py;
+                           # already resolved transitively (model2vec) at this exact version
+    "datastar-py>=1.0.2",  # THE INBOX — SSE/patch helpers matching vendored datastar-core.js v1.0.2
 ]
 
 [dependency-groups]

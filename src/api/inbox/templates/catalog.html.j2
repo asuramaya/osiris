@@ -1,0 +1,82 @@
+{# THE CATALOG — FROZEN. One macro per Block `kind` (blocks.py's KIND_NAMES); this file
+   and shell.html.j2 are the ONLY places markup is authored anywhere in this app. render.py
+   is the only Python that touches Jinja at all — a builder (inbox.py) never emits a
+   string of HTML, only a typed Block tree.
+
+   THE BADGE/STATUS EQUIVALENCE (msg 1818, ruling 2): Badge with tone in {ok,wait,fail} IS
+   design-layer's `status` component (glyph+word+desaturated hue, the ONLY colored thing
+   on the page) wearing the Pydantic vocabulary's name — render_badge below emits the
+   SAME `.status` class the design intended; tone='neutral' is the same markup shape with
+   no color. Read this macro as documentation of that equivalence, not a second system.
+
+   THE ITEM-KIND AXIS (msg 1818, ruling 3): InboxItem.item_kind (notify/question/review)
+   is rendered as a bare monochrome glyph (`.queue-row-glyph`, no `.status` class, no
+   color) — a DIFFERENT slot from any status Badge that might appear elsewhere on the
+   same row. Never merge the two. #}
+
+{% macro render_block(b) -%}
+{%- if b.kind == 'text' -%}{{ render_text(b) }}
+{%- elif b.kind == 'badge' -%}{{ render_badge(b) }}
+{%- elif b.kind == 'button' -%}{{ render_button(b) }}
+{%- elif b.kind == 'action_row' -%}{{ render_action_row(b) }}
+{%- elif b.kind == 'inbox_item' -%}{{ render_inbox_item(b) }}
+{%- elif b.kind == 'inbox_list' -%}{{ render_inbox_list(b) }}
+{%- elif b.kind == 'region' -%}{{ render_region(b) }}
+{%- elif b.kind == 'page' -%}{{ render_page(b) }}
+{%- endif -%}
+{%- endmacro %}
+
+{% macro render_text(b) -%}
+<span class="text text--{{ b.style }}">{{ b.body }}</span>
+{%- endmacro %}
+
+{% macro render_badge(b) -%}
+{%- set glyph = {'ok': '●', 'wait': '▲', 'fail': '✗', 'neutral': ''}[b.tone] -%}
+<span class="status status--{{ b.tone }}">{%- if glyph %}{{ glyph }} {% endif -%}{{ b.label }}</span>
+{%- endmacro %}
+
+{% macro render_button(b, item_id=none) -%}
+{%- set target = '/inbox/' ~ item_id ~ '/' ~ b.action if item_id else b.action -%}
+<button type="button" class="btn btn--{{ b.style }}"
+        data-on-click="@post('{{ target }}')">{{ b.label }}</button>
+{%- endmacro %}
+
+{% macro render_action_row(b, item_id=none) -%}
+<span class="action-row">
+{%- for button in b.buttons %}{{ render_button(button, item_id) }}{% endfor -%}
+</span>
+{%- endmacro %}
+
+{% macro render_inbox_item(b) -%}
+<div class="queue-row" id="item-{{ b.id }}">
+  <span class="queue-row-glyph mono" title="{{ b.item_kind }}">{{ ITEM_KIND_GLYPH[b.item_kind] }}</span>
+  <span class="queue-row-title">{{ b.title }}{% if b.detail %} — {{ render_text(b.detail) }}{% endif %}</span>
+  <span class="queue-row-age mono">{{ b.age }}</span>
+  {%- if b.actions %}
+  <span class="queue-row-actions">{{ render_action_row(b.actions, b.id) }}</span>
+  {%- endif %}
+</div>
+{%- endmacro %}
+
+{% macro render_inbox_list(b) -%}
+<div class="inbox-list" id="inbox-list">
+{%- if b.items %}
+{%- for item in b.items %}{{ render_inbox_item(item) }}{% endfor -%}
+{%- else %}
+<div class="empty">{{ b.empty_label }}</div>
+{%- endif %}
+</div>
+{%- endmacro %}
+
+{% macro render_region(b) -%}
+<{{ 'header' if b.name == 'masthead' else 'footer' if b.name == 'footer' else 'aside' if b.name == 'aside' else 'main' }}
+    class="region region--{{ b.name }}" data-region="{{ b.name }}" id="region-{{ b.name }}">
+{%- for child in b.children %}{{ render_block(child) }}{% endfor -%}
+</{{ 'header' if b.name == 'masthead' else 'footer' if b.name == 'footer' else 'aside' if b.name == 'aside' else 'main' }}>
+{%- endmacro %}
+
+{% macro render_page(b) -%}
+<div class="page">
+{%- for region in b.regions %}{{ render_region(region) }}{% endfor -%}
+</div>
+{%- endmacro %}
