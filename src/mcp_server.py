@@ -3158,6 +3158,32 @@ async def rename_seat(seat_id: str, new_handle: str, because: str,
 
 
 @mcp.tool()
+async def reissue_office(
+    seat_id: str, because: str, adopt: bool = False, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Recompile a seat's CLAUDE.md managed section — THE BOOT COMPILER's fourth compile
+    point (thread 4951d818), fired on demand when law changes or a live fact (a peer
+    bond, a manager reassignment) needs to reach an already-occupied office that
+    establish_office/mint_seat's fill-missing-only scaffold will never revisit again.
+    Only the bytes between the `<!-- osiris:compiled:begin -->` / `...:end -->` markers
+    are ever touched — a seat's own hand-composed narrative, hand-added facts, and
+    charter.md always, survive untouched. `because` is required (a reissue is
+    testimony, same discipline rename_seat runs).
+    REFUSES LOUDLY, naming the seat, rather than guessing, when the managed section is
+    missing, duplicated, or mangled (a hand-edit damaged the markers themselves) —
+    fix it by hand, or pass `adopt=True` for the one-time on-ramp when an office
+    genuinely predates the compiler (zero marker text on disk); `adopt=True` on an
+    office that already carries any marker text also refuses."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a reissue is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.boot_compiler import reissue_office as _reissue_office
+    return await _reissue_office(Actions(await _pool_get()), seat_id=seat_id,
+                                 because=because, actor=ident.agent_id, adopt=adopt)
+
+
+@mcp.tool()
 async def file_subagent(subagent_id: str, ctx: Context | None = None) -> dict[str, Any]:
     """File ONE ephemeral subagent under its spawner (ruling 0f76458c — a hand is never a
     first-class fleet member). Attributes it to its spawner (an existing spawned_by edge, or

@@ -48,7 +48,8 @@ from pathlib import Path
 from typing import Any
 
 from src.actions.core import Actions
-from src.orchestrator.offices import _CHARTER_TEMPLATE, _DEFAULT_OFFICE_ROOT, _STANDING_ORDERS
+from src.orchestrator.boot_compiler import compile_managed_body, template_version, wrap_managed
+from src.orchestrator.offices import _CHARTER_TEMPLATE, _DEFAULT_OFFICE_ROOT
 from src.orchestrator.seats import ensure_seat, seat_facts, seat_occupancy
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
@@ -151,19 +152,23 @@ async def _near_miss(pool: Any, handle: str) -> str | None:
     return None
 
 
-def _scaffold_office(
-    *, handle: str, house: str, project: str, intended_model: str,
-    office_root: Path,
+async def _scaffold_office(
+    actions: Actions, *, handle: str, house: str, project: str, intended_model: str,
+    office_root: Path, seat_id: str, manager_seat_id: str,
 ) -> dict[str, Any]:
     """A worker's office — dir + `.osiris` (project AND model, assignment 3's own gap
     for pre-existing seats closed at birth for a new one) + CLAUDE.md + charter.md + the
     osiris-tool permission grant (d0a815ad/86ead89e — the one human act launch() needs,
-    spent here instead of at every future interactive walk-in), all from offices.py's own
-    template family. FILL-MISSING-ONLY, every file its own exists-guard: a fresh mint's
-    office cannot yet exist to collide with, and an ADOPTED seat's office (Alfred's field
-    pilot, ruling 7cffda8f — Tantra's real shell was an operator-made dir with no pin, no
-    orders, a HOLLOW adoption otherwise) gets exactly its missing pieces filled, nothing
-    present ever touched."""
+    spent here instead of at every future interactive walk-in), CLAUDE.md now compiled
+    by THE BOOT COMPILER (thread 4951d818) rather than a frozen template string.
+    FILL-MISSING-ONLY, every file its own exists-guard: a fresh mint's office cannot yet
+    exist to collide with, and an ADOPTED seat's office (Alfred's field pilot, ruling
+    7cffda8f — Tantra's real shell was an operator-made dir with no pin, no orders, a
+    HOLLOW adoption otherwise) gets exactly its missing pieces filled, nothing present
+    ever touched. `manager_seat_id` is passed explicitly (role='worker' is explicit
+    too) rather than derived live — the caller's own `managed_by` link isn't created
+    until AFTER this call returns, so a live derive here would read a brand-new worker
+    as a manager-less 'coordinator'."""
     office = office_root / handle.lower()
     office.mkdir(parents=True, exist_ok=True)
     pin = office / ".osiris"
@@ -174,8 +179,8 @@ def _scaffold_office(
     orders = office / "CLAUDE.md"
     orders_state = "left in place"
     if not orders.exists():
-        orders.write_text(_STANDING_ORDERS.format(
-            handle=handle, office=office, house=house,
+        body = await compile_managed_body(
+            actions, seat_id=seat_id, handle=handle, house=house, office=str(office),
             seat_line=" — not yet seated: your next claim binds you (the on-ramp).",
             charter_block=(
                 "Your charter was never formally declared — it lives only in prose. First "
@@ -183,7 +188,8 @@ def _scaffold_office(
                 "is what a seat GOVERNS, not where it sits."),
             # a FRESH mint can never yet carry a peer_of edge (offices.py's own
             # establish_office is where a peer bonded later gets picked up live)
-            peer_addendum="\n"))
+            peer_block="\n", role="worker", manager_seat_id=manager_seat_id)
+        orders.write_text(wrap_managed(body, template_version()))
         orders_state = "written"
     charter = office / "charter.md"
     charter_state = "left in place"
@@ -279,9 +285,10 @@ async def mint_seat(
     # exists-guard, so running it here unconditionally is always safe.
     office_result: dict[str, Any] | None = None
     if existing_seat_id is not None or seat_minted:
-        office_result = _scaffold_office(
-            handle=handle, house=worker_house or "", project=project or worker_house or "",
-            intended_model=intended_model, office_root=root)
+        office_result = await _scaffold_office(
+            actions, handle=handle, house=worker_house or "",
+            project=project or worker_house or "", intended_model=intended_model,
+            office_root=root, seat_id=worker_seat_id, manager_seat_id=manager_seat_id)
 
     worker_obj = await actions.create_or_find_object("Seat", worker_seat_id, actor)
     worker_facts = await seat_facts(actions.pool, worker_seat_id)

@@ -24,60 +24,16 @@ from src.orchestrator.mounts import rebind_seat
 
 _DEFAULT_OFFICE_ROOT = Path.home() / ".osiris" / "seats"
 
-_STANDING_ORDERS = """\
-# {handle} — seat office
-
-This is your OFFICE (`{office}/`), not a code repo. The seat-offices ruling
-(ed5f5ce2): agents sit in Osiris-owned homes; code stays in the code repos you GOVERN.
-Launch here, resume here — this path never moves again, whatever happens to the repos.
-
-## Who you are
-- Seat: **{handle}**, house **{house}**{seat_line}
-- The `.osiris` file beside this pins your house; your mail, attribution, and lineage
-  all key on it. Do not edit either file's `project` line.
-- Osiris knows this office as your anchor. `mount(cwd=<this dir>)`, then `orient()`.
-- Your cwd IS this office — whatever an older conversation of yours remembers. A resumed
-  memory of a former home is stale the moment you read it here.
-
-## Your charter
-{charter_block}
-{peer_addendum}## How to work from an office
-- Your code lives elsewhere. Work on it with absolute paths, or `cd` within commands;
-  each repo's own CLAUDE.md loads as you touch its files — read the boot sector of any
-  repo before real work in it.
-- Seat-local state (notes, scratch, drafts) belongs HERE — never in a repo behind a
-  fragile .gitignore. That class of mess is what this office exists to end.
-
-## Ending a turn
-Never end a turn on a permission question asked to an empty room — a spawned or
-resumed body has no one there to read it. Proceed on the brief instead of pausing for
-confirmation. A genuine ask still has a home: `send(..., grade='ask')` to your manager,
-or `send(to='operator')` for the human's desk — that's where someone will actually see
-it. End a turn only on completion, a real blocker, or a natural seam.
-
-## Ritual (unchanged)
-Write back AS YOU GO: `record_decision` / `open_thread` (kind='obligation') /
-`resolve_thread`. A session can die at any instant; what is not in the graph does not
-exist. The fleet DMs you as send(to_agent='{handle}') once you've `claim_name`'d it —
-claim_name first if you haven't (an unclaimed seat is not yet a resolvable address); until
-then, mail reaches you as project traffic. After that first claim, the seat is the address
-across every succession.
-- GRADE EVERY DM: a brief or question that needs the recipient's act = `grade='ask'`; an
-  ack or status note = `grade='fyi'`. Graded asks are NAMED in the recipient's unread
-  count, and pair-heartbeat watchdogs key on them — an ungraded brief is invisible to
-  both the reader and whatever is watching the exchange.
-"""
-
 # THE PEER ADDENDUM (ruling d74492ee, spec e6636c7e — LEGIBILITY leg 2, seats.py): rendered
-# INTO _STANDING_ORDERS' `{peer_addendum}` slot only when the seat carries an active peer_of
-# edge at establish_office's OWN call time (never at mintseat.py's fresh-mint scaffold — a
-# brand-new seat cannot yet have a peer to declare). The default "\n" reproduces the
-# template's original single blank line between the charter section and "## How to work..."
-# exactly (see the empty-vs-populated arithmetic in _peer_addendum's own docstring); a
-# populated block adds its own leading/trailing blank lines so the surrounding sections never
-# collide. Same never-clobber law as CLAUDE.md itself: this only ever reaches a FRESH file —
-# an existing CLAUDE.md is never rewritten to pick up a peer bonded after the fact (v1.1
-# scope, not this leg's job).
+# INTO house_law.md's `{peer_block}` slot (boot_compiler.compile_managed_body) only when the
+# seat carries an active peer_of edge at establish_office's OWN call time (never at
+# mintseat.py's fresh-mint scaffold — a brand-new seat cannot yet have a peer to declare).
+# The default "\n" reproduces the template's original single blank line between the charter
+# section and "## How to work..." exactly (see the empty-vs-populated arithmetic in
+# _peer_addendum's own docstring); a populated block adds its own leading/trailing blank
+# lines so the surrounding sections never collide. THE BOOT COMPILER (thread 4951d818) closed
+# the v1.1 gap this comment used to name here: reissue_office recomputes this live on an
+# already-occupied seat, same as establish_office always has for a fresh one.
 def _peer_addendum(peer_seat: str, peer_handle: str | None) -> str:
     """The `## Peer` section's full text, INCLUDING its own leading `\\n` (one blank line
     after the charter block) and trailing `\\n\\n` (one blank line before "## How to work").
@@ -245,9 +201,17 @@ async def establish_office(
     if orders.exists():
         orders_state = "left in place — the office already has standing orders"
     else:
-        orders.write_text(_STANDING_ORDERS.format(
-            handle=handle, office=office, house=house, seat_line=seat_line,
-            charter_block=charter_block, peer_addendum=peer_addendum))
+        from src.orchestrator.boot_compiler import (
+            compile_managed_body,
+            template_version,
+            wrap_managed,
+        )
+
+        body = await compile_managed_body(
+            actions, seat_id=bound["seat_id"] if bound else None, handle=handle,
+            house=house, office=str(office), seat_line=seat_line,
+            charter_block=charter_block, peer_block=peer_addendum)
+        orders.write_text(wrap_managed(body, template_version()))
         orders_state = "written"
     # THE CHARTER FILE, never clobbered (d80621a7 piece 3): an occupied office's charter is
     # the seat's own hand-maintained live state — alfred's stays his, exactly like CLAUDE.md.
