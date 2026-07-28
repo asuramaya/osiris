@@ -1041,6 +1041,61 @@ async def test_correct_agent_house_refuses_an_unknown_agent(actions: Actions) ->
     assert "no such agent" in out["error"]
 
 
+# ═══ retire_agent (task #74) — third-party retirement, the manager-scoped complement to
+# self-scoped retire(). msg 1713's reap needed exactly this: no sanctioned verb reached a
+# third party, forcing direct assert_property under an operator's live permission grant.
+
+async def test_retire_agent_retires_someone_else(actions: Actions) -> None:
+    from src.orchestrator.agents import retire_agent
+
+    await actions.create_or_find_object("Agent", "agent:ra1dead", "test")
+    out = await retire_agent(actions, agent_id="agent:ra1dead", actor="agent:witness",
+                             because="Flip68Real residue, confirmed dead via harness roster")
+    assert out == {"retired": "agent:ra1dead",
+                   "because": "Flip68Real residue, confirmed dead via harness roster"}
+    row = await actions.pool.fetchrow("SELECT status FROM objects WHERE canonical='agent:ra1dead'")
+    assert row["status"] == "retired"
+    retired_by = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id AND a.name='retired_by' WHERE o.canonical='agent:ra1dead'")
+    assert retired_by == "agent:witness"
+    event = await actions.pool.fetchrow(
+        "SELECT payload FROM object_events WHERE event_type='status_change' "
+        "ORDER BY id DESC LIMIT 1")
+    assert event["payload"]["status"] == "retired"
+
+
+async def test_retire_agent_refuses_blank_because(actions: Actions) -> None:
+    from src.orchestrator.agents import retire_agent
+
+    await actions.create_or_find_object("Agent", "agent:ra2blnk", "test")
+    out = await retire_agent(actions, agent_id="agent:ra2blnk", actor="agent:witness",
+                             because="  ")
+    assert "because is required" in out["error"]
+    row = await actions.pool.fetchrow("SELECT status FROM objects WHERE canonical='agent:ra2blnk'")
+    assert row["status"] == "active"
+
+
+async def test_retire_agent_refuses_an_unknown_agent(actions: Actions) -> None:
+    from src.orchestrator.agents import retire_agent
+
+    out = await retire_agent(actions, agent_id="agent:ra3ghos", actor="agent:witness",
+                             because="test")
+    assert "no such agent" in out["error"]
+
+
+async def test_retire_agent_refuses_an_already_retired_agent(actions: Actions) -> None:
+    from src.orchestrator.agents import retire_agent
+
+    await actions.create_or_find_object("Agent", "agent:ra4twic", "test")
+    first = await retire_agent(actions, agent_id="agent:ra4twic", actor="agent:witness",
+                               because="first pass")
+    assert "retired" in first
+    second = await retire_agent(actions, agent_id="agent:ra4twic", actor="agent:witness",
+                                because="second pass")
+    assert "already retired" in second["error"]
+
+
 async def test_succeeds_seat_is_not_succeeded_from(actions: Actions) -> None:
     """Two relations, two names. `succeeded_from` chains ANCHORS (which conversation spawned
     which); `succeeds_seat` chains HOLDERS of a job. Two relations wearing one name is the

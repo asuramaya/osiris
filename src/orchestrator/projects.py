@@ -30,8 +30,12 @@ from typing import Any
 import asyncpg
 
 from src.actions.core import Actions
+from src.parsers.base import EvidenceClass
+from src.parsers.evidence import confidence_for
 
 _LIVE_MOUNT_WINDOW = timedelta(minutes=15)
+_EC = EvidenceClass.SELF_DECLARED.value
+_CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 
 
 async def _resolve_software_project(pool: asyncpg.Pool, ref: str) -> asyncpg.Record | None:
@@ -111,3 +115,39 @@ async def retire_project(
                          "live signal, retire_project refuses"}
     await actions.set_status(pid, "retired", because, actor)
     return {"retired_project": canonical, "id": str(pid)[:8], "because": because}
+
+
+async def assert_project_property(
+    actions: Actions, *, project: str, name: str, value: str, actor: str,
+) -> dict[str, Any]:
+    """The sanctioned write for a SINGLE project-scoped property — task #74's own gap:
+    the reap (msg 1675/1689) had no verb for anything beyond a status flip, forcing
+    in-process scripts for every other lifecycle stamp. Resolves `project` exactly like
+    retire_project (UUID/short-id/canonical/name, SoftwareProject ONLY — the same
+    seshat/ra disambiguation). NOT self-scoped: any authorized caller may stamp any
+    named project; `actor` is attribution, never a same-caller requirement (same
+    reasoning as correct_agent_house).
+
+    Refuses LOUDLY on: blank project/name/value; an unresolved project; `name=='status'`
+    — status has its OWN compensating-event path (retire_project -> Actions.set_status,
+    the object_events audit trail); a bare assertion here would silently reopen the exact
+    STATUS GAP class already fixed once for seats (retire_seat, commit 122d642)."""
+    project = (project or "").strip()
+    name = (name or "").strip()
+    value = (value or "").strip()
+    if not project:
+        return {"error": "project is required"}
+    if not name:
+        return {"error": "name is required — a property needs a name"}
+    if not value:
+        return {"error": "value is required — asserting a blank value is not a fact"}
+    if name == "status":
+        return {"error": "status has its own compensating-event path — use "
+                         "retire_project (or a future sibling), never a bare property "
+                         "assertion"}
+    row = await _resolve_software_project(actions.pool, project)
+    if row is None:
+        return {"error": f"no such SoftwareProject: {project!r}"}
+    await actions.assert_property(row["id"], name, value, actor, datetime.now(UTC), _CONF,
+                                  evidence_class=_EC)
+    return {"project": row["canonical"], "name": name, "value": value}

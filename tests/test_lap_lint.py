@@ -418,6 +418,101 @@ async def test_lint_deals_rot_candidates_but_never_resolves(actions: Actions) ->
     assert st == "open"
 
 
+# ═══ check/limit/offset (task #74, thread 12a210ab leg 1) — the 50-row hard cap had no
+# pagination and no way to isolate one check's full findings without hand-writing this
+# tool's own SQL, the exact pain the reap hit needing all 19 contradiction + 24 false-mint
+# rows.
+
+async def test_lint_check_filter_lists_only_that_checks_findings(actions: Actions) -> None:
+    t = "agent:teller"
+    c = await actions.create_or_find_object("Organization", "org:tie2", t)
+    await actions.assert_property(c, "hq", "Berlin", "agent:one", NOW, 0.9, evidence_class=_SD)
+    await actions.assert_property(c, "hq", "Munich", "agent:two", NOW + timedelta(minutes=1),
+                                  0.9, evidence_class=_SD)
+    th = await actions.create_or_find_object("Thread", "thread:filter-duty", t)
+    await actions.assert_property(th, "status", "open", t, NOW, 0.9, evidence_class=_SD)
+    await actions.assert_property(th, "kind", "obligation", t, NOW, 0.9, evidence_class=_SD)
+    await actions.assert_property(th, "summary", "filter test duty", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.pool.execute(
+        "UPDATE objects SET created_at = now() - interval '30 days' WHERE id=$1", th)
+
+    out = await _fn(actions, "lint", {"check": "contradiction"})
+    assert {f["check"] for f in out["findings"]} == {"contradiction"}
+    assert len(out["findings"]) == 1
+    # every OTHER check's true total is still reported — just not listed
+    assert out["counts"]["stale-obligation"] >= 1
+    assert not any(f["check"] == "stale-obligation" for f in out["findings"])
+
+
+async def test_lint_check_filter_unknown_check_returns_nothing(actions: Actions) -> None:
+    t = "agent:teller"
+    c = await actions.create_or_find_object("Organization", "org:tie3", t)
+    await actions.assert_property(c, "hq", "Berlin", "agent:one", NOW, 0.9, evidence_class=_SD)
+    await actions.assert_property(c, "hq", "Munich", "agent:two", NOW + timedelta(minutes=1),
+                                  0.9, evidence_class=_SD)
+    out = await _fn(actions, "lint", {"check": "not-a-real-check"})
+    assert out["findings"] == []
+    assert out["counts"]["contradiction"] == 1  # still counted, just not listed
+
+
+async def test_lint_unfiltered_call_is_unchanged(actions: Actions) -> None:
+    """`check=None` (the default) stays behavior-identical to the pre-existing 50-cap —
+    no regression for every caller that never asked for a check filter."""
+    t = "agent:teller"
+    for i in range(3):
+        c = await actions.create_or_find_object("Organization", f"org:many{i}", t)
+        await actions.assert_property(c, "hq", "A", "agent:one", NOW, 0.9, evidence_class=_SD)
+        await actions.assert_property(c, "hq", "B", "agent:two", NOW + timedelta(minutes=1),
+                                      0.9, evidence_class=_SD)
+    out = await _fn(actions, "lint", {})
+    assert "capped" not in out
+    assert len(_by_check(out, "contradiction")) == 3
+
+
+async def test_lint_check_filter_paginates_beyond_the_50_cap(actions: Actions) -> None:
+    """The exact reap pain: more than 50 findings on one check. Unfiltered stays capped
+    at 50 with a `capped`/`note` receipt; `check=` lists the FULL set uncapped, and
+    `limit`/`offset` page through it."""
+    t = "agent:teller"
+    for i in range(55):
+        c = await actions.create_or_find_object("Organization", f"org:bulk{i:03d}", t)
+        await actions.assert_property(c, "hq", "A", "agent:one", NOW, 0.9, evidence_class=_SD)
+        await actions.assert_property(c, "hq", "B", "agent:two", NOW + timedelta(minutes=1),
+                                      0.9, evidence_class=_SD)
+    unfiltered = await _fn(actions, "lint", {})
+    assert len(_by_check(unfiltered, "contradiction")) == 50
+    assert unfiltered["capped"]["contradiction"] == 5
+
+    full = await _fn(actions, "lint", {"check": "contradiction"})
+    assert len(full["findings"]) == 55
+    assert "capped" not in full
+
+    paged = await _fn(actions, "lint", {"check": "contradiction", "limit": 10, "offset": 20})
+    assert len(paged["findings"]) == 10
+    assert paged["capped"]["contradiction"] == 25  # 55 - 20 - 10
+    assert "25" in paged["note"]
+
+
+async def test_lint_orphan_link_check_filter_beyond_its_own_sql_cap(actions: Actions) -> None:
+    """orphan-link's own SQL pre-limits its fetch to _LINT_CAP — unlike every other check,
+    which fetches its FULL row set and only caps at the display layer. Prove the check
+    filter actually raises the SQL-level fetch too, not just the display slice."""
+    t = "agent:teller"
+    corpse = await actions.create_or_find_object("Organization", "org:manycorpse", t)
+    await actions.pool.execute("UPDATE objects SET status='retired' WHERE id=$1", corpse)
+    for i in range(55):
+        alive = await actions.create_or_find_object("Person", f"person:orphan{i:03d}", t)
+        await actions.create_link(alive, corpse, "member_of", t,
+                                  NOW + timedelta(seconds=i), 0.9, evidence_class=_SD)
+    unfiltered = await _fn(actions, "lint", {})
+    assert len(_by_check(unfiltered, "orphan-link")) == 50
+    assert unfiltered["counts"]["orphan-link"] == 55
+
+    full = await _fn(actions, "lint", {"check": "orphan-link"})
+    assert len(full["findings"]) == 55
+
+
 async def test_lint_is_report_only_and_a_clean_graph_says_so(actions: Actions) -> None:
     """Rule #7 in test form: the lint must not write a single row — a linter that healed
     would be a loop pathology. And silence must be legible: clean checks are NAMED."""

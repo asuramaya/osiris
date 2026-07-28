@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 from src.actions.core import Actions
 from src.orchestrator.mounts import save_mount
-from src.orchestrator.projects import retire_project
+from src.orchestrator.projects import assert_project_property, retire_project
 from src.orchestrator.seats import ensure_seat
 
 NOW = datetime.now(UTC)
@@ -142,3 +142,69 @@ async def test_retire_project_refuses_when_only_a_seat_of_that_name_exists(
     await ensure_seat(actions, house="osiris", handle="ghost", source="test")
     out = await retire_project(actions, project="ghost", actor="agent:test", because="reap")
     assert "no such SoftwareProject" in out["error"]
+
+
+# ═══ assert_project_property (task #74) — the sanctioned write for a single
+# project-scoped property, closing the gap that forced in-process scripts for anything
+# beyond a status flip during the reap.
+
+async def test_assert_project_property_stamps_a_named_property(actions: Actions) -> None:
+    await _stub_project(actions, "repo:app1", "app1")
+    out = await assert_project_property(actions, project="app1", name="merged_into",
+                                        value="repo:bytebye", actor="agent:test")
+    assert out == {"project": "repo:app1", "name": "merged_into", "value": "repo:bytebye"}
+    val = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id AND a.name='merged_into' WHERE o.canonical='repo:app1'")
+    assert val == "repo:bytebye"
+
+
+async def test_assert_project_property_refuses_a_blank_project(actions: Actions) -> None:
+    out = await assert_project_property(actions, project=" ", name="x", value="y",
+                                        actor="agent:test")
+    assert "project is required" in out["error"]
+
+
+async def test_assert_project_property_refuses_a_blank_name(actions: Actions) -> None:
+    await _stub_project(actions, "repo:app2", "app2")
+    out = await assert_project_property(actions, project="app2", name=" ", value="y",
+                                        actor="agent:test")
+    assert "name is required" in out["error"]
+
+
+async def test_assert_project_property_refuses_a_blank_value(actions: Actions) -> None:
+    await _stub_project(actions, "repo:app3", "app3")
+    out = await assert_project_property(actions, project="app3", name="x", value=" ",
+                                        actor="agent:test")
+    assert "value is required" in out["error"]
+
+
+async def test_assert_project_property_refuses_an_unknown_project(actions: Actions) -> None:
+    out = await assert_project_property(actions, project="does-not-exist", name="x",
+                                        value="y", actor="agent:test")
+    assert "no such SoftwareProject" in out["error"]
+
+
+async def test_assert_project_property_refuses_status(actions: Actions) -> None:
+    """status has its own compensating-event path (retire_project) — a bare assertion
+    here would reopen the exact STATUS GAP class already fixed once for seats."""
+    await _stub_project(actions, "repo:app4", "app4")
+    out = await assert_project_property(actions, project="app4", name="status",
+                                        value="retired", actor="agent:test")
+    assert "its own compensating-event path" in out["error"]
+    row = await actions.pool.fetchrow("SELECT status FROM objects WHERE canonical='repo:app4'")
+    assert row["status"] == "active"
+
+
+async def test_assert_project_property_never_touches_a_seat_of_the_same_name(
+    actions: Actions,
+) -> None:
+    seat = await ensure_seat(actions, house="osiris", handle="ra2", source="test")
+    await _stub_project(actions, "repo:ra2", "ra2")
+    out = await assert_project_property(actions, project="ra2", name="note", value="x",
+                                        actor="agent:test")
+    assert out["project"] == "repo:ra2"
+    seat_val = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id AND a.name='note' WHERE o.canonical=$1", seat["seat_id"])
+    assert seat_val is None

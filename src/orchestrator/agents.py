@@ -281,6 +281,51 @@ async def correct_agent_house(
     return {"agent_id": agent_id, "corrected": corrected, "was": was}
 
 
+async def retire_agent(
+    actions: Actions, *, agent_id: str, actor: str, because: str,
+) -> dict[str, Any]:
+    """Third-party retirement for an agent — the manager-scoped complement to the
+    self-scoped retire() (mcp_server.py derives the CALLER's own id, no target param at
+    all). Task #74's own gap: msg 1713's reap needed exactly this — two genuinely-dead
+    agents (Flip68Real's residue, e29d40ce/-ii) could only be retired via direct
+    assert_property under the operator's own live permission grant, TWICE, because no
+    sanctioned verb reached a THIRD PARTY.
+
+    UNLIKE self-scoped retire(): NOT self-scoped, on purpose, same reasoning as
+    correct_agent_house — a manager dispatching a worker to retire dead residue is
+    exactly this case, not a caller retiring itself by another name. Accountability
+    lives in `actor`, an explicit witness, never a same-caller requirement.
+
+    Stamps `retired`/`retired_by`/`retired_because` (append-only assertions, the same
+    free-form vocabulary this codebase already carries — `_PHANTOM_FOLD_SRC` etc. are
+    not a strict enum) AND flips objects.status via Actions.set_status — the real
+    compensating event, same pattern as retire_seat/retire_project, so a third-party
+    retirement is auditable and never just a label (the STATUS GAP class already fixed
+    twice elsewhere in this house).
+
+    Refuses LOUDLY on: blank `because`; an unknown or already-non-active agent."""
+    because = (because or "").strip()
+    if not because:
+        return {"error": "because is required — retiring an agent is a deliberate act "
+                         "on the record"}
+    agent_id = (agent_id or "").strip()
+    row = await actions.pool.fetchrow(
+        "SELECT id, status FROM objects WHERE canonical=$1 AND type='Agent'", agent_id)
+    if row is None:
+        return {"error": f"no such agent: {agent_id!r}"}
+    if row["status"] != "active":
+        return {"error": f"{agent_id} is already {row['status']} — nothing to retire"}
+    now = datetime.now(UTC)
+    await actions.assert_property(row["id"], "retired", "true", actor, now, _CONF,
+                                  evidence_class=_EC)
+    await actions.assert_property(row["id"], "retired_by", actor, actor, now, _CONF,
+                                  evidence_class=_EC)
+    await actions.assert_property(row["id"], "retired_because", because, actor, now, _CONF,
+                                  evidence_class=_EC)
+    await actions.set_status(row["id"], "retired", because, actor)
+    return {"retired": agent_id, "because": because}
+
+
 def seat_label(canonical: str, handle: str | None, generation: int | None = None) -> str | None:
     """The human display for an agent: 'Ra V' — the SEAT plus which holder of it this mind is.
 

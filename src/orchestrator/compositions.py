@@ -1182,16 +1182,36 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     row; the one identity degradation that must never be silent), PARALLEL-LIVES (a
     generation minted while a different door of its own lineage held a live pulse — the
     predecessor was not dead; reads the parallel_pulse_door stamp mint_heir writes at
-    the mint, thread 4bcd6541)."""
+    the mint, thread 4bcd6541).
+
+    `check`/`limit`/`offset` (task #74, thread 12a210ab leg 1): every check hard-caps its
+    LISTED findings at `_LINT_CAP` (50) regardless — the reap needed the full 19
+    contradiction rows and full 24 false-mint rows and could only get them by hand-writing
+    _fn_lint's own SQL again. Pass `check` (one of the `check` values a finding/`counts` key
+    carries, e.g. 'false-mint') to list ONLY that check's findings, with `limit`/`offset`
+    paginating its FULL row set instead of the 50-cap (default: uncapped, all of it, in one
+    page). Every OTHER check still just reports its `counts` total — unfiltered calls are
+    BYTE-IDENTICAL to before this existed (`check=None` is a complete no-op)."""
     stale_days = max(1, min(int(args.get("stale_days") or 14), 365))
     eps = float(args.get("eps") or 0.05)          # "near-tie" on the confidence axis
     live_secs = int(args.get("live_secs") or 900)  # a mount seen this recently is LIVE
+    check_filter = str(args.get("check") or "").strip() or None
+    raw_limit = args.get("limit")
+    page_limit = max(1, min(int(raw_limit), 5000)) if raw_limit is not None else None
+    page_offset = max(0, int(args.get("offset") or 0))
     findings: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
 
     def land(check: str, severity: str, rows: list[dict[str, Any]]) -> None:
         counts[check] = len(rows)
-        for r in rows[:_LINT_CAP]:
+        if check_filter is not None:
+            if check != check_filter:
+                return  # per-check filter: every OTHER check's rows are never listed
+            page = rows[page_offset:]
+            listed = page if page_limit is None else page[:page_limit]
+        else:
+            listed = rows[:_LINT_CAP]
+        for r in listed:
             findings.append({"check": check, "severity": severity, **r})
 
     # CONTRADICTION — same (object, field), different values from different sources, the top
@@ -1375,10 +1395,16 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "  AND (fo.status <> 'active' OR t.status <> 'active') "
         "  AND NOT (l.type = 'same_as' AND fo.merged_into IS NOT DISTINCT FROM l.to_id)")
     orphan_total = await pool.fetchval(f"SELECT count(*) {_ORPHAN_WHERE}")
+    # this check's own SQL pre-limits to _LINT_CAP (unlike every other check, which fetches
+    # its FULL row set and only caps at land()'s own display layer) — when it's the one
+    # named by `check`, fetch enough rows for land()'s offset/limit slice to actually work,
+    # capped at the same 5000 safety ceiling `limit` itself clamps to.
+    orphan_fetch = (min(page_offset + (page_limit or 5000), 5000)
+                    if check_filter == "orphan-link" else _LINT_CAP)
     orphans = await pool.fetch(
         "SELECT l.type, fo.canonical AS from_c, fo.status AS from_s, "
         f" t.canonical AS to_c, t.status AS to_s {_ORPHAN_WHERE} "
-        "ORDER BY l.last_seen DESC LIMIT $1", _LINT_CAP)
+        "ORDER BY l.last_seen DESC LIMIT $1", orphan_fetch)
     land("orphan-link", "info", [
         {"subject": f"{r['from_c']} -{r['type']}-> {r['to_c']}",
          "detail": "historical edge on a non-active object ("
@@ -1548,14 +1574,25 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         for r in par])
 
     findings.sort(key=lambda f: (_SEVERITY_RANK.get(str(f["severity"]), 9), str(f["check"])))
-    capped = {c: n - _LINT_CAP for c, n in counts.items() if n > _LINT_CAP}
+    if check_filter is not None:
+        # a per-check ask paginates ONE check's full set — "capped" now names how much of
+        # THAT check's own total is still beyond this page, never the other checks (they
+        # were never listed at all, so their own counts need no remaining-count noise)
+        total = counts.get(check_filter, 0)
+        remaining = total - page_offset - len(findings)
+        capped = {check_filter: remaining} if remaining > 0 else {}
+        note = (f"showing {len(findings)} of {total} for check={check_filter!r} "
+                f"(offset={page_offset}) — {remaining} more; raise limit/offset for the "
+                "rest") if remaining > 0 else None
+    else:
+        capped = {c: n - _LINT_CAP for c, n in counts.items() if n > _LINT_CAP}
+        note = ("some checks list only their first "
+                f"{_LINT_CAP} findings; counts hold the true totals") if capped else None
     return {
         "findings": findings,
         "counts": counts,
         "clean": sorted(c for c, n in counts.items() if n == 0),
-        **({"capped": capped,
-            "note": "some checks list only their first "
-                    f"{_LINT_CAP} findings; counts hold the true totals"} if capped else {}),
+        **({"capped": capped, "note": note} if capped else {}),
         "ran_at": now.isoformat(),
         "discipline": "report-only — the lint never writes (rule #7); "
                       "findings are testimony, not verdicts",
