@@ -2985,6 +2985,26 @@ async def set_seat_attended(seat_id: str, attended: str, because: str,
 
 
 @mcp.tool()
+async def rename_seat(seat_id: str, new_handle: str, because: str,
+                      ctx: Context | None = None) -> dict[str, Any]:
+    """Rename a Seat — manager/operator-invoked, no self-service (claim_name is for a mind
+    naming ITSELF). Stamps the seat's own `handle` and, if the seat is occupied, the
+    current holder's `handle` too — both compensating assertions, the old handle stays in
+    history. The harness-session display name is OUT of scope (a running process this call
+    has no reach into); the receipt says the graph renamed and the harness name follows at
+    the holder's next spawn. Refuses loudly on a blank/over-long `new_handle`, a blank
+    `because`, an unknown seat, or a `new_handle` another active seat already carries
+    (case-insensitive — the exact casing-drift this build exists to stop)."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a rename is a mind's act, and the graph must know "
+                         "whose", "why": _anchorless(ctx)}
+    from src.orchestrator.seats import rename_seat as _rename_seat
+    return await _rename_seat(Actions(await _pool_get()), seat_id=seat_id,
+                              new_handle=new_handle, because=because, actor=ident.agent_id)
+
+
+@mcp.tool()
 async def fold_candidates(ctx: Context | None = None) -> dict[str, Any]:
     """THE ARCHAEOLOGIST'S TRAY (thread b975851b) — sweep the registry and disk for
     anonymous agents that evidence says were never distinct minds (view-aliases: a mount

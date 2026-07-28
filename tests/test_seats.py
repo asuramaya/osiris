@@ -1352,6 +1352,95 @@ async def test_set_seat_attended_refuses_a_retired_seat(actions: Actions) -> Non
     assert "error" in out and "retired" in out["error"]
 
 
+# ═══ RENAME_SEAT (operator-ordered, 2026-07-28 — the casing-drift build) ═══
+
+async def _handle_of(actions: Actions, canonical: str) -> str | None:
+    return await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='handle' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", canonical)
+
+
+async def test_rename_seat_stamps_seat_and_its_current_holder(actions: Actions) -> None:
+    from src.orchestrator.seats import bind_holder, rename_seat
+
+    seat = (await ensure_seat(actions, house="demo", handle="tjmax", source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=seat, agent_id="agent:tjholder", source="test")
+    await actions.assert_property(
+        await actions.create_or_find_object("Agent", "agent:tjholder", "test"),
+        "handle", "TJMAX", "agent:tjholder", datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    out = await rename_seat(actions, seat_id=seat, new_handle="William", actor="test",
+                            because="after William Shockley, replacing a linux-function name")
+    assert out["seat"] == seat and out["old_handle"] == "tjmax" and out["new_handle"] == "William"
+    assert out["holder_stamped"] == "agent:tjholder"
+    assert "harness" in out["note"] and "next spawn" in out["note"]
+    assert await _handle_of(actions, seat) == "William"
+    assert await _handle_of(actions, "agent:tjholder") == "William"
+    # old handle stays in history — never deleted, just superseded
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='handle' AND a.value #>> '{}' = 'tjmax'", seat) == 1
+
+
+async def test_rename_seat_on_a_vacant_seat_only_stamps_the_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import rename_seat
+
+    seat = (await ensure_seat(actions, house="demo", handle="Empty", source="test"))["seat_id"]
+    out = await rename_seat(actions, seat_id=seat, new_handle="StillEmpty", actor="test",
+                            because="renaming a seat nobody sits in yet")
+    assert out["holder_stamped"] is None
+    assert await _handle_of(actions, seat) == "StillEmpty"
+
+
+async def test_rename_seat_refuses_a_name_another_seat_already_carries(
+    actions: Actions,
+) -> None:
+    """The exact drift lesson: 'vajra' and 'Vajra' must never both be claimable."""
+    from src.orchestrator.seats import rename_seat
+
+    await ensure_seat(actions, house="demo", handle="Vajra", source="test")
+    other = (await ensure_seat(actions, house="demo", handle="Renameme",
+                               source="test"))["seat_id"]
+    out = await rename_seat(actions, seat_id=other, new_handle="vajra", actor="test",
+                            because="attempting a casing-only collision")
+    assert "error" in out and "already claimed" in out["error"]
+    assert await _handle_of(actions, other) == "Renameme"
+
+
+async def test_rename_seat_refuses_a_blank_because(actions: Actions) -> None:
+    from src.orchestrator.seats import rename_seat
+
+    seat = (await ensure_seat(actions, house="demo", handle="Blank2",
+                              source="test"))["seat_id"]
+    out = await rename_seat(actions, seat_id=seat, new_handle="Something", actor="test",
+                            because="   ")
+    assert "error" in out
+    assert await _handle_of(actions, seat) == "Blank2"
+
+
+async def test_rename_seat_refuses_a_blank_or_overlong_handle(actions: Actions) -> None:
+    from src.orchestrator.seats import rename_seat
+
+    seat = (await ensure_seat(actions, house="demo", handle="Sized",
+                              source="test"))["seat_id"]
+    blank = await rename_seat(actions, seat_id=seat, new_handle="   ", actor="test",
+                              because="an empty name is not a name")
+    assert "error" in blank
+    toolong = await rename_seat(actions, seat_id=seat, new_handle="x" * 41, actor="test",
+                                because="past the 40-char handle cap")
+    assert "error" in toolong
+    assert await _handle_of(actions, seat) == "Sized"
+
+
+async def test_rename_seat_refuses_an_unknown_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import rename_seat
+
+    out = await rename_seat(actions, seat_id="seat:nosuchsea", new_handle="Anyone",
+                            actor="test", because="no such seat exists")
+    assert out == {"error": "no such seat: 'seat:nosuchsea'"}
+
+
 # ═══ SEAT LIFECYCLE (ruling ff6148b0's completion, decision 87953278, thread cb374585) ═══
 
 

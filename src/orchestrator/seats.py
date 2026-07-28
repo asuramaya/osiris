@@ -466,6 +466,66 @@ async def set_seat_attended(
     return {"seat": seat_id, "attended": attended, "because": because}
 
 
+async def rename_seat(
+    actions: Actions, *, seat_id: str, new_handle: str, actor: str, because: str,
+) -> dict[str, Any]:
+    """RENAME_SEAT (operator-ordered, 2026-07-28) — no rename verb existed; claim_name is
+    self-claiming only (a mind picks its OWN name), and this house's handles have drifted
+    in casing (vajra lowercase, TJMAX all-caps at the agent level vs tjmax at the seat) with
+    nothing to correct it deliberately. A manager or the operator renames a seat by hand,
+    always with a reason on the record.
+
+    SCOPE, both compensating assertions (old handle stays in history, never deleted):
+    (1) the seat's own `handle` property; (2) the CURRENT holder's `handle` stamp too, if
+    the seat is occupied — a rename that only touched the seat would leave the live mind
+    still answering to its old name in every seat_label() render. Mirrors claim_name's own
+    40-char cap on a handle — same class of field, same discipline.
+
+    OUT OF SCOPE, deliberately: the harness-session display name (a terminal/window title
+    like "[P] [PS] Tjmax") is NOT touched — it belongs to a running process this verb has
+    no reach into. The honest receipt is "graph renamed; the harness name follows at next
+    spawn," never a claim of something this call didn't do.
+
+    Refuses LOUDLY on: a blank `new_handle` or one over 40 chars; a blank `because` (a
+    rename is testimony — the reason must be on the record, the same discipline
+    set_seat_attended holds); an unknown seat; `new_handle` already claimed by a DIFFERENT
+    active seat, case-insensitive (seats_by_handle — the exact drift lesson that named this
+    build: 'vajra' and 'Vajra' must never both be claimable)."""
+    new_handle = (new_handle or "").strip()
+    if not new_handle or len(new_handle) > 40:
+        return {"error": "pick a short handle (1-40 chars)"}
+    if not because.strip():
+        return {"error": "because is required — a rename is testimony; the reason it "
+                         "changed must be on the record"}
+    row = await actions.pool.fetchrow(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
+        seat_id)
+    if row is None:
+        return {"error": f"no such seat: {seat_id!r}"}
+    collisions = [s for s in await seats_by_handle(actions.pool, new_handle) if s != seat_id]
+    if collisions:
+        return {"error": f"'{new_handle}' is already claimed by {collisions[0]} "
+                         "(case-insensitive) — a name belongs to one seat forever"}
+    old_handle = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        row["id"])
+    now = datetime.now(UTC)
+    await actions.assert_property(row["id"], "handle", new_handle, actor, now, _CONF,
+                                  evidence_class=_EC)
+    occ = await seat_occupancy(actions.pool, seat_id)
+    holder_stamped: str | None = None
+    if occ["holder"]:
+        holder_oid = await actions.create_or_find_object("Agent", occ["holder"], actor)
+        await actions.assert_property(holder_oid, "handle", new_handle, actor, now, _CONF,
+                                      evidence_class=_EC)
+        holder_stamped = occ["holder"]
+    return {"seat": seat_id, "old_handle": old_handle, "new_handle": new_handle,
+            "holder_stamped": holder_stamped, "because": because,
+            "note": "graph renamed; the harness window/session display name follows at "
+                    "next spawn, not retroactively"}
+
+
 async def bind_holder(
     actions: Actions, *, seat_id: str, agent_id: str, source: str | None = None,
 ) -> None:
