@@ -800,12 +800,33 @@ async def _real_list_tools() -> dict[str, str] | str:
 ListTools = Callable[[], Awaitable[dict[str, str] | str]]
 
 
+async def _real_record_deploy(pool: asyncpg.Pool, repo_root: Path) -> str | None:
+    """The write half of the reboot-is-a-deploy confession (thread 489a39d0): the boot-time
+    guard (deploy_guard.check_unreviewed_boot) needs a ground truth to confess against, and
+    none existed — this is it. A watermark (the same generic cursor store pulse.py's own
+    `devhead:` already uses, not a new table): the ONLY place this repo's HEAD is meant to
+    reach a running service is a successful `osiris deploy` restart, so recording it here IS
+    the ledger. Returns the head it recorded (or None on a read failure, which is also a
+    no-op — never a deploy failure, the write side stays as fail-open as the read side)."""
+    from src.orchestrator.deploy_guard import _DEPLOY_CURSOR_KEY, _git_head
+    from src.orchestrator.monitor import set_cursor
+
+    head = _git_head(repo_root)
+    if head is not None:
+        await set_cursor(pool, _DEPLOY_CURSOR_KEY, head)
+    return head
+
+
+RecordDeploy = Callable[[asyncpg.Pool, Path], Awaitable[str | None]]
+
+
 async def cmd_deploy(
     *, repo_root: Path | None = None, git_status: GitStatus = _real_git_status,
     restart: RestartServices = _real_restart_services, pool: asyncpg.Pool | None = None,
     list_tools: ListTools = _real_list_tools,
     migration_state: MigrationState = _real_migration_state,
     run_migrations: MigrateRunner = _real_run_migrations,
+    record_deploy: RecordDeploy = _real_record_deploy,
 ) -> int:
     """The deploy ritual as one verb (thread e51a841c): a live near-miss held batch 3 because
     src/orchestrator/handshake.py carried another agent's uncommitted WIP and the three
@@ -822,7 +843,10 @@ async def cmd_deploy(
     (informationally, never gating) any dirty COMMIT-DEPLOYED script — a oneshot timer unit
     reads straight off disk, so nothing here can hold it back (msg 1481) — and (thread
     6a78e64b leg 2) diffs the MCP tool list before vs after the restart, so a deploy names
-    exactly which verbs are arriving rather than leaving that to be discovered by accident."""
+    exactly which verbs are arriving rather than leaving that to be discovered by accident.
+    (6) records the deployed HEAD (thread 489a39d0) — the ground truth the reboot-is-a-deploy
+    boot guard confesses against; a raw restart or a reboot never calls this, so the ledger
+    and reality staying in sync is itself evidence the deploy went through this ritual."""
     root = repo_root if repo_root is not None else _find_repo_root()
     if root is None:
         print("osiris deploy: not inside a git repository — cd into the osiris checkout "
@@ -871,6 +895,10 @@ async def cmd_deploy(
             print(f"osiris deploy: restart failed (exit {rc}): {out}", file=sys.stderr)
             return 1
         print(f"osiris deploy: restarted {', '.join(DEPLOY_UNITS)}")
+
+        deployed_head = await record_deploy(pool, root)
+        print(f"deploy ledger: recorded {deployed_head}" if deployed_head else
+              "deploy ledger: HEAD unknown — not recorded (repo_root isn't a git checkout)")
 
         fails, waited = await _wait_for_smoke()
         if fails:

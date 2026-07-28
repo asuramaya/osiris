@@ -33,7 +33,12 @@ from src.ingest.wake_cost import meter_bodies, meter_receipts, meter_wakes
 from src.orchestrator.budgets import BudgetLedger
 from src.orchestrator.cascade import CascadeContext, expand_case, run_cascade
 from src.orchestrator.census import live_bodies, live_bodies_by_cwd
-from src.orchestrator.deploy_guard import alarm_schema_drift, check_schema_drift
+from src.orchestrator.deploy_guard import (
+    alarm_schema_drift,
+    alarm_unreviewed_boot,
+    check_schema_drift,
+    check_unreviewed_boot,
+)
 from src.orchestrator.liveness import observe_liveness
 from src.orchestrator.manifests import load_manifests
 from src.orchestrator.monitor import (
@@ -101,6 +106,15 @@ async def startup(ctx: dict[str, Any]) -> None:
             await alarm_schema_drift(pool, drift, service="osiris-worker")
     except Exception as exc:  # noqa: BLE001 — the guard must never become the thing it guards against
         _log.warning("deploy_guard check failed at worker boot: %r", exc)
+    # THE REBOOT-IS-A-DEPLOY GUARD (thread 489a39d0): a SEPARATE try/except from the schema
+    # check above — a bug in one guard must never suppress the other, same isolation the
+    # rest of this module already gives each independent boot-time check.
+    try:
+        reboot_drift = await check_unreviewed_boot(pool)
+        if reboot_drift:
+            await alarm_unreviewed_boot(pool, reboot_drift, service="osiris-worker")
+    except Exception as exc:  # noqa: BLE001 — the guard must never become the thing it guards against
+        _log.warning("deploy_guard reboot check failed at worker boot: %r", exc)
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:

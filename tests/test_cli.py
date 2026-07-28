@@ -612,6 +612,64 @@ async def test_cmd_deploy_restart_failure_is_honest(actions: Actions, tmp_path: 
     assert out == 1
 
 
+# --- osiris deploy records the ledger a boot-time reboot guard confesses against (489a39d0) ----
+
+async def test_cmd_deploy_records_the_deployed_head_on_a_successful_restart(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    calls: list[tuple[Any, Path]] = []
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    async def _record_deploy(pool: Any, repo_root: Path) -> str | None:
+        calls.append((pool, repo_root))
+        return "deadbeef"
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                         pool=actions.pool, record_deploy=_record_deploy)
+    assert calls == [(actions.pool, tmp_path)]
+    assert "deploy ledger: recorded deadbeef" in buf.getvalue()
+
+
+async def test_cmd_deploy_never_records_when_the_restart_fails(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    async def _failing_restart(units: list[str]) -> tuple[int, str]:
+        return 1, "Unit osiris-mcp.service not found."
+
+    async def _unreachable(pool: Any, repo_root: Path) -> str | None:
+        raise AssertionError("must never be called — the restart never succeeded")
+
+    out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [],
+                           restart=_failing_restart, pool=actions.pool,
+                           record_deploy=_unreachable)
+    assert out == 1
+
+
+async def test_cmd_deploy_reports_head_unknown_off_a_non_git_root(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The default `_real_record_deploy` against a `tmp_path` (never a git checkout) — a
+    real end-to-end exercise of the fail-open write side, not a fake."""
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                         pool=actions.pool)
+    assert "deploy ledger: HEAD unknown — not recorded" in buf.getvalue()
+
+
 # --- osiris migrate + osiris deploy's migration gate (thread c4681c38) ---------------------------
 # a fake `state`/`run_migrations` pair instead of a real alembic.ini or a real DB revision —
 # never risk running a real upgrade, or mutating the shared test DB's alembic_version row.
