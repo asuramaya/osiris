@@ -41,8 +41,7 @@ Launch here, resume here — this path never moves again, whatever happens to th
 
 ## Your charter
 {charter_block}
-
-## How to work from an office
+{peer_addendum}## How to work from an office
 - Your code lives elsewhere. Work on it with absolute paths, or `cd` within commands;
   each repo's own CLAUDE.md loads as you touch its files — read the boot sector of any
   repo before real work in it.
@@ -68,6 +67,48 @@ across every succession.
   count, and pair-heartbeat watchdogs key on them — an ungraded brief is invisible to
   both the reader and whatever is watching the exchange.
 """
+
+# THE PEER ADDENDUM (ruling d74492ee, spec e6636c7e — LEGIBILITY leg 2, seats.py): rendered
+# INTO _STANDING_ORDERS' `{peer_addendum}` slot only when the seat carries an active peer_of
+# edge at establish_office's OWN call time (never at mintseat.py's fresh-mint scaffold — a
+# brand-new seat cannot yet have a peer to declare). The default "\n" reproduces the
+# template's original single blank line between the charter section and "## How to work..."
+# exactly (see the empty-vs-populated arithmetic in _peer_addendum's own docstring); a
+# populated block adds its own leading/trailing blank lines so the surrounding sections never
+# collide. Same never-clobber law as CLAUDE.md itself: this only ever reaches a FRESH file —
+# an existing CLAUDE.md is never rewritten to pick up a peer bonded after the fact (v1.1
+# scope, not this leg's job).
+def _peer_addendum(peer_seat: str, peer_handle: str | None) -> str:
+    """The `## Peer` section's full text, INCLUDING its own leading `\\n` (one blank line
+    after the charter block) and trailing `\\n\\n` (one blank line before "## How to work").
+    An unpeered seat never calls this — its caller passes the bare `"\\n"` default instead,
+    which reproduces the template's ORIGINAL spacing (one literal `\\n` already sits before
+    the `{peer_addendum}` slot in the template; this default's own single `\\n` supplies the
+    second, together forming the one blank line the un-addended template always had)."""
+    who = peer_handle or peer_seat
+    return (
+        "\n## Peer\n"
+        f"You are peered with **{who}** (`{peer_seat}`) — a symmetric bond (ruling "
+        "d74492ee, spec e6636c7e), not a chain of command. It carries real law:\n"
+        "- **Two-tier decisions**: an ordinary act either of you takes ALONE binds the "
+        "pair — tell your peer, don't wait for sign-off. Extraordinary acts (schema "
+        "changes, external commitments, scope changes, spending) need BOTH your names.\n"
+        "- **Domain split**: a co-owned PROJECT is never a co-owned TASK — every item has "
+        "exactly one accountable peer.\n"
+        "- **Mutual hold**: either of you may say HOLD on an irreversible act. Respect it; "
+        "resolve within one exchange or escalate to the operator's desk.\n"
+        "- **Fiduciary disclosure**: surface in-scope findings and risks to your peer "
+        "proactively — silence is a violation.\n"
+        "- **Review cadence**: exchange a structured status and review each other's work "
+        "at every settle.\n"
+        "- **The ledger**: keep small reciprocal obligations deliberately OPEN — a zeroed "
+        "ledger is a dead bond.\n"
+        "- **Anti-sycophancy**: never change a position without citing a reason not "
+        "already on the table; two round-trips without convergence means "
+        "decide-by-domain-owner or escalate.\n"
+        f"send(to_agent='{who}') reaches them.\n\n"
+    )
+
 
 # THE CHARTER FILE (d80621a7 piece 3, alfred's alfred-seat-charter.md pattern graduating
 # to convention): the seat's own LIVE-STATE scratchpad, distinct from CLAUDE.md's standing
@@ -186,13 +227,27 @@ async def establish_office(
         "Your charter was never formally declared — it lives only in prose. First act: "
         "`charter(repos=[...])` naming the repos you actually govern. A house is what a "
         "seat GOVERNS, not where it sits.")
+    # THE PEER ADDENDUM (ruling d74492ee, spec e6636c7e): computed LIVE, like seat_line
+    # and charter_block above it — a peer bonded after a fresh mint's scaffold still shows
+    # up here, the one place that reads the graph instead of a fixed mint-time default.
+    peer_addendum = "\n"
+    if bound is not None:
+        from src.orchestrator.seats import peer_of_seat
+
+        peer_seat = await peer_of_seat(actions.pool, bound["seat_id"])
+        if peer_seat is not None:
+            peer_handle = await actions.pool.fetchval(
+                "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+                "ON a.object_id=o.id AND a.name='handle' WHERE o.canonical=$1 "
+                "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", peer_seat)
+            peer_addendum = _peer_addendum(peer_seat, peer_handle)
     orders = office / "CLAUDE.md"
     if orders.exists():
         orders_state = "left in place — the office already has standing orders"
     else:
         orders.write_text(_STANDING_ORDERS.format(
             handle=handle, office=office, house=house, seat_line=seat_line,
-            charter_block=charter_block))
+            charter_block=charter_block, peer_addendum=peer_addendum))
         orders_state = "written"
     # THE CHARTER FILE, never clobbered (d80621a7 piece 3): an occupied office's charter is
     # the seat's own hand-maintained live state — alfred's stays his, exactly like CLAUDE.md.

@@ -850,6 +850,77 @@ async def test_orient_names_the_live_siblings_in_your_project(actions: Actions) 
         srv._agents.pop(srv._conn_key(ctx), None)
 
 
+async def test_orient_shows_the_peer(actions: Actions) -> None:
+    """LEGIBILITY leg 2 (ruling d74492ee, spec e6636c7e): a peer_of bond is recognition-
+    first per Ostrom p7 — an edge nobody's briefing surfaces is a convention, ignorable.
+    orient() names the caller's peer (handle + last-seen), and a seat with no peer gets no
+    such block, the same conditional shape co_agents already established."""
+    from src import mcp_server as srv
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.seats import bind_holder, peer_seats
+
+    await bind_holder(actions, seat_id="seat:me-seat1", agent_id="agent:me-1", source="test")
+    await bind_holder(actions, seat_id="seat:peerseat1", agent_id="agent:peer-1",
+                      source="test")
+    await actions.assert_property(
+        await actions.create_or_find_object("Seat", "seat:peerseat1", "test"), "handle",
+        "Halcyon", "test", datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await peer_seats(actions, "seat:me-seat1", "seat:peerseat1", because="the reconciliation",
+                     actor="test")
+    await mounts.save_mount(actions.pool, job_dir="/h/.claude/jobs/peer0001",
+                            agent_id="agent:peer-1", project="sharedtree", cwd="/y",
+                            model=None, session_key="pk")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:me-1", session="me000001", project="sharedtree",
+        model=None, cwd=None)
+    try:
+        out = await srv.orient(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["peer"]["seat"] == "seat:peerseat1"
+    assert out["peer"]["handle"] == "Halcyon"
+    assert "last_seen" in out["peer"]
+    assert "your peer" in out["peer"]["note"]
+
+
+async def test_orient_shows_no_peer_block_when_unpeered(actions: Actions) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.seats import bind_holder
+
+    await bind_holder(actions, seat_id="seat:lonelyseat", agent_id="agent:lonely-1",
+                      source="test")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:lonely-1", session="lonely01", project="sharedtree",
+        model=None, cwd=None)
+    try:
+        out = await srv.orient(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "peer" not in out
+
+
 async def test_orient_shows_a_live_siblings_context_pct_and_near_seam(
     actions: Actions,
 ) -> None:

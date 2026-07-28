@@ -142,6 +142,57 @@ async def test_establish_office_refuses_the_unknown(
     assert "never invents" in out["error"]
 
 
+async def test_establish_office_renders_peer_addendum_when_peered(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """LEGIBILITY leg 2 (ruling d74492ee, spec e6636c7e): a peer_of bond is rendered
+    into the seat's own standing orders — computed LIVE at establish_office's own call
+    time (unlike mintseat.py's fresh-mint scaffold, which never has a peer yet)."""
+    from src.orchestrator.seats import bind_holder, peer_seats
+
+    agent = await _seat_fixture(actions, tmp_path, handle="Butler")
+    await bind_holder(actions, seat_id="seat:butlerseat", agent_id=agent, source="test")
+    await actions.assert_property(
+        await actions.create_or_find_object("Seat", "seat:peerseat9", "test"), "handle",
+        "Halcyon", "test", datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await peer_seats(actions, "seat:butlerseat", "seat:peerseat9", because="the pairing",
+                     actor="test")
+
+    out = await establish_office(
+        actions, seat_or_agent=agent, actor="agent:test",
+        office_root=tmp_path / "seats", projects_root=tmp_path / "projects",
+        claude_json=tmp_path / "cj.json")
+
+    assert out["standing_orders"] == "written"
+    orders = (tmp_path / "seats" / "butler" / "CLAUDE.md").read_text()
+    assert "## Peer" in orders
+    assert "peered with **Halcyon** (`seat:peerseat9`)" in orders
+    assert "Two-tier decisions" in orders and "Mutual hold" in orders
+    # the surrounding sections are untouched — one blank line on either side, same as
+    # the unpeered rendering's own spacing
+    assert "## How to work from an office" in orders
+
+
+async def test_establish_office_renders_no_peer_addendum_when_unpeered(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A SEATED but unpeered lineage gets none of the addendum — the block is gated on
+    an actual peer_of edge, not merely on holding a durable seat."""
+    from src.orchestrator.seats import bind_holder
+
+    agent = await _seat_fixture(actions, tmp_path, handle="Butler")
+    await bind_holder(actions, seat_id="seat:butlerseat2", agent_id=agent, source="test")
+
+    out = await establish_office(
+        actions, seat_or_agent=agent, actor="agent:test",
+        office_root=tmp_path / "seats", projects_root=tmp_path / "projects",
+        claude_json=tmp_path / "cj.json")
+
+    assert out["standing_orders"] == "written"
+    orders = (tmp_path / "seats" / "butler" / "CLAUDE.md").read_text()
+    assert "## Peer" not in orders
+
+
 async def test_establish_office_refuses_a_live_seat(
     actions: Actions, tmp_path: Path,
 ) -> None:

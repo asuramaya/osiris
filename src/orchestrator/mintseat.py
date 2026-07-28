@@ -180,7 +180,10 @@ def _scaffold_office(
             charter_block=(
                 "Your charter was never formally declared — it lives only in prose. First "
                 "act: `charter(repos=[...])` naming the repos you actually govern. A house "
-                "is what a seat GOVERNS, not where it sits.")))
+                "is what a seat GOVERNS, not where it sits."),
+            # a FRESH mint can never yet carry a peer_of edge (offices.py's own
+            # establish_office is where a peer bonded later gets picked up live)
+            peer_addendum="\n"))
         orders_state = "written"
     charter = office / "charter.md"
     charter_state = "left in place"

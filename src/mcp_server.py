@@ -1335,6 +1335,37 @@ async def _co_agents(pool: asyncpg.Pool, project: str, agent_id: str) -> dict[st
     }
 
 
+async def _peer_bearings(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
+    """This mind's peer_of partner, made legible beside co_agents (ruling d74492ee,
+    spec e6636c7e — LEGIBILITY leg 2): the peer's handle and last-seen pulse, not just a
+    bare seat id. None when unbound or unpeered, so callers keep the same `if peer:` shape
+    co_agents already established."""
+    from src.orchestrator.seats import held_seat, peer_of_seat
+
+    bound = await held_seat(pool, agent_id)
+    if bound is None:
+        return None
+    peer_seat = await peer_of_seat(pool, bound["seat_id"])
+    if peer_seat is None:
+        return None
+    handle = await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id AND a.name='handle' WHERE o.canonical=$1 "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", peer_seat)
+    last_seen = await pool.fetchval(
+        "SELECT max(m.last_seen) FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id AND t.canonical=$1 AND t.type='Seat' "
+        "JOIN agent_mounts m ON m.agent_id=f.canonical "
+        "WHERE l.type='holds' AND (l.valid_until IS NULL OR l.valid_until > now())",
+        peer_seat)
+    return {
+        "seat": peer_seat, "handle": handle,
+        **({"last_seen": last_seen.isoformat()} if last_seen else {}),
+        "note": "your peer — two-tier decisions bind the pair (ordinary acts alone; "
+                "extraordinary acts need both names); mutual review at every settle",
+    }
+
+
 @mcp.tool()
 async def mount(
     cwd: str, job_dir: str | None = None, model: str | None = None,
@@ -2077,6 +2108,12 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
     # and the graph never said so — he re-derived 'never git add -A' from a local file
     # while osiris KNEW). One query: other live mounts on THIS project, named at orient.
     co_agents = await _co_agents(pool, proj, ident.agent_id) if ident and proj else None
+    # THE PEER BLOCK (ruling d74492ee, spec e6636c7e — LEGIBILITY leg 2): a peer_of bond
+    # is recognition-first per Ostrom p7 — an edge nobody's briefing ever surfaces is a
+    # convention, ignorable exactly like co_agents' shared tree used to be before Deckard's
+    # msg 258. Computed off ident.agent_id (never `who`, which can carry a spawn's
+    # description string) — same discipline co_agents already follows.
+    peer = await _peer_bearings(pool, ident.agent_id) if ident else None
     try:  # one glance line — never let the pulse slow or crash orient
         pulse: str | None = await mounts.fleet_pulse(pool, lease_secs=lease)
     except Exception:  # noqa: BLE001
@@ -2165,6 +2202,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             **sweep_receipt,
             **({"succession_note": inheritance} if inheritance else {}),
             **({"co_agents": co_agents} if co_agents else {}),
+            **({"peer": peer} if peer else {}),
             **({"while_you_were_away": away} if away else {}),
             **dead,
             **scoped,
@@ -2221,6 +2259,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         **({"swap": swap} if swap else {}),
         **({"succession_note": inheritance} if inheritance else {}),
         **({"co_agents": co_agents} if co_agents else {}),
+        **({"peer": peer} if peer else {}),
         **({"while_you_were_away": away} if away else {}),
         **({"osiris_health": organs} if organs else {}),
         **seam,
@@ -2933,6 +2972,45 @@ async def retire_project(project: str, because: str,
     from src.orchestrator.projects import retire_project as _retire_project
     return await _retire_project(Actions(await _pool_get()), project=project,
                                  actor=ident.agent_id, because=because)
+
+
+@mcp.tool()
+async def peer_seats(seat_a: str, seat_b: str, because: str,
+                     ctx: Context | None = None) -> dict[str, Any]:
+    """Mint a SYMMETRIC peer_of bond between two active Seats (ruling d74492ee, spec
+    e6636c7e) — recognition-first: makes the pair legible to mail routing, review
+    assignment, and succession. NOT self-scoped — neither seat need be the caller's own;
+    the caller is recorded only as `actor` (who made the bond), never a party to it by
+    default.
+
+    Refuses LOUDLY on: blank `because`; an unknown/inactive seat on either side;
+    seat_a==seat_b; or either seat already carrying an active peer_of edge — v1 is PAIRS
+    ONLY, no chains (a triad is deferred to v1.1, after the first pair survives contact)."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — peering two seats is a deliberate act on the "
+                         "record", "why": _anchorless(ctx)}
+    from src.orchestrator.seats import peer_seats as _peer_seats
+    return await _peer_seats(Actions(await _pool_get()), seat_a, seat_b, because=because,
+                             actor=ident.agent_id)
+
+
+@mcp.tool()
+async def unpeer(seat_a: str, seat_b: str, because: str,
+                 ctx: Context | None = None) -> dict[str, Any]:
+    """Invalidate an active peer_of bond between two Seats — the compensating-event
+    complement to peer_seats. Direction-agnostic: the bond is symmetric, so unpeer(a, b)
+    and unpeer(b, a) heal the same edge.
+
+    Refuses LOUDLY on: blank `because`; an unknown/inactive seat on either side; or no
+    active peer_of edge between the named pair."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — unpeering two seats is a deliberate act on the "
+                         "record", "why": _anchorless(ctx)}
+    from src.orchestrator.seats import unpeer as _unpeer
+    return await _unpeer(Actions(await _pool_get()), seat_a, seat_b, because=because,
+                         actor=ident.agent_id)
 
 
 @mcp.tool()

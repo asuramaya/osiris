@@ -1005,3 +1005,125 @@ async def vacate_holder(
     await actions.assert_property(row["id"], "vacated_because", because.strip(), actor, now,
                                   _CONF, evidence_class=_EC)
     return {"vacated": seat_id, "was_held_by": [str(h["holder"]) for h in holders]}
+
+
+# ═══ PEER_OF (msg 1770, Thoth's dispatch; ruling d74492ee, spec e6636c7e) — a sanctioned
+# pair of verbs minting/healing a SYMMETRIC Seat<->Seat bond, shaped after retire_seat/
+# vacate_holder immediately above: self-contained, gathers its own refusal evidence, writes
+# only once every check clears. Recognition-first (research-peer-structures.md, mechanism
+# 11, Ostrom p7): the edge's whole v1 job is making a pair LEGIBLE (to orient(), to the
+# standing-orders PEER ADDENDUM) — the two-tier-decision/mutual-hold/disclosure LAW the
+# research condensed lives in the addendum's prose (offices.py), not enforced here; these
+# verbs only mint and heal the recognition edge itself.
+#
+# SYMMETRIC BY CONVENTION, NOT BY SCHEMA: `peer_of` is stored as one directional row
+# (from_id, to_id) same as any other link; peer_seats mints it in whichever order the caller
+# named seat_a/seat_b, and every reader queries BOTH directions (`_active_peer`, the same
+# shape this codebase already uses for a symmetric read on a directional column —
+# trigger._managed_edge). No write-time canonical ordering (e.g. lexicographically-smaller-
+# first) — query-both-directions is the existing idiom, so this follows it rather than
+# inventing a second convention.
+
+
+async def _active_peer(pool: asyncpg.Pool, seat_pk: uuid.UUID) -> asyncpg.Record | None:
+    """This seat's current peer_of partner, read in EITHER direction, or None — the one
+    query every caller (peer_seats' own precondition, unpeer, peer_of_seat) shares instead
+    of hand-rolling the symmetric predicate independently."""
+    return await pool.fetchrow(
+        "SELECT l.from_id, l.to_id, "
+        "CASE WHEN l.from_id=$1 THEN t.canonical ELSE f.canonical END AS peer "
+        "FROM links l JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
+        "WHERE l.type='peer_of' AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "AND (l.from_id=$1 OR l.to_id=$1) LIMIT 1", seat_pk)
+
+
+async def peer_of_seat(pool: asyncpg.Pool, seat_id: str) -> str | None:
+    """The seat's current peer's canonical id, or None when unpeered/unknown — the shared
+    read orient()'s peer block and offices.py's PEER ADDENDUM both call."""
+    row = await pool.fetchrow(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Seat'", seat_id)
+    if row is None:
+        return None
+    peer = await _active_peer(pool, row["id"])
+    return peer["peer"] if peer is not None else None
+
+
+async def peer_seats(
+    actions: Actions, seat_a: str, seat_b: str, *, because: str, actor: str,
+) -> dict[str, Any]:
+    """Mint a symmetric peer_of bond between two active Seats. NOT self-scoped — neither
+    seat need be the caller's own; `actor` is recorded only as whoever made the bond, never
+    a party to it by default. `because` is kept on the EDGE itself (create_link's own
+    `properties`), never stamped asymmetrically on one side of a symmetric relationship.
+
+    Refuses LOUDLY on: blank `because`; an unknown/inactive seat on either side;
+    seat_a==seat_b; or either seat already carrying an active peer_of edge — v1 is PAIRS
+    ONLY, no chains (a triad is deferred to v1.1, after the first pair survives contact)."""
+    because = (because or "").strip()
+    if not because:
+        return {"error": "because is required — peering two seats is a deliberate act on "
+                         "the record"}
+    row_a = await actions.pool.fetchrow(
+        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
+        "AND status='active'", (seat_a or "").strip())
+    if row_a is None:
+        return {"error": f"no such active seat: {seat_a!r}"}
+    row_b = await actions.pool.fetchrow(
+        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
+        "AND status='active'", (seat_b or "").strip())
+    if row_b is None:
+        return {"error": f"no such active seat: {seat_b!r}"}
+    if row_a["id"] == row_b["id"]:
+        return {"error": f"{row_a['canonical']} cannot be peered with itself"}
+    existing_a = await _active_peer(actions.pool, row_a["id"])
+    if existing_a is not None:
+        return {"error": f"{row_a['canonical']} already has a peer "
+                         f"({existing_a['peer']}) — v1 is pairs only, no chains"}
+    existing_b = await _active_peer(actions.pool, row_b["id"])
+    if existing_b is not None:
+        return {"error": f"{row_b['canonical']} already has a peer "
+                         f"({existing_b['peer']}) — v1 is pairs only, no chains"}
+    now = datetime.now(UTC)
+    await actions.create_link(row_a["id"], row_b["id"], "peer_of", actor, now, _CONF,
+                              properties={"because": because}, evidence_class=_EC)
+    return {"peered": [row_a["canonical"], row_b["canonical"]], "because": because}
+
+
+async def unpeer(
+    actions: Actions, seat_a: str, seat_b: str, *, because: str, actor: str,
+) -> dict[str, Any]:
+    """Invalidate an active peer_of bond — the compensating-event complement to
+    peer_seats. Direction-agnostic: the bond is symmetric, so unpeer(a, b) and unpeer(b, a)
+    heal the same edge. `because` is stamped on BOTH seats (`unpeer_because`) rather than
+    picking one side arbitrarily — the same reasoning that keeps peer_seats' own `because`
+    off any single seat's property set.
+
+    Refuses LOUDLY on: blank `because`; an unknown/inactive seat on either side; or no
+    active peer_of edge between the named pair."""
+    because = (because or "").strip()
+    if not because:
+        return {"error": "because is required — unpeering two seats is a deliberate act "
+                         "on the record"}
+    row_a = await actions.pool.fetchrow(
+        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
+        "AND status='active'", (seat_a or "").strip())
+    if row_a is None:
+        return {"error": f"no such active seat: {seat_a!r}"}
+    row_b = await actions.pool.fetchrow(
+        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
+        "AND status='active'", (seat_b or "").strip())
+    if row_b is None:
+        return {"error": f"no such active seat: {seat_b!r}"}
+    link = await actions.pool.fetchrow(
+        "SELECT from_id, to_id FROM links WHERE type='peer_of' "
+        "AND (valid_until IS NULL OR valid_until > now()) "
+        "AND ((from_id=$1 AND to_id=$2) OR (from_id=$2 AND to_id=$1))",
+        row_a["id"], row_b["id"])
+    if link is None:
+        return {"error": f"{row_a['canonical']} and {row_b['canonical']} are not peered"}
+    now = datetime.now(UTC)
+    await actions.invalidate_link(link["from_id"], link["to_id"], "peer_of", actor, now)
+    for oid in (link["from_id"], link["to_id"]):
+        await actions.assert_property(oid, "unpeer_because", because, actor, now, _CONF,
+                                      evidence_class=_EC)
+    return {"unpeered": [row_a["canonical"], row_b["canonical"]], "because": because}

@@ -350,6 +350,17 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "mint_seat only ever ADDS a missing edge, never removes one — an org chart "
              "restructure is a deliberate compensating act, not this verb's job.",
              ("Seat",), ("Seat",)),
+    LinkType("peer_of", "A SYMMETRIC Seat<->Seat partnership (ruling d74492ee, spec "
+             "e6636c7e, research-peer-structures.md) — recognition-first: makes a pair "
+             "legible to mail routing, review assignment, and succession (Ostrom p7: "
+             "convention alone is ignorable, an edge in the graph isn't). THIS CATALOG "
+             "HAS NO `symmetric` FLAG — the link is stored as ONE directional row "
+             "(minted in whichever order the caller named the pair), and every reader "
+             "must query BOTH from_id and to_id (the existing idiom for a symmetric "
+             "relationship on a directional column, see trigger._managed_edge; seats.py's "
+             "own peer_of_seat is the shared reader). v1 is PAIRS ONLY, no chains: "
+             "peer_seats refuses if either side already carries an active peer_of edge.",
+             ("Seat",), ("Seat",)),
 )
 
 OBJECT_TYPES: dict[str, ObjectType] = {t.name: t for t in _OBJECT_TYPES}
