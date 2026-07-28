@@ -113,7 +113,7 @@ def test_page_shell_carries_nav_poller_and_partial_contract() -> None:
     assert '<div id="c"><p>INNER</p></div>' in html
     assert "setInterval(tick,4000)" in html and "partial" in html
     assert 'details[open]' in html  # the poller re-opens what the operator was reading
-    for tab in ("/desk", "/mail", "/fleet", "/membrane"):
+    for tab in ("/", "/desk", "/mail", "/fleet"):
         assert f'href="{tab}"' in html
 
 

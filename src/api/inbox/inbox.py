@@ -74,8 +74,17 @@ async def _thread_ages(pool: asyncpg.Pool, short_ids: list[str]) -> dict[str, da
 async def build_inbox(pool: asyncpg.Pool) -> InboxList:
     """The whole Inbox, one call: run live-desk, fold its three sections into one
     triage-to-zero queue (Linear's own discipline, research-prior-art.md mechanism 4) —
-    ALL admitted items in one list, newest first within each kind's own natural order."""
+    ALL admitted items in one list, newest first within each kind's own natural order.
+
+    An UNSEEDED live-desk composition degrades to an honest empty label (the same
+    discipline /live-desk's own route already follows — run_composition returns
+    {"error": ...} instead of {"items": ...} when nothing by that name is saved yet;
+    agents never improvise an empty state, design-layer's own 12th component's law, so
+    this names the real reason rather than a bare 'Inbox clear.' lie)."""
     out = await run_composition(pool, "live-desk")
+    if "items" not in out:
+        return InboxList(items=[], empty_label=(
+            "live-desk composition isn't seeded — run seed_default_compositions"))
     sections: dict[str, Any] = out["items"]
     now = datetime.now(UTC)
 

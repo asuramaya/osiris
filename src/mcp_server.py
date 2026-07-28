@@ -791,7 +791,7 @@ async def describe(table: str) -> dict[str, Any]:
 @mcp.tool()
 async def smoke() -> dict[str, Any]:
     """DEPLOY-TIME LIVENESS (ruling 2ee43411, task #63, threads bb763977/1849d800): walks
-    every chrome route (/desk /live-desk /mail /fleet /roadmap /canon /overhead /membrane)
+    every chrome route (/ /desk /live-desk /mail /fleet /roadmap /canon /overhead)
     and runs one real query over THIS server's own pool — the exact class of bug 1da1bf2
     fixed (`_boot_check` warming the wrong pool) shipped past every static gate and only
     broke at real boot; only a live call catches it. Call this right after a restart, not

@@ -21,7 +21,7 @@ import re
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +35,7 @@ from pydantic import BaseModel
 
 from src.actions.core import Actions
 from src.api import chrome
-from src.api.membrane import _e, render_membrane
+from src.api.membrane import _e
 from src.config.settings import get_settings
 from src.connectors.leases import LeaseStore
 from src.connectors.osint4all import suggest_manifests
@@ -53,7 +53,6 @@ from src.ontology.resolution import (
     review_tray,
 )
 from src.ontology.schema import catalog as ontology_catalog
-from src.orchestrator import surface
 from src.orchestrator.cobrowse import cobrowse_open
 from src.orchestrator.compositions import (
     list_compositions,
@@ -64,7 +63,6 @@ from src.orchestrator.compositions import (
     save_watch,
 )
 from src.orchestrator.console import get_console, set_console
-from src.orchestrator.digest import fleet_digest
 from src.orchestrator.dossier import entity_dossier
 from src.orchestrator.federation import federated_query, promote, to_preview
 from src.orchestrator.handoff import abandon, open_handoff, post_back
@@ -80,6 +78,7 @@ from src.orchestrator.runner import load_input_object
 
 _HELPERS_DIR = Path(__file__).resolve().parent.parent.parent / "helpers"
 _UI_DIR = Path(__file__).resolve().parent.parent / "ui" / "static"
+_INBOX_STATIC_DIR = Path(__file__).resolve().parent / "inbox" / "static"
 
 
 _log = logging.getLogger("osiris.api")
@@ -985,30 +984,10 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         fired = await evaluate_watches(p)  # also raise alerts (the bell), prospectively
         return {"ingested": ingested, "alerts_fired": fired, "watch_id": str(watch_id)}
 
-    @app.get("/membrane")
-    async def membrane(
-        hours: int | None = None, p: asyncpg.Pool = Depends(get_pool)
-    ) -> Response:
-        """The upward lane as a page — the statusline's click-through (read-only lens over
-        fleet_digest + the wake ledger; anchored sections #desk #conversations #fleet #wakes).
-        Deliberately NOT the composer (held, ruling 450caf7b) — the smallest walkable membrane.
-
-        Defaults to WATERMARK MODE ('new since you last looked'); `?hours=N` forces a rolling
-        window. The PAGE never advances the watermark — glancing at the lens must not move it
-        (that is a deliberate act, reserved for the fleet_digest MCP tool's mark_seen)."""
-        since = (datetime.now(UTC) - timedelta(hours=hours)) if hours is not None else None
-        dg = await fleet_digest(
-            Actions(p), since=since, mark_seen=False,
-            lease_secs=get_settings().osiris_mail_lease_secs)
-        wakes = [dict(r) for r in await p.fetch(
-            "SELECT to_project, from_agent, message_id, woke_at FROM agent_wakes "
-            "ORDER BY woke_at DESC LIMIT 20")]
-        # THE AMBIENT ROW (ruling e9ef7373, thread 109b6c48 stage 3): fleet-wide, unscoped —
-        # this page has no single project/agent to narrow owed_here/briefs_mine/mail to, the
-        # same call fleet_pulse makes for orient's one-liner. Beside the windowed strip
-        # above, never in place of it — see render_ambient_strip's own docstring.
-        ambient = await surface.fetch(p)
-        return Response(render_membrane(dg, wakes, ambient=ambient), media_type="text/html")
+    # THE MEMBRANE ROUTE IS RETIRED (task #71, ruling 0b3dd431, msg 1811/1818): THE INBOX
+    # (src/api/inbox/) is :8011's new front door, mounted below. render_membrane's own
+    # module (src/api/membrane.py) stays in the tree, unrouted, for one deploy cycle per
+    # Thoth's explicit instruction — a rollback needs it reachable without a revert.
 
     # THE CHROME OPENED (operator, 2026-07-11): /desk /mail /fleet — clickable, openable,
     # ~4s-fresh lenses so the human looks WITHOUT calling an agent. Same read-only
@@ -1140,6 +1119,15 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
     if _UI_DIR.is_dir():
         app.mount("/ui", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
+
+    # THE INBOX (task #71, ruling 0b3dd431): :8011's new front door, replacing /membrane
+    # (retired above). Frozen static assets (vendored datastar.js, app.css) mounted
+    # separately from /ui (that mount is the OLD Cytoscape/MapLibre SPA, unrelated).
+    from src.api.inbox.app import router as inbox_router
+
+    app.include_router(inbox_router)
+    if _INBOX_STATIC_DIR.is_dir():
+        app.mount("/static", StaticFiles(directory=str(_INBOX_STATIC_DIR)), name="inbox-static")
 
     return app
 

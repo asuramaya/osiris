@@ -108,8 +108,8 @@ async def test_the_mcp_tool_wrapper_delegates_to_smoke(actions: Actions) -> None
 # --- summarize_failures: the judgment layer scripts/osiris_smoke.py and `osiris smoke` share -
 
 def _green_chrome() -> dict[str, str]:
-    return {"/desk": "ok", "/live-desk": "ok", "/mail": "ok", "/fleet": "ok",
-            "/roadmap": "ok", "/canon": "ok", "/overhead": "ok", "/membrane": "ok"}
+    return {"/": "ok", "/desk": "ok", "/live-desk": "ok", "/mail": "ok", "/fleet": "ok",
+            "/roadmap": "ok", "/canon": "ok", "/overhead": "ok"}
 
 
 def test_summarize_failures_all_green_yields_nothing() -> None:

@@ -44,15 +44,28 @@ async def test_health(client: httpx.AsyncClient) -> None:
     assert r.json() == {"status": "ok"}
 
 
-async def test_membrane_route_wires_the_ambient_strip_live(client: httpx.AsyncClient) -> None:
-    """The one live-route test for stage 3 (ruling e9ef7373, thread 109b6c48): the route
-    handler now also calls surface.fetch() and passes it through — this is the wiring check
-    that the pure render_membrane/render_ambient_strip unit tests can't cover on their own."""
+async def test_membrane_route_is_retired(client: httpx.AsyncClient) -> None:
+    """THE INBOX (task #71, ruling 0b3dd431) replaced /membrane as :8011's front door —
+    locking in the retirement as intentional, not an accidental regression. render_membrane
+    itself stays in src/api/membrane.py, unrouted, for one deploy cycle (Thoth's own
+    instruction, msg 1811) — this only proves the ROUTE is gone, not the module."""
     r = await client.get("/membrane")
+    assert r.status_code == 404
+
+
+async def test_inbox_route_wires_the_real_app_live(client: httpx.AsyncClient) -> None:
+    """The one live-route test for THE INBOX at the real create_app() level (pure
+    builder/render coverage lives in test_inbox_blocks.py/test_inbox_catalog.py/
+    test_inbox_app.py) — this is the wiring check those can't cover on their own: the
+    router is actually include_router()'d, and the static mount actually serves the
+    vendored assets, from the SAME app real deploys boot."""
+    r = await client.get("/")
     assert r.status_code == 200
-    assert '<div class="strip-label">right now</div>' in r.text
-    assert '<div class="strip ambient">' in r.text
-    assert '<div class="strip">' in r.text  # the windowed strip, still there beside it
+    assert "<!doctype html>" in r.text.lower()
+    css = await client.get("/static/app.css")
+    assert css.status_code == 200
+    js = await client.get("/static/datastar.js")
+    assert js.status_code == 200
 
 
 async def test_list_and_get_object(client: httpx.AsyncClient, actions: Actions) -> None:

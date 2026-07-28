@@ -64,6 +64,22 @@ async def test_build_inbox_is_empty_on_a_clean_desk(actions: Actions) -> None:
     assert inbox_list.empty_label == "Inbox clear."
 
 
+async def test_build_inbox_degrades_honestly_on_an_unseeded_composition(
+    actions: Actions,
+) -> None:
+    """A fresh/unseeded DB has no 'live-desk' composition saved — run_composition returns
+    {"error": ...}, not {"items": ...} (the same case /live-desk's own route already
+    degrades gracefully on). Crashing here would be the exact KeyError this test pins
+    against; the fix names the real reason rather than a misleading bare 'Inbox clear.'"""
+    # deliberately NOT seeding live-desk
+
+    from src.api.inbox.inbox import build_inbox
+    inbox_list = await build_inbox(actions.pool)
+
+    assert inbox_list.items == []
+    assert "not seeded" in inbox_list.empty_label or "isn't seeded" in inbox_list.empty_label
+
+
 async def test_build_inbox_never_lists_a_resolved_thread(actions: Actions) -> None:
     from src.orchestrator.capture import open_thread, resolve_thread
 

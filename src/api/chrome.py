@@ -129,9 +129,9 @@ async function tick(){
 setInterval(tick,4000);
 </script>"""
 
-_TABS = (("desk", "/desk"), ("live-desk", "/live-desk"), ("mail", "/mail"),
+_TABS = (("inbox", "/"), ("desk", "/desk"), ("live-desk", "/live-desk"), ("mail", "/mail"),
          ("fleet", "/fleet"), ("roadmap", "/roadmap"), ("docs", "/canon"),
-         ("overhead", "/overhead"), ("membrane", "/membrane"))
+         ("overhead", "/overhead"))
 
 
 def page(title: str, active: str, inner: str, *, actions: bool = False) -> str:
