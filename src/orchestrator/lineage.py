@@ -27,7 +27,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -413,6 +415,212 @@ async def patronym_for(actions: Actions, parent_agent: str) -> str | None:
         "SELECT count(*) FROM links l JOIN objects p ON p.id=l.to_id "
         "WHERE l.type='spawned_by' AND p.canonical=$1", parent_agent)
     return f"{label}.{max(int(n or 0), 1)}"
+
+
+# THE SUBAGENT FILING ORGAN (ruling 0f76458c, extending 977f1abd's THE HAND IS NOT A LESSER
+# SOUL, 2026-07-28). A hand is never a first-class fleet member; it files under its spawner,
+# forever. Surveyed before building: of 2,679 active 17-hex subagent Agent objects fleet-
+# wide, 2,672 (99%) already carry a spawned_by edge (register_swarm/register_spawn's own
+# work), 2,406 of those already carry a patronym (register_spawn's live path) — the real gap
+# is the ~266 backfill-only names and the 7 edge-less stragglers whose `session` property is
+# their only pointer home, PLUS the status-follows-parent flip, which exists nowhere yet.
+_SUBAGENT_PATTERN = "^agent:a[0-9a-f]{16}$"
+_LIVE_SECS = 900  # the fleet's one liveness window — seats.py, liveness.py, the roster
+
+
+async def _resolve_subagent_parent(
+    actions: Actions, subagent_oid: uuid.UUID,
+) -> str | None:
+    """The subagent's direct parent — its spawned_by edge where one exists, else its
+    `session` property's root agent id (resolve_parents' own fallback, "a miss means the
+    root session spawned it," reapplied at filing time for the tiny slice that predates even
+    that reconstruction). None only when neither exists. Pure read — writes nothing, safe to
+    call during a dry-run classification pass."""
+    parent = await actions.pool.fetchval(
+        "SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='spawned_by' LIMIT 1", subagent_oid)
+    if parent:
+        return str(parent)
+    session = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='session' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        subagent_oid)
+    return f"agent:{session}" if session else None
+
+
+async def _parent_live(actions: Actions, parent: str) -> bool:
+    """Is the EXACT parent generation (not its whole lineage) live right now? A hand was
+    spawned by one specific TURN — if a newer generation has since succeeded it, that turn
+    is over and the hand it spawned can never resume, even though the lineage continues."""
+    return bool(await actions.pool.fetchval(
+        "SELECT max(last_seen) > now() - make_interval(secs => $2) FROM agent_mounts "
+        "WHERE agent_id=$1", parent, float(_LIVE_SECS)))
+
+
+async def file_subagent(
+    actions: Actions, *, subagent_id: str, actor: str, patronym_ordinal: int | None = None,
+) -> dict[str, Any]:
+    """Files ONE subagent (ruling 0f76458c): (1) attributes it to its spawner — refuses
+    loudly when neither a spawned_by edge nor a `session` property resolves one (surveyed
+    2026-07-28: zero such cases exist fleet-wide, but the refusal stands rather than guess).
+    (2) stamps the X.n patronym name (patronym_for's own label+ordinal shape) when it doesn't
+    already carry one — idempotent, never renames an already-named hand. (3) flips status to
+    'historical' via Actions.set_status (a real object_event, never raw SQL) when the exact
+    parent generation is no longer live — a parent-live hand is filed (attributed + named)
+    but never status-flipped, so a mind's OWN research agents mid-work are never buried.
+
+    `patronym_ordinal`, when given, OVERRIDES patronym_for's own count-based ordinal. That
+    count is every spawned_by edge into the parent, named or not — correct for the LIVE path
+    (one child registers at a time, so the count IS this child's rank the instant it's read)
+    but WRONG for a backfill where every sibling's edge already exists: every unnamed sibling
+    would compute the SAME total and collide on one name. file_subagents (the sweep) computes
+    real per-parent ordinals once and passes them in; a standalone call is safe without one
+    only when no other unnamed sibling of the same parent is being filed in the same breath."""
+    row = await actions.pool.fetchrow(
+        "SELECT id, status FROM objects WHERE canonical=$1 AND type='Agent'", subagent_id)
+    if row is None:
+        return {"error": f"no such subagent: {subagent_id!r}"}
+    oid = row["id"]
+    now = datetime.now(UTC)
+    parent = await _resolve_subagent_parent(actions, oid)
+    if not parent:
+        return {"error": f"{subagent_id} has neither a spawned_by edge nor a session "
+                         "property — cannot attribute to a spawner"}
+    parent_oid = await actions.create_or_find_object("Agent", parent, actor)
+    linked = await _link_once(actions, oid, parent_oid, "spawned_by", now)
+
+    named: str | None = None
+    already_named = bool(await actions.pool.fetchval(
+        "SELECT 1 FROM current_assertions WHERE object_id=$1 AND name='patronym'", oid))
+    if not already_named:
+        if patronym_ordinal is not None:
+            from src.orchestrator.agents import seat_label
+            handle = await actions.pool.fetchval(
+                "SELECT a.value#>>'{}' FROM current_assertions a "
+                "JOIN objects o ON o.id=a.object_id "
+                "WHERE a.name='handle' AND (o.canonical=$1 OR $1 LIKE o.canonical||'-%') "
+                "ORDER BY a.observed_at DESC LIMIT 1", parent)
+            if handle:
+                gen = await actions.pool.fetchval(
+                    "SELECT a.value#>>'{}' FROM current_assertions a "
+                    "JOIN objects o ON o.id=a.object_id "
+                    "WHERE a.name='seat_generation' AND o.canonical=$1 LIMIT 1", parent)
+                label = seat_label(parent, str(handle),
+                                   int(gen) if gen and str(gen).isdigit() else None) or str(handle)
+                named = f"{label}.{patronym_ordinal}"
+        else:
+            named = await patronym_for(actions, parent)
+        if named:
+            async def prop(name: str, value: Any) -> None:
+                await actions.assert_property(oid, name, value, actor, now, _CONF,
+                                              evidence_class=_EC.value)
+            await prop("patronym", named)
+            await prop("name", named)
+
+    live = await _parent_live(actions, parent)
+    flipped = False
+    if not live and row["status"] == "active":
+        await actions.set_status(
+            oid, "historical",
+            f"ephemeral subagent, parent {parent} not live — status follows the spawner "
+            "(ruling 0f76458c)", actor)
+        flipped = True
+    return {"subagent": subagent_id, "parent": parent, "spawned_by_linked": linked,
+            "named": named, "already_named": already_named, "parent_live": live,
+            "status_flipped_historical": flipped}
+
+
+_PATRONYM_ORDINAL = re.compile(r"\.(\d+)$")
+
+
+async def file_subagents(
+    actions: Actions, *, project: str | None = None, dry_run: bool = True, actor: str,
+    limit: int = 4000,
+) -> dict[str, Any]:
+    """THE SWEEP (ruling 0f76458c's TESTBED clause): runs file_subagent's resolver over every
+    active 17-hex subagent Agent object in scope (`project=` narrows it; None is fleet-wide).
+    DRY-RUN (the default) writes nothing and reports per-class counts — attributable_parent_
+    dead / attributable_parent_live / unattributable — plus a bounded sample, so a mind sees
+    a scope's shape before committing to it. THE TESTBED SEQUENCE (the operator's word): dry-
+    run hector-vector's ~92 first, receipts to the manager, live only at their word, THEN a
+    fleet-wide dry-run — never the reverse.
+
+    ORDINALS ARE COMPUTED HERE, ONCE, PER PARENT — the reason this sweep exists rather than a
+    loop over file_subagent: a backfill's siblings mostly already have their spawned_by edge,
+    so patronym_for's own count-based ordinal would hand every unnamed sibling of one parent
+    the SAME number. This groups unnamed candidates by resolved parent, finds each parent's
+    highest ALREADY-USED ordinal (parsed off existing patronym suffixes, fleet-wide — not
+    just this scope, so a project-scoped sweep never collides with a name minted elsewhere),
+    and hands out the next integers in a stable order (oldest `last_active` first)."""
+    rows = await actions.pool.fetch(
+        "SELECT o.id, o.canonical, o.status, "
+        " (SELECT a.value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='last_active' LIMIT 1) AS last_active, "
+        " (SELECT a.value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='patronym' LIMIT 1) AS patronym "
+        "FROM objects o WHERE o.type='Agent' AND o.status='active' "
+        f"AND o.canonical ~ '{_SUBAGENT_PATTERN}' "
+        "AND ($1::text IS NULL OR EXISTS (SELECT 1 FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='project' AND a.value#>>'{}' = $1)) "
+        "ORDER BY o.canonical LIMIT $2", project, limit)
+
+    candidates = []
+    for r in rows:
+        parent = await _resolve_subagent_parent(actions, r["id"])
+        candidates.append({"oid": r["id"], "canonical": r["canonical"],
+                           "last_active": r["last_active"] or "", "patronym": r["patronym"],
+                           "parent": parent})
+    unattributable = [c for c in candidates if not c["parent"]]
+    attributable = [c for c in candidates if c["parent"]]
+
+    live_cache: dict[str, bool] = {}
+    for c in attributable:
+        p = c["parent"]
+        if p not in live_cache:
+            live_cache[p] = await _parent_live(actions, p)
+        c["parent_live"] = live_cache[p]
+    parent_dead = [c for c in attributable if not c["parent_live"]]
+    parent_live_list = [c for c in attributable if c["parent_live"]]
+
+    # per-parent ordinal assignment for whoever still needs a name
+    by_parent: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for c in attributable:
+        if not c["patronym"]:
+            by_parent[c["parent"]].append(c)
+    ordinal_plan: dict[uuid.UUID, int] = {}
+    for parent, kids in by_parent.items():
+        used = await actions.pool.fetch(
+            "SELECT a.value#>>'{}' AS patronym FROM current_assertions a "
+            "JOIN links l ON l.from_id=a.object_id "
+            "JOIN objects p ON p.id=l.to_id AND p.canonical=$1 "
+            "WHERE a.name='patronym' AND l.type='spawned_by'", parent)
+        highest = 0
+        for u in used:
+            m = _PATRONYM_ORDINAL.search(u["patronym"] or "")
+            if m:
+                highest = max(highest, int(m.group(1)))
+        kids.sort(key=lambda c: c["last_active"])
+        for i, k in enumerate(kids, start=1):
+            ordinal_plan[k["oid"]] = highest + i
+
+    counts = {"attributable_parent_dead": len(parent_dead),
+             "attributable_parent_live": len(parent_live_list),
+             "unattributable": len(unattributable)}
+    sample = [{"subagent": c["canonical"], "parent": c["parent"],
+               "will_name": ordinal_plan.get(c["oid"]) is not None,
+               "will_flip_historical": not c["parent_live"]}
+              for c in attributable[:20]]
+
+    if dry_run:
+        return {"scope": project or "fleet", "candidates": len(candidates), "counts": counts,
+                "sample": sample, "unattributable_ids": [c["canonical"] for c in unattributable],
+                "note": "DRY-RUN — nothing written; pass dry_run=False to file"}
+
+    filed = [await file_subagent(actions, subagent_id=c["canonical"], actor=actor,
+                                 patronym_ordinal=ordinal_plan.get(c["oid"]))
+             for c in attributable]
+    return {"scope": project or "fleet", "candidates": len(candidates), "counts": counts,
+            "filed": len(filed), "unattributable_ids": [c["canonical"] for c in unattributable]}
 
 
 async def sense_swarms(actions: Actions, root: Path) -> dict[str, int]:

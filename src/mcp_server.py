@@ -2814,6 +2814,25 @@ async def fold_agent(dupe: str, into: str, evidence: str,
 
 
 @mcp.tool()
+async def unfold_agent(dupe: str, because: str, execute: bool = False,
+                       ctx: Context | None = None) -> dict[str, Any]:
+    """Reverse a wrongful `fold_agent` call — the compensating event fold_agent's own
+    docstring promises. DRY RUN IS THE DEFAULT (`execute=False`): returns the exact plan
+    (the kernel unmerge, any chain-integrity fix, and the estate items that CAN'T cleanly
+    return) without writing anything — review it, then call again with `execute=True` to
+    perform it. Refuses: `dupe` not currently folded, a blank `because`, or a fold whose
+    original justification cites the operator's word when `because` doesn't carry a
+    fresh one — reversing an operator-blessed fold needs the operator's word too."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — an unfold is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.folds import unfold_agent as _unfold
+    return await _unfold(Actions(await _pool_get()), dupe=dupe, because=because,
+                         actor=ident.agent_id, execute=execute)
+
+
+@mcp.tool()
 async def correct_house(new_house: str, ctx: Context | None = None) -> dict[str, Any]:
     """A HEAD corrects its OWN stored house (ruling ff6148b0, decision 87953278) — the one
     legitimate write left after house became a live derivation off the managed_by chain
@@ -3002,6 +3021,45 @@ async def rename_seat(seat_id: str, new_handle: str, because: str,
     from src.orchestrator.seats import rename_seat as _rename_seat
     return await _rename_seat(Actions(await _pool_get()), seat_id=seat_id,
                               new_handle=new_handle, because=because, actor=ident.agent_id)
+
+
+@mcp.tool()
+async def file_subagent(subagent_id: str, ctx: Context | None = None) -> dict[str, Any]:
+    """File ONE ephemeral subagent under its spawner (ruling 0f76458c — a hand is never a
+    first-class fleet member). Attributes it to its spawner (an existing spawned_by edge, or
+    its `session` property's root agent when neither exists — refuses loudly if neither
+    resolves), stamps its X.n patronym name if it doesn't already carry one, and flips its
+    status to 'historical' when the EXACT parent generation that spawned it is no longer
+    live — a parent-live hand is filed but never status-flipped. For filing more than one at
+    once, use file_subagents (the dry-run-first sweep) instead — it computes correct
+    per-parent naming ordinals that a bare loop over this tool would collide on."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — filing a hand is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.lineage import file_subagent as _file_subagent
+    return await _file_subagent(Actions(await _pool_get()), subagent_id=subagent_id,
+                                actor=ident.agent_id)
+
+
+@mcp.tool()
+async def file_subagents(project: str | None = None, dry_run: bool = True,
+                         ctx: Context | None = None) -> dict[str, Any]:
+    """THE SWEEP (ruling 0f76458c's testbed clause): runs file_subagent's resolver over every
+    active 17-hex subagent Agent object in scope. `project=` narrows it (e.g. 'hector-vector'
+    for the testbed); omitted is fleet-wide. DRY-RUN (the default) writes nothing and returns
+    per-class counts — attributable_parent_dead / attributable_parent_live / unattributable —
+    plus a bounded sample, so a manager can see a scope's shape before committing to it. THE
+    TESTBED SEQUENCE (the operator's word): dry-run hector-vector first, receipts to the
+    manager, live only at their word, THEN a fleet-wide dry-run — never the reverse. Pass
+    dry_run=False only once the dry-run's shape has been reviewed."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — filing hands is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.lineage import file_subagents as _file_subagents
+    return await _file_subagents(Actions(await _pool_get()), project=project,
+                                 dry_run=dry_run, actor=ident.agent_id)
 
 
 @mcp.tool()

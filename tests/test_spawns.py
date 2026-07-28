@@ -301,3 +301,205 @@ async def test_register_spawn_mints_the_patronym(actions: Actions) -> None:
     anon_kid = await register_spawn(Actions(actions.pool), "hand0003",
                                     parent_agent="agent:ffff7777", project="demo")
     assert await _prop(actions, anon_kid, "patronym") is None
+
+
+# ═══ THE SUBAGENT FILING ORGAN (ruling 0f76458c, extending 977f1abd, 2026-07-28) ═══
+
+
+async def test_file_subagent_names_an_existing_edge_and_flips_a_dead_parent(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.lineage import file_subagent
+
+    parent = await actions.create_or_find_object("Agent", "agent:fso00001", "agent:fso00001")
+    await actions.assert_property(parent, "handle", "Ferryman", "agent:fso00001", NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(parent, "seat_generation", "1", "agent:fso00001", NOW, 0.9,
+                                  evidence_class=_SD)
+    child = await actions.create_or_find_object("Agent", "agent:aabbcc00112233445",
+                                                 "fleet-observer")
+    await actions.create_link(child, parent, "spawned_by", "fleet-observer", NOW, 0.6,
+                              evidence_class="direct_observation")
+    # no agent_mounts row at all for the parent — it is not live
+    out = await file_subagent(actions, subagent_id="agent:aabbcc00112233445", actor="test")
+    assert out["parent"] == "agent:fso00001"
+    assert out["named"] == "Ferryman I.1"
+    assert out["already_named"] is False
+    assert out["parent_live"] is False
+    assert out["status_flipped_historical"] is True
+    assert await _prop(actions, "agent:aabbcc00112233445", "patronym") == "Ferryman I.1"
+    assert await _prop(actions, "agent:aabbcc00112233445", "name") == "Ferryman I.1"
+    assert await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE canonical='agent:aabbcc00112233445'") == "historical"
+
+    # idempotent: a second call never renames and never re-flips (already historical)
+    out2 = await file_subagent(actions, subagent_id="agent:aabbcc00112233445", actor="test")
+    assert out2["already_named"] is True and out2["named"] is None
+    assert out2["status_flipped_historical"] is False
+
+
+async def test_file_subagent_never_flips_a_live_parent(actions: Actions) -> None:
+    """A mind's own research agents mid-work must not be buried — filed (attributed +
+    named), never status-flipped, while the parent is live."""
+    from src.orchestrator.lineage import file_subagent
+
+    parent = await actions.create_or_find_object("Agent", "agent:fso00002", "agent:fso00002")
+    await actions.assert_property(parent, "handle", "Alive", "agent:fso00002", NOW, 0.9,
+                                  evidence_class=_SD)
+    child = await actions.create_or_find_object("Agent", "agent:abccdd00112233445",
+                                                 "fleet-observer")
+    await actions.create_link(child, parent, "spawned_by", "fleet-observer", NOW, 0.6,
+                              evidence_class="direct_observation")
+    await mounts.save_mount(actions.pool, job_dir="/x/jobs/fso00002", agent_id="agent:fso00002",
+                            project="demo", cwd="/w", model=None, session_key=None)
+    out = await file_subagent(actions, subagent_id="agent:abccdd00112233445", actor="test")
+    assert out["parent_live"] is True
+    assert out["status_flipped_historical"] is False
+    assert out["named"] == "Alive I.1"          # still filed and named
+    assert await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE canonical='agent:abccdd00112233445'") == "active"
+
+
+async def test_file_subagent_falls_back_to_session_when_no_spawned_by_edge(
+    actions: Actions,
+) -> None:
+    """The 7-of-2,679 fleet-wide stragglers: no spawned_by edge, only a `session` property —
+    the root agent id it derives to."""
+    from src.orchestrator.lineage import file_subagent
+
+    child = await actions.create_or_find_object("Agent", "agent:acddee00112233445",
+                                                 "fleet-observer")
+    await actions.assert_property(child, "session", "fso000root", "fleet-observer", NOW, 0.6,
+                                  evidence_class="direct_observation")
+    out = await file_subagent(actions, subagent_id="agent:acddee00112233445", actor="test")
+    assert out["parent"] == "agent:fso000root"
+    assert out["spawned_by_linked"] is True
+    edges = await actions.pool.fetchval(
+        "SELECT t.canonical FROM links l JOIN objects c ON c.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id "
+        "WHERE c.canonical='agent:acddee00112233445' AND l.type='spawned_by'")
+    assert edges == "agent:fso000root"
+
+
+async def test_file_subagent_refuses_when_genuinely_unattributable(actions: Actions) -> None:
+    from src.orchestrator.lineage import file_subagent
+
+    await actions.create_or_find_object("Agent", "agent:adeeff00112233445", "fleet-observer")
+    out = await file_subagent(actions, subagent_id="agent:adeeff00112233445", actor="test")
+    assert "error" in out and "neither a spawned_by edge nor a session" in out["error"]
+
+
+async def test_file_subagent_refuses_an_unknown_subagent(actions: Actions) -> None:
+    from src.orchestrator.lineage import file_subagent
+
+    out = await file_subagent(actions, subagent_id="agent:nosuchsubagent", actor="test")
+    assert "error" in out
+
+
+async def test_file_subagents_dry_run_writes_nothing_and_classifies(actions: Actions) -> None:
+    from src.orchestrator.lineage import file_subagents
+
+    dead = await actions.create_or_find_object("Agent", "agent:fso00003", "agent:fso00003")
+    await actions.assert_property(dead, "handle", "Dead", "agent:fso00003", NOW, 0.9,
+                                  evidence_class=_SD)
+    live = await actions.create_or_find_object("Agent", "agent:fso00004", "agent:fso00004")
+    await actions.assert_property(live, "handle", "Live", "agent:fso00004", NOW, 0.9,
+                                  evidence_class=_SD)
+    await mounts.save_mount(actions.pool, job_dir="/x/jobs/fso00004", agent_id="agent:fso00004",
+                            project="demo", cwd="/w", model=None, session_key=None)
+
+    kid_dead = await actions.create_or_find_object("Agent", "agent:aa11aa00112233445",
+                                                    "fleet-observer")
+    await actions.assert_property(kid_dead, "project", "sweeptest", "fleet-observer", NOW,
+                                  0.9, evidence_class=_SD)
+    await actions.create_link(kid_dead, dead, "spawned_by", "fleet-observer", NOW, 0.6,
+                              evidence_class="direct_observation")
+    kid_live = await actions.create_or_find_object("Agent", "agent:aa22aa00112233445",
+                                                    "fleet-observer")
+    await actions.assert_property(kid_live, "project", "sweeptest", "fleet-observer", NOW,
+                                  0.9, evidence_class=_SD)
+    await actions.create_link(kid_live, live, "spawned_by", "fleet-observer", NOW, 0.6,
+                              evidence_class="direct_observation")
+    kid_orphan = await actions.create_or_find_object("Agent", "agent:aa33aa00112233445",
+                                                      "fleet-observer")
+    await actions.assert_property(kid_orphan, "project", "sweeptest", "fleet-observer", NOW,
+                                  0.9, evidence_class=_SD)
+
+    out = await file_subagents(actions, project="sweeptest", dry_run=True, actor="test")
+    assert out["counts"] == {"attributable_parent_dead": 1, "attributable_parent_live": 1,
+                             "unattributable": 1}
+    assert out["unattributable_ids"] == ["agent:aa33aa00112233445"]
+    assert "DRY-RUN" in out["note"]
+    # nothing written
+    assert await _prop(actions, "agent:aa11aa00112233445", "patronym") is None
+    assert await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE canonical='agent:aa11aa00112233445'") == "active"
+
+
+async def test_file_subagents_live_pass_never_collides_sibling_ordinals(
+    actions: Actions,
+) -> None:
+    """THE BUG THIS SWEEP EXISTS TO AVOID: patronym_for's own count-based ordinal is every
+    spawned_by edge into the parent, named or not — if two unnamed siblings were each filed
+    by a naive call to patronym_for, both would compute the SAME total and collide on one
+    name. The sweep must hand them 1 and 2, not 2 and 2."""
+    from src.orchestrator.lineage import file_subagents
+
+    parent = await actions.create_or_find_object("Agent", "agent:fso00005", "agent:fso00005")
+    await actions.assert_property(parent, "handle", "Sibling", "agent:fso00005", NOW, 0.9,
+                                  evidence_class=_SD)
+    k1 = await actions.create_or_find_object("Agent", "agent:ab11bb00112233445",
+                                             "fleet-observer")
+    await actions.assert_property(k1, "project", "sibtest", "fleet-observer", NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(k1, "last_active", "2026-07-27T10:00:00+00:00",
+                                  "fleet-observer", NOW, 0.9, evidence_class=_SD)
+    await actions.create_link(k1, parent, "spawned_by", "fleet-observer", NOW, 0.6,
+                              evidence_class="direct_observation")
+    k2 = await actions.create_or_find_object("Agent", "agent:ab22bb00112233445",
+                                             "fleet-observer")
+    await actions.assert_property(k2, "project", "sibtest", "fleet-observer", NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(k2, "last_active", "2026-07-27T11:00:00+00:00",
+                                  "fleet-observer", NOW, 0.9, evidence_class=_SD)
+    await actions.create_link(k2, parent, "spawned_by", "fleet-observer", NOW, 0.6,
+                              evidence_class="direct_observation")
+
+    out = await file_subagents(actions, project="sibtest", dry_run=False, actor="test")
+    assert out["counts"]["attributable_parent_dead"] == 2
+    names = {await _prop(actions, "agent:ab11bb00112233445", "patronym"),
+             await _prop(actions, "agent:ab22bb00112233445", "patronym")}
+    assert names == {"Sibling I.1", "Sibling I.2"}          # distinct, not a collision
+    # the earlier last_active gets the earlier ordinal
+    assert await _prop(actions, "agent:ab11bb00112233445", "patronym") == "Sibling I.1"
+    assert await _prop(actions, "agent:ab22bb00112233445", "patronym") == "Sibling I.2"
+
+
+async def test_file_subagents_continues_ordinals_past_already_named_siblings(
+    actions: Actions,
+) -> None:
+    """A backfill sweep must never renumber an already-named hand, and must never reuse its
+    ordinal for a still-unnamed one."""
+    from src.orchestrator.lineage import file_subagents
+
+    parent = await actions.create_or_find_object("Agent", "agent:fso00006", "agent:fso00006")
+    await actions.assert_property(parent, "handle", "Cont", "agent:fso00006", NOW, 0.9,
+                                  evidence_class=_SD)
+    named = await actions.create_or_find_object("Agent", "agent:ac11cc00112233445",
+                                                 "fleet-observer")
+    await actions.assert_property(named, "project", "conttest", "fleet-observer", NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(named, "patronym", "Cont I.1", "fleet-observer", NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.create_link(named, parent, "spawned_by", "fleet-observer", NOW, 0.6,
+                              evidence_class="direct_observation")
+    unnamed = await actions.create_or_find_object("Agent", "agent:ac22cc00112233445",
+                                                   "fleet-observer")
+    await actions.assert_property(unnamed, "project", "conttest", "fleet-observer", NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.create_link(unnamed, parent, "spawned_by", "fleet-observer", NOW, 0.6,
+                              evidence_class="direct_observation")
+
+    await file_subagents(actions, project="conttest", dry_run=False, actor="test")
+    assert await _prop(actions, "agent:ac11cc00112233445", "patronym") == "Cont I.1"  # untouched
+    assert await _prop(actions, "agent:ac22cc00112233445", "patronym") == "Cont I.2"  # continues
