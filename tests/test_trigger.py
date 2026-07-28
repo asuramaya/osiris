@@ -627,6 +627,14 @@ async def _dm_to_owner(actions: Actions) -> int:
     return int(out["id"])
 
 
+async def _no_job(ids: set[str]) -> dict[str, Any] | None:
+    """No daemon job matches — a clean, hermetic 'the daemon lane has nothing' for tests
+    that want to exercise the resume lane specifically. NEVER pass a bare `None` for
+    `jobs`/`nudge` in these tests: dispatch_dm treats either as 'unset' and falls back to
+    the REAL claude_daemon functions, which would reach for a live daemon socket."""
+    return None
+
+
 async def test_a_dm_resumes_the_addressee_itself(actions: Actions, tmp_path: Path) -> None:
     """The payoff: a DM to a stale-but-resumable agent wakes THAT agent via its own session
     — mode 'dm-resume' in the ledger, the private prompt, never a twin."""
@@ -1583,6 +1591,218 @@ async def test_a_crossed_registry_never_leaks_the_envelope_or_the_resume(
                           settings=_settings(enabled=True, sense=str(sense)),
                           spawn=_boom, windows=_no_windows, jobs=_jobs, nudge=_boom)
     assert d["mode"] == "pull-only" and "crossed" in d["detail"]
+    assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
+
+
+# ═══ THE CORROBORATION FALLBACK (thread 25943031, halcyon's own stranding) ═══════════════
+# halcyon's parked session was provably its own — every signature in the whole transcript
+# was its own lineage — but the LAST 400KB was all unsigned harness noise (away summaries,
+# chrome), so the old tail-only check read it as a stranger and refused both nudge and
+# resume. These tests build a transcript whose signed act sits DEEPER than the tail, prove
+# the fallback finds and corroborates it, and prove the different-mind arm and the
+# registry re-check still refuse when either leg fails (Thoth's design approval, DM 1825).
+
+def _deep_transcript_bytes(*, signed_line: bytes, total_size: int) -> bytes:
+    """`signed_line` at offset 0, padded with unsigned filler out to `total_size` bytes —
+    the shape of halcyon's own transcript: real signed history, then a long unsigned tail."""
+    assert len(signed_line) < total_size
+    return signed_line + b"x" * (total_size - len(signed_line))
+
+
+def test_resident_of_deeper_sync_finds_a_signature_beyond_the_tail(tmp_path: Path) -> None:
+    proj = tmp_path / "-repo-demo"
+    proj.mkdir(parents=True)
+    signed = b'{"type":"user","toolUseResult":"{\\"sent\\":1,\\"from\\":\\"agent:abcd1234\\"}"}\n'
+    t = proj / f"{FULL_SID}.jsonl"
+    # total size > one tail window, so the signed line at offset 0 sits OUTSIDE the tail
+    # the plain _resident_of_sync already checked, but inside the first deeper window
+    t.write_bytes(_deep_transcript_bytes(signed_line=signed, total_size=500_000))
+    assert trigger_module._resident_of_sync(tmp_path, FULL_SID) is None  # the OLD check misses it
+    resident, path = trigger_module._resident_of_deeper_sync(tmp_path, FULL_SID)
+    assert resident == "agent:abcd1234" and path == t
+
+
+def test_resident_of_deeper_sync_respects_its_own_cap(tmp_path: Path) -> None:
+    """Beyond `_RESIDENT_DEEP_WINDOWS` windows back, the signature is unreachable — bounded
+    cost, not an unbounded scan of an arbitrarily large transcript."""
+    proj = tmp_path / "-repo-demo"
+    proj.mkdir(parents=True)
+    signed = b'{"type":"user","toolUseResult":"{\\"sent\\":1,\\"from\\":\\"agent:abcd1234\\"}"}\n'
+    t = proj / f"{FULL_SID}.jsonl"
+    # tail (400KB) + 4 extra windows (1.6MB) = 2MB reachable; push the signature well past it
+    t.write_bytes(_deep_transcript_bytes(signed_line=signed, total_size=2_500_000))
+    resident, path = trigger_module._resident_of_deeper_sync(tmp_path, FULL_SID)
+    assert resident is None and path == t  # unreachable — a clean miss, not a wrong guess
+
+
+async def _mounted_deep_agent(
+    actions: Actions, tmp_path: Path, *, agent_id: str = "agent:abcd1234",
+    cwd: str = "/repo/demo", seat_id: str | None = None,
+) -> tuple[Path, Path]:
+    """A registry row + a transcript whose signed act sits beyond the tail — the halcyon
+    shape. Returns (sense_root, transcript_path)."""
+    from src.orchestrator import mounts
+    from src.orchestrator.mounts import _harness_slug
+
+    sense = tmp_path / "projects"
+    proj = sense / _harness_slug(cwd)
+    proj.mkdir(parents=True, exist_ok=True)
+    t = proj / f"{FULL_SID}.jsonl"
+    signed = ('{"type":"user","toolUseResult":'
+             f'"{{\\"sent\\":1,\\"from\\":\\"{agent_id}\\"}}"}}\n').encode()
+    t.write_bytes(_deep_transcript_bytes(signed_line=signed, total_size=500_000))
+    job_dir = tmp_path / "jobs" / "abcd1234"
+    await mounts.save_mount(actions.pool, job_dir=str(job_dir), agent_id=agent_id,
+                            project="demo", cwd=cwd, model=None, session_key=None)
+    if seat_id is not None:
+        await actions.pool.execute(
+            "UPDATE agent_mounts SET seat_id=$1 WHERE job_dir=$2", seat_id, str(job_dir))
+    return sense, t
+
+
+async def test_registry_corroborates_a_genuine_lineage_correct_deep_match(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    _sense, t = await _mounted_deep_agent(actions, tmp_path)
+    job_dir = str(tmp_path / "jobs" / "abcd1234")
+    assert await trigger_module._registry_corroborates(
+        actions.pool, job_dir, t, "agent:abcd1234", seat_id=None)
+
+
+async def test_registry_corroborates_refuses_a_reassigned_door(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The exact failure mode named in the design brief: stale deep history names the
+    original addressee, but the CURRENT registry row for this job_dir now names someone
+    else (the door was legitimately reassigned) — corroboration must fail, not trust the
+    stale transcript content alone."""
+    _sense, t = await _mounted_deep_agent(
+        actions, tmp_path, agent_id="agent:newowner")  # registry NOW says newowner
+    job_dir = str(tmp_path / "jobs" / "abcd1234")
+    # the deep-scan signature (baked into the transcript by the helper) still names
+    # abcd1234 — the registry disagrees, so corroboration must refuse FOR abcd1234
+    assert not await trigger_module._registry_corroborates(
+        actions.pool, job_dir, t, "agent:abcd1234", seat_id=None)
+
+
+async def test_registry_corroborates_refuses_a_slug_collision(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thoth's own instruction (DM 1825): dashes AND dots both fold to '-' under
+    _harness_slug, so two real, different cwds can collide. A collision is corroboration
+    FAILURE, never a pass on a coincidental string match."""
+    from src.orchestrator import mounts
+
+    # the addressee's own door, cwd with a DOT
+    _sense, t = await _mounted_deep_agent(actions, tmp_path, cwd="/repo/demo.x")
+    job_dir = str(tmp_path / "jobs" / "abcd1234")
+    # a second, unrelated door whose cwd (a DASH instead of the dot) slugifies IDENTICALLY
+    await mounts.save_mount(
+        actions.pool, job_dir=str(tmp_path / "jobs" / "other0001"),
+        agent_id="agent:someoneelse", project="demo", cwd="/repo/demo-x",
+        model=None, session_key=None)
+    assert not await trigger_module._registry_corroborates(
+        actions.pool, job_dir, t, "agent:abcd1234", seat_id=None)
+
+
+async def test_registry_corroborates_refuses_a_seat_mismatch(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    _sense, t = await _mounted_deep_agent(actions, tmp_path, seat_id="seat:wrong-one")
+    job_dir = str(tmp_path / "jobs" / "abcd1234")
+    assert not await trigger_module._registry_corroborates(
+        actions.pool, job_dir, t, "agent:abcd1234", seat_id="seat:the-real-one")
+
+
+async def test_registry_corroborates_accepts_a_null_seat_as_unsuspicious(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Not every agent holds a seat — a null seat_id on the registry row is not itself
+    evidence against corroboration."""
+    _sense, t = await _mounted_deep_agent(actions, tmp_path, seat_id=None)
+    job_dir = str(tmp_path / "jobs" / "abcd1234")
+    assert await trigger_module._registry_corroborates(
+        actions.pool, job_dir, t, "agent:abcd1234", seat_id="seat:the-real-one")
+
+
+async def test_dispatch_dm_resumes_the_halcyon_shaped_unsigned_tail(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE PAYOFF: a lineage-correct body whose transcript's last 400KB is all unsigned
+    harness noise is no longer stranded — the deeper scan finds its own real signature,
+    the registry corroborates, and the resume lane proceeds exactly as if the tail itself
+    had been signed."""
+    sense, _t = await _mounted_deep_agent(actions, tmp_path)
+    await actions.pool.execute("UPDATE agent_mounts SET last_seen = now() - interval '1 hour'")
+    msg_id = await _dm_to_owner(actions)
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append((repo, kw))
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("no daemon job was found — nudge must never be reached")
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_spawn, windows=_no_windows, jobs=_no_job, nudge=_boom)
+    assert d["mode"] == "resumed"
+    assert calls and calls[0][1].get("resume_session") == FULL_SID
+
+
+async def test_dispatch_dm_still_refuses_when_deep_history_is_a_different_mind(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE DIFFERENT-MIND ARM STAYS UNCONDITIONAL: an unsigned tail whose deeper history
+    belongs to someone else must refuse exactly like today's tail-signed crossed-registry
+    case — the fallback never overrides a found disagreement, wherever it's found."""
+    from src.orchestrator import mounts
+
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-demo"
+    proj.mkdir(parents=True, exist_ok=True)
+    t = proj / f"{FULL_SID}.jsonl"
+    stranger_signed = (b'{"type":"user","toolUseResult":'
+                       b'"{\\"sent\\":1,\\"from\\":\\"agent:zzstranger-ix\\"}"}\n')
+    t.write_bytes(_deep_transcript_bytes(signed_line=stranger_signed, total_size=500_000))
+    await mounts.save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "abcd1234"),
+                            agent_id="agent:abcd1234", project="demo", cwd="/repo/demo",
+                            model=None, session_key=None)
+    await actions.pool.execute("UPDATE agent_mounts SET last_seen = now() - interval '1 hour'")
+    msg_id = await _dm_to_owner(actions)
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a different-mind deep match must never be nudged or resumed")
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom)
+    assert d["mode"] == "pull-only"
+    assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
+
+
+async def test_dispatch_dm_still_refuses_a_reassigned_door_end_to_end(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thoth's own named case: the transcript's stale deep history still says abcd1234, but
+    the door has been legitimately reassigned — the CURRENT registry says otherwise. The
+    fallback must not resurrect an addressee's access to a door that moved on."""
+    sense, _t = await _mounted_deep_agent(
+        actions, tmp_path, agent_id="agent:newowner")
+    await actions.pool.execute("UPDATE agent_mounts SET last_seen = now() - interval '1 hour'")
+    msg_id = await _dm_to_owner(actions)
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a reassigned door must never be nudged or resumed for the "
+                             "old addressee")
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom)
+    assert d["mode"] == "pull-only"
     assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
 
 

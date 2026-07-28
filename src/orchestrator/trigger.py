@@ -452,10 +452,13 @@ async def _dms_with_unread(
 
 async def _agent_resumable(
     pool: asyncpg.Pool, agent_id: str, st: Settings
-) -> tuple[str, str, float] | None:
-    """(session_id, repo_cwd) to resume the ADDRESSEE's own session, else None — the same
-    checks as the project ladder (not retired, own anchored transcript, below the context
-    ceiling) scoped to one agent's mounts."""
+) -> tuple[str, str, float, str] | None:
+    """(session_id, repo_cwd, mtime, job_dir) to resume the ADDRESSEE's own session, else
+    None — the same checks as the project ladder (not retired, own anchored transcript,
+    below the context ceiling) scoped to one agent's mounts. `job_dir` (thread 25943031,
+    the resident-guard corroboration fallback) is the SPECIFIC registry row this hit came
+    from — existing callers all index resume[0]/resume[1], never destructure the full
+    tuple, so appending it here is additive, not a breaking change."""
     if await _retired(pool, agent_id):
         return None
     rows = await pool.fetch(
@@ -491,15 +494,16 @@ async def _retired(pool: asyncpg.Pool, agent_canonical: str) -> bool:
 
 def _pick_resumable_sync(
     cands: list[tuple[str, str]], root: Path, ceiling_bytes: int
-) -> tuple[str, str, float] | None:
+) -> tuple[str, str, float, str] | None:
     """The disk half of resume-resolution (sync — called via to_thread): for each candidate
     (job_dir, cwd), anchor its transcript and check the context ceiling. Returns
-    (full_session_id, cwd, transcript_mtime) for the first resumable owner. The transcript
-    stem IS the session id `claude --resume` takes; a transcript at the ceiling is
-    retirement-by-compaction territory — resuming it would replay a sibling project's 21:30
-    case, which was LEGITIMATE succession. The mtime rides along as the ONE honest mid-turn
-    signal: a turn writes the transcript; nothing else does (the statusline-heartbeat
-    superstition, killed 2026-07-20 — see dispatch_dm)."""
+    (full_session_id, cwd, transcript_mtime, job_dir) for the first resumable owner. The
+    transcript stem IS the session id `claude --resume` takes; a transcript at the ceiling
+    is retirement-by-compaction territory — resuming it would replay a sibling project's
+    21:30 case, which was LEGITIMATE succession. The mtime rides along as the ONE honest
+    mid-turn signal: a turn writes the transcript; nothing else does (the statusline-
+    heartbeat superstition, killed 2026-07-20 — see dispatch_dm). `job_dir` (thread
+    25943031) rides along too, additive — see _agent_resumable's own docstring."""
     for job_dir, cwd in cands:
         t = locate_current_transcript(root, job_dir, anchored_only=True)
         if t is None:
@@ -510,16 +514,16 @@ def _pick_resumable_sync(
                 continue
         except OSError:
             continue
-        return t.stem, cwd, st.st_mtime
+        return t.stem, cwd, st.st_mtime, job_dir
     return None
 
 
 async def _resumable_owner(
     pool: asyncpg.Pool, project: str, st: Settings
-) -> tuple[str, str, float] | None:
-    """(session_id, repo_cwd) of the project's freshest RESUMABLE owner, else None: not
-    retired (graph check), transcript anchored on its own job_dir (never a co-tenant's), and
-    below the context ceiling."""
+) -> tuple[str, str, float, str] | None:
+    """(session_id, repo_cwd, mtime, job_dir) of the project's freshest RESUMABLE owner,
+    else None: not retired (graph check), transcript anchored on its own job_dir (never a
+    co-tenant's), and below the context ceiling."""
     rows = await pool.fetch(
         "SELECT agent_id, job_dir, cwd FROM agent_mounts WHERE project=$1 "
         "ORDER BY last_seen DESC LIMIT 5", project)
@@ -646,6 +650,11 @@ _SIGNED = [
     re.compile(r"knows you as (agent:[A-Za-z0-9._-]+)"),
 ]
 _RESIDENT_TAIL_BYTES = 400_000
+# THE CORROBORATION FALLBACK (thread 25943031, halcyon's own stranding, design approved
+# Thoth DM 1825): how many further 400KB windows the deeper scan reads BEHIND the tail
+# already checked, on a tail miss only. Bounds total scan cost regardless of file size —
+# 4 extra windows is ~1.6MB beyond the tail's own 400KB, ~2MB worst case per dispatch.
+_RESIDENT_DEEP_WINDOWS = 4
 
 
 def _resident_of_sync(root: Path, sid: str) -> str | None:
@@ -670,6 +679,89 @@ def _resident_of_sync(root: Path, sid: str) -> str | None:
             if m:
                 return m.group(1)
     return None
+
+
+def _resident_of_deeper_sync(
+    root: Path, sid: str, *, extra_windows: int = _RESIDENT_DEEP_WINDOWS,
+) -> tuple[str | None, Path | None]:
+    """Sync (runs via to_thread): called ONLY after `_resident_of_sync`'s own tail check
+    already returned None (thread 25943031 — halcyon's last 400KB was all unsigned harness
+    noise — away summaries, chrome — even though every signature further back in the SAME
+    file was its own lineage). Reads up to `extra_windows` further 400KB windows strictly
+    BEHIND the tail already checked (never re-reading it), stopping at the first signed
+    act found or the front of the file. Returns (resident_agent_id, transcript_path) — the
+    path rides along even on a signature MISS, so `_resident_disagrees` can reason about
+    the file for the registry corroboration step without a second glob. Bounded: total
+    cost never exceeds `extra_windows` chunks regardless of how large the file is."""
+    if not sid:
+        return None, None
+    t = next(iter(root.expanduser().glob(f"*/{sid}.jsonl")), None)
+    if t is None:
+        return None, None
+    try:
+        size = t.stat().st_size
+    except OSError:
+        return None, t
+    end = max(0, size - _RESIDENT_TAIL_BYTES)  # the tail's own start — never overlap it
+    for _ in range(extra_windows):
+        if end <= 0:
+            break
+        start = max(0, end - _RESIDENT_TAIL_BYTES)
+        try:
+            with t.open("rb") as f:
+                f.seek(start)
+                chunk = f.read(end - start).decode("utf-8", errors="replace")
+        except OSError:
+            break
+        for line in reversed(chunk.splitlines()):
+            for pat in _SIGNED:
+                m = pat.search(line)
+                if m:
+                    return m.group(1), t
+        end = start
+    return None, t
+
+
+async def _registry_corroborates(
+    pool: asyncpg.Pool, job_dir_hint: str, transcript: Path, base: str, *,
+    seat_id: str | None,
+) -> bool:
+    """A FRESH registry read (thread 25943031 — never reused state from candidate
+    selection) for the SPECIFIC job_dir this candidate came from: never a cwd-wide search
+    (a cwd is not unique across job_dirs by design — two generations of one lineage
+    legitimately share one, which a slug-first lookup would misread as ambiguous). Three
+    checks, ALL required: (1) the row's agent_id is this lineage's base or a later
+    generation; (2) the row's own cwd, SLUGIFIED (never the transcript's directory name
+    DEcoded — slugification is lossy to invert, lossless to apply; Thoth's own instruction,
+    DM 1825), matches the directory the transcript ACTUALLY sits in — a registry row whose
+    cwd field has drifted from disk reality fails here rather than passing on trust alone;
+    (3) when the addressee holds a seat, the row's seat_id agrees (a null seat_id is not
+    itself suspicious — not every agent holds one). `job_dir_hint` may be a full job_dir
+    (the resume lane already knows it exactly) or a bare basename (the daemon lane's own
+    job['short']) — matched either way against agent_mounts.job_dir, its own primary key.
+
+    A SLUG COLLISION — some OTHER live door's cwd ALSO slugifying to this exact directory
+    name (dashes AND dots both fold to '-' under _harness_slug, so this is a real, not
+    hypothetical, case) — is corroboration FAILURE, the guard's existing conservative
+    bias: a coincidental string match is ambiguous evidence, never proof."""
+    from src.orchestrator.agents import _generation
+    from src.orchestrator.mounts import _harness_slug, _legacy_slug
+
+    row = await pool.fetchrow(
+        "SELECT job_dir, agent_id, cwd, seat_id FROM agent_mounts "
+        "WHERE job_dir = $1 OR job_dir LIKE '%/' || $1", job_dir_hint)
+    if row is None:
+        return False
+    if _generation(row["agent_id"])[0] != base:
+        return False
+    slug = transcript.parent.name
+    if _harness_slug(row["cwd"]) != slug and _legacy_slug(row["cwd"]) != slug:
+        return False
+    others = await pool.fetch(
+        "SELECT cwd FROM agent_mounts WHERE job_dir != $1", row["job_dir"])
+    if any(_harness_slug(r["cwd"]) == slug or _legacy_slug(r["cwd"]) == slug for r in others):
+        return False  # a slug collision — refuse rather than trust a coincidental match
+    return seat_id is None or row["seat_id"] is None or row["seat_id"] == seat_id
 
 
 def _turn_fresh_sync(root: Path, sid: str, active_secs: int) -> bool:
@@ -706,16 +798,43 @@ def _turn_fresh_sync(root: Path, sid: str, active_secs: int) -> bool:
     return False
 
 
-async def _resident_disagrees(root: Path, sid: str, base: str) -> bool:
+async def _resident_disagrees(
+    pool: asyncpg.Pool, root: Path, sid: str, base: str, *,
+    job_dir_hint: str = "", seat_id: str | None = None,
+) -> bool:
     """True when the session's own signed testimony names a DIFFERENT lineage than the
     addressee — the crossed-registry class (thread 0100a35e, the Ra misdelivery): the
-    registry said the addressee lived there; the transcript says someone else does. An
-    unsigned session also disagrees (never address a stranger). Both the nudge AND the
-    resume must refuse on this — each would put the addressee's mail into a foreign
-    window."""
+    registry said the addressee lived there; the transcript says someone else does. Both
+    the nudge AND the resume must refuse on this — each would put the addressee's mail
+    into a foreign window.
+
+    THE DIFFERENT-MIND ARM IS UNCONDITIONAL (thread 25943031, halcyon's own stranding —
+    the fix for the OTHER arm never touches this one): any signed act found, whether in
+    the tail or the deeper fallback scan below, is compared directly against `base`; no
+    corroboration check ever runs on a found disagreement, let alone overrides one.
+
+    THE UNSIGNED-TAIL ARM alone gets the fallback: on a total tail MISS (nothing signed in
+    the last 400KB), a lineage-correct body whose last activity happened to be unsigned
+    harness noise (away summaries, chrome) must not read as a stranger just because it
+    hasn't SAID anything recently. Before refusing, scan further back in the SAME file
+    (bounded, `_resident_of_deeper_sync`) for the newest signed act; accept the session as
+    the addressee's ONLY when that act's lineage matches AND a fresh registry read
+    corroborates (`_registry_corroborates`) — either alone is insufficient. Still nothing
+    found anywhere within the scan cap, or the deeper act names someone else, or the
+    registry doesn't corroborate: refuse, exactly as before this fix."""
     from src.orchestrator.agents import _generation
     resident = await asyncio.to_thread(_resident_of_sync, root, sid)
-    return resident is None or _generation(resident)[0] != base
+    if resident is not None:
+        return _generation(resident)[0] != base
+    deep_resident, transcript = await asyncio.to_thread(_resident_of_deeper_sync, root, sid)
+    if deep_resident is None or transcript is None:
+        return True
+    if _generation(deep_resident)[0] != base:
+        return True
+    if not job_dir_hint:
+        return True  # no candidate to corroborate against — refuse, never guess one
+    return not await _registry_corroborates(
+        pool, job_dir_hint, transcript, base, seat_id=seat_id)
 
 
 def _mail_envelope(msg_id: int, *, sender_label: str, addressee_label: str,
@@ -955,7 +1074,8 @@ async def dispatch_dm(
         else Path.home() / ".claude" / "projects"
     job = await jobs(ids)
     if job is not None and await _resident_disagrees(
-            root, str(job.get("sessionId") or ""), base):
+            pool, root, str(job.get("sessionId") or ""), base,
+            job_dir_hint=str(job.get("short") or ""), seat_id=seat_id):
         # the crossed-registry class (0100a35e): the registry pointed here, the session's
         # own signed testimony names someone else (or nobody) — never leak the envelope
         job = None
@@ -1024,7 +1144,8 @@ async def dispatch_dm(
                           "at the context ceiling) — a private message is never handed to "
                           "a fresh twin"}
     session_id, repo = resume[0], resume[1]
-    if await _resident_disagrees(root, session_id, base):
+    if await _resident_disagrees(pool, root, session_id, base,
+                                 job_dir_hint=resume[3], seat_id=seat_id):
         return {"mode": "pull-only",
                 "detail": "the registry's door for this addressee leads to a session whose "
                           "own signed testimony names a different mind (the crossed-registry "
