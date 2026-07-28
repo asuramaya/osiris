@@ -4266,7 +4266,12 @@ async def _boot_check() -> None:
     fail-open: nothing here may ever block or delay serving."""
     import logging
 
-    from src.orchestrator.deploy_guard import alarm_schema_drift, check_schema_drift
+    from src.orchestrator.deploy_guard import (
+        alarm_schema_drift,
+        alarm_unreviewed_boot,
+        check_schema_drift,
+        check_unreviewed_boot,
+    )
 
     try:
         # A THROWAWAY pool on this short-lived boot loop — NEVER _pool_get()'s global pool.
@@ -4284,6 +4289,20 @@ async def _boot_check() -> None:
     except Exception as exc:  # noqa: BLE001 — the guard must never become the thing it guards against
         logging.getLogger("osiris.deploy_guard").warning(
             "deploy_guard check failed at mcp boot: %r", exc)
+    # THE REBOOT-IS-A-DEPLOY GUARD (thread 489a39d0): a SEPARATE try/except and pool from the
+    # schema check above — a bug in one guard must never suppress the other, and this one
+    # needs its own throwaway pool for the same event-loop reason.
+    try:
+        pool = await create_pool(get_settings().database_url, max_size=1)
+        try:
+            reboot_drift = await check_unreviewed_boot(pool)
+            if reboot_drift:
+                await alarm_unreviewed_boot(pool, reboot_drift, service="osiris-mcp")
+        finally:
+            await pool.close()
+    except Exception as exc:  # noqa: BLE001 — the guard must never become the thing it guards against
+        logging.getLogger("osiris.deploy_guard").warning(
+            "deploy_guard reboot check failed at mcp boot: %r", exc)
 
 
 def main() -> None:
