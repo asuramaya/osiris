@@ -1575,6 +1575,24 @@ async def test_retire_seat_closes_a_vacant_seat(actions: Actions) -> None:
     assert val == "true"
 
 
+async def test_retire_seat_flips_object_status_too(actions: Actions) -> None:
+    """THE STATUS GAP (Seshat msg 1686, operator-caught msg 1713): the property alone left
+    objects.status readable as 'active' forever — a fresh claim could still bind to a seat
+    that LOOKED retired. Both layers must flip together."""
+    from src.orchestrator.seats import retire_seat
+
+    await actions.create_or_find_object("Seat", "seat:rs4status", "test")
+    out = await retire_seat(actions, "seat:rs4status", reason="status gap coverage",
+                            actor="test")
+    assert out == {"retired": "seat:rs4status"}
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='seat:rs4status'")
+    assert row["status"] == "retired"
+    # a second retire_seat call must refuse on the now-non-active status, not re-fire
+    again = await retire_seat(actions, "seat:rs4status", actor="test")
+    assert "already retired" in again["error"]
+
+
 async def test_retire_seat_refuses_an_active_holder(actions: Actions) -> None:
     from src.orchestrator.seats import bind_holder, retire_seat
 

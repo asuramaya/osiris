@@ -451,8 +451,7 @@ async def set_seat_attended(
                          "guard (dispatch_dm's human-attended check); the reason it changed "
                          "must be on the record"}
     row = await actions.pool.fetchrow(
-        "SELECT id FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
-        seat_id)
+        "SELECT id, status FROM objects WHERE canonical=$1 AND type='Seat'", seat_id)
     if row is None:
         return {"error": f"no such seat: {seat_id!r}"}
     retired = await actions.pool.fetchval(
@@ -460,6 +459,12 @@ async def set_seat_attended(
         "AND a.value #>> '{}' = 'true'", row["id"])
     if retired:
         return {"error": f"{seat_id} is retired — cannot stamp attendance on a retired seat"}
+    # THE STATUS GAP fix (retire_seat now flips objects.status too, msg 1713) means a
+    # retired seat's status is no longer 'active' — the lookup above must not filter on it
+    # up front, or a retired seat reads as "no such seat" instead of the specific message
+    # above. A merged seat (fold_seat) hits this same non-active branch, pre-existing gap.
+    if row["status"] != "active":
+        return {"error": f"{seat_id} is {row['status']}, not active — nothing to stamp"}
     now = datetime.now(UTC)
     await actions.assert_property(row["id"], "attended", attended, actor, now, _CONF,
                                   evidence_class=_EC)
@@ -923,7 +928,15 @@ async def retire_seat(actions: Actions, seat_id: str, *, reason: str = "", actor
 
     Refuses LOUDLY on: unknown or already-inactive seat; an ACTIVE holder (a live mind
     sitting in a seat is not this verb's business to evict — transfer or let it vacate
-    first, the same discipline fold_agent already holds for agents)."""
+    first, the same discipline fold_agent already holds for agents).
+
+    THE STATUS GAP (Seshat msg 1686, live specimen operator-caught msg 1713): this used
+    to stamp only the `retired` PROPERTY, leaving objects.status reading 'active' forever
+    — invisible to anything that checks status rather than the property, and nothing
+    stopped a fresh claim from re-binding to a seat that LOOKED retired. Now flips both
+    layers: the property (for anything already reading it) AND objects.status via
+    Actions.set_status (the real compensating event, same pattern as retire_project),
+    so a retired seat is actually inert, not just labeled."""
     seat_id = (seat_id or "").strip()
     row = await actions.pool.fetchrow(
         "SELECT id, status FROM objects WHERE canonical=$1 AND type='Seat'", seat_id)
@@ -943,6 +956,7 @@ async def retire_seat(actions: Actions, seat_id: str, *, reason: str = "", actor
     if (reason or "").strip():
         await actions.assert_property(row["id"], "retired_because", reason.strip(), actor,
                                       datetime.now(UTC), _CONF, evidence_class=_EC)
+    await actions.set_status(row["id"], "retired", reason.strip() or "seat retired", actor)
     return {"retired": seat_id}
 
 
