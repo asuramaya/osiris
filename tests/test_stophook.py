@@ -17,7 +17,12 @@ from pathlib import Path
 import pytest
 import scripts.osiris_stophook as stophook
 from src.actions.core import Actions
-from src.orchestrator.capture import open_thread, record_decision
+from src.orchestrator.capture import (
+    open_thread,
+    record_decision,
+    record_practice,
+    refute_practice,
+)
 from src.orchestrator.mailbox import send_message
 from src.orchestrator.mounts import save_mount
 from src.orchestrator.seats import bind_holder
@@ -460,6 +465,25 @@ def test_parked_on_a_question_pure() -> None:
     assert stophook._parked_on_a_question(None) is False
 
 
+def test_practice_violation_pure() -> None:
+    """PRACTICE v2 layer 3: a reversal cue ALONE is too cheap a trigger (most turns say
+    'stop'/'avoid' about something no Practice has ever touched) — topical overlap with
+    the practice's own statement is required too. Neither signal alone should fire."""
+    practices = [{"id": "abc12345",
+                 "statement": "batch small commits into one PR for this class of change"}]
+    hit = stophook._practice_violation(
+        "never batch small commits into one PR for this class of change", practices)
+    assert hit == {"practice_id": "abc12345",
+                   "statement": practices[0]["statement"], "cues": ["never"]}
+    # cue present, but no topical overlap with any standing practice — no false positive
+    assert stophook._practice_violation("never eat the last slice of pizza", practices) is None
+    # topical overlap present, but no reversal cue — a plain mention, not a violation
+    assert stophook._practice_violation(
+        "batch small commits into one PR for this class of change, as usual", practices) is None
+    assert stophook._practice_violation(None, practices) is None
+    assert stophook._practice_violation("never mind", []) is None
+
+
 async def test_sent_a_real_ask_true_only_for_a_recent_ask_from_this_agent(
     actions: Actions,
 ) -> None:
@@ -562,6 +586,117 @@ async def test_stage_a_does_not_confess_when_the_question_already_went_out_as_ma
         {"cwd": str(office), "session_id": sid, "transcript_path": str(transcript)})
     after = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
     assert after == before  # no NEW confession — the real ask already covers it
+
+
+# ═══════════ STAGE C — THE TURN-END PRACTICE AUDIT ═══════════
+
+async def test_active_practices_excludes_refuted_and_reads_the_statement(
+    actions: Actions,
+) -> None:
+    """Same shape as _fn_practices, hand-duplicated because this file's bare
+    asyncpg.connect has no JSON codec — but a REFUTED practice is excluded here (unlike
+    practices()'s own on-demand listing, which still shows one, flagged): dead law must
+    never trip a live-turn audit."""
+    live = await record_practice(actions, "route every dispatch through the DM lane")
+    dead = await record_practice(actions, "always vendor node_modules by hand")
+    d = await record_decision(actions, "vendoring node_modules by hand was a maintenance trap")
+    await refute_practice(actions, str(dead), killed_by=str(d))
+
+    out = await stophook._active_practices(actions.pool)
+    ids = {p["id"] for p in out}
+    assert str(live) in ids
+    assert str(dead) not in ids
+    live_row = next(p for p in out if p["id"] == str(live))
+    assert live_row["statement"] == "route every dispatch through the DM lane"
+
+
+async def test_stage_a_confesses_when_a_turn_violates_a_standing_practice(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
+) -> None:
+    """The v3 gap (c54e8176's own second case): a turn can violate standing law WITHOUT
+    ever recording a decision — no write, so layer 1's write-time check never fires. Stage
+    C catches it off the turn's own tail text at stop time, courtesy-DM only, never a
+    block."""
+    monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    worker_agent, worker_seat = "agent:pviol001", "seat:pviol001"
+    manager_agent, manager_seat = "agent:pvmgr001", "seat:pvmgr001"
+    worker_obj = await actions.create_or_find_object("Seat", worker_seat, worker_agent)
+    manager_obj = await actions.create_or_find_object("Seat", manager_seat, manager_agent)
+    now = datetime.now(UTC)
+    await actions.assert_property(worker_obj, "handle", "pviolworker", worker_agent, now,
+                                  0.9, evidence_class="self_declared")
+    await actions.create_link(worker_obj, manager_obj, "managed_by", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await bind_holder(actions, seat_id=worker_seat, agent_id=worker_agent)
+    await record_practice(
+        actions, "batch small commits into one PR for this class of change")
+
+    office = tmp_path / "office"
+    office.mkdir()
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(
+        transcript,
+        {"type": "assistant", "isSidechain": False, "message": {"content":
+            "Actually, never batch small commits into one PR for this class of change — "
+            "going with one big commit instead. Done."}},
+    )
+    job_dir = str(tmp_path / "jobs" / "pviolat1")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=worker_agent, project="testhouse",
+                     cwd=str(office), model=None, session_key=None)
+    sid = "pviolat1-0000-4000-8000-000000000000"
+
+    before = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    await stophook._stage_a_async(
+        {"cwd": str(office), "session_id": sid, "transcript_path": str(transcript)})
+    after = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    assert after == before + 1
+    row = await actions.pool.fetchrow(
+        "SELECT from_agent, to_agent, body, grade FROM fleet_messages ORDER BY id DESC LIMIT 1")
+    assert row["from_agent"] == worker_agent
+    assert row["to_agent"] == manager_seat
+    assert row["grade"] == "fyi"
+    assert "may have violated standing Practice" in row["body"]
+    assert "batch small commits into one PR for this class of change" in row["body"]
+    assert "never" in row["body"]
+
+
+async def test_stage_a_does_not_confess_when_a_turn_merely_mentions_a_practice_topic(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
+) -> None:
+    """Topical overlap alone, with no reversal cue, is just a plain mention — not flagged.
+    Distinguishes this from the violation case above by wording only."""
+    monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    worker_agent, worker_seat = "agent:pviol002", "seat:pviol002"
+    manager_agent, manager_seat = "agent:pvmgr002", "seat:pvmgr002"
+    worker_obj = await actions.create_or_find_object("Seat", worker_seat, worker_agent)
+    manager_obj = await actions.create_or_find_object("Seat", manager_seat, manager_agent)
+    now = datetime.now(UTC)
+    await actions.assert_property(worker_obj, "handle", "pviolworker2", worker_agent, now,
+                                  0.9, evidence_class="self_declared")
+    await actions.create_link(worker_obj, manager_obj, "managed_by", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await bind_holder(actions, seat_id=worker_seat, agent_id=worker_agent)
+    await record_practice(
+        actions, "batch small commits into one PR for this class of change")
+
+    office = tmp_path / "office2"
+    office.mkdir()
+    transcript = tmp_path / "t2.jsonl"
+    _write_transcript(
+        transcript,
+        {"type": "assistant", "isSidechain": False, "message": {"content":
+            "Batching small commits into one PR for this class of change, as usual. Done."}},
+    )
+    job_dir = str(tmp_path / "jobs" / "pviolat2")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=worker_agent, project="testhouse",
+                     cwd=str(office), model=None, session_key=None)
+    sid = "pviolat2-0000-4000-8000-000000000000"
+
+    before = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    await stophook._stage_a_async(
+        {"cwd": str(office), "session_id": sid, "transcript_path": str(transcript)})
+    after = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    assert after == before  # topical mention only, no reversal cue — nothing to flag
 
 
 # ═══════════ INTEGRATION — _stage_a_async end to end ═══════════

@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -321,6 +322,13 @@ def _swap_confession(payload: dict[str, Any]) -> str | None:
 # etiquette from attended-session training; nobody there to answer it). Detection only, via
 # the same courtesy-DM surfacing Stage A already proves works — no PTY poke, no auto-continue;
 # actuation is later, operator-gated work (Thoth, DM 1644), not this leg.
+#
+# STAGE C (PRACTICE v2 layer 3, Thoth LXII's DM 1785): a fourth mechanism, same fail-open,
+# never-blocks discipline — (4) THE PRACTICE AUDIT: a turn's own tail text checked against
+# standing Practices for a lexical reversal fingerprint (the SAME heuristic layer 1 wires
+# into record_decision), catching a turn that violated standing law WITHOUT ever recording
+# a decision at all — c54e8176's own second case (a read-only audit that writes nothing,
+# so no write-time check could have fired). See the STAGE C section below for the detail.
 
 async def _resolve_worker_identity(
     conn: Any, session_id: str, cwd: str,
@@ -540,6 +548,85 @@ async def _confess_if_parked(
         grade="fyi")
 
 
+# ═══════════ STAGE C — THE TURN-END PRACTICE AUDIT (PRACTICE v2 layer 3, Thoth LXII's
+# DM 1785; grounds c54e8176 + thread 54a5c842) ═══════════
+# Layer 1 (record_decision) catches a WRITE that contradicts standing law; this catches a
+# TURN that never wrote anything at all — c54e8176's own second case (a Bash grep and a
+# misreading of its output, no decision recorded, so no write-time check ever fired).
+# DETECTION ONLY, same discipline as Stage B: a courtesy fyi DM to the manager, never a
+# block, never a re-check, no auto-correction. `_active_practices` re-reads
+# `_fn_practices`'s SAME shape (src/orchestrator/compositions.py) by hand rather than
+# calling the composition layer — this file's bare asyncpg.connect has no JSON codec
+# registered (see `_assert_pending`'s own note), so every read here goes through Postgres's
+# `#>>'{}'` text extraction instead.
+
+async def _active_practices(conn: Any, limit: int = 25) -> list[dict[str, Any]]:
+    """Standing Practices only — refuted ones are EXCLUDED here (unlike practices()'s own
+    on-demand listing, which shows a refuted Practice flagged, never hidden): dead law
+    must never trip a live-turn audit. Ordered by confirmed witness count, the same
+    'one witness is a hunch, four is law' bar record_practice's own docstring names."""
+    rows = await conn.fetch(
+        "SELECT o.id, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='statement' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS statement "
+        "FROM objects o WHERE o.type='Practice' AND o.status='active' "
+        "AND NOT EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='refuted_by') "
+        "ORDER BY (SELECT count(*) FROM links l WHERE l.from_id=o.id AND l.type='witnesses') "
+        "  DESC LIMIT $1", limit)
+    return [{"id": str(r["id"]), "statement": r["statement"]} for r in rows if r["statement"]]
+
+
+def _practice_violation(
+    text: str | None, practices: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Pure, no DB, no NLP: the SAME lexical reversal fingerprint layer 1 uses at write
+    time (capture.practice_contradiction_cues), applied here to a turn's raw tail text
+    instead of a Decision's summary — a turn can violate standing law without ever
+    recording one (c54e8176's own second case). A cue alone is too cheap a trigger (most
+    turns say 'stop'/'avoid' about something no Practice has ever touched), so this ALSO
+    requires topical overlap with the practice's own statement: at least 2 shared
+    significant words (len >= 4, crude but stopword-free by construction). Returns the
+    first (highest-confirmed, since `practices` arrives pre-ordered) match, or None — a
+    miss is not proof of compliance, only that this fingerprint found nothing; the
+    caller's job is a courtesy nudge, never a verdict."""
+    if not text or not practices:
+        return None
+    from src.orchestrator.capture import practice_contradiction_cues
+
+    cues = practice_contradiction_cues(text)
+    if not cues:
+        return None
+    words = set(re.findall(r"[a-z]{4,}", text.lower()))
+    for p in practices:
+        stmt_words = set(re.findall(r"[a-z]{4,}", (p.get("statement") or "").lower()))
+        if len(words & stmt_words) >= 2:
+            return {"practice_id": p["id"][:8], "statement": p["statement"], "cues": cues}
+    return None
+
+
+async def _confess_if_practice_violated(
+    conn: Any, *, payload: dict[str, Any], agent_id: str, cwd: str, manager_seat: str,
+) -> None:
+    """STAGE C: DETECTION ONLY, no actuation — the courtesy-DM shape Stage A/B already
+    proved out, applied to a standing Practice instead of a parked question. Fail-open by
+    construction (an empty `practices` list or an unreadable transcript both just return
+    None from `_practice_violation`, never raise)."""
+    text = _last_assistant_text(str(payload.get("transcript_path") or ""))
+    practices = await _active_practices(conn)
+    hit = _practice_violation(text, practices)
+    if hit is None:
+        return
+    from src.orchestrator.mailbox import send_message
+    await send_message(
+        conn, from_agent=agent_id, from_project=Path(cwd).name, to_agent=manager_seat,
+        body=f"stopping; this turn may have violated standing Practice {hit['practice_id']} "
+             f"(\"{hit['statement']}\") — reversal language found ({', '.join(hit['cues'])}); "
+             "a heuristic flag, not a verdict, worth a look",
+        grade="fyi")
+
+
 async def _stage_a_async(payload: dict[str, Any], pct: int | None = None) -> None:
     cwd = str(payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
     session_id = str(payload.get("session_id") or "")
@@ -559,6 +646,8 @@ async def _stage_a_async(payload: dict[str, Any], pct: int | None = None) -> Non
         manager_seat = await _manager_seat(conn, seat_id)
         if manager_seat is not None:
             await _confess_if_parked(
+                conn, payload=payload, agent_id=agent_id, cwd=cwd, manager_seat=manager_seat)
+            await _confess_if_practice_violated(
                 conn, payload=payload, agent_id=agent_id, cwd=cwd, manager_seat=manager_seat)
         leased = await _leased_assignment(conn, seat_id, agent_id)
         if leased is None:

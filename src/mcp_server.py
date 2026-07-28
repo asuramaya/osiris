@@ -716,7 +716,8 @@ async def lap(ref: str, limit: int = 200, ctx: Context | None = None) -> dict[st
 
 
 @mcp.tool()
-async def graph_lint(stale_days: int = 14) -> dict[str, Any]:
+async def graph_lint(stale_days: int = 14, check: str | None = None, limit: int | None = None,
+                     offset: int = 0) -> dict[str, Any]:
     """The graph audits ITSELF — report-only, never writes. The checks, each a lived bug
     made a standing tripwire: contradiction (near-tie multi-source winners — the resolver
     is coin-flipping a fact), laundering (an agent carrying a fact above its origin grade),
@@ -729,9 +730,24 @@ async def graph_lint(stale_days: int = 14) -> dict[str, Any]:
     generation minted while a different door of its own lineage still pulsed — the
     predecessor was not dead).
     Findings are TESTIMONY for a mind to judge, not verdicts to auto-apply; heal with
-    compensating events, never DELETE (constitution 3)."""
+    compensating events, never DELETE (constitution 3).
+
+    `check`/`limit`/`offset` (task #74, thread 12a210ab): every check normally lists only
+    its first 50 findings (`counts` still holds the true total for all of them). Pass
+    `check` (a value from `counts` or a finding's own `check` field, e.g. 'false-mint') to
+    list ONLY that check's findings, paginated by `limit`/`offset` across its FULL row set
+    instead of the 50-cap — the reap needed the full 19 contradiction rows and full 24
+    false-mint rows and had no way to ask for them short of hand-writing this tool's own
+    SQL. Omitting `check` is a complete no-op, byte-identical to before this existed."""
     pool = await _pool_get()
-    spec = {"op": "function", "name": "lint", "args": {"stale_days": stale_days}}
+    args: dict[str, Any] = {"stale_days": stale_days}
+    if check is not None:
+        args["check"] = check
+    if limit is not None:
+        args["limit"] = limit
+    if offset:
+        args["offset"] = offset
+    spec = {"op": "function", "name": "lint", "args": args}
     out = await comp.run_spec(pool, spec, None, name="graph-lint")
     items: dict[str, Any] = out["items"]
     return items
@@ -2975,6 +2991,26 @@ async def retire_project(project: str, because: str,
 
 
 @mcp.tool()
+async def assert_project_property(project: str, name: str, value: str,
+                                  ctx: Context | None = None) -> dict[str, Any]:
+    """The sanctioned write for a SINGLE project-scoped property (task #74) — closes the
+    gap that forced in-process scripts for anything beyond a status flip during the reap.
+    `project` resolves the same way retire_project does (UUID, 8-char short id, canonical
+    `repo:<name>`, or its `name` property) — SoftwareProject ONLY. NOT self-scoped: any
+    authorized caller may stamp any named project.
+
+    Refuses LOUDLY on: blank project/name/value; an unresolved project; `name=='status'`
+    (status has its own compensating-event path — retire_project, not a bare assertion)."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — asserting a project property is a deliberate "
+                         "act on the record", "why": _anchorless(ctx)}
+    from src.orchestrator.projects import assert_project_property as _assert_project_property
+    return await _assert_project_property(Actions(await _pool_get()), project=project,
+                                          name=name, value=value, actor=ident.agent_id)
+
+
+@mcp.tool()
 async def peer_seats(seat_a: str, seat_b: str, because: str,
                      ctx: Context | None = None) -> dict[str, Any]:
     """Mint a SYMMETRIC peer_of bond between two active Seats (ruling d74492ee, spec
@@ -3033,6 +3069,26 @@ async def correct_agent_house(agent_id: str, project: str | None = None,
     return await _correct_agent_house(Actions(await _pool_get()), agent_id=agent_id,
                                       project=project, seat_generation=seat_generation,
                                       actor=ident.agent_id)
+
+
+@mcp.tool()
+async def retire_agent(agent_id: str, because: str,
+                       ctx: Context | None = None) -> dict[str, Any]:
+    """Third-party retirement for an agent (task #74) — the manager-scoped complement
+    to the self-scoped retire() (which derives the CALLER's own id, no target param at
+    all). Stamps retired/retired_by/retired_because AND flips objects.status via a
+    compensating event, same pattern as retire_seat/retire_project. NOT self-scoped —
+    the target need not be the caller; `actor` is attribution, never a same-caller
+    requirement.
+
+    Refuses LOUDLY on: blank `because`; an unknown or already-non-active agent."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — retiring an agent is a deliberate act on the "
+                         "record", "why": _anchorless(ctx)}
+    from src.orchestrator.agents import retire_agent as _retire_agent
+    return await _retire_agent(Actions(await _pool_get()), agent_id=agent_id,
+                               actor=ident.agent_id, because=because)
 
 
 @mcp.tool()
