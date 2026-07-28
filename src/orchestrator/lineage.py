@@ -555,9 +555,11 @@ async def file_subagents(
     rows = await actions.pool.fetch(
         "SELECT o.id, o.canonical, o.status, "
         " (SELECT a.value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='last_active' LIMIT 1) AS last_active, "
+        "   AND a.name='last_active' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS last_active, "
         " (SELECT a.value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='patronym' LIMIT 1) AS patronym "
+        "   AND a.name='patronym' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS patronym "
         "FROM objects o WHERE o.type='Agent' AND o.status='active' "
         f"AND o.canonical ~ '{_SUBAGENT_PATTERN}' "
         "AND ($1::text IS NULL OR EXISTS (SELECT 1 FROM current_assertions a "
