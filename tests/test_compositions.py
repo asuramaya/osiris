@@ -895,3 +895,52 @@ async def test_mail_composition_end_to_end(actions: Actions) -> None:
     res = await run_composition(actions.pool, "mail")
     assert res["kind"] == "rows"
     assert "neo" in [r["box"] for r in res["items"]]
+
+
+# --- row_action on a `function` node (msg 1952, gating msg 1950's proposal) — SERVER HALF
+# ONLY. A Function's row is already its own facts, so args resolve via row.get(property)
+# directly, no `_props`/`_col_value` indirection the way `_table`'s object-backed version
+# needs. Not wired into any real composition's own saved spec yet — the client half
+# (table() recognizing `_action` as a control, a "run:" dispatch) isn't built.
+
+async def test_function_row_action_resolves_args_from_the_rows_own_keys(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.mailbox import send_message
+
+    await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
+                       to_project="neo", body="a project lane message")
+
+    spec = {"op": "function", "name": "mail_overview",
+            "row_action": {"action": "run:mail_threads", "args": {"box": {"property": "box"}}}}
+    res = await run_composition(actions.pool, await _save(actions, "mail-drill", spec))
+    assert res["kind"] == "rows"
+    row = next(r for r in res["items"] if r["box"] == "neo")
+    assert row["_action"] == {"action": "run:mail_threads", "args": {"box": "neo"}}
+
+
+async def test_function_row_action_is_absent_without_a_declared_row_action(
+    actions: Actions,
+) -> None:
+    """No row_action on the node -> no `_action` key at all (never a default, never
+    inferred) — the same opt-in discipline `table`'s own row_action already follows."""
+    from src.orchestrator.mailbox import send_message
+
+    await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
+                       to_project="neo", body="a project lane message")
+
+    spec = {"op": "function", "name": "mail_overview"}
+    res = await run_composition(actions.pool, await _save(actions, "mail-no-drill", spec))
+    assert all("_action" not in r for r in res["items"])
+
+
+async def test_function_row_action_does_not_apply_to_dict_shaped_output(
+    actions: Actions,
+) -> None:
+    """A dict-shaped Function (kind stays "data", task #60) has no rows to attach a
+    per-row control to — row_action is silently a no-op there, never an error."""
+    spec = {"op": "function", "name": "fleet_pulse_line",
+            "row_action": {"action": "run:whatever", "args": {}}}
+    res = await run_composition(actions.pool, await _save(actions, "pulse-drill", spec))
+    assert res["kind"] == "data"
+    assert isinstance(res["items"], str)

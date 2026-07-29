@@ -45,7 +45,14 @@ Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
        MAX_GROUP_DEPTH so nesting stays closed, not open-ended.
   {"op":"these"}                                    -> the nearest enclosing `group`'s own
        partition (empty outside one) — {"op":"subject"}'s sibling for a group body.
-  {"op":"function","name":,"args":{}}              -> a registered Function (the escape hatch)
+  {"op":"function","name":,"args":{},"row_action":?} -> a registered Function (the escape
+       hatch). When its own output is row-shaped (task #60's data->rows reclassification),
+       `row_action` works exactly as `table`'s own (msg 1952, gating msg 1950's server-side
+       proposal) — SIMPLER, even: a Function's row is already a plain dict, so args resolve
+       via `row.get(property)` directly, no `_props` indirection. SERVER HALF ONLY: the
+       client (table() recognizing `_action` as a control, a "run:" dispatch) is not built —
+       do not wire this into a real composition's spec until it lands, or `_action` renders
+       as a raw JSON blob (the exact bug this same finding caught on live-desk's own rows).
 
 The old `discrepancy` read-model is just one composition (opinion left the engine):
   subtract( collect(location, country) over traverse(subject, 2 hops),
@@ -2462,6 +2469,22 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         # output for free. A dict-shaped Function (sections-like output — `pulse`, `wall`)
         # stays kind="data"; nothing there is orderable/groupable and nothing should be.
         if isinstance(data, list) and all(isinstance(x, dict) for x in data):
+            row_action = node.get("row_action")
+            if row_action:
+                # SERVER HALF ONLY (msg 1952, gating msg 1950's proposal) — a Function's row
+                # is already its own facts, so this needs no `_props`/`_col_value`
+                # indirection the way `_table`'s object-backed version does: `row.get(
+                # property)` directly. The CLIENT half (table() recognizing `_action` as a
+                # control, not a column; a "run:" dispatch route) is deliberately NOT built
+                # here — frozen-file work, Thoth's to assign. Do not wire this into a real
+                # composition's own spec until that lands, or `_action` renders as a raw
+                # JSON blob (the exact bug this same finding caught on live-desk's rows).
+                for row in data:
+                    row["_action"] = {
+                        "action": row_action.get("action"),
+                        "args": {arg: row.get(str(spec.get("property")))
+                                for arg, spec in (row_action.get("args") or {}).items()},
+                    }
             return Result("rows", rows=data)
         return Result("data", data=data)
 
