@@ -3660,8 +3660,11 @@ _COMP_META: dict[str, tuple[str, str]] = {
 
 # AUTO-REFRESH (ruling cf9286b2): absent = MANUAL ONLY, the default for every composition not
 # named here — a lens goes live because someone decided it should, never by inheriting a
-# global tick. Only the two compositions the ruling names explicitly: "mail and the fleet
-# strip want seconds; docs, design-canon and the decision log want never."
+# global tick. The ruling named "mail and the fleet strip want seconds; docs, design-canon
+# and the decision log want never" explicitly, then Thoth extended it (msg 1977) to
+# "fleet-live" on the same reasoning: refresh_secs belongs to a composition whose ANSWER
+# GOES STALE, and who is alive right now is the most perishable fact in the graph — a fleet
+# roster that must be manually re-run is a fleet roster that lies by default.
 #
 # 8s, not :8011's 5s copied by habit (that number was picked for an SSE PUSH lane's own
 # server-side tick, a continuous connection — it carries no informational weight for a POLL
@@ -3674,6 +3677,7 @@ _COMP_META: dict[str, tuple[str, str]] = {
 _COMP_REFRESH_SECS: dict[str, int] = {
     "mail": 8,
     "fleet-strip": 8,
+    "fleet-live": 8,
 }
 
 

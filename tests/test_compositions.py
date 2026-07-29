@@ -582,21 +582,24 @@ async def test_default_compositions_seeded(actions: Actions) -> None:
     assert "operational-vs-disclosed-geography" in names
 
 
-async def test_seeding_gives_only_mail_and_fleet_strip_a_refresh_secs(
+async def test_seeding_gives_only_mail_fleet_strip_and_fleet_live_a_refresh_secs(
     actions: Actions,
 ) -> None:
     """ruling cf9286b2: "mail and the fleet strip want seconds; docs, design-canon and the
     decision log want never" — absent/None is the default for every OTHER composition, not
-    just the three named ones. A future addition to DEFAULT_COMPOSITIONS that forgets to
-    stay out of _COMP_REFRESH_SECS would silently start auto-polling; this pins the set."""
+    just the named ones. Thoth extended the ruling to "fleet-live" (msg 1977): a fleet
+    roster that must be manually re-run is a fleet roster that lies by default. A future
+    addition to DEFAULT_COMPOSITIONS that forgets to stay out of _COMP_REFRESH_SECS would
+    silently start auto-polling; this pins the set."""
     await seed_default_compositions(actions.pool)
     by_name = {c["name"]: c["refresh_secs"] for c in await list_compositions(actions.pool)}
     assert by_name["mail"] == 8
     assert by_name["fleet-strip"] == 8
+    assert by_name["fleet-live"] == 8
     assert by_name["docs"] is None
     assert by_name["design-canon"] is None
     assert by_name["decision-log"] is None
-    assert sum(1 for v in by_name.values() if v is not None) == 2
+    assert sum(1 for v in by_name.values() if v is not None) == 3
 
 
 async def test_save_composition_round_trips_refresh_secs(actions: Actions) -> None:
