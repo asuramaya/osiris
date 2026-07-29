@@ -813,6 +813,132 @@ async def test_fleet_strip_composition_end_to_end(actions: Actions) -> None:
     assert "agent:feedface" in str(res["items"]["live_agents"])
 
 
+# --- fleet_live / "fleet-live" (rung 2, ruling d42c543b, Thoth msg 1926/1936) — /fleet's
+# full-fidelity port: additive, the route stays live beside it. UNLIKE fleet_live_agents
+# (ranked, one project, live+seated only), this is the whole roster — every project, every
+# soul the mount registry knows — with doors/ancestors FLATTENED to readable prose rather
+# than a nested list a table cell can't render (see _fn_fleet_live's own docstring).
+
+async def test_fleet_live_lists_the_full_cross_project_roster(actions: Actions) -> None:
+    """The one property fleet_live_agents deliberately does NOT have: no project filter,
+    no live/seated-only cut. A dead soul on a different project must still show up."""
+    from src.orchestrator.mounts import save_mount
+
+    p = actions.pool
+    await save_mount(p, job_dir="/jobs/aaaa0001", agent_id="agent:deadbeef",
+                     project="osiris", cwd="/w/osiris", model="claude-sonnet-5",
+                     session_key="sid:realconn")
+    await save_mount(p, job_dir="/jobs/bbbb0002", agent_id="agent:c0ffee01",
+                     project="neo", cwd="/w/neo", model="claude-opus-5",
+                     session_key="sid:otherconn")
+    await p.execute("UPDATE agent_mounts SET last_seen = now() - interval '2 days' "
+                    "WHERE agent_id='agent:c0ffee01'")  # stale — still must appear
+
+    spec = {"op": "function", "name": "fleet_live"}
+    res = await run_composition(p, await _save(actions, "fleet-live-t1", spec))
+    assert res["kind"] == "data"
+    projects = {r.get("project") for r in res["items"]["unreconciled"]}
+    assert projects == {"osiris", "neo"}         # both projects, live AND stale, both present
+
+
+async def test_fleet_live_degrades_honestly_on_a_pool_failure() -> None:
+    """A broken pool must say so, never a silent empty roster (the same degrade-honestly
+    law fleet_live_agents/mail_overview already follow)."""
+    from src.orchestrator.compositions import _fn_fleet_live
+
+    class _BrokenPool:
+        def __getattr__(self, name: str) -> object:
+            async def _raise(*args: object, **kwargs: object) -> None:
+                raise ConnectionError("pool gone")
+            return _raise
+
+    out = await _fn_fleet_live(_BrokenPool(), None, {})  # type: ignore[arg-type]
+    assert out == {"pulse": "fleet data unavailable"}
+
+
+async def test_fleet_live_flattens_doors_to_readable_prose_not_a_repr(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.compositions import _fn_fleet_live
+    from src.orchestrator.mounts import save_mount
+
+    p = actions.pool
+    o = await actions.create_or_find_object("Agent", "agent:cafe99aa", "agent:cafe99aa")
+    await actions.assert_property(o, "handle", "Cafe", "agent:cafe99aa", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await save_mount(p, job_dir="/jobs/aaaa0001", agent_id="agent:cafe99aa",
+                     project="osiris", cwd="/w/osiris", model="claude-opus-4-8",
+                     session_key="sid:realconn")
+    await save_mount(p, job_dir="/jobs/bbbb0002", agent_id="agent:cafe99aa",
+                     project="osiris", cwd="/w/osiris", model="claude-fable-5",
+                     session_key="view-of:aaaa0001")
+
+    out = await _fn_fleet_live(p, None, {})
+    mine = next(r for r in out["roster"] if r["seat"] == "Cafe I")
+    assert "{" not in mine["doors"] and "[" not in mine["doors"]   # no repr leaked through
+    assert mine["doors"].startswith("2 doors (")
+    assert "tab→aaaa0001" in mine["doors"] and "session aaaa0001" in mine["doors"]
+
+
+async def test_fleet_live_flattens_ancestors_to_readable_prose_not_a_repr(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.compositions import _fn_fleet_live
+    from src.orchestrator.mounts import save_mount
+
+    p = actions.pool
+    for gen, handle_gen in (("agent:3e7a0001", 1), ("agent:3e7a0001-ii", 2),
+                            ("agent:3e7a0001-iii", 3)):
+        o = await actions.create_or_find_object("Agent", gen, gen)
+        await actions.assert_property(o, "handle", "Metra", gen, NOW, 0.9,
+                                      evidence_class="self_declared")
+        await actions.assert_property(o, "seat_generation", str(handle_gen), gen, NOW, 0.9,
+                                      evidence_class="self_declared")
+        await save_mount(p, job_dir=f"/jobs/{gen.removeprefix('agent:')}", agent_id=gen,
+                         project="metrahouse", cwd="/w/metra", model=None, session_key=None)
+    # ages must be UNAMBIGUOUS, not just "old": -i strictly older than -ii, so the
+    # "freshest ancestor" pick isn't a coin flip between two rows aged in one UPDATE
+    await p.execute("UPDATE agent_mounts SET last_seen = now() - interval '3 days' "
+                    "WHERE agent_id='agent:3e7a0001'")
+    await p.execute("UPDATE agent_mounts SET last_seen = now() - interval '2 days' "
+                    "WHERE agent_id='agent:3e7a0001-ii'")
+
+    out = await _fn_fleet_live(p, None, {})
+    mine = next(r for r in out["roster"] if r["seat"] == "Metra III")
+    assert "{" not in mine["ancestors"] and "[" not in mine["ancestors"]
+    assert mine["ancestors"] == "2 earlier lives, most recent Metra II 2d ago"
+
+
+async def test_fleet_live_pulse_and_wake_ledger(actions: Actions) -> None:
+    from src.orchestrator.compositions import _fn_fleet_live
+    from src.orchestrator.mounts import save_mount
+
+    p = actions.pool
+    await save_mount(p, job_dir="/jobs/aaaa0003", agent_id="agent:feedface",
+                     project="osiris", cwd="/w/osiris", model="claude-sonnet-5",
+                     session_key="sid:realconn3")
+    await p.execute("INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+                    "VALUES ('osiris', 'agent:x', 9, 'mint')")
+
+    out = await _fn_fleet_live(p, None, {})
+    assert "live" in out["pulse"] and "wakes" in out["pulse"]
+    assert any(w["project"] == "osiris" and w["by"] == "agent:x" for w in out["wake_ledger"])
+
+
+async def test_fleet_live_composition_is_registered_and_runs_end_to_end(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.mounts import save_mount
+
+    await save_mount(actions.pool, job_dir="/jobs/dddd0004", agent_id="agent:0ddba11",
+                     project="osiris", cwd="/w/osiris", model="claude-sonnet-5",
+                     session_key="sid:realconn4")
+    await save_composition(actions.pool, "fleet-live", DEFAULT_COMPOSITIONS["fleet-live"])
+    res = await run_composition(actions.pool, "fleet-live")
+    assert res["kind"] == "data"
+    assert "agent:0ddba11" in str(res["items"]["unreconciled"])
+
+
 # --- mail_overview / mail_threads / MAIL_OVERVIEW (task #71 consolidation wave 2, ruling
 # d42c543b, msg 1929) — /mail's overview half ported as a Function + Composition. Both
 # Functions wrap chrome.py's own mail_overview/mail_threads verbatim, never re-deriving

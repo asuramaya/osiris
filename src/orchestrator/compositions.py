@@ -2053,6 +2053,142 @@ async def _fn_fleet_pulse_line(
         return "fleet pulse unavailable"
 
 
+def _fleet_age(secs: float | None) -> str:
+    """A short, human age string — independent of chrome.py's own private `_age()` (this
+    Function's output is consumed primarily by osiris.js, not chrome's dying renderer; no
+    need to import a leading-underscore symbol across the module boundary for a two-line
+    format)."""
+    if secs is None:
+        return "?"
+    s = float(secs)
+    if s < 60:
+        return f"{int(s)}s ago"
+    if s < 3600:
+        return f"{int(s // 60)}m ago"
+    if s < 86400:
+        return f"{int(s // 3600)}h ago"
+    return f"{int(s // 86400)}d ago"
+
+
+def _fleet_door_line(d: dict[str, Any]) -> str:
+    key = d.get("session_key") or ""
+    when = _fleet_age(d.get("age_secs"))
+    if key.startswith("view-of:"):
+        return f"tab→{key.removeprefix('view-of:')} {when}"
+    if key.startswith("resume-of:"):
+        return f"resume→{key.removeprefix('resume-of:')} {when}"
+    sid = (d.get("job_dir") or "").rsplit("/", 1)[-1] or "?"
+    return f"session {sid} {when}"
+
+
+def _fleet_doors_summary(doors: list[dict[str, Any]]) -> str | None:
+    """FLATTENED, not omitted (Thoth, msg 1936): 'N doors (label, label...)', capped at 4
+    labels so a soul with many doors still reads as one line, not an essay. None (never a
+    bare 0 or an empty string) when there is nothing to say — the field itself is absent
+    from the row rather than a hollow value, same 'a missing field beats a decoded repr'
+    law the docstring below states for the row as a whole."""
+    if not doors:
+        return None
+    labels = [_fleet_door_line(d) for d in doors[:4]]
+    more = f", +{len(doors) - 4} more" if len(doors) > 4 else ""
+    return f"{len(doors)} door{'s' if len(doors) != 1 else ''} ({', '.join(labels)}{more})"
+
+
+def _fleet_ancestors_summary(ancestors: list[dict[str, Any]]) -> str | None:
+    """Same law: a readable sentence or nothing, never a repr. Only the FRESHEST past life
+    is named — the rest are counted, not listed, mirroring render_fleet's own economy
+    (head line + a count) rather than dumping every generation into one cell."""
+    if not ancestors:
+        return None
+
+    def _age_key(a: dict[str, Any]) -> float:
+        v = a.get("age_secs")
+        return float(v) if v is not None else float("inf")
+
+    freshest = min(ancestors, key=_age_key)
+    name = freshest.get("seat") or "?"
+    when = _fleet_age(freshest.get("age_secs"))
+    if len(ancestors) == 1:
+        return f"1 earlier life: {name}, {when}"
+    return f"{len(ancestors)} earlier lives, most recent {name} {when}"
+
+
+async def _fn_fleet_live(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """/fleet's full-fidelity port (rung 2, ruling d42c543b, Thoth msg 1926/1936) —
+    ADDITIVE ONLY: /fleet's route is NOT deleted yet, this lands beside it so the two can be
+    compared live before anything retires (msg 1936's own sequencing — "nothing is deleted
+    before its replacement exists" now means at PARITY, not merely present). Wraps
+    chrome.fleet_data verbatim, same discipline as fleet_live_agents/mail_overview — never
+    re-derives the soul-fold, only reshapes its already-full-fidelity output for the
+    generic renderer.
+
+    UNLIKE fleet_live_agents (RANKED: one project, live+seated only), this is the FULL
+    roster — every project, every soul the mount registry currently knows, live or not —
+    because full fidelity was the ask (msg 1926: neither the plain "fleet" table nor the
+    strip reproduces soul-folding, the wake ledger, the hourly wake budget, the visitor
+    split, or the cross-project view; this Function is where all five actually live).
+
+    THE FLATTENING (msg 1936's own bar — "genuinely readable... exactly as you sketched"):
+    neither render_composition nor osiris.js's table() recurse into a nested list/dict CELL
+    value — a raw `doors=[{...}]` would render as an undecoded repr, worse than not showing
+    it. `doors`/`ancestors` become short prose summaries instead (_fleet_doors_summary/
+    _fleet_ancestors_summary) — present when there's something to say, ABSENT (never a
+    hollow value) when there isn't. Nothing is silently dropped: every field either renders
+    readably or is omitted and named here, not decided quietly at build time."""
+    from src.api.chrome import fleet_data
+    from src.config.settings import get_settings
+
+    try:
+        data = await fleet_data(pool, wake_budget=get_settings().osiris_wake_hourly_budget)
+    except Exception:  # noqa: BLE001 — see fleet_live_agents: unavailable, never a silent
+        # empty table (msg 1894 point 4, degrade-honestly, renderer-independent)
+        return {"pulse": "fleet data unavailable"}
+    mounts = data["mounts"]
+    named = [m for m in mounts if m.get("seat")]
+    anon = [m for m in mounts if not m.get("seat")]
+    live_n = sum(1 for m in mounts if m["live"] and m.get("seated", True))
+    vis_n = sum(1 for m in mounts if m["live"] and not m.get("seated", True))
+    budget = f'/{data["wake_budget"]}' if data.get("wake_budget") else ""
+    pulse = (
+        f"{live_n} live"
+        + (f" · {vis_n} visitor{'s' if vis_n != 1 else ''}" if vis_n else "")
+        + f" · {len(named)} soul{'s' if len(named) != 1 else ''}"
+        + (f" · {len(anon)} unreconciled" if anon else "")
+        + f" · wakes {data['wakes_hour']}{budget}/h"
+    )
+
+    def _row(m: dict[str, Any]) -> dict[str, Any]:
+        row: dict[str, Any] = {
+            "seat": m.get("seat") or m.get("agent_id") or "?",
+            "project": m.get("project") or "?",
+            "model": str(m.get("model") or "?").removeprefix("claude-"),
+            "live": bool(m.get("live")),
+            "age": _fleet_age(m.get("age_secs")),
+        }
+        doors = _fleet_doors_summary(m.get("doors") or [])
+        if doors:
+            row["doors"] = doors
+        ancestors = _fleet_ancestors_summary(m.get("ancestors") or [])
+        if ancestors:
+            row["ancestors"] = ancestors
+        return row
+
+    wake_ledger = [
+        {"when": str(w["woke_at"])[:16], "project": w.get("to_project") or "?",
+         "mode": w.get("mode") or "?", "by": w.get("from_agent") or "?",
+         "message_id": w.get("message_id")}
+        for w in data["wakes"]
+    ]
+    return {
+        "pulse": pulse,
+        "roster": [_row(m) for m in named],
+        "unreconciled": [_row(m) for m in anon],
+        "wake_ledger": wake_ledger,
+    }
+
+
 async def _fn_mail_overview(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
@@ -2130,6 +2266,7 @@ _FUNCTIONS: dict[str, Function] = {
     "practices": _fn_practices,
     "fleet_live_agents": _fn_fleet_live_agents,
     "fleet_pulse_line": _fn_fleet_pulse_line,
+    "fleet_live": _fn_fleet_live,
     "mail_overview": _fn_mail_overview,
     "mail_threads": _fn_mail_threads,
 }
@@ -2143,7 +2280,8 @@ _FUNCTIONS: dict[str, Function] = {
 # `lap` anchors on args.ref OR the subject; `lint` audits the whole graph, no anchor at all.
 _SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "pulse", "project",
                  "lap", "lint", "echoes", "wall", "desk_decisions", "practices",
-                 "fleet_live_agents", "fleet_pulse_line", "mail_overview", "mail_threads"}
+                 "fleet_live_agents", "fleet_pulse_line", "fleet_live", "mail_overview",
+                 "mail_threads"}
 
 
 def list_functions() -> list[str]:
@@ -3241,6 +3379,13 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     # the fleet strip's migration pilot (task #71 slice two, msg 1894/1897) — not "fleet"
     # (taken: every agent the graph knows, unranked). No subject needed.
     "fleet-strip": FLEET_STRIP,
+    # /fleet's full-fidelity port (rung 2, ruling d42c543b, msg 1926/1936) — ADDITIVE, the
+    # route stays live beside this for a side-by-side look before anything retires. Neither
+    # "fleet" (every agent ever seen, no liveness) nor "fleet-strip" (one project, live+
+    # seated only) is this: soul-folding, doors/ancestors (flattened to prose — see
+    # _fn_fleet_live's own docstring for what that means and why), the wake ledger, the
+    # hourly budget, and the cross-project view all live here. No subject needed.
+    "fleet-live": {"op": "function", "name": "fleet_live"},
     # /mail's overview half (consolidation wave 2, ruling d42c543b, msg 1929) — no subject
     # needed. mail_threads stays a Function only (no saved composition): see MAIL_OVERVIEW's
     # own comment for why a fixed-box composition isn't the right shape yet.
@@ -3317,6 +3462,8 @@ _COMP_META: dict[str, tuple[str, str]] = {
                           "drift alarms"),
     "fleet-strip": ("fleet", "live co-agents right now, ranked — not the wall 'fleet' already "
                              "renders"),
+    "fleet-live": ("fleet", "the full roster: every project, souls folded by generation, "
+                            "doors/ancestors, the wake ledger and hourly budget"),
     "mail": ("fleet", "every mailbox with traffic, busiest-latest first (overview only — "
                       "see mail_threads for one box)"),
     "open threads": ("wall", "the raw unresolved list (ungraded — prefer the-wall)"),

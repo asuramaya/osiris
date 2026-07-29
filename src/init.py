@@ -66,6 +66,9 @@ ROOM_COMPOSITIONS: dict[str, tuple[str, ...]] = {
         # the fleet strip's migration pilot (task #71 slice two, msg 1894/1897) — same room
         # as "fleet" (the unranked wall it deliberately doesn't replace).
         "fleet-strip",
+        # /fleet's full-fidelity port, additive alongside the still-live route (rung 2,
+        # ruling d42c543b, Thoth msg 1926/1936) — same room as "fleet"/"fleet-strip".
+        "fleet-live",
         # /mail's overview half (consolidation wave 2, ruling d42c543b, msg 1929).
         "mail",
     ),
