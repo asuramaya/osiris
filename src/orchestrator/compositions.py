@@ -2046,6 +2046,63 @@ async def _fn_fleet_pulse_line(
         return "fleet pulse unavailable"
 
 
+async def _fn_mail_overview(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """/mail's port (ruling d42c543b, msg 1929) — a Function, not a pure op: soul-folding
+    (resolving each '@agent:...'/'@seat:...' lane through living_head, nesting agent
+    mailboxes under their project) needs imperative per-row async lookups the op-tree
+    has no primitive for. Wraps chrome.mail_overview verbatim — never re-derives the fold.
+    A flat list[dict] (one row per project's group chat OR per soul, `chrome.py`'s own
+    shape unchanged) — task #60's reclassification hands it to the generic table for
+    free, same ride fleet_live_agents already took."""
+    from src.api.chrome import mail_overview
+
+    try:
+        groups = await mail_overview(pool)
+    except Exception:  # noqa: BLE001 — a mail read that fails is UNAVAILABLE, never a
+        # silent empty table (the same degrade-honestly law fleet_live_agents follows)
+        return [{"box": "mail data unavailable", "msgs": "-", "unsettled": "-"}]
+    rows: list[dict[str, Any]] = []
+    for g in groups:
+        room = g.get("room")
+        if room:
+            rows.append({"box": room["box"], "msgs": room["msgs"],
+                         "unsettled": room["unsettled"]})
+        for s in g["souls"]:
+            rows.append({"box": s.get("soul") or s["box"], "msgs": s["msgs"],
+                         "unsettled": s["unsettled"]})
+    return rows
+
+
+async def _fn_mail_threads(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """One mailbox's threads (ruling d42c543b, msg 1929) — `box` rides as `args.box`, not a
+    subject: a mailbox is a project name or a synthetic '@agent:.../@seat:...' string, never
+    a graph object's UUID the composer's own subject resolution expects. Wraps
+    chrome.mail_threads verbatim. Flat list[dict] — same free ride to the generic table.
+
+    KNOWN GAP, flagged not hidden: `render_mail_box` shows every message's full body inline
+    (a per-thread <details> expansion); this row carries only the latest message's snippet
+    (a table cell that held every body would just be a stringified JSON blob, not a rendered
+    list — the generic table has no nested-table primitive). Per-message detail is real
+    information this port does not preserve 1:1 — see the build brief, not silently dropped."""
+    from src.api.chrome import mail_threads
+
+    box = str(args.get("box") or "").strip()
+    if not box:
+        return [{"thread": "no box given — pass args.box (a project name or "
+                           "'@agent:...'/'@seat:...')", "between": "-", "msgs": "-"}]
+    try:
+        threads = await mail_threads(pool, box)
+    except Exception:  # noqa: BLE001 — see _fn_mail_overview: unavailable, not silent
+        return [{"thread": "mail data unavailable", "between": "-", "msgs": "-"}]
+    return [{"thread": t["thread"], "between": ", ".join(t["between"]),
+             "msgs": len(t["msgs"]), "unsettled": t["unsettled"],
+             "latest": t["msgs"][-1]["body"][:160] if t["msgs"] else ""} for t in threads]
+
+
 _FUNCTIONS: dict[str, Function] = {
     "coinvest": _fn_coinvest,
     "subject_report": _fn_subject_report,
@@ -2066,6 +2123,8 @@ _FUNCTIONS: dict[str, Function] = {
     "practices": _fn_practices,
     "fleet_live_agents": _fn_fleet_live_agents,
     "fleet_pulse_line": _fn_fleet_pulse_line,
+    "mail_overview": _fn_mail_overview,
+    "mail_threads": _fn_mail_threads,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
@@ -2077,7 +2136,7 @@ _FUNCTIONS: dict[str, Function] = {
 # `lap` anchors on args.ref OR the subject; `lint` audits the whole graph, no anchor at all.
 _SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "pulse", "project",
                  "lap", "lint", "echoes", "wall", "desk_decisions", "practices",
-                 "fleet_live_agents", "fleet_pulse_line"}
+                 "fleet_live_agents", "fleet_pulse_line", "mail_overview", "mail_threads"}
 
 
 def list_functions() -> list[str]:
@@ -3121,6 +3180,16 @@ FLEET_STRIP: dict[str, Any] = {
 }
 
 
+# THE MAIL OVERVIEW (task #71 consolidation wave 2, ruling d42c543b, msg 1929) — the
+# overview-only half of /mail's port. `mail_threads` (registered as a Function, above) is
+# NOT saved as its own composition here: it takes `args.box`, and the composer has no
+# mechanism today for a human to supply a Function's args at run time (checked: no such
+# input exists in src/ui/static/index.html) — a saved composition with a baked-in box
+# would only ever show one fixed mailbox. That gap is flagged to Thoth, not papered over
+# with a placeholder composition; /mail's route stays until it's resolved.
+MAIL_OVERVIEW: dict[str, Any] = {"op": "function", "name": "mail_overview"}
+
+
 DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "operational-vs-disclosed-geography": GEOGRAPHY_DISCREPANCY,
     # the arrival briefing — a `sections` op-tree, no longer a hand-written Function.
@@ -3136,6 +3205,10 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     # the fleet strip's migration pilot (task #71 slice two, msg 1894/1897) — not "fleet"
     # (taken: every agent the graph knows, unranked). No subject needed.
     "fleet-strip": FLEET_STRIP,
+    # /mail's overview half (consolidation wave 2, ruling d42c543b, msg 1929) — no subject
+    # needed. mail_threads stays a Function only (no saved composition): see MAIL_OVERVIEW's
+    # own comment for why a fixed-box composition isn't the right shape yet.
+    "mail": MAIL_OVERVIEW,
     # the former bespoke read-models, now forkable compositions over named Functions —
     # opinion left engine code (no more hardcoded read-model + bespoke MCP tool per lens).
     "co-investment-ties": {"op": "function", "name": "coinvest"},
@@ -3208,6 +3281,8 @@ _COMP_META: dict[str, tuple[str, str]] = {
                           "drift alarms"),
     "fleet-strip": ("fleet", "live co-agents right now, ranked — not the wall 'fleet' already "
                              "renders"),
+    "mail": ("fleet", "every mailbox with traffic, busiest-latest first (overview only — "
+                      "see mail_threads for one box)"),
     "open threads": ("wall", "the raw unresolved list (ungraded — prefer the-wall)"),
     "echoes": ("wall", "the triage pile: untouched miner echoes, oldest first"),
     "decision-log": ("memory", "every decision with its WHY; superseded entries grayed"),

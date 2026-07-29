@@ -768,3 +768,87 @@ async def test_fleet_strip_composition_end_to_end(actions: Actions) -> None:
     assert isinstance(res["items"]["pulse"], str)
     assert "live" in res["items"]["pulse"]
     assert "agent:feedface" in str(res["items"]["live_agents"])
+
+
+# --- mail_overview / mail_threads / MAIL_OVERVIEW (task #71 consolidation wave 2, ruling
+# d42c543b, msg 1929) — /mail's overview half ported as a Function + Composition. Both
+# Functions wrap chrome.py's own mail_overview/mail_threads verbatim, never re-deriving
+# the soul-fold or the box-routing logic.
+
+async def test_mail_overview_function_lists_boxes_with_traffic(actions: Actions) -> None:
+    from src.orchestrator.mailbox import send_message
+
+    await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
+                       to_project="neo", body="a project lane message")
+
+    spec = {"op": "function", "name": "mail_overview"}
+    res = await run_composition(actions.pool, await _save(actions, "mail-ov", spec))
+    assert res["kind"] == "rows"          # task #60's own reclassification
+    boxes = [r["box"] for r in res["items"]]
+    assert "neo" in boxes
+
+
+async def test_mail_overview_degrades_honestly_on_a_pool_failure() -> None:
+    """A broken pool must say so, never a silent empty table (the same degrade-honestly
+    law fleet_live_agents/fleet_pulse_line already follow)."""
+    from src.orchestrator.compositions import _fn_mail_overview
+
+    class _BrokenPool:
+        def __getattr__(self, name: str) -> object:
+            async def _raise(*args: object, **kwargs: object) -> None:
+                raise ConnectionError("pool gone")
+            return _raise
+
+    rows = await _fn_mail_overview(_BrokenPool(), None, {})  # type: ignore[arg-type]
+    assert rows == [{"box": "mail data unavailable", "msgs": "-", "unsettled": "-"}]
+
+
+async def test_mail_threads_function_lists_one_boxs_threads_via_args_box(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.mailbox import send_message
+
+    await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
+                       to_project="neo", body="hello neo")
+    await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
+                       to_project="other", body="not this box")
+
+    spec = {"op": "function", "name": "mail_threads", "args": {"box": "neo"}}
+    res = await run_composition(actions.pool, await _save(actions, "mail-th", spec))
+    assert res["kind"] == "rows"
+    latest = [r["latest"] for r in res["items"]]
+    assert any("hello neo" in v for v in latest)
+    assert not any("not this box" in v for v in latest)
+
+
+async def test_mail_threads_names_the_missing_box_honestly() -> None:
+    from src.orchestrator.compositions import _fn_mail_threads
+
+    rows = await _fn_mail_threads(None, None, {})  # type: ignore[arg-type]
+    assert "no box given" in rows[0]["thread"]
+
+
+async def test_mail_threads_degrades_honestly_on_a_pool_failure() -> None:
+    from src.orchestrator.compositions import _fn_mail_threads
+
+    class _BrokenPool:
+        def __getattr__(self, name: str) -> object:
+            async def _raise(*args: object, **kwargs: object) -> None:
+                raise ConnectionError("pool gone")
+            return _raise
+
+    rows = await _fn_mail_threads(_BrokenPool(), None, {"box": "neo"})  # type: ignore[arg-type]
+    assert rows == [{"thread": "mail data unavailable", "between": "-", "msgs": "-"}]
+
+
+async def test_mail_composition_end_to_end(actions: Actions) -> None:
+    from src.orchestrator.compositions import MAIL_OVERVIEW
+    from src.orchestrator.mailbox import send_message
+
+    await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
+                       to_project="neo", body="a project lane message")
+
+    await save_composition(actions.pool, "mail", MAIL_OVERVIEW)
+    res = await run_composition(actions.pool, "mail")
+    assert res["kind"] == "rows"
+    assert "neo" in [r["box"] for r in res["items"]]

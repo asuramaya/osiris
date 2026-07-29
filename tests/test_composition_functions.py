@@ -112,7 +112,8 @@ async def test_function_registry_is_listable(actions: Actions) -> None:
     # domain logic (echo-filtering, fleet_messages) neither op-tree nor `group` can express.
     assert list_functions() == ["canon", "coinvest", "desk_decisions", "echoes", "family",
                                 "family_drift", "fleet_live_agents", "fleet_pulse_line",
-                                "lap", "lint", "portfolio", "practices",
+                                "lap", "lint", "mail_overview", "mail_threads",
+                                "portfolio", "practices",
                                 "project", "pulse", "roadmap_open", "screen_network", "search",
                                 "subject_report", "wall"]
 
