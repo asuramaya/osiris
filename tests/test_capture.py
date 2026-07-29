@@ -252,6 +252,55 @@ async def test_record_decision_still_runs_supersedes_through_a_dedup_hit(
     assert superseded_by == str(near)  # the supersede still landed, on the deduped object
 
 
+async def test_find_near_duplicate_decision_excludes_a_given_id(actions: Actions) -> None:
+    """Direct unit test of `exclude` (Thoth's catch, msg 1903, thread af77073a), independent
+    of any similarity-score luck: an exact restatement dedups to `d` with no exclusion, and
+    excluding `d` itself must fall through to no match (nothing else on the project is
+    close). Proves the parameter actually narrows the candidate pool, not just that the
+    call accepts it."""
+    d = await record_decision(actions, "wire the daemon receipt path into the meter",
+                              repo="dedupproj")
+    assert await find_near_duplicate_decision(
+        actions.pool, "wire the daemon receipt path into the meter", repo="dedupproj") == d
+    assert await find_near_duplicate_decision(
+        actions.pool, "wire the daemon receipt path into the meter", repo="dedupproj",
+        exclude=d) is None
+
+
+async def test_a_correction_never_dedupes_onto_the_decision_it_supersedes(
+    actions: Actions,
+) -> None:
+    """Thoth's own specimen (msg 1903), summaries reproduced VERBATIM from the graph
+    (b35db2a1 / 5c2fa5aa): a correction restates its subject BY NATURE, so it is
+    systematically MORE similar to the ruling it corrects than an average pair of
+    decisions — the highest-stakes write this guard touches, not the safest. Without
+    `exclude`, `dup` could resolve to `old` itself, `d` would become `old`, and the
+    existing 'never buries itself' guard (`old != d`) would then silently skip the burial —
+    the correction's words would land on the OLD object with no supersession minted.
+    Measured pg_trgm similarity between these two real summaries is ~0.244 (well under the
+    0.60 bar) — this test does not depend on crossing it: it pins the behavior so a future
+    threshold change (or reworded pair) cannot reintroduce the swallow silently, exactly as
+    Thoth asked. `test_find_near_duplicate_decision_excludes_a_given_id` above is the
+    deterministic proof the exclusion mechanism itself works."""
+    old_summary = ("Peer detachment: cut managed_by ONLY after launch/wake gain a "
+                   "non-manager authorization path — the order is load-bearing")
+    correction_summary = ("CORRECTION: peers detach with NO new code — cut managed_by "
+                          "directly. Supersedes my own gate-first ruling (and its "
+                          "accidental twin c30df5de)")
+    old = await record_decision(actions, old_summary, repo="dedupproj")
+    new = await record_decision(actions, correction_summary, repo="dedupproj",
+                                supersedes=str(old))
+    assert new != old  # a genuinely new object — never silently absorbed by the old one
+    row = await actions.pool.fetchrow(
+        "SELECT a.value #>> '{}' AS summary FROM current_assertions a "
+        "WHERE a.object_id=$1 AND a.name='summary'", old)
+    assert row["summary"] == old_summary  # the old ruling's words are still its OWN
+    superseded_by = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "WHERE a.object_id=$1 AND a.name='superseded_by'", old)
+    assert superseded_by == str(new)  # the burial actually happened
+
+
 async def test_pg_trgm_is_enabled_in_this_database(actions: Actions) -> None:
     """CHECK, don't assume (sessions.py's own '_near_same... pg_trgm is not installed' comment
     went stale the day migration 0025 landed it): this test pins that the dev/test database

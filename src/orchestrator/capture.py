@@ -114,7 +114,10 @@ async def record_decision(
     ambiguous-failure bug: a rejected-but-actually-committed call, retried with the summary
     reworded by one word, minted a twin). `find_near_duplicate_decision` runs first; a hit
     reuses that LIVE decision's id instead of minting, exactly as `find_near_duplicate_open_
-    thread` does for threads. Returns the id.
+    thread` does for threads. The decision named by `supersedes` is EXCLUDED from that
+    lookup (Thoth's catch, same thread): a correction restates its subject by nature, so it
+    is the highest-risk case for this guard, not the lowest — see find_near_duplicate_
+    decision's own docstring for the failure this exclusion prevents. Returns the id.
 
     `supersedes` BURIES an earlier decision under this one (the operator's ruling
     dd04d7dd, Tjmax III's ask): the old decision is stamped superseded_by/-because —
@@ -172,7 +175,11 @@ async def record_decision(
     # LIVE decision instead of minting a twin; everything else (kind/rationale/protocol/repo/
     # grounds/supersedes/resolves) still runs exactly as it would for a freshly-minted one —
     # only the OBJECT ITSELF is deduped, never the structural side effects a caller depends on.
-    dup = await find_near_duplicate_decision(actions.pool, summary, repo=repo) if repo else None
+    # `exclude=old`: `supersedes` names the ONE decision this call must never dedup onto —
+    # see find_near_duplicate_decision's docstring for why a correction is the highest-risk
+    # case, not a low one (Thoth's catch, msg 1903, thread af77073a).
+    dup = (await find_near_duplicate_decision(actions.pool, summary, repo=repo, exclude=old)
+           if repo else None)
     # ONE transaction: the Decision, its summary/kind/rationale, and the repo link either all
     # land or none do — a process death mid-sequence can no longer leave a summary-less husk.
     async with actions.atomic() as a:
@@ -529,7 +536,7 @@ async def find_near_duplicate_open_thread(
 
 
 async def find_near_duplicate_decision(
-    pool: asyncpg.Pool, summary: str, *, repo: str | None,
+    pool: asyncpg.Pool, summary: str, *, repo: str | None, exclude: uuid.UUID | None = None,
 ) -> uuid.UUID | None:
     """An existing LIVE Decision on this project that is the SAME ruling as `summary`,
     reworded — or None. `record_decision` checks this BEFORE minting (mirrors
@@ -542,12 +549,26 @@ async def find_near_duplicate_decision(
     correction — same exclusion shape as the thread guard's 'resolved is never a target').
     Unlike the thread guard, this is NOT the whole defense: `record_decision` still runs
     `supersedes`/`resolves` in full regardless of a hit, so a structural side effect a
-    retry depends on is never swallowed by the dedup — only the OBJECT ITSELF is reused."""
+    retry depends on is never swallowed by the dedup — only the OBJECT ITSELF is reused.
+
+    `exclude` (Thoth's catch, msg 1903, thread af77073a): the decision named by THIS call's
+    own `supersedes` must never itself be a dedup candidate. A correction restates its
+    subject BY NATURE — that is what makes it a correction — so it is systematically MORE
+    similar to the ruling it corrects than an average pair of decisions, not less; the
+    highest-stakes write this guard touches is exactly the one most likely to misfire on.
+    Without this, `dup` could resolve to the very decision `supersedes` names, `record_
+    decision` would set `d = dup = old`, and its existing 'never buries itself' guard
+    (`old != d`) would then silently skip the burial — the correction's words land on the
+    OLD object, superseded_by never gets asserted, and the wrong ruling ends up wearing the
+    right one's words. A stated intent ("supersede THIS one") outranks any similarity score,
+    so the caller resolves `old` first and passes it here — an exclusion, not a heuristic."""
     if not repo:
         return None
     proj = await _resolve_repo(pool, repo.removeprefix("repo:").strip())
     if proj is None:
         return None
+    exclude_clause = " AND o.id <> $2" if exclude is not None else ""
+    params = (proj, exclude) if exclude is not None else (proj,)
     rows = await pool.fetch(
         "SELECT o.id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -557,8 +578,8 @@ async def find_near_duplicate_decision(
         "WHERE o.type='Decision' AND o.merged_into IS NULL AND o.status='active' "
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='superseded_by' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'')=''",
-        proj)
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'')=''" + exclude_clause,
+        *params)
     candidates = [(r["id"], r["summary"]) for r in rows if r["summary"]]
     if not candidates:
         return None
