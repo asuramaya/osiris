@@ -70,13 +70,38 @@ _READER_HOLDS_ADDR = (
 # read time. Estate transfers and sweeps still converge the lanes; the read no longer
 # WAITS for them (Atlas's split: the statusline counted a DM on -ii while the freshly
 # minted -iii read an empty inbox — one soul, two answers).
+#
+# THE SETTLE-STATE ROLLUP (threads af911f47/00378259, "A FORK MINTS A FRESH INBOX",
+# Thoth's word 2026-07-29, DM 1856 — Option A): delivery already rolls up the whole
+# lineage (above); settle-state used to check ONLY the exact reader's own message_
+# recipients row (`r.read_at`, `r` LEFT JOINed on `r.agent_id = $agent`). mint_heir
+# (agents.py's estate transfer) already copies message_recipients rows forward on every
+# TRUE succession — this only closes the gap for an identity that reaches a shared
+# lineage base-prefix WITHOUT going through mint_heir (a true fork, or a fresh body
+# landing on an existing handle): the NOT EXISTS below asks "has ANY generation of MY
+# OWN lineage already settled this", the same base-prefix pattern delivery already
+# trusts to decide WHOSE mail this is — restoring symmetry (delivery already has a
+# proactive copy AND a live-query fallback; settle-state had only the first). This is a
+# CONSCIOUSLY ACCEPTED trust boundary, not a new one: a coincidental base-prefix match
+# with no real succession behind it would inherit settled-state it never earned, exactly
+# as it already inherits DELIVERY it never earned via the clause above — same risk,
+# already live, now made consistent rather than introduced. Scoped to lineage-matched
+# mail ONLY: the broadcast/project-wide clause (to_project=$project) is untouched, so a
+# genuinely new seat in an old project still sees every broadcast nobody in ITS OWN
+# lineage has settled — standing debt stays standing for a reader who never inherited
+# any history to begin with. `r` (the exact-agent LEFT JOIN) still governs the
+# delivered_at/lease/grace bookkeeping below UNCHANGED — only the read/settled
+# determination rolls up; per-reader delivery tracking stays per-reader on purpose.
 _DELIVERABLE_TO_READER = (
     "((m.to_agent = $agent) "
     " OR (m.to_agent = $lineage OR m.to_agent LIKE $lineage || '-%') "
     " OR " + _READER_HOLDS_ADDR + " "
     " OR (m.to_project = $project AND m.to_agent IS NULL AND m.from_agent <> $agent)) "
     "AND m.read_at IS NULL "
-    "AND r.read_at IS NULL "
+    "AND NOT EXISTS (SELECT 1 FROM message_recipients r3 WHERE r3.message_id = m.id "
+    "  AND (r3.agent_id = $agent OR r3.agent_id = $lineage "
+    "       OR r3.agent_id LIKE $lineage || '-%') "
+    "  AND r3.read_at IS NOT NULL) "
     "AND (r.delivered_at IS NULL "
     "     OR r.delivered_at < now() - make_interval(secs => $grace) "
     "     OR (r.delivered_at < now() - make_interval(secs => $lease) "

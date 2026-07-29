@@ -763,6 +763,50 @@ async def test_a_dm_on_an_old_generation_rolls_up_to_the_living_reader(
     assert await unread_count(p, "elsewhere", reader_agent="agent:aaaa9999") == 0
 
 
+async def test_a_lineage_mate_inherits_settled_state_without_going_through_mint_heir(
+    actions: Actions,
+) -> None:
+    """THE FORK POPULATION (threads af911f47/00378259, Thoth's word 2026-07-29, DM 1856 —
+    Option A): mint_heir already copies message_recipients rows forward on a TRUE
+    succession (agents.py). This proves the OTHER population — an identity that reaches
+    a shared lineage base-prefix WITHOUT mint_heir ever running (a true fork, or a fresh
+    body landing on an existing handle) — no longer re-inherits what a SIBLING generation
+    already settled. -iii settles a DM; -vii (no mint_heir copy between them, simulating
+    exactly that gap) must see it as already handled, not fresh."""
+    p = actions.pool
+    dm = await send_message(p, from_agent="agent:c1b99f6e-ii", from_project="ByeByte",
+                            to_agent="agent:f0e5a001-iii", body="report for the fork test")
+    # -iii itself settles it — no mint_heir copy ever runs to -vii
+    (m,) = await read_inbox(p, "forkhouse", reader_agent="agent:f0e5a001-iii")
+    assert m["id"] == dm["id"]
+    out = await ack_messages(p, "forkhouse", [dm["id"]], reader_agent="agent:f0e5a001-iii")
+    assert out["settled"] == [dm["id"]]
+    # -vii has NO message_recipients row of its own (mint_heir never ran for it) — before
+    # this fix, the exact-id-only settle check would show this as fresh, unread mail
+    assert await unread_count(p, "forkhouse", reader_agent="agent:f0e5a001-vii") == 0
+    assert await read_inbox(p, "forkhouse", reader_agent="agent:f0e5a001-vii") == []
+
+
+async def test_a_genuinely_new_lineage_in_an_old_project_still_sees_standing_broadcasts(
+    actions: Actions,
+) -> None:
+    """THE COUNTER-CASE (Thoth's own instinct, DM 1843/1856): the settle-state rollup
+    only widens what counts as MY lineage already having answered — it must never touch
+    the broadcast/project-wide clause. A genuinely new, UNRELATED lineage (no shared
+    base-prefix with anyone) landing in an old, populated project still sees a standing
+    broadcast that NOBODY in its own (empty) lineage has ever settled — exactly as
+    before this fix, because the new NOT EXISTS check is scoped to MY OWN lineage's
+    rows, and a fresh lineage has none."""
+    p = actions.pool
+    await send_message(p, from_agent="agent:veteran001", from_project="oldhouse",
+                       to_project="oldhouse", body="standing, never-settled project ask")
+    # a completely unrelated fresh lineage — no generation of it has ever touched this
+    n = await unread_count(p, "oldhouse", reader_agent="agent:newcomer9999")
+    assert n == 1
+    got = await read_inbox(p, "oldhouse", reader_agent="agent:newcomer9999")
+    assert [msg["body"] for msg in got] == ["standing, never-settled project ask"]
+
+
 async def test_desk_briefs_count_folds_threads_and_skips_the_dimmed(
     actions: Actions,
 ) -> None:

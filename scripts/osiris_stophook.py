@@ -92,7 +92,12 @@ async def _deliverable(
             "WHERE ((m.to_agent=$1) "
             "   OR (m.to_agent = $4 OR m.to_agent LIKE $4 || '-%') "
             "   OR (m.to_project=$2 AND m.to_agent IS NULL AND m.from_agent <> $1)) "
-            "AND m.read_at IS NULL AND r.read_at IS NULL "
+            "AND m.read_at IS NULL "
+            # THE SETTLE-STATE ROLLUP (mailbox._DELIVERABLE_TO_READER; keep in step): has
+            # ANY generation of my lineage already settled this, not just my own exact id.
+            "AND NOT EXISTS (SELECT 1 FROM message_recipients r3 WHERE r3.message_id=m.id "
+            "  AND (r3.agent_id=$1 OR r3.agent_id=$4 OR r3.agent_id LIKE $4 || '-%') "
+            "  AND r3.read_at IS NOT NULL) "
             "AND (r.delivered_at IS NULL OR r.delivered_at < now() - make_interval(secs => $3))",
             row["agent_id"], project, STOP_GRACE_SECS, base)
         n = int(n_row["n"]) if n_row else 0
