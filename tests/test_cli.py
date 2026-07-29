@@ -21,7 +21,7 @@ from src.cli import (
     cmd_migrate,
     cmd_seed,
     commit_deployed_notes,
-    composition_gap_note,
+    composition_gap_notes,
     diff_tool_lists,
     dirty_tracked_src_files,
     match_session,
@@ -412,15 +412,27 @@ def test_commit_deployed_notes_clean_is_silent() -> None:
     assert commit_deployed_notes(status, oneshot) == []
 
 
-def test_composition_gap_note_flags_a_shortfall() -> None:
-    note = composition_gap_note(10, 22)
-    assert note is not None
-    assert "10" in note and "22" in note
+def test_composition_gap_notes_flags_the_missing_default_by_name() -> None:
+    notes = composition_gap_notes({"a", "b"}, {"a", "b", "c"})
+    assert len(notes) == 1
+    assert "'c'" in notes[0]
 
 
-def test_composition_gap_note_silent_when_caught_up() -> None:
-    assert composition_gap_note(22, 22) is None
-    assert composition_gap_note(30, 22) is None  # more than expected is never a gap
+def test_composition_gap_notes_silent_when_caught_up() -> None:
+    assert composition_gap_notes({"a", "b"}, {"a", "b"}) == []
+    assert composition_gap_notes({"a", "b", "extra"}, {"a", "b"}) == []  # extra rows, no gap
+
+
+def test_composition_gap_notes_extra_user_saved_rows_never_mask_a_missing_default() -> None:
+    """The exact bug (thread a25365a9): a count comparison reads 'caught up' as long as the
+    table is at least as big as DEFAULT_COMPOSITIONS, even if what's padding the count is
+    unrelated user-saved compositions rather than the defaults themselves. Eleven extras
+    and one missing default, measured live, is the shape that produced two false all-clears
+    in a row."""
+    have = {"a"} | {f"user-saved-{i}" for i in range(11)}
+    notes = composition_gap_notes(have, {"a", "b"})
+    assert len(notes) == 1
+    assert "'b'" in notes[0]
 
 
 def test_alembic_gap_note_flags_a_mismatch() -> None:
@@ -597,7 +609,7 @@ async def test_cmd_deploy_restarts_and_reports_smoke_and_gaps(
                                pool=actions.pool, list_tools=_list_tools)
     assert calls == [list(DEPLOY_UNITS)]
     # a blank test DB has no compositions/alembic_version rows seeded — this exercises the
-    # gap-reporting path without asserting exact counts (that's composition_gap_note's own
+    # gap-reporting path without asserting exact names (that's composition_gap_notes' own
     # unit test's job); only that cmd_deploy runs the comparison and returns cleanly either way.
     assert out in (0, 1)
     assert "TOOL LIST CHANGED: +retire_assertion, ~smoke changed" in buf.getvalue()

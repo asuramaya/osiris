@@ -652,11 +652,17 @@ def _alembic_head(repo_root: Path) -> str | None:
         return None
 
 
-def composition_gap_note(db_count: int, expected: int) -> str | None:
-    if db_count >= expected:
-        return None
-    return (f"compositions: DB has {db_count}, DEFAULT_COMPOSITIONS defines {expected} — "
-           "run `osiris seed` (or `osiris seed --compositions-only`).")
+def composition_gap_notes(have: set[str], expected: set[str]) -> list[str]:
+    """NAME-set difference, never a count (thread a25365a9): a `db_count >= expected`
+    comparison cannot fail in the direction it exists to detect, because the same table
+    also holds user-saved compositions — eleven of them, measured live, alongside the 24
+    defaults. Up to eleven vanished defaults would still read "up to date" under a count
+    check, and it silently did, on two consecutive deploys. One note per missing default,
+    naming it, so `osiris seed --compositions-only` is an instruction a reader can act on
+    rather than a hope. Extra rows (user-saved or otherwise) never mask a gap here — only
+    a name present in `expected` and absent from `have` counts as one."""
+    return [f"compositions: default {name!r} missing from the DB — run `osiris seed` "
+            "(or `osiris seed --compositions-only`)." for name in sorted(expected - have)]
 
 
 def alembic_gap_note(current: str | None, head: str | None) -> str | None:
@@ -669,12 +675,19 @@ def alembic_gap_note(current: str | None, head: str | None) -> str | None:
 async def _composition_gaps(pool: asyncpg.Pool) -> list[str]:
     """Composition seeding only — the alembic half moved to `_apply_pending_migrations`
     (thread c4681c38 leg 2), which now runs BEFORE the restart rather than being reported
-    alongside this end-of-deploy note."""
+    alongside this end-of-deploy note. REPORTS by name, never AUTO-SEEDS (thread a25365a9's
+    own ask, argued in the commit this lands with): `seed_default_compositions` upserts
+    every default's spec unconditionally, including ones already present — running it
+    automatically on every deploy would silently overwrite a default a human hand-edited
+    live in the composer (the whole point of a composition being forkable/savable), trading
+    today's dishonest-but-passive miscount for a silent, active clobber. A migration auto-
+    applies safely because it replays a reviewed, versioned script; a composition auto-seed
+    would replay code OVER whatever the DB now holds under that name. Reporting by name
+    keeps the fix in the same class as the ratchet: name what's missing, let a human decide."""
     from src.orchestrator.compositions import DEFAULT_COMPOSITIONS
 
-    db_count = await pool.fetchval("SELECT count(*) FROM compositions")
-    note = composition_gap_note(db_count, len(DEFAULT_COMPOSITIONS))
-    return [note] if note is not None else []
+    have = {r["name"] for r in await pool.fetch("SELECT name FROM compositions")}
+    return composition_gap_notes(have, set(DEFAULT_COMPOSITIONS))
 
 
 MigrationState = Callable[[asyncpg.Pool, Path], Awaitable[tuple[str | None, str | None]]]
