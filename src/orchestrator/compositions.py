@@ -37,12 +37,19 @@ Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
        one titled read-model (Notion's page-of-blocks). Each body is its own op-tree; the
        result is {title: rendered-items}. This is what a "briefing"/"dossier" IS — a page of
        compositions, not bespoke code.
-  {"op":"group","from":N,"by":P,"body":N}          -> one section PER DISTINCT VALUE of
+  {"op":"group","from":N,"by":P,"body":N,"sequence":?}  -> one section PER DISTINCT VALUE of
        property P (a DYNAMIC `sections` — titles come from the data, not the spec). `body`
        is evaluated once per partition; {"op":"these"} inside it means "this partition's
        members," so `body` may itself be another `group` — arc->status->owner IS three of
        these nested, nothing more (ruling c5b184cd, thread d56e7073/#44). Capped at
        MAX_GROUP_DEPTH so nesting stays closed, not open-ended.
+       `sequence` (ruling d42c543b, Thoth msg 1937) imposes a caller-given order on the
+       partition TITLES — distinct from `order`, which sorts rows/objects by a DERIVED
+       property value, never a caller-literal key sequence. Listed titles render first, in
+       that order (one absent from the data just doesn't appear — never an error); any
+       title NOT in the sequence appends after, alphabetically, so an unanticipated value
+       is visible, never dropped. Independent per nesting level — an outer and inner
+       `group` may each carry their own `sequence` or none.
   {"op":"these"}                                    -> the nearest enclosing `group`'s own
        partition (empty outside one) — {"op":"subject"}'s sibling for a group body.
   {"op":"function","name":,"args":{},"row_action":?} -> a registered Function (the escape
@@ -2725,6 +2732,15 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
                     _THESE.reset(these_token)
         finally:
             _GROUP_DEPTH.reset(depth_token)
+        sequence = node.get("sequence")
+        if sequence:
+            # Listed titles first, in the given order (one absent from the data is a
+            # silent no-op — same as an empty group always was). Everything ELSE appends
+            # after, alphabetically — visible, never dropped: a typo'd or new title must
+            # never vanish just because nobody added it to the sequence yet.
+            ordered: dict[str, Any] = {t: partitions[t] for t in sequence if t in partitions}
+            ordered.update(sorted((t, v) for t, v in partitions.items() if t not in sequence))
+            partitions = ordered
         return Result("data", data=partitions)
 
     if op == "function":
@@ -3422,19 +3438,21 @@ ROADMAP: dict[str, Any] = {
 # shape. `where: topic present` excludes an untopiced Reference entirely (deliberate,
 # unchanged from docs.py's own note: `topic` is exactly what marks the seeded docs canon,
 # never a catch-all bucket a plain fleet-wide Reference would fall into). The fixed section
-# ORDER (getting-started/concepts/...) is presentation policy, not a fact about the data —
-# same "keep ranking out of the op-tree" call PROJECT_BRIEFING's own open_threads section
-# already makes; the route reorders the returned dict, same thin post-step precedent.
+# ORDER (getting-started/concepts/reference/deployment/history) was presentation policy
+# living OUTSIDE the op-tree — app.py's /canon route re-sorted the returned dict by hand.
+# Ruling d42c543b (Thoth msg 1926/1937): a route special-casing a composition's own output
+# is exactly what the ruling refuses — `group`'s new `sequence` param moves the policy INTO
+# the op-tree, where every reader of this composition (the route, /ui, a future consumer)
+# gets the same order for free, and the route-level re-sort retires with it.
 DOCS: dict[str, Any] = {
     "op": "group", "by": "topic",
+    "sequence": ("getting-started", "concepts", "reference", "deployment", "history"),
     "from": {"op": "select", "object_type": "Reference",
              "where": [{"property": "topic", "op": "present"}]},
     "body": {"op": "table", "from": {"op": "these"},
              "columns": [{"property": "canonical"}, {"property": "name"},
                         {"property": "vendor"}]},
 }
-
-DOCS_SECTION_ORDER = ("getting-started", "concepts", "reference", "deployment", "history")
 
 
 # THE LIVE DESK (ruling c5b184cd, thread d56e7073/#44) — "what's actionable for the operator

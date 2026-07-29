@@ -1069,17 +1069,11 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         same path is silently shadowed by it (caught live by the route test). `?p=<project>`
         names which project's chrome this is (defaults to osiris's own) — the "docs"
         composition itself is not yet project-scoped, so every project currently renders the
-        same canon. The fixed section order is presentation policy, not a composition
-        concern (same "ranking stays out of the op-tree" call PROJECT_BRIEFING already
-        makes) — this thin re-sort is that policy's one home."""
-        from src.orchestrator.compositions import DOCS_SECTION_ORDER
+        same canon. The fixed section order used to be a route-level re-sort; it now lives
+        in DOCS's own `sequence` (ruling d42c543b, Thoth msg 1937) — this route just renders
+        whatever the composition returns, no post-step of its own."""
         title = f"docs · {p_}"
         res = await run_composition(p, "docs")
-        if res.get("kind") == "data" and isinstance(res.get("items"), dict):
-            items = res["items"]
-            ordered = [t for t in DOCS_SECTION_ORDER if t in items] + sorted(
-                t for t in items if t not in DOCS_SECTION_ORDER)
-            res["items"] = {t: items[t] for t in ordered}
         inner = chrome.render_composition(res)
         return Response(inner if partial else chrome.page(title, "docs", inner),
                         media_type="text/html")

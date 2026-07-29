@@ -319,6 +319,93 @@ async def test_group_consumes_a_function_node_yielding_a_list(actions: Actions) 
     assert {d["summary"] for d in res["items"]["agent:y"]} == {"call B"}
 
 
+# --- group's `sequence` (rung 3, ruling d42c543b, Thoth msg 1937) — a caller-given key
+# ORDER over `group`'s dynamic titles, distinct from `order` (which sorts by a derived
+# property value, never a caller-literal sequence). The three absent-case tests are the
+# ones Thoth named specifically ("those three are where a reordering bug hides").
+
+async def test_group_sequence_orders_titles_and_appends_unlisted_ones_alphabetically(
+    actions: Actions,
+) -> None:
+    await _filings(actions)
+    o = await actions.create_or_find_object("Organization", "cik:30", "edgar")
+    await actions.assert_property(o, "sector", "zz-unlisted", "edgar", NOW, 0.85)
+    await actions.assert_property(o, "amount", "9", "edgar", NOW, 0.85)
+    spec = {"op": "group", "by": "sector", "sequence": ["bio", "ai"],
+            "from": {"op": "select", "object_type": "Organization"},
+            "body": {"op": "table", "from": {"op": "these"}, "columns": [{"property": "amount"}]}}
+    res = await run_composition(actions.pool, await _save(actions, "seq-basic", spec))
+    # listed titles first, IN THE GIVEN ORDER — reversed from insertion/alphabetical
+    assert list(res["items"].keys()) == ["bio", "ai", "zz-unlisted"]
+
+
+async def test_group_sequence_key_with_no_matching_data_is_a_silent_skip(
+    actions: Actions,
+) -> None:
+    """A sequence naming a title that doesn't exist in this run's data must not appear, and
+    must not error — same as an ordinary empty group today (msg 1937's first absent case)."""
+    await _filings(actions)  # only "ai" and "bio" sectors exist
+    spec = {"op": "group", "by": "sector", "sequence": ["nonexistent", "bio", "ai"],
+            "from": {"op": "select", "object_type": "Organization"},
+            "body": {"op": "table", "from": {"op": "these"}, "columns": [{"property": "amount"}]}}
+    res = await run_composition(actions.pool, await _save(actions, "seq-absent-key", spec))
+    assert list(res["items"].keys()) == ["bio", "ai"]  # "nonexistent" never appears, no error
+
+
+async def test_group_key_absent_from_sequence_appends_visibly_not_dropped(
+    actions: Actions,
+) -> None:
+    """A data value the sequence never anticipated (a typo, a new category) must still
+    render — appended after the sequenced titles, never silently lost (msg 1937's second
+    absent case, the no-silent-caps law applied to reordering)."""
+    await _filings(actions)  # "ai", "bio"
+    o = await actions.create_or_find_object("Organization", "cik:31", "edgar")
+    await actions.assert_property(o, "sector", "biotech-typo", "edgar", NOW, 0.85)
+    await actions.assert_property(o, "amount", "7", "edgar", NOW, 0.85)
+    spec = {"op": "group", "by": "sector", "sequence": ["ai"],  # "bio"/"biotech-typo" unlisted
+            "from": {"op": "select", "object_type": "Organization"},
+            "body": {"op": "table", "from": {"op": "these"}, "columns": [{"property": "amount"}]}}
+    res = await run_composition(actions.pool, await _save(actions, "seq-unlisted-key", spec))
+    # "ai" first (sequenced); the two unlisted titles appended, alphabetically
+    assert list(res["items"].keys()) == ["ai", "bio", "biotech-typo"]
+
+
+async def test_group_sequence_is_independent_per_nesting_level(actions: Actions) -> None:
+    """A nested group's own `sequence` (or lack of one) never leaks to its parent's, and
+    vice versa (msg 1937's third absent case) — each `group` node reads its own `node`."""
+    for cik, sector, band in [("40", "ai", "hi"), ("41", "ai", "lo"),
+                              ("42", "bio", "hi"), ("43", "bio", "lo")]:
+        o = await actions.create_or_find_object("Organization", f"cik:{cik}", "edgar")
+        await actions.assert_property(o, "sector", sector, "edgar", NOW, 0.85)
+        await actions.assert_property(o, "band", band, "edgar", NOW, 0.85)
+    spec = {"op": "group", "by": "sector", "sequence": ["bio", "ai"],
+            "from": {"op": "select", "object_type": "Organization"},
+            "body": {"op": "group", "by": "band", "sequence": ["lo", "hi"], "from": {"op": "these"},
+                     "body": {"op": "table", "from": {"op": "these"},
+                              "columns": [{"property": "band"}]}}}
+    res = await run_composition(actions.pool, await _save(actions, "seq-nested", spec))
+    assert list(res["items"].keys()) == ["bio", "ai"]                 # outer's own sequence
+    assert list(res["items"]["bio"].keys()) == ["lo", "hi"]           # inner's own, independent
+    assert list(res["items"]["ai"].keys()) == ["lo", "hi"]
+
+
+async def test_docs_composition_renders_sections_in_the_fixed_topic_order(
+    actions: Actions,
+) -> None:
+    """The real payoff: DOCS's own `sequence` (folded in from the former route-level
+    DOCS_SECTION_ORDER re-sort) produces getting-started/concepts/reference/deployment/
+    history in that order straight from the composition — no post-step needed anywhere."""
+    from src.orchestrator.compositions import DOCS
+
+    for topic in ("history", "getting-started", "reference"):  # deliberately out of order
+        ref = await actions.create_or_find_object("Reference", f"ref:{topic}", "docs")
+        await actions.assert_property(ref, "topic", topic, "docs", NOW, 0.85)
+        await actions.assert_property(ref, "name", topic, "docs", NOW, 0.85)
+    await save_composition(actions.pool, "docs", DOCS)
+    res = await run_composition(actions.pool, "docs")
+    assert list(res["items"].keys()) == ["getting-started", "reference", "history"]
+
+
 async def test_order_and_take_already_worked_over_a_function_node(actions: Actions) -> None:
     """order/take needed NO code changes for this — they already branched on Result.kind.
     Pins that a function-sourced "rows" result orders/takes exactly like `table`'s does."""
