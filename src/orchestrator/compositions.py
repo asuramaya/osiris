@@ -2000,6 +2000,52 @@ async def _fn_practices(
     ]
 
 
+async def _fn_fleet_live_agents(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """THE FLEET STRIP's ranked half (task #71 slice two, gated msg 1894/1897) — a Function,
+    not a pure op: liveness/seatedness aren't stored graph properties, they're derived at
+    read time from agent_mounts (last_seen freshness, the fold-by-soul, the visitor-gate
+    discriminator against phantom bg-pty rows) — exactly the class of read chrome.fleet_data
+    already does and this wraps rather than re-derives, same discipline as desk_decisions
+    wrapping mailbox's own predicate instead of re-deriving it.
+
+    RANKED, NOT THE WALL: only live, seated co-agents on ONE project (`args.project`,
+    default 'osiris' — this graph's own control surface) — never the full roster the plain
+    "fleet" composition already renders unranked. A flat list[dict] (task #60's own
+    reclassification hands this to the generic table for free — no Composition op, no view
+    type, nothing in osiris.js)."""
+    from src.api.chrome import fleet_data
+
+    project = str(args.get("project") or "osiris")
+    try:
+        data = await fleet_data(pool)
+    except Exception:  # noqa: BLE001 — a fleet read that fails is UNAVAILABLE, never a
+        # silent empty table (msg 1894 point 4, degrade-honestly, renderer-independent)
+        return [{"agent": "fleet data unavailable", "project": "-", "model": "-"}]
+    live = [m for m in data["mounts"]
+            if m.get("live") and m.get("seated") and m.get("project") == project]
+    return [{"agent": m.get("seat") or m.get("agent_id") or "?",
+             "project": m.get("project") or "?",
+             "model": str(m.get("model") or "?").removeprefix("claude-")} for m in live]
+
+
+async def _fn_fleet_pulse_line(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """The fleet strip's one-line pulse — the SAME string orient() already shows every
+    seat (mounts.fleet_pulse), never re-derived. Deliberately a bare string, not a dict: a
+    short scalar Function result renders as a header chip (osiris.js renderData), no
+    section of its own needed. NOT named 'pulse' — that name is held by the unrelated
+    dev_pulses/off-the-clock-loop heartbeat digest (msg 1897's own naming catch)."""
+    from src.orchestrator.mounts import fleet_pulse
+
+    try:
+        return await fleet_pulse(pool)
+    except Exception:  # noqa: BLE001 — see _fn_fleet_live_agents: unavailable, not silent
+        return "fleet pulse unavailable"
+
+
 _FUNCTIONS: dict[str, Function] = {
     "coinvest": _fn_coinvest,
     "subject_report": _fn_subject_report,
@@ -2018,6 +2064,8 @@ _FUNCTIONS: dict[str, Function] = {
     "echoes": _fn_echoes,
     "wall": _fn_wall,
     "practices": _fn_practices,
+    "fleet_live_agents": _fn_fleet_live_agents,
+    "fleet_pulse_line": _fn_fleet_pulse_line,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
@@ -2028,7 +2076,8 @@ _FUNCTIONS: dict[str, Function] = {
 # opinion → primitives the user owns.
 # `lap` anchors on args.ref OR the subject; `lint` audits the whole graph, no anchor at all.
 _SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "pulse", "project",
-                 "lap", "lint", "echoes", "wall", "desk_decisions", "practices"}
+                 "lap", "lint", "echoes", "wall", "desk_decisions", "practices",
+                 "fleet_live_agents", "fleet_pulse_line"}
 
 
 def list_functions() -> list[str]:
@@ -3057,6 +3106,21 @@ LIVE_DESK: dict[str, Any] = {
 }
 
 
+# THE FLEET STRIP (task #71 slice two, gated msg 1894/1897) — the PILOT proving "everything
+# becomes a Composition" on the cheapest possible case: zero UI code, no view-type registry,
+# no branch in renderWallView. Two Functions because neither leg is expressible as a pure op
+# (liveness/seatedness are derived at read time from agent_mounts, not stored graph
+# properties on Agent — see _fn_fleet_live_agents's own docstring). Ranked, never the wall
+# the plain "fleet" composition already renders (every agent the graph knows, unfiltered).
+FLEET_STRIP: dict[str, Any] = {
+    "op": "sections",
+    "sections": [
+        {"title": "pulse", "body": {"op": "function", "name": "fleet_pulse_line"}},
+        {"title": "live_agents", "body": {"op": "function", "name": "fleet_live_agents"}},
+    ],
+}
+
+
 DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "operational-vs-disclosed-geography": GEOGRAPHY_DISCREPANCY,
     # the arrival briefing — a `sections` op-tree, no longer a hand-written Function.
@@ -3069,6 +3133,9 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "docs": DOCS,
     # the live desk (ruling c5b184cd, thread d56e7073/#44) — no subject needed.
     "live-desk": LIVE_DESK,
+    # the fleet strip's migration pilot (task #71 slice two, msg 1894/1897) — not "fleet"
+    # (taken: every agent the graph knows, unranked). No subject needed.
+    "fleet-strip": FLEET_STRIP,
     # the former bespoke read-models, now forkable compositions over named Functions —
     # opinion left engine code (no more hardcoded read-model + bespoke MCP tool per lens).
     "co-investment-ties": {"op": "function", "name": "coinvest"},
@@ -3139,6 +3206,8 @@ _COMP_META: dict[str, tuple[str, str]] = {
     "the-wall": ("wall", "what is GENUINELY unresolved — obligations first, echoes counted"),
     "live-desk": ("wall", "what's actionable for the operator right now — owed, decisions, "
                           "drift alarms"),
+    "fleet-strip": ("fleet", "live co-agents right now, ranked — not the wall 'fleet' already "
+                             "renders"),
     "open threads": ("wall", "the raw unresolved list (ungraded — prefer the-wall)"),
     "echoes": ("wall", "the triage pile: untouched miner echoes, oldest first"),
     "decision-log": ("memory", "every decision with its WHY; superseded entries grayed"),

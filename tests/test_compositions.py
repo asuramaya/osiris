@@ -701,3 +701,70 @@ async def test_live_desk_composition_end_to_end(actions: Actions) -> None:
     assert "now closed" not in owed  # resolved -- fell out by construction, no extra logic
     assert "which design should we ship" in str(res["items"]["decisions_awaiting_a_call"])
     assert "SCHEMA DRIFT" in str(res["items"]["drift_alarms"])
+
+
+# --- fleet_live_agents / fleet_pulse_line / FLEET_STRIP (task #71 slice two, gated msg
+# 1894/1897) — the /ui migration pilot: a Composition + two Functions, zero UI code. Both
+# are Functions because liveness/seatedness are derived at read time from agent_mounts,
+# never stored graph properties on Agent (see _fn_fleet_live_agents's own docstring).
+
+async def test_fleet_live_agents_lists_only_live_seated_agents_on_one_project(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.mounts import save_mount
+
+    p = actions.pool
+    await save_mount(p, job_dir="/jobs/aaaa0001", agent_id="agent:deadbeef",
+                     project="osiris", cwd="/w/osiris", model="claude-sonnet-5",
+                     session_key="sid:realconn")
+    # a different project's live agent must never leak into the osiris strip
+    await save_mount(p, job_dir="/jobs/bbbb0002", agent_id="agent:c0ffee01",
+                     project="neo", cwd="/w/neo", model="claude-opus-5",
+                     session_key="sid:otherconn")
+
+    spec = {"op": "function", "name": "fleet_live_agents"}
+    res = await run_composition(p, await _save(actions, "fleet-agents", spec))
+    assert res["kind"] == "rows"          # task #60's own reclassification, proven above
+    agents = [r["agent"] for r in res["items"]]
+    assert any("deadbeef" in a for a in agents)
+    assert not any("c0ffee01" in a for a in agents)
+
+
+async def test_fleet_live_agents_degrades_honestly_on_a_pool_failure() -> None:
+    """A broken pool must say so, never silently render an empty table (msg 1894 point 4,
+    degrade-honestly — renderer-independent, the same law build_inbox already follows)."""
+    from src.orchestrator.compositions import _fn_fleet_live_agents
+
+    class _BrokenPool:
+        def __getattr__(self, name: str) -> object:
+            async def _raise(*args: object, **kwargs: object) -> None:
+                raise ConnectionError("pool gone")
+            return _raise
+
+    rows = await _fn_fleet_live_agents(_BrokenPool(), None, {})  # type: ignore[arg-type]
+    assert rows == [{"agent": "fleet data unavailable", "project": "-", "model": "-"}]
+
+
+async def test_fleet_pulse_line_returns_the_same_string_orient_shows(actions: Actions) -> None:
+    from src.orchestrator.compositions import _fn_fleet_pulse_line
+    from src.orchestrator.mounts import fleet_pulse
+
+    expected = await fleet_pulse(actions.pool)
+    line = await _fn_fleet_pulse_line(actions.pool, None, {})
+    assert line == expected
+
+
+async def test_fleet_strip_composition_end_to_end(actions: Actions) -> None:
+    from src.orchestrator.compositions import FLEET_STRIP
+    from src.orchestrator.mounts import save_mount
+
+    await save_mount(actions.pool, job_dir="/jobs/cccc0003", agent_id="agent:feedface",
+                     project="osiris", cwd="/w/osiris", model="claude-sonnet-5",
+                     session_key="sid:realconn2")
+
+    await save_composition(actions.pool, "fleet-strip", FLEET_STRIP)
+    res = await run_composition(actions.pool, "fleet-strip")
+    assert res["kind"] == "data"           # a `sections` op always packages as data
+    assert isinstance(res["items"]["pulse"], str)
+    assert "live" in res["items"]["pulse"]
+    assert "agent:feedface" in str(res["items"]["live_agents"])

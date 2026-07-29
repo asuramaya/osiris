@@ -63,6 +63,9 @@ ROOM_COMPOSITIONS: dict[str, tuple[str, ...]] = {
         # docs also seeded with no shelf section (see _COMP_META below). All three are
         # developer project-memory lenses, the same class as briefing/decision-log/the-wall.
         "roadmap", "docs", "live-desk",
+        # the fleet strip's migration pilot (task #71 slice two, msg 1894/1897) — same room
+        # as "fleet" (the unranked wall it deliberately doesn't replace).
+        "fleet-strip",
     ),
     "analyst": (
         "who-is-this", "operational-vs-disclosed-geography", "co-investment-ties",
