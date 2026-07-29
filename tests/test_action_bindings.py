@@ -15,8 +15,9 @@ import pytest_asyncio
 from src.actions.core import Actions
 from src.api.actions import ACTION_VERBS
 from src.api.app import create_app
+from src.api.chrome import render_composition
 from src.orchestrator.capture import open_thread
-from src.orchestrator.compositions import LIVE_DESK, save_composition
+from src.orchestrator.compositions import LIVE_DESK, run_composition, save_composition
 
 NOW = datetime(2026, 7, 27, tzinfo=UTC)
 
@@ -107,20 +108,21 @@ async def test_act_route_refuses_an_unknown_action(
     assert "error" in r.json() and "unknown action" in r.json()["error"]
 
 
-# --- /live-desk, end to end: composition -> generic renderer -> a real button -----------
+# --- "live-desk": composition -> generic renderer -> a real button ---------------------
+# The /live-desk ROUTE retired (ruling d42c543b) — it was a pure passthrough, no bespoke
+# logic of its own, so this drives the same composition -> renderer path directly instead
+# of through the (deleted) HTTP route. `actions=True`'s own page-shell behavior (the
+# "your clicks write" label, arming the click handler) is covered independently by
+# test_chrome.py's test_only_the_desk_arms_the_write_handler; /act's dispatch is covered
+# above by test_act_route_dispatches_a_known_action. What's left to prove HERE is only
+# that a composition's `_action` row survives render_composition as real button markup.
 
-async def test_live_desk_page_renders_real_buttons(
-    actions: Actions, client: httpx.AsyncClient,
-) -> None:
+async def test_live_desk_composition_renders_real_buttons(actions: Actions) -> None:
     await save_composition(actions.pool, "live-desk", LIVE_DESK)
     await open_thread(actions, "operator must pick a direction", owner="operator",
                       source="agent:me")
 
-    r = await client.get("/live-desk")
-    assert r.status_code == 200
-    assert "operator must pick a direction" in r.text
-    assert 'data-action="resolve_thread"' in r.text
-    assert "your clicks write" in r.text  # actions=True armed the page, honestly labeled
-
-    partial = await client.get("/live-desk?partial=1")
-    assert "<!doctype" not in partial.text.lower()
+    res = await run_composition(actions.pool, "live-desk")
+    html = render_composition(res)
+    assert "operator must pick a direction" in html
+    assert 'data-action="resolve_thread"' in html

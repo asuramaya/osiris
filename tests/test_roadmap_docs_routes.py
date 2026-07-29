@@ -1,10 +1,13 @@
-"""/roadmap /canon — the routes feeding chrome's pure renderers off the live graph
-(thread 521ae613a6f4). One end-to-end test per route: the pure-renderer fixture tests in
-test_chrome.py cover layout; this covers the wiring (Query aliasing, pool injection,
-project defaulting) those can't. The "docs" nav tab routes at /canon, not /docs — FastAPI
-reserves /docs for its own Swagger UI (a second route at the same path is silently
-shadowed by it — this file's own first draft caught that live, hitting the swagger page
-instead of the renderer)."""
+"""/canon — the route feeding chrome's pure renderer off the live graph (thread
+521ae613a6f4). End-to-end: the pure-renderer fixture tests in test_chrome.py cover layout;
+this covers the wiring (Query aliasing, pool injection, project defaulting) those can't. The
+"docs" nav tab routes at /canon, not /docs — FastAPI reserves /docs for its own Swagger UI
+(a second route at the same path is silently shadowed by it — this file's own first draft
+caught that live, hitting the swagger page instead of the renderer).
+
+/roadmap's own equivalent route test retired with the route itself (ruling d42c543b): it was
+a pure duplicate of the "roadmap" composition already roomed in /ui — verified live before
+deletion, see src/api/app.py's own retirement comment."""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
@@ -15,8 +18,7 @@ import pytest_asyncio
 from src.actions.core import Actions
 from src.api.app import create_app
 from src.ingest.reference import ingest_reference_doc
-from src.orchestrator.capture import open_thread
-from src.orchestrator.compositions import DOCS, ROADMAP, save_composition
+from src.orchestrator.compositions import DOCS, save_composition
 
 NOW = datetime(2026, 7, 25, tzinfo=UTC)
 
@@ -29,32 +31,6 @@ async def client(actions: Actions) -> AsyncIterator[httpx.AsyncClient]:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
-
-
-async def test_roadmap_route_defaults_to_osiris_and_switches_on_p(
-    actions: Actions, client: httpx.AsyncClient,
-) -> None:
-    # the route reads compositions.ROADMAP by name from the DB (ruling c5b184cd,
-    # thread d56e7073/#44) — a real deploy seeds this via seed_default_compositions;
-    # the test seeds it directly, same as any other composition-route test.
-    await save_composition(actions.pool, "roadmap", ROADMAP)
-    proj = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "test")
-    await actions.assert_property(proj, "name", "osiris", "test", NOW, 0.9,
-                                  evidence_class="self_declared")
-    await open_thread(actions, "a real duty on the default project", repo="osiris",
-                      kind="obligation", source="agent:me")
-
-    default = await client.get("/roadmap")
-    assert default.status_code == 200
-    assert "a real duty on the default project" in default.text
-    assert "roadmap" in default.text
-
-    unknown = await client.get("/roadmap?p=nobody-here")
-    assert unknown.status_code == 200
-    assert "no such project" in unknown.text
-
-    partial = await client.get("/roadmap?partial=1")
-    assert "<!doctype" not in partial.text.lower()  # partial: content div only, no shell
 
 
 async def test_docs_route_serves_the_ingested_canon(

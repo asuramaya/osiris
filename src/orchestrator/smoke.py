@@ -17,8 +17,10 @@ import httpx
 # every chrome route named in thread bb763977 — /health isn't here on purpose: it's already
 # its own dedicated liveness endpoint (src/api/app.py), this walks the actual RENDERED pages.
 # /membrane retired (task #71, ruling 0b3dd431) — "/" (THE INBOX) is :8011's new front door.
+# /live-desk and /roadmap retired (ruling d42c543b) — pure duplicates of the "live-desk" and
+# "roadmap" compositions already roomed in /ui, verified live before deletion.
 CHROME_ROUTES: tuple[str, ...] = (
-    "/", "/desk", "/live-desk", "/mail", "/fleet", "/roadmap", "/canon", "/overhead",
+    "/", "/desk", "/mail", "/fleet", "/canon", "/overhead",
 )
 
 

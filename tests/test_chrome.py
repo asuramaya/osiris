@@ -535,8 +535,10 @@ def test_render_composition_no_button_without_an_action() -> None:
 # test_compositions.py (the composition end to end) and the render_composition section above.
 
 
-def test_page_shell_includes_the_new_nav_tabs() -> None:
-    html = page("roadmap", "roadmap", "<p>x</p>")
+def test_page_shell_includes_the_docs_nav_tab() -> None:
+    html = page("docs", "docs", "<p>x</p>")
     # "docs" routes at /canon, not /docs — FastAPI reserves /docs for its own Swagger UI
-    for tab in ("/roadmap", "/canon"):
-        assert f'href="{tab}"' in html
+    assert 'href="/canon"' in html
+    # /roadmap retired (ruling d42c543b) — a pure duplicate of the "roadmap" composition
+    # already roomed in /ui; a dead nav link would be a worse bug than the duplication was
+    assert 'href="/roadmap"' not in html

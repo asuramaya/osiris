@@ -35,7 +35,6 @@ from pydantic import BaseModel
 
 from src.actions.core import Actions
 from src.api import chrome
-from src.api.membrane import _e
 from src.config.settings import get_settings
 from src.connectors.leases import LeaseStore
 from src.connectors.osint4all import suggest_manifests
@@ -1027,20 +1026,12 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         return Response(inner if partial else chrome.page("mail", "mail", inner),
                         media_type="text/html")
 
-    @app.get("/live-desk")
-    async def live_desk_page(partial: int = 0, p: asyncpg.Pool = Depends(get_pool)) -> Response:
-        """"What's actionable for the operator right now" (ruling c5b184cd, thread
-        d56e7073/#44) — owed_to_you / decisions_awaiting_a_call / drift_alarms, read AND
-        write: the composition's own `_action` rows render real buttons here (`actions=True`
-        arms the click handler, same as /desk). Resolved/stale fall out by construction —
-        this page has no bespoke filtering of its own, only the composition + the generic
-        renderer. Requires `seed_default_compositions` to have run at least once since
-        "live-desk" was added; an unseeded DB degrades to an honest "no composition" line."""
-        res = await run_composition(p, "live-desk")
-        inner = chrome.render_composition(res)
-        return Response(
-            inner if partial else chrome.page("live desk", "live-desk", inner, actions=True),
-            media_type="text/html")
+    # /live-desk RETIRED (ruling d42c543b): its own docstring already said "this page has
+    # no bespoke filtering of its own, only the composition + the generic renderer" — a pure
+    # duplicate of the "live-desk" composition already roomed in /ui, through the SAME
+    # chrome.render_composition. Verified live before deletion: opened "live-desk" in /ui,
+    # confirmed the owed/decisions/drift-alarm bands and real `_action` buttons render there
+    # identically to what this route produced.
 
     @app.get("/fleet")
     async def fleet_page(partial: int = 0, p: asyncpg.Pool = Depends(get_pool)) -> Response:
@@ -1052,29 +1043,12 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         return Response(inner if partial else chrome.page("fleet", "fleet", inner),
                         media_type="text/html")
 
-    @app.get("/roadmap")
-    async def roadmap_page(
-        p_: str = Query("osiris", alias="p"), partial: int = 0,
-        p: asyncpg.Pool = Depends(get_pool),
-    ) -> Response:
-        """A project's obligations/threads (thread 521ae613a6f4, migrated to a composition —
-        ruling c5b184cd, thread d56e7073/#44) — GENERIC per-project, `?p=<project>` switches
-        (defaults to osiris's own). Reads the "roadmap" composition (compositions.ROADMAP)
-        through the generic renderer — the hardcoded roadmap.py/render_roadmap retire in
-        favor of it. Requires `seed_default_compositions` to have run against this DB at
-        least once since the composition was added; an unseeded DB degrades to an honest
-        "no composition" line, never a crash."""
-        title = f"roadmap · {p_}"
-        proj = await p.fetchval(
-            "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
-            f"repo:{p_}")
-        if proj is None:
-            inner = f'<p class="dim">no such project: {_e(p_)!r}</p>'
-        else:
-            res = await run_composition(p, "roadmap", proj)
-            inner = chrome.render_composition(res)
-        return Response(inner if partial else chrome.page(title, "roadmap", inner),
-                        media_type="text/html")
+    # /roadmap RETIRED (ruling d42c543b): a thin wrapper over the "roadmap" composition
+    # through chrome.render_composition, no bespoke logic of its own beyond a `?p=` project
+    # default/lookup — verified live before deletion: focused the "osiris" SoftwareProject
+    # in /ui, ran "roadmap", confirmed the same open/resolved-by-arc/owner bands this route
+    # produced. Losing the auto-default-to-osiris convenience (a manual focus click in /ui
+    # replaces it) is a UX nuance, not a filter/scope/band/count the composition itself lacks.
 
     @app.get("/canon")
     async def canon_page(
