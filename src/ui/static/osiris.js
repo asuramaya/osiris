@@ -468,8 +468,79 @@ const Osiris = (() => {
   };
   const TIGHT = 24;                                // a column whose widest value fits in a glance
 
+  // row_action's CLIENT half (ruling c5b184cd, thread e5d1eb6d) — the server half
+  // (compositions._table/`function` op) has attached `_action:{action,args}` to a row since
+  // #44/89df464; table() must treat it as a CONTROL, never a column, or it renders as its own
+  // JSON.stringify'd blob (the exact bug live-desk shipped with — nobody clicked resolve on
+  // /ui, so nobody noticed). Label map mirrors chrome.py's _ACTION_LABELS verbatim — same
+  // registry, same cosmetic names, one less thing to keep in sync by hand than it looks: any
+  // action.js can't render for whatever reason falls back to its own verb name unlabeled.
+  const ACTION_LABELS = { resolve_thread: "resolve", assign_thread: "not mine",
+    defer_thread: "later", reclassify_thread: "reclassify", settle: "settle" };
+  // esc() alone is not attribute-safe — it never escapes '"', and every value here lands
+  // inside a double-quoted data-args attribute carrying raw JSON.stringify output (which is
+  // built almost entirely OF '"' characters). The browser decodes &quot; back to '"' when it
+  // parses the attribute, so JSON.parse(el.dataset.args) still sees the original string.
+  const escAttr = (s) => esc(s).replace(/"/g, "&quot;");
+  function _actionButton(action) {
+    const name = action.action || "";
+    const label = ACTION_LABELS[name] || name;
+    return `<button class="r-act-btn" data-action="${escAttr(name)}" ` +
+      `data-args="${escAttr(JSON.stringify(action.args || {}))}">${esc(label)}</button>`;
+  }
+  // a lightweight, self-built toast — this library has no host page to ask for one (osiris.js
+  // is the frozen surface the composer just calls into), so it mounts its own corner and cleans
+  // up after itself rather than assuming index.html has somewhere to put a message.
+  function toast(msg, isError) {
+    let box = document.getElementById("o-toast");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "o-toast";
+      document.body.appendChild(box);
+    }
+    const item = document.createElement("div");
+    item.className = "o-toast-item" + (isError ? " err" : "");
+    item.textContent = msg;
+    box.appendChild(item);
+    setTimeout(() => item.remove(), 3000);
+  }
+  // THE CLICK DELEGATE — mirrors chrome.py's _ACTIONS script exactly (same POST /act shape,
+  // same disable-on-click guard against a double-fire before the request resolves). Installed
+  // ONCE at module load on `document`, never re-wired per render: every composition run
+  // replaces `panel.innerHTML` wholesale, and a delegate on `document` survives that for free
+  // — no rebind after each render, no risk of a listener stacking on a node about to be thrown
+  // away. Deliberately NOT a "run:" navigation dispatch (Imhotep's drill-in need is a separate,
+  // unbuilt piece — a route that sometimes mutates and sometimes queries, chosen by a string
+  // prefix, is a footgun by construction; out of scope here on purpose).
+  document.addEventListener("click", async (e) => {
+    const b = e.target.closest("button[data-action]");
+    if (!b) return;
+    e.preventDefault();
+    const was = b.textContent;
+    b.disabled = true;
+    b.textContent = "…";
+    let args;
+    try { args = JSON.parse(b.dataset.args || "{}"); } catch { args = {}; }
+    try {
+      const r = await fetch("/act", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: b.dataset.action, args }),
+      }).then((res) => res.json());
+      if (r && r.error) { toast(r.error, true); b.disabled = false; b.textContent = was; return; }
+      toast(`${ACTION_LABELS[b.dataset.action] || b.dataset.action} — done`);
+      // the row's own fact no longer holds (the graph write already landed, server-confirmed)
+      // — remove it now rather than wait on a poll this composition may not even be running.
+      b.closest("tr")?.remove();
+    } catch (err) {
+      toast("action failed — " + err, true);
+      b.disabled = false;
+      b.textContent = was;
+    }
+  });
+
   function table(list) {
-    const keys = [...new Set(list.flatMap((o) => (o && typeof o === "object" ? Object.keys(o) : [])))];
+    const keys = [...new Set(list.flatMap((o) => (o && typeof o === "object" ? Object.keys(o) : [])))]
+      .filter((k) => k !== "_action");
     if (!keys.length) return `<ul class="r-list">${list.map((v) => `<li>${esc(v)}</li>`).join("")}</ul>`;
     const vals = {}, widest = {};
     keys.forEach((k) => {
@@ -494,11 +565,15 @@ const Osiris = (() => {
         ? `<span title="${esc(s)}">${esc(s.slice(0, 157))}…</span>` : esc(s);
     };
     const cls = (k) => (widest[k] <= TIGHT ? ' class="r-tight"' : "");
+    const hasAction = list.some((o) => o && o._action && o._action.action);
     return (chips.length
       ? `<div class="r-facts">${chips.map((c) => `<span class="r-chip">${esc(c)}</span>`).join("")}</div>`
       : "") +
-      `<table class="r-table"><thead><tr>${cols.map((c) => `<th${cls(c)}>${esc(c)}</th>`).join("")}</tr></thead>
-      <tbody>${list.map((o) => `<tr>${cols.map((c) => `<td${cls(c)}>${cell(o ? o[c] : "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+      `<table class="r-table"><thead><tr>${cols.map((c) => `<th${cls(c)}>${esc(c)}</th>`).join("")}` +
+      `${hasAction ? "<th></th>" : ""}</tr></thead>
+      <tbody>${list.map((o) => `<tr>${cols.map((c) => `<td${cls(c)}>${cell(o ? o[c] : "")}</td>`).join("")}` +
+      `${hasAction ? `<td>${o && o._action && o._action.action ? _actionButton(o._action) : ""}</td>` : ""}` +
+      `</tr>`).join("")}</tbody></table>`;
   }
 
   return { $, esc, pct, OPSYM, loadSchema, ty, objectDetail, loadRels, makeBoard,

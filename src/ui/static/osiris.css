@@ -177,6 +177,17 @@ a { color: var(--blue); text-decoration: none; }
 .r-table { max-width: 160ch; }
 .r-table th.r-tight, .r-table td.r-tight { width: 1%; white-space: nowrap; color: var(--muted); }
 .r-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; }
+/* row_action's client control (thread e5d1eb6d) — the button table() emits for a row
+   carrying `_action`, and the toast osiris.js raises once the click resolves. */
+.r-act-btn { background: var(--chip); border: 1px solid var(--border2); color: var(--muted);
+  border-radius: 6px; padding: 3px 9px; font-size: 11px; cursor: pointer; white-space: nowrap; }
+.r-act-btn:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+.r-act-btn:disabled { opacity: .5; cursor: default; }
+#o-toast { position: fixed; right: 18px; bottom: 18px; z-index: 200; display: flex;
+  flex-direction: column; gap: 6px; }
+.o-toast-item { background: var(--panel2); border: 1px solid var(--border2); color: var(--text);
+  border-radius: 8px; padding: 8px 14px; font-size: 12.5px; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
+.o-toast-item.err { border-color: var(--amber); color: var(--amber); }
 .r-group { margin-bottom: 18px; }
 .r-group h3 { font-size: 11px; letter-spacing: .5px; text-transform: uppercase; color: var(--text);
   margin: 0 0 8px; font-weight: 650; }
