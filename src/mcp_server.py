@@ -799,12 +799,14 @@ async def describe(table: str) -> dict[str, Any]:
 @mcp.tool()
 async def smoke() -> dict[str, Any]:
     """DEPLOY-TIME LIVENESS (ruling 2ee43411, task #63, threads bb763977/1849d800): walks
-    every chrome route (/ /desk /live-desk /mail /fleet /roadmap /canon /overhead)
-    and runs one real query over THIS server's own pool — the exact class of bug 1da1bf2
-    fixed (`_boot_check` warming the wrong pool) shipped past every static gate and only
-    broke at real boot; only a live call catches it. Call this right after a restart, not
-    just once at boot — a static gate proved it cannot substitute. `ok=false` names exactly
-    which surface failed, never a bare red light."""
+    every chrome route (smoke.CHROME_ROUTES — never hand-listed here again; an enumerated
+    copy in this very docstring is exactly what went stale, msg 1927, when /live-desk and
+    /roadmap retired, commit bb86bbe, and this prose didn't) and runs one real query over
+    THIS server's own pool — the exact class of bug 1da1bf2 fixed (`_boot_check` warming
+    the wrong pool) shipped past every static gate and only broke at real boot; only a live
+    call catches it. Call this right after a restart, not just once at boot — a static gate
+    proved it cannot substitute. `ok=false` names exactly which surface failed, never a bare
+    red light."""
     pool = await _pool_get()
     async with httpx.AsyncClient(
         base_url=get_settings().osiris_console_base_url, timeout=5.0,
