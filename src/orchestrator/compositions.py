@@ -52,14 +52,21 @@ Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
        `group` may each carry their own `sequence` or none.
   {"op":"these"}                                    -> the nearest enclosing `group`'s own
        partition (empty outside one) — {"op":"subject"}'s sibling for a group body.
-  {"op":"function","name":,"args":{},"row_action":?} -> a registered Function (the escape
-       hatch). When its own output is row-shaped (task #60's data->rows reclassification),
-       `row_action` works exactly as `table`'s own (msg 1952, gating msg 1950's server-side
-       proposal) — SIMPLER, even: a Function's row is already a plain dict, so args resolve
-       via `row.get(property)` directly, no `_props` indirection. SERVER HALF ONLY: the
-       client (table() recognizing `_action` as a control, a "run:" dispatch) is not built —
-       do not wire this into a real composition's spec until it lands, or `_action` renders
-       as a raw JSON blob (the exact bug this same finding caught on live-desk's own rows).
+  {"op":"function","name":,"args":{},"row_action":?,"row_actions":?} -> a registered
+       Function (the escape hatch). When its own output is row-shaped (task #60's data->rows
+       reclassification), `row_action` works exactly as `table`'s own (msg 1952, gating msg
+       1950's server-side proposal) — SIMPLER, even: a Function's row is already a plain
+       dict, so args resolve via `row.get(property)` directly, no `_props` indirection. The
+       client (table() recognizing a lone `_action` as a control, a click-delegate POSTing
+       to /act) shipped in 37af8b7 — browser-verified against live-desk's own resolve
+       button; the "run:" navigation dispatch stays unbuilt, a separate need.
+       `row_actions` (plural, msg 1976 gating msg 1971's proposal) is for a row that affords
+       MORE than one verb — a list of {label,action,args}, producing `_actions:[...]` on the
+       row. Its own arg templates add `{"literal":v}` alongside `{"property":p}` (exactly
+       one of the two, or the composer refuses loudly — see `_row_action_arg`'s own
+       docstring). SERVER HALF ONLY: the client has no case for `_actions` (plural) yet — do
+       not wire `row_actions` into a real composition's spec until it lands, or `_actions`
+       renders as a raw JSON blob (the same bug the singular form shipped with once).
 
 The old `discrepancy` read-model is just one composition (opinion left the engine):
   subtract( collect(location, country) over traverse(subject, 2 hops),
@@ -2312,19 +2319,18 @@ async def _fn_desk_overview(
     with desk_project(args.project), the same two-step shape mail_overview/mail_threads
     already took.
 
-    THE WRITE SIDE IS NOT HERE, ON PURPOSE. render_desk's roster and desk_project's own
-    per-debt rows carry FOUR verbs (done/not mine/later/settle) — chrome.py's `_verbs`/
-    `_settle`, each POSTing a DIFFERENT action+args shape to /desk/settle (a bare id, an
-    id+owner, an id+days, or a LIST of ids for a bulk settle). Today's row_action carries
-    exactly one action per row, with one property-templated arg each. That is a genuinely
-    new arrangement, not a page needing special-cased HTML (rung 3, ruling d42c543b) —
-    proposed to Thoth separately, not built here. Arming a single-action row_action for a
-    four-verb row would drop three of the four doors or misdescribe which one fires: the
-    exact capability-without-a-working-effect shape row_action's own build (89df464)
-    refused to ship, and osiris.js has no row_action client at all yet regardless (thread
-    e5d1eb6d/#92) — building the multi-action write side before the single-action read side
-    even renders would compound, not fix, that gap. The chrome.py route stays live; this
-    composition is read-only until the op exists."""
+    THE WRITE SIDE IS NOT HERE, STILL, THOUGH THE GRAMMAR NOW EXISTS. render_desk's roster
+    and desk_project's own per-debt rows carry FOUR verbs (done/not mine/later/settle) —
+    chrome.py's `_verbs`/`_settle`, each POSTing a DIFFERENT action+args shape (a bare id, an
+    id+owner, an id+days, or a LIST of ids for a bulk settle). `row_actions` (plural, msg
+    1976 gating msg 1971's proposal) can express exactly this now — a list of
+    {label,action,args} per row, resolving through the SAME /act verbs (resolve_thread/
+    assign_thread/defer_thread/settle) chrome.py's own route already uses. Still not wired
+    in HERE, on purpose: the client has no case for `_actions` (plural) yet — table() only
+    renders a lone `_action` as a button — so arming it would render a raw JSON blob, the
+    exact capability-without-a-working-effect shape 89df464's own build refused to ship for
+    the singular form. The chrome.py route stays live; this composition stays read-only
+    until the client lands."""
     from src.orchestrator.mailbox import read_desk
 
     try:
@@ -2365,7 +2371,7 @@ async def _fn_desk_project(
 
     SAME WRITE-SIDE GAP as desk_overview — see that Function's own docstring. The four verbs
     are not modeled here either; each row carries only what it's ABOUT (summary/body, kind,
-    id), never a control that would render as a raw JSON blob with no client to press it."""
+    id), never a `row_actions` declaration the client can't render yet."""
     from src.orchestrator.mailbox import read_desk
 
     project = str(args.get("project") or "").strip()
@@ -2511,6 +2517,35 @@ def _setop[T](op: str, lists: list[list[T]]) -> list[T]:
         common = set(lists[0]).intersection(*(set(x) for x in lists[1:]))
         return [x for x in _distinct(lists[0]) if x in common]
     return _distinct([x for lst in lists for x in lst])
+
+
+def _row_action_arg(row: dict[str, Any], spec: dict[str, Any]) -> Any:
+    """One arg's value for a `row_actions` (plural) template — EXACTLY one of `{"literal":
+    v}` (a caller-given constant, e.g. `because: "operator: done"`) or `{"property": p}`
+    (`row.get(p)` — a Function's row is already its own facts, no `_props` indirection
+    needed; a list-valued property, e.g. a thread-fold's own id list, passes through
+    unchanged — no separate bulk-arg primitive required).
+
+    REFUSES LOUDLY on either malformed shape, rather than picking a silent winner (Thoth
+    msg 1976): both keys present is almost certainly a copy-paste mistake with the wrong one
+    live, and a quiet precedence there is exactly the kind of bug that survives review
+    because the OTHER value looked plausible too. An unknown key is the same class of
+    mistake — a KeyError-shaped refusal now beats a None arg the verb accepts silently and
+    the operator only notices when the write does the wrong thing. Deliberately NOT shared
+    with `row_action`'s (singular) own inline resolution — that one is live in production
+    (89df464, browser-verified via 37af8b7) and stays untouched; only `row_actions` gets the
+    richer template."""
+    unknown = set(spec) - {"literal", "property"}
+    if unknown:
+        raise ValueError(f"row_actions arg spec has unknown key(s) {sorted(unknown)}: {spec!r}")
+    if "literal" in spec and "property" in spec:
+        raise ValueError(f"row_actions arg spec has BOTH literal and property — exactly "
+                         f"one is required: {spec!r}")
+    if "literal" in spec:
+        return spec["literal"]
+    if "property" in spec:
+        return row.get(str(spec["property"]))
+    raise ValueError(f"row_actions arg spec needs literal or property: {spec!r}")
 
 
 async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | None) -> Result:
@@ -2761,20 +2796,40 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         if isinstance(data, list) and all(isinstance(x, dict) for x in data):
             row_action = node.get("row_action")
             if row_action:
-                # SERVER HALF ONLY (msg 1952, gating msg 1950's proposal) — a Function's row
-                # is already its own facts, so this needs no `_props`/`_col_value`
-                # indirection the way `_table`'s object-backed version does: `row.get(
-                # property)` directly. The CLIENT half (table() recognizing `_action` as a
-                # control, not a column; a "run:" dispatch route) is deliberately NOT built
-                # here — frozen-file work, Thoth's to assign. Do not wire this into a real
-                # composition's own spec until that lands, or `_action` renders as a raw
-                # JSON blob (the exact bug this same finding caught on live-desk's rows).
+                # A Function's row is already its own facts, so this needs no `_props`/
+                # `_col_value` indirection the way `_table`'s object-backed version does:
+                # `row.get(property)` directly. The CLIENT half (table() recognizing
+                # `_action` as a control, a click-delegate POSTing to /act) shipped in
+                # 37af8b7 — browser-verified against live-desk's resolve button. The "run:"
+                # navigation dispatch stays unbuilt (a separate, deliberately out-of-scope
+                # need). SINGULAR only: one action, one property-templated arg each — see
+                # `row_actions` below for a row that affords more than one verb.
                 for row in data:
                     row["_action"] = {
                         "action": row_action.get("action"),
                         "args": {arg: row.get(str(spec.get("property")))
                                 for arg, spec in (row_action.get("args") or {}).items()},
                     }
+            row_actions = node.get("row_actions")
+            if row_actions:
+                # PLURAL, SERVER HALF ONLY (Thoth msg 1976, gating msg 1971's proposal) — a
+                # row that affords more than one verb (chrome.py's /desk: done/not mine/
+                # later, three DIFFERENT actions on one debt row) can't be expressed by
+                # `row_action`'s single `{action, args}`. `row_actions` is a list of
+                # {label, action, args}; each row gets `_actions: [...]`, one entry per
+                # declared verb. The CLIENT has no case for `_actions` (plural) yet — table()
+                # only renders a lone `_action` as a button — so DO NOT wire this into any
+                # saved composition's spec until that lands, same rule 89df464 already
+                # applied to the singular form: a declared control with no client renders as
+                # a raw JSON blob, which is worse than not shipping the control at all.
+                for row in data:
+                    row["_actions"] = [
+                        {"label": str(ra.get("label") or ra.get("action") or ""),
+                         "action": ra.get("action"),
+                         "args": {arg: _row_action_arg(row, spec)
+                                 for arg, spec in (ra.get("args") or {}).items()}}
+                        for ra in row_actions
+                    ]
             return Result("rows", rows=data)
         return Result("data", data=data)
 

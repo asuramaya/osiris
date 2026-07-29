@@ -5,6 +5,7 @@ becomes a saved, forkable spec the user owns. Also proves the ops and persistenc
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 from src.actions.core import Actions
@@ -1231,7 +1232,9 @@ async def test_desk_composition_end_to_end(actions: Actions) -> None:
 # ONLY. A Function's row is already its own facts, so args resolve via row.get(property)
 # directly, no `_props`/`_col_value` indirection the way `_table`'s object-backed version
 # needs. Not wired into any real composition's own saved spec yet — the client half
-# (table() recognizing `_action` as a control, a "run:" dispatch) isn't built.
+# (table() recognizing `_action` as a control, a "run:" dispatch) isn't built. UPDATE
+# (37af8b7): the singular client now IS built and browser-verified — see the row_actions
+# (plural) block below for what's still not.
 
 async def test_function_row_action_resolves_args_from_the_rows_own_keys(
     actions: Actions,
@@ -1274,3 +1277,119 @@ async def test_function_row_action_does_not_apply_to_dict_shaped_output(
     res = await run_composition(actions.pool, await _save(actions, "pulse-drill", spec))
     assert res["kind"] == "data"
     assert isinstance(res["items"], str)
+
+
+# --- row_actions (plural) on a `function` node (Thoth msg 1976, gating msg 1971's proposal)
+# — SERVER GRAMMAR ONLY. A row that affords more than one verb (chrome.py's /desk: done/not
+# mine/later, three DIFFERENT actions on one debt row) needs more than row_action's single
+# {action, args}. `row_actions` is a list of {label, action, args}; each row gets
+# `_actions: [...]`. Its own arg templates add `{"literal": v}` alongside `{"property": p}`
+# (via `_row_action_arg`) — refusing loudly on either malformed shape rather than picking a
+# silent winner. NOT wired into any saved composition's own spec — the client has no case
+# for `_actions` (plural) yet, same "don't arm a control with no client" discipline
+# row_action's own build (89df464) already followed for the singular form.
+
+async def test_function_row_actions_produces_a_labeled_action_list_per_row(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.mailbox import send_message
+
+    await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
+                       to_project="neo", body="a project lane message")
+
+    spec = {"op": "function", "name": "mail_overview",
+            "row_actions": [
+                {"label": "done", "action": "resolve_thread",
+                 "args": {"ref": {"property": "box"}, "because": {"literal": "operator: done"}}},
+                {"label": "later", "action": "defer_thread",
+                 "args": {"ref": {"property": "box"}, "days": {"literal": 30}}},
+            ]}
+    res = await run_composition(actions.pool, await _save(actions, "mail-triage", spec))
+    row = next(r for r in res["items"] if r["box"] == "neo")
+    assert row["_actions"] == [
+        {"label": "done", "action": "resolve_thread",
+         "args": {"ref": "neo", "because": "operator: done"}},
+        {"label": "later", "action": "defer_thread", "args": {"ref": "neo", "days": 30}},
+    ]
+
+
+async def test_function_row_actions_label_falls_back_to_the_action_name(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.mailbox import send_message
+
+    await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
+                       to_project="neo", body="a project lane message")
+
+    spec = {"op": "function", "name": "mail_overview",
+            "row_actions": [{"action": "resolve_thread", "args": {}}]}
+    res = await run_composition(actions.pool, await _save(actions, "mail-nolabel", spec))
+    row = next(r for r in res["items"] if r["box"] == "neo")
+    assert row["_actions"][0]["label"] == "resolve_thread"
+
+
+async def test_function_row_actions_is_absent_without_a_declared_row_actions(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.mailbox import send_message
+
+    await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
+                       to_project="neo", body="a project lane message")
+
+    spec = {"op": "function", "name": "mail_overview"}
+    res = await run_composition(actions.pool, await _save(actions, "mail-no-triage", spec))
+    assert all("_actions" not in r for r in res["items"])
+
+
+async def test_row_action_arg_resolves_a_literal_constant() -> None:
+    from src.orchestrator.compositions import _row_action_arg
+
+    assert _row_action_arg({"box": "neo"}, {"literal": "operator: done"}) == "operator: done"
+    assert _row_action_arg({"box": "neo"}, {"literal": 30}) == 30
+
+
+async def test_row_action_arg_resolves_a_property_lookup_including_list_values() -> None:
+    from src.orchestrator.compositions import _row_action_arg
+
+    row = {"box": "neo", "thread_folded_ids": [1, 2, 3]}
+    assert _row_action_arg(row, {"property": "box"}) == "neo"
+    # a list-valued property passes through unchanged — no separate bulk-arg primitive
+    assert _row_action_arg(row, {"property": "thread_folded_ids"}) == [1, 2, 3]
+
+
+async def test_row_action_arg_refuses_when_both_literal_and_property_are_given() -> None:
+    from src.orchestrator.compositions import _row_action_arg
+
+    with pytest.raises(ValueError, match="BOTH literal and property"):
+        _row_action_arg({"box": "neo"}, {"literal": "x", "property": "box"})
+
+
+async def test_row_action_arg_refuses_on_an_unknown_spec_key() -> None:
+    from src.orchestrator.compositions import _row_action_arg
+
+    with pytest.raises(ValueError, match="unknown key"):
+        _row_action_arg({"box": "neo"}, {"value": "box"})
+
+
+async def test_row_action_arg_refuses_on_an_empty_spec() -> None:
+    from src.orchestrator.compositions import _row_action_arg
+
+    with pytest.raises(ValueError, match="needs literal or property"):
+        _row_action_arg({"box": "neo"}, {})
+
+
+async def test_no_default_composition_arms_row_actions_yet() -> None:
+    """The client has no case for `_actions` (plural) yet — arming it in a real, saved
+    composition would render a raw JSON blob (msg 1976's own rule, applied to itself)."""
+
+    def _has_row_actions(node: Any) -> bool:
+        if isinstance(node, dict):
+            if "row_actions" in node:
+                return True
+            return any(_has_row_actions(v) for v in node.values())
+        if isinstance(node, list):
+            return any(_has_row_actions(v) for v in node)
+        return False
+
+    armed = [name for name, spec in DEFAULT_COMPOSITIONS.items() if _has_row_actions(spec)]
+    assert armed == []
