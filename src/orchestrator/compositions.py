@@ -77,6 +77,7 @@ from src.orchestrator.discrepancy import _HOME_PROPS, country_of
 from src.orchestrator.frontier import subject_report
 from src.orchestrator.monitor import match_condition
 from src.orchestrator.neighborhoods import NEIGHBORHOOD, neighborhoods_of
+from src.orchestrator.seats import _OPERATOR_ACTORS
 
 # Named pure transforms a `collect` op may apply to a value. Kept tiny and neutral —
 # `country` is the only domain helper, shared with the (soon-vestigial) discrepancy code.
@@ -197,18 +198,20 @@ _GRADE_W_PY = {"self_declared": 1.0, "authoritative_api": 0.95, "corroborated": 
 # every branch; run_spec sets it, _fn_search/_fn_lap fall back to it.
 
 _ACL_CALLER: ContextVar[str | None] = ContextVar("_ACL_CALLER", default=None)
-# the operator's own surfaces — the desk and the :8011 console self-identify as these
-_OPERATOR_CALLERS = {"operator", "console"}
 
 
 async def _caller_house(pool: asyncpg.Pool, caller: str | None) -> str | None:
     """The house a caller reads reflections as — a SECURITY-RELEVANT read (this gates
     cross-house reflection visibility, ruling ff6148b0): '*' for the operator's own
-    surfaces, None for an anonymous caller (reads NO reflections — an unmounted stranger
-    has no house), else the caller's seat house, falling back to its project label (most
-    projects are their own house). `held_seat`'s `house` is DERIVED (decision 4c9e4bd7) —
-    this inherits that fix for free, no query of its own."""
-    if caller in _OPERATOR_CALLERS:
+    surfaces (`seats._OPERATOR_ACTORS` — the ONE definition of "this actor is the
+    operator's own hand", shared with derive_house's house-anchor check and mintseat's
+    cross-house-mint guard; a second, locally-drifted copy here once excluded
+    'analyst:operator' — the API layer's own attribution string for the human's triage
+    clicks — task #82), None for an anonymous caller (reads NO reflections — an
+    unmounted stranger has no house), else the caller's seat house, falling back to its
+    project label (most projects are their own house). `held_seat`'s `house` is DERIVED
+    (decision 4c9e4bd7) — this inherits that fix for free, no query of its own."""
+    if caller in _OPERATOR_ACTORS:
         return "*"
     if not caller:
         return None

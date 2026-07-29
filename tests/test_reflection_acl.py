@@ -47,7 +47,7 @@ async def test_reflections_are_house_scoped_in_search(actions: Actions) -> None:
     assert not any(h["type"] == "Reflection" for h in away["hits"])
     anon = await _search(actions, "ache successions", None)
     assert not any(h["type"] == "Reflection" for h in anon["hits"])
-    for surface in ("operator", "console"):
+    for surface in ("operator", "console", "analyst:operator"):
         seen = await _search(actions, "ache successions", surface)
         assert any(h["type"] == "Reflection" for h in seen["hits"])
 

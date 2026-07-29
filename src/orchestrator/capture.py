@@ -109,7 +109,12 @@ async def record_decision(
     records WHICH instance decided (still SELF_DECLARED, still the high-trust channel).
     `grounds` cites the Reference objects the decision rests on — `grounded_by` edges
     minted AT BIRTH, so the citation carries the decider's grade instead of being
-    reconstructed later from prose. Idempotent on the summary hash. Returns the id.
+    reconstructed later from prose. Idempotent on the summary hash — AND, when `repo` is
+    given, on a near-duplicate reword of it too (thread af77073a, Thoth's own retry-after-
+    ambiguous-failure bug: a rejected-but-actually-committed call, retried with the summary
+    reworded by one word, minted a twin). `find_near_duplicate_decision` runs first; a hit
+    reuses that LIVE decision's id instead of minting, exactly as `find_near_duplicate_open_
+    thread` does for threads. Returns the id.
 
     `supersedes` BURIES an earlier decision under this one (the operator's ruling
     dd04d7dd, Tjmax III's ask): the old decision is stamped superseded_by/-because —
@@ -162,10 +167,17 @@ async def record_decision(
             raise ValueError(f"resolves matched no thread: {resolves!r} — quote its UUID, "
                              "8-char short id, or a summary substring")
         answered.append(single)
+    # The near-dup lookup, like `_find_decision`/`_find_thread` just above, reads OUTSIDE the
+    # write transaction — a pre-check, not a locked decision. On a hit, `d` below reuses that
+    # LIVE decision instead of minting a twin; everything else (kind/rationale/protocol/repo/
+    # grounds/supersedes/resolves) still runs exactly as it would for a freshly-minted one —
+    # only the OBJECT ITSELF is deduped, never the structural side effects a caller depends on.
+    dup = await find_near_duplicate_decision(actions.pool, summary, repo=repo) if repo else None
     # ONE transaction: the Decision, its summary/kind/rationale, and the repo link either all
     # land or none do — a process death mid-sequence can no longer leave a summary-less husk.
     async with actions.atomic() as a:
-        d = await a.create_or_find_object("Decision", _canon("decision", summary), source)
+        d = dup if dup is not None else await a.create_or_find_object(
+            "Decision", _canon("decision", summary), source)
         await a.assert_property(d, "summary", summary, source, observed, _CONF,
                                 evidence_class=_EC)
         await a.assert_property(d, "kind", kind, source, observed, _CONF,
@@ -437,10 +449,16 @@ async def ingest_reference(
     return ref, canon
 
 
-# THE OPEN-THREAD DEDUP (two field witnesses, Aegis and Maat): the same fact got minted
-# TWICE across a lineage restart because the summary differed slightly the second telling —
-# `_canon`'s exact-hash idempotency only catches a byte-identical repeat. Conservative on
-# purpose: a false merge silently drops testimony (worse than a duplicate a human can fold).
+# THE NEAR-DUPLICATE DEDUP (three field witnesses now: Aegis and Maat on threads, Thoth on
+# decisions — thread af77073a): the same fact gets minted TWICE across a retry or a lineage
+# restart because the summary differed slightly the second telling — `_canon`'s exact-hash
+# idempotency only catches a byte-identical repeat. Thoth's own case: a record_decision came
+# back REJECTED after it had already committed server-side; the natural retry minted a twin
+# because the two summaries differed by one word ("— order is load-bearing" vs "— the order
+# is load-bearing"), buried by hand afterward (c30df5de superseded_by 5c2fa5aa). Shared by
+# `find_near_duplicate_open_thread` (threads) and `find_near_duplicate_decision` (decisions,
+# below) — one algorithm, one threshold, two mint sites. Conservative on purpose: a false
+# merge silently drops testimony (worse than a duplicate a human can fold).
 _DEDUP_SIM = 0.60  # first-pass estimate (no live desk to measure against, unlike mailbox.py's
                     # calibrated 0.30 "same story" bar) — recalibrate if it over/under-fires.
 
@@ -507,6 +525,61 @@ async def find_near_duplicate_open_thread(
         ratio = SequenceMatcher(None, norm_new, _normalize_for_dedup(cand)).ratio()
         if ratio > best_ratio:
             best_id, best_ratio = tid, ratio
+    return uuid.UUID(str(best_id)) if best_id is not None and best_ratio > _DEDUP_SIM else None
+
+
+async def find_near_duplicate_decision(
+    pool: asyncpg.Pool, summary: str, *, repo: str | None,
+) -> uuid.UUID | None:
+    """An existing LIVE Decision on this project that is the SAME ruling as `summary`,
+    reworded — or None. `record_decision` checks this BEFORE minting (mirrors
+    `find_near_duplicate_open_thread`'s shape exactly, same normalized-exact-then-similarity
+    cascade, same `_DEDUP_SIM` bar): a normalized exact match first, then a conservative
+    similarity check over that project's LIVE decisions — pg_trgm when available, else the
+    Python-side ratio fallback. `repo`-scoped only, like the thread guard — no safe scope to
+    dedup against fleet-wide, so it stands down when `repo` is absent. LIVE excludes a
+    decision that has since been superseded (a buried ruling is a different fact now — the
+    correction — same exclusion shape as the thread guard's 'resolved is never a target').
+    Unlike the thread guard, this is NOT the whole defense: `record_decision` still runs
+    `supersedes`/`resolves` in full regardless of a hit, so a structural side effect a
+    retry depends on is never swallowed by the dedup — only the OBJECT ITSELF is reused."""
+    if not repo:
+        return None
+    proj = await _resolve_repo(pool, repo.removeprefix("repo:").strip())
+    if proj is None:
+        return None
+    rows = await pool.fetch(
+        "SELECT o.id, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS summary "
+        "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+        "WHERE o.type='Decision' AND o.merged_into IS NULL AND o.status='active' "
+        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "   WHERE a.object_id=o.id AND a.name='superseded_by' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'')=''",
+        proj)
+    candidates = [(r["id"], r["summary"]) for r in rows if r["summary"]]
+    if not candidates:
+        return None
+    norm_new = _normalize_for_dedup(summary)
+    for did, cand in candidates:
+        if _normalize_for_dedup(cand) == norm_new:
+            return uuid.UUID(str(did))
+    if await _pg_trgm_enabled(pool):
+        ids = [did for did, _ in candidates]
+        bodies = [cand for _, cand in candidates]
+        hit = await pool.fetchval(
+            "WITH b AS (SELECT unnest($1::uuid[]) AS id, unnest($2::text[]) AS body) "
+            "SELECT id FROM b WHERE similarity(body, $3) > $4 "
+            "ORDER BY similarity(body, $3) DESC LIMIT 1",
+            ids, bodies, summary, _DEDUP_SIM)
+        return uuid.UUID(str(hit)) if hit is not None else None
+    best_id, best_ratio = None, 0.0
+    for did, cand in candidates:
+        ratio = SequenceMatcher(None, norm_new, _normalize_for_dedup(cand)).ratio()
+        if ratio > best_ratio:
+            best_id, best_ratio = did, ratio
     return uuid.UUID(str(best_id)) if best_id is not None and best_ratio > _DEDUP_SIM else None
 
 

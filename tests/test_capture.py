@@ -15,6 +15,7 @@ from src.actions.core import Actions
 from src.ingest.mined import consolidate_memory
 from src.mcp_server import _project_briefing
 from src.orchestrator.capture import (
+    find_near_duplicate_decision,
     find_near_duplicate_open_thread,
     link_repo,
     measurement_smell,
@@ -165,6 +166,90 @@ async def test_a_resolved_thread_is_never_a_dedup_target(actions: Actions) -> No
     await resolve_thread(actions, summary, because="shipped")
     assert await find_near_duplicate_open_thread(
         actions.pool, summary, repo="dedupproj") is None
+
+
+async def test_a_reworded_decision_dedups_to_the_existing_live_decision(
+    actions: Actions,
+) -> None:
+    """Thoth's own bug (thread af77073a): a record_decision came back REJECTED after it had
+    already committed server-side; the retry reworded the summary by one word and minted a
+    twin. The near-dup guard must catch that one-word reword and resolve to the FIRST
+    decision's id, never a twin — same shape as the thread guard's own dedup test."""
+    d = await record_decision(actions, "order is load-bearing — never reorder the steps",
+                              repo="dedupproj")
+    hit = await find_near_duplicate_decision(
+        actions.pool, "order is load-bearing — never reorder these steps", repo="dedupproj")
+    assert hit == d
+
+
+async def test_an_unrelated_decision_summary_is_never_a_false_merge(
+    actions: Actions,
+) -> None:
+    """Conservative on purpose, same bar as the thread guard: a genuinely different ruling
+    on the same project must NOT dedup — a false merge silently drops testimony."""
+    await record_decision(actions, "order is load-bearing — never reorder the steps",
+                          repo="dedupproj")
+    hit = await find_near_duplicate_decision(
+        actions.pool, "the statusline flaps unreachable under load", repo="dedupproj")
+    assert hit is None
+
+
+async def test_decision_dedup_never_crosses_a_project_boundary(actions: Actions) -> None:
+    """No `repo` (or a DIFFERENT one) is no safe scope to dedup against — an exact
+    restatement filed under a different project, or with none at all, must still mint."""
+    await record_decision(actions, "order is load-bearing — never reorder the steps",
+                          repo="dedupproj")
+    assert await find_near_duplicate_decision(
+        actions.pool, "order is load-bearing — never reorder the steps",
+        repo="otherproj") is None
+    assert await find_near_duplicate_decision(
+        actions.pool, "order is load-bearing — never reorder the steps", repo=None) is None
+
+
+async def test_a_superseded_decision_is_never_a_dedup_target(actions: Actions) -> None:
+    """A buried ruling is a different fact now — the correction — so a fresh telling of the
+    old words must mint (or match the successor), never quietly reattach to the loser."""
+    summary = "order is load-bearing — never reorder the steps"
+    d = await record_decision(actions, summary, repo="dedupproj")
+    await record_decision(actions, "actually, order does not matter here",
+                          repo="dedupproj", supersedes=str(d))
+    assert await find_near_duplicate_decision(
+        actions.pool, summary, repo="dedupproj") is None
+
+
+async def test_record_decision_reuses_the_near_dup_object_not_a_twin(
+    actions: Actions,
+) -> None:
+    """The guard wired into `record_decision` itself, not just the bare finder: a retry with
+    a one-word reword under the same repo must land on the SAME object — count stays 1."""
+    d1 = await record_decision(actions, "order is load-bearing — never reorder the steps",
+                               repo="dedupproj")
+    d2 = await record_decision(actions, "order is load-bearing — never reorder these steps",
+                               repo="dedupproj")
+    assert d1 == d2
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Decision'") == 1
+
+
+async def test_record_decision_still_runs_supersedes_through_a_dedup_hit(
+    actions: Actions,
+) -> None:
+    """The near-dup guard reuses the OBJECT, never swallows a structural side effect: even
+    when this call's own summary near-dups an unrelated existing decision, `supersedes`
+    must still bury its named target — a genuinely new ruling must never be silently
+    dropped just because its wording resembles something else on the wall."""
+    target = await record_decision(actions, "the old onboarding flow is retired",
+                                   repo="dedupproj")
+    near = await record_decision(actions, "order is load-bearing — never reorder the steps",
+                                 repo="dedupproj")
+    again = await record_decision(
+        actions, "order is load-bearing — never reorder these steps",
+        repo="dedupproj", supersedes=str(target))
+    assert again == near  # still deduped onto the near-identical live decision
+    superseded_by = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "WHERE a.object_id=$1 AND a.name='superseded_by'", target)
+    assert superseded_by == str(near)  # the supersede still landed, on the deduped object
 
 
 async def test_pg_trgm_is_enabled_in_this_database(actions: Actions) -> None:
