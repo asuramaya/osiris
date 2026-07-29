@@ -1155,6 +1155,100 @@ async def test_manager_of_seat_none_when_unmanaged(actions: Actions) -> None:
     assert await manager_of_seat(actions.pool, "seat:mos2cccc") is None
 
 
+# ═══ RESOLVE_PROJECT (ruling 577988ed, hoisted msg 1888) — the ONE project resolver every
+# reader (mount, the stop hook, census) now funnels through, replacing four hand-rolled
+# `Path(cwd).name` copies that could mint a phantom "seats" project. ═══════════
+
+async def test_resolve_project_a_seated_agent_gets_its_house_not_the_cwd(
+    actions: Actions,
+) -> None:
+    """The core contract: a seated agent's project is its seat's derived house,
+    unconditionally — cwd is irrelevant when a real seat backs the agent."""
+    from src.orchestrator.seats import bind_holder, resolve_project
+
+    head = await actions.create_or_find_object("Seat", "seat:rp1head0", "test")
+    await actions.assert_property(head, "house", "osiris", "test", datetime.now(UTC), 0.9)
+    worker = await actions.create_or_find_object("Seat", "seat:rp1wrk00", "test")
+    await _link_managed_by(actions, worker, head)
+    await actions.create_or_find_object("Agent", "agent:rp1aaaa0", "test")
+    await bind_holder(actions, seat_id="seat:rp1wrk00", agent_id="agent:rp1aaaa0")
+
+    assert await resolve_project(
+        actions.pool, "agent:rp1aaaa0", "/some/unrelated/path") == "osiris"
+
+
+async def test_resolve_project_a_seated_agent_in_its_own_office_gets_the_house_not_the_handle(
+    actions: Actions,
+) -> None:
+    """THE LITERAL GUARD (msg 1888): `~/.osiris/seats/<handle>` must resolve to the seat's
+    HOUSE, not the handle basename — exactly the shape a caller sees when cwd IS the
+    agent's own office directory."""
+    from src.orchestrator.seats import bind_holder, resolve_project
+
+    head = await actions.create_or_find_object("Seat", "seat:rp2head0", "test")
+    await actions.assert_property(head, "house", "osiris", "test", datetime.now(UTC), 0.9)
+    worker = await actions.create_or_find_object("Seat", "seat:rp2wrk00", "test")
+    await _link_managed_by(actions, worker, head)
+    await actions.create_or_find_object("Agent", "agent:rp2aaaa0", "test")
+    await bind_holder(actions, seat_id="seat:rp2wrk00", agent_id="agent:rp2aaaa0")
+
+    office_cwd = str(Path.home() / ".osiris" / "seats" / "somehandle")
+    assert await resolve_project(actions.pool, "agent:rp2aaaa0", office_cwd) == "osiris"
+
+
+async def test_resolve_project_an_unseated_agent_at_the_bare_office_root_refuses(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE LIVE SPECIMEN (Thoth, msg 1888): an agent with no seat at all, sitting at the
+    bare container root, must never mint the phantom "seats" — refuse (None), same honesty
+    resolve_identity already keeps for the identical cwd."""
+    from src.orchestrator.seats import resolve_project
+
+    fake_root = tmp_path / ".osiris" / "seats"
+    fake_root.mkdir(parents=True)
+    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", fake_root)
+    await actions.create_or_find_object("Agent", "agent:rp3aaaa0", "test")
+
+    assert await resolve_project(actions.pool, "agent:rp3aaaa0", str(fake_root)) is None
+
+
+async def test_resolve_project_an_unseated_agent_falls_back_to_an_ordinary_cwd_guess(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """No seat, no office-root hazard — an ordinary repo cwd guesses its basename exactly
+    like resolve_identity's own cwd fold, the fallback this function exists to preserve."""
+    from src.orchestrator.seats import resolve_project
+
+    repo = tmp_path / "some-repo"
+    repo.mkdir()
+    await actions.create_or_find_object("Agent", "agent:rp4aaaa0", "test")
+
+    assert await resolve_project(actions.pool, "agent:rp4aaaa0", str(repo)) == "some-repo"
+
+
+async def test_resolve_project_an_unseated_agent_honors_the_osiris_pin_over_the_basename(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.seats import resolve_project
+
+    repo = tmp_path / "renamed-folder"
+    repo.mkdir()
+    (repo / ".osiris").write_text('project = "pinnedname"\n')
+    await actions.create_or_find_object("Agent", "agent:rp5aaaa0", "test")
+
+    assert await resolve_project(actions.pool, "agent:rp5aaaa0", str(repo)) == "pinnedname"
+
+
+async def test_resolve_project_an_unseated_agent_with_no_cwd_at_all_is_none(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import resolve_project
+
+    await actions.create_or_find_object("Agent", "agent:rp6aaaa0", "test")
+
+    assert await resolve_project(actions.pool, "agent:rp6aaaa0", None) is None
+
+
 # ═══ DERIVE_HOUSE (ruling ff6148b0, decision 4c9e4bd7) — house is DERIVED off the managed_by
 # chain to the head, never a stored snapshot that drifts (Alfred's legacy bytebye, Vajra's
 # twin house=vajra). The head's own stored house is the one legitimate anchor. ═══════════

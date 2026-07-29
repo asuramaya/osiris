@@ -335,6 +335,117 @@ async def test_resolve_identity_none_outside_any_office(
     assert identity is None
 
 
+# ═══════════ THE PROJECT RESOLUTION FIX (msg 1888) — the live specimen: Thoth's own turn,
+# cwd the bare seat-office CONTAINER, basename-guessed "seats", a phantom project. This
+# wasn't just a wrong label: `_deliverable`'s own broadcast-mail clause (`m.to_project=$2`)
+# silently MISSED real mail addressed to the seat's actual house. ═══════════
+
+async def test_deliverable_resolves_the_real_house_not_the_container_basename(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
+) -> None:
+    """THE LIVE SPECIMEN, exactly: a seated agent sitting at the bare office root resolves
+    its house through the seat, never the basename "seats"."""
+    monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    fake_root = tmp_path / ".osiris" / "seats"
+    fake_root.mkdir(parents=True)
+    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", fake_root)
+
+    agent, worker_seat = "agent:dlv10001", "seat:dlv10001"
+    head = await actions.create_or_find_object("Seat", "seat:dlv1head", "test")
+    await actions.assert_property(head, "house", "osiris", "test", datetime.now(UTC), 0.9)
+    worker = await actions.create_or_find_object("Seat", worker_seat, "test")
+    await actions.create_link(worker, head, "managed_by", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+    await actions.create_or_find_object("Agent", agent, agent)
+    await bind_holder(actions, seat_id=worker_seat, agent_id=agent)
+    job_dir = str(tmp_path / "jobs" / "dlv10001")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="seats",
+                     cwd=str(fake_root), model=None, session_key=None)
+    sid = "dlv10001-0000-4000-8000-000000000000"
+
+    n, senders, window, bands, project = await stophook._deliverable(str(fake_root), sid)
+    assert project == "osiris"
+
+
+async def test_deliverable_no_longer_blind_to_broadcast_mail_from_the_container_root(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
+) -> None:
+    """THE ACTUAL DEFECT, not just cosmetics (msg 1888: "worse than the read"): under the
+    old `Path(cwd).name` fallback, this session's resolved project ("seats") never matched
+    a broadcast sent `to_project="osiris"` — real mail sat undelivered. Fixed, the broadcast
+    is now found."""
+    monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    fake_root = tmp_path / ".osiris" / "seats"
+    fake_root.mkdir(parents=True)
+    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", fake_root)
+
+    agent, worker_seat = "agent:dlv20001", "seat:dlv20001"
+    head = await actions.create_or_find_object("Seat", "seat:dlv2head", "test")
+    await actions.assert_property(head, "house", "osiris", "test", datetime.now(UTC), 0.9)
+    worker = await actions.create_or_find_object("Seat", worker_seat, "test")
+    await actions.create_link(worker, head, "managed_by", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+    await actions.create_or_find_object("Agent", agent, agent)
+    await bind_holder(actions, seat_id=worker_seat, agent_id=agent)
+    job_dir = str(tmp_path / "jobs" / "dlv20001")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="seats",
+                     cwd=str(fake_root), model=None, session_key=None)
+    sid = "dlv20001-0000-4000-8000-000000000000"
+    await send_message(actions.pool, from_agent="agent:someoneelse", from_project="osiris",
+                       to_project="osiris", body="a real broadcast for the house", grade="fyi")
+
+    n, senders, window, bands, project = await stophook._deliverable(str(fake_root), sid)
+    assert n == 1
+    assert project == "osiris"
+
+
+async def test_stage_a_confession_from_project_is_the_house_not_the_container_basename(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
+) -> None:
+    """The write side of the same fix: a confession sent from the bare office root stamps
+    the real house on `from_project`, never the phantom "seats" (osiris_stophook.py's
+    former `send_message(..., from_project=Path(cwd).name, ...)`)."""
+    monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    fake_root = tmp_path / ".osiris" / "seats"
+    fake_root.mkdir(parents=True)
+    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", fake_root)
+
+    worker_agent, worker_seat = "agent:dlv30001", "seat:dlv30001"
+    manager_agent, manager_seat = "agent:dlv3mgr1", "seat:dlv3mgr1"
+    worker_obj = await actions.create_or_find_object("Seat", worker_seat, worker_agent)
+    manager_obj = await actions.create_or_find_object("Seat", manager_seat, manager_agent)
+    now = datetime.now(UTC)
+    await actions.assert_property(worker_obj, "handle", "dlv3worker", worker_agent, now,
+                                  0.9, evidence_class="self_declared")
+    # the manager IS the house-bearing head here (a single managed_by hop) — a seat has
+    # exactly one active manager; splitting "who to confess to" from "where the house
+    # derives" would need a second hop, not a second link off the same worker
+    await actions.assert_property(manager_obj, "house", "osiris", "test", now, 0.9)
+    await actions.create_link(worker_obj, manager_obj, "managed_by", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await bind_holder(actions, seat_id=worker_seat, agent_id=worker_agent)
+
+    transcript = tmp_path / "t3.jsonl"
+    _write_transcript(
+        transcript,
+        {"type": "assistant", "isSidechain": False,
+         "message": {"content": "Want me to proceed straight into that now?"}},
+    )
+    job_dir = str(tmp_path / "jobs" / "dlv30001")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=worker_agent, project="seats",
+                     cwd=str(fake_root), model=None, session_key=None)
+    sid = "dlv30001-0000-4000-8000-000000000000"
+
+    await stophook._stage_a_async(
+        {"cwd": str(fake_root), "session_id": sid, "transcript_path": str(transcript)})
+    row = await actions.pool.fetchrow(
+        "SELECT from_project FROM fleet_messages ORDER BY id DESC LIMIT 1")
+    assert row["from_project"] == "osiris"
+
+
 # ═══════════ THE LEASE, THE MANAGER, THE GAP ═══════════
 
 async def test_leased_assignment_finds_the_open_obligation_owned_by_my_seat(
@@ -353,18 +464,10 @@ async def test_leased_assignment_none_when_nothing_is_open_for_me(actions: Actio
         actions.pool, "seat:ffff0001", "agent:ffff0001") is None
 
 
-async def test_manager_seat_resolves_the_managed_by_link(actions: Actions) -> None:
-    worker = await actions.create_or_find_object("Seat", "seat:1111aaaa", "test")
-    manager = await actions.create_or_find_object("Seat", "seat:2222bbbb", "test")
-    now = datetime.now(UTC)
-    await actions.create_link(worker, manager, "managed_by", "test", now, 0.9,
-                              evidence_class="self_declared")
-    assert await stophook._manager_seat(actions.pool, "seat:1111aaaa") == "seat:2222bbbb"
-
-
-async def test_manager_seat_none_when_unmanaged(actions: Actions) -> None:
-    await actions.create_or_find_object("Seat", "seat:3333cccc", "test")
-    assert await stophook._manager_seat(actions.pool, "seat:3333cccc") is None
+# _manager_seat's own duplicate query is GONE (msg 1888) — the hook now calls
+# seats.manager_of_seat directly, already covered by
+# test_manager_of_seat_resolves_the_managed_by_link / test_manager_of_seat_none_when_unmanaged
+# in test_seats.py; no separate hook-local copy left to test here.
 
 
 async def test_mail_gap_reads_both_directions(actions: Actions) -> None:

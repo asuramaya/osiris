@@ -45,6 +45,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from src.orchestrator.agents import read_project_label
+from src.orchestrator.offices import is_bare_office_root
 
 PgrepFn = Callable[[], "list[int] | None"]
 ReadFn = Callable[[int], "str | None"]
@@ -130,6 +131,15 @@ def live_bodies(
             continue
         cwd = read_cwd(pid)
         if not cwd:
+            continue
+        # THE BARE OFFICE ROOT (msg 1888): a body sitting at ~/.osiris/seats itself has no
+        # `.osiris` pin and no single project of its own — the old unconditional basename
+        # fallback minted the literal phantom "seats" here (Thoth's live specimen: fleet()
+        # reporting "seats — 0 live · 3 sessions · 2 os bodies"). Skip it, same as
+        # resolve_identity stays honestly unresolved from cwd rather than inventing one —
+        # this pure OS census has no agent_id to resolve the real project through its seat
+        # (that's seats.resolve_project's job), so dropping the pid beats mis-tallying it.
+        if is_bare_office_root(cwd):
             continue
         project = read_project_label(cwd) or Path(cwd).name
         out[project].append(pid)

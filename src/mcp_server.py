@@ -474,21 +474,28 @@ async def _resolve_project_seat_first(pool: asyncpg.Pool, ident: AgentIdentity) 
     """IDENTITY IS LOCATION-INDEPENDENT (operator ruling 577988ed, correcting mount-guard #6's
     original refusal): osiris orients from the SEAT (anchor→holds→seat), never from cwd — the
     whole point of a seat is that where a session happens to be sitting doesn't matter. For a
-    SEATED session, project is the SEAT'S OWN derived house (held_seat, which already sources
-    from derive_house — ruling ff6148b0) — UNCONDITIONALLY, overriding whatever cwd produced,
-    not merely filling in a gap when cwd came up empty. Deliberately NOT house_of(agent_id):
-    that reads the AGENT's own project stamp, exactly what a transient bad mount can pollute
-    (Thoth's own case) — trusting it here would let a polluted stamp go on leaking into every
-    read, the very thing this function exists to stop. An UNSEATED session (no holds binding
-    yet — nothing to trust but its own resolution) keeps whatever cwd produced, None included;
-    that's an honest 'not mounted to a definite project', not an error. Mutates `ident` in
-    place; call AFTER register_agent (the write gate must still see the FRESH cwd-derived
-    value, unclobbered — a legitimate cwd-derived project still gets asserted for a session
-    that isn't seated yet)."""
-    from src.orchestrator.seats import held_seat
-    seat = await held_seat(pool, ident.agent_id)
-    if seat and seat.get("house"):
-        ident.project = seat["house"]
+    SEATED session, project is the SEAT'S OWN derived house — UNCONDITIONALLY, overriding
+    whatever cwd produced, not merely filling in a gap when cwd came up empty. Deliberately
+    NOT house_of(agent_id): that reads the AGENT's own project stamp, exactly what a
+    transient bad mount can pollute (Thoth's own case) — trusting it here would let a
+    polluted stamp go on leaking into every read, the very thing this function exists to
+    stop. An UNSEATED session (no holds binding yet — nothing to trust but its own
+    resolution) keeps whatever cwd produced, None included; that's an honest 'not mounted to
+    a definite project', not an error. Mutates `ident` in place; call AFTER register_agent
+    (the write gate must still see the FRESH cwd-derived value, unclobbered — a legitimate
+    cwd-derived project still gets asserted for a session that isn't seated yet).
+
+    A thin wrapper (msg 1888, the mount/project-resolution pollution build) around
+    `seats._seated_house` — the SAME seat-first check `seats.resolve_project` (the shared
+    resolver the stop hook and census now use) leads with. Deliberately not the full
+    `resolve_project`: its cwd-guessing fallback is for callers with no cwd-derived answer
+    of their own; mount() already has one, fresh off `resolve_identity` moments earlier in
+    this same pipeline, and it must win untouched when this comes up unseated — recomputing
+    a second, independent cwd guess here could disagree with it."""
+    from src.orchestrator.seats import _seated_house
+    house = await _seated_house(pool, ident.agent_id)
+    if house is not None:
+        ident.project = house
 
 
 async def _reattach(

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from src.orchestrator.census import live_bodies
 
 
@@ -48,6 +49,30 @@ def test_two_bodies_in_one_project_both_count(tmp_path: Path) -> None:
                       read_cwd={1: str(d), 2: str(d)}.get,
                       read_exe={1: _versions_exe(), 2: _versions_exe("2.1.209")}.get)
     assert out == {"shared": [1, 2]}
+
+
+def test_the_bare_office_root_is_dropped_never_a_phantom_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A body sitting at the bare seat-office CONTAINER (~/.osiris/seats itself, never a
+    project) must never be tallied under the literal string "seats" (Thoth's live specimen,
+    msg 1888: fleet() reported "seats — 0 live · 3 sessions · 2 os bodies"). This census has
+    no agent_id to resolve the real project through the seat — it drops the pid instead of
+    mis-tallying it, same honesty resolve_identity already keeps for the exact same cwd."""
+    import src.orchestrator.census as census_mod
+
+    fake_root = tmp_path / ".osiris" / "seats"
+    fake_root.mkdir(parents=True)
+    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", fake_root)
+
+    real_office = fake_root / "someseat"
+    real_office.mkdir()
+    cwds = {11: str(fake_root), 22: str(real_office)}
+    exes = {11: _versions_exe(), 22: _versions_exe()}
+
+    out = census_mod.live_bodies(pgrep=lambda: [11, 22], read_cwd=cwds.get, read_exe=exes.get)
+
+    assert out == {"someseat": [22]}  # the container's own body is dropped, not "seats": [11]
 
 
 def test_an_exe_that_is_not_the_claude_binary_is_refused(tmp_path: Path) -> None:

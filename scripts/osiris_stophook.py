@@ -50,17 +50,24 @@ STOP_GRACE_SECS = 3600
 
 
 async def _deliverable(
-    project: str, session_id: str,
-) -> tuple[int, list[str], int | None, dict[str, int]]:
-    """(deliverable mail count, its senders, KNOWN window size or None, grade bands) for
-    THIS session — mail mirrors mailbox.unread_count exactly (per-recipient, migration
-    0021); the window comes from the mount row's context_window_size, stamped by the
-    chrome from the harness's own accounting. An unmounted session has no inbox →
-    (0, [], None, {}). The SENDERS ride along because a notification that omits them
-    forces a read to discover whether a read was warranted (Metron V, msg 444) — and the
-    GRADE BANDS ride for the same reason (thread f9449d8d: an FYI wearing a duty's
-    authority teaches the reader to skim, and a skimmed mailbox is lost; the nag says
-    which of the pile actually asks something, without guessing the ungraded)."""
+    cwd: str, session_id: str,
+) -> tuple[int, list[str], int | None, dict[str, int], str | None]:
+    """(deliverable mail count, its senders, KNOWN window size or None, grade bands, the
+    RESOLVED project) for THIS session — mail mirrors mailbox.unread_count exactly (per-
+    recipient, migration 0021); the window comes from the mount row's context_window_size,
+    stamped by the chrome from the harness's own accounting. An unmounted session has no
+    inbox → (0, [], None, {}, None). The SENDERS ride along because a notification that
+    omits them forces a read to discover whether a read was warranted (Metron V, msg 444) —
+    and the GRADE BANDS ride for the same reason (thread f9449d8d: an FYI wearing a duty's
+    authority teaches the reader to skim, and a skimmed mailbox is lost; the nag says which
+    of the pile actually asks something, without guessing the ungraded).
+
+    THE PROJECT is now `seats.resolve_project` (msg 1888), never a bare `Path(cwd).name` —
+    the old hand-rolled basename was more than cosmetic: a session sitting at the bare
+    seat-office CONTAINER guessed "seats" and MISSED every real broadcast mail addressed to
+    its actual house (`m.to_project=$2` below), a mail-blindness bug, not just a wrong label
+    in the block reason. Resolved here (not by the caller) so it rides the SAME connection
+    and agent_id lookup, one round trip, not two."""
     import asyncpg
 
     conn = await asyncpg.connect(DSN, timeout=1.0)
@@ -69,12 +76,14 @@ async def _deliverable(
         # inline anchor-name match was the mail arc's silent half: a re-anchored window
         # was never nagged, so its mail sat while the session lived
         from src.orchestrator.mounts import find_session_row
+        from src.orchestrator.seats import resolve_project
         row = await find_session_row(conn, session_id or "")
         if row is None or not row["agent_id"]:
             # (the old `return 0, None` here was a 2-tuple against a 3-tuple signature —
             # the unmounted path "worked" only because the caller's fail-open ate the
             # unpack error; now it declines honestly)
-            return 0, [], None, {}
+            return 0, [], None, {}, None
+        project = await resolve_project(conn, str(row["agent_id"]), cwd)
         # `m.from_agent <> $1` on the broadcast leg: THE SELF-ECHO (Metron V, msgs 444/446) —
         # without it this hook BLOCKED a turn to make an agent read its own outbound, six
         # times in one night. Mirrors mailbox._DELIVERABLE_TO_READER; keep them in step —
@@ -104,7 +113,7 @@ async def _deliverable(
         senders = [s for s in (n_row["senders"] or []) if s] if n_row else []
         bands = ({"ask": int(n_row["asks"] or 0), "fyi": int(n_row["fyis"] or 0)}
                  if n_row else {})
-        return n, senders, row["context_window_size"], bands
+        return n, senders, row["context_window_size"], bands, project
     finally:
         await conn.close()
 
@@ -386,15 +395,6 @@ async def _leased_assignment(
     return {"id": row["id"], "summary": row["summary"]} if row is not None else None
 
 
-async def _manager_seat(conn: Any, seat_id: str) -> str | None:
-    return await conn.fetchval(  # type: ignore[no-any-return]
-        "SELECT t.canonical FROM links l JOIN objects f ON f.id=l.from_id "
-        "JOIN objects t ON t.id=l.to_id WHERE f.canonical=$1 AND l.type='managed_by' "
-        "AND t.type='Seat' AND t.status='active' "
-        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
-        "ORDER BY l.first_seen DESC LIMIT 1", seat_id)
-
-
 async def _mail_gap(
     conn: Any, my_seat: str, manager_seat: str, agent_id: str,
 ) -> tuple[datetime | None, datetime | None]:
@@ -531,7 +531,8 @@ async def _assert_context_pct(agent_id: str, pct: int) -> None:
 
 
 async def _confess_if_parked(
-    conn: Any, *, payload: dict[str, Any], agent_id: str, cwd: str, manager_seat: str,
+    conn: Any, *, payload: dict[str, Any], agent_id: str, project: str | None,
+    manager_seat: str,
 ) -> None:
     """STAGE B (thread 3c4fe1dc): DETECTION ONLY, no actuation — the operator caught a
     spawned body complete its intake correctly, then stall on 'Want me to proceed straight
@@ -539,7 +540,11 @@ async def _confess_if_parked(
     own stop confession already proves out — a courtesy fyi DM to the manager — rather than
     a new graph property nobody reads (state='pending' has had zero readers since Stage A
     shipped; this doesn't repeat that gap). Never pokes a PTY: auto-continuation is future,
-    operator-gated work paired with the reaper class (Thoth, DM 1644), not this leg."""
+    operator-gated work paired with the reaper class (Thoth, DM 1644), not this leg.
+
+    `project` is the CALLER's already-resolved `seats.resolve_project` result (msg 1888) —
+    never re-derived here from cwd, which used to mint the "seats" phantom onto real mail
+    (osiris_stophook.py's own former `Path(cwd).name`)."""
     text = _last_assistant_text(str(payload.get("transcript_path") or ""))
     if not _parked_on_a_question(text) or await _sent_a_real_ask(conn, agent_id):
         return
@@ -547,7 +552,7 @@ async def _confess_if_parked(
     q = text.strip().splitlines()[-1].strip()[-200:]
     from src.orchestrator.mailbox import send_message
     await send_message(
-        conn, from_agent=agent_id, from_project=Path(cwd).name, to_agent=manager_seat,
+        conn, from_agent=agent_id, from_project=project, to_agent=manager_seat,
         body=f"stopping; last turn ended on an unanswered question with no mail ask sent "
              f"— likely parked, nobody's in the room to answer it: “{q}”",
         grade="fyi")
@@ -652,12 +657,14 @@ def _practice_violation(
 
 
 async def _confess_if_practice_violated(
-    conn: Any, *, payload: dict[str, Any], agent_id: str, cwd: str, manager_seat: str,
+    conn: Any, *, payload: dict[str, Any], agent_id: str, project: str | None,
+    manager_seat: str,
 ) -> None:
     """STAGE C: DETECTION ONLY, no actuation — the courtesy-DM shape Stage A/B already
     proved out, applied to a standing Practice instead of a parked question. Fail-open by
     construction (an empty `practices` list or an unreadable transcript both just return
-    None from `_practice_violation`, never raise)."""
+    None from `_practice_violation`, never raise). `project` — see `_confess_if_parked`'s
+    own note: the caller's already-resolved seats.resolve_project, never re-derived here."""
     text = _last_assistant_text(str(payload.get("transcript_path") or ""))
     practices = await _active_practices(conn)
     hit = _practice_violation(text, practices)
@@ -665,7 +672,7 @@ async def _confess_if_practice_violated(
         return
     from src.orchestrator.mailbox import send_message
     await send_message(
-        conn, from_agent=agent_id, from_project=Path(cwd).name, to_agent=manager_seat,
+        conn, from_agent=agent_id, from_project=project, to_agent=manager_seat,
         body=f"stopping; this turn may have violated standing Practice {hit['practice_id']} "
              f"(\"{hit['statement']}\") — reversal language found ({', '.join(hit['cues'])}); "
              "a heuristic flag, not a verdict, worth a look",
@@ -688,12 +695,19 @@ async def _stage_a_async(payload: dict[str, Any], pct: int | None = None) -> Non
         if not identity.get("seat_id"):
             return  # unclaimed seat — nothing further to confess
         seat_id = identity["seat_id"]
-        manager_seat = await _manager_seat(conn, seat_id)
+        from src.orchestrator.seats import manager_of_seat, resolve_project
+        # THE ONE resolver (msg 1888): every confession below attributes to this, never a
+        # hand-rolled `Path(cwd).name` — the old basename fabricated a phantom "seats" onto
+        # real mail whenever this session sat at the bare office root (Thoth's live specimen).
+        project = await resolve_project(conn, agent_id, cwd)
+        manager_seat = await manager_of_seat(conn, seat_id)
         if manager_seat is not None:
             await _confess_if_parked(
-                conn, payload=payload, agent_id=agent_id, cwd=cwd, manager_seat=manager_seat)
+                conn, payload=payload, agent_id=agent_id, project=project,
+                manager_seat=manager_seat)
             await _confess_if_practice_violated(
-                conn, payload=payload, agent_id=agent_id, cwd=cwd, manager_seat=manager_seat)
+                conn, payload=payload, agent_id=agent_id, project=project,
+                manager_seat=manager_seat)
         leased = await _leased_assignment(conn, seat_id, agent_id)
         if leased is None:
             await _assert_pending(agent_id)
@@ -705,7 +719,7 @@ async def _stage_a_async(payload: dict[str, Any], pct: int | None = None) -> Non
         if body is None:
             return
         from src.orchestrator.mailbox import send_message
-        await send_message(conn, from_agent=agent_id, from_project=Path(cwd).name,
+        await send_message(conn, from_agent=agent_id, from_project=project,
                            to_agent=manager_seat, body=body, grade="fyi")
     finally:
         await conn.close()
@@ -738,11 +752,10 @@ def main() -> None:
         print(json.dumps({"decision": "block", "reason": confession}))
         return
     cwd = payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    project = Path(cwd).name
     session_id = payload.get("session_id") or ""
     try:
-        n, senders, window, bands = asyncio.run(
-            asyncio.wait_for(_deliverable(project, session_id), timeout=1.5))
+        n, senders, window, bands, project = asyncio.run(
+            asyncio.wait_for(_deliverable(cwd, session_id), timeout=1.5))
     except Exception:  # noqa: BLE001 — graph down = allow the stop; the chrome still shows it
         _stage_a(payload)
         return
@@ -759,12 +772,13 @@ def main() -> None:
         if graded and rest:
             graded.append(f"{rest} ungraded")
         shape = f" — {', '.join(graded)}" if graded else ""
+        project_display = project or "an unresolved project"
         print(json.dumps({
             "decision": "block",
-            "reason": (f"Osiris: {n} deliverable message(s) for {project}{who}{shape} — call "
-                       "inbox(), act on what carries new work, SETTLE each handled message "
-                       "(reply with send(reply_to=<id>) or ack with inbox(ack=[ids])), then "
-                       "finish. If a message needs nothing, ack it."),
+            "reason": (f"Osiris: {n} deliverable message(s) for {project_display}{who}{shape} "
+                       "— call inbox(), act on what carries new work, SETTLE each handled "
+                       "message (reply with send(reply_to=<id>) or ack with "
+                       "inbox(ack=[ids])), then finish. If a message needs nothing, ack it."),
         }))
         return
     # THE OFFLOAD RITUAL (queue item 4, #49 piece 3): mail outranks it (above); fail-open

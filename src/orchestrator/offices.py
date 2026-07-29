@@ -24,6 +24,21 @@ from src.orchestrator.mounts import rebind_seat
 
 _DEFAULT_OFFICE_ROOT = Path.home() / ".osiris" / "seats"
 
+
+def is_bare_office_root(cwd: str | Path | None) -> bool:
+    """True only for the exact seat-office CONTAINER (~/.osiris/seats) — the parent of every
+    seat, never a project of its own (ruling 577988ed). ONE shared check so every cwd→project
+    fold (agents.resolve_identity, census.live_bodies) applies the SAME guard instead of
+    drifting copies (msg 1888: census.live_bodies was missing this and minted a phantom
+    "seats" project row from a live process sitting at the bare root).
+
+    Deliberately narrower than "any office subdirectory": a real seat's own office dir IS an
+    ordinary basename guess here BY DESIGN — see
+    test_resolve_identity_never_invents_a_project_from_the_bare_office_root. A seated agent's
+    project resolving to its seat's HOUSE instead of its handle is the DB-backed resolver's
+    job (seats.resolve_project), not this pure, cwd-only guard's."""
+    return cwd is not None and Path(cwd) == _DEFAULT_OFFICE_ROOT
+
 # THE PEER ADDENDUM (ruling d74492ee, spec e6636c7e — LEGIBILITY leg 2, seats.py): rendered
 # INTO house_law.md's `{peer_block}` slot (boot_compiler.compile_managed_body) only when the
 # seat carries an active peer_of edge at establish_office's OWN call time (never at

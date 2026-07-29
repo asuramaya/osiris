@@ -218,6 +218,62 @@ async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
     return {"seat_id": best["seat_id"], "handle": best["handle"], "house": house}
 
 
+async def _seated_house(pool: asyncpg.Pool, agent_id: str) -> str | None:
+    """The seat-first half alone, shared by `resolve_project` and
+    mcp_server._resolve_project_seat_first: a SEATED agent's project is its seat's DERIVED
+    house (held_seat, sourcing from derive_house — ruling ff6148b0) — UNCONDITIONALLY, never
+    guessed from cwd. Split out so mount()'s own wrapper can call ONLY this half (its cwd
+    guess already came from resolve_identity moments earlier, in the SAME pipeline, and must
+    win untouched when this returns None — re-deriving a second, independent cwd guess here
+    risks disagreeing with it, e.g. under a test's monkeypatched office root)."""
+    seat = await held_seat(pool, agent_id)
+    return str(seat["house"]) if seat and seat.get("house") else None
+
+
+async def resolve_project(
+    pool: asyncpg.Pool, agent_id: str, cwd: str | None,
+) -> str | None:
+    """THE ONE project resolver (ruling 577988ed; hoisted, msg 1888 — the mount/project-
+    resolution pollution build): every reader that needs "which project is this agent in"
+    AND HAS NO cwd-derived guess of its own already funnels through here — the stop hook's
+    four hand-rolled `Path(cwd).name` sites and census.live_bodies used to each re-derive
+    their own answer. The live specimen was Thoth's own turn: cwd the bare seat-office
+    CONTAINER (~/.osiris/seats), basename-guessed "seats", a phantom project neither fleet()
+    nor a mail query should ever see.
+
+    A SEATED agent's project is its seat's derived house (`_seated_house`) — UNCONDITIONALLY.
+    This is also how `~/.osiris/seats/<handle>` resolves to the seat's HOUSE, not the handle:
+    a caller that has already turned that directory into an agent_id (binding_of_handle,
+    same as the stop hook's own identity resolution) gets the real house here, never the
+    bare handle.
+
+    An UNSEATED agent falls back to a cwd-derived guess — a `.osiris` pin, else the folder's
+    basename — EXCEPT the bare office container itself (offices.is_bare_office_root), which
+    refuses (None) rather than mint the "seats" phantom. Deliberately NOT the full
+    `resolve_identity`: that also GUESSES a session id by scanning ~/.claude/projects for the
+    hottest matching transcript, disk I/O this project-only lookup has no use for (and the
+    stop hook's per-turn budget and census's per-pid loop can't afford). mount() does NOT use
+    this fallback branch (see `_seated_house`'s own note) — it already has resolve_identity's
+    answer and only needs the seated override.
+
+    Takes any connection-like with `.fetchval`/`.fetch` (a bare asyncpg.Connection works fine,
+    not only a Pool — the stop hook has no pool of its own, only `asyncpg.connect(DSN)`)."""
+    house = await _seated_house(pool, agent_id)
+    if house is not None:
+        return house
+    if not cwd:
+        return None
+    from src.orchestrator.agents import read_project_label
+    from src.orchestrator.offices import is_bare_office_root
+
+    pinned = read_project_label(cwd)
+    if pinned:
+        return pinned
+    if is_bare_office_root(cwd):
+        return None
+    return Path(cwd).name or None
+
+
 SeatState = Literal["vacant", "occupied", "cold"]
 
 
@@ -347,11 +403,12 @@ async def reachability(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
 
 async def manager_of_seat(pool: asyncpg.Pool, seat_id: str) -> str | None:
     """The manager Seat of a worker Seat, or None when unmanaged — the single-pair read
-    mirroring osiris_stophook.py's own local `_manager_seat` query (same table, same shape),
-    promoted here so notify-at-seam (mint_heir's compaction path, thread aeae9977) doesn't
-    hand-roll a third copy. The stop-hook script keeps its own copy for now (it cannot import
-    across the script/package boundary without a heavier refactor) — a known duplicate, not a
-    disagreement: both read `managed_by` the same way."""
+    originally promoted here so notify-at-seam (mint_heir's compaction path, thread aeae9977)
+    didn't hand-roll a third copy. The stop hook's own former local `_manager_seat` duplicate
+    is GONE (msg 1888): the claim that it "cannot import across the script/package boundary
+    without a heavier refactor" was STALE — the hook already puts the repo root on sys.path
+    and imports `src.orchestrator.mailbox`/`.seats` directly (osiris_stophook.py's own
+    `_resolve_worker_identity`); it now calls this function instead of its own copy."""
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT t.canonical FROM links l JOIN objects f ON f.id=l.from_id "
         "JOIN objects t ON t.id=l.to_id WHERE f.canonical=$1 AND l.type='managed_by' "
