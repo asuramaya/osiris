@@ -2246,6 +2246,139 @@ async def _fn_mail_threads(
              "latest": t["msgs"][-1]["body"][:160] if t["msgs"] else ""} for t in threads]
 
 
+async def _fn_overhead(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """/overhead's port (task #91) — a Function, not a pure op: TWO independent data sources
+    (TranscriptStore's harness-cost accounting, TelemetryStore's retained-events forensics)
+    that chrome.py's route already reads separately and lays out on one page; this Function
+    makes that same composition once, in Python — a `sections` op-tree calling two Functions
+    would hit TranscriptStore.overhead_fleet twice for what is one query. Wraps
+    overhead_fleet/summary verbatim, never re-derives either accounting.
+
+    ONE dict, three keys — `totals` (a scalar-valued dict, renders as a header-chip group),
+    `top_sessions` (flat list[dict], task #60's reclassification hands it to the generic
+    table), `telemetry` (a scalar-valued dict, same free ride as totals — present as a
+    one-line note instead of a missing key when TelemetryStore hasn't eaten a file yet: its
+    own docstring says absence must never read as a zero-row pretence).
+
+    KNOWN GAP, flagged not hidden: chrome.py's `_fmt_tok`/`_size_cell` compress numbers
+    ("1.2M", bytes-vs-tokens chosen per row) for the eye; the generic renderer has no
+    per-column formatter, so top_sessions carries the raw ints instead. Content, not a
+    decoded blob — a presentation nuance, the same call roadmap's auto-default and fleet's
+    doors/ancestors flattening already made, not data this port owes."""
+    from src.ingest.telemetry import TelemetryStore
+    from src.ingest.transcript_store import TranscriptStore
+
+    try:
+        data = await TranscriptStore(pool).overhead_fleet(top=20)
+    except Exception:  # noqa: BLE001 — a read that fails is UNAVAILABLE, never a silent
+        # empty section (the same degrade-honestly law fleet_live_agents follows)
+        return {"totals": "overhead data unavailable"}
+    top_sessions = [
+        {"session": s["anchor_sid"], "project": s.get("project") or "?",
+         "total_tokens": s["total_tokens"], "bytes": s["bytes"],
+         "hidden_pct": s["hidden_pct"], "multiplier": s["multiplier"],
+         "cache_read_pct": s["cache_read_pct"], "channel_files": s["channel_files"],
+         "reminders": s["reminders"], "compactions": s["compactions"]}
+        for s in data["top"]
+    ]
+    out: dict[str, Any] = {"totals": data["totals"], "top_sessions": top_sessions}
+    try:
+        telemetry = await TelemetryStore(pool).summary()
+    except Exception:  # noqa: BLE001 — see above: unavailable, not silent
+        out["telemetry"] = "retained-telemetry data unavailable"
+    else:
+        out["telemetry"] = (
+            telemetry if telemetry is not None
+            else "nothing retained yet — the store hasn't eaten a telemetry file")
+    return out
+
+
+async def _fn_desk_overview(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """/desk's landing page (task #91) — the ROSTER, never the contents (operator, 2026-07-11:
+    the whole point of this shape is landing on COUNTS so the fleet's backlog doesn't show on
+    one scroll — see read_desk's own docstring). Wraps read_desk verbatim, never re-derives
+    which project owes what. One row per project — counts and rot-age only; drill into one
+    with desk_project(args.project), the same two-step shape mail_overview/mail_threads
+    already took.
+
+    THE WRITE SIDE IS NOT HERE, ON PURPOSE. render_desk's roster and desk_project's own
+    per-debt rows carry FOUR verbs (done/not mine/later/settle) — chrome.py's `_verbs`/
+    `_settle`, each POSTing a DIFFERENT action+args shape to /desk/settle (a bare id, an
+    id+owner, an id+days, or a LIST of ids for a bulk settle). Today's row_action carries
+    exactly one action per row, with one property-templated arg each. That is a genuinely
+    new arrangement, not a page needing special-cased HTML (rung 3, ruling d42c543b) —
+    proposed to Thoth separately, not built here. Arming a single-action row_action for a
+    four-verb row would drop three of the four doors or misdescribe which one fires: the
+    exact capability-without-a-working-effect shape row_action's own build (89df464)
+    refused to ship, and osiris.js has no row_action client at all yet regardless (thread
+    e5d1eb6d/#92) — building the multi-action write side before the single-action read side
+    even renders would compound, not fix, that gap. The chrome.py route stays live; this
+    composition is read-only until the op exists."""
+    from src.orchestrator.mailbox import read_desk
+
+    try:
+        desk = await read_desk(pool)
+    except Exception:  # noqa: BLE001 — a desk read that fails is UNAVAILABLE, never a
+        # silent empty roster (the same degrade-honestly law fleet_live_agents follows)
+        return {"owed": "desk data unavailable"}
+    projects = [
+        {"project": p["project"], "debts": len(p.get("debts") or []),
+         "asks": len(p.get("asks") or []), "critical": bool(p.get("critical")),
+         "oldest": _fleet_age(p.get("oldest_secs"))}
+        for p in (desk.get("by_project") or [])
+    ]
+    out: dict[str, Any] = {"owed": desk["owed"], "letters": desk["letters"],
+                            "by_project": projects}
+    guesses = (desk.get("miner_guesses") or {}).get("threads") or []
+    if guesses:
+        out["miner_guesses"] = [
+            {"id": t["id"], "project": t["project"], "summary": t["summary"]}
+            for t in guesses]
+    dimmed = desk.get("dimmed") or []
+    if dimmed:
+        out["dimmed"] = [
+            {"project": d.get("project") or "?", "headline": d.get("headline") or "",
+             "moot": d.get("moot") or ""}
+            for d in dimmed]
+    return out
+
+
+async def _fn_desk_project(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """One project's desk, walked into (task #91) — `project` rides as `args.project`, not a
+    subject: a project name here is the same free-text string mail_threads's `args.box`
+    already established, never a graph object's UUID the composer's own subject resolution
+    expects. Wraps read_desk verbatim; the debts + asks render_desk_project shows before its
+    own action buttons, flattened to one row each.
+
+    SAME WRITE-SIDE GAP as desk_overview — see that Function's own docstring. The four verbs
+    are not modeled here either; each row carries only what it's ABOUT (summary/body, kind,
+    id), never a control that would render as a raw JSON blob with no client to press it."""
+    from src.orchestrator.mailbox import read_desk
+
+    project = str(args.get("project") or "").strip()
+    if not project:
+        return [{"debt": "no project given — pass args.project", "kind": "-"}]
+    try:
+        desk = await read_desk(pool)
+    except Exception:  # noqa: BLE001 — see desk_overview: unavailable, not silent
+        return [{"debt": "desk data unavailable", "kind": "-"}]
+    p = next((x for x in (desk.get("by_project") or []) if x["project"] == project), None)
+    if p is None:
+        return [{"debt": f"nothing owed to {project} — cleared, or never was", "kind": "-"}]
+    rows = [{"debt": t["summary"], "kind": t.get("kind") or "-", "id": t["id"]}
+            for t in (p.get("debts") or [])]
+    rows += [{"debt": (m.get("body") or "")[:160], "kind": "ask",
+              "from": m.get("from_project") or "?", "id": m["id"]}
+             for m in (p.get("asks") or [])]
+    return rows
+
+
 _FUNCTIONS: dict[str, Function] = {
     "coinvest": _fn_coinvest,
     "subject_report": _fn_subject_report,
@@ -2269,6 +2402,9 @@ _FUNCTIONS: dict[str, Function] = {
     "fleet_live": _fn_fleet_live,
     "mail_overview": _fn_mail_overview,
     "mail_threads": _fn_mail_threads,
+    "overhead": _fn_overhead,
+    "desk_overview": _fn_desk_overview,
+    "desk_project": _fn_desk_project,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
@@ -2281,7 +2417,7 @@ _FUNCTIONS: dict[str, Function] = {
 _SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "pulse", "project",
                  "lap", "lint", "echoes", "wall", "desk_decisions", "practices",
                  "fleet_live_agents", "fleet_pulse_line", "fleet_live", "mail_overview",
-                 "mail_threads"}
+                 "mail_threads", "overhead", "desk_overview", "desk_project"}
 
 
 def list_functions() -> list[str]:
@@ -3390,6 +3526,14 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     # needed. mail_threads stays a Function only (no saved composition): see MAIL_OVERVIEW's
     # own comment for why a fixed-box composition isn't the right shape yet.
     "mail": MAIL_OVERVIEW,
+    # /overhead's port (task #91, ruling d42c543b) — no subject needed; the harness-cost +
+    # retained-telemetry read-model, one Function, two data sources (see _fn_overhead).
+    "overhead": {"op": "function", "name": "overhead"},
+    # /desk's landing roster (task #91, ruling d42c543b) — READ-ONLY: the four action verbs
+    # (done/not mine/later/settle) are a rung-3 gap, proposed not built (see _fn_desk_overview's
+    # own docstring). desk_project stays a Function only (args.project), same shape as
+    # mail_threads/args.box — no saved composition.
+    "desk": {"op": "function", "name": "desk_overview"},
     # the former bespoke read-models, now forkable compositions over named Functions —
     # opinion left engine code (no more hardcoded read-model + bespoke MCP tool per lens).
     "co-investment-ties": {"op": "function", "name": "coinvest"},
@@ -3466,6 +3610,8 @@ _COMP_META: dict[str, tuple[str, str]] = {
                             "doors/ancestors, the wake ledger and hourly budget"),
     "mail": ("fleet", "every mailbox with traffic, busiest-latest first (overview only — "
                       "see mail_threads for one box)"),
+    "desk": ("wall", "what you owe each project, oldest first — read-only for now, see "
+                     "chrome's /desk for the four action verbs"),
     "open threads": ("wall", "the raw unresolved list (ungraded — prefer the-wall)"),
     "echoes": ("wall", "the triage pile: untouched miner echoes, oldest first"),
     "decision-log": ("memory", "every decision with its WHY; superseded entries grayed"),
@@ -3486,6 +3632,8 @@ _COMP_META: dict[str, tuple[str, str]] = {
     "family-consistency": ("engine", "config families that should agree but don't"),
     "family-drift": ("engine", "how config families drift over time"),
     "lap": ("engine", "one object's provenance timeline — how belief formed"),
+    "overhead": ("engine", "what the harness itself costs — hidden channels, cache vs "
+                          "fresh, reminders, compactions, retained telemetry"),
     "operational-vs-disclosed-geography": ("casework", "where an org operates vs claims"),
     "co-investment-ties": ("casework", "who co-invests with the subject"),
     "who-is-this": ("casework", "the subject's dossier at a glance"),

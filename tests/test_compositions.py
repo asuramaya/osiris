@@ -11,6 +11,8 @@ from src.actions.core import Actions
 from src.orchestrator.compositions import (
     DEFAULT_COMPOSITIONS,
     _eval,
+    _fn_desk_overview,
+    _fn_desk_project,
     list_compositions,
     run_composition,
     save_composition,
@@ -1021,6 +1023,118 @@ async def test_mail_composition_end_to_end(actions: Actions) -> None:
     res = await run_composition(actions.pool, "mail")
     assert res["kind"] == "rows"
     assert "neo" in [r["box"] for r in res["items"]]
+
+
+# --- overhead (task #91, ruling d42c543b, msg 1959) — /overhead ported as one Function, two
+# data sources (TranscriptStore's harness-cost accounting, TelemetryStore's retained-events
+# forensics) composed once in Python. Wraps overhead_fleet/summary verbatim.
+
+async def test_overhead_function_shows_zero_totals_with_no_sessions_ingested(
+    actions: Actions,
+) -> None:
+    """Nothing eaten yet is an honest empty totals dict, not an error — same 'absence, never
+    a zero-row pretence' law TelemetryStore.summary's own docstring states."""
+    from src.orchestrator.compositions import _fn_overhead
+
+    data = await _fn_overhead(actions.pool, None, {})
+    assert data["totals"]["sessions"] == 0
+    assert data["top_sessions"] == []
+    assert "nothing retained yet" in data["telemetry"]
+
+
+async def test_overhead_degrades_honestly_on_a_pool_failure() -> None:
+    from src.orchestrator.compositions import _fn_overhead
+
+    class _BrokenPool:
+        def __getattr__(self, name: str) -> object:
+            async def _raise(*args: object, **kwargs: object) -> None:
+                raise ConnectionError("pool gone")
+            return _raise
+
+    data = await _fn_overhead(_BrokenPool(), None, {})  # type: ignore[arg-type]
+    assert data == {"totals": "overhead data unavailable"}
+
+
+async def test_overhead_composition_end_to_end(actions: Actions) -> None:
+    await save_composition(actions.pool, "overhead", {"op": "function", "name": "overhead"})
+    res = await run_composition(actions.pool, "overhead")
+    assert res["kind"] == "data"          # a dict, not a list — no rows reclassification
+    assert res["items"]["totals"]["sessions"] == 0
+
+
+# --- desk_overview / desk_project (task #91, ruling d42c543b, msg 1959) — /desk's READ side
+# only. The four action verbs (done/not mine/later/settle) are a rung-3 gap, proposed to
+# Thoth separately, not built here — see _fn_desk_overview's own docstring.
+
+async def test_desk_overview_lists_projects_with_asks(actions: Actions) -> None:
+    from src.orchestrator.mailbox import send_message
+
+    await send_message(actions.pool, from_agent="agent:a", from_project="neo",
+                       to_project="operator", body="pick a signing strategy",
+                       desk_kind="decision")
+
+    data = await _fn_desk_overview(actions.pool, None, {})
+    assert data["owed"] >= 0
+    projects = {p["project"]: p for p in data["by_project"]}
+    assert "neo" in projects
+    assert projects["neo"]["asks"] == 1
+
+
+async def test_desk_overview_degrades_honestly_on_a_pool_failure() -> None:
+    class _BrokenPool:
+        def __getattr__(self, name: str) -> object:
+            async def _raise(*args: object, **kwargs: object) -> None:
+                raise ConnectionError("pool gone")
+            return _raise
+
+    data = await _fn_desk_overview(_BrokenPool(), None, {})  # type: ignore[arg-type]
+    assert data == {"owed": "desk data unavailable"}
+
+
+async def test_desk_project_function_lists_one_projects_asks_via_args_project(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.mailbox import send_message
+
+    await send_message(actions.pool, from_agent="agent:a", from_project="neo",
+                       to_project="operator", body="pick a signing strategy",
+                       desk_kind="decision")
+    await send_message(actions.pool, from_agent="agent:a", from_project="other",
+                       to_project="operator", body="not this project", desk_kind="decision")
+
+    rows = await _fn_desk_project(actions.pool, None, {"project": "neo"})
+    debts = [r["debt"] for r in rows]
+    assert any("pick a signing strategy" in d for d in debts)
+    assert not any("not this project" in d for d in debts)
+
+
+async def test_desk_project_names_the_missing_project_honestly() -> None:
+    rows = await _fn_desk_project(None, None, {})  # type: ignore[arg-type]
+    assert "no project given" in rows[0]["debt"]
+
+
+async def test_desk_project_degrades_honestly_on_a_pool_failure() -> None:
+    class _BrokenPool:
+        def __getattr__(self, name: str) -> object:
+            async def _raise(*args: object, **kwargs: object) -> None:
+                raise ConnectionError("pool gone")
+            return _raise
+
+    rows = await _fn_desk_project(_BrokenPool(), None, {"project": "neo"})  # type: ignore[arg-type]
+    assert rows == [{"debt": "desk data unavailable", "kind": "-"}]
+
+
+async def test_desk_composition_end_to_end(actions: Actions) -> None:
+    from src.orchestrator.mailbox import send_message
+
+    await send_message(actions.pool, from_agent="agent:a", from_project="neo",
+                       to_project="operator", body="pick a signing strategy",
+                       desk_kind="decision")
+
+    await save_composition(actions.pool, "desk", {"op": "function", "name": "desk_overview"})
+    res = await run_composition(actions.pool, "desk")
+    assert res["kind"] == "data"
+    assert "neo" in [p["project"] for p in res["items"]["by_project"]]
 
 
 # --- row_action on a `function` node (msg 1952, gating msg 1950's proposal) — SERVER HALF

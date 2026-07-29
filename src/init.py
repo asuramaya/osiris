@@ -71,6 +71,8 @@ ROOM_COMPOSITIONS: dict[str, tuple[str, ...]] = {
         "fleet-live",
         # /mail's overview half (consolidation wave 2, ruling d42c543b, msg 1929).
         "mail",
+        # /overhead and /desk's read-only landing roster (task #91, ruling d42c543b, msg 1959).
+        "overhead", "desk",
     ),
     "analyst": (
         "who-is-this", "operational-vs-disclosed-geography", "co-investment-ties",
