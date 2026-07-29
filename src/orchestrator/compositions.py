@@ -2679,23 +2679,31 @@ async def save_composition(
     pool: asyncpg.Pool, name: str, spec: dict[str, Any], kind: str = "lens",
     *, webhook_url: str | None = None, active: bool = True, room_id: uuid.UUID | None = None,
     description: str | None = None, section: str | None = None,
+    refresh_secs: int | None = None,
 ) -> uuid.UUID:
     """Save (or update) a composition by name. Fork = save under a new name. `webhook_url`
     and `active` are a watch's execution metadata (a lens ignores them). `room_id` scopes it
     to a stance (NULL = unassigned; a re-save without a room keeps the existing one).
     `description` = one line of 'when to open this'; `section` = which shelf of the composer
-    sidebar (arrive | wall | memory | fleet | engine | casework) — both keep their prior
-    value when omitted on a re-save."""
+    sidebar (arrive | wall | memory | fleet | engine | casework) — all three keep their prior
+    value when omitted on a re-save. `refresh_secs` (ruling cf9286b2) is how often the
+    watermark-poller should check for this lens while it's the one on screen — None (the
+    default) means MANUAL ONLY: a lens goes live because someone decided it should, never
+    because it inherited a global tick. Unlike description/section, an explicit re-save
+    passing None does NOT clear a prior value either — same COALESCE-keeps-prior contract,
+    consistent across all three, not a special case for this one."""
     return await pool.fetchval(  # type: ignore[no-any-return]
         "INSERT INTO compositions (name, kind, spec, webhook_url, active, room_id, "
-        " description, section) "
-        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8) "
+        " description, section, refresh_secs) "
+        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) "
         "ON CONFLICT (name) DO UPDATE SET spec=EXCLUDED.spec, kind=EXCLUDED.kind, "
         "  webhook_url=EXCLUDED.webhook_url, active=EXCLUDED.active, "
         "  room_id=COALESCE(EXCLUDED.room_id, compositions.room_id), "
         "  description=COALESCE(EXCLUDED.description, compositions.description), "
-        "  section=COALESCE(EXCLUDED.section, compositions.section) RETURNING id",
-        name, kind, spec, webhook_url, active, room_id, description, section,
+        "  section=COALESCE(EXCLUDED.section, compositions.section), "
+        "  refresh_secs=COALESCE(EXCLUDED.refresh_secs, compositions.refresh_secs) "
+        "RETURNING id",
+        name, kind, spec, webhook_url, active, room_id, description, section, refresh_secs,
     )
 
 
@@ -2753,14 +2761,19 @@ async def list_rooms(pool: asyncpg.Pool) -> list[dict[str, Any]]:
 async def list_compositions(
     pool: asyncpg.Pool, room_id: uuid.UUID | None = None
 ) -> list[dict[str, Any]]:
-    """Saved compositions. `room_id` scopes to a stance (None = all rooms — the god view)."""
+    """Saved compositions. `room_id` scopes to a stance (None = all rooms — the god view).
+    `refresh_secs` (ruling cf9286b2) rides along here, not on run_composition's own result —
+    it's composition METADATA (same table/row as description/section), read once when the
+    sidebar loads rather than re-fetched on every run."""
     return [
         {"id": str(r["id"]), "name": r["name"], "kind": r["kind"], "spec": _coerce(r["spec"]),
          "webhook_url": r["webhook_url"], "active": r["active"],
          "room_id": str(r["room_id"]) if r["room_id"] else None,
-         "description": r["description"], "section": r["section"]}
+         "description": r["description"], "section": r["section"],
+         "refresh_secs": r["refresh_secs"]}
         for r in await pool.fetch(
-            "SELECT id, name, kind, spec, webhook_url, active, room_id, description, section "
+            "SELECT id, name, kind, spec, webhook_url, active, room_id, description, section, "
+            " refresh_secs "
             "FROM compositions "
             "WHERE ($1::uuid IS NULL OR room_id=$1) ORDER BY created_at", room_id
         )
@@ -3309,11 +3322,30 @@ _COMP_META: dict[str, tuple[str, str]] = {
     "screen-financing-network": ("casework", "the subject's financing network, screened"),
 }
 
+# AUTO-REFRESH (ruling cf9286b2): absent = MANUAL ONLY, the default for every composition not
+# named here — a lens goes live because someone decided it should, never by inheriting a
+# global tick. Only the two compositions the ruling names explicitly: "mail and the fleet
+# strip want seconds; docs, design-canon and the decision log want never."
+#
+# 8s, not :8011's 5s copied by habit (that number was picked for an SSE PUSH lane's own
+# server-side tick, a continuous connection — it carries no informational weight for a POLL
+# interval). Measured instead (watermark.py's own docstring has the full numbers): the
+# watermark query itself costs 0.071ms server-side, ~0.25ms round trip — a non-factor at any
+# plausible tick rate, even with dozens of open tabs. The real constraint is UX: 8s is fast
+# enough that a burst of new mail or a newly-mounted agent surfaces within one ordinary human
+# glance, and slow enough to read as meaningfully different from a genuinely real-time push
+# surface (:8011's inbox) — a poll dressed up as a stream would be dishonest about what it is.
+_COMP_REFRESH_SECS: dict[str, int] = {
+    "mail": 8,
+    "fleet-strip": 8,
+}
+
 
 async def seed_default_compositions(pool: asyncpg.Pool) -> int:
     for name, spec in DEFAULT_COMPOSITIONS.items():
         section, desc = _COMP_META.get(name, (None, None))
-        await save_composition(pool, name, spec, "lens", description=desc, section=section)
+        await save_composition(pool, name, spec, "lens", description=desc, section=section,
+                               refresh_secs=_COMP_REFRESH_SECS.get(name))
     # the shelf also reaches saved, non-default lenses it knows by name (agent-authored
     # twins of the defaults) — metadata only, never their spec
     for name, (section, desc) in _COMP_META.items():

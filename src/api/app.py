@@ -74,6 +74,7 @@ from src.orchestrator.monitor import (
     tick,
 )
 from src.orchestrator.runner import load_input_object
+from src.orchestrator.watermark import graph_watermark
 
 _HELPERS_DIR = Path(__file__).resolve().parent.parent.parent / "helpers"
 _UI_DIR = Path(__file__).resolve().parent.parent / "ui" / "static"
@@ -713,6 +714,13 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             case_id=body.case_id,
             selected=body.selected,
         )
+
+    # --- watermark: auto-refresh's whole mechanism (ruling cf9286b2) — poll THIS, never
+    # the composition. See src/orchestrator/watermark.py's own docstring for the four
+    # markers, why they're separate rather than combined, and the measured cost.
+    @app.get("/watermark")
+    async def watermark_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        return await graph_watermark(p)
 
     # --- compositions: the composer's primitive (lenses + watches as one) ----
     @app.get("/compositions")

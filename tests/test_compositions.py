@@ -493,6 +493,49 @@ async def test_default_compositions_seeded(actions: Actions) -> None:
     assert "operational-vs-disclosed-geography" in names
 
 
+async def test_seeding_gives_only_mail_and_fleet_strip_a_refresh_secs(
+    actions: Actions,
+) -> None:
+    """ruling cf9286b2: "mail and the fleet strip want seconds; docs, design-canon and the
+    decision log want never" — absent/None is the default for every OTHER composition, not
+    just the three named ones. A future addition to DEFAULT_COMPOSITIONS that forgets to
+    stay out of _COMP_REFRESH_SECS would silently start auto-polling; this pins the set."""
+    await seed_default_compositions(actions.pool)
+    by_name = {c["name"]: c["refresh_secs"] for c in await list_compositions(actions.pool)}
+    assert by_name["mail"] == 8
+    assert by_name["fleet-strip"] == 8
+    assert by_name["docs"] is None
+    assert by_name["design-canon"] is None
+    assert by_name["decision-log"] is None
+    assert sum(1 for v in by_name.values() if v is not None) == 2
+
+
+async def test_save_composition_round_trips_refresh_secs(actions: Actions) -> None:
+    await save_composition(actions.pool, "wm-comp", {"op": "select"}, refresh_secs=15)
+    rows = [c for c in await list_compositions(actions.pool) if c["name"] == "wm-comp"]
+    assert rows[0]["refresh_secs"] == 15
+
+
+async def test_save_composition_omitting_refresh_secs_keeps_the_prior_value(
+    actions: Actions,
+) -> None:
+    """Same COALESCE-keeps-prior contract as description/section (msg 1938's own note): a
+    re-save that doesn't mention refresh_secs must never silently clear it."""
+    await save_composition(actions.pool, "wm-comp2", {"op": "select"}, refresh_secs=20)
+    await save_composition(actions.pool, "wm-comp2", {"op": "select", "object_type": "X"})
+    rows = [c for c in await list_compositions(actions.pool) if c["name"] == "wm-comp2"]
+    assert rows[0]["refresh_secs"] == 20
+    assert rows[0]["spec"]["object_type"] == "X"  # the actual edit still landed
+
+
+async def test_save_composition_defaults_refresh_secs_to_none(actions: Actions) -> None:
+    """Manual only, the default (ruling cf9286b2) — a plain save/fork never inherits a tick
+    it wasn't given."""
+    await save_composition(actions.pool, "wm-comp3", {"op": "select"})
+    rows = [c for c in await list_compositions(actions.pool) if c["name"] == "wm-comp3"]
+    assert rows[0]["refresh_secs"] is None
+
+
 async def _save(actions: Actions, name: str, spec: dict) -> str:
     await save_composition(actions.pool, name, spec)
     return name

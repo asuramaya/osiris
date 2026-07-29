@@ -193,6 +193,7 @@
     <section id="center">
       <div id="tools">
         <span class="title" id="boardtitle">Board</span>
+        <span id="refreshdot" class="o-faint"></span>
         <span id="viewsw" class="viewsw"></span>
         <button class="iconbtn collect-only" onclick="expandSet()" title="Run collectors to grow the set">Expand ▸</button>
         <span class="spacer"></span>
@@ -344,11 +345,54 @@ async function runComp(name){
   setStatus(`Running ${name}…`);
   const res = await fetch(`/compositions/${encodeURIComponent(name)}/run`,{method:'POST',
     headers:{'content-type':'application/json'},body:JSON.stringify({subject:FOCUS})}).then(r=>r.json());
-  if(res.error){ RESULT=null; WORKING=null; renderSwitcher(); renderComposerBar(); showPanel();
+  if(res.error){ RESULT=null; WORKING=null; stopAutoRefresh(); renderSwitcher(); renderComposerBar(); showPanel();
     $('result').innerHTML=`<div class="o-empty">${esc(res.error)}<br><br>
       Tip: focus a subject object first, then run.</div>`; $('boardtitle').textContent=name; return; }
   RESULT=res; RESULT.name=name; WORKING = res.spec ? JSON.parse(JSON.stringify(res.spec)) : null;
   VIEW=Osiris.defaultView(res); renderSwitcher(); await renderCurrent();
+  startAutoRefresh(name);
+}
+
+// ---- auto-refresh (ruling cf9286b2): poll a WATERMARK, never the composition itself.
+// refresh_secs is a per-composition property (COMPS[].refresh_secs, set by
+// compositions._COMP_REFRESH_SECS) — absent means MANUAL ONLY, the default: a lens goes
+// live because someone decided it should, never by inheriting a global tick. Built once
+// here, in the frozen shell, so no ported page ever hand-rolls its own poller again — the
+// alternative is how chrome.py ended up with four independent renderers.
+let REFRESH_TIMER=null, REFRESH_MARK=null;
+function stopAutoRefresh(){
+  if(REFRESH_TIMER) clearInterval(REFRESH_TIMER);
+  REFRESH_TIMER=null; REFRESH_MARK=null; $('refreshdot').textContent='';
+}
+async function startAutoRefresh(name){
+  stopAutoRefresh();
+  const secs = (COMPS.find(c=>c.name===name)||{}).refresh_secs;
+  if(!secs) return;  // manual only — no timer, no watermark fetch at all
+  try{ REFRESH_MARK = await fetch('/watermark').then(r=>r.json()); }
+  catch(e){ $('refreshdot').textContent=' · not refreshing'; return; }
+  $('refreshdot').textContent=` · live ${secs}s`;
+  REFRESH_TIMER = setInterval(()=>refreshTick(name, secs), secs*1000);
+}
+// KNOWN LIMITATION, accepted to keep this change small (the ruling's own priority): an
+// in-progress inline-composer EDIT (a filter chip added/removed via runWorking()) on an
+// auto-refreshing composition can be overwritten by the next tick — WORKING and
+// RESULT.spec resync on every runWorking() call, so there is no cheap signal left to tell
+// "edited" from "freshly loaded" once the composer bar has already re-run. mail and
+// fleet-strip are simple ranked lists; filtering either mid-poll is a real but narrow risk.
+async function refreshTick(name, secs){
+  if(name!==ACTIVE || !RESULT || RESULT.name!==name) return;  // switched away or drilled in
+  let mark;
+  try{ mark = await fetch('/watermark').then(r=>r.json()); }
+  catch(e){ $('refreshdot').textContent=' · not refreshing'; return; }
+  if(JSON.stringify(mark)===JSON.stringify(REFRESH_MARK)){ $('refreshdot').textContent=` · live ${secs}s`; return; }
+  REFRESH_MARK=mark;
+  const res = await fetch(`/compositions/${encodeURIComponent(name)}/run`,{method:'POST',
+    headers:{'content-type':'application/json'},body:JSON.stringify({subject:FOCUS})}).then(r=>r.json());
+  if(res.error || name!==ACTIVE || !RESULT || RESULT.name!==name) return;
+  RESULT=res; RESULT.name=name; WORKING = res.spec ? JSON.parse(JSON.stringify(res.spec)) : null;
+  if(!Osiris.viewsFor(RESULT).includes(VIEW)) VIEW=Osiris.defaultView(RESULT);
+  renderSwitcher(); await renderCurrent();
+  $('refreshdot').textContent=` · live ${secs}s`;
 }
 
 // W4: the inline composer. The active result's op-tree is shown as a lineage breadcrumb +
@@ -585,7 +629,8 @@ async function drillInto(group, spec){
   VIEW=Osiris.defaultView(res); renderSwitcher(); await renderCurrent();
 }
 function setView(v){ VIEW=v; postConsole({view:v}); renderSwitcher(); renderCurrent(); }
-function clearAll(){ RESULT=null; VIEW=null; WORKING=null; renderSwitcher(); renderComposerBar();
+function clearAll(){ RESULT=null; VIEW=null; WORKING=null; stopAutoRefresh(); renderSwitcher();
+  renderComposerBar();
   showBoard(); board.clear(); $('boardtitle').textContent='Board'; setStatus('Cleared.'); }
 
 // ---- analyses (cases) ------------------------------------------------------

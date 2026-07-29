@@ -81,6 +81,33 @@ async def test_watch_appears_as_a_composition(client: httpx.AsyncClient) -> None
     assert watch["spec"]["op"] == "select"  # a watch's spec is a runnable select
 
 
+async def test_watermark_endpoint_returns_the_four_markers_and_moves_on_a_write(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """ruling cf9286b2's whole poll target — osiris.js fetches this, never a composition,
+    to decide whether to re-run one. Full behavioral coverage of graph_watermark lives in
+    test_watermark.py; this just proves the REST route (the thing the browser actually
+    calls) wires through to it correctly."""
+    before = (await client.get("/watermark")).json()
+    assert before == {"audit_log": None, "fleet_messages": None, "agent_mounts": None,
+                      "agent_wakes": None}
+    await actions.create_or_find_object("Thread", "thread:wmapi1", "test")
+    after = (await client.get("/watermark")).json()
+    assert after["audit_log"] is not None and after["audit_log"] != before["audit_log"]
+
+
+async def test_compositions_list_surfaces_refresh_secs_over_rest(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """The sidebar's own source of truth for whether/how often to poll a lens — read once
+    when GET /compositions loads, per composition, not re-fetched on every run."""
+    from src.orchestrator.compositions import save_composition
+
+    await save_composition(actions.pool, "wm-rest", {"op": "select"}, refresh_secs=12)
+    comps = {c["name"]: c for c in (await client.get("/compositions")).json()}
+    assert comps["wm-rest"]["refresh_secs"] == 12
+
+
 async def test_related_pivot_returns_a_result_set(
     client: httpx.AsyncClient, actions: Actions
 ) -> None:
