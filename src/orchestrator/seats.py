@@ -316,8 +316,9 @@ async def reachability(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
     THE READ ONLY, deliberately: this does not retry a refused send, notify anyone, or
     change what dispatch_dm does — it is the truthful primitive Ra's fix and any future
     notify-at-seam work CONSULT, not a rewrite of either. `job_for` is a pure READ of
-    daemon job state (claude_daemon.job_for), never the RCE-flagged `reply` injection lane
-    (ruling 482c3d0f) — legal and used as-is under the flagged-abstraction policy. Fails
+    daemon job state (claude_daemon.job_for), never the `reply` injection lane — a distinction
+    worth keeping even though ruling 85fba696 sanctioned that lane too: a READ cannot move
+    another mind, so this stays side-effect-free by construction, not by policy. Fails
     OPEN like claude_daemon's own convention: a dark daemon or an unknown lineage reads
     unreachable-by-this-check, never treated as proof of death — only as 'this read
     couldn't confirm it'."""

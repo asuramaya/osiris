@@ -263,14 +263,18 @@ class Settings(BaseSettings):
     osiris_pit_watch_enabled: bool = False
     osiris_pit_watch_escalate_at: int = 3
     # THE FROZEN LANE (wake(), thread 9f566244 / handoff 8f005905) — OFF by default, and this
-    # one is not a mere kill switch but a QUARANTINE. wake() rides the Claude daemon reply lane,
-    # which this house proved is a confirmed harness-level RCE: an injected turn runs arbitrary
-    # shell in any session, forged as origin.kind='human' (decisions 635911f4, bd256380). The
-    # lane stays DARK until Anthropic closes the hole AND ships a sanctioned inter-agent API —
-    # building durable machinery on it before then is the exact mistake the disclosure names.
-    # When (only when) that successor exists, flip this on. wake_worker refuses with nothing sent
-    # while it is False, even for an authorized managed_by pair.
-    osiris_wake_enabled: bool = False
+    # QUARANTINE LIFTED (ruling 85fba696, operator 2026-07-29, superseding 482c3d0f). This was
+    # dark because the house read the Claude daemon reply lane as a harness-level RCE (decisions
+    # 635911f4, bd256380) and disclosed it. Anthropic reviewed that disclosure and deemed the
+    # behavior INTENDED DESIGN — so the premise of the quarantine is withdrawn and the lane is
+    # sanctioned to use. What the house measured is still TRUE and still matters: an injected
+    # turn is stamped origin.kind='human' by the harness regardless of who actually wrote it,
+    # which is exactly why wake() prefixes its own self-identifying provenance marker (it
+    # refuses to hide behind that label) — keep that discipline, it is attribution honesty, not
+    # a workaround. Still NOT a public API: an undocumented internal of someone else's product,
+    # free to change without notice, which is why the injectable `nudge` seam in
+    # trigger.trigger_mail_tick stays — operational insurance now, not legal cover.
+    osiris_wake_enabled: bool = True
     # The operator's STANDING model choice (the intent). The fable harness silently demotes
     # fable→opus when it senses danger (ruling f2ae6346); the swap-detector flags an observed
     # model that diverges from this — the confession backstop the cold-boot ritual can't be.

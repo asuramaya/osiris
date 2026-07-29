@@ -114,9 +114,10 @@ class BoundedMCP(FastMCP):
 # method (ServerSession.send_tool_list_changed); FastMCP's own create_initialization_options()
 # call sites (stdio/sse/streamable-http, all inside the SDK) just never pass a
 # NotificationOptions(tools_changed=True), so the capability was never declared. That is an
-# ergonomics gap in FastMCP's convenience wrapper, not a "don't build on this" wall (482c3d0f's
-# discipline is about the daemon's undocumented claim-socket internals — a different thing
-# entirely): NotificationOptions/create_initialization_options are PUBLIC, documented SDK
+# ergonomics gap in FastMCP's convenience wrapper, not a "don't build on this" wall (the
+# undocumented-internal caution — 482c3d0f, now ruling 85fba696 — is about the daemon's own
+# claim-socket internals, a different thing entirely):
+# NotificationOptions/create_initialization_options are PUBLIC, documented SDK
 # surface, exactly like BoundedMCP.call_tool above already overrides FastMCP's own public
 # call_tool. No monkey-patch of anything private.
 _notified_list_changed: set[str] = set()

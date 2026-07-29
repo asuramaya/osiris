@@ -891,12 +891,13 @@ async def dispatch_dm(
     windows = windows or _manager_windows
     poke = poke or _poke_window
     if jobs is None or nudge is None:
-        # ⚠ THE FLAGGED-ILLEGAL INJECT SEAM (ruling 482c3d0f, operator 2026-07-22): `nudge`
-        # defaults to claude_daemon.reply — the RCE turn-injection SIDE CHANNEL disclosed to
-        # Anthropic, temporary and to be replaced by the sanctioned inter-agent API. `nudge`
-        # IS the interface: a sanctioned API drops in here with no other change; do not build
-        # new machinery on the default. `jobs` (job_for) is a benign READ of daemon liveness
-        # (the authoritative state Ra's reachability read consults), NOT the side channel.
+        # THE INJECT SEAM (ruling 85fba696, superseding 482c3d0f): `nudge` defaults to
+        # claude_daemon.reply — the daemon turn-injection channel, disclosed to Anthropic and
+        # deemed INTENDED DESIGN, so the old "do not build new machinery on the default" bar is
+        # WITHDRAWN. `nudge` stays a parameter anyway: the lane is an undocumented internal free
+        # to break without notice, so this is the swap seam for whatever replaces it — kept as
+        # operational insurance now rather than legal cover. `jobs` (job_for) is a benign READ
+        # of daemon liveness (the authoritative state Ra's reachability read consults).
         from src.ingest.harness import claude_daemon
         jobs = jobs or claude_daemon.job_for
         nudge = nudge or claude_daemon.reply
@@ -1405,17 +1406,19 @@ async def wake_worker(
                           "in either direction — wake() only knocks within a manager<->worker "
                           "pair; peers and cross-house traffic route through a manager or the "
                           "operator's desk"}
-    # THE FROZEN LANE (osiris_wake_enabled, default False). The pair is AUTHORIZED — this is not
-    # an authorization refusal — but wake() rides the daemon reply lane, a confirmed RCE, and it
-    # stays dark until a sanctioned inter-agent API exists (handoff 8f005905). Nothing is sent.
-    # The check sits here, past authorization, so the refusal can say honestly 'you're allowed,
-    # the lane is closed' rather than a blanket 'verb off' — and so no marker/DM is ever minted.
+    # THE LANE SWITCH (osiris_wake_enabled, default True since ruling 85fba696 — Anthropic
+    # reviewed the disclosure and deemed the daemon reply lane INTENDED DESIGN, withdrawing
+    # 482c3d0f's quarantine). It stays a SWITCH rather than becoming unconditional: the lane is
+    # an undocumented internal that can break without notice, and an operator may want it dark
+    # for a run. The check sits here, PAST authorization, so a refusal says honestly "you're
+    # allowed, the lane is off" rather than a blanket "verb off" — and so no marker/DM is ever
+    # minted when it is. Do not move it above the managed_by gate.
     st = settings or get_settings()
     if not st.osiris_wake_enabled:
         return {"mode": "refused-wake-frozen",
-                "detail": "wake() is frozen (osiris_wake_enabled=False): the daemon reply lane it "
-                          "rides is a confirmed RCE, dark until Anthropic ships a sanctioned "
-                          "inter-agent API — the pair is authorized, but no knock was sent"}
+                "detail": "wake() is switched off (osiris_wake_enabled=False) — the pair is "
+                          "authorized and the lane itself is sanctioned (ruling 85fba696), but "
+                          "this deployment has it disabled, so no knock was sent"}
     marker = _wake_marker(caller, caller_seat, (caller_held or {}).get("handle"))
     body = f"{marker}\n\n{message}"
     res = await send_message(pool, from_agent=caller, from_project=await house_of(pool, caller),
@@ -2005,9 +2008,10 @@ async def _spawn_in_body(
 # instead of a bare -p child, a metered body, or the manager daemon's PTY broker + claim-socket.
 # The spike verified live (claude --help + a real `claude agents --json` sample against the
 # fleet's own running sessions) that these documented, sanctioned flags already cover both
-# halves launch() needs — building a session-create client against the undocumented daemon
-# spare-pool claim-socket protocol would be new machinery on the same class of internal channel
-# ruling 482c3d0f already flags as a disclosed RCE primitive not to build on. Every spawned
+# halves launch() needs — documented flags beat a hand-rolled client against the undocumented
+# daemon spare-pool claim-socket protocol, and that preference SURVIVES ruling 85fba696 (which
+# withdrew 482c3d0f's do-not-build bar): the lane being sanctioned makes it permitted, not
+# preferable — a documented flag still can't break under us silently. Every spawned
 # session is visible in `claude agents --json` BY CONSTRUCTION — clause 3 ("front end wide
 # open") made mechanical, not patched around (contrast the attach-line receipt, part 2 of this
 # task, which is an interim fix for the OLD substrate's blind spot, not a replacement for this).
