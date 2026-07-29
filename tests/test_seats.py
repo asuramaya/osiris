@@ -1160,8 +1160,10 @@ async def test_manager_of_seat_none_when_unmanaged(actions: Actions) -> None:
 # twin house=vajra). The head's own stored house is the one legitimate anchor. ═══════════
 
 
-async def _link_managed_by(actions: Actions, worker: Any, manager: Any) -> None:
-    await actions.create_link(worker, manager, "managed_by", "test", datetime.now(UTC), 0.9,
+async def _link_managed_by(
+    actions: Actions, worker: Any, manager: Any, *, source: str = "test",
+) -> None:
+    await actions.create_link(worker, manager, "managed_by", source, datetime.now(UTC), 0.9,
                               evidence_class="self_declared")
 
 
@@ -1215,6 +1217,86 @@ async def test_derive_house_none_for_an_unknown_seat(actions: Actions) -> None:
     from src.orchestrator.seats import derive_house
 
     assert await derive_house(actions.pool, "seat:dh4ghost") is None
+
+
+# --- THE HOUSE ANCHOR (ruling b4208fa3, thread 105f3425/bec2e4af — cross-house adoption
+# silently annexed Ferryman/halcyon into osiris and, escalated, leaked 50 of Thoth's own
+# messages into a hector-vector seat's mailbox) ---------------------------------------------
+
+async def test_derive_house_anchors_on_an_operator_sourced_managed_by_link(
+    actions: Actions,
+) -> None:
+    """THE LIVE REPRO'S ACTUAL SHAPE (halcyon): an ALREADY-EXISTING seat's own `house`
+    property keeps its ORIGINAL, unrelated source (an old agent id) — only the managed_by
+    LINK itself carries today's operator-sourced adoption. The anchor must fire off the
+    LINK's source, not just the property's, or this exact seat is silently missed."""
+    from src.orchestrator.seats import derive_house
+
+    worker = await actions.create_or_find_object("Seat", "seat:ha1worker", "test")
+    await actions.assert_property(worker, "house", "hector-vector", "agent:old-mint",
+                                  datetime.now(UTC), 0.9)
+    manager = await actions.create_or_find_object("Seat", "seat:ha1mgr00", "test")
+    await actions.assert_property(manager, "house", "osiris", "test", datetime.now(UTC), 0.9)
+    await _link_managed_by(actions, worker, manager, source="operator")
+
+    assert await derive_house(actions.pool, "seat:ha1worker") == "hector-vector"
+    # the manager itself is untouched
+    assert await derive_house(actions.pool, "seat:ha1mgr00") == "osiris"
+
+
+async def test_derive_house_anchors_on_an_operator_sourced_house_property(
+    actions: Actions,
+) -> None:
+    """THE LITERAL TEXT OF THE RULING: a seat whose own `house` property was freshly
+    operator-stamped (Ferryman's own shape — minted fresh at the operator's word) anchors
+    even if the managed_by link itself was asserted by an ordinary agent."""
+    from src.orchestrator.seats import derive_house
+
+    worker = await actions.create_or_find_object("Seat", "seat:ha2worker", "test")
+    await actions.assert_property(worker, "house", "hector-vector", "operator",
+                                  datetime.now(UTC), 0.9)
+    manager = await actions.create_or_find_object("Seat", "seat:ha2mgr00", "test")
+    await actions.assert_property(manager, "house", "osiris", "test", datetime.now(UTC), 0.9)
+    await _link_managed_by(actions, worker, manager, source="agent:ordinary-worker")
+
+    assert await derive_house(actions.pool, "seat:ha2worker") == "hector-vector"
+
+
+async def test_derive_house_an_ordinary_managed_seat_still_derives_its_manager_s(
+    actions: Actions,
+) -> None:
+    """NEITHER signal present (an ordinary worker, an ordinary manager, an ordinary link) —
+    derivation is UNCHANGED: the worker still walks to its manager's house exactly as
+    before this fix. The regression this fix must never introduce."""
+    from src.orchestrator.seats import derive_house
+
+    manager = await actions.create_or_find_object("Seat", "seat:ha3mgr00", "test")
+    await actions.assert_property(manager, "house", "osiris", "test", datetime.now(UTC), 0.9)
+    worker = await actions.create_or_find_object("Seat", "seat:ha3worker", "test")
+    await actions.assert_property(worker, "house", "hector-vector", "agent:old-mint",
+                                  datetime.now(UTC), 0.9)
+    await _link_managed_by(actions, worker, manager, source="agent:ordinary-worker")
+
+    assert await derive_house(actions.pool, "seat:ha3worker") == "osiris"
+
+
+async def test_derive_house_anchor_chains_correctly_past_a_third_generation(
+    actions: Actions,
+) -> None:
+    """An anchor's OWN manager still derives normally past it — the anchor stops the
+    WALK for the anchored seat's own lookup, it doesn't turn its manager into an anchor
+    too, and a seat BEYOND the anchor (if any) is unaffected by this specific edge."""
+    from src.orchestrator.seats import derive_house
+
+    grandhead = await actions.create_or_find_object("Seat", "seat:ha4head0", "test")
+    await actions.assert_property(grandhead, "house", "osiris", "test", datetime.now(UTC), 0.9)
+    anchor = await actions.create_or_find_object("Seat", "seat:ha4anchr", "test")
+    await actions.assert_property(anchor, "house", "hector-vector", "agent:old-mint",
+                                  datetime.now(UTC), 0.9)
+    await _link_managed_by(actions, anchor, grandhead, source="operator")
+
+    assert await derive_house(actions.pool, "seat:ha4anchr") == "hector-vector"
+    assert await derive_house(actions.pool, "seat:ha4head0") == "osiris"
 
 
 async def test_held_seat_reports_the_derived_house_not_the_stale_stamp(
@@ -1280,6 +1362,28 @@ async def test_seat_facts_all_none_for_an_unknown_seat(actions: Actions) -> None
 
     assert await seat_facts(actions.pool, "seat:sf2ghost") == {
         "handle": None, "house": None, "intended_model": None, "anchor_cwd": None}
+
+
+async def test_the_window_tag_renders_an_anchored_seat_s_true_house(actions: Actions) -> None:
+    """THE OPERATOR'S OWN SIGHTING (decision 105f3425): 'Ferryman said [OS] instead of
+    [HE]'. seat_facts (the shared resolver launch()'s window tag is built from) must
+    report the anchored seat's OWN house, not its osiris manager's, and _house_tag must
+    render it correctly — the full path the operator actually looks at, proven together
+    rather than trusting derive_house's own fix in isolation."""
+    from src.orchestrator.seats import seat_facts
+    from src.orchestrator.trigger import _house_tag
+
+    manager = await actions.create_or_find_object("Seat", "seat:wt1mgr00", "test")
+    await actions.assert_property(manager, "house", "osiris", "test", datetime.now(UTC), 0.9)
+    worker = await actions.create_or_find_object("Seat", "seat:wt1worker", "test")
+    await actions.assert_property(worker, "handle", "Ferryman", "test", datetime.now(UTC), 0.9)
+    await actions.assert_property(worker, "house", "hector-vector", "agent:old-mint",
+                                  datetime.now(UTC), 0.9)
+    await _link_managed_by(actions, worker, manager, source="operator")
+
+    facts = await seat_facts(actions.pool, "seat:wt1worker")
+    assert facts["house"] == "hector-vector"
+    assert _house_tag(facts["house"]) == "HE"  # not "OS" — the bug the operator caught live
 
 
 # ═══ ATTENDANCE (thread 96f62338, replacing ruling d8a77f80's broken managed_by proxy) ═══

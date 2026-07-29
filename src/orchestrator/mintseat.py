@@ -50,17 +50,12 @@ from typing import Any
 from src.actions.core import Actions
 from src.orchestrator.boot_compiler import compile_managed_body, template_version, wrap_managed
 from src.orchestrator.offices import _CHARTER_TEMPLATE, _DEFAULT_OFFICE_ROOT
-from src.orchestrator.seats import ensure_seat, seat_facts, seat_occupancy
+from src.orchestrator.seats import _OPERATOR_ACTORS, ensure_seat, seat_facts, seat_occupancy
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
 _EC = EvidenceClass.SELF_DECLARED.value
 _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
-
-# names naming the human, not a seat — the operator's own hand crosses a house boundary;
-# no seat does it unilaterally (mirrors the reflection ACL's own operator-caller set,
-# compositions.py's _OPERATOR_CALLERS — same law, same shape, different door)
-_OPERATOR_ACTORS = {"operator", "analyst:operator", "console"}
 
 DEFAULT_WORKER_MODEL = "claude-sonnet-5"  # ruling f6f6174d: Sonnet is the worker default
 

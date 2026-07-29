@@ -52,6 +52,13 @@ _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 # 15-minute liveness window everywhere else — resolve_seat, agent_liveness, the roster)
 _LIVE_SECS = 900
 
+# THE OPERATOR'S OWN HAND — the actor strings that count as a deliberate operator act,
+# never a fleet agent's own. Lived here first as mintseat.py's private cross-house-mint
+# guard; moved up (mintseat.py now imports it from here) so derive_house's own house-
+# anchor check (ruling b4208fa3, thread 105f3425/bec2e4af) shares the SAME definition —
+# two independent notions of "the operator's hand" would drift the moment one changed.
+_OPERATOR_ACTORS = {"operator", "analyst:operator", "console"}
+
 
 @asynccontextmanager
 async def _seat_lock(pool: asyncpg.Pool, house: str, handle: str) -> AsyncIterator[None]:
@@ -352,6 +359,32 @@ async def manager_of_seat(pool: asyncpg.Pool, seat_id: str) -> str | None:
         "ORDER BY l.first_seen DESC LIMIT 1", seat_id)
 
 
+async def _managed_by_source(pool: asyncpg.Pool, seat_id: str) -> str | None:
+    """The `managed_by` edge's OWN source_id for `seat_id`'s active manager link, or None
+    when unmanaged — a second read alongside manager_of_seat's (same row) so derive_house
+    can tell WHO authorized this specific management relationship, distinct from the bare
+    fact of it. Not folded into manager_of_seat itself: that helper has 5 existing callers,
+    all treating its return as a bare str | None — widening it would ripple to every one."""
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT l.source_id FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE f.canonical=$1 AND l.type='managed_by' "
+        "AND t.type='Seat' AND t.status='active' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "ORDER BY l.first_seen DESC LIMIT 1", seat_id)
+
+
+async def _own_house_stamp(pool: asyncpg.Pool, seat_id: str) -> tuple[str | None, str | None]:
+    """(house value, its own source_id) for `seat_id`'s own stored `house` property — one
+    read reused both when `seat_id` is a genuine head (no manager at all) and when it's an
+    operator-crossed anchor (managed, but the crossing itself keeps its own house)."""
+    row = await pool.fetchrow(
+        "SELECT a.value #>> '{}' AS house, a.source_id FROM objects o "
+        "JOIN current_assertions a ON a.object_id=o.id AND a.name='house' "
+        "WHERE o.canonical=$1 ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        seat_id)
+    return (row["house"], row["source_id"]) if row else (None, None)
+
+
 _MAX_HOUSE_HOPS = 32  # generous for any real org depth (mirrors mint_heir's own bounded-
                       # walk convention, range(64)) — exists to catch a managed_by CYCLE,
                       # a data bug, not a legitimately deep chain
@@ -366,6 +399,30 @@ async def derive_house(pool: asyncpg.Pool, seat_id: str, *, max_hops: int = _MAX
     spawn-time snapshot. Every seat below derives through the chain; the stored `house`
     property on a non-head seat is legacy noise this never reads (Alfred's old bytebye,
     Vajra's twin house=vajra simply stop being consulted, not corrected).
+
+    THE HOUSE ANCHOR (ruling b4208fa3, thread 105f3425/bec2e4af — the cross-house adoption
+    bug that silently annexed Ferryman/halcyon into osiris and, escalated, leaked 50 of
+    Thoth's own messages into a hector-vector seat's mailbox): a managed_by edge the
+    OPERATOR'S OWN HAND asserted crosses a house boundary DELIBERATELY — mintseat's own
+    cross-house-mint guard already refuses that crossing for anyone else. The walk now
+    STOPS at any seat whose incoming picture shows the operator's hand on the crossing:
+    either the managed_by link TO its manager was itself asserted by an operator actor
+    (`_OPERATOR_ACTORS` — the live, empirically-verified signal: today's adoption event
+    stamps the LINK with source='operator' even when it never re-touches an ALREADY-
+    EXISTING seat's own `house` property, which is exactly what happened to halcyon — its
+    house property still carries the source from its original 2026-07-20 mint, an
+    unrelated agent id, so checking ONLY the property's own source would silently miss the
+    seat that actually caused the mail breach) OR the seat's own `house` property was
+    itself asserted by an operator actor (the literal text of the ruling, still checked,
+    still true for a seat like Ferryman whose house WAS freshly operator-stamped at mint).
+    Either signal makes this seat a house ANCHOR, treated as a head for house purposes even
+    while it remains managed — management and habitation are different facts; the org
+    chart may cross a boundary without annexing what it crosses.
+
+    Ordinary derivation is UNCHANGED for every seat where neither the operator's own hand
+    touched the managed_by edge NOR the house property — an ordinary worker under an
+    ordinary manager still walks to its manager exactly as before this fix (decision
+    87953278 is the standing witness: Thoth/Khnum/Seshat all still derive 'osiris').
 
     READ-TIME ONLY, same discipline as reachability(): computed fresh every call, nothing
     written back. LOUD on a managed_by CYCLE — a seat reappearing in its own chain is a
@@ -382,10 +439,12 @@ async def derive_house(pool: asyncpg.Pool, seat_id: str, *, max_hops: int = _MAX
         seen.add(current)
         manager = await manager_of_seat(pool, current)
         if manager is None:  # current is the HEAD — its own stamped house is authoritative
-            return await pool.fetchval(  # type: ignore[no-any-return]
-                "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
-                "ON a.object_id=o.id AND a.name='house' WHERE o.canonical=$1 "
-                "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", current)
+            house, _source = await _own_house_stamp(pool, current)
+            return house
+        link_source = await _managed_by_source(pool, current)
+        house, house_source = await _own_house_stamp(pool, current)
+        if link_source in _OPERATOR_ACTORS or house_source in _OPERATOR_ACTORS:
+            return house  # a house ANCHOR — managed, but the crossing was deliberate
         current = manager
     logger.warning("house derivation for %s exceeded %d hops without reaching a head",
                    seat_id, max_hops)

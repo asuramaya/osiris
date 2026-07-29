@@ -696,6 +696,49 @@ async def test_mount_resolves_project_from_the_seat_not_cwd_when_seated(
     assert out["project"] == "osiris", f"must read the SEAT's house, not the polluted stamp: {out}"
 
 
+async def test_mount_resolves_an_anchored_seat_s_own_house_not_its_manager_s(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE MOUNT INVARIANT (ruling b4208fa3, thread 105f3425/bec2e4af — halcyon's own
+    incident): a seat mounting into a project it does not belong to is a mail-boundary
+    breach, not a display bug — halcyon's fresh body mounted project='osiris' and leased
+    50 of Thoth's own messages because derive_house walked PAST an operator-adopted,
+    cross-house seat to its osiris manager. Leg 2's own root-cause: mount()'s seat-first
+    resolution (577988ed, proven above) is CORRECT BY DESIGN and needs no separate fix —
+    the defect was entirely inside derive_house() (Leg 1). This proves the invariant holds
+    end-to-end through the REAL mount() call, not just derive_house() in isolation: an
+    operator-adopted seat, managed by an osiris-house seat, still mounts into its OWN
+    house."""
+    from src import mcp_server as srv
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    fake_root = tmp_path / ".osiris" / "seats"
+    fake_root.mkdir(parents=True)
+    monkeypatch.setattr("src.orchestrator.agents._DEFAULT_OFFICE_ROOT", fake_root)
+
+    manager = await ensure_seat(actions, house="osiris", handle="Manager1", source="test")
+    worker = await ensure_seat(actions, house="hector-vector", handle="Worker1",
+                               source="test")
+    manager_oid = await actions.create_or_find_object("Seat", manager["seat_id"], "test")
+    worker_oid = await actions.create_or_find_object("Seat", worker["seat_id"], "test")
+    # the adoption itself: an operator-sourced managed_by edge crossing the house boundary
+    await actions.create_link(worker_oid, manager_oid, "managed_by", "operator",
+                              datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await bind_holder(actions, seat_id=worker["seat_id"], agent_id="agent:hv000001",
+                      source="test")
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(fake_root),
+                              job_dir=str(tmp_path / "jobs" / "hv000001"))
+    finally:
+        srv._pool = saved_pool
+    assert out.get("error") is None
+    assert out["project"] == "hector-vector", (
+        f"the adopted seat must mount into its OWN house, never its manager's: {out}")
+
+
 # ───────────────────────────── the door sweep (operator ruling, 2026-07-17) ──────────────
 
 
