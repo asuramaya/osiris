@@ -34,7 +34,16 @@ async def entity_dossier(pool: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, 
     real identity lives in title/summary/statement/surface/handle (a Practice, a
     BlindSpot, an unclaimed Agent) rendered its raw canonical hash here even though the
     graph/table views of the SAME object already resolved it correctly. Both now share
-    `resolve_label`, the one canonical answer every other consumer uses."""
+    `resolve_label`, the one canonical answer every other consumer uses.
+
+    Task #114 (thread 7b258b5f, found by Thoth closing #99): the relationship listing
+    used to carry NO `valid_until` filter at all — an INVALIDATED link (unpeer/
+    detach_seat's own write) rendered identically to a live one, which is exactly what
+    produced a false-urgent reading published as fact (a managed_by edge read as active
+    a full day after it was invalidated). derive_role/manager_of_seat (seats.py) already
+    filter on `valid_until`; this was the read-side gap sitting beside their write-side
+    correctness — same (l.valid_until IS NULL OR l.valid_until > now()) predicate used
+    everywhere else in this codebase, applied here for the first time."""
     obj = await pool.fetchrow(
         "SELECT id, type, canonical, status FROM objects WHERE id=$1", object_id
     )
@@ -74,7 +83,8 @@ async def entity_dossier(pool: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, 
             f"SELECT l.type, l.{other} AS nbr, l.evidence_class, l.source_id, "
             f"       n.type AS nbr_type, n.canonical AS nbr_canon "
             f"FROM links l JOIN objects n ON n.id=l.{other} "
-            f"WHERE l.{end}=$1 AND l.type <> ALL($2::text[])",
+            f"WHERE l.{end}=$1 AND l.type <> ALL($2::text[]) "
+            f"AND (l.valid_until IS NULL OR l.valid_until > now())",
             object_id,
             list(_HIDDEN_LINK_TYPES),
         )

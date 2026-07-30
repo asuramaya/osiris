@@ -1055,6 +1055,26 @@ async def resolve_ref(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
         "SELECT id FROM objects WHERE canonical=$1 AND status='active' LIMIT 1", ref)
     if oid is not None:
         return uuid.UUID(str(oid))
+    # A FLEET HANDLE ("sekhmet") must resolve to the REAL agent, never a harness sidechain
+    # artifact that happens to share the substring (task #114, Seshat XIII, thread
+    # 05a72d2c0af0 — found live: dossier("sekhmet") returned "sekhmet I.1", a spawned_by
+    # visitor object, ahead of agent:seat-af50a33e, the real body, reachable only by
+    # following that artifact's OWN spawned_by edge). agents.resolve_seat is the already-
+    # correct, battle-tested resolver mail routing uses for exactly this: it explicitly
+    # excludes spawned_by visitors ("a spawn wearing a handle is a leak, resolving mail into
+    # it buries the message in a sidechain nobody resumes" — its own docstring) and, among
+    # real candidates, a live seat always wins and the latest generation outranks its
+    # ancestor. Tried before the generic name-matching legs below, which have no concept of
+    # "visitor" at all and would happily match the shorter, ILIKE-friendliest sidechain label.
+    from src.actions.core import Actions
+    from src.orchestrator.agents import resolve_seat
+
+    seat = await resolve_seat(Actions(pool), ref)
+    if seat.get("agent"):
+        oid = await pool.fetchval(
+            "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", seat["agent"])
+        if oid is not None:
+            return uuid.UUID(str(oid))
     for predicate, order in (
         ("lower(a.value #>> '{}') = lower($1)",
          "(SELECT count(*) FROM current_assertions x WHERE x.object_id=a.object_id) DESC"),
