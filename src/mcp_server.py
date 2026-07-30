@@ -785,6 +785,13 @@ async def triage(mode: str = "census", object_type: str | None = None, status: s
     doubles as a plain browse. `limit`/`offset` (default 200/0, capped 2000) page it;
     `census` already carries the true count per type, so this never needs to.
 
+    `object_type='Type'` — THE CATALOG'S OWN GAP SURFACE (task #97 workstream 2): a
+    different bucket set, since a Type row doesn't participate in `links` the way an
+    ordinary object does (every one would trivially bucket 'orphan' otherwise, saying
+    nothing real). `undescribed` (blank/missing `description` — exactly what a bare
+    accretion mints) > `no_label_rule` (kind='object' only; blank/missing `label_field`)
+    > `normal`.
+
     Read-only, no writes — findings are testimony for a mind's own triage verbs, same rule
     graph_lint runs on."""
     pool = await _pool_get()

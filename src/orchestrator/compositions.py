@@ -2531,6 +2531,9 @@ assertion_stats AS (
 _TRIAGE_BUCKET_PRIORITY = {
     "duplicate_suspect": 0, "bulk_import": 1, "orphan": 2, "hub": 3, "stale": 4, "thin": 5,
     "normal": 6,
+    # the catalog's own gap surface (object_type='Type' only, see _triage_type_gaps) —
+    # ranked ahead of "normal" so a described-and-labeled Type never crowds out a real gap
+    "undescribed": -2, "no_label_rule": -1,
 }
 
 
@@ -2569,6 +2572,17 @@ async def _fn_triage(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     types sit near 1) > `stale` (linked, but untouched longer than `stale_days`) > `thin`
     (1-2 live links) > `normal` (none of the above — BUCKETS lists every object in scope,
     not only flagged ones, so it doubles as a plain browse of the type).
+
+    THE CATALOG'S OWN GAP SURFACE (task #97 workstream 2's other half — "your triage
+    Function IS the surface these gaps should appear on, do not build a second
+    instrument"): `args.object_type='Type'` routes to a DIFFERENT bucket set, since the
+    generic connectivity buckets above are meaningless for Type rows (a Type doesn't
+    participate in `links` the way an ordinary object does — every one of them would
+    trivially bucket `orphan` and tell a reader nothing). Two gaps instead: `undescribed`
+    (blank/missing `description` — a stub nobody has explained yet, exactly what
+    accretion mints) > `no_label_rule` (kind='object' only — a link type has no field of
+    its own to label; blank/missing `label_field`) > `normal` (both present). Same
+    pagination/status/no-silent-caps contract as the generic path.
 
     Read-only, no writes, same rule graph_lint runs on (a triage that healed would be a
     loop pathology — findings are testimony for a mind's own triage verbs, not an
@@ -2615,11 +2629,13 @@ async def _triage_buckets(pool: asyncpg.Pool, args: dict[str, Any]) -> Any:
                 else f"no objects of type {object_type!r}")
         return [{"note": note, "valid_types": ", ".join(r["type"] for r in types)}]
     status = str(args.get("status") or "active").strip()
-    stale_days = max(1, min(int(args.get("stale_days") or 30), 365))
-    cohort_min = max(2, min(int(args.get("cohort_min") or 3), 50))
     raw_limit = args.get("limit")
     limit = max(1, min(int(raw_limit), 2000)) if raw_limit is not None else 200
     offset = max(0, int(args.get("offset") or 0))
+    if object_type == "Type":
+        return await _triage_type_gaps(pool, status, limit, offset)
+    stale_days = max(1, min(int(args.get("stale_days") or 30), 365))
+    cohort_min = max(2, min(int(args.get("cohort_min") or 3), 50))
     rows = await pool.fetch(_TRIAGE_LINK_CTE + """
         , per_object AS (
             SELECT o.id, o.canonical, o.created_at,
@@ -2709,6 +2725,57 @@ async def _triage_buckets(pool: asyncpg.Pool, args: dict[str, Any]) -> Any:
         for r in page
     ]
     return listed or [{"note": f"no {status} objects of type {object_type!r}"}]
+
+
+async def _triage_type_gaps(
+    pool: asyncpg.Pool, status: str, limit: int, offset: int,
+) -> Any:
+    """THE CATALOG'S OWN GAP SURFACE (task #97 workstream 2) — `_triage_buckets`'
+    object_type='Type' branch. Type rows don't participate in `links` the way ordinary
+    objects do (a declared type's domain/range/schemes are properties, not graph edges),
+    so the generic connectivity buckets (orphan/hub/stale/thin) would trivially label
+    every Type 'orphan' and say nothing real — this reads the Type's OWN fields instead:
+    `undescribed` (blank/missing `description`, exactly what a bare accretion mints) and
+    `no_label_rule` (kind='object' only — a link type has no field of its own to label;
+    blank/missing `label_field`), else `normal`. Same pagination/no-silent-caps contract
+    as the generic path; never called directly (`_triage_buckets` is the one dispatch
+    point, same discipline as that function's own docstring)."""
+    rows = await pool.fetch("""
+        WITH per_type AS (
+            SELECT o.id, o.canonical, o.created_at AS born,
+                   (SELECT a.value #>> '{}' FROM current_assertions a
+                    WHERE a.object_id = o.id AND a.name = 'kind'
+                    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind,
+                   (SELECT a.value #>> '{}' FROM current_assertions a
+                    WHERE a.object_id = o.id AND a.name = 'description'
+                    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS description,
+                   (SELECT a.value #>> '{}' FROM current_assertions a
+                    WHERE a.object_id = o.id AND a.name = 'label_field'
+                    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS label_field,
+                   GREATEST(o.created_at, (SELECT max(a.observed_at) FROM current_assertions a
+                                           WHERE a.object_id = o.id)) AS last_touch
+            FROM objects o
+            WHERE o.type = 'Type' AND o.status = $1
+        )
+        SELECT id, canonical, born, last_touch, kind,
+               CASE
+                 WHEN description IS NULL OR btrim(description) = '' THEN 'undescribed'
+                 WHEN kind = 'object' AND (label_field IS NULL OR btrim(label_field) = '')
+                     THEN 'no_label_rule'
+                 ELSE 'normal'
+               END AS bucket
+        FROM per_type
+        ORDER BY canonical
+    """, status)
+    bucketed = sorted(rows, key=lambda r: (_TRIAGE_BUCKET_PRIORITY[r["bucket"]], r["canonical"]))
+    page = bucketed[offset:offset + limit]
+    listed = [
+        {"id": str(r["id"]), "canonical": r["canonical"], "bucket": r["bucket"],
+         "kind": r["kind"], "born": r["born"].isoformat(),
+         "last_touch": r["last_touch"].isoformat()}
+        for r in page
+    ]
+    return listed or [{"note": f"no {status} Type objects"}]
 
 
 _FUNCTIONS: dict[str, Function] = {

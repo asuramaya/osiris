@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 from src.actions.core import Actions
+from src.ontology.catalog import ensure_type
 from src.orchestrator.compositions import (
     DEFAULT_COMPOSITIONS,
     _eval,
@@ -841,22 +842,10 @@ async def test_roadmap_composition_resolved_is_pure_op_tree_group(actions: Actio
     assert res["items"]["retracted"] == {}  # nothing retracted — an empty group, not missing
 
 
-async def test_roadmap_composition_renders_via_the_generic_renderer(actions: Actions) -> None:
-    """End to end: the composition's own output feeds render_composition with no adapter —
-    the whole point of a shared {kind,items} contract between the op-tree and the renderer."""
-    from src.api.chrome import render_composition
-    from src.orchestrator.capture import open_thread
-    from src.orchestrator.compositions import ROADMAP
-
-    proj = await actions.create_or_find_object("SoftwareProject", "repo:rmcomp3", "test")
-    await actions.assert_property(proj, "name", "rmcomp3", "test", NOW, 0.9,
-                                  evidence_class="self_declared")
-    await open_thread(actions, "a tracked duty", repo="rmcomp3", arc="Fleet-Hygiene",
-                      owner="agent:x", source="agent:me")
-    await save_composition(actions.pool, "roadmap", ROADMAP)
-    res = await run_composition(actions.pool, "roadmap", proj)
-    html = render_composition(res, title="roadmap")
-    assert "a tracked duty" in html and "Fleet-Hygiene" in html
+# The end-to-end proof that a composition's own output fed chrome.py's render_composition
+# with no adapter RETIRED alongside it (task #96, second cut, 2026-07-30) — the shared
+# {kind,items} contract now runs solely through osiris.js's table()/renderResult, exercised
+# live in /ui, not this suite.
 
 
 # --- the migrated DOCS (ruling c5b184cd, thread d56e7073/#44): the simpler proof case — no
@@ -1782,6 +1771,56 @@ async def test_triage_buckets_cohort_min_arg_lowers_the_bulk_import_threshold(
     by_canon = {r["canonical"]: r["bucket"] for r in rows}
     assert by_canon["org:pair0"] == "bulk_import"
     assert by_canon["org:pair1"] == "bulk_import"
+
+
+async def test_triage_buckets_flags_undescribed_type(actions: Actions) -> None:
+    """Task #97 workstream 2's gap surface: a bare accretion stub (no description) must
+    bucket 'undescribed', not the generic 'orphan' every Type would trivially get."""
+    await ensure_type(actions, name="GapUndescribed", kind="object", actor="test")
+
+    rows = await _fn_triage(actions.pool, None, {"mode": "buckets", "object_type": "Type"})
+    row = next(r for r in rows if r["canonical"] == "type:object:GapUndescribed")
+    assert row["bucket"] == "undescribed"
+    assert row["kind"] == "object"
+
+
+async def test_triage_buckets_flags_no_label_rule_for_described_object_type(
+    actions: Actions,
+) -> None:
+    """A described object-kind type with no label_field is a narrower, later-stage gap
+    than 'undescribed' — must not be conflated with it."""
+    await ensure_type(actions, name="GapNoLabel", kind="object", actor="test",
+                      description="has a description but no label_field")
+
+    rows = await _fn_triage(actions.pool, None, {"mode": "buckets", "object_type": "Type"})
+    row = next(r for r in rows if r["canonical"] == "type:object:GapNoLabel")
+    assert row["bucket"] == "no_label_rule"
+
+
+async def test_triage_buckets_type_normal_when_described_and_labeled(
+    actions: Actions,
+) -> None:
+    await ensure_type(actions, name="GapComplete", kind="object", actor="test",
+                      description="fully described", label_field="handle")
+
+    rows = await _fn_triage(actions.pool, None, {"mode": "buckets", "object_type": "Type"})
+    row = next(r for r in rows if r["canonical"] == "type:object:GapComplete")
+    assert row["bucket"] == "normal"
+
+
+async def test_triage_buckets_link_kind_type_never_flagged_no_label_rule(
+    actions: Actions,
+) -> None:
+    """label_field is an OBJECT-kind concept (a data field an object shows as its label)
+    — a link type has no field of its own to label, so a described link type with no
+    label_field is 'normal', never 'no_label_rule'."""
+    await ensure_type(actions, name="gap_link_rel", kind="link", actor="test",
+                      description="a described link type, no label_field ever expected")
+
+    rows = await _fn_triage(actions.pool, None, {"mode": "buckets", "object_type": "Type"})
+    row = next(r for r in rows if r["canonical"] == "type:link:gap_link_rel")
+    assert row["bucket"] == "normal"
+    assert row["kind"] == "link"
 
 
 async def test_triage_buckets_names_valid_types_when_object_type_missing_or_unknown(
