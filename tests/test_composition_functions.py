@@ -116,7 +116,7 @@ async def test_function_registry_is_listable(actions: Actions) -> None:
                                 "fleet_pulse_line", "lap", "lint", "mail_overview",
                                 "mail_threads", "overhead", "portfolio", "practices",
                                 "project", "pulse", "roadmap_open", "screen_network", "search",
-                                "subject_report", "wall"]
+                                "subject_report", "triage", "wall"]
 
 
 async def test_briefing_is_a_sections_op_tree(actions: Actions) -> None:
