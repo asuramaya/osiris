@@ -41,10 +41,10 @@ class _RaisingPool:
 # --- smoke_chrome: every named route, against the real ASGI app, no compositions seeded ----
 
 async def test_smoke_chrome_walks_every_named_route(client: httpx.AsyncClient) -> None:
-    """Every route named in thread bb763977, on a BLANK DB — /canon degrades to an honest
-    'no composition' line rather than crashing (its own docstring says so); the smoke walk
-    only cares that the surface answered, not what it said. (/roadmap and /live-desk retired,
-    ruling d42c543b — pure duplicates of compositions already roomed in /ui.)"""
+    """Every route named in thread bb763977, on a BLANK DB — the smoke walk only cares that
+    the surface answered, not what it said. (/roadmap and /live-desk retired, ruling
+    d42c543b; /canon retired task #96 — all pure pass-throughs to compositions already
+    roomed in /ui.)"""
     out = await smoke_chrome(client)
     assert set(out) == set(CHROME_ROUTES)
     assert all(v == "ok" for v in out.values()), out
@@ -109,8 +109,7 @@ async def test_the_mcp_tool_wrapper_delegates_to_smoke(actions: Actions) -> None
 # --- summarize_failures: the judgment layer scripts/osiris_smoke.py and `osiris smoke` share -
 
 def _green_chrome() -> dict[str, str]:
-    return {"/": "ok", "/desk": "ok", "/mail": "ok", "/fleet": "ok",
-            "/canon": "ok", "/overhead": "ok"}
+    return {"/": "ok", "/desk": "ok", "/mail": "ok", "/fleet": "ok", "/overhead": "ok"}
 
 
 def test_summarize_failures_all_green_yields_nothing() -> None:

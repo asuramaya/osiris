@@ -129,8 +129,11 @@ async function tick(){
 setInterval(tick,4000);
 </script>"""
 
+# "docs" (/canon) RETIRED 2026-07-30, task #96 — the route was a pure pass-through to the
+# "docs" composition, which lives in /ui. render_composition and its _comp_* chain are now
+# unreachable from any route and retire with it (held one step, see thread on #96).
 _TABS = (("inbox", "/"), ("desk", "/desk"), ("mail", "/mail"), ("fleet", "/fleet"),
-         ("docs", "/canon"), ("overhead", "/overhead"))
+         ("overhead", "/overhead"))
 
 
 def page(title: str, active: str, inner: str, *, actions: bool = False) -> str:

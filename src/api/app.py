@@ -1085,25 +1085,17 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     # produced. Losing the auto-default-to-osiris convenience (a manual focus click in /ui
     # replaces it) is a UX nuance, not a filter/scope/band/count the composition itself lacks.
 
-    @app.get("/canon")
-    async def canon_page(
-        p_: str = Query("osiris", alias="p"), partial: int = 0,
-        p: asyncpg.Pool = Depends(get_pool),
-    ) -> Response:
-        """The doc canon, topic-sectioned (thread 521ae613a6f4, migrated to a composition —
-        ruling c5b184cd, thread d56e7073/#44) — the "docs" nav tab, routed at /canon rather
-        than /docs: FastAPI reserves /docs for its own Swagger UI, and a second route at the
-        same path is silently shadowed by it (caught live by the route test). `?p=<project>`
-        names which project's chrome this is (defaults to osiris's own) — the "docs"
-        composition itself is not yet project-scoped, so every project currently renders the
-        same canon. The fixed section order used to be a route-level re-sort; it now lives
-        in DOCS's own `sequence` (ruling d42c543b, Thoth msg 1937) — this route just renders
-        whatever the composition returns, no post-step of its own."""
-        title = f"docs · {p_}"
-        res = await run_composition(p, "docs")
-        inner = chrome.render_composition(res)
-        return Response(inner if partial else chrome.page(title, "docs", inner),
-                        media_type="text/html")
+    # /canon RETIRED (task #96, the deletion wave — Thoth LXV, 2026-07-30). The route had
+    # become a pure pass-through — run_composition("docs") → render_composition → page() —
+    # with no bespoke logic left. Its `?p=` param was already decorative: the "docs"
+    # composition is not project-scoped, so every project rendered the identical canon. Its
+    # one real capability, the fixed topic order, became ENGINE VOCABULARY in DOCS's own
+    # `sequence` (commit 5987df5) rather than a route-level re-sort, and Seshat verified that
+    # order live in /ui before this deletion. Deleting it also retires
+    # chrome.render_composition and its whole _comp_* helper chain — a SECOND generic
+    # composition renderer in Python, duplicating osiris.js client-side, counted as debt by
+    # the render-hygiene ratchet and never to be revived. The lens lives in /ui, the
+    # vocabulary lives in the op-tree, and nothing here rendered anything unique.
 
     @app.get("/overhead")
     async def overhead_page(

@@ -19,8 +19,11 @@ import httpx
 # /membrane retired (task #71, ruling 0b3dd431) — "/" (THE INBOX) is :8011's new front door.
 # /live-desk and /roadmap retired (ruling d42c543b) — pure duplicates of the "live-desk" and
 # "roadmap" compositions already roomed in /ui, verified live before deletion.
+# /canon retired 2026-07-30 (task #96): a pure pass-through to the "docs" composition, whose
+# one distinct capability (fixed topic order) became the `sequence` op at 5987df5 and was
+# verified live in /ui before deletion.
 CHROME_ROUTES: tuple[str, ...] = (
-    "/", "/desk", "/mail", "/fleet", "/canon", "/overhead",
+    "/", "/desk", "/mail", "/fleet", "/overhead",
 )
 
 

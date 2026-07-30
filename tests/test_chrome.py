@@ -551,10 +551,14 @@ def test_render_composition_no_button_without_an_action() -> None:
 # test_compositions.py (the composition end to end) and the render_composition section above.
 
 
-def test_page_shell_includes_the_docs_nav_tab() -> None:
-    html = page("docs", "docs", "<p>x</p>")
-    # "docs" routes at /canon, not /docs — FastAPI reserves /docs for its own Swagger UI
-    assert 'href="/canon"' in html
-    # /roadmap retired (ruling d42c543b) — a pure duplicate of the "roadmap" composition
-    # already roomed in /ui; a dead nav link would be a worse bug than the duplication was
+def test_page_shell_has_no_dead_nav_links() -> None:
+    """Retired routes must leave the nav, not just the router. A dead nav link is a worse
+    bug than the duplication it was pointing at — the reader clicks it and gets a 404 with
+    no explanation, where before they got a redundant-but-working page."""
+    html = page("overhead", "overhead", "<p>x</p>")
+    # /roadmap retired (ruling d42c543b), /canon retired (task #96, 2026-07-30) — both pure
+    # pass-throughs to compositions already roomed in /ui.
     assert 'href="/roadmap"' not in html
+    assert 'href="/canon"' not in html
+    # the survivors are still wired
+    assert 'href="/overhead"' in html
