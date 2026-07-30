@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from src.actions.core import Actions
-from src.orchestrator.capture import open_thread
+from src.orchestrator.capture import open_thread, record_practice
 from src.orchestrator.compositions import run_spec
 from src.parsers.base import EvidenceClass
 
@@ -74,6 +74,34 @@ async def test_a_bare_hex_fragment_opens_the_id_door(actions: Actions) -> None:
     assert "id-fragment" in out["note"]
     # ...and ordinary words are never mistaken for ids ('decide' is not hex)
     assert (await _search(actions, "decide"))["hits"] == []
+
+
+async def test_a_practice_hit_carries_its_statement_not_a_raw_hash(actions: Actions) -> None:
+    """Task #97 workstream 3 (ruling 52daab71): the reported bug verbatim — a Practice
+    has none of name/title/summary (only statement/failure_prevented/surface), so a
+    search hit's own `canonical` is all a raw hash gives you. Matched via lexical
+    search on the statement text (not the id door), the hit must still carry a real
+    label."""
+    await record_practice(actions, "measure it yourself, don't trust an inherited "
+                          "number", failure_prevented="a wrong verb count shipped")
+    out = await _search(actions, "inherited number")
+    assert out["hits"] and out["hits"][0]["type"] == "Practice"
+    h = out["hits"][0]
+    assert h["label"] == "measure it yourself, don't trust an inherited number"
+    assert h["label_source"] == "chain"
+    assert h["display_label"]  # disambiguated form is always populated too
+
+
+async def test_the_id_door_labels_its_answer_too(actions: Actions) -> None:
+    """The single-bare-hex-token path returns early (a separate code path from the
+    lexical/fused hits below) — it must not skip label attachment just because it
+    skips everything else."""
+    pid = await record_practice(actions, "never hand-write kernel SQL, use the MCP surface")
+    oid = await actions.pool.fetchval(
+        "SELECT id::text FROM objects WHERE id=$1", pid)
+    out = await _search(actions, oid[:8])
+    assert out["hits"] and out["hits"][0]["via"] == "id"
+    assert out["hits"][0]["label"] == "never hand-write kernel SQL, use the MCP surface"
 
 
 async def test_the_id_door_also_matches_a_threads_canonical_short_hash(actions: Actions) -> None:

@@ -32,7 +32,15 @@ logger = logging.getLogger("osiris.schema")
 @dataclass(frozen=True)
 class ObjectType:
     """One declared kind of entity. `schemes` are the canonical-id prefixes it uses
-    (e.g. cik:, lei:); `color`/`shape` drive every surface's rendering."""
+    (e.g. cik:, lei:); `color`/`shape` drive every surface's rendering.
+
+    `label_field`/`subtitle_field` (task #97 workstream 3, ruling 52daab71) are the
+    RULE tier of label resolution (src/ontology/labels.py): the property name that
+    holds this type's own display identity, checked before the universal fallback
+    chain. Only declare one when the chain's own members (name/title/summary/
+    statement/surface/handle) would pick the WRONG field for this type, or the type
+    has none of them at all (Tension's pole_a/pole_b) — most types need neither,
+    because the chain was itself designed around their real shapes."""
 
     name: str
     category: str
@@ -40,6 +48,8 @@ class ObjectType:
     shape: str  # cytoscape node shape
     description: str
     schemes: tuple[str, ...] = ()
+    label_field: str | None = None
+    subtitle_field: str | None = None
 
 
 @dataclass(frozen=True)
@@ -135,19 +145,33 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
     ObjectType("Agent", "Software", "#f778ba", "hexagon",
                "A Claude instance operating over the graph — an analyst in the fleet. "
                "Carries its model (source-model provenance) and works in a project on "
-               "behalf of a principal. 'A man and all his imaginary friends.'", ("agent:",)),
+               "behalf of a principal. 'A man and all his imaginary friends.'", ("agent:",),
+               # `handle` (the claimed seat name — "Imhotep VII") is the mind's real
+               # identity once claimed; `name` (chain position 1, so it would otherwise
+               # win first) is a composite "{model} in {project}" string stamped on
+               # every mount, unclaimed or not — the RIGHT display value only before a
+               # claim. Overriding to `handle` and falling through the chain's own
+               # `name` for the pre-claim case gets both right with one field.
+               label_field="handle"),
     ObjectType("Tension", "Software", "#e685b5", "vee",
                "A held POLARITY — two positions in productive tension, neither settled. Unlike a "
                "Decision (which settles) or a Thread (which closes), a tension is HELD: the "
                "current lean is recorded but never auto-resolved or consolidated away; the lean "
-               "history is the dance across sessions.", ("tension:",)),
+               "history is the dance across sessions.", ("tension:",),
+               # pole_a/pole_b/lean/lean_why match NONE of the universal chain — a
+               # Tension has no name/title/summary/statement/surface/handle at all, so
+               # without this it falls straight to canonical (the exact bug reported).
+               label_field="pole_a", subtitle_field="pole_b"),
     ObjectType("BlindSpot", "Software", "#d29922", "octagon",
                "A project's registered BLIND SPOT — what its harness/rig CANNOT verify from "
                "here, and where the real verification lives (thread 8e26cd10: 459 headless-"
                "Chromium tests green while every iPhone was broken). Held like a Tension — a "
                "stable per-project fact, never resolved away — and surfaced at orient() so a "
                "session knows the shape of its own ignorance before trusting a green harness.",
-               ("blindspot:",)),
+               ("blindspot:",),
+               # `surface` already wins via the universal chain (position 5) — declared
+               # here only for `cannot_see`, a genuine subtitle the chain has no slot for.
+               subtitle_field="cannot_see"),
     ObjectType("Superstition", "Software", "#8b949e", "diamond",
                "A DEAD WORKAROUND — a practice a bug once justified, killed by name when its "
                "fix landed (thread a9be40c9: Atlas caught 'NEVER DM BY NAME' in his own will "
@@ -155,7 +179,11 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                "forever, on my authority'). The half-life of a workaround outlives its bug: "
                "record_decision(obsoletes=[…]) mints these, and orient announces recent kills "
                "fleet-wide so every mind whose memory carries the practice strikes it.",
-               ("superstition:",)),
+               ("superstition:",),
+               # `statement` already wins via the chain (position 4) — declared only
+               # for `killed_by`, a genuine subtitle (who killed it) the chain has no
+               # slot for.
+               subtitle_field="killed_by"),
     ObjectType("Practice", "Software", "#3fb950", "diamond",
                "A TRANSFERABLE TECHNIQUE — Superstition's positive twin, closing the "
                "ontology's learn/unlearn asymmetry (Alfred IX's filing, operator ruling "
@@ -172,7 +200,11 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                "converts to a Superstition (record_decision(refutes=…)): the Practice "
                "stays ACTIVE carrying `refuted_by`, never retired — a half-remembered "
                "refuted lesson must stay findable, surfaced WITH the flag.",
-               ("practice:",)),
+               ("practice:",),
+               # `statement` already wins via the chain (position 4) — declared only
+               # for `failure_prevented`, a genuine subtitle (the concrete symptom)
+               # the chain has no slot for.
+               subtitle_field="failure_prevented"),
     ObjectType("Reflection", "Software", "#b083f0", "ellipse",
                "A memory lived for its own sake — the operator's ruling bfb3ae26 ('they "
                "need a home and I want them remembered; they are not exactly work "
@@ -187,7 +219,11 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                "class was keying identity on mutable facts (path, session). Minds (Agents) "
                "hold it in succession via `holds`; the seat outlives them all — it exists "
                "BEFORE its first session, which is what lets the daemon export it at birth.",
-               ("seat:",)),
+               ("seat:",),
+               # `name` (chain position 1) is stamped equal to `handle` at mint, but
+               # `rename_seat` only re-asserts `handle` — declaring the rule tier here
+               # keeps a renamed Seat's label correct even if `name` goes stale.
+               label_field="handle"),
     # Observables
     ObjectType("IPv4", "Observable", "#2dd4bf", "ellipse", "An IPv4 address observable."),
     ObjectType("TelegramChannel", "Observable", "#56a3ff", "ellipse",
