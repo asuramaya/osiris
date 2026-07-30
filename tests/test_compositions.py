@@ -17,6 +17,7 @@ from src.orchestrator.compositions import (
     create_room,
     list_compositions,
     run_composition,
+    run_spec,
     save_composition,
     seed_default_compositions,
 )
@@ -1291,6 +1292,47 @@ async def test_desk_project_function_lists_one_projects_asks_via_args_project(
     assert not any("not this project" in d for d in debts)
 
 
+async def test_desk_project_ask_row_carries_the_settle_action(actions: Actions) -> None:
+    """task #91 (Thoth msg 1976/2029) — measured against chrome.py's own render_desk_project:
+    an ASK row (a brief message) gets ONE action, settle — the same /act verb chrome's own
+    /desk/settle route wraps (ack_messages), same single-id shape _settle([m["id"]]) sends."""
+    from src.orchestrator.mailbox import send_message
+
+    sent = await send_message(actions.pool, from_agent="agent:a", from_project="neo",
+                              to_project="operator", body="pick a signing strategy",
+                              desk_kind="decision")
+
+    rows = await _fn_desk_project(actions.pool, None, {"project": "neo"})
+    row = next(r for r in rows if r["kind"] == "ask")
+    assert row["_action"] == {"action": "settle", "args": {"ids": [sent["id"]]}}
+
+
+async def test_desk_project_debt_row_carries_the_three_triage_actions(
+    actions: Actions,
+) -> None:
+    """A DEBT row (an open Thread owned by 'operator') gets THREE actions — done/not mine/
+    later — matching chrome.py's own _verbs() exactly: resolve_thread/assign_thread/
+    defer_thread through the SAME /act registry chrome's /threads/triage route wraps."""
+    from src.orchestrator.capture import open_thread
+
+    tid = await open_thread(actions, "refill the gemini key for #37", kind="obligation",
+                            owner="operator", repo="neo", source="agent:a")
+    short = str(tid)[:8]  # _operator_queue's own "id" is truncated, same as chrome.py's tid
+
+    rows = await _fn_desk_project(actions.pool, None, {"project": "neo"})
+    row = next(r for r in rows if r["kind"] == "obligation")
+    assert row["id"] == short
+    assert row["_actions"] == [
+        {"label": "done", "action": "resolve_thread",
+         "args": {"ref": short, "because": "operator: done"}},
+        {"label": "not mine", "action": "assign_thread",
+         "args": {"ref": short, "owner": "neo",
+                  "because": "operator: not mine — neo owns this"}},
+        {"label": "later", "action": "defer_thread",
+         "args": {"ref": short, "days": 30, "because": "operator: not now"}},
+    ]
+
+
 async def test_desk_project_names_the_missing_project_honestly() -> None:
     rows = await _fn_desk_project(None, None, {})  # type: ignore[arg-type]
     assert "no project given" in rows[0]["debt"]
@@ -1470,9 +1512,42 @@ async def test_row_action_arg_refuses_on_an_empty_spec() -> None:
         _row_action_arg({"box": "neo"}, {})
 
 
-async def test_no_default_composition_arms_row_actions_yet() -> None:
-    """The client has no case for `_actions` (plural) yet — arming it in a real, saved
-    composition would render a raw JSON blob (msg 1976's own rule, applied to itself)."""
+async def test_desk_project_composition_run_is_armed_end_to_end(actions: Actions) -> None:
+    """THE GUARD, FLIPPED (task #91, Thoth msg 1976/2029): the client now has a case for
+    `_actions` — the risk this test originally caught (a control declared with no way to
+    render it) no longer exists, so a negative "nothing is armed" assertion would just rot
+    into dead friction. Replaced with a POSITIVE guard: run desk_project through the actual
+    composer engine (run_spec, not a raw _fn_desk_project call) with real seeded debt+ask
+    data, and assert the returned rows carry properly-shaped `_actions`/`_action` — the same
+    round trip a real /ui click depends on, so this keeps guarding the thing that matters
+    (the ARMED composition actually renders its buttons) instead of guarding its absence."""
+    from src.orchestrator.capture import open_thread
+    from src.orchestrator.mailbox import send_message
+
+    tid = await open_thread(actions, "refill the gemini key for #37", kind="obligation",
+                            owner="operator", repo="neo", source="agent:a")
+    sent = await send_message(actions.pool, from_agent="agent:a", from_project="neo",
+                              to_project="operator", body="pick a signing strategy",
+                              desk_kind="decision")
+
+    res = await run_spec(actions.pool,
+                         {"op": "function", "name": "desk_project", "args": {"project": "neo"}})
+    assert res["kind"] == "rows"
+    debt = next(r for r in res["items"] if r["kind"] == "obligation")
+    assert debt["_actions"][0] == {"label": "done", "action": "resolve_thread",
+                                   "args": {"ref": str(tid)[:8], "because": "operator: done"}}
+    assert len(debt["_actions"]) == 3
+    ask = next(r for r in res["items"] if r["kind"] == "ask")
+    assert ask["_action"] == {"action": "settle", "args": {"ids": [sent["id"]]}}
+
+
+async def test_no_default_composition_arms_row_actions_declaratively() -> None:
+    """The NODE-LEVEL `row_actions` grammar (as opposed to a Function embedding `_actions`
+    directly — see desk_project's own docstring for why it took that path instead) still has
+    no real caller: nothing DECLARES `row_actions` on a saved composition's spec yet. Kept as
+    a narrower, still-true guard — not "nothing is armed" (desk_project is, now), but "this
+    ONE mechanism specifically isn't exercised by a saved spec yet," so arming it that way
+    later doesn't silently skip verification."""
 
     def _has_row_actions(node: Any) -> bool:
         if isinstance(node, dict):

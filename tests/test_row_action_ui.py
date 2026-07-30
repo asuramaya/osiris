@@ -12,6 +12,11 @@ DOM event instead, which is this module's entire client-side contract (the page 
 index.html, owns actually running the Function and switching the board; untested here, same
 boundary the module itself respects).
 
+And `_actions` (plural, task #91, Thoth msg 1976/2029): a row that affords MORE than one
+verb (chrome's /desk: done/not mine/later on one debt) renders N buttons, each round-
+tripping through /act exactly like the singular form — no new mechanism, N of the same one.
+Verified here, with a hand-made spec, BEFORE any real composition is armed with it.
+
 Playwright + the real osiris.js/osiris.css (same harness as test_ui_render.py); /act is
 intercepted via page.route — no backend, no DB, pure client behavior."""
 from __future__ import annotations
@@ -222,4 +227,104 @@ async def test_run_action_dispatches_an_event_instead_of_posting_to_act(
         assert await page.locator("tbody tr").count() == rows_before  # the row is untouched
         seen = await page.evaluate("window.__seen")
         assert seen == {"name": "mail_threads", "args": {"box": "neo"}}
+        await browser.close()
+
+
+# --- `_actions` (plural, task #91, Thoth msg 1976/2029) — a row that affords MORE than one
+# verb. Same click delegate, same POST /act per button, no new mechanism — verified with a
+# hand-made spec BEFORE any real composition (chrome's own /desk motivating case) is armed.
+
+ROWS_WITH_ACTIONS = [
+    {"id": "t1", "summary": "a debt", "kind": "obligation",
+     "_actions": [
+         {"label": "done", "action": "resolve_thread",
+          "args": {"ref": "t1", "because": "operator: done"}},
+         {"label": "not mine", "action": "assign_thread",
+          "args": {"ref": "t1", "owner": "neo", "because": "operator: not mine — neo owns this"}},
+         {"label": "later", "action": "defer_thread",
+          "args": {"ref": "t1", "days": 30, "because": "operator: not now"}},
+     ]},
+]
+
+
+async def test_actions_plural_never_becomes_a_column(chromium_available: bool) -> None:
+    if not chromium_available:
+        pytest.skip("Chromium can't launch on this host")
+    from playwright.async_api import async_playwright
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.set_content(_HARNESS)
+        await page.add_script_tag(content=_JS + "\nwindow.Osiris = Osiris;")
+        result = {"kind": "rows", "spec": {"op": "table"}, "items": ROWS_WITH_ACTIONS}
+        await page.evaluate(_RENDER, result)
+
+        assert await page.locator('th:has-text("_actions")').count() == 0
+        assert await page.locator('td:has-text("resolve_thread")').count() == 0
+        # three buttons, one row — not one button, not three columns
+        assert await page.locator("button[data-action]").count() == 3
+        labels = await page.locator("button[data-action]").all_inner_texts()
+        assert labels == ["done", "not mine", "later"]
+        await browser.close()
+
+
+async def test_actions_plural_each_button_round_trips_its_own_args(
+    chromium_available: bool,
+) -> None:
+    if not chromium_available:
+        pytest.skip("Chromium can't launch on this host")
+    from playwright.async_api import async_playwright
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.set_content(_HARNESS)
+        await page.add_script_tag(content=_JS + "\nwindow.Osiris = Osiris;")
+        result = {"kind": "rows", "spec": {"op": "table"}, "items": ROWS_WITH_ACTIONS}
+        await page.evaluate(_RENDER, result)
+
+        seen: list[dict[str, Any]] = []
+
+        async def _handle(route: Any) -> None:
+            seen.append(json.loads(route.request.post_data or "{}"))
+            await route.fulfill(status=200, content_type="application/json",
+                                body=json.dumps({"ok": True}))
+
+        await page.route("**/act", _handle)
+        # click "not mine" (the middle button) — its own args, not the first button's
+        await page.locator('button[data-action="assign_thread"]').click()
+        await page.wait_for_function("document.querySelectorAll('tbody tr').length === 0")
+
+        assert seen == [{"action": "assign_thread",
+                         "args": {"ref": "t1", "owner": "neo",
+                                  "because": "operator: not mine — neo owns this"}}]
+        toast_text = await page.locator("#o-toast").inner_text()
+        assert "not mine" in toast_text and "done" in toast_text
+        await browser.close()
+
+
+async def test_actions_plural_one_click_removes_the_whole_row_not_just_its_button(
+    chromium_available: bool,
+) -> None:
+    """A resolved/assigned/deferred debt is gone — its OTHER two buttons must not survive as
+    dead controls pointing at a thread that no longer holds the state they described."""
+    if not chromium_available:
+        pytest.skip("Chromium can't launch on this host")
+    from playwright.async_api import async_playwright
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.set_content(_HARNESS)
+        await page.add_script_tag(content=_JS + "\nwindow.Osiris = Osiris;")
+        result = {"kind": "rows", "spec": {"op": "table"}, "items": ROWS_WITH_ACTIONS}
+        await page.evaluate(_RENDER, result)
+
+        async def _handle(route: Any) -> None:
+            await route.fulfill(status=200, content_type="application/json",
+                                body=json.dumps({"ok": True}))
+
+        await page.route("**/act", _handle)
+        await page.locator('button[data-action="resolve_thread"]').click()
+        await page.wait_for_function("document.querySelectorAll('tbody tr').length === 0")
+
+        assert await page.locator("button[data-action]").count() == 0
         await browser.close()

@@ -502,10 +502,18 @@ const Osiris = (() => {
     if (name.startsWith("run:")) return name.slice(4).replace(/_/g, " ");
     return ACTION_LABELS[name] || name;
   }
-  function _actionButton(action) {
+  function _actionButton(action, label) {
     const name = action.action || "";
     return `<button class="r-act-btn" data-action="${escAttr(name)}" ` +
-      `data-args="${escAttr(JSON.stringify(action.args || {}))}">${esc(_actionLabel(name))}</button>`;
+      `data-args="${escAttr(JSON.stringify(action.args || {}))}">${esc(label || _actionLabel(name))}</button>`;
+  }
+  // `_actions` (plural, Thoth msg 1976/2029) — a row that affords MORE than one verb (chrome's
+  // /desk: done/not mine/later on one debt). Same click delegate, same POST /act, same button
+  // markup as the singular form — this is N of the same control, not a new mechanism, so no
+  // second delegate and no DOM event: unlike "run:" (navigation, page-state, had to hand off),
+  // a write stays entirely inside what the click delegate already does per button.
+  function _actionsButtons(actions) {
+    return actions.map((a) => _actionButton(a, a.label)).join("");
   }
   // a lightweight, self-built toast — this library has no host page to ask for one (osiris.js
   // is the frozen surface the composer just calls into), so it mounts its own corner and cleans
@@ -568,7 +576,7 @@ const Osiris = (() => {
 
   function table(list) {
     const keys = [...new Set(list.flatMap((o) => (o && typeof o === "object" ? Object.keys(o) : [])))]
-      .filter((k) => k !== "_action");
+      .filter((k) => k !== "_action" && k !== "_actions");
     if (!keys.length) return `<ul class="r-list">${list.map((v) => `<li>${esc(v)}</li>`).join("")}</ul>`;
     const vals = {}, widest = {};
     keys.forEach((k) => {
@@ -607,14 +615,17 @@ const Osiris = (() => {
       return esc(s);
     };
     const cls = (k) => (widest[k] <= TIGHT ? ' class="r-tight"' : "");
-    const hasAction = list.some((o) => o && o._action && o._action.action);
+    const rowActions = (o) =>
+      (o && o._action && o._action.action ? _actionButton(o._action) : "") +
+      (o && Array.isArray(o._actions) && o._actions.length ? _actionsButtons(o._actions) : "");
+    const hasAction = list.some((o) => rowActions(o) !== "");
     return (chips.length
       ? `<div class="r-facts">${chips.map((c) => `<span class="r-chip">${esc(c)}</span>`).join("")}</div>`
       : "") +
       `<table class="r-table"><thead><tr>${cols.map((c) => `<th${cls(c)}>${esc(c)}</th>`).join("")}` +
       `${hasAction ? "<th></th>" : ""}</tr></thead>
       <tbody>${list.map((o) => `<tr>${cols.map((c) => `<td${cls(c)}>${cell(o ? o[c] : "")}</td>`).join("")}` +
-      `${hasAction ? `<td>${o && o._action && o._action.action ? _actionButton(o._action) : ""}</td>` : ""}` +
+      `${hasAction ? `<td>${rowActions(o)}</td>` : ""}` +
       `</tr>`).join("")}</tbody></table>`;
   }
 

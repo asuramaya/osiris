@@ -67,9 +67,11 @@ Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
        MORE than one verb — a list of {label,action,args}, producing `_actions:[...]` on the
        row. Its own arg templates add `{"literal":v}` alongside `{"property":p}` (exactly
        one of the two, or the composer refuses loudly — see `_row_action_arg`'s own
-       docstring). SERVER HALF ONLY: the client has no case for `_actions` (plural) yet — do
-       not wire `row_actions` into a real composition's spec until it lands, or `_actions`
-       renders as a raw JSON blob (the same bug the singular form shipped with once).
+       docstring). The client renders `_actions` as N buttons, same click delegate, same /act
+       round trip per button as the singular form (task #91, Thoth msg 1976/2029) — a Function
+       may also embed `_actions`/`_action` directly on rows it returns, without this node-level
+       declaration, when a saved composition can't express the shape (see `desk_project`'s own
+       docstring for why: two row kinds in one list, needing two different action shapes).
 
 The old `discrepancy` read-model is just one composition (opinion left the engine):
   subtract( collect(location, country) over traverse(subject, 2 hops),
@@ -2325,18 +2327,11 @@ async def _fn_desk_overview(
     with desk_project(args.project), the same two-step shape mail_overview/mail_threads
     already took.
 
-    THE WRITE SIDE IS NOT HERE, STILL, THOUGH THE GRAMMAR NOW EXISTS. render_desk's roster
-    and desk_project's own per-debt rows carry FOUR verbs (done/not mine/later/settle) —
-    chrome.py's `_verbs`/`_settle`, each POSTing a DIFFERENT action+args shape (a bare id, an
-    id+owner, an id+days, or a LIST of ids for a bulk settle). `row_actions` (plural, msg
-    1976 gating msg 1971's proposal) can express exactly this now — a list of
-    {label,action,args} per row, resolving through the SAME /act verbs (resolve_thread/
-    assign_thread/defer_thread/settle) chrome.py's own route already uses. Still not wired
-    in HERE, on purpose: the client has no case for `_actions` (plural) yet — table() only
-    renders a lone `_action` as a button — so arming it would render a raw JSON blob, the
-    exact capability-without-a-working-effect shape 89df464's own build refused to ship for
-    the singular form. The chrome.py route stays live; this composition stays read-only
-    until the client lands."""
+    THE WRITE SIDE IS ON desk_project, NOT HERE — this Function stays read-only, and not
+    because the client can't render it (it can, since 88ad297/task #91's client leg): the
+    ROSTER is COUNTS, never individual debts (see the docstring above), so there is no per-
+    debt row here to attach a control to. `by_project` carries counts only, exactly what
+    render_desk's own roster table shows before its own click-to-walk-in."""
     from src.orchestrator.mailbox import read_desk
 
     try:
@@ -2375,9 +2370,26 @@ async def _fn_desk_project(
     expects. Wraps read_desk verbatim; the debts + asks render_desk_project shows before its
     own action buttons, flattened to one row each.
 
-    SAME WRITE-SIDE GAP as desk_overview — see that Function's own docstring. The four verbs
-    are not modeled here either; each row carries only what it's ABOUT (summary/body, kind,
-    id), never a `row_actions` declaration the client can't render yet."""
+    THE WRITE SIDE IS HERE NOW (task #91, Thoth msg 1976/2029) — measured fresh against
+    chrome.py's own `_verbs`/`_settle`, not assumed from an earlier description (this
+    Function's own prior docstring said "four verbs" as if every row carried all four; reading
+    the source showed a DEBT row carries three — done/not mine/later — and an ASK row carries
+    a different one, settle. Two shapes, not four options on one row).
+
+    `_actions`/`_action` are embedded DIRECTLY on each row by this Function's own Python,
+    NOT declared via the `row_actions`/`row_action` NODE-level grammar `_eval`'s `function` op
+    reads: that grammar is for a SAVED composition to attach a control without touching a
+    Function's code (mail_overview's own row_action is exactly that). desk_project has no
+    saved composition to declare it on (same args.project constraint mail_threads has), and
+    its ONE list mixes two row kinds needing DIFFERENT actions — something a single node-level
+    declaration, applied uniformly to every row, cannot express. A Function is "the escape
+    hatch" for exactly this: domain logic even the declarative layer can't reach.
+
+    Every write verb resolves through the SAME /act registry (actions.ACTION_VERBS) chrome.py
+    itself routes through — resolve_thread/assign_thread/defer_thread (chrome's /threads/
+    triage, same capture.py calls, same source="analyst:operator") and settle (chrome's
+    /desk/settle, same ack_messages call). Same effect, same attribution, a different route to
+    get there — verified by reading both call chains, not assumed identical from the names."""
     from src.orchestrator.mailbox import read_desk
 
     project = str(args.get("project") or "").strip()
@@ -2390,11 +2402,25 @@ async def _fn_desk_project(
     p = next((x for x in (desk.get("by_project") or []) if x["project"] == project), None)
     if p is None:
         return [{"debt": f"nothing owed to {project} — cleared, or never was", "kind": "-"}]
-    rows = [{"debt": t["summary"], "kind": t.get("kind") or "-", "id": t["id"]}
-            for t in (p.get("debts") or [])]
-    rows += [{"debt": (m.get("body") or "")[:160], "kind": "ask",
-              "from": m.get("from_project") or "?", "id": m["id"]}
-             for m in (p.get("asks") or [])]
+    because_not_mine = f"operator: not mine — {project} owns this"
+    rows = [
+        {"debt": t["summary"], "kind": t.get("kind") or "-", "id": t["id"],
+         "_actions": [
+             {"label": "done", "action": "resolve_thread",
+              "args": {"ref": t["id"], "because": "operator: done"}},
+             {"label": "not mine", "action": "assign_thread",
+              "args": {"ref": t["id"], "owner": project, "because": because_not_mine}},
+             {"label": "later", "action": "defer_thread",
+              "args": {"ref": t["id"], "days": 30, "because": "operator: not now"}},
+         ]}
+        for t in (p.get("debts") or [])
+    ]
+    rows += [
+        {"debt": (m.get("body") or "")[:160], "kind": "ask",
+         "from": m.get("from_project") or "?", "id": m["id"],
+         "_action": {"action": "settle", "args": {"ids": [m["id"]]}}}
+        for m in (p.get("asks") or [])
+    ]
     return rows
 
 
@@ -2820,16 +2846,15 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
                     }
             row_actions = node.get("row_actions")
             if row_actions:
-                # PLURAL, SERVER HALF ONLY (Thoth msg 1976, gating msg 1971's proposal) — a
-                # row that affords more than one verb (chrome.py's /desk: done/not mine/
-                # later, three DIFFERENT actions on one debt row) can't be expressed by
-                # `row_action`'s single `{action, args}`. `row_actions` is a list of
-                # {label, action, args}; each row gets `_actions: [...]`, one entry per
-                # declared verb. The CLIENT has no case for `_actions` (plural) yet — table()
-                # only renders a lone `_action` as a button — so DO NOT wire this into any
-                # saved composition's spec until that lands, same rule 89df464 already
-                # applied to the singular form: a declared control with no client renders as
-                # a raw JSON blob, which is worse than not shipping the control at all.
+                # PLURAL (Thoth msg 1976, gating msg 1971's proposal) — a row that affords
+                # more than one verb (chrome.py's /desk: done/not mine/later, three DIFFERENT
+                # actions on one debt row) can't be expressed by `row_action`'s single
+                # {action, args}. `row_actions` is a list of {label, action, args}; each row
+                # gets `_actions: [...]`, one entry per declared verb. The client renders N
+                # buttons, same click delegate as the singular form (task #91, Thoth msg
+                # 1976/2029). NB: desk_project's own three-verb debt rows embed `_actions`
+                # directly in Python rather than declaring `row_actions` here — see that
+                # Function's own docstring for why this node-level path isn't the fit there.
                 for row in data:
                     row["_actions"] = [
                         {"label": str(ra.get("label") or ra.get("action") or ""),
@@ -3678,10 +3703,11 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     # /overhead's port (task #91, ruling d42c543b) — no subject needed; the harness-cost +
     # retained-telemetry read-model, one Function, two data sources (see _fn_overhead).
     "overhead": {"op": "function", "name": "overhead"},
-    # /desk's landing roster (task #91, ruling d42c543b) — READ-ONLY: the four action verbs
-    # (done/not mine/later/settle) are a rung-3 gap, proposed not built (see _fn_desk_overview's
-    # own docstring). desk_project stays a Function only (args.project), same shape as
-    # mail_threads/args.box — no saved composition.
+    # /desk's landing roster (task #91, ruling d42c543b) — the ROSTER itself stays read-only
+    # (counts, not individual debts — see _fn_desk_overview's own docstring). The write side
+    # lives on desk_project, walked into with args.project (own docstring: done/not mine/
+    # later on a debt, settle on an ask, embedded directly on each row). desk_project stays a
+    # Function only, same shape as mail_threads/args.box — no saved composition.
     "desk": {"op": "function", "name": "desk_overview"},
     # the former bespoke read-models, now forkable compositions over named Functions —
     # opinion left engine code (no more hardcoded read-model + bespoke MCP tool per lens).
@@ -3759,8 +3785,8 @@ _COMP_META: dict[str, tuple[str, str]] = {
                             "doors/ancestors, the wake ledger and hourly budget"),
     "mail": ("fleet", "every mailbox with traffic, busiest-latest first (overview only — "
                       "see mail_threads for one box)"),
-    "desk": ("wall", "what you owe each project, oldest first — read-only for now, see "
-                     "chrome's /desk for the four action verbs"),
+    "desk": ("wall", "what you owe each project, oldest first — see desk_project for one "
+                     "(overview only — same shape as mail/mail_threads)"),
     "open threads": ("wall", "the raw unresolved list (ungraded — prefer the-wall)"),
     "echoes": ("wall", "the triage pile: untouched miner echoes, oldest first"),
     "decision-log": ("memory", "every decision with its WHY; superseded entries grayed"),
