@@ -22,6 +22,7 @@ from src.cli import (
     cmd_seed,
     commit_deployed_notes,
     composition_gap_notes,
+    composition_room_gap_notes,
     diff_tool_lists,
     dirty_tracked_src_files,
     match_session,
@@ -433,6 +434,17 @@ def test_composition_gap_notes_extra_user_saved_rows_never_mask_a_missing_defaul
     notes = composition_gap_notes(have, {"a", "b"})
     assert len(notes) == 1
     assert "'b'" in notes[0]
+
+
+def test_composition_room_gap_notes_names_each_unassigned_composition() -> None:
+    notes = composition_room_gap_notes(["orphan-a", "orphan-b"])
+    assert len(notes) == 2
+    joined = " ".join(notes)
+    assert "'orphan-a'" in joined and "'orphan-b'" in joined
+
+
+def test_composition_room_gap_notes_silent_when_none_unassigned() -> None:
+    assert composition_room_gap_notes([]) == []
 
 
 def test_alembic_gap_note_flags_a_mismatch() -> None:
