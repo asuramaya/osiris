@@ -30,8 +30,8 @@ from typing import Any
 from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.ingest.providers import LLMClient, llm_provider
+from src.ontology.catalog import is_known_link_type
 from src.ontology.entity_type import classify_entity_type, clean_entity_name
-from src.ontology.schema import is_known_link_type
 from src.parsers.base import EvidenceClass
 
 # the inference seams live in providers.py (the GPU-as-key abstraction); re-exported
@@ -188,7 +188,7 @@ async def extract_document(
         # free-form phrases ("officer_of", "acquired_by", …) — a known one passes
         # through; anything else is demoted to a generic `related_to` link with the
         # raw phrase kept in `relation`. Nuance survives as data; the catalog stays clean.
-        if is_known_link_type(rel.type):
+        if await is_known_link_type(actions.pool, rel.type):
             link_type, props = rel.type, None
         else:
             link_type, props = "related_to", {"relation": rel.type}

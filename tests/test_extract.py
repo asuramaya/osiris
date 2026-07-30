@@ -84,10 +84,13 @@ async def test_extract_document_emits_graded_nodes(actions: Actions, case_id: st
         "entities": 2, "relationships": 1,
         "canonicals": ["extracted-org:neuralink-corp", "extracted-person:elon-musk"],
     }
-    # everything the LLM read is graded DERIVED (a lead to verify, not a fact)
+    # everything the LLM read is graded DERIVED (a lead to verify, not a fact) — excludes
+    # the session-persistent Type catalog (task #97), not this test's business
     classes = {
         r["evidence_class"]
-        for r in await actions.pool.fetch("SELECT evidence_class FROM current_assertions")
+        for r in await actions.pool.fetch(
+            "SELECT a.evidence_class FROM current_assertions a "
+            "JOIN objects o ON o.id = a.object_id WHERE o.type <> 'Type'")
     }
     assert classes == {"derived"}
     link_class = await actions.pool.fetchval("SELECT evidence_class FROM links")

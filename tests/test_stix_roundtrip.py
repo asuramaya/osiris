@@ -39,7 +39,9 @@ async def test_ingest_counts_and_skips(actions: Actions, case_id: str, bundle: d
 async def test_ingest_is_idempotent(actions: Actions, case_id: str, bundle: dict) -> None:
     await ingest_bundle(actions, bundle, case_id=case_id)
     await ingest_bundle(actions, bundle, case_id=case_id)  # re-ingest the seed
-    assert await actions.pool.fetchval("SELECT count(*) FROM objects") == 11
+    # excludes the session-persistent Type catalog (task #97) — not this test's business
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type <> 'Type'") == 11
     # canonical = STIX id makes re-ingest a no-op create; one create event per object.
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM object_events WHERE event_type='create'"
@@ -80,9 +82,11 @@ async def test_roundtrip_semantic_equivalence(
     actions: Actions, case_id: str, bundle: dict
 ) -> None:
     await ingest_bundle(actions, bundle, case_id=case_id)
+    # excludes the session-persistent Type catalog (task #97) — this test exports only
+    # what THIS bundle ingested
     all_ids = {
         r["id"]
-        for r in await actions.pool.fetch("SELECT id FROM objects")
+        for r in await actions.pool.fetch("SELECT id FROM objects WHERE type <> 'Type'")
     }
     out = await export_objects(actions.pool, all_ids)
 

@@ -1,0 +1,205 @@
+"""THE CATALOG STORE (task #97 workstream 1) — Type as a first-class graph object.
+Every test proves ONE contract: idempotent stub-on-miss, keep-prior-on-omission, the
+bootstrap axiom, warn/strict enforcement, and the fingerprint cache actually seeing a
+fresh write. Nothing here touches conftest.py's shared fixtures — each test seeds
+exactly what it needs.
+"""
+from __future__ import annotations
+
+import pytest
+from src.actions.core import Actions
+from src.ontology import catalog
+from src.ontology.catalog import (
+    TypeRecord,
+    UnknownTypeError,
+    categories,
+    check_link_type,
+    check_object_type,
+    ensure_type,
+    full_catalog,
+    get_type,
+    is_known_link_type,
+    is_known_object_type,
+    link_type,
+    object_type,
+    seed_catalog,
+    set_strict,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_cache() -> None:
+    catalog._cache.clear()
+
+
+async def test_ensure_type_mints_a_bare_stub(actions: Actions) -> None:
+    rec = await ensure_type(actions, name="Widget", kind="object", actor="test")
+    assert rec.name == "Widget" and rec.kind == "object"
+    assert rec.category == () and rec.description == ""
+    again = await get_type(actions.pool, "Widget", "object")
+    assert again == rec
+
+
+async def test_ensure_type_is_idempotent(actions: Actions) -> None:
+    a = await ensure_type(actions, name="Gadget", kind="object", actor="test",
+                          description="a thing")
+    b = await ensure_type(actions, name="Gadget", kind="object", actor="test",
+                          description="a thing")
+    assert a == b
+    st = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Type' AND canonical='type:object:Gadget'")
+    assert st == 1
+
+
+async def test_ensure_type_keeps_prior_value_on_omission(actions: Actions) -> None:
+    """The section/room_id discipline (89e67c49), generalized: a bare call must never
+    blank an already-rich Type's fields."""
+    await ensure_type(actions, name="Rich", kind="object", actor="human",
+                      description="carefully written", category=["Software"],
+                      label_field="handle")
+    # Seshat's accretion call site — bare, on a type someone already described
+    stub_call = await ensure_type(actions, name="Rich", kind="object", actor="accretion")
+    assert stub_call.description == "carefully written"
+    assert stub_call.category == ("Software",)
+    assert stub_call.label_field == "handle"
+
+
+async def test_ensure_type_link_kind_round_trips_domain_range(actions: Actions) -> None:
+    rec = await ensure_type(actions, name="orbits", kind="link", actor="test",
+                            description="A orbits B", domain=["Planet"], range=["Star"])
+    assert rec.domain == ("Planet",) and rec.range == ("Star",)
+    fetched = await link_type(actions.pool, "orbits")
+    assert fetched.description == "A orbits B"
+
+
+async def test_object_type_falls_back_to_default_when_unknown(actions: Actions) -> None:
+    rec = await object_type(actions.pool, "NeverDeclared")
+    assert rec.name == "Unknown" and rec.category == ("Other",)
+
+
+async def test_link_type_falls_back_to_default_when_unknown(actions: Actions) -> None:
+    rec = await link_type(actions.pool, "never_declared")
+    assert rec.name == "unknown"
+
+
+async def test_is_known_reports_true_only_after_ensure_type(actions: Actions) -> None:
+    assert not await is_known_object_type(actions.pool, "Sprocket")
+    await ensure_type(actions, name="Sprocket", kind="object", actor="test")
+    assert await is_known_object_type(actions.pool, "Sprocket")
+    assert not await is_known_link_type(actions.pool, "Sprocket")
+
+
+async def test_bootstrap_axiom_type_is_always_valid_even_unseeded(actions: Actions) -> None:
+    """check_object_type("Type") must never consult the (possibly empty) catalog —
+    the one axiom the self-describing meta-schema needs."""
+    set_strict(True)
+    try:
+        await check_object_type(actions.pool, "Type")  # must not raise, catalog is empty
+    finally:
+        set_strict(False)
+
+
+async def test_check_object_type_warns_by_default_never_raises(
+    actions: Actions, caplog: pytest.LogCaptureFixture,
+) -> None:
+    set_strict(False)
+    with caplog.at_level("WARNING"):
+        await check_object_type(actions.pool, "Ghost")
+    assert any("Ghost" in r.message for r in caplog.records)
+
+
+async def test_check_object_type_raises_in_strict_mode_for_undeclared(
+    actions: Actions,
+) -> None:
+    set_strict(True)
+    try:
+        with pytest.raises(UnknownTypeError):
+            await check_object_type(actions.pool, "Ghost")
+    finally:
+        set_strict(False)
+
+
+async def test_check_object_type_passes_silently_once_declared(actions: Actions) -> None:
+    await ensure_type(actions, name="Declared", kind="object", actor="test")
+    set_strict(True)
+    try:
+        await check_object_type(actions.pool, "Declared")  # must not raise
+    finally:
+        set_strict(False)
+
+
+async def test_check_link_type_same_contract(actions: Actions) -> None:
+    set_strict(True)
+    try:
+        with pytest.raises(UnknownTypeError):
+            await check_link_type(actions.pool, "no_such_link")
+    finally:
+        set_strict(False)
+    await ensure_type(actions, name="rel", kind="link", actor="test")
+    set_strict(True)
+    try:
+        await check_link_type(actions.pool, "rel")  # must not raise
+    finally:
+        set_strict(False)
+
+
+async def test_categories_dedupes_across_types(actions: Actions) -> None:
+    await ensure_type(actions, name="A", kind="object", actor="test", category=["X", "Y"])
+    await ensure_type(actions, name="B", kind="object", actor="test", category=["Y", "Z"])
+    cats = await categories(actions.pool)
+    # a subset check, not equality: the catalog is deliberately session-persistent
+    # (task #97 — Type rows survive the per-test reset), so the seeded 96 entries'
+    # own categories are also present by the time this test runs
+    assert {"X", "Y", "Z"} <= set(cats)
+
+
+async def test_full_catalog_shape(actions: Actions) -> None:
+    await ensure_type(actions, name="Foo", kind="object", actor="test",
+                      color="#fff", shape="ellipse", description="d", category=["C"])
+    await ensure_type(actions, name="rel", kind="link", actor="test", description="d2")
+    c = await full_catalog(actions.pool)
+    assert {"object_types", "link_types", "categories"} <= c.keys()
+    foo = next(t for t in c["object_types"] if t["name"] == "Foo")
+    assert foo["color"] == "#fff" and foo["category"] == ["C"]
+    assert any(lt["name"] == "rel" for lt in c["link_types"])
+
+
+async def test_cache_sees_a_fresh_write_immediately_same_process(actions: Actions) -> None:
+    """The fingerprint check, not a stale TTL window, is what a same-process caller
+    must see — mint, then read, with no cache priming in between."""
+    assert await object_type(actions.pool, "JustMinted") == catalog._DEFAULT_OBJECT
+    await ensure_type(actions, name="JustMinted", kind="object", actor="test",
+                      description="fresh")
+    rec = await object_type(actions.pool, "JustMinted")
+    assert rec.description == "fresh"
+
+
+async def test_seed_catalog_migrates_every_declared_entry(actions: Actions) -> None:
+    from src.ontology import schema
+    counts = await seed_catalog(actions)
+    assert counts["object_types"] == len(schema._OBJECT_TYPES)
+    assert counts["link_types"] == len(schema._LINK_TYPES)
+    org = await object_type(actions.pool, "Organization")
+    assert org.color == "#4493f8" and "cik:" in org.schemes and org.category == ("Entity",)
+    link = await link_type(actions.pool, "controlled_by")
+    assert link.domain == ("CryptoAddress",)
+
+
+async def test_seed_catalog_is_idempotent(actions: Actions) -> None:
+    first = await seed_catalog(actions)
+    n_before = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Type'")
+    second = await seed_catalog(actions)
+    n_after = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Type'")
+    assert first == second
+    # not a total-row assertion (the catalog is deliberately session-persistent, so
+    # other tests' ad-hoc types may already share the table) — idempotency means a
+    # repeat seed adds NOTHING, whatever the starting count was
+    assert n_before == n_after
+
+
+async def test_type_record_is_frozen_and_comparable() -> None:
+    a = TypeRecord(name="X", kind="object", category=("A",))
+    b = TypeRecord(name="X", kind="object", category=("A",))
+    assert a == b
+    with pytest.raises(AttributeError):
+        a.name = "Y"  # type: ignore[misc]

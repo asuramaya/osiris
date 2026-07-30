@@ -14,7 +14,8 @@ async def test_create_or_find_is_idempotent(actions: Actions, case_id: str) -> N
     assert a == b
 
     # exactly one object, one create event, one object_created outbox, one create_object audit
-    assert await actions.pool.fetchval("SELECT count(*) FROM objects") == 1
+    # (excluding the session-persistent Type catalog, task #97 — not this test's business)
+    assert await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type <> 'Type'") == 1
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM object_events WHERE event_type='create'"
     ) == 1

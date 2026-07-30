@@ -72,8 +72,13 @@ async def test_a_bare_hex_fragment_opens_the_id_door(actions: Actions) -> None:
     assert out["hits"] and out["hits"][0]["canonical"] == "decision:iddoor"
     assert out["hits"][0]["via"] == "id" and "id door" in out["hits"][0]["snippet"]
     assert "id-fragment" in out["note"]
-    # ...and ordinary words are never mistaken for ids ('decide' is not hex)
-    assert (await _search(actions, "decide"))["hits"] == []
+    # ...and ordinary words are never mistaken for ids ('decide' is not hex) — this
+    # is specifically about the ID-FRAGMENT door, not about zero hits overall: the
+    # catalog (task #97) legitimately seeds a real, searchable link type named
+    # "decided_in", so a substring match on "decide" is correct search behavior,
+    # not the bug this test guards against
+    decide_hits = (await _search(actions, "decide"))["hits"]
+    assert not any(h.get("via") == "id" for h in decide_hits)
 
 
 async def test_a_practice_hit_carries_its_statement_not_a_raw_hash(actions: Actions) -> None:

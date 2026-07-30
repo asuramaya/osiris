@@ -22,7 +22,7 @@ from typing import Any, cast
 
 import asyncpg
 
-from src.ontology.schema import check_link_type, check_object_type
+from src.ontology.catalog import check_link_type, check_object_type
 
 Json = dict[str, Any]
 
@@ -108,8 +108,13 @@ class Actions:
     ) -> uuid.UUID:
         """Deterministic find-or-create on (type, canonical). Emits object_created
         only on genuine creation. Adds case membership (idempotent) when scoped."""
-        check_object_type(type_)  # validate against the declared semantic layer
         async with self._tx() as conn:
+            # validate against the catalog USING THIS TRANSACTION'S OWN CONNECTION, never
+            # a fresh self.pool.acquire() — inside atomic(), self._conn is already one of
+            # the pool's N connections; a second acquire here would need an (N+1)th that
+            # concurrent atomic() callers holding all N can never free (a real deadlock,
+            # found live under test_concurrency.py's 40-way concurrent record_decision).
+            await check_object_type(conn, type_)
             row = await conn.fetchrow(
                 "INSERT INTO objects (type, canonical) VALUES ($1,$2) "
                 "ON CONFLICT (type, canonical) DO NOTHING RETURNING id",
@@ -361,8 +366,11 @@ class Actions:
         frontier's primary anchor signal; see parsers/evidence.py). (Phase 0: plain
         insert; edge consolidation/dedup and valid_until come with later phases.)"""
         actor = actor or source_id
-        check_link_type(type_)  # validate against the declared semantic layer
         async with self._tx() as conn:
+            # this transaction's own connection, never a fresh self.pool.acquire() — see
+            # create_or_find_object's identical note (the pool-exhaustion deadlock inside
+            # atomic())
+            await check_link_type(conn, type_)
             new_id = cast(
                 int,
                 await conn.fetchval(
@@ -414,8 +422,9 @@ class Actions:
         link is never gone: it stops counting as current (readers filter on `valid_until IS
         NULL OR valid_until > now()`), and its row stays exactly where it was created, in whose
         name, and why. Idempotent — a triple with nothing active returns 0."""
-        check_link_type(type_)
         async with self._tx() as conn:
+            # this transaction's own connection — see create_or_find_object's identical note
+            await check_link_type(conn, type_)
             tag = await conn.execute(
                 "UPDATE links SET valid_until=$4 WHERE from_id=$1 AND to_id=$2 AND type=$3 "
                 "AND valid_until IS NULL",

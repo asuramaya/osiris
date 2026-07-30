@@ -63,6 +63,11 @@ async def _search(actions: Actions, q: str) -> dict:
 async def test_backfill_is_incremental_and_forgets_the_dead(
     actions: Actions, fake_embedder: FakeEmbedder
 ) -> None:
+    # drain whatever the persistent Type catalog (task #97) already needs embedded —
+    # search_vectors resets every test but the Type objects themselves don't, so
+    # they legitimately look "new" to the very first backfill call of any test that
+    # hasn't already indexed them; not what THIS test is about
+    baseline = await semantics.embed_backfill(actions.pool, fake_embedder)
     await _decision(actions, "decision:swap", "the warm swap demotion ruling stands")
     await _decision(actions, "decision:mail", "settle every inbox mail before dark")
     r1 = await semantics.embed_backfill(actions.pool, fake_embedder)
@@ -79,7 +84,8 @@ async def test_backfill_is_incremental_and_forgets_the_dead(
         "UPDATE objects SET status='merged' WHERE canonical='decision:mail'")
     r4 = await semantics.embed_backfill(actions.pool, fake_embedder)
     assert r4["dropped"] == 1
-    assert await actions.pool.fetchval("SELECT count(*) FROM search_vectors") == 1
+    n = await actions.pool.fetchval("SELECT count(*) FROM search_vectors")
+    assert n == baseline["embedded"] + 1
 
 
 async def test_semantic_candidates_rank_by_meaning_and_respect_the_floor(
