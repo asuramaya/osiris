@@ -73,6 +73,9 @@ ROOM_COMPOSITIONS: dict[str, tuple[str, ...]] = {
         "mail",
         # /overhead and /desk's read-only landing roster (task #91, ruling d42c543b, msg 1959).
         "overhead", "desk",
+        # triage-as-a-primitive's census half (task #98) — the left-pane type browser the
+        # operator sketched. BUCKETS (the middle pane) is args-driven per call, not roomed.
+        "type-census",
     ),
     "analyst": (
         "who-is-this", "operational-vs-disclosed-geography", "co-investment-ties",

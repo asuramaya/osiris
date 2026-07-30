@@ -2454,6 +2454,166 @@ async def _fn_desk_project(
     return rows
 
 
+# TRIAGE AS A PRIMITIVE (task #98, operator ruling 45b074bf "THE USER NEVER DEBUGS THE
+# MACHINERY" + the read-ergonomics arc ad19a779/thread 5e1a46ea/task #65): Thoth ran eight
+# hand-written SQL scripts through a shell this session to judge the object set — none of it
+# reusable. `objects`/`links` carry no `updated_at` column (confirmed against the live
+# schema), so "last touched" is always DERIVED, never a stored fact — the same three-source
+# GREATEST every mode below shares.
+_TRIAGE_LINK_CTE = """
+WITH live_links AS (
+    SELECT from_id AS obj_id, GREATEST(first_seen, last_seen, created_at) AS touch
+    FROM links WHERE valid_until IS NULL OR valid_until > now()
+    UNION ALL
+    SELECT to_id AS obj_id, GREATEST(first_seen, last_seen, created_at)
+    FROM links WHERE valid_until IS NULL OR valid_until > now()
+),
+link_stats AS (
+    SELECT obj_id, count(*) AS link_count, max(touch) AS last_link_touch
+    FROM live_links GROUP BY obj_id
+),
+assertion_stats AS (
+    SELECT object_id, max(observed_at) AS last_assertion
+    FROM current_assertions GROUP BY object_id
+)
+"""
+
+_TRIAGE_BUCKET_PRIORITY = {
+    "duplicate_suspect": 0, "orphan": 1, "hub": 2, "stale": 3, "thin": 4, "normal": 5,
+}
+
+
+async def _fn_triage(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
+    """rung 2 — TRIAGE AS A PRIMITIVE (task #98). TWO MODES, one Function (`args.mode`,
+    default "census") — this pair IS the left-hand type browser the operator sketched:
+    census is the left pane (types + counts + health), buckets is the middle pane (one
+    type's objects, triage-labeled). Build once, surface twice; the LABEL half (how a row
+    DISPLAYS beyond its raw canonical) is still being designed with the operator and
+    deliberately NOT touched here — no labeling scheme is invented in this Function; it
+    reads `canonical` raw and leaves a clean seam for whatever the label rule becomes.
+
+    CENSUS — one row per (type, status): `n` (count), `orphans` (zero live links), `thin`
+    (1-2 live links), `median_links`/`max_links` (live link count distribution), `born`
+    (earliest `created_at` in the group), `last_touch` (latest of: any member's
+    `created_at`, any member's most recent assertion, any live link touching a member).
+
+    BUCKETS — requires `args.object_type` (a note naming every real type is returned when
+    it's missing or unknown, never a silent empty page); optional `args.status` (default
+    "active"), `args.stale_days` (default 30, clamped 1-365), `args.limit`/`args.offset`
+    (default 200/0, capped 2000 — the no-silent-caps law: CENSUS already carries the true
+    `n` per type, this is the browse/page surface, not the count of record). One row per
+    object, ONE bucket each by priority (an object can meet more than one definition; the
+    most actionable wins): `duplicate_suspect` (another object of the SAME type+status
+    shares its basename — the canonical's last path segment, or the text after its first
+    ':', case-folded; catches File-path collisions and scheme-prefix near-dupes alike) >
+    `orphan` (zero live links) > `hub` (live link count at or above the type's OWN 95th
+    percentile, floor 10 — self-normalizing per type rather than one global number, since
+    e.g. SoftwareProject's own median can run past 80 while sparser types sit near 1) >
+    `stale` (linked, but untouched longer than `stale_days`) > `thin` (1-2 live links) >
+    `normal` (none of the above — BUCKETS lists every object in scope, not only flagged
+    ones, so it doubles as a plain browse of the type).
+
+    Read-only, no writes, same rule graph_lint runs on (a triage that healed would be a
+    loop pathology — findings are testimony for a mind's own triage verbs, not an
+    auto-apply)."""
+    mode = str(args.get("mode") or "census").strip().lower()
+    if mode == "buckets":
+        return await _triage_buckets(pool, args)
+    if mode != "census":
+        return [{"note": f"unknown mode {mode!r} — use 'census' or 'buckets'"}]
+    rows = await pool.fetch(_TRIAGE_LINK_CTE + """
+        SELECT o.type, o.status, count(*) AS n,
+               count(*) FILTER (WHERE COALESCE(ls.link_count,0) = 0) AS orphans,
+               count(*) FILTER (WHERE COALESCE(ls.link_count,0) BETWEEN 1 AND 2) AS thin,
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY COALESCE(ls.link_count,0))
+                   AS median_links,
+               max(COALESCE(ls.link_count,0)) AS max_links,
+               min(o.created_at) AS born,
+               max(GREATEST(o.created_at, ast.last_assertion, ls.last_link_touch))
+                   AS last_touch
+        FROM objects o
+        LEFT JOIN link_stats ls ON ls.obj_id = o.id
+        LEFT JOIN assertion_stats ast ON ast.object_id = o.id
+        GROUP BY o.type, o.status
+        ORDER BY o.type, o.status
+    """)
+    return [
+        {"type": r["type"], "status": r["status"], "n": r["n"], "orphans": r["orphans"],
+         "thin": r["thin"], "median_links": float(r["median_links"] or 0),
+         "max_links": r["max_links"], "born": r["born"].isoformat(),
+         "last_touch": r["last_touch"].isoformat()}
+        for r in rows
+    ]
+
+
+async def _triage_buckets(pool: asyncpg.Pool, args: dict[str, Any]) -> Any:
+    """BUCKETS half of `_fn_triage` — split out so the mode dispatch above stays readable;
+    never called directly by a composition/MCP caller (that's `_fn_triage`'s job)."""
+    object_type = str(args.get("object_type") or "").strip()
+    known = bool(object_type) and await pool.fetchval(
+        "SELECT 1 FROM objects WHERE type=$1 LIMIT 1", object_type)
+    if not known:
+        types = await pool.fetch("SELECT DISTINCT type FROM objects ORDER BY type")
+        note = ("buckets mode requires args.object_type" if not object_type
+                else f"no objects of type {object_type!r}")
+        return [{"note": note, "valid_types": ", ".join(r["type"] for r in types)}]
+    status = str(args.get("status") or "active").strip()
+    stale_days = max(1, min(int(args.get("stale_days") or 30), 365))
+    raw_limit = args.get("limit")
+    limit = max(1, min(int(raw_limit), 2000)) if raw_limit is not None else 200
+    offset = max(0, int(args.get("offset") or 0))
+    rows = await pool.fetch(_TRIAGE_LINK_CTE + """
+        , per_object AS (
+            SELECT o.id, o.canonical, o.created_at,
+                   COALESCE(ls.link_count, 0) AS link_count,
+                   GREATEST(o.created_at, ast.last_assertion, ls.last_link_touch)
+                       AS last_touch,
+                   lower(CASE
+                       WHEN o.canonical LIKE '%/%'
+                           THEN regexp_replace(o.canonical, '^.*/', '')
+                       WHEN o.canonical LIKE '%:%'
+                           THEN regexp_replace(o.canonical, '^[^:]*:', '')
+                       ELSE o.canonical END) AS basename
+            FROM objects o
+            LEFT JOIN link_stats ls ON ls.obj_id = o.id
+            LEFT JOIN assertion_stats ast ON ast.object_id = o.id
+            WHERE o.type = $1 AND o.status = $2
+        ),
+        -- a percentile is an ORDERED-SET aggregate: postgres refuses it as a window
+        -- function (`OVER` unsupported), so the 95th percentile is its own single-row
+        -- CTE, cross-joined back in, rather than computed inline per row.
+        stats AS (
+            SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY link_count) AS p95_links
+            FROM per_object
+        ),
+        basename_counts AS (
+            SELECT basename, count(*) AS n FROM per_object GROUP BY basename
+        )
+        SELECT p.id, p.canonical, p.created_at AS born, p.last_touch, p.link_count,
+               CASE
+                 WHEN bc.n > 1 THEN 'duplicate_suspect'
+                 WHEN p.link_count = 0 THEN 'orphan'
+                 WHEN p.link_count >= GREATEST(10, s.p95_links) THEN 'hub'
+                 WHEN p.last_touch < now() - make_interval(days => $3) THEN 'stale'
+                 WHEN p.link_count BETWEEN 1 AND 2 THEN 'thin'
+                 ELSE 'normal'
+               END AS bucket
+        FROM per_object p
+        JOIN basename_counts bc ON bc.basename = p.basename
+        CROSS JOIN stats s
+        ORDER BY p.canonical
+    """, object_type, status, stale_days)
+    bucketed = sorted(rows, key=lambda r: (_TRIAGE_BUCKET_PRIORITY[r["bucket"]], r["canonical"]))
+    page = bucketed[offset:offset + limit]
+    listed = [
+        {"id": str(r["id"]), "canonical": r["canonical"], "bucket": r["bucket"],
+         "links": r["link_count"], "born": r["born"].isoformat(),
+         "last_touch": r["last_touch"].isoformat()}
+        for r in page
+    ]
+    return listed or [{"note": f"no {status} objects of type {object_type!r}"}]
+
+
 _FUNCTIONS: dict[str, Function] = {
     "coinvest": _fn_coinvest,
     "subject_report": _fn_subject_report,
@@ -2480,6 +2640,7 @@ _FUNCTIONS: dict[str, Function] = {
     "overhead": _fn_overhead,
     "desk_overview": _fn_desk_overview,
     "desk_project": _fn_desk_project,
+    "triage": _fn_triage,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
@@ -2489,10 +2650,11 @@ _FUNCTIONS: dict[str, Function] = {
 # op-trees (a `table`, a `sections`, a `sections`+show-original — see DEFAULT_COMPOSITIONS):
 # opinion → primitives the user owns.
 # `lap` anchors on args.ref OR the subject; `lint` audits the whole graph, no anchor at all.
+# `triage` is the same shape as `lint` — census/buckets both scope via `args`, never a subject.
 _SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "pulse", "project",
                  "lap", "lint", "echoes", "wall", "desk_decisions", "practices",
                  "fleet_live_agents", "fleet_pulse_line", "fleet_live", "mail_overview",
-                 "mail_threads", "overhead", "desk_overview", "desk_project"}
+                 "mail_threads", "overhead", "desk_overview", "desk_project", "triage"}
 
 
 def list_functions() -> list[str]:
@@ -3795,6 +3957,12 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "lap": {"op": "function", "name": "lap"},
     # rung 2: the graph auditing itself — report-only findings, testimony not verdicts.
     "graph-lint": {"op": "function", "name": "lint"},
+    # rung 2 (task #98): the census half of triage-as-a-primitive — types + counts + health,
+    # the left pane the operator sketched. BUCKETS (the middle pane, per-type drill) needs
+    # args.object_type per call, so it has no static saved composition — reach it via
+    # run-spec/{"op":"function","name":"triage","args":{"mode":"buckets","object_type":...}}
+    # or the `triage` MCP tool directly, the same ephemeral path mail_threads/desk_project use.
+    "type-census": {"op": "function", "name": "triage"},
     "echoes": {"op": "function", "name": "echoes"},
     # THE ONE WALL LAW (ruling 923c380f): the graded unresolved view — orient's law as a lens.
     "the-wall": {"op": "function", "name": "wall", "args": {"me": ["operator"]}},
@@ -3834,6 +4002,7 @@ _COMP_META: dict[str, tuple[str, str]] = {
     "portfolio": ("fleet", "the operator's repos as a portfolio"),
     "roadmap": ("fleet", "a project's work map — open/resolved/retracted, arc then owner"),
     "graph-lint": ("engine", "the graph auditing itself — findings, not verdicts"),
+    "type-census": ("engine", "every type's health — counts, orphans, thin, median links"),
     "family-consistency": ("engine", "config families that should agree but don't"),
     "family-drift": ("engine", "how config families drift over time"),
     "lap": ("engine", "one object's provenance timeline — how belief formed"),

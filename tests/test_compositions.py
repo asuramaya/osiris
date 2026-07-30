@@ -15,6 +15,7 @@ from src.orchestrator.compositions import (
     _fn_desk_overview,
     _fn_desk_project,
     _fn_echoes,
+    _fn_triage,
     create_room,
     list_compositions,
     run_composition,
@@ -1592,3 +1593,135 @@ async def test_no_default_composition_arms_row_actions_declaratively() -> None:
 
     armed = [name for name, spec in DEFAULT_COMPOSITIONS.items() if _has_row_actions(spec)]
     assert armed == []
+
+
+# --- triage-as-a-primitive (task #98) ---------------------------------------------------
+
+async def test_triage_census_reports_n_orphans_thin_median_and_max_per_type_status(
+    actions: Actions,
+) -> None:
+    orphan = await actions.create_or_find_object("Organization", "org:orphan", "test")
+    thin1 = await actions.create_or_find_object("Organization", "org:thin1", "test")
+    thin2 = await actions.create_or_find_object("Organization", "org:thin2", "test")
+    p1 = await actions.create_or_find_object("Person", "person:1", "test")
+    p2 = await actions.create_or_find_object("Person", "person:2", "test")
+    p3 = await actions.create_or_find_object("Person", "person:3", "test")
+    await actions.create_link(thin1, p1, "owns", "test", NOW, 0.9)
+    await actions.create_link(thin2, p2, "owns", "test", NOW, 0.9)
+    await actions.create_link(thin2, p3, "owns", "test", NOW, 0.9)
+    del orphan  # exists only to be counted, never linked
+
+    rows = await _fn_triage(actions.pool, None, {"mode": "census"})
+    row = next(r for r in rows if r["type"] == "Organization" and r["status"] == "active")
+    assert row["n"] == 3
+    assert row["orphans"] == 1
+    assert row["thin"] == 2
+    assert row["median_links"] == 1.0
+    assert row["max_links"] == 2
+    # objects.created_at is DB-generated at insert (DEFAULT now()) — not the fixture's own
+    # NOW constant, which only stamps assertions/links — so "born" is checked for shape,
+    # not an exact value the test can control.
+    assert datetime.fromisoformat(row["born"]).year >= 2026
+
+
+async def test_triage_buckets_flags_orphan_and_hub(actions: Actions) -> None:
+    orphan = await actions.create_or_find_object("Organization", "org:orphan", "test")
+    hub = await actions.create_or_find_object("Organization", "org:hub", "test")
+    del orphan
+    for i in range(15):
+        p = await actions.create_or_find_object("Person", f"person:hub{i}", "test")
+        await actions.create_link(hub, p, "owns", "test", NOW, 0.9)
+
+    rows = await _fn_triage(actions.pool, None,
+                            {"mode": "buckets", "object_type": "Organization",
+                             "stale_days": 999_999})
+    by_canon = {r["canonical"]: r["bucket"] for r in rows}
+    assert by_canon["org:orphan"] == "orphan"
+    assert by_canon["org:hub"] == "hub"
+
+
+async def test_triage_buckets_flags_thin_and_normal(actions: Actions) -> None:
+    thin = await actions.create_or_find_object("Organization", "org:thin", "test")
+    normal = await actions.create_or_find_object("Organization", "org:normal", "test")
+    people = [await actions.create_or_find_object("Person", f"person:{i}", "test")
+              for i in range(5)]
+    await actions.create_link(thin, people[0], "owns", "test", NOW, 0.9)
+    for p in people[1:]:
+        await actions.create_link(normal, p, "owns", "test", NOW, 0.9)  # 4 links: not thin
+
+    rows = await _fn_triage(actions.pool, None,
+                            {"mode": "buckets", "object_type": "Organization",
+                             "stale_days": 999_999})
+    by_canon = {r["canonical"]: r["bucket"] for r in rows}
+    assert by_canon["org:thin"] == "thin"
+    assert by_canon["org:normal"] == "normal"
+
+
+async def test_triage_buckets_flags_stale_when_linked_but_long_untouched(
+    actions: Actions,
+) -> None:
+    stale = await actions.create_or_find_object("Organization", "org:stale", "test")
+    p = await actions.create_or_find_object("Person", "person:stale-link", "test")
+    await actions.create_link(stale, p, "owns", "test", NOW, 0.9)
+    # last_touch is GREATEST of THREE created_at-shaped columns (the object's own, the
+    # link's own) — both DB-generated at insert (always "now"), so an object can never
+    # read as stale on its own creation/link timestamps. Backdating both directly is the
+    # only way to manufacture a genuinely old, genuinely untouched-since object here.
+    await actions.pool.execute("UPDATE objects SET created_at=$1 WHERE id=$2", NOW, stale)
+    await actions.pool.execute(
+        "UPDATE links SET created_at=$1, first_seen=$1, last_seen=$1 "
+        "WHERE from_id=$2 OR to_id=$2", NOW, stale)
+
+    rows = await _fn_triage(actions.pool, None,
+                            {"mode": "buckets", "object_type": "Organization",
+                             "stale_days": 1})
+    row = next(r for r in rows if r["canonical"] == "org:stale")
+    assert row["bucket"] == "stale"
+
+
+async def test_triage_buckets_flags_duplicate_suspect_on_basename_collision(
+    actions: Actions,
+) -> None:
+    a = await actions.create_or_find_object("Organization", "repo:conker", "test")
+    b = await actions.create_or_find_object("Organization", "file:/x/conker", "test")
+    c = await actions.create_or_find_object("Organization", "repo:unique-thing", "test")
+    del a, b, c
+
+    rows = await _fn_triage(actions.pool, None,
+                            {"mode": "buckets", "object_type": "Organization",
+                             "stale_days": 999_999})
+    by_canon = {r["canonical"]: r["bucket"] for r in rows}
+    assert by_canon["repo:conker"] == "duplicate_suspect"
+    assert by_canon["file:/x/conker"] == "duplicate_suspect"
+    assert by_canon["repo:unique-thing"] == "orphan"  # distinct basename, zero links
+
+
+async def test_triage_buckets_names_valid_types_when_object_type_missing_or_unknown(
+    actions: Actions,
+) -> None:
+    await actions.create_or_find_object("Organization", "org:exists", "test")
+
+    missing = await _fn_triage(actions.pool, None, {"mode": "buckets"})
+    assert "requires args.object_type" in missing[0]["note"]
+    assert "Organization" in missing[0]["valid_types"]
+
+    unknown = await _fn_triage(actions.pool, None,
+                               {"mode": "buckets", "object_type": "NotARealType"})
+    assert "no objects of type" in unknown[0]["note"]
+
+
+async def test_triage_unknown_mode_names_the_valid_choices(actions: Actions) -> None:
+    rows = await _fn_triage(actions.pool, None, {"mode": "bogus"})
+    assert "unknown mode" in rows[0]["note"]
+
+
+async def test_type_census_composition_end_to_end(actions: Actions) -> None:
+    await actions.create_or_find_object("SoftwareProject", "repo:census-e2e", "test")
+
+    await save_composition(actions.pool, "type-census", DEFAULT_COMPOSITIONS["type-census"])
+    res = await run_composition(actions.pool, "type-census")
+    assert res["kind"] == "rows"
+    row = next(r for r in res["items"]
+              if r["type"] == "SoftwareProject" and r["status"] == "active")
+    assert row["n"] == 1
+    assert row["orphans"] == 1

@@ -762,6 +762,47 @@ async def graph_lint(stale_days: int = 14, check: str | None = None, limit: int 
 
 
 @mcp.tool()
+async def triage(mode: str = "census", object_type: str | None = None, status: str = "active",
+                 stale_days: int = 30, limit: int | None = None,
+                 offset: int = 0) -> list[dict[str, Any]]:
+    """Judge the object set itself — the reusable primitive behind eight ad-hoc SQL scripts
+    a manager once ran through a shell by hand (task #98). TWO MODES, `mode`:
+
+    'census' (the default) — one row per (type, status): `n`, `orphans` (zero live links),
+    `thin` (1-2 live links), `median_links`/`max_links`, `born` (earliest member),
+    `last_touch` (latest touch across the group — derived; the graph carries no
+    `updated_at`). The left-pane type browser: what exists, and how healthy each slice is.
+
+    'buckets' — `object_type` required (a note names every real type when it's missing or
+    unknown). One row per object of that type+`status` (default "active"), each carrying
+    exactly one `bucket`: `duplicate_suspect` (a same-type+status object shares its
+    basename), `orphan` (zero live links), `hub` (live links at/above the type's own 95th
+    percentile, floor 10), `stale` (linked but untouched past `stale_days`, default 30),
+    `thin` (1-2 live links), or `normal`. Every object in scope is listed, not only flagged
+    ones — this doubles as a plain browse. `limit`/`offset` (default 200/0, capped 2000)
+    page it; `census` already carries the true count per type, so this never needs to.
+
+    Read-only, no writes — findings are testimony for a mind's own triage verbs, same rule
+    graph_lint runs on."""
+    pool = await _pool_get()
+    args: dict[str, Any] = {"mode": mode}
+    if object_type is not None:
+        args["object_type"] = object_type
+    if status:
+        args["status"] = status
+    if stale_days:
+        args["stale_days"] = stale_days
+    if limit is not None:
+        args["limit"] = limit
+    if offset:
+        args["offset"] = offset
+    spec = {"op": "function", "name": "triage", "args": args}
+    out = await comp.run_spec(pool, spec, None, name="triage")
+    items: list[dict[str, Any]] = out["items"]
+    return items
+
+
+@mcp.tool()
 async def get_schema() -> dict[str, Any]:
     """The ontology — the object types (with category + canonical schemes) and link types
     the graph declares. Read this before authoring a composition or reading a result, so you
