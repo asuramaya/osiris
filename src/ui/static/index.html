@@ -505,6 +505,25 @@ async function saveWorkingAs(){
     body:JSON.stringify({name,spec:WORKING,kind:'lens',room_id:ROOM||null})});
   await loadComps(); setStatus(`Saved '${name}' to this room.`);
 }
+// row_actions' "run:" dispatch (task #90, Thoth msg 1976/2005) — a row_action whose action
+// is "run:<function>" is navigation, not a write: osiris.js's click delegate recognizes the
+// prefix and fires this event instead of POSTing to /act (a mutation and a read have
+// different response shapes — a toast+row-removal vs a whole new board). Mirrors
+// runWorking()'s own ephemeral-spec pattern exactly, just sourced from a row's own _action
+// instead of the inline composer's WORKING spec — no saved composition backs the result, so
+// unlike runComp() there is nothing to look up a refresh_secs for.
+document.addEventListener('osiris:run', async (e)=>{
+  const {name, args} = e.detail;
+  setStatus(`Running ${name}…`);
+  stopAutoRefresh();
+  const res = await fetch('/compositions/run-spec',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({spec:{op:'function', name, args}, subject:FOCUS, name})}).then(r=>r.json());
+  if(res.error){ setStatus(res.error); return; }
+  ACTIVE=null; postConsole({composition:name, view:null}); loadComps();
+  RESULT=res; RESULT.name=name;
+  WORKING = res.spec ? JSON.parse(JSON.stringify(res.spec)) : null;
+  VIEW=Osiris.defaultView(res); renderSwitcher(); await renderCurrent();
+});
 // a table row inspects in place (right panel) — it does NOT switch the center to the board,
 // so you keep your result set. (A graph node tap goes through focus(), which explores.)
 // single-click = SELECT: inspect the object + post the cursor (Claude follows), never touching

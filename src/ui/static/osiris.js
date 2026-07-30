@@ -494,11 +494,18 @@ const Osiris = (() => {
   // built almost entirely OF '"' characters). The browser decodes &quot; back to '"' when it
   // parses the attribute, so JSON.parse(el.dataset.args) still sees the original string.
   const escAttr = (s) => esc(s).replace(/"/g, "&quot;");
+  // A "run:<function>" action is NAVIGATION, not a verb — no fixed cosmetic name belongs in
+  // ACTION_LABELS for it (that would mean hardcoding a function name into the frozen module,
+  // exactly the per-page special-casing this architecture refuses). Generic instead: strip
+  // the prefix, underscores to spaces — "run:mail_threads" reads as "mail threads".
+  function _actionLabel(name) {
+    if (name.startsWith("run:")) return name.slice(4).replace(/_/g, " ");
+    return ACTION_LABELS[name] || name;
+  }
   function _actionButton(action) {
     const name = action.action || "";
-    const label = ACTION_LABELS[name] || name;
     return `<button class="r-act-btn" data-action="${escAttr(name)}" ` +
-      `data-args="${escAttr(JSON.stringify(action.args || {}))}">${esc(label)}</button>`;
+      `data-args="${escAttr(JSON.stringify(action.args || {}))}">${esc(_actionLabel(name))}</button>`;
   }
   // a lightweight, self-built toast — this library has no host page to ask for one (osiris.js
   // is the frozen surface the composer just calls into), so it mounts its own corner and cleans
@@ -521,25 +528,34 @@ const Osiris = (() => {
   // ONCE at module load on `document`, never re-wired per render: every composition run
   // replaces `panel.innerHTML` wholesale, and a delegate on `document` survives that for free
   // — no rebind after each render, no risk of a listener stacking on a node about to be thrown
-  // away. Deliberately NOT a "run:" navigation dispatch (Imhotep's drill-in need is a separate,
-  // unbuilt piece — a route that sometimes mutates and sometimes queries, chosen by a string
-  // prefix, is a footgun by construction; out of scope here on purpose).
+  // away.
   document.addEventListener("click", async (e) => {
     const b = e.target.closest("button[data-action]");
     if (!b) return;
     e.preventDefault();
+    let args;
+    try { args = JSON.parse(b.dataset.args || "{}"); } catch { args = {}; }
+    // NAVIGATION, not a mutation (task #90, Thoth msg 1976/2005) — a "run:<function>" action
+    // invokes-and-SHOWS a Result rather than writing through /act: a materially different
+    // response shape (a whole new board, not a toast + row removal). This module has no
+    // access to RESULT/WORKING/renderCurrent — those are page (index.html) state, same
+    // boundary renderResult's own inspectOnly/drillInto callback params already respect — so
+    // it only recognizes the prefix and hands off via a DOM event; the shell does the run.
+    if (b.dataset.action.startsWith("run:")) {
+      document.dispatchEvent(new CustomEvent("osiris:run",
+        { detail: { name: b.dataset.action.slice(4), args } }));
+      return;
+    }
     const was = b.textContent;
     b.disabled = true;
     b.textContent = "…";
-    let args;
-    try { args = JSON.parse(b.dataset.args || "{}"); } catch { args = {}; }
     try {
       const r = await fetch("/act", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: b.dataset.action, args }),
       }).then((res) => res.json());
       if (r && r.error) { toast(r.error, true); b.disabled = false; b.textContent = was; return; }
-      toast(`${ACTION_LABELS[b.dataset.action] || b.dataset.action} — done`);
+      toast(`${_actionLabel(b.dataset.action)} — done`);
       // the row's own fact no longer holds (the graph write already landed, server-confirmed)
       // — remove it now rather than wait on a poll this composition may not even be running.
       b.closest("tr")?.remove();

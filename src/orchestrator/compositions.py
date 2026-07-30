@@ -59,7 +59,10 @@ Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
        dict, so args resolve via `row.get(property)` directly, no `_props` indirection. The
        client (table() recognizing a lone `_action` as a control, a click-delegate POSTing
        to /act) shipped in 37af8b7 — browser-verified against live-desk's own resolve
-       button; the "run:" navigation dispatch stays unbuilt, a separate need.
+       button. An action named `"run:<function>"` is NAVIGATION rather than a write — the
+       client dispatches a DOM event instead of POSTing, the page shell runs the named
+       Function via /compositions/run-spec and shows its Result (task #90, Thoth msg 1976/
+       2005) — see `mail_overview`'s own row_action for the motivating case.
        `row_actions` (plural, msg 1976 gating msg 1971's proposal) is for a row that affords
        MORE than one verb — a list of {label,action,args}, producing `_actions:[...]` on the
        row. Its own arg templates add `{"literal":v}` alongside `{"property":p}` (exactly
@@ -2803,9 +2806,11 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
                 # `_col_value` indirection the way `_table`'s object-backed version does:
                 # `row.get(property)` directly. The CLIENT half (table() recognizing
                 # `_action` as a control, a click-delegate POSTing to /act) shipped in
-                # 37af8b7 — browser-verified against live-desk's resolve button. The "run:"
-                # navigation dispatch stays unbuilt (a separate, deliberately out-of-scope
-                # need). SINGULAR only: one action, one property-templated arg each — see
+                # 37af8b7 — browser-verified against live-desk's resolve button. A
+                # `"run:<function>"` action is the navigation form (task #90, Thoth msg
+                # 1976/2005) — the client dispatches a DOM event instead of POSTing, and the
+                # page shell runs the named Function via /compositions/run-spec, showing its
+                # Result. SINGULAR only: one action, one property-templated arg each — see
                 # `row_actions` below for a row that affords more than one verb.
                 for row in data:
                     row["_action"] = {
@@ -3633,12 +3638,15 @@ FLEET_STRIP: dict[str, Any] = {
 
 # THE MAIL OVERVIEW (task #71 consolidation wave 2, ruling d42c543b, msg 1929) — the
 # overview-only half of /mail's port. `mail_threads` (registered as a Function, above) is
-# NOT saved as its own composition here: it takes `args.box`, and the composer has no
-# mechanism today for a human to supply a Function's args at run time (checked: no such
-# input exists in src/ui/static/index.html) — a saved composition with a baked-in box
-# would only ever show one fixed mailbox. That gap is flagged to Thoth, not papered over
-# with a placeholder composition; /mail's route stays until it's resolved.
-MAIL_OVERVIEW: dict[str, Any] = {"op": "function", "name": "mail_overview"}
+# NOT saved as its own composition here — it takes `args.box`, and a saved composition with
+# a baked-in box would only ever show one fixed mailbox. THE DRILL-IN (task #90, Thoth msg
+# 1976/2005): each row's own `row_action` runs mail_threads for THAT row's box via the
+# "run:" navigation dispatch — a click switches the board to that box's threads, no manual
+# args-input mechanism needed. Closes the gap this comment used to flag as open.
+MAIL_OVERVIEW: dict[str, Any] = {
+    "op": "function", "name": "mail_overview",
+    "row_action": {"action": "run:mail_threads", "args": {"box": {"property": "box"}}},
+}
 
 
 DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {

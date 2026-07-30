@@ -6,6 +6,12 @@ because of it. table() must treat `_action` as a CONTROL, never a column, and th
 delegate must round-trip a row's own args through /act faithfully — including surviving being
 embedded in an HTML attribute, which is JSON's `"` characters' natural home for corruption.
 
+Also covers the "run:" navigation form (task #90, Thoth msg 1976/2005): an action named
+"run:<function>" must NOT reach /act at all — the click delegate dispatches an `osiris:run`
+DOM event instead, which is this module's entire client-side contract (the page shell,
+index.html, owns actually running the Function and switching the board; untested here, same
+boundary the module itself respects).
+
 Playwright + the real osiris.js/osiris.css (same harness as test_ui_render.py); /act is
 intercepted via page.route — no backend, no DB, pure client behavior."""
 from __future__ import annotations
@@ -145,4 +151,75 @@ async def test_click_error_response_restores_the_button_and_keeps_the_row(
         assert await page.locator("tbody tr").count() == 2  # a refused write removes nothing
         toast_text = await page.locator("#o-toast").inner_text()
         assert "no match" in toast_text
+        await browser.close()
+
+
+# --- "run:" dispatch (task #90, Thoth msg 1976/2005) — a row_action whose action starts with
+# "run:<function>" is NAVIGATION, not a write: the click delegate must NOT POST it to /act, and
+# must instead dispatch a document-level `osiris:run` CustomEvent carrying {name, args} — the
+# page shell (index.html, untested here — see its own osiris:run listener) is what actually
+# runs the Function and switches the board. This module has no access to that page state by
+# design, so the event is the entire client-side contract this test can verify.
+
+ROWS_WITH_RUN_ACTION = [
+    {"box": "neo", "msgs": 3, "unsettled": 1,
+     "_action": {"action": "run:mail_threads", "args": {"box": "neo"}}},
+]
+
+
+async def test_run_action_renders_a_generic_label_not_the_raw_action_string(
+    chromium_available: bool,
+) -> None:
+    if not chromium_available:
+        pytest.skip("Chromium can't launch on this host")
+    from playwright.async_api import async_playwright
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.set_content(_HARNESS)
+        await page.add_script_tag(content=_JS + "\nwindow.Osiris = Osiris;")
+        result = {"kind": "rows", "spec": {"op": "table"}, "items": ROWS_WITH_RUN_ACTION}
+        await page.evaluate(_RENDER, result)
+
+        btn = page.locator("button[data-action]").first
+        assert await btn.get_attribute("data-action") == "run:mail_threads"
+        # generic prefix-strip, not the raw "run:mail_threads" string, and not a hardcoded
+        # per-function label either — the module never learns what "mail_threads" means
+        assert (await btn.inner_text()).strip() == "mail threads"
+        await browser.close()
+
+
+async def test_run_action_dispatches_an_event_instead_of_posting_to_act(
+    chromium_available: bool,
+) -> None:
+    if not chromium_available:
+        pytest.skip("Chromium can't launch on this host")
+    from playwright.async_api import async_playwright
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.set_content(_HARNESS)
+        await page.add_script_tag(content=_JS + "\nwindow.Osiris = Osiris;")
+        result = {"kind": "rows", "spec": {"op": "table"}, "items": ROWS_WITH_RUN_ACTION}
+        await page.evaluate(_RENDER, result)
+
+        posted = {"hit": False}
+
+        async def _handle(route: Any) -> None:
+            posted["hit"] = True
+            await route.fulfill(status=200, content_type="application/json", body="{}")
+
+        await page.route("**/act", _handle)
+        await page.evaluate(
+            "window.__seen = null; "
+            "document.addEventListener('osiris:run', (e) => { window.__seen = e.detail; });")
+
+        rows_before = await page.locator("tbody tr").count()
+        await page.locator("button[data-action]").first.click()
+        await page.wait_for_function("window.__seen !== null")
+
+        assert posted["hit"] is False  # never reached /act — it's navigation, not a write
+        assert await page.locator("tbody tr").count() == rows_before  # the row is untouched
+        seen = await page.evaluate("window.__seen")
+        assert seen == {"name": "mail_threads", "args": {"box": "neo"}}
         await browser.close()

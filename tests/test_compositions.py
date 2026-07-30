@@ -1193,6 +1193,21 @@ async def test_mail_composition_end_to_end(actions: Actions) -> None:
     assert "neo" in [r["box"] for r in res["items"]]
 
 
+async def test_mail_composition_rows_carry_the_drill_in_run_action(actions: Actions) -> None:
+    """task #90 (Thoth msg 1976/2005) — each box's own row runs mail_threads for THAT box via
+    the "run:" navigation dispatch, not a fixed/shared action across every row."""
+    from src.orchestrator.compositions import MAIL_OVERVIEW
+    from src.orchestrator.mailbox import send_message
+
+    await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
+                       to_project="neo", body="a project lane message")
+
+    await save_composition(actions.pool, "mail", MAIL_OVERVIEW)
+    res = await run_composition(actions.pool, "mail")
+    row = next(r for r in res["items"] if r["box"] == "neo")
+    assert row["_action"] == {"action": "run:mail_threads", "args": {"box": "neo"}}
+
+
 # --- overhead (task #91, ruling d42c543b, msg 1959) — /overhead ported as one Function, two
 # data sources (TranscriptStore's harness-cost accounting, TelemetryStore's retained-events
 # forensics) composed once in Python. Wraps overhead_fleet/summary verbatim.
