@@ -14,6 +14,7 @@ from src.orchestrator.compositions import (
     _eval,
     _fn_desk_overview,
     _fn_desk_project,
+    create_room,
     list_compositions,
     run_composition,
     save_composition,
@@ -657,6 +658,51 @@ async def test_save_composition_omitting_section_keeps_the_prior_value_on_resave
     await save_composition(actions.pool, "wm-resec", {"op": "select", "object_type": "X"})
     rows = [c for c in await list_compositions(actions.pool) if c["name"] == "wm-resec"]
     assert rows[0]["section"] == "fleet"          # not overwritten to _more
+    assert rows[0]["spec"]["object_type"] == "X"  # the actual edit still landed
+
+
+# --- room_id GETS THE SAME TREATMENT (ruling 89e67c49): the identical invisibility defect,
+# the identical Postgres NOT-NULL-on-INSERT-tuple trap, the identical fix shape — with one
+# deliberate difference (no DB-level NOT NULL; see save_composition's own docstring for why
+# ON DELETE SET NULL makes that unsafe here) that these tests exercise directly. -------------
+
+async def test_save_composition_defaults_missing_room_to_the_engineer_room_on_create(
+    actions: Actions,
+) -> None:
+    room_id = await create_room(actions.pool, "engineer")
+    await save_composition(actions.pool, "wm-noroom", {"op": "select"})
+    rows = [c for c in await list_compositions(actions.pool) if c["name"] == "wm-noroom"]
+    assert rows[0]["room_id"] == str(room_id)
+
+
+async def test_save_composition_leaves_room_unassigned_when_no_engineer_room_exists(
+    actions: Actions,
+) -> None:
+    """The fallback degrades gracefully rather than fabricating a room that would fail its
+    own foreign key — every test DB starts with zero rooms, so this is also the default
+    coverage for that shape, not a contrived edge case."""
+    await save_composition(actions.pool, "wm-noroomatall", {"op": "select"})
+    rows = [c for c in await list_compositions(actions.pool) if c["name"] == "wm-noroomatall"]
+    assert rows[0]["room_id"] is None
+
+
+async def test_save_composition_explicit_room_wins_on_create(actions: Actions) -> None:
+    await create_room(actions.pool, "engineer")
+    other = await create_room(actions.pool, "analyst")
+    await save_composition(actions.pool, "wm-room", {"op": "select"}, room_id=other)
+    rows = [c for c in await list_compositions(actions.pool) if c["name"] == "wm-room"]
+    assert rows[0]["room_id"] == str(other)  # never silently redirected to the fallback
+
+
+async def test_save_composition_omitting_room_keeps_the_prior_value_on_resave(
+    actions: Actions,
+) -> None:
+    await create_room(actions.pool, "engineer")
+    mine = await create_room(actions.pool, "mine")
+    await save_composition(actions.pool, "wm-reroom", {"op": "select"}, room_id=mine)
+    await save_composition(actions.pool, "wm-reroom", {"op": "select", "object_type": "X"})
+    rows = [c for c in await list_compositions(actions.pool) if c["name"] == "wm-reroom"]
+    assert rows[0]["room_id"] == str(mine)        # not redirected to 'engineer'
     assert rows[0]["spec"]["object_type"] == "X"  # the actual edit still landed
 
 

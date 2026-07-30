@@ -80,6 +80,7 @@ load-tested): `traverse` ≤ 3 hops, `aggregate` ≤ 3 group_by dimensions.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from collections import Counter
@@ -99,6 +100,8 @@ from src.orchestrator.frontier import subject_report
 from src.orchestrator.monitor import match_condition
 from src.orchestrator.neighborhoods import NEIGHBORHOOD, neighborhoods_of
 from src.orchestrator.seats import _OPERATOR_ACTORS
+
+logger = logging.getLogger("osiris.compositions")
 
 # Named pure transforms a `collect` op may apply to a value. Kept tiny and neutral —
 # `country` is the only domain helper, shared with the (soon-vestigial) discrepancy code.
@@ -3051,15 +3054,16 @@ async def save_composition(
 ) -> uuid.UUID:
     """Save (or update) a composition by name. Fork = save under a new name. `webhook_url`
     and `active` are a watch's execution metadata (a lens ignores them). `room_id` scopes it
-    to a stance (NULL = unassigned; a re-save without a room keeps the existing one).
+    to a stance; a re-save without one keeps the existing one; a genuine create without one
+    gets the named fallback below, never a bare NULL — see ROOM_ID GETS THE SAME TREATMENT.
     `description` = one line of 'when to open this'; `section` = which shelf of the composer
-    sidebar (arrive | wall | memory | fleet | engine | casework) — all three keep their prior
-    value when omitted on a re-save. `refresh_secs` (ruling cf9286b2) is how often the
-    watermark-poller should check for this lens while it's the one on screen — None (the
-    default) means MANUAL ONLY: a lens goes live because someone decided it should, never
-    because it inherited a global tick. Unlike description/section, an explicit re-save
-    passing None does NOT clear a prior value either — same COALESCE-keeps-prior contract,
-    consistent across all three, not a special case for this one.
+    sidebar (arrive | wall | memory | fleet | engine | casework) — description and
+    refresh_secs keep their prior value when omitted on a re-save, same COALESCE-keeps-prior
+    contract as always; section and room_id no longer CAN be omitted into NULL at all, on
+    either a create or a re-save (see below — both needed the same fix, for the same reason).
+    `refresh_secs` (ruling cf9286b2) is how often the watermark-poller should check for this
+    lens while it's the one on screen — None (the default) means MANUAL ONLY: a lens goes
+    live because someone decided it should, never because it inherited a global tick.
 
     MUST BE SECTIONED (task #94): neither the MCP save_composition tool nor the HTTP
     /compositions route ever pass `section` — a fresh save through either always arrives here
@@ -3069,7 +3073,28 @@ async def save_composition(
     room-scoped read, and section=NULL used to have no NOT-NULL backstop either. `_more` is
     already the CLIENT's own fallback shelf label (osiris.js: `c.section||'_more'`) for
     exactly this case — reused here rather than inventing a second sentinel, so an
-    uncategorized composition still lands somewhere a reader can find it."""
+    uncategorized composition still lands somewhere a reader can find it.
+
+    ROOM_ID GETS THE SAME TREATMENT (ruling 89e67c49): room_id=NULL turned out to have the
+    identical "invisible outside the god view" defect section=NULL did (0 of 28 compositions
+    visible in the one room in active use have room_id=NULL — confirmed live, task #94).
+    Resolved the same way, for the same Postgres reason (below): reuse the prior row's
+    room_id on a re-save, or the 'engineer' room BY NAME (not a hardcoded id) on a genuine
+    create with none at all — looked up fresh each call since a room's id isn't portable
+    across environments the way the string '_more' is. The fallback firing is logged
+    (logger.warning), never silent — "a default that reports beats a silent one" (89e67c49):
+    a misfiled-but-visible composition is recoverable, an invisible one isn't.
+
+    UNLIKE SECTION, room_id gets NO DB-level NOT NULL constraint. The column carries
+    `REFERENCES rooms(id) ON DELETE SET NULL` (migration 0010) specifically so deleting a
+    room gracefully orphans its compositions back to unassigned rather than breaking the
+    delete; a NOT NULL constraint would turn deleting ANY room that still has compositions
+    in it into a hard failure. Room deletion setting room_id to NULL is a real, legitimate,
+    DIFFERENT case from 'never assigned one at creation' — only the latter is what this
+    function's own resolution closes. If the 'engineer' room itself doesn't exist in this
+    environment (every test DB; a fresh install before anyone's created a room), room_id is
+    left None rather than fabricating a value that would fail its own foreign key — logged
+    either way, so the gap is visible rather than assumed away."""
     if section is None:
         # Postgres validates NOT NULL against the ATTEMPTED insert row even on a path that
         # will end up taking the ON CONFLICT DO UPDATE branch — the UPDATE SET clause's own
@@ -3079,8 +3104,30 @@ async def save_composition(
         # specifically: reuse the existing row's section on a re-save, or '_more' if there's
         # no prior row at all (a genuine create) — section is never passed as a literal NULL
         # into the query below, in either case.
-        section = await pool.fetchval(
-            "SELECT section FROM compositions WHERE name=$1", name) or "_more"
+        prior_section = await pool.fetchval(
+            "SELECT section FROM compositions WHERE name=$1", name)
+        if prior_section is None:
+            logger.warning(
+                "save_composition(%r): no section given and none on record — "
+                "defaulting to the '_more' shelf", name)
+        section = prior_section or "_more"
+    if room_id is None:
+        prior_room = await pool.fetchval(
+            "SELECT room_id FROM compositions WHERE name=$1", name)
+        if prior_room is not None:
+            room_id = prior_room
+        else:
+            fallback_room = await pool.fetchval(
+                "SELECT id FROM rooms WHERE name='engineer'")
+            if fallback_room is not None:
+                logger.warning(
+                    "save_composition(%r): no room_id given and none on record — "
+                    "defaulting to the 'engineer' room (%s)", name, fallback_room)
+                room_id = fallback_room
+            else:
+                logger.warning(
+                    "save_composition(%r): no room_id given, none on record, and no "
+                    "'engineer' room exists here — leaving room_id unassigned", name)
     return await pool.fetchval(  # type: ignore[no-any-return]
         "INSERT INTO compositions (name, kind, spec, webhook_url, active, room_id, "
         " description, section, refresh_secs) "
