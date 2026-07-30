@@ -239,3 +239,65 @@ async def test_objects_timeline_mode_caps_and_says_what_it_withheld(
         assert info["items"] == 12, f"expected the SECTION_CAP=12 shape, got {info['items']}"
         assert info["more"] and "28" in info["more"], (
             f"no honest '+N more' note for the other 28: {info['more']!r}")
+
+
+# NESTED CELL VALUES (task #109's tail, Thoth DM 2145; compositions.py:2216's own documented
+# gap): neither render_composition (chrome.py, left untouched — Thoth's own chrome.py route
+# cuts are imminent, no reason to add fresh logic to a shrinking module) nor osiris.js's
+# table() used to recurse into a CELL holding a list or dict — a raw JSON.stringify blob, or
+# "[object Object]" repeated for a list of objects, worse than not showing it at all. table()'s
+# _txt/_flatVal now flatten one into the same compact "key=value, key=value" prose
+# _fleet_doors_summary/_fleet_ancestors_summary already hand-roll per-Function
+# (compositions.py) — capped at 2 levels deep so a genuinely deep structure degrades to "{…}"
+# rather than an unbounded blob. Each field below VARIES across rows (table()'s own law: a
+# constant value collapses to a header chip, never a cell) so the fix is exercised as a real
+# column, not a chip.
+NESTED_ROWS = [
+    {"id": "a", "bucket": "duplicate_suspect",
+     "siblings": [{"canonical": "repo:coinbase-onchain-agent", "links": 3},
+                  {"canonical": "repo:coinbase-onchain-web", "links": 5}],
+     "stats": {"in": 12, "out": 3}, "tags": ["a", "b", "c"],
+     "meta": {"outer": {"inner": {"deep": "v1"}}}},
+    {"id": "b", "bucket": "hub", "siblings": [{"canonical": "repo:other", "links": 1}],
+     "stats": {"in": 1, "out": 0}, "tags": ["x", "y"],
+     "meta": {"outer": {"inner": {"deep": "v2"}}}},
+    {"id": "c", "bucket": "normal", "siblings": [], "stats": {"in": 0, "out": 0}, "tags": [],
+     "meta": {}},
+]
+
+
+async def test_table_flattens_nested_cell_values_instead_of_a_blob(
+    chromium_available: bool,
+) -> None:
+    if not chromium_available:
+        pytest.skip("Chromium can't launch on this host")
+    from playwright.async_api import async_playwright
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page = await browser.new_page(viewport={"width": 1200, "height": 900})
+        await page.set_content(_HARNESS)
+        await page.add_script_tag(content=_JS + "\nwindow.Osiris = Osiris;")
+        result = {"kind": "rows", "spec": {"op": "table"}, "items": NESTED_ROWS}
+        html = await page.evaluate("""
+            async (result) => {
+              const panel = document.getElementById('panel');
+              panel.innerHTML = '';
+              await window.Osiris.renderResult(
+                result, {board: null, panel}, 'panel', ()=>{}, ()=>{});
+              return panel.innerHTML;
+            }
+        """, result)
+        await browser.close()
+        assert "[object Object]" not in html, "a list of dicts joined as [object Object] mush"
+        assert '{"in":12' not in html, "a nested dict fell straight to a JSON.stringify blob"
+        # the nested list-of-dicts flattened into real, readable content — not dropped
+        assert "coinbase-onchain-agent" in html
+        assert "coinbase-onchain-web" in html
+        # the nested plain dict flattened into the same "key=value" prose
+        assert "in=12" in html and "out=3" in html
+        # an already-working flat array of primitives is UNCHANGED — comma-joined
+        assert "a, b, c" in html
+        # a genuinely deep structure (meta.outer.inner.deep) is CAPPED, not unrolled forever
+        assert "v1" not in html and "v2" not in html, (
+            "depth cap didn't fire — a 3-level-deep leaf value leaked into the cell")
+        assert "…" in html, "no collapse marker for the depth-capped structure"

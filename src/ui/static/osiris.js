@@ -476,10 +476,46 @@ const Osiris = (() => {
   //   · width is decided by CONTENT, never position — a column whose longest value is short is
   //     marked .r-tight and shrinks to fit, so the prose column takes the width it needs
   //     instead of splitting a 4K panel evenly with a one-word `scope`.
+  // NESTED CELL VALUES (task #109's tail, Thoth DM 2145; compositions.py:2216's own
+  // documented gap — "neither render_composition nor osiris.js's table() recurse into a
+  // nested list/dict CELL value"): a raw JSON.stringify blob or an "[object Object]"-joined
+  // mush is worse than not showing it at all. Flattened into the SAME compact
+  // "key=value, key=value" prose _fleet_doors_summary/_fleet_ancestors_summary already
+  // hand-roll per-Function server-side (compositions.py) — generalized here so no Function
+  // needs its own summarizer just to keep a nested field out of the generic table's way.
+  // Capped at 2 levels deep (a 3rd level collapses to a count or "{…}", never recurses
+  // forever) and a few items per list — a genuinely deep structure degrades to a number
+  // rather than an unreadable wall, same economy _fleet_doors_summary's own 4-item cap
+  // already established. Lands inside cell()'s EXISTING clamp+tooltip once it runs long
+  // (below) — nothing new needed there, only the text itself had to stop lying.
+  const NEST_ITEMS_CAP = 4;
+  function _hasNestedObject(v) {
+    return Array.isArray(v) ? v.some((x) => x && typeof x === "object") : !!(v && typeof v === "object");
+  }
+  function _flatObj(o, depth) {
+    const parts = Object.entries(o)
+      .filter(([k, val]) => val != null && val !== "" && k !== "_action" && k !== "_actions")
+      .map(([k, val]) => `${k}=${_flatVal(val, depth)}`);
+    return parts.length ? parts.join(", ") : "(none)";
+  }
+  function _flatVal(v, depth) {
+    if (v == null) return "";
+    if (Array.isArray(v)) {
+      if (!v.length) return "";
+      if (depth >= 2) return `${v.length} item${v.length === 1 ? "" : "s"}`;
+      const shown = v.slice(0, NEST_ITEMS_CAP)
+        .map((x) => (x && typeof x === "object" ? _flatObj(x, depth + 1) : String(x)));
+      return shown.join("; ") + (v.length > NEST_ITEMS_CAP ? `, +${v.length - NEST_ITEMS_CAP} more` : "");
+    }
+    if (typeof v === "object") return depth >= 2 ? "{…}" : _flatObj(v, depth + 1);
+    return String(v);
+  }
   const _txt = (v) => {
     if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v)) v = v.slice(0, 10);   // ISO → date
-    return v == null ? "" : Array.isArray(v) ? v.join(", ")
-      : typeof v === "object" ? JSON.stringify(v) : String(v);
+    if (v == null) return "";
+    if (Array.isArray(v) && !_hasNestedObject(v)) return v.join(", ");  // unchanged: flat list
+    if (Array.isArray(v) || typeof v === "object") return _flatVal(v, 0);
+    return String(v);
   };
   const TIGHT = 24;                                // a column whose widest value fits in a glance
 
