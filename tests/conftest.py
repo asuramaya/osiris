@@ -16,77 +16,84 @@ from src.db.redis import create_redis
 from testcontainers.postgres import PostgresContainer
 from testcontainers.redis import RedisContainer
 
-_TABLES = (
-    # rooms/cases/objects/assertions are DELIBERATELY ABSENT (task #97): the
-    # `actions` fixture below truncates everything in THIS string first, then
-    # handles those four separately (scoped deletes for objects/assertions, plain
-    # DELETEs for cases/rooms) — sparing the persistent Type catalog. All four were
-    # in this string once; if you're re-adding any of them, you are almost
-    # certainly re-introducing one of two bugs already caught live, THE SECOND ONE
-    # TWICE (it has two hops):
-    #   (1) Imhotep's catch (msg 2116): re-adding objects/assertions means the
-    #       blanket TRUNCATE wipes the Type rows before the scoped delete runs (which
-    #       then no-ops on an already-empty table) — every test raises UnknownTypeError.
-    #   (2) THE CASCADE LEAK (found independently, same night, TWO HOPS DEEP): even
-    #       with objects/assertions/cases correctly absent, TRUNCATE ... CASCADE
-    #       reaches `assertions` via a chain that starts somewhere that looks
-    #       harmless: `rooms` (a normal, no-preservation-needed table, easy to
-    #       assume safe to leave in this string) has `cases.room_id REFERENCES
-    #       rooms(id)` pointing AT it — so truncating `rooms` cascades to `cases`
-    #       (a table this string already knows to exclude, but CASCADE doesn't care
-    #       what your OWN exclusion list intended), which THEN cascades again to
-    #       `assertions` via `case_id REFERENCES cases(id)`. Confirmed empirically
-    #       via `conn.add_log_listener` on a live TRUNCATE — Postgres's own NOTICE
-    #       output says exactly this: "truncate cascades to table cases" then
-    #       "truncate cascades to table assertions". The visible symptom was
-    #       identical to bug (1) — `is_known_object_type` reads False and `actions`
-    #       below re-seeds on EVERY test, not just the first, each time emitting
-    #       ~700 fresh audit_log/outbox rows that silently starve evaluators with a
-    #       small default LIMIT (found via test_monitor.py's alert tests returning 0
-    #       fired instead of 1 — no exception, no obvious signal, just a quietly
-    #       wrong count) — but the FIRST fix attempt (excluding only cases) did NOT
-    #       resolve it, because the cascade's actual entry point was rooms, not
-    #       cases itself. Lesson: TRUNCATE CASCADE's reachability is NOT limited to
-    #       the direct FK neighbors of what you can see in one table's own CREATE
-    #       TABLE statement — a LATER migration can add a new FK to an old, innocent-
-    #       looking table (0010_rooms.py added cases.room_id years after cases was
-    #       first created) and silently extend the cascade graph. Don't reason this
-    #       by hand a third time: if a future migration adds a new FK anywhere near
-    #       objects/assertions/cases/rooms, re-verify with a live NOTICE listener
-    #       (see git history for this comment) rather than re-deriving the graph by
-    #       reading CREATE TABLE statements. `rooms` and `cases` are each cleared by
-    #       a plain DELETE (never TRUNCATE) issued AFTER the scoped assertions/
-    #       objects delete — `rooms`'s own referencing FKs (cases.room_id,
-    #       compositions.room_id, console_state.room_id) are all `ON DELETE SET
-    #       NULL`, which a real DELETE honors and TRUNCATE never does, so deleting
-    #       rooms this way never touches — let alone cascades into — anything else.
-    "case_objects,object_events,links,helper_runs,"
-    "triggers,audit_log,outbox,merge_candidates,cookie_leases,handoffs,helper_cache,"
-    "alerts,watermarks,collection_jobs,compositions,"
-    "fleet_messages,message_recipients,agent_wakes,agent_mounts,llm_usage,search_log,"
-    # LEAKED ACROSS TESTS UNTIL 2026-07-14. `dev_pulses` was never truncated, so the FIRST test to
-    # call pulse() left a row behind and every later one saw a "previous" pulse that belonged to
-    # another test entirely. test_pulse's baseline assertion passed only because it happened to run
-    # first — for its whole life it was resting on alphabetical luck, and a new test file sorting
-    # before it (test_orphan_rows) was enough to break it.
-    # A SHARED FIXTURE THAT FORGETS ONE TABLE DOES NOT FAIL — IT MAKES EVERY TEST'S RESULT DEPEND
-    # ON WHO RAN BEFORE IT, which is the same class as everything else we killed this week: state
-    # written at a seam and never reconciled.
-    "dev_pulses,console_state,search_vectors,body_usage"
-    # THE HARNESS-AGNOSTIC TRANSCRIPT STORE (ruling be741d3e): per-turn index fed by
-    # adapters; truncated like every other sidecar so tests start clean.
-    ",harness_sessions,harness_turns"
-    # THE TELEMETRY READER (task #35): the retained-events sidecar, same law.
-    ",harness_telemetry,harness_telemetry_files"
-    # PIT WATCH STAGE B's own ledger (thread 449bf55d): append-only, deriving state by
-    # aggregate query — exactly the shape that bites hardest when forgotten here, since a
-    # leftover 'escalated' tombstone on a message_id a later test's own fresh sequence
-    # reuses (RESTART IDENTITY resets fleet_messages, not this table) silently forges a
-    # false "already escalated" for a message that was never touched this test.
-    ",pit_watch_alarms"
-    # THE DEATH RITE'S OWN COMPLETION LEDGER (Finding A, thread 5177057a): one row per
-    # enqueue attempt, same append-only shape as pit_watch_alarms above, same leak risk.
-    ",sweep_ledger"
+# rooms/cases/objects/assertions are DELIBERATELY ABSENT (task #97): the `actions`
+# fixture below resets everything in THIS tuple first, then handles those four
+# separately (scoped deletes for objects/assertions, plain DELETEs for cases/rooms) —
+# sparing the persistent Type catalog. All four were in this set once; if you're
+# re-adding any of them, you are almost certainly re-introducing one of two bugs
+# already caught live, THE SECOND ONE TWICE (it has two hops):
+#   (1) Imhotep's catch (msg 2116): re-adding objects/assertions means the blanket
+#       reset wipes the Type rows before the scoped delete runs (which then no-ops
+#       on an already-empty table) — every test raises UnknownTypeError.
+#   (2) THE CASCADE LEAK (found independently, same night, TWO HOPS DEEP): even with
+#       objects/assertions/cases correctly absent, TRUNCATE ... CASCADE (this set's
+#       reset statement BEFORE task #100) reached `assertions` via a chain that
+#       starts somewhere that looks harmless: `rooms` (a normal, no-preservation-
+#       needed table, easy to assume safe to leave in this set) has `cases.room_id
+#       REFERENCES rooms(id)` pointing AT it — so truncating `rooms` cascaded to
+#       `cases` (a table this set already knew to exclude, but CASCADE doesn't care
+#       what your OWN exclusion list intended), which THEN cascaded again to
+#       `assertions` via `case_id REFERENCES cases(id)`. Confirmed empirically via
+#       `conn.add_log_listener` on a live TRUNCATE — Postgres's own NOTICE output
+#       said exactly this: "truncate cascades to table cases" then "truncate
+#       cascades to table assertions". Lesson, still true under DELETE even though
+#       the specific TRUNCATE-CASCADE mechanism is gone (see below): a LATER
+#       migration can add a new FK to an old, innocent-looking table (0010_rooms.py
+#       added cases.room_id years after cases was first created) and silently widen
+#       what a reset touches. Don't reason this by hand: if a future migration adds
+#       a new FK anywhere near objects/assertions/cases/rooms/_RESET_TABLES, re-
+#       verify with a live query against pg_constraint (see _RESET_TABLES's own
+#       comment for the exact query) rather than re-deriving the graph by reading
+#       CREATE TABLE statements. `rooms` and `cases` are each cleared by a plain
+#       DELETE issued AFTER the scoped assertions/objects delete — `rooms`'s own
+#       referencing FKs (cases.room_id, compositions.room_id, console_state.room_id)
+#       are all `ON DELETE SET NULL`, which DELETE honors, so deleting rooms this
+#       way never touches — let alone cascades into — anything else.
+#
+# TASK #100 (Thoth msg 2144/2152/2161): this used to be one `TRUNCATE {_TABLES}
+# RESTART IDENTITY CASCADE` statement. Measured live (decision 335ddd13): TRUNCATE
+# pays a FIXED catalog/lock cost per table REGARDLESS of row count — ~270ms average
+# even against empty tables, ~73-83% of the whole suite's 588s, dwarfing pool
+# creation (~19ms) and everything else in this fixture combined. Since every one of
+# these tables is nearly empty at reset time (a handful of rows a single test wrote,
+# at most), DELETE beats TRUNCATE by roughly two orders of magnitude — DELETE's cost
+# scales with row count, TRUNCATE's doesn't (decision 41c47976: ~9.88ms average
+# against the same empty-table benchmark, ~27x). Sequential DELETEs need the FK-
+# dependency order TRUNCATE's own CASCADE used to compute for you — get that order
+# from Postgres itself, never by hand (the exact lesson bug (2) above already
+# taught): `SELECT conrelid::regclass::text AS child, confrelid::regclass::text AS
+# parent FROM pg_constraint WHERE contype = 'f'`, filtered to edges where both sides
+# are in _RESET_TABLES, topologically sorted child-before-parent. Re-run that query
+# and re-sort if a migration adds a new FK among these tables — a stale order fails
+# LOUDLY (a FK violation on the misordered DELETE), never silently, which is the one
+# way this is safer than TRUNCATE CASCADE's silent-widening failure mode.
+#
+# ONE REAL BEHAVIOR CHANGE: DELETE does not reset sequences the way TRUNCATE
+# RESTART IDENTITY did — bigserial ids climb across the whole session instead of
+# restarting at 1 every test. Verified before landing this: no test anywhere in
+# tests/ or src/ asserts a literal id for any of these 31 tables (regex-swept, not
+# just spot-checked — one incidental false positive, a UA-string, zero real hits).
+_RESET_TABLES = (
+    "agent_mounts", "agent_wakes", "alerts", "audit_log", "body_usage", "case_objects",
+    "collection_jobs", "console_state", "cookie_leases", "dev_pulses", "handoffs",
+    "harness_telemetry", "harness_telemetry_files", "harness_turns", "helper_cache",
+    "links", "llm_usage", "merge_candidates", "message_recipients", "object_events",
+    "outbox", "pit_watch_alarms", "search_log", "search_vectors", "sweep_ledger",
+    "triggers", "watermarks",
+    # these four must come LAST, in this order — each is the PARENT side of an
+    # internal FK from a table above it in this tuple (alerts->compositions,
+    # handoffs->helper_runs, harness_turns->harness_sessions,
+    # message_recipients->fleet_messages), so a CHILD row can still reference it
+    # while everything above deletes. Deleting a parent before its child violates
+    # the FK — this order was wrong once already (caught live: the first version of
+    # this tuple had the direction backwards, an inverted topological sort that a
+    # timing-only benchmark against empty tables never exercised; the real suite's
+    # FK violations on handoffs->helper_runs are what caught it). Everything above
+    # this line has no FK to anything else in this tuple (verified via the
+    # pg_constraint query above, then re-verified against REAL referencing rows —
+    # not just an empty-table benchmark — for all four pairs before landing this
+    # fix) and can run in any order relative to each other.
+    "compositions", "fleet_messages", "harness_sessions", "helper_runs",
 )
 
 
@@ -127,27 +134,32 @@ def _strict_schema() -> Iterator[None]:
 @pytest_asyncio.fixture
 async def actions(pg_dsn: str) -> AsyncIterator[Actions]:
     pool = await create_pool(pg_dsn)
-    async with pool.acquire() as conn:
-        # THE CATALOG SURVIVES THE RESET (task #97): everything in _TABLES truncates
-        # as before, FIRST — rooms/cases/objects/assertions are excluded from that
-        # string (see its own comment for the two-hop CASCADE leak this avoids:
-        # rooms -> cases -> assertions).
-        await conn.execute(f"TRUNCATE {_TABLES} RESTART IDENTITY CASCADE")
+    async with pool.acquire() as conn, conn.transaction():
+        # THE CATALOG SURVIVES THE RESET (task #97): every table in _RESET_TABLES is
+        # cleared FIRST, in its own dependency order (see that tuple's comment) —
+        # rooms/cases/objects/assertions are excluded, same as before task #100's
+        # TRUNCATE -> DELETE change (see its own comment for the two-hop CASCADE leak
+        # this still avoids: rooms -> cases -> assertions). Wrapped in one explicit
+        # transaction (conn.transaction(), new under task #100) so 31 sequential
+        # DELETEs commit atomically together — a mid-sequence failure now rolls back
+        # everything instead of leaving a partially-reset database for the next test,
+        # which a single TRUNCATE statement never risked but never needed either.
+        for table in _RESET_TABLES:
+            await conn.execute(f"DELETE FROM {table}")
         # objects/assertions: spare exactly the Type rows the catalog check below
         # seeds. assertions.id is bigserial and this scoped delete does NOT reset it
-        # (unlike the TRUNCATE ... RESTART IDENTITY every other table gets) — checked
-        # before landing this: no test asserts a literal assertions.id value (grepped
-        # tests/ + src/ for one; every read is by a dynamically-fetched id, never a
-        # hardcoded literal).
+        # (DELETE never resets a sequence, unlike the old TRUNCATE ... RESTART
+        # IDENTITY) — checked before landing this: no test asserts a literal
+        # assertions.id value (grepped tests/ + src/ for one; every read is by a
+        # dynamically-fetched id, never a hardcoded literal).
         await conn.execute(
             "DELETE FROM assertions a USING objects o "
             "WHERE a.object_id = o.id AND o.type <> 'Type'")
         await conn.execute("DELETE FROM objects WHERE type <> 'Type'")
         # cases and rooms LAST, after the two deletes above — by now nothing in
         # `assertions` still holds a case_id (Type rows never carry one; every other
-        # row is already gone), so plain DELETEs (never TRUNCATE, which would need
-        # CASCADE again and reopen the exact leak this whole block exists to close)
-        # satisfy every FK with zero referencing rows left to violate.
+        # row is already gone), so plain DELETEs satisfy every FK with zero
+        # referencing rows left to violate.
         await conn.execute("DELETE FROM cases")
         await conn.execute("DELETE FROM rooms")
     actions_ = Actions(pool)
