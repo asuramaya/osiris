@@ -294,7 +294,14 @@ const Osiris = (() => {
   }
   function timelineList(panel, items, onPick, onCtx) {
     if (!items.length) { panel.innerHTML = `<div class="o-empty">Empty result.</div>`; return; }
-    const body = items.map((o, i) => {
+    // NO SILENT CAPS (the same law _capped's own SECTION_CAP/_more enforce for "data" mode,
+    // below): "objects" mode used to render every item verbatim — 305 threads, full-paragraph
+    // summaries, one unbroken scroll — while "data" mode next to it capped at 12 and SAID what
+    // it withheld. Two renderers of the same law reading differently is itself the bug; reusing
+    // SECTION_CAP/_more (never a second number, never a second idiom) is what makes them read
+    // the same again.
+    const shown = items.slice(0, SECTION_CAP);
+    const body = shown.map((o, i) => {
       const p = o.props || {};
       const d = _pickDate(p), s = _pickSummary(p);
       const when = d ? esc(String(d).slice(0, 10)) : `#${i + 1}`;
@@ -304,7 +311,7 @@ const Osiris = (() => {
         <div class="tl-main"><span class="o-faint">${esc(o.type)}</span> ${esc(o.label)}${sum}</div></div>`;
     }).join("");
     panel.innerHTML = `<div class="r-head">${items.length} item${items.length === 1 ? "" : "s"} · in order</div>
-      <div class="tl">${body}</div>`;
+      <div class="tl">${body}</div>` + (items.length > shown.length ? _more(items.length - shown.length) : "");
     _wireRows(panel, onPick, onCtx);
   }
 
@@ -360,11 +367,15 @@ const Osiris = (() => {
   }
 
   function objectsTable(panel, items, onPick, onCtx) {
-    const { cols, chips, showType } = _tableShape(items);
+    // same NO-SILENT-CAPS treatment as timelineList above, and the same reused SECTION_CAP/
+    // _more — column shape is computed from the SHOWN slice, matching _capped's own
+    // table(shown) precedent, not the full set a reader never sees past row 12 anyway.
+    const shown = items.slice(0, SECTION_CAP);
+    const { cols, chips, showType } = _tableShape(shown);
     const head = (showType ? "<th>Type</th>" : "") + "<th>Name</th>" +
       cols.map((c) => `<th>${esc(c)}</th>`).join("");
     const cell = (v) => `<td title="${esc(v)}"><span class="clamp">${esc(v)}</span></td>`;
-    const body = items
+    const body = shown
       .map((o) => `<tr data-pick="${o.id}" data-type="${esc(o.type)}" style="cursor:pointer">
         ${showType ? `<td><span class="o-faint">${esc(o.type)}</span></td>` : ""}${cell(o.label || "")}
         ${cols.map((c) => cell((o.props || {})[c] || "")).join("")}</tr>`)
@@ -373,7 +384,8 @@ const Osiris = (() => {
     panel.innerHTML =
       `<div class="r-head">${items.length} object${items.length === 1 ? "" : "s"}` +
       (chips.length ? ` <span class="o-faint">— all share</span> ${chipbar}` : "") + "</div>" +
-      (items.length ? `<table class="r-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
+      (items.length ? `<table class="r-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>` +
+        (items.length > shown.length ? _more(items.length - shown.length) : "")
         : `<div class="o-empty">Empty result.</div>`);
     _wireRows(panel, onPick, onCtx);
   }
@@ -559,10 +571,24 @@ const Osiris = (() => {
       return true;
     });
     if (!cols.length) return `<div class="o-empty">—</div>`;
+    // .r-table td .clamp (osiris.css) is a proper 2-line clamp+ellipsis, word-wrapped — built
+    // 2026-07-11 for objectsTable's own cells, but table() never applied it, so a MEDIUM string
+    // (short of the >160 "wall of text" bar below) sailed through untouched. In a many-column
+    // table, table-layout:auto starves a non-tight column thin, and overflow-wrap:anywhere +
+    // word-break:break-word then break it mid-word with nowhere else to go — "1 door (session
+    // 82d04858 2s ago)" towering into ten near-single-character lines. TIGHT (24, above) is
+    // already this file's own line for "short enough to trust at a glance, never wraps" — a
+    // .r-tight COLUMN's cells are by definition all <= TIGHT chars, so they never cross this
+    // same bar and the clamp's own `white-space` never fights a tight column's `nowrap`. Reusing
+    // it here (rather than a fresh magic number) means anything past "glanceable" gets two real,
+    // word-wrapped lines instead of a starved column's only remaining option: mid-word carnage.
     const cell = (v) => {
       const s = _txt(v);
-      return s.length > 160                        // clamp a wall of text; full text in the tooltip
-        ? `<span title="${esc(s)}">${esc(s.slice(0, 157))}…</span>` : esc(s);
+      if (s.length > 160)                       // a genuine wall of text: hard-cap the DOM weight
+        return `<span class="clamp" title="${esc(s)}">${esc(s.slice(0, 157))}…</span>`;
+      if (s.length > TIGHT)                      // medium prose: 2 lines, word-wrapped, not char-by-char
+        return `<span class="clamp" title="${esc(s)}">${esc(s)}</span>`;
+      return esc(s);
     };
     const cls = (k) => (widest[k] <= TIGHT ? ' class="r-tight"' : "");
     const hasAction = list.some((o) => o && o._action && o._action.action);
