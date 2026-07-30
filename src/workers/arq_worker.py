@@ -53,6 +53,7 @@ from src.orchestrator.monitor import (
 )
 from src.orchestrator.mounts import sweep_ghost_doors, sweep_stale_doors
 from src.orchestrator.ratelimit import RateLimiter
+from src.orchestrator.resource_lease import reap_stale as reap_stale_leases
 from src.orchestrator.runner import reap_stale_runs
 from src.orchestrator.trigger import trigger_mail_tick
 from src.orchestrator.watchers import make_form_d_watcher
@@ -154,6 +155,15 @@ async def run_source_ticks(ctx: dict[str, Any]) -> int:
 async def reap_runs(ctx: dict[str, Any]) -> int:
     """Self-heal: recover runs orphaned by a crashed worker so a restart re-claims."""
     return await reap_stale_runs(ctx["pool"])
+
+
+async def reap_leases(ctx: dict[str, Any]) -> int:
+    """Self-heal: recover resource_leases nobody released (task #103/#119) — a crash, a
+    compaction, a dropped session. Mirrors reap_runs exactly; explicit release_lease stays
+    the primary path, this is the backstop. Default window matches
+    mcp_server.reap_stale_leases' own default (an hour — agent-work-paced, not
+    machine-paced like helper_runs' 900s)."""
+    return await reap_stale_leases(ctx["pool"])
 
 
 async def heartbeat(ctx: dict[str, Any]) -> int:
@@ -675,6 +685,8 @@ class WorkerSettings:
              run_at_startup=True),
         # self-heal orphaned claims every 5 min (the failure-drill recovery path).
         cron(watched(reap_runs, every=300), minute=set(range(0, 60, 5)), run_at_startup=True),
+        # self-heal orphaned resource_leases every 5 min, same shape (task #103/#119).
+        cron(watched(reap_leases, every=300), minute=set(range(1, 60, 5)), run_at_startup=True),
         # liveness heartbeat every 30s (the dead-man's-switch /health/worker reads).
         cron(watched(heartbeat, every=30), second={0, 30}, run_at_startup=True),
         # THE FREE OBSERVER, every 60s: stat the transcripts so a mind heads-down for 20 minutes

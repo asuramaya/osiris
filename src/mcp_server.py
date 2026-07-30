@@ -44,7 +44,7 @@ from src.ontology.resolution import (
     reclassify_mistyped_entities,
     resolve_cross_base,
 )
-from src.orchestrator import capture, census, digest, handshake, mailbox, mounts
+from src.orchestrator import capture, census, digest, handshake, mailbox, mounts, resource_lease
 from src.orchestrator import compositions as comp
 from src.orchestrator import dispose as dispose_seam
 from src.orchestrator import succession as comp_succession
@@ -3989,6 +3989,106 @@ async def resolve_thread(
             "closure-miner will not find this close"
         )
     return out
+
+
+@mcp.tool()
+async def acquire_lease(
+    resource_id: str, holder: str | None = None,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    session_anchor: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Claim ANY resource by an EXACT id — a file path, `docker-daemon`, `compose-merge`,
+    `tree` — the mechanical half of tonight's hand-maintained file-ownership map. Task
+    #103's Q7 found `open_thread(assignee=)`'s `leased_to` only LOOKED like this primitive:
+    its conflict check is fuzzy prose similarity over a thread summary (threshold 0.60,
+    never tuned), read-then-write, repo-scoped only — two agents naming the same file in
+    differently-worded summaries would get no lease at all. This is the fix: `resource_id`
+    matched by EQUALITY, backed by a real DB-level uniqueness guarantee
+    (`resource_leases_active_claim`), never a race.
+
+    `resource_id` is CONVENTION, not a closed vocabulary — nothing here validates,
+    enumerates, or pre-decides what strings mean. Same string in, same claim, whatever the
+    caller means by it.
+
+    `holder` defaults to YOUR OWN mounted identity; pass one explicitly to claim on
+    another's behalf — the same latitude `open_thread`'s `assignee` already has (a manager
+    reserving a lane before its worker starts, say).
+
+    A REFUSAL names WHO holds it and SINCE WHEN (`holder`/`held_since`) — enough for the
+    caller to decide wait-or-escalate instead of guessing, never a silent duplicate mint
+    (Alfred's #4.3 UX, kept; only the matcher underneath it changed).
+
+    EXPIRY is deliberately NOT a renewed TTL: our holders are agent sessions doing
+    variable-length turns, not daemons with a background heartbeat loop — a short TTL would
+    either spam constant renewal calls or false-expire a legitimate long turn. Explicit
+    `release_lease` is the primary path (matches how the fleet already coordinates —
+    announce when done); `reap_stale_leases` is the crash/compaction backstop, not the
+    norm, and rides a cron every 5 minutes (arq_worker.reap_leases) the same way
+    `reap_stale_runs` already does for `helper_runs`."""
+    pool = await _pool_get()
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
+    try:
+        result = await resource_lease.acquire(
+            Actions(pool), resource_id, holder or actor, source=actor)
+    except ValueError as e:
+        return {"error": str(e)}
+    out: dict[str, Any] = {
+        "resource_id": result.resource_id, "acquired": result.acquired,
+        "holder": result.holder, "held_since": result.acquired_at.isoformat(),
+        "thread_id": str(result.thread_id),
+    }
+    if not result.acquired:
+        out["note"] = (f"already held by {result.holder} since "
+                       f"{result.acquired_at.isoformat()} — no new claim minted")
+    return out
+
+
+@mcp.tool()
+async def release_lease(
+    resource_id: str, holder: str | None = None,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    session_anchor: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Release a resource YOU hold — only the ACTUAL holder's own release call frees it,
+    never a different agent's, even by name (the same asymmetry `resolve_thread` has no
+    equivalent of, deliberately: a lease's whole point is that holding it means something).
+    `released: false` for BOTH an unheld resource and a wrong-holder attempt — both are
+    refusals to report, never errors to raise; check `check_lease` first if you need to
+    tell the two apart."""
+    pool = await _pool_get()
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
+    released = await resource_lease.release(pool, resource_id, holder or actor)
+    return {"resource_id": resource_id, "released": released}
+
+
+@mcp.tool()
+async def check_lease(resource_id: str) -> dict[str, Any]:
+    """Read-only: who holds `resource_id` right now, or that it's free. Never claims,
+    never mints, never leases anything — a glance before deciding whether `acquire_lease`
+    is even worth calling."""
+    pool = await _pool_get()
+    held = await resource_lease.current_holder(pool, resource_id)
+    if held is None:
+        return {"resource_id": resource_id, "held": False}
+    return {
+        "resource_id": resource_id, "held": True, "holder": held["holder"],
+        "held_since": held["acquired_at"].isoformat(), "thread_id": str(held["thread_id"]),
+    }
+
+
+@mcp.tool()
+async def reap_stale_leases(older_than_secs: int = 3600) -> dict[str, Any]:
+    """Recover leases nobody released — a crash, a compaction, a dropped session. The
+    active-claim constraint would otherwise wedge that `resource_id` FOREVER, the same risk
+    `reap_stale_runs` names for `helper_runs`. This is the BACKSTOP, not the norm —
+    `release_lease` is how a lease is meant to end; call this directly only when you
+    suspect a stale claim right now and don't want to wait for the cron's next tick (every
+    5 minutes, arq_worker.reap_leases, mirroring `reap_runs`'s own wiring for helper_runs).
+    An hour's default is deliberately looser than helper_runs' 900s — a resource
+    lease here is agent-work-paced (a whole session touching a file), not machine-paced."""
+    pool = await _pool_get()
+    n = await resource_lease.reap_stale(pool, older_than_secs=older_than_secs)
+    return {"reaped": n, "older_than_secs": older_than_secs}
 
 
 @mcp.tool()
