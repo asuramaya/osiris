@@ -5,11 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Osiris · Composer</title>
 <link rel="stylesheet" href="/ui/osiris.css" />
-<script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
-<script src="https://unpkg.com/layout-base/layout-base.js"></script>
-<script src="https://unpkg.com/cose-base/cose-base.js"></script>
-<script src="https://unpkg.com/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
-<script src="https://unpkg.com/marked@12.0.0/marked.min.js"></script>
+<!-- Vendored, no CDN (task #92, operator ruling a4bd555c — a stranger installing this
+     package offline/air-gapped must get a working console). See src/ui/static/vendor/*.js
+     for provenance (source URL, pinned version, sha256, license) on each file. -->
+<script src="/ui/vendor/cytoscape.min.js"></script>
+<script src="/ui/vendor/layout-base.js"></script>
+<script src="/ui/vendor/cose-base.js"></script>
+<script src="/ui/vendor/cytoscape-fcose.js"></script>
+<script src="/ui/vendor/marked.min.js"></script>
 <style>
   html,body{height:100%;margin:0}
   body{background:var(--bg);color:var(--text);overflow:hidden;
