@@ -107,6 +107,23 @@ async def test_objects_search_is_word_order_proof(
     assert str(d) in await ids("idempotent")          # single-token behaviour unchanged
 
 
+async def test_objects_list_resolves_labels_via_the_full_chain_and_disambiguates(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """Task #97 workstream 3: /objects' own `name` used to be a raw SQL COALESCE
+    (name/title/summary/subject/canonical only) — a Practice fell straight to its
+    canonical hash. Now resolve_label + disambiguate_labels, same as every other
+    consumer, with a `display_label` field alongside."""
+    p = await actions.create_or_find_object("Practice", "practice:apitest", "test")
+    await actions.assert_property(p, "statement", "an api-level practice test", "test",
+                                  datetime.now(UTC), 0.9)
+    r = await client.get("/objects", params={"type": "Practice"})
+    assert r.status_code == 200
+    row = next(o for o in r.json() if o["canonical"] == "practice:apitest")
+    assert row["name"] == "an api-level practice test"
+    assert row["display_label"]
+
+
 async def test_object_graph(client: httpx.AsyncClient, actions: Actions) -> None:
     await _seed(actions)
     oid = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical=$1", LAZARUS)

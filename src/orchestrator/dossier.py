@@ -19,29 +19,10 @@ from typing import Any
 
 import asyncpg
 
-from src.ontology.labels import LABEL_CHAIN, resolve_label
+from src.ontology.labels import fetch_label_props, resolve_label
 
 # Identity bookkeeping links (merge plumbing) are not part of the entity's network.
 _HIDDEN_LINK_TYPES = ("same_as", "not_same_as")
-
-
-async def _label_props(
-    pool: asyncpg.Pool, ids: list[uuid.UUID]
-) -> dict[uuid.UUID, dict[str, Any]]:
-    """Winning value per LABEL_CHAIN property, batched across `ids` in one query — the
-    same shape compositions.py's `_attach_labels` uses, so a dossier with many
-    neighbors costs one extra query, not N."""
-    if not ids:
-        return {}
-    rows = await pool.fetch(
-        "SELECT DISTINCT ON (object_id, name) object_id, name, value #>> '{}' AS v "
-        "FROM current_assertions WHERE object_id = ANY($1::uuid[]) AND name = ANY($2::text[]) "
-        "ORDER BY object_id, name, confidence DESC NULLS LAST, observed_at DESC",
-        ids, list(LABEL_CHAIN))
-    out: dict[uuid.UUID, dict[str, Any]] = {}
-    for r in rows:
-        out.setdefault(r["object_id"], {})[r["name"]] = r["v"]
-    return out
 
 
 async def entity_dossier(pool: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, Any]:
@@ -60,7 +41,7 @@ async def entity_dossier(pool: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, 
     if obj is None:
         return {}
 
-    own_props = (await _label_props(pool, [object_id])).get(object_id, {})
+    own_props = (await fetch_label_props(pool, [object_id])).get(object_id, {})
     name = resolve_label(obj["type"], own_props, obj["canonical"]).label
 
     # properties as the multi-source set: one entry per property name, carrying each
@@ -107,7 +88,7 @@ async def entity_dossier(pool: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, 
                              "nbr_type": r["nbr_type"], "nbr_canon": r["nbr_canon"],
                              "evidence_class": r["evidence_class"], "source": r["source_id"]})
 
-    nbr_props = await _label_props(pool, nbr_ids)
+    nbr_props = await fetch_label_props(pool, nbr_ids)
     rels = [
         {
             "direction": r["direction"],

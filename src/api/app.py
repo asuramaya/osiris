@@ -46,7 +46,7 @@ from src.dissemination.brief import build_case_brief
 from src.ingest.harris_foreclosure import demo_fetch, make_harris_foreclosure_watcher
 from src.ontology.classify import classify
 from src.ontology.intake import intake
-from src.ontology.labels import resolve_label
+from src.ontology.labels import disambiguate_labels, fetch_label_props, resolve_label
 from src.ontology.resolution import (
     find_person_merge_candidates,
     resolve_candidate,
@@ -299,7 +299,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         excl = [t.strip() for t in exclude_types.split(",") if t.strip()] \
             if exclude_types else None
         rows = await p.fetch(
-            "SELECT id, type, canonical, status, " + _OBJ_LABEL + " AS name "
+            "SELECT id, type, canonical, status "
             "FROM objects o "
             "WHERE status NOT IN ('archived','merged') "
             "  AND ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM case_objects co "
@@ -322,7 +322,23 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             limit,
             excl,
         )
-        return [dict(r) for r in rows]
+        # task #97 workstream 3 (ruling 52daab71): `name` used to be a raw SQL COALESCE
+        # (_OBJ_LABEL) — chain-only, no per-type RULE tier. resolve_label per row (one
+        # batched property fetch, not N) plus disambiguate_labels across the whole
+        # returned set — this IS the sidebar/table's own object list, the surface the
+        # reported collision bug (three rows truncating to one string) is most visible on.
+        props_by_id = await fetch_label_props(p, [r["id"] for r in rows])
+        items = [
+            {"id": r["id"], "type": r["type"], "canonical": r["canonical"],
+             "status": r["status"],
+             "name": resolve_label(r["type"], props_by_id.get(r["id"], {}),
+                                   r["canonical"]).label}
+            for r in rows
+        ]
+        disp = disambiguate_labels([(str(it["id"]), it["name"], it["canonical"]) for it in items])
+        for it in items:
+            it["display_label"] = disp[str(it["id"])]
+        return items
 
     @app.get("/objects/{object_id}")
     async def get_object(
@@ -361,12 +377,12 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         its `git show` DIFF (the git backbone made readable); a Reference / any object with a
         `body` returns its markdown; a PDF source returns a url. Generic, no per-type UI code."""
         row = await p.fetchrow(
-            "SELECT o.type, o.canonical, " + _OBJ_LABEL + " AS name FROM objects o WHERE o.id=$1",
-            object_id,
+            "SELECT o.type, o.canonical FROM objects o WHERE o.id=$1", object_id,
         )
         if row is None:
             raise HTTPException(404, "object not found")
-        title = row["name"] or row["canonical"]
+        props = (await fetch_label_props(p, [object_id])).get(object_id, {})
+        title = resolve_label(row["type"], props, row["canonical"]).label
         if row["type"] == "Commit" and row["canonical"].startswith("commit:"):
             diff = await _git_show(row["canonical"].split(":", 1)[1])
             if diff:
@@ -518,12 +534,14 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             frontier = nxt
 
         node_rows = await p.fetch(
-            "SELECT o.id, o.type, o.canonical, " + _OBJ_LABEL + " AS name "
-            "FROM objects o WHERE o.id = ANY($1::uuid[])",
+            "SELECT o.id, o.type, o.canonical FROM objects o WHERE o.id = ANY($1::uuid[])",
             list(seen),
         )
+        node_props = await fetch_label_props(p, [r["id"] for r in node_rows])
         nodes = [
-            {"id": str(r["id"]), "type": r["type"], "label": r["name"] or r["canonical"]}
+            {"id": str(r["id"]), "type": r["type"],
+             "label": resolve_label(r["type"], node_props.get(r["id"], {}),
+                                    r["canonical"]).label}
             for r in node_rows
         ]
         edge_rows = await p.fetch(
@@ -1109,15 +1127,6 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     return app
 
 
-# The best HUMAN label for an object — never a raw hash/id when a name/title/summary exists.
-# A Commit has no `name` but has `summary`; without this the UI shows `commit:7f0…` for every
-# node and row (the hairball / hash-wall). Generic, no per-type code.
-_LABEL_PROPS = ("name", "title", "summary", "subject")
-_OBJ_LABEL = "COALESCE(" + ", ".join(
-    f"(SELECT value #>> '{{}}' FROM current_assertions a "
-    f"WHERE a.object_id=o.id AND a.name='{_p}' "
-    f"ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)" for _p in _LABEL_PROPS
-) + ", o.canonical)"
 
 
 # The git backbone, made viewable: a Commit's "content" is its diff. Resolve the short sha
@@ -1230,15 +1239,13 @@ async def _object_card(p: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, Any] 
 
 
 async def _label(p: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, str]:
-    """An object's display label (name → canonical) + type — for review/list rendering."""
-    r = await p.fetchrow(
-        "SELECT o.type, o.canonical, " + _OBJ_LABEL + " AS name "
-        "FROM objects o WHERE o.id=$1",
-        object_id,
-    )
+    """An object's display label (resolve_label's rule/chain/canonical) + type — for
+    review/list rendering."""
+    r = await p.fetchrow("SELECT o.type, o.canonical FROM objects o WHERE o.id=$1", object_id)
     if r is None:
         return {"label": str(object_id), "type": "?"}
-    return {"label": r["name"] or r["canonical"], "type": r["type"]}
+    props = (await fetch_label_props(p, [object_id])).get(object_id, {})
+    return {"label": resolve_label(r["type"], props, r["canonical"]).label, "type": r["type"]}
 
 
 def _coerce_json(v: Any) -> Any:

@@ -102,7 +102,7 @@ from typing import Any
 
 import asyncpg
 
-from src.ontology.labels import LABEL_CHAIN, disambiguate_labels, resolve_label
+from src.ontology.labels import disambiguate_labels, fetch_label_props, resolve_label
 from src.ontology.resolution import screen_network
 from src.orchestrator.agents import _generation
 from src.orchestrator.coinvest import coinvestment_ties
@@ -306,14 +306,8 @@ async def _attach_labels(pool: asyncpg.Pool, hits: list[dict[str, Any]]) -> list
     if not hits:
         return hits
     ids = [uuid.UUID(h["id"]) for h in hits]
-    rows = await pool.fetch(
-        "SELECT DISTINCT ON (object_id, name) object_id, name, value #>> '{}' AS v "
-        "FROM current_assertions WHERE object_id = ANY($1::uuid[]) AND name = ANY($2::text[]) "
-        "ORDER BY object_id, name, confidence DESC, observed_at DESC",
-        ids, list(LABEL_CHAIN))
-    props_by_id: dict[str, dict[str, Any]] = {}
-    for r in rows:
-        props_by_id.setdefault(str(r["object_id"]), {})[r["name"]] = r["v"]
+    by_uuid = await fetch_label_props(pool, ids)
+    props_by_id = {str(k): v for k, v in by_uuid.items()}
     for h in hits:
         res = resolve_label(h["type"], props_by_id.get(h["id"], {}), h["canonical"])
         h["label"], h["label_source"] = res.label, res.source

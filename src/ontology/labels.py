@@ -24,13 +24,37 @@ re-opening ruling 52daab71 — Thoth's own text names this exact ordering.
 
 from __future__ import annotations
 
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
+import asyncpg
+
 from src.ontology.schema import object_type
 
 LABEL_CHAIN: tuple[str, ...] = ("name", "title", "summary", "statement", "surface", "handle")
+
+
+async def fetch_label_props(
+    pool: asyncpg.Pool, ids: list[uuid.UUID]
+) -> dict[uuid.UUID, dict[str, Any]]:
+    """The winning value per LABEL_CHAIN property, batched across `ids` in ONE query —
+    every consumer needs exactly this shape before calling `resolve_label` per row, so
+    it lives here once rather than as a third/fourth near-identical inline query
+    (compositions.py's search/object_items and dossier.py's entity_dossier each grew
+    their own copy before this existed)."""
+    if not ids:
+        return {}
+    rows = await pool.fetch(
+        "SELECT DISTINCT ON (object_id, name) object_id, name, value #>> '{}' AS v "
+        "FROM current_assertions WHERE object_id = ANY($1::uuid[]) AND name = ANY($2::text[]) "
+        "ORDER BY object_id, name, confidence DESC NULLS LAST, observed_at DESC",
+        ids, list(LABEL_CHAIN))
+    out: dict[uuid.UUID, dict[str, Any]] = {}
+    for r in rows:
+        out.setdefault(r["object_id"], {})[r["name"]] = r["v"]
+    return out
 
 
 @dataclass(frozen=True)
