@@ -2534,6 +2534,11 @@ _TRIAGE_BUCKET_PRIORITY = {
     # the catalog's own gap surface (object_type='Type' only, see _triage_type_gaps) —
     # ranked ahead of "normal" so a described-and-labeled Type never crowds out a real gap
     "undescribed": -2, "no_label_rule": -1,
+    # task #102 (operator's principle via Thoth's dispatch DM 2279): a LIVE epistemic
+    # conflict on a specific property outranks every generic connectivity bucket, including
+    # duplicate_suspect — a naming collision is a structural SUSPICION, a contradicted
+    # property is a confirmed disagreement already sitting in the data.
+    "contradicted": -3,
 }
 
 
@@ -2558,7 +2563,13 @@ async def _fn_triage(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     capped 2000 — the no-silent-caps law: CENSUS already carries the true `n` per type,
     this is the browse/page surface, not the count of record). One row per object, ONE
     bucket each by priority (an object can meet more than one definition; the most
-    actionable wins): `duplicate_suspect` (another object of the SAME type+status shares
+    actionable wins): `contradicted` (task #102, operator's principle via Thoth's dispatch
+    DM 2279 — this object has a property with more than one DISTINCT live value from
+    different sources, neither superseding the other; `current_assertions` already holds
+    disagreement by design, this bucket is the first thing that NAMES it, ranked above
+    every other bucket here since a confirmed epistemic conflict outranks a structural
+    suspicion — the row also carries `contradicted_on`, the sorted list of property names
+    in conflict) > `duplicate_suspect` (another object of the SAME type+status shares
     its basename — the canonical's last path segment, or the text after its first ':',
     case-folded; catches File-path collisions and scheme-prefix near-dupes alike) >
     `bulk_import` (task #98 follow-up, Thoth msg 2065 — `args.cohort_min` or more objects
@@ -2572,6 +2583,12 @@ async def _fn_triage(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     types sit near 1) > `stale` (linked, but untouched longer than `stale_days`) > `thin`
     (1-2 live links) > `normal` (none of the above — BUCKETS lists every object in scope,
     not only flagged ones, so it doubles as a plain browse of the type).
+
+    `contradicted` MARKS, it never RESOLVES (the operator's rule): no value is dropped or
+    ranked into a winner here, only named as contested — same discipline `entity_dossier`'s
+    new `agreement` field follows for a single entity's own property list (dossier.py,
+    same task). This bucket is the fleet/project-wide discovery half: which OBJECTS have
+    at least one contradicted property, without already knowing which one to look at.
 
     THE CATALOG'S OWN GAP SURFACE (task #97 workstream 2's other half — "your triage
     Function IS the surface these gaps should appear on, do not build a second
@@ -2697,9 +2714,33 @@ async def _triage_buckets(pool: asyncpg.Pool, args: dict[str, Any]) -> Any:
             SELECT born_bucket, fingerprint, count(*) AS n
             FROM cohorts GROUP BY born_bucket, fingerprint
             HAVING count(*) >= $4
+        ),
+        -- CONTRADICTION (task #102, operator's principle via Thoth's dispatch DM 2279):
+        -- current_assertions already coexists two sources' DIFFERING values on the same
+        -- property (nobody superseded either) — the storage layer holds it correctly, but
+        -- nothing NAMED it. Grouping on (object_id, name) and requiring >1 DISTINCT value
+        -- is sufficient to prove genuine multi-source disagreement without checking
+        -- source_id explicitly: within-source supersession already collapses a single
+        -- source's own repeated assertion to one live row, so two live rows on the same
+        -- name can only come from two different sources. Deliberately NOT excluding
+        -- name/tag here (unlike entity_dossier's own property listing, which routes those
+        -- through resolve_label for display) — a contradicted identity property is exactly
+        -- the kind of conflict this bucket exists to surface, not hide.
+        contradicted_props AS (
+            SELECT ca.object_id, ca.name
+            FROM current_assertions ca
+            JOIN per_object p2 ON p2.id = ca.object_id
+            GROUP BY ca.object_id, ca.name
+            HAVING count(DISTINCT (ca.value #>> '{}')) > 1
+        ),
+        contradicted_objs AS (
+            SELECT object_id, array_agg(DISTINCT name ORDER BY name) AS props
+            FROM contradicted_props GROUP BY object_id
         )
         SELECT p.id, p.canonical, p.created_at AS born, p.last_touch, p.link_count,
+               cont.props AS contradicted_on,
                CASE
+                 WHEN cont.props IS NOT NULL THEN 'contradicted'
                  WHEN bc.n > 1 THEN 'duplicate_suspect'
                  WHEN cc.n IS NOT NULL THEN 'bulk_import'
                  WHEN p.link_count = 0 THEN 'orphan'
@@ -2714,12 +2755,14 @@ async def _triage_buckets(pool: asyncpg.Pool, args: dict[str, Any]) -> Any:
         LEFT JOIN cohorts co ON co.obj_id = p.id
         LEFT JOIN cohort_counts cc
             ON cc.born_bucket = co.born_bucket AND cc.fingerprint = co.fingerprint
+        LEFT JOIN contradicted_objs cont ON cont.object_id = p.id
         ORDER BY p.canonical
     """, object_type, status, stale_days, cohort_min)
     bucketed = sorted(rows, key=lambda r: (_TRIAGE_BUCKET_PRIORITY[r["bucket"]], r["canonical"]))
     page = bucketed[offset:offset + limit]
     listed = [
         {"id": str(r["id"]), "canonical": r["canonical"], "bucket": r["bucket"],
+         **({"contradicted_on": list(r["contradicted_on"])} if r["contradicted_on"] else {}),
          "links": r["link_count"], "born": r["born"].isoformat(),
          "last_touch": r["last_touch"].isoformat()}
         for r in page

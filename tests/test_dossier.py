@@ -94,6 +94,84 @@ async def test_dossier_resolves_own_name_and_neighbor_name_via_the_full_chain(
     assert nbr["neighbor"]["name"] == "a practice with no name property"
 
 
+async def test_dossier_already_surfaced_both_sides_of_a_contradiction_before_marking(
+    actions: Actions,
+) -> None:
+    """VERIFICATION for task #102 (Thoth's DM 2279), done BEFORE building the mark: does
+    dossier show BOTH contradicting assertions, or silently take the first?
+    `current_assertions` (alembic 0001/0005) excludes ONLY assertions someone explicitly
+    `supersedes`d — two DIFFERENT sources asserting DIFFERENT values on the same property,
+    neither superseding the other, BOTH stay current by design. This proves
+    entity_dossier's properties query (no LIMIT, no ORDER-BY-confidence-then-take-one)
+    already read that whole multi-source set rather than silently collapsing to a winner —
+    NOT an instrument defect of the valid_until family Imhotep fixed at 4610cb2. #102's
+    actual gap, closed by the `agreement` field below, was that nothing NAMED whether the
+    values it already returns agree or genuinely contradict."""
+    from datetime import UTC, datetime
+
+    obj = await actions.create_or_find_object("Thread", "thread:dosscontra", "test")
+    now = datetime.now(UTC)
+    await actions.assert_property(obj, "status", "open", "agent:alice", now, 0.9)
+    await actions.assert_property(obj, "status", "resolved", "agent:bob", now, 0.9)
+
+    d = await entity_dossier(actions.pool, obj)
+    status = next(p for p in d["properties"] if p["name"] == "status")
+    values = {v["value"] for v in status["values"]}
+    sources = {v["source"] for v in status["values"]}
+    # both genuinely contradicting values are present — not silently collapsed to one
+    assert values == {"open", "resolved"}
+    assert sources == {"agent:alice", "agent:bob"}
+    assert len(status["values"]) == 2
+
+
+async def test_dossier_marks_a_single_source_property_as_single(actions: Actions) -> None:
+    from datetime import UTC, datetime
+
+    obj = await actions.create_or_find_object("Thread", "thread:dosssingle", "test")
+    await actions.assert_property(obj, "status", "open", "agent:alice",
+                                  datetime.now(UTC), 0.9)
+    d = await entity_dossier(actions.pool, obj)
+    status = next(p for p in d["properties"] if p["name"] == "status")
+    assert status["agreement"] == "single"
+    assert len(status["values"]) == 1
+
+
+async def test_dossier_marks_two_sources_with_the_same_value_as_agreeing(
+    actions: Actions,
+) -> None:
+    """SAME tag, SAME data — the operator's rule names this ONE referent corroborated by
+    two sources, never a conflict, and MUST render distinctly from a genuine contradiction
+    (same tag, DIFFERENT data)."""
+    from datetime import UTC, datetime
+
+    obj = await actions.create_or_find_object("Thread", "thread:dossagree", "test")
+    now = datetime.now(UTC)
+    await actions.assert_property(obj, "status", "open", "agent:alice", now, 0.9)
+    await actions.assert_property(obj, "status", "open", "agent:bob", now, 0.9)
+    d = await entity_dossier(actions.pool, obj)
+    status = next(p for p in d["properties"] if p["name"] == "status")
+    assert status["agreement"] == "agreeing"
+    assert len(status["values"]) == 2
+    assert {v["value"] for v in status["values"]} == {"open"}
+
+
+async def test_dossier_marks_two_sources_with_different_values_as_contradicting(
+    actions: Actions,
+) -> None:
+    """The actual #102 payoff: MARKED, never resolved — no value dropped, ranked, or
+    picked as a winner; both remain, now with the epistemic state named."""
+    from datetime import UTC, datetime
+
+    obj = await actions.create_or_find_object("Thread", "thread:dosscontra2", "test")
+    now = datetime.now(UTC)
+    await actions.assert_property(obj, "status", "open", "agent:alice", now, 0.9)
+    await actions.assert_property(obj, "status", "resolved", "agent:bob", now, 0.9)
+    d = await entity_dossier(actions.pool, obj)
+    status = next(p for p in d["properties"] if p["name"] == "status")
+    assert status["agreement"] == "contradicting"
+    assert {v["value"] for v in status["values"]} == {"open", "resolved"}
+
+
 async def test_dossier_relationships_filter_invalidated_links(actions: Actions) -> None:
     """Task #114 (thread 7b258b5f, found by Thoth closing #99): a link healed by
     invalidate_link (valid_until stamped, never deleted) used to render identically to a

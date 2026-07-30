@@ -1712,6 +1712,60 @@ async def test_triage_buckets_flags_duplicate_suspect_on_basename_collision(
     assert by_canon["repo:unique-thing"] == "orphan"  # distinct basename, zero links
 
 
+async def test_triage_buckets_flags_contradicted_when_two_sources_disagree(
+    actions: Actions,
+) -> None:
+    """Task #102 (operator's principle via Thoth's dispatch DM 2279): two DIFFERENT
+    sources asserting DIFFERENT values on the same property, neither superseding the
+    other — current_assertions already holds this as live disagreement; this proves the
+    bucket NAMES it, and names WHICH property, without touching the underlying data."""
+    obj = await actions.create_or_find_object("Organization", "org:contra", "test")
+    await actions.assert_property(obj, "status", "active", "agent:alice", NOW, 0.9)
+    await actions.assert_property(obj, "status", "dissolved", "agent:bob", NOW, 0.9)
+
+    rows = await _fn_triage(actions.pool, None,
+                            {"mode": "buckets", "object_type": "Organization",
+                             "stale_days": 999_999})
+    row = next(r for r in rows if r["canonical"] == "org:contra")
+    assert row["bucket"] == "contradicted"
+    assert row["contradicted_on"] == ["status"]
+
+
+async def test_triage_buckets_does_not_flag_agreeing_sources_as_contradicted(
+    actions: Actions,
+) -> None:
+    """SAME tag, SAME data — two sources corroborating one fact must never render as a
+    conflict (the operator's categorical distinction, not a similarity threshold)."""
+    obj = await actions.create_or_find_object("Organization", "org:agree", "test")
+    await actions.assert_property(obj, "status", "active", "agent:alice", NOW, 0.9)
+    await actions.assert_property(obj, "status", "active", "agent:bob", NOW, 0.9)
+
+    rows = await _fn_triage(actions.pool, None,
+                            {"mode": "buckets", "object_type": "Organization",
+                             "stale_days": 999_999})
+    row = next(r for r in rows if r["canonical"] == "org:agree")
+    assert row["bucket"] != "contradicted"
+    assert "contradicted_on" not in row
+
+
+async def test_triage_buckets_contradicted_outranks_duplicate_suspect(
+    actions: Actions,
+) -> None:
+    """MARK, DO NOT RESOLVE — but among the marks, priority still has to pick ONE bucket
+    per object: a confirmed live disagreement outranks a structural naming suspicion."""
+    a = await actions.create_or_find_object("Organization", "repo:bothflags", "test")
+    b = await actions.create_or_find_object("Organization", "file:/x/bothflags", "test")
+    del b
+    await actions.assert_property(a, "status", "active", "agent:alice", NOW, 0.9)
+    await actions.assert_property(a, "status", "dissolved", "agent:bob", NOW, 0.9)
+
+    rows = await _fn_triage(actions.pool, None,
+                            {"mode": "buckets", "object_type": "Organization",
+                             "stale_days": 999_999})
+    row = next(r for r in rows if r["canonical"] == "repo:bothflags")
+    assert row["bucket"] == "contradicted"
+
+
 async def test_triage_buckets_flags_bulk_import_cohort(actions: Actions) -> None:
     ids = []
     for i in range(3):

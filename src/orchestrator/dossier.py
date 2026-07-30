@@ -43,7 +43,20 @@ async def entity_dossier(pool: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, 
     a full day after it was invalidated). derive_role/manager_of_seat (seats.py) already
     filter on `valid_until`; this was the read-side gap sitting beside their write-side
     correctness — same (l.valid_until IS NULL OR l.valid_until > now()) predicate used
-    everywhere else in this codebase, applied here for the first time."""
+    everywhere else in this codebase, applied here for the first time.
+
+    Task #102 (operator's principle, via Thoth's dispatch DM 2279 — "disagreement is just
+    more data; it does not have to be collapsed into resolution, it merely has to be
+    MARKED AS DISAGREEMENT"): `current_assertions` (alembic 0001/0005) already coexists
+    two sources' differing values on the same property — nobody superseded either, so both
+    stay current by design. The `properties` query below already read that whole
+    multi-source set (verified, not assumed — see
+    test_dossier_already_surfaced_both_sides_of_a_contradiction_before_marking); what it
+    never did is NAME whether the set it returns agrees or genuinely contradicts. Each
+    property entry now carries `agreement`: "single"
+    (one source), "agreeing" (multiple sources, same value), or "contradicting" (multiple
+    sources, different values) — the three epistemic states a reader could not tell apart
+    before. MARK, never resolve: no value is dropped, ranked, or picked as a winner."""
     obj = await pool.fetchrow(
         "SELECT id, type, canonical, status FROM objects WHERE id=$1", object_id
     )
@@ -71,6 +84,13 @@ async def entity_dossier(pool: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, 
             "evidence_class": r["evidence_class"],
             "confidence": r["confidence"],
         })
+    for entry in properties.values():
+        distinct = {v["value"] for v in entry["values"]}
+        entry["agreement"] = (
+            "single" if len(entry["values"]) == 1 else
+            "agreeing" if len(distinct) == 1 else
+            "contradicting"
+        )
 
     # relationships, both directions, neighbor labelled and typed. Repeated edges
     # (same direction, type, neighbor) are collapsed: a duplicated link carries no
