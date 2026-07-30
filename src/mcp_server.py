@@ -3313,6 +3313,29 @@ async def resolve_fold(candidate_id: int, decision: str,
 
 
 @mcp.tool()
+async def fleet_reconcile(execute: bool = False,
+                          ctx: Context | None = None) -> dict[str, Any]:
+    """THE REAPER (task #59) — buckets stale/anonymous agent mounts into bulk_fold_swarm,
+    rollup_office_remount, drop_ephemeral_test_cwd, and leave_for_human, and — only with
+    `execute=True` — acts on the first three (fold_agent/resolve_fold_candidate for the
+    fold buckets, a row-scoped mount drop for the third). leave_for_human is NEVER
+    touched, by construction. DRY RUN IS THE DEFAULT: without `execute`, returns the plan
+    only (which candidates would fold, which mount rows would drop) and writes nothing.
+    With `execute=True`, re-reads the tray fresh immediately before acting (never a stale
+    report) and returns before/after tray counts as its receipt — proof the acted rows
+    left the tray, not a trusted boolean. The sanctioned door for what was previously only
+    reachable as orchestrator code (src.orchestrator.fleet_reconcile.reconcile_execute) —
+    built so a reviewed act never has to be a hand-written script against the live
+    graph."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first", "why": _anchorless(ctx)}
+    from src.orchestrator.fleet_reconcile import reconcile_execute
+    return await reconcile_execute(Actions(await _pool_get()), actor=ident.agent_id,
+                                   execute=execute)
+
+
+@mcp.tool()
 async def establish_office(seat: str, ctx: Context | None = None) -> dict[str, Any]:
     """THE OFFICE CEREMONY (ruling ed5f5ce2) — one act moves a seat into its Osiris-owned
     home at ~/.osiris/seats/<handle>/: writes the seat's STANDING ORDERS (a per-seat
