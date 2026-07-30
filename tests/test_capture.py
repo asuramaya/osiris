@@ -15,7 +15,10 @@ from src.actions.core import Actions
 from src.ingest.mined import consolidate_memory
 from src.mcp_server import _project_briefing
 from src.orchestrator.capture import (
+    amend_decision,
+    annotate_thread,
     backfill_decided_in,
+    decision_addenda,
     find_near_duplicate_decision,
     find_near_duplicate_open_thread,
     link_repo,
@@ -28,6 +31,7 @@ from src.orchestrator.capture import (
     record_decision,
     record_tension,
     resolve_thread,
+    thread_notes,
 )
 from src.orchestrator.compositions import _props, run_composition, seed_default_compositions
 from src.parsers.base import EvidenceClass
@@ -2736,3 +2740,132 @@ async def test_search_indexes_the_statement_field_and_flags_a_refuted_practice(
                        "args": {"q": "quarantine the flaky test", "limit": 10}}))["items"]["hits"]
     match = next(h for h in hits2 if h["id"] == str(p))
     assert "refuted" in match  # flagged, never hidden
+
+
+# LANE 2 — annotate_thread / amend_decision (Thoth's brief, DM 2334): append-without-close,
+# append-without-supersede.
+
+async def test_annotate_thread_adds_a_note_without_closing_the_thread(actions: Actions) -> None:
+    t = await open_thread(actions, "does the composer need a live-collab mode",
+                          source="session-miner")
+    got = await annotate_thread(actions, str(t), "checked: no user has asked for this yet")
+    assert got == t
+    props = await _props(actions.pool, t)
+    assert props["status"] == "open"  # never touched by an annotation
+    notes = await thread_notes(actions.pool, t)
+    assert [n["note"] for n in notes] == ["checked: no user has asked for this yet"]
+
+
+async def test_annotate_thread_appends_multiple_notes_in_order(actions: Actions) -> None:
+    t = await open_thread(actions, "why do the pulse numbers disagree with the census")
+    await annotate_thread(actions, str(t), "first lead: two instruments, different scope")
+    await annotate_thread(actions, str(t), "second lead: one of them double-counts halted "
+                          "projects")
+    notes = await thread_notes(actions.pool, t)
+    # order things were understood in — oldest first, nothing buried
+    assert [n["note"] for n in notes] == [
+        "first lead: two instruments, different scope",
+        "second lead: one of them double-counts halted projects",
+    ]
+
+
+async def test_annotate_thread_note_carries_its_own_source(actions: Actions) -> None:
+    t = await open_thread(actions, "should reap_stale_leases run more often than 5 minutes")
+    await annotate_thread(actions, str(t), "measured: no lease has ever gone stale in prod",
+                          source="agent:khnum")
+    notes = await thread_notes(actions.pool, t)
+    assert notes[0]["source"] == "agent:khnum"
+
+
+async def test_annotate_thread_returns_none_when_nothing_matches(actions: Actions) -> None:
+    assert await annotate_thread(actions, "no such thread anywhere", "a note") is None
+
+
+async def test_annotate_thread_refuses_a_blank_note(actions: Actions) -> None:
+    import pytest
+
+    t = await open_thread(actions, "a thread that will receive a rejected blank note")
+    with pytest.raises(ValueError, match="blank"):
+        await annotate_thread(actions, str(t), "   ")
+    assert await thread_notes(actions.pool, t) == []
+
+
+async def test_annotate_thread_leaves_a_resolved_thread_resolved(actions: Actions) -> None:
+    """Annotation is addition, never a state transition — it must not silently reopen a
+    thread the caller already closed, the same discipline reclassify_thread already holds
+    for kind."""
+    t = await open_thread(actions, "was the AF_UNIX regression xdist-exclusive")
+    await resolve_thread(actions, str(t), because="confirmed: bare pytest hits it too")
+    await annotate_thread(actions, str(t), "khnum's fix: cf9413a")
+    props = await _props(actions.pool, t)
+    assert props["status"] == "resolved"
+
+
+async def test_amend_decision_adds_an_addendum_without_touching_summary(
+    actions: Actions,
+) -> None:
+    d = await record_decision(actions, "resource_lease uses a partial unique index, not "
+                              "advisory locks", kind="ruling", source="agent:me")
+    got = await amend_decision(actions, str(d), "confirmed under 50-way concurrent claims: "
+                               "exactly one holder, zero false negatives")
+    assert got == d
+    props = await _props(actions.pool, d)
+    assert props["summary"] == ("resource_lease uses a partial unique index, not advisory "
+                                "locks")
+    addenda = await decision_addenda(actions.pool, d)
+    assert [a["addendum"] for a in addenda] == [
+        "confirmed under 50-way concurrent claims: exactly one holder, zero false negatives"]
+
+
+async def test_amend_decision_appends_multiple_addenda_in_order(actions: Actions) -> None:
+    d = await record_decision(actions, "the fifty concurrent claims test is load-bearing",
+                              source="agent:me")
+    await amend_decision(actions, str(d), "first: reproduced locally, 50/50 clean")
+    await amend_decision(actions, str(d), "second: reproduced again under -n auto")
+    addenda = await decision_addenda(actions.pool, d)
+    assert [a["addendum"] for a in addenda] == [
+        "first: reproduced locally, 50/50 clean",
+        "second: reproduced again under -n auto",
+    ]
+
+
+async def test_amend_decision_returns_none_when_nothing_matches(actions: Actions) -> None:
+    assert await amend_decision(actions, "no such decision anywhere", "an addendum") is None
+
+
+async def test_amend_decision_refuses_a_blank_addendum(actions: Actions) -> None:
+    import pytest
+
+    d = await record_decision(actions, "a decision that will receive a rejected blank amend",
+                              source="agent:me")
+    with pytest.raises(ValueError, match="blank"):
+        await amend_decision(actions, str(d), "   ")
+    assert await decision_addenda(actions.pool, d) == []
+
+
+async def test_amend_decision_refuses_a_superseded_decision(actions: Actions) -> None:
+    """Amendment is not correction: a dead ruling does not grow new reasoning — the refusal
+    must name supersede as the right tool, exactly the way fold_project names rename."""
+    import pytest
+
+    old = await record_decision(actions, "the cache misses come from TTL expiry",
+                                kind="ruling", source="agent:me")
+    await record_decision(actions, "the cache misses come from key collisions, not TTL",
+                          kind="ruling", source="agent:me", supersedes=str(old))
+    with pytest.raises(ValueError, match="supersede"):
+        await amend_decision(actions, str(old), "one more thought on the old theory")
+    assert await decision_addenda(actions.pool, old) == []
+
+
+async def test_amend_decision_still_works_on_the_successor_after_a_supersede(
+    actions: Actions,
+) -> None:
+    old = await record_decision(actions, "the cache misses come from a race in the warmer",
+                                kind="ruling", source="agent:me")
+    new = await record_decision(actions, "the cache misses come from key collisions, not "
+                                "a race", kind="ruling", source="agent:me",
+                                supersedes=str(old))
+    got = await amend_decision(actions, str(new), "confirmed live, 2026-07-30")
+    assert got == new
+    assert [a["addendum"] for a in await decision_addenda(actions.pool, new)] == [
+        "confirmed live, 2026-07-30"]

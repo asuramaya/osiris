@@ -1370,3 +1370,143 @@ async def set_lifecycle(
         await actions.assert_property(pid, "lifecycle_because", because, source, now, _CONF,
                                       evidence_class=_EC)
     return pid  # type: ignore[no-any-return]
+
+
+# LANE 2 — MAKE INCREMENTAL CAPTURE POSSIBLE (Thoth's brief, DM 2334): neither `resolve_
+# thread` (closes on call regardless of intent, #116/thread 69f4165d) nor `record_decision`
+# (write-once-plus-supersede — mint fresh, or bury under a correction) lets a session ADD to
+# a durable object without replacing or closing it. Both force BATCH-AT-THE-END capture,
+# which is exactly what dies at a seam. Two verbs below, one law: APPEND, NEVER OVERWRITE.
+#
+# Every addition carries its own source/observed_at/grade — the same metadata every
+# assertion in this module already carries — under a property name that can never collide
+# with an EARLIER append (`_append_property_name`, just below). That matters because the
+# ordinary mechanism every other property write here relies on, `assert_property`'s
+# within-source supersession, would otherwise silently bury an earlier note/addendum from
+# `current_assertions` the instant two calls happened to share a name — precisely the loss
+# this lane exists to close. So unlike every other mint in this file (`_canon`, hashed on
+# CONTENT for idempotency — a repeat IS the same fact, fold it), an append is keyed on
+# nothing but its own identity: a repeat is new testimony, never a duplicate to fold away.
+#
+# AND NEITHER IS A SECOND SUPERSEDE (Thoth's explicit line, refusing to let the two blur):
+# amendment is not correction. `record_decision(supersedes=...)` already exists for "the
+# earlier reasoning was wrong" and stays the only door for that; `amend_decision` structurally
+# cannot touch `summary`/`rationale`/anything already on the object — it can only add — and
+# refuses outright, naming supersede by name, the moment its target is no longer live.
+def _append_property_name(prefix: str) -> str:
+    """A property name that can never collide with an earlier append under the same
+    prefix — see the banner above for why a content hash (this module's usual idempotency
+    key) would be the wrong choice here."""
+    return f"{prefix}:{uuid.uuid4().hex[:12]}"
+
+
+async def annotate_thread(
+    actions: Actions, ref: str, note: str, *, source: str = _SOURCE,
+) -> uuid.UUID | None:
+    """Add to a thread's record WITHOUT closing it — the fifth door (`resolve_thread` closes;
+    `assign_thread` hands off; `defer_thread` snoozes; this one just adds). `status` is never
+    touched: an annotated thread stays exactly as open — or resolved, or deferred — as it was
+    before the call. This is addition, not a state transition, and it is the missing case
+    #116 named: today `resolve_thread` is the ONLY verb that writes to an EXISTING thread, and
+    it closes on call regardless of intent, so anything short of a full close gets forced into
+    batch-at-the-end capture — exactly what a dying session drops.
+
+    Carries the SAME source/observed_at/grade every assertion in this module already does,
+    stamped under a property name that can never collide with an earlier append (`_append_
+    property_name`) — a genuine within-source supersede here would silently bury an earlier
+    note from `current_assertions`, the loss this verb exists to prevent. Read the whole
+    record back, in the order it was understood, with `thread_notes`.
+
+    This is not `resolve_thread`'s `because`, and it is not a correction: annotate_thread has
+    no parameter that can change `summary`, `status`, or any existing property — it can only
+    ADD. A caller who means "the earlier understanding was wrong" wants a different verb
+    entirely (open a fresh thread, or fold the correction into whatever answers this one);
+    nothing here revises anything.
+
+    Returns the thread id, or None if `ref` matched nothing (same convention as
+    `resolve_thread`/`assign_thread`/`defer_thread`). Raises ValueError on a blank note —
+    an empty addition is not testimony."""
+    note = note.strip()
+    if not note:
+        raise ValueError("note must not be blank — an empty addition is not testimony")
+    tid = await _find_thread(actions.pool, ref)
+    if tid is None:
+        return None
+    observed = datetime.now(UTC)
+    await actions.assert_property(tid, _append_property_name("note"), note, source, observed,
+                                  _CONF, evidence_class=_EC)
+    return tid
+
+
+async def thread_notes(pool: asyncpg.Pool, thread_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Every annotation `annotate_thread` has added to this thread, oldest first — the order
+    it was understood in, which is often the finding itself. Reads `current_assertions`
+    directly rather than going through a single-winner resolver like `_thread_summary`/
+    `_current_owner`: each note's property name is unique (`_append_property_name`), so every
+    one of them is independently "current" — there is no winner to pick among them."""
+    rows = await pool.fetch(
+        "SELECT a.value #>> '{}' AS note, a.source_id AS source, a.observed_at, "
+        "a.confidence FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name LIKE 'note:%' ORDER BY a.observed_at ASC",
+        thread_id,
+    )
+    return [{"note": r["note"], "source": r["source"], "observed_at": r["observed_at"],
+             "confidence": float(r["confidence"])} for r in rows]
+
+
+async def amend_decision(
+    actions: Actions, ref: str, addendum: str, *, source: str = _SOURCE,
+) -> uuid.UUID | None:
+    """Append reasoning to a LIVE decision as understanding develops, WITHOUT superseding it.
+    `record_decision` is write-once-plus-supersede — mint fresh, or bury under a correction —
+    and there was no third door for "more of the same ruling's own reasoning, added later."
+    `summary` is never touched here (Thoth's own lean on this, argued and adopted: it is the
+    addressable handle callers dedup and short-id-match against — mutating it under a reader
+    is how #117's problems start), and neither is `rationale`/`kind`/anything else already on
+    the object; amend_decision structurally has no parameter that could touch them — it can
+    only add a new, independent property, same law and same mechanism as `annotate_thread`
+    (`_append_property_name`) — see that verb's docstring for why a content hash would be the
+    wrong key here.
+
+    Refuses (raises ValueError, naming supersede by name) when `ref` resolves to a decision
+    that is already superseded: a dead ruling does not grow new reasoning — amending it would
+    either misattribute fresh testimony to a ruling no longer in force, or quietly do
+    supersede's job without supersede's bookkeeping (the two-way superseded_by/supersedes
+    navigation). A correction belongs on `record_decision(supersedes=...)`; this verb only
+    ever adds to a ruling still standing.
+
+    Returns the decision id, or None if `ref` matched nothing (same convention as
+    `resolve_thread`). Raises ValueError on a blank addendum."""
+    addendum = addendum.strip()
+    if not addendum:
+        raise ValueError("addendum must not be blank — an empty addition is not testimony")
+    did = await _find_decision(actions.pool, ref)
+    if did is None:
+        return None
+    superseded_by = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='superseded_by' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        did,
+    )
+    if superseded_by:
+        raise ValueError(
+            f"decision {ref!r} is already superseded by {str(superseded_by)[:8]} — amend "
+            "the successor, or use record_decision(supersedes=...) if you mean a correction; "
+            "amend_decision only ever adds to a ruling still standing")
+    observed = datetime.now(UTC)
+    await actions.assert_property(did, _append_property_name("addendum"), addendum, source,
+                                  observed, _CONF, evidence_class=_EC)
+    return did
+
+
+async def decision_addenda(pool: asyncpg.Pool, decision_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Every addendum `amend_decision` has added to this decision, oldest first — see
+    `thread_notes` for why each one is independently current."""
+    rows = await pool.fetch(
+        "SELECT a.value #>> '{}' AS addendum, a.source_id AS source, a.observed_at, "
+        "a.confidence FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name LIKE 'addendum:%' ORDER BY a.observed_at ASC",
+        decision_id,
+    )
+    return [{"addendum": r["addendum"], "source": r["source"], "observed_at": r["observed_at"],
+             "confidence": float(r["confidence"])} for r in rows]
