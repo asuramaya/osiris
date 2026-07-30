@@ -94,6 +94,40 @@ type _PoolOrConn = asyncpg.Pool | asyncpg.Connection
 _CACHE_TTL = 120.0  # fail-safe only, see module docstring — the fingerprint is the real gate
 _cache: dict[str, Any] = {}  # "v" -> (fingerprint, cached_at, {(kind,name): TypeRecord})
 
+# THE USAGE-COUNT CACHE (task #121, ruling a4bd555c's "relevance is observed, not
+# declared" — the two principles the flat catalog shipped without): a PLAIN TTL, never
+# the Type catalog's own fingerprint gate. That gate exists because check_object_type
+# needs byte-exact freshness (a just-minted type must validate immediately or a write
+# fails that shouldn't). A usage count backing a RANKING has no such requirement — a
+# count lagging a few seconds behind the newest write is still an honest ranking signal,
+# so trading precision for one fewer query on every full_catalog call is the right
+# call, not a shortcut. Measured cost at ~11k objects / ~31k links (EXPLAIN ANALYZE,
+# both queries combined): ~7ms warm. Cheap enough that even the TTL is generous, not
+# load-bearing — kept because full_catalog sits on get_schema, which every agent's
+# orient/mount pays for.
+_USAGE_TTL = 30.0
+_usage_cache: dict[str, Any] = {}  # "v" -> (cached_at, {obj_type: n}, {link_type: n})
+
+
+async def _usage_counts(pool: _PoolOrConn) -> tuple[dict[str, int], dict[str, int]]:
+    """(object type name -> live instance count, link type name -> live instance count).
+    'Live' mirrors the rest of the codebase's own definitions: objects.status='active'
+    (seats.py, dossier.py's own convention), links valid_until IS NULL OR > now() (the
+    same predicate dossier.py/seats.py already use everywhere else) — a merged object or
+    an invalidated link should not inflate a type's apparent relevance."""
+    hit = _usage_cache.get("v")
+    if hit and time.monotonic() - hit[0] < _USAGE_TTL:
+        return hit[1], hit[2]
+    obj_rows = await pool.fetch(
+        "SELECT type, count(*) AS n FROM objects WHERE status='active' GROUP BY type")
+    link_rows = await pool.fetch(
+        "SELECT type, count(*) AS n FROM links "
+        "WHERE (valid_until IS NULL OR valid_until > now()) GROUP BY type")
+    obj_counts = {r["type"]: r["n"] for r in obj_rows}
+    link_counts = {r["type"]: r["n"] for r in link_rows}
+    _usage_cache["v"] = (time.monotonic(), obj_counts, link_counts)
+    return obj_counts, link_counts
+
 
 def _canonical(name: str, kind: str) -> str:
     return f"type:{kind}:{name}"
@@ -197,19 +231,42 @@ async def categories(pool: _PoolOrConn) -> list[str]:
 
 async def full_catalog(pool: _PoolOrConn) -> dict[str, Any]:
     """JSON-serializable catalog for the API/UI — the live, graph-backed semantic
-    layer as data. Replaces schema.py's old catalog()."""
+    layer as data. Replaces schema.py's old catalog().
+
+    TASK #121 (ruling a4bd555c, the half of the flat-catalog design left unbuilt): the
+    catalog is COMPLETE AT THE RECORD — every declared type is always present here,
+    never trimmed, never retired; that was explicitly ruled out (a journalist's graph
+    and this graph disagree on which 24 of 25 STIX/ATT&CK types read as noise, so
+    neither reading gets to delete the other's vocabulary). What's new is BOUNDED AT
+    THE LENS: each entry carries its live `count` in THIS graph, and both lists are
+    ordered by that count (ties broken by name, for a deterministic, diffable order) —
+    "reveal by summoning," instance count standing in for the summon signal, never a
+    declared category/domain tag deciding for the reader. A type with zero live
+    instances still ships, just last. Recency and co-occurrence (the ruling's other two
+    named relevance signals) are natural next steps, not built here — count alone
+    already answers the question this task was dispatched to answer."""
     cat = await _catalog(pool)
+    obj_counts, link_counts = await _usage_counts(pool)
+    object_types = [
+        {"name": r.name, "category": list(r.category), "color": r.color,
+         "shape": r.shape, "description": r.description, "schemes": list(r.schemes),
+         "count": obj_counts.get(r.name, 0)}
+        for r in cat.values() if r.kind == "object"
+    ]
+    link_types = [
+        {"name": r.name, "description": r.description,
+         "domain": list(r.domain), "range": list(r.range),
+         "count": link_counts.get(r.name, 0)}
+        for r in cat.values() if r.kind == "link"
+    ]
+    def _rank_key(t: dict[str, Any]) -> tuple[int, str]:
+        return (-t["count"], t["name"])
+
+    object_types.sort(key=_rank_key)
+    link_types.sort(key=_rank_key)
     return {
-        "object_types": [
-            {"name": r.name, "category": list(r.category), "color": r.color,
-             "shape": r.shape, "description": r.description, "schemes": list(r.schemes)}
-            for r in cat.values() if r.kind == "object"
-        ],
-        "link_types": [
-            {"name": r.name, "description": r.description,
-             "domain": list(r.domain), "range": list(r.range)}
-            for r in cat.values() if r.kind == "link"
-        ],
+        "object_types": object_types,
+        "link_types": link_types,
         "categories": await categories(pool),
     }
 

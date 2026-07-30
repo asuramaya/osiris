@@ -30,6 +30,7 @@ from src.ontology.catalog import (
 @pytest.fixture(autouse=True)
 def _clear_cache() -> None:
     catalog._cache.clear()
+    catalog._usage_cache.clear()
 
 
 async def test_ensure_type_mints_a_bare_stub(actions: Actions) -> None:
@@ -211,6 +212,107 @@ async def test_full_catalog_shape(actions: Actions) -> None:
     foo = next(t for t in c["object_types"] if t["name"] == "Foo")
     assert foo["color"] == "#fff" and foo["category"] == ["C"]
     assert any(lt["name"] == "rel" for lt in c["link_types"])
+
+
+async def test_full_catalog_ranks_object_types_by_live_instance_count(
+    actions: Actions,
+) -> None:
+    """Task #121 (ruling a4bd555c): RELEVANCE OBSERVED, NOT DECLARED — the catalog
+    ranks by live usage in THIS graph, never a declared category/domain tag."""
+    await ensure_type(actions, name="PopularKind", kind="object", actor="test")
+    await ensure_type(actions, name="RareKind", kind="object", actor="test")
+    for i in range(5):
+        await actions.create_or_find_object("PopularKind", f"popular:{i}", "test")
+    await actions.create_or_find_object("RareKind", "rare:0", "test")
+
+    c = await full_catalog(actions.pool)
+    popular = next(t for t in c["object_types"] if t["name"] == "PopularKind")
+    rare = next(t for t in c["object_types"] if t["name"] == "RareKind")
+    assert popular["count"] == 5
+    assert rare["count"] == 1
+    names = [t["name"] for t in c["object_types"]]
+    assert names.index("PopularKind") < names.index("RareKind")
+
+
+async def test_full_catalog_keeps_a_zero_instance_type_present_but_ranked_last(
+    actions: Actions,
+) -> None:
+    """COMPLETE AT THE RECORD (ruling a4bd555c, the operator's refusal of Thoth's
+    retire-the-unused-types instinct): a type with zero live instances in THIS graph
+    is never trimmed — it still ships, just last in the observed-relevance order."""
+    await ensure_type(actions, name="UsedKind", kind="object", actor="test")
+    await ensure_type(actions, name="UnusedKind", kind="object", actor="test")
+    await actions.create_or_find_object("UsedKind", "used:0", "test")
+
+    c = await full_catalog(actions.pool)
+    names = {t["name"] for t in c["object_types"]}
+    assert "UnusedKind" in names
+    unused = next(t for t in c["object_types"] if t["name"] == "UnusedKind")
+    assert unused["count"] == 0
+    order = [t["name"] for t in c["object_types"]]
+    assert order.index("UsedKind") < order.index("UnusedKind")
+
+
+async def test_full_catalog_object_count_excludes_a_merged_away_object(
+    actions: Actions,
+) -> None:
+    """A merge doesn't delete the loser (status='merged', never gone) but it must not
+    keep inflating its type's apparent relevance — the same status='active' discipline
+    used everywhere else in this codebase."""
+    await ensure_type(actions, name="MergeCountKind", kind="object", actor="test")
+    winner = await actions.create_or_find_object("MergeCountKind", "mc:winner", "test")
+    loser = await actions.create_or_find_object("MergeCountKind", "mc:loser", "test")
+    await actions.merge_objects(winner, loser, "test merge", "test")
+
+    c = await full_catalog(actions.pool)
+    rec = next(t for t in c["object_types"] if t["name"] == "MergeCountKind")
+    assert rec["count"] == 1  # the merged-away loser doesn't count
+
+
+async def test_full_catalog_link_count_excludes_an_invalidated_link(
+    actions: Actions,
+) -> None:
+    """Mirrors dossier.py's own valid_until discipline: a healed (invalidated, never
+    deleted) link must not keep counting toward its type's relevance."""
+    from datetime import UTC, datetime
+
+    await ensure_type(actions, name="LinkCountKind", kind="object", actor="test")
+    await ensure_type(actions, name="live_count_rel", kind="link", actor="test")
+    a = await actions.create_or_find_object("LinkCountKind", "lc:a", "test")
+    b = await actions.create_or_find_object("LinkCountKind", "lc:b", "test")
+    now = datetime.now(UTC)
+    await actions.create_link(a, b, "live_count_rel", "test", now, 0.9)
+    await actions.invalidate_link(a, b, "live_count_rel", "test", now)
+
+    c = await full_catalog(actions.pool)
+    rel = next(t for t in c["link_types"] if t["name"] == "live_count_rel")
+    assert rel["count"] == 0  # the one link that ever existed is now invalidated
+
+
+async def test_usage_count_cache_does_not_see_a_fresh_write_within_the_ttl(
+    actions: Actions,
+) -> None:
+    """Deliberately the OPPOSITE contract from the Type catalog's own fingerprint gate
+    (test_cache_sees_a_fresh_write_immediately_same_process below) — a usage count
+    backs a RANKING, not a validation check, so trading a few seconds of staleness for
+    one fewer query per full_catalog call is the intended tradeoff, not a bug."""
+    await ensure_type(actions, name="TtlKind", kind="object", actor="test")
+    first = await full_catalog(actions.pool)
+    before = next(t for t in first["object_types"] if t["name"] == "TtlKind")["count"]
+    await actions.create_or_find_object("TtlKind", "ttl:0", "test")
+    second = await full_catalog(actions.pool)
+    after = next(t for t in second["object_types"] if t["name"] == "TtlKind")["count"]
+    assert after == before  # still cached — the write hasn't crossed the TTL yet
+
+
+async def test_usage_count_cache_refreshes_once_cleared(actions: Actions) -> None:
+    await ensure_type(actions, name="RefreshKind", kind="object", actor="test")
+    await full_catalog(actions.pool)  # prime the cache at count=0
+    await actions.create_or_find_object("RefreshKind", "refresh:0", "test")
+    catalog._usage_cache.clear()
+    c = await full_catalog(actions.pool)
+    rec = next(t for t in c["object_types"] if t["name"] == "RefreshKind")
+    assert rec["count"] == 1
 
 
 async def test_cache_sees_a_fresh_write_immediately_same_process(actions: Actions) -> None:
