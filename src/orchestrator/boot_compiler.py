@@ -331,3 +331,75 @@ async def reissue_office(
             "changed": True,
             "note": "managed section added (adopt)" if adopt else
                     "managed section recompiled"}
+
+
+# ═══════════ THE ROLLOUT CHECK (thread 0e5bae06, #84) ═══════════
+# "the machinery exists and passes its test" is not "the machinery is in effect" — the
+# Boot Compiler shipped whole and reached 2 of 27 offices because nothing checked the
+# ROLLOUT, only the acceptance test (the disease Thoth LXIV named across seven separate
+# instances this reign). c72e206 is the cure's shape, copied here: NAME every gap, never
+# just count — a >= comparison can't fail in the direction it exists to detect once other,
+# unrelated rows (here, seats with no office at all) share the same table.
+#
+# FOUR reasons a seat is not "rolled out", kept DISTINCT rather than folded into one
+# count, because only one of them is what adopt=True can fix:
+#   never_compiled — has a handle, an office, a CLAUDE.md, zero markers. adopt-ready.
+#   malformed      — has markers, but they're damaged. reissue refuses; needs a hand fix,
+#                    never a second adopt (reissue_office's own refusal already covers
+#                    this at write time — named here too so the check surfaces it BEFORE
+#                    an operator tries and gets refused).
+#   no_claude_md   — has a handle and an anchor_cwd, but no CLAUDE.md file on disk yet.
+#                    establish_office/mint_seat's job, not adopt's — reissue_office
+#                    refuses this case outright (no file to append to).
+#   no_office      — no handle or no anchor_cwd on record at all. A DIFFERENT, already-
+#                    tracked bug (thread 7a9c3c46) that adopt cannot touch because
+#                    reissue_office has no office to find. Reported so it is never
+#                    silently folded into "needs rollout" and miscounted as fixed by a
+#                    sweep that cannot reach it.
+async def boot_rollout_gaps(pool: asyncpg.Pool) -> list[dict[str, str]]:
+    """Every active Seat NOT carrying a compiled managed section, one dict per seat,
+    classified by `reason` (see the four kinds above) — never a bare count. Read-only:
+    opens each office's CLAUDE.md to inspect it, writes nothing."""
+    from src.orchestrator.seats import seat_facts
+
+    rows = await pool.fetch(
+        "SELECT o.canonical AS seat_id FROM objects o WHERE o.type='Seat' "
+        "AND o.status='active' ORDER BY o.canonical")
+    gaps: list[dict[str, str]] = []
+    for row in rows:
+        seat_id = row["seat_id"]
+        facts = await seat_facts(pool, seat_id)
+        handle, anchor, house = facts.get("handle"), facts.get("anchor_cwd"), facts.get("house")
+        if not handle or not anchor:
+            gaps.append({"seat_id": seat_id, "handle": handle or "", "house": house or "",
+                        "reason": "no_office"})
+            continue
+        orders_path = Path(anchor) / "CLAUDE.md"
+        if not orders_path.exists():
+            gaps.append({"seat_id": seat_id, "handle": handle, "house": house or "",
+                        "anchor_cwd": anchor, "reason": "no_claude_md"})
+            continue
+        try:
+            locate_managed_section(orders_path.read_text())
+        except MarkerError as exc:
+            reason = "never_compiled" if "never been compiled" in str(exc) else "malformed"
+            gaps.append({"seat_id": seat_id, "handle": handle, "house": house or "",
+                        "anchor_cwd": anchor, "reason": reason, "detail": str(exc)})
+    return gaps
+
+
+def boot_rollout_gap_notes(gaps: list[dict[str, str]]) -> list[str]:
+    """One printable, actionable line per gap — `cmd_boot_status` prints these and a
+    caller-facing exit code follows from whether this list is empty, same contract as
+    `composition_gap_notes`. Each line names the seat AND says what fixes it, because a
+    gap that only says "N offices missing a section" is the exact miscount this check
+    exists to replace."""
+    fixes = {
+        "never_compiled": "run `reissue_office(adopt=True)`",
+        "malformed": "markers are damaged — needs a hand fix before any reissue",
+        "no_claude_md": "no CLAUDE.md on disk — needs establish_office/mint_seat first",
+        "no_office": "no handle or anchor_cwd on record — not an adopt target",
+    }
+    return [f"boot: {g['handle'] or g['seat_id']} ({g.get('house') or 'no house'}) has no "
+            f"compiled section — {fixes[g['reason']]}"
+            for g in sorted(gaps, key=lambda g: (g["reason"], g["handle"] or g["seat_id"]))]

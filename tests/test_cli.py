@@ -16,6 +16,7 @@ from src.cli import (
     _wait_for_smoke,
     alembic_gap_note,
     cmd_attach,
+    cmd_boot_status,
     cmd_deploy,
     cmd_launch,
     cmd_migrate,
@@ -830,3 +831,37 @@ async def test_cmd_deploy_refuses_when_migration_fails_and_never_restarts(
                                migration_state=_state, run_migrations=_failing_run)
     assert out == 1
     assert "REFUSED" in buf.getvalue()
+
+
+# --- boot-status -------------------------------------------------------------------------------
+
+async def test_cmd_boot_status_clean_on_a_blank_db(actions: Actions) -> None:
+    """A blank test DB has no active Seats at all — no seats means no gaps, same "silent
+    when there is nothing to name" contract as composition_gap_notes on a caught-up DB."""
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_boot_status(pool=actions.pool)
+    assert out == 0
+    assert "every active seat carries a compiled managed section" in buf.getvalue()
+
+
+async def test_cmd_boot_status_names_a_gap_and_exits_nonzero(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    await ensure_seat(actions, house="clihouse", handle="CliGapSeat",
+                      anchor_cwd=str(tmp_path / "cligap"), source="test")
+    (tmp_path / "cligap").mkdir()
+    (tmp_path / "cligap" / "CLAUDE.md").write_text("# never compiled\n")
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_boot_status(pool=actions.pool)
+    assert out == 1
+    assert "CliGapSeat" in buf.getvalue()
+    assert "reissue_office(adopt=True)" in buf.getvalue()

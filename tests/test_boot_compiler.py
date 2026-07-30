@@ -14,6 +14,8 @@ from src.orchestrator.boot_compiler import (
     MarkerError,
     _armed_practices,
     _has_any_markers,
+    boot_rollout_gap_notes,
+    boot_rollout_gaps,
     compile_managed_body,
     derive_role,
     locate_managed_section,
@@ -335,3 +337,75 @@ async def test_reissue_requires_because_and_refuses_an_unknown_seat(
     unknown = await reissue_office(actions, seat_id="seat:doesnotexist",
                                    because="a reason", actor="agent:test")
     assert "error" in unknown and "no such seat" in unknown["error"]
+
+
+# ═══════════ THE ROLLOUT CHECK (thread 0e5bae06, #84) — names, never counts ═══════════
+
+async def test_boot_rollout_gaps_names_each_of_the_four_reasons_distinctly(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The check's whole point: a seat missing its section for FOUR different reasons must
+    never collapse into one count, because only `never_compiled` is what adopt=True fixes —
+    the other three need a completely different act (a hand fix, establish_office, or the
+    anchor_cwd bug thread 7a9c3c46 already tracks)."""
+    # compiled: not a gap.
+    compiled = await ensure_seat(actions, house="rollouthouse", handle="RolloutCompiled",
+                                 anchor_cwd=str(tmp_path / "compiled"), source="test")
+    (tmp_path / "compiled").mkdir()
+    (tmp_path / "compiled" / "CLAUDE.md").write_text(
+        "# hand prose\n\n" + wrap_managed("compiled body", "v1"))
+
+    # never_compiled: has an office and a CLAUDE.md, zero markers.
+    never = await ensure_seat(actions, house="rollouthouse", handle="RolloutNever",
+                              anchor_cwd=str(tmp_path / "never"), source="test")
+    (tmp_path / "never").mkdir()
+    (tmp_path / "never" / "CLAUDE.md").write_text("# hand-written orders, pre-compiler\n")
+
+    # malformed: markers present but damaged (a duplicated BEGIN).
+    malformed = await ensure_seat(actions, house="rollouthouse", handle="RolloutMalformed",
+                                  anchor_cwd=str(tmp_path / "malformed"), source="test")
+    (tmp_path / "malformed").mkdir()
+    (tmp_path / "malformed" / "CLAUDE.md").write_text(
+        wrap_managed("body", "v1") + "\n<!-- osiris:compiled:begin v=rogue -->\n")
+
+    # no_claude_md: has a handle and an anchor_cwd, but no file there yet.
+    no_file = await ensure_seat(actions, house="rollouthouse", handle="RolloutNoFile",
+                                anchor_cwd=str(tmp_path / "nofile"), source="test")
+
+    # no_office: no anchor_cwd on record at all.
+    no_office = await ensure_seat(actions, house="rollouthouse", handle="RolloutNoOffice",
+                                  source="test")
+
+    gaps = await boot_rollout_gaps(actions.pool)
+    by_seat = {g["seat_id"]: g for g in gaps}
+
+    assert compiled["seat_id"] not in by_seat
+    assert by_seat[never["seat_id"]]["reason"] == "never_compiled"
+    assert by_seat[malformed["seat_id"]]["reason"] == "malformed"
+    assert by_seat[no_file["seat_id"]]["reason"] == "no_claude_md"
+    assert by_seat[no_office["seat_id"]]["reason"] == "no_office"
+
+
+async def test_boot_rollout_gaps_silent_when_every_active_seat_is_compiled(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    seat = await ensure_seat(actions, house="cleanhouse", handle="AllCompiled",
+                             anchor_cwd=str(tmp_path / "clean"), source="test")
+    (tmp_path / "clean").mkdir()
+    (tmp_path / "clean" / "CLAUDE.md").write_text(wrap_managed("body", "v1"))
+    gaps = await boot_rollout_gaps(actions.pool)
+    assert seat["seat_id"] not in {g["seat_id"] for g in gaps}
+
+
+def test_boot_rollout_gap_notes_names_the_seat_the_house_and_the_fix() -> None:
+    notes = boot_rollout_gap_notes([
+        {"seat_id": "seat:aaa", "handle": "Atlas", "house": "atlas", "reason": "never_compiled"},
+        {"seat_id": "seat:bbb", "handle": "Bort", "house": "", "reason": "no_office"},
+    ])
+    assert len(notes) == 2
+    assert "Atlas (atlas)" in notes[0] and "reissue_office(adopt=True)" in notes[0]
+    assert "Bort (no house)" in notes[1] and "not an adopt target" in notes[1]
+
+
+def test_boot_rollout_gap_notes_silent_on_an_empty_list() -> None:
+    assert boot_rollout_gap_notes([]) == []

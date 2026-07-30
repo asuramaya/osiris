@@ -219,6 +219,44 @@ async def cmd_smoke() -> int:
     return 1
 
 
+# --- boot-status -------------------------------------------------------------------------------
+
+async def cmd_boot_status(*, pool: asyncpg.Pool | None = None) -> int:
+    """Report-only rollout check (thread 0e5bae06, #84) — names every active seat NOT
+    carrying a compiled managed section, classified by why, same shape as
+    `composition_gap_notes`: a build isn't done when its acceptance test passes, it's
+    done when the effect reaches every office, and 'reached most of them' is a gap this
+    prints by name, never a count that can read clean while 19 offices are silently
+    unreached."""
+    from src.orchestrator.boot_compiler import boot_rollout_gap_notes, boot_rollout_gaps
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris boot-status: could not reach postgres at {settings.database_url} "
+                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            return 1
+    try:
+        gaps = await boot_rollout_gaps(pool)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if not gaps:
+        print("boot: every active seat carries a compiled managed section")
+        return 0
+    for note in boot_rollout_gap_notes(gaps):
+        print(note)
+    return 1
+
+
 # --- seed ------------------------------------------------------------------------------------
 
 async def cmd_seed(*, compositions_only: bool, pool: asyncpg.Pool | None = None) -> int:
@@ -986,6 +1024,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("smoke", help="the same deploy-time liveness probe the fleet runs")
 
+    sub.add_parser("boot-status", help="name every active seat with no compiled managed "
+                   "section, classified by why (report-only; exit 1 if any)")
+
     p_seed = sub.add_parser("seed", help="seed default compositions (and rooms)")
     p_seed.add_argument("--compositions-only", action="store_true",
                         help="seed + room DEFAULT_COMPOSITIONS only; skip the canon ingest")
@@ -1017,6 +1058,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_attach(args.handle))
     if args.command == "smoke":
         return asyncio.run(cmd_smoke())
+    if args.command == "boot-status":
+        return asyncio.run(cmd_boot_status())
     if args.command == "seed":
         return asyncio.run(cmd_seed(compositions_only=args.compositions_only))
     if args.command == "launch":
