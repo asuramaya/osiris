@@ -151,3 +151,137 @@ async def assert_project_property(
     await actions.assert_property(row["id"], name, value, actor, datetime.now(UTC), _CONF,
                                   evidence_class=_EC)
     return {"project": row["canonical"], "name": name, "value": value}
+
+
+# --- fold_project (task #102's LANE 2, Thoth's dispatch DM 2302/2310) --------------------
+
+async def _contradicting_properties(
+    pool: asyncpg.Pool, a_id: uuid.UUID, b_id: uuid.UUID,
+) -> list[str]:
+    """Task #102's mark-not-resolve primitive (dossier.py's `agreement` field,
+    compositions.py's `contradicted` triage bucket), reused here as a REFUSAL SIGNAL
+    instead of a display marker: for every property name either object currently
+    carries, does the union of both objects' current values disagree? Same
+    `count(DISTINCT value) > 1` logic as both siblings above, scoped here to exactly
+    two candidate objects rather than a type census or one object's own multi-source
+    set. `name`/`tag` are excluded — a label difference is a fold's own PREMISE (two
+    tags for one referent is exactly the operator's "SAME data, DIFFERENT tags ->
+    merge is correct" case), never a sign these are two different things; every OTHER
+    property disagreeing is the opposite case ("SAME tag, DIFFERENT data") the operator
+    named as the one merge must never cross."""
+    rows = await pool.fetch(
+        "SELECT name FROM current_assertions "
+        "WHERE object_id = ANY($1::uuid[]) AND name NOT IN ('name', 'tag') "
+        "GROUP BY name HAVING count(DISTINCT (value #>> '{}')) > 1",
+        [a_id, b_id])
+    return sorted(r["name"] for r in rows)
+
+
+# every live link type link_repo/works_in/governs/informs can put ON a SoftwareProject
+# (src/ontology/schema.py) — re-pointed FROM `dupe` TO `into` before the kernel merge,
+# since Actions.merge_objects never touches a pre-existing `links` row itself (see its
+# own docstring: "assertions are never rewritten"; the same is true of links).
+_PROJECT_ESTATE_LINK_TYPES = ("in_repo", "works_in", "governs", "informs")
+
+
+async def fold_project(
+    actions: Actions, *, dupe: str, into: str, evidence: str, actor: str,
+) -> dict[str, Any]:
+    """Fold SoftwareProject `dupe` into `into` — the deliberate, evidence-gated cure for a
+    TWIN (two SoftwareProject objects that are really one project under two labels; #107's
+    own path-shaped mint and a basename collision are tonight's live cases, not a merge
+    machine built ahead of need).
+
+    BOTH ENDPOINTS MUST ALREADY EXIST (Thoth's correction, DM 2310, from redmonth's own
+    counterexample: a project whose graph presence is real — hundreds of edges, a seat, a
+    succession chain — while its code identity has moved on needs a RENAME-WITH-SUCCESSION
+    primitive, a different verb, not this one; `into` not existing means the caller wants
+    that verb). fold_project never find-or-CREATEs `into` — that would be #107's own
+    disease reborn inside a merge verb. The refusal on a missing target NAMES the right
+    tool rather than silently minting one.
+
+    THE GUARD IS THE DESIGN (the operator's own categorical rule, via Thoth's dispatch
+    DM 2279, task #102): SAME data, DIFFERENT tags -> one referent, merge is correct. SAME
+    tag, DIFFERENT data -> two things, or one thing with contested facts -> merge is
+    WRONG. `_contradicting_properties` checks every property OTHER than name/tag (a label
+    difference is this fold's own premise, not a conflict) for genuine cross-object
+    disagreement between `dupe` and `into` — a hit refuses loudly and names exactly what
+    conflicts, because a wrong merge does not just lose a duplicate, it DESTROYS a
+    recorded disagreement, which was data.
+
+    Never gates on commits, or the lack of them (unlike retire_project's stub-cull guard)
+    — a project's graph presence can be real while its code presence is zero, and this
+    verb must fit that shape even though redmonth itself is not its case.
+
+    ESTATE moved BEFORE the kernel call: every live edge of `_PROJECT_ESTATE_LINK_TYPES`
+    pointing FROM another object INTO `dupe` re-points to `into` (idempotent — a link
+    already live to `into` is never duplicated), then `agent_mounts.project` (a loose
+    string match, never a FK — same shape fold_agent's raw `agent_mounts.agent_id` UPDATE)
+    is re-addressed the same way. Only then does `Actions.merge_objects` run.
+
+    REVERSIBLE, never a delete: the kernel stamps `merged_into` + `status='merged'` on
+    `dupe`; `unmerge_objects` restores that projection. The re-pointed estate is NOT
+    automatically restored by an unmerge (the same `estate_unreturnable` class
+    `unfold_agent` already reports) — the receipt names every edge moved so a reversal by
+    hand has the list.
+
+    Refuses LOUDLY, nothing written, on: empty evidence (an auto-merge wearing a
+    signature); blank dupe/into; dupe==into; either label not resolving to an ACTIVE
+    SoftwareProject (missing, wrong type, or already merged); a genuine cross-object
+    contradiction on any non-name/tag property."""
+    dupe, into = (dupe or "").strip(), (into or "").strip()
+    if not (evidence or "").strip():
+        return {"error": "a fold without evidence is an auto-merge wearing a signature — "
+                         "cite what proves these are one project"}
+    if not dupe or not into:
+        return {"error": "fold_project needs both labels: dupe and into"}
+    if dupe == into:
+        return {"error": "dupe and into name the same project — nothing to fold"}
+    dupe_row = await _resolve_software_project(actions.pool, dupe)
+    into_row = await _resolve_software_project(actions.pool, into)
+    if dupe_row is None or into_row is None:
+        missing = [label for label, row in ((dupe, dupe_row), (into, into_row))
+                  if row is None]
+        return {"error": f"unknown SoftwareProject(s): {', '.join(missing)} — fold_project "
+                         "never invents either side; if the target doesn't exist yet, this "
+                         "is a RENAME, not a fold — a different verb for a different act"}
+    if dupe_row["status"] == "merged":
+        return {"error": f"{dupe_row['canonical']} is already folded — nothing to do"}
+    if into_row["status"] == "merged":
+        return {"error": f"{into_row['canonical']} is itself folded — fold into the "
+                         "living project instead"}
+    conflicts = await _contradicting_properties(actions.pool, dupe_row["id"], into_row["id"])
+    if conflicts:
+        return {"error": f"{dupe_row['canonical']} and {into_row['canonical']} carry "
+                         f"contradicting values on: {', '.join(conflicts)} — this may be "
+                         "two different projects, not one under two names; fold_project "
+                         "refuses rather than destroy the disagreement",
+                "contradicted_on": conflicts}
+    now = datetime.now(UTC)
+    dupe_oid, into_oid = dupe_row["id"], into_row["id"]
+    moved: dict[str, int] = {}
+    for link_type in _PROJECT_ESTATE_LINK_TYPES:
+        rows = await actions.pool.fetch(
+            "SELECT from_id AS oid FROM links WHERE to_id=$1 AND type=$2 "
+            "AND (valid_until IS NULL OR valid_until > now())", dupe_oid, link_type)
+        n = 0
+        for r in rows:
+            exists = await actions.pool.fetchval(
+                "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type=$3 "
+                "AND (valid_until IS NULL OR valid_until > now())",
+                r["oid"], into_oid, link_type)
+            await actions.invalidate_link(r["oid"], dupe_oid, link_type, actor, now)
+            if not exists:
+                await actions.create_link(r["oid"], into_oid, link_type, actor, now, _CONF,
+                                          evidence_class=_EC)
+            n += 1
+        if n:
+            moved[link_type] = n
+    bare_dupe = dupe_row["canonical"].removeprefix("repo:")
+    bare_into = into_row["canonical"].removeprefix("repo:")
+    mount_tag = await actions.pool.execute(
+        "UPDATE agent_mounts SET project=$1 WHERE project=$2", bare_into, bare_dupe)
+    mounts_moved = int(mount_tag.rsplit(" ", 1)[-1])
+    await actions.merge_objects(into_oid, dupe_oid, justification=evidence, actor=actor)
+    return {"folded": dupe_row["canonical"], "into": into_row["canonical"],
+           "edges_moved": moved, "mounts_moved": mounts_moved}

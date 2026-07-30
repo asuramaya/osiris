@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 from src.actions.core import Actions
 from src.orchestrator.mounts import save_mount
-from src.orchestrator.projects import assert_project_property, retire_project
+from src.orchestrator.projects import assert_project_property, fold_project, retire_project
 from src.orchestrator.seats import ensure_seat
 
 NOW = datetime.now(UTC)
@@ -208,3 +208,210 @@ async def test_assert_project_property_never_touches_a_seat_of_the_same_name(
         "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
         "ON a.object_id=o.id AND a.name='note' WHERE o.canonical=$1", seat["seat_id"])
     assert seat_val is None
+
+
+# ═══ fold_project (task #102's lane 2, Thoth's dispatch DM 2302/2310) — the deliberate,
+# evidence-gated cure for a genuine TWIN. Never executed live tonight: these tests build
+# and prove the verb, they do not fold osiris's own real fragments.
+
+async def test_fold_project_moves_the_estate_and_merges(actions: Actions) -> None:
+    await _stub_project(actions, "repo:dupe1", "dupe1")
+    await _stub_project(actions, "repo:into1", "into1")
+    dupe_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:dupe1'")
+    into_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:into1'")
+
+    commit = await actions.create_or_find_object("Commit", "commit:foldc1", "test")
+    await actions.create_link(commit, dupe_id, "in_repo", "test", NOW, 0.9)
+    agent = await actions.create_or_find_object("Agent", "agent:foldworker", "test")
+    await actions.create_link(agent, dupe_id, "works_in", "test", NOW, 0.9)
+    await actions.create_link(agent, dupe_id, "governs", "test", NOW, 0.9)
+    ref = await actions.create_or_find_object("Reference", "ref:foldref", "test")
+    await actions.create_link(ref, dupe_id, "informs", "test", NOW, 0.9)
+    await save_mount(actions.pool, job_dir="/j/fold1", agent_id="agent:x", project="dupe1",
+                     cwd="/w/dupe1", model="claude-fable-5", session_key=None, alive=True)
+
+    out = await fold_project(actions, dupe="dupe1", into="into1",
+                             evidence="both mint the same repo, confirmed by the operator",
+                             actor="agent:test")
+    assert out["folded"] == "repo:dupe1" and out["into"] == "repo:into1"
+    assert out["edges_moved"] == {"in_repo": 1, "works_in": 1, "governs": 1, "informs": 1}
+    assert out["mounts_moved"] == 1
+
+    row = await actions.pool.fetchrow(
+        "SELECT status, merged_into FROM objects WHERE id=$1", dupe_id)
+    assert row["status"] == "merged" and row["merged_into"] == into_id
+
+    for from_id, link_type in ((commit, "in_repo"), (agent, "works_in"), (agent, "governs"),
+                               (ref, "informs")):
+        live_to_into = await actions.pool.fetchval(
+            "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type=$3 "
+            "AND (valid_until IS NULL OR valid_until > now())", from_id, into_id, link_type)
+        assert live_to_into == 1, f"{link_type} edge never re-pointed to into"
+        live_to_dupe = await actions.pool.fetchval(
+            "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type=$3 "
+            "AND (valid_until IS NULL OR valid_until > now())", from_id, dupe_id, link_type)
+        assert live_to_dupe is None, f"{link_type} edge still live on dupe after fold"
+
+    mount_project = await actions.pool.fetchval(
+        "SELECT project FROM agent_mounts WHERE job_dir='/j/fold1'")
+    assert mount_project == "into1"
+
+
+async def test_fold_project_is_idempotent_on_an_edge_already_live_to_into(
+    actions: Actions,
+) -> None:
+    """The estate re-point must never duplicate a link `into` already has — the SAME
+    "re-capture is a no-op" discipline link_repo/grounds already follow."""
+    await _stub_project(actions, "repo:dupe2", "dupe2")
+    await _stub_project(actions, "repo:into2", "into2")
+    dupe_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:dupe2'")
+    into_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:into2'")
+    commit = await actions.create_or_find_object("Commit", "commit:foldc2", "test")
+    await actions.create_link(commit, dupe_id, "in_repo", "test", NOW, 0.9)
+    await actions.create_link(commit, into_id, "in_repo", "test", NOW, 0.9)  # already there
+
+    await fold_project(actions, dupe="dupe2", into="into2", evidence="one project, two mints",
+                       actor="agent:test")
+    count = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND to_id=$2 AND type='in_repo'",
+        commit, into_id)
+    assert count == 1, "the already-live edge to into was duplicated, not deduped"
+
+
+async def test_fold_project_refuses_blank_evidence(actions: Actions) -> None:
+    await _stub_project(actions, "repo:fe1", "fe1")
+    await _stub_project(actions, "repo:fe2", "fe2")
+    out = await fold_project(actions, dupe="fe1", into="fe2", evidence="  ", actor="agent:test")
+    assert "auto-merge wearing a signature" in out["error"]
+    row = await actions.pool.fetchrow("SELECT status FROM objects WHERE canonical='repo:fe1'")
+    assert row["status"] == "active"
+
+
+async def test_fold_project_refuses_dupe_equals_into(actions: Actions) -> None:
+    await _stub_project(actions, "repo:same1", "same1")
+    out = await fold_project(actions, dupe="same1", into="same1", evidence="x",
+                             actor="agent:test")
+    assert "nothing to fold" in out["error"]
+
+
+async def test_fold_project_refuses_an_unknown_dupe(actions: Actions) -> None:
+    await _stub_project(actions, "repo:realinto", "realinto")
+    out = await fold_project(actions, dupe="ghost-project", into="realinto", evidence="x",
+                             actor="agent:test")
+    assert "unknown SoftwareProject" in out["error"] and "ghost-project" in out["error"]
+
+
+async def test_fold_project_refuses_a_missing_target_and_names_rename_as_the_right_tool(
+    actions: Actions,
+) -> None:
+    """The redmonth correction (Thoth DM 2310): fold_project NEVER find-or-CREATEs `into`
+    — a missing target means the caller wants a rename, and the refusal says so."""
+    await _stub_project(actions, "repo:realdupe", "realdupe")
+    out = await fold_project(actions, dupe="realdupe", into="does-not-exist-yet",
+                             evidence="x", actor="agent:test")
+    assert "unknown SoftwareProject" in out["error"]
+    assert "RENAME, not a fold" in out["error"]
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE canonical='repo:does-not-exist-yet'") == 0
+
+
+async def test_fold_project_refuses_when_dupe_already_merged(actions: Actions) -> None:
+    await _stub_project(actions, "repo:am1", "am1")
+    await _stub_project(actions, "repo:am2", "am2")
+    await _stub_project(actions, "repo:am3", "am3")
+    await fold_project(actions, dupe="am1", into="am2", evidence="first fold",
+                       actor="agent:test")
+    out = await fold_project(actions, dupe="am1", into="am3", evidence="second fold",
+                             actor="agent:test")
+    assert "already folded" in out["error"]
+
+
+async def test_fold_project_refuses_when_into_is_already_merged(actions: Actions) -> None:
+    await _stub_project(actions, "repo:ai1", "ai1")
+    await _stub_project(actions, "repo:ai2", "ai2")
+    await _stub_project(actions, "repo:ai3", "ai3")
+    await fold_project(actions, dupe="ai1", into="ai2", evidence="first fold",
+                       actor="agent:test")
+    out = await fold_project(actions, dupe="ai3", into="ai1", evidence="second fold",
+                             actor="agent:test")
+    assert "itself folded" in out["error"]
+
+
+async def test_fold_project_refuses_a_genuine_cross_object_contradiction(
+    actions: Actions,
+) -> None:
+    """The operator's rule (task #102): SAME tag, DIFFERENT data means these may be TWO
+    projects, not one under two names. A wrong merge destroys the recorded disagreement,
+    which was data — fold_project must refuse rather than silently pick a winner."""
+    await _stub_project(actions, "repo:cd1", "cd1")
+    await _stub_project(actions, "repo:cd2", "cd2")
+    cd1_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:cd1'")
+    cd2_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:cd2'")
+    await actions.assert_property(cd1_id, "language", "python", "agent:alice", NOW, 0.9)
+    await actions.assert_property(cd2_id, "language", "go", "agent:bob", NOW, 0.9)
+
+    out = await fold_project(actions, dupe="cd1", into="cd2", evidence="looks like a twin",
+                             actor="agent:test")
+    assert "contradicting values" in out["error"] and "language" in out["error"]
+    assert out["contradicted_on"] == ["language"]
+    row = await actions.pool.fetchrow("SELECT status FROM objects WHERE canonical='repo:cd1'")
+    assert row["status"] == "active"
+
+
+async def test_fold_project_does_not_refuse_on_a_differing_name(actions: Actions) -> None:
+    """Two different `name` properties is the fold's own PREMISE (two tags, one referent)
+    — never treated as a conflict, unlike a genuinely differing OTHER property."""
+    await _stub_project(actions, "repo:dn1", "dn1-label")
+    await _stub_project(actions, "repo:dn2", "dn2-label")
+    out = await fold_project(actions, dupe="dn1", into="dn2",
+                             evidence="two labels, one repo", actor="agent:test")
+    assert "folded" in out
+
+
+async def test_fold_project_never_gates_on_commits(actions: Actions) -> None:
+    """Thoth's explicit requirement from redmonth's own warning (DM 2310): unlike
+    retire_project's stub-cull guard, a project WITH commits attached must still fold —
+    graph presence being real is exactly the case this verb has to handle."""
+    await _stub_project(actions, "repo:hc1", "hc1")
+    await _stub_project(actions, "repo:hc2", "hc2")
+    dupe_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:hc1'")
+    commit = await actions.create_or_find_object("Commit", "commit:foldc3", "test")
+    await actions.create_link(commit, dupe_id, "in_repo", "test", NOW, 0.9)
+
+    out = await fold_project(actions, dupe="hc1", into="hc2", evidence="commits and all",
+                             actor="agent:test")
+    assert "folded" in out
+
+
+async def test_fold_project_is_reversible_via_unmerge(actions: Actions) -> None:
+    """Reversibility is non-negotiable (Thoth's explicit ask): prove the UNWIND, not just
+    the merge — merged_into + status='merged', never a delete, and unmerge_objects
+    restores the projection exactly."""
+    await _stub_project(actions, "repo:rev1", "rev1")
+    await _stub_project(actions, "repo:rev2", "rev2")
+    dupe_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:rev1'")
+    into_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:rev2'")
+
+    await fold_project(actions, dupe="rev1", into="rev2", evidence="reversibility check",
+                       actor="agent:test")
+    merged_row = await actions.pool.fetchrow(
+        "SELECT status, merged_into FROM objects WHERE id=$1", dupe_id)
+    assert merged_row["status"] == "merged" and merged_row["merged_into"] == into_id
+
+    await actions.unmerge_objects(dupe_id, justification="reversibility check undone",
+                                  actor="agent:test")
+    restored_row = await actions.pool.fetchrow(
+        "SELECT status, merged_into FROM objects WHERE id=$1", dupe_id)
+    assert restored_row["status"] == "active" and restored_row["merged_into"] is None
+    # the merge event and the same_as link both stay — witnesses of the era, never erased
+    # (merge_objects stamps object_id=winner, related_id=loser — core.py:484-492)
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM object_events WHERE object_id=$1 AND related_id=$2 "
+        "AND event_type='merge'", into_id, dupe_id) == 1
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND to_id=$2 AND type='same_as'",
+        dupe_id, into_id) == 1
