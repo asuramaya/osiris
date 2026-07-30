@@ -7,12 +7,14 @@ call, refreshed when the neighborhood moves, metered in llm_usage.
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 from src.actions.core import Actions
 from src.ingest.providers import Usage
 from src.orchestrator.capture import open_thread, record_decision
-from src.orchestrator.neighborhoods import consolidate_pass, summarize_neighborhoods
+from src.orchestrator.monitor import set_cursor
+from src.orchestrator.neighborhoods import consolidate_pass, discover_trees, summarize_neighborhoods
 
 
 class FakeLLM:
@@ -129,3 +131,74 @@ async def test_census_trees_mints_the_unmodeled_and_paths_the_known(
     again = await census_trees(actions, roots=[str(tmp_path / "code")])
     assert again["minted"] == [] and again["pathed"] == []
     assert again["known"] == 2  # both now known; the unchanged disk writes nothing
+
+
+# --- the read-back (thread 2309: "I could not have discovered my own zero") -------------
+
+async def test_discover_trees_includes_a_project_with_no_activity_at_all(
+        actions: Actions) -> None:
+    """The gap the old version had: a truly fresh project (no Thread/Commit ever filed
+    under it) used to be silently absent from this function's own output — the exact
+    'invisible until someone tells you' defect redmonth named. Every active SoftwareProject
+    is reported now, zero-everything or not."""
+    await actions.create_or_find_object("SoftwareProject", "repo:freshproject", "analyst:test")
+    out = await discover_trees(actions.pool, watched=[])
+    row = next(r for r in out if r["tree"] == "freshproject")
+    assert row["commits"] == 0
+    assert row["activity"] == 0
+    assert row["path"] is None
+    assert row["reason"] == "no on_disk_path registered — the disk census hasn't found it yet"
+
+
+async def test_discover_trees_reads_the_stored_path_never_guesses_one(
+        actions: Actions) -> None:
+    """redmonth's own warning (thread 2309): a directory-name match against a search root
+    is a GUESS, and his mounted cwd is not even a git repository — the real repo lives
+    under a different name entirely. `path` comes ONLY from the stored on_disk_path
+    property (census_trees's write, or a future explicit registration); nothing here
+    re-derives it from any caller-supplied root, so a wrong guess is structurally
+    impossible, not just avoided by convention."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:ballgemlike", "git")
+    await actions.assert_property(proj, "on_disk_path", "/home/x/code/ballgem", "disk-census",
+                                  datetime.now(UTC),
+                                  0.9)
+    out = await discover_trees(actions.pool, watched=[])
+    row = next(r for r in out if r["tree"] == "ballgemlike")
+    assert row["path"] == "/home/x/code/ballgem"
+    assert row["reason"] == "on disk at /home/x/code/ballgem, not in the ingest watch list"
+    assert row["blind"] is True  # a path exists, nobody watches it
+
+
+async def test_discover_trees_names_watched_but_never_ticked(actions: Actions) -> None:
+    """A project can be honestly in the watch list and still have zero commits, simply
+    because pulse.py hasn't ticked since it was added — no devhead:<name> watermark yet.
+    That is a DIFFERENT fact from 'not watched at all' and must read as one."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:justadded", "git")
+    await actions.assert_property(proj, "on_disk_path", "/home/x/code/justadded", "disk-census",
+                                  datetime.now(UTC),
+                                  0.9)
+    out = await discover_trees(actions.pool, watched=["/home/x/code/justadded"])
+    row = next(r for r in out if r["tree"] == "justadded")
+    assert row["watched"] is True
+    assert row["commits"] == 0
+    assert row["last_ingested_at"] is None
+    assert row["reason"] == "in the watch list but ingest has never ticked for it yet"
+    assert row["blind"] is False  # watched, just not yet ticked — not the same as blind
+
+
+async def test_discover_trees_names_ticked_but_still_empty(actions: Actions) -> None:
+    """The rarest, most alarming case: pulse HAS run (a real watermark exists) and STILL
+    found zero commits — the path may no longer point at a real git repo. Distinguishing
+    this from 'never ticked' is the whole point of reading the watermark's own timestamp,
+    not just its presence."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:emptiedout", "git")
+    await actions.assert_property(proj, "on_disk_path", "/home/x/code/emptiedout", "disk-census",
+                                  datetime.now(UTC),
+                                  0.9)
+    await set_cursor(actions.pool, "devhead:emptiedout", "deadbeef")
+    out = await discover_trees(actions.pool, watched=["/home/x/code/emptiedout"])
+    row = next(r for r in out if r["tree"] == "emptiedout")
+    assert row["commits"] == 0
+    assert row["last_ingested_at"] is not None
+    assert row["reason"] == (
+        "ingest has run and found nothing — the path may no longer be a git repo")

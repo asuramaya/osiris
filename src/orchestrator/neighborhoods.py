@@ -68,9 +68,7 @@ _SYSTEM = (
     "invent facts not present in the input; never editorialize about priorities.")
 
 
-async def discover_trees(
-    pool: asyncpg.Pool, *, roots: list[str], watched: list[str],
-) -> list[dict[str, Any]]:
+async def discover_trees(pool: asyncpg.Pool, *, watched: list[str]) -> list[dict[str, Any]]:
     """THE GARDEN AUDITS ITSELF (operator, 2026-07-12: "does it not detect the changes or is
     that my fault"). Neither: one project had 126 commits on disk and the graph never read one,
     because the pulse's repo list is a HAND-TYPED env var (OSIRIS_DEV_REPOS, 7 paths) while the
@@ -84,25 +82,64 @@ async def discover_trees(
     This is the mechanism — and it only REPORTS. Osiris has no hands: it names the gap between
     the trees it knows and the trees it watches, and a deliberate act closes it. Growing the
     watch list is a decision, never a side effect (constitution #6: never silently).
+
+    THE READ-BACK A HOUSE NEEDS TO SEE ITS OWN INVISIBILITY (redmonth's report, thread 2309:
+    "I could not have discovered my own zero; you had to tell me... I would rank [being able
+    to tell] FIRST — being unwatched is recoverable; being unwatched and unable to tell is
+    not"). Every active SoftwareProject is reported, not just ones the graph already has
+    Thread/Commit testimony against — a truly fresh, zero-everything project used to be
+    silently absent from this function's own output, the exact "invisible until someone
+    tells you" defect it exists to close. `path` is READ from the stored `on_disk_path`
+    property (census_trees's own write, or a future explicit registration) — never
+    re-derived by matching this tree's name against a caller-supplied search root, which
+    the earlier version of this function did: a directory-name match is a GUESS, and
+    redmonth proved the guess can be wrong (his own mounted cwd is not a git repository at
+    all; his real repo lives elsewhere, under a different name). No path recorded means no
+    path claimed — the honest "I don't know" the earlier version couldn't say.
+
+    `reason` NAMES why `commits` is zero, so a zero never reads as silence: no on_disk_path
+    at all; on disk but not in `watched`; watched but ingest has never ticked (no
+    `devhead:<tree>` watermark yet — pulse.py's own cursor, so "last ingested" is exactly
+    that watermark's `updated_at`); or ingest has genuinely run and found nothing (the path
+    may no longer be a real git repo). A non-zero `commits` needs no reason and gets none.
     """
     rows = await pool.fetch(
-        "SELECT replace(p.canonical, 'repo:', '') AS tree, "
-        " count(*) FILTER (WHERE o.type='Thread') AS threads, "
-        " count(*) FILTER (WHERE o.type='Commit') AS commits "
-        "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
-        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' AND p.status='active' "
-        "WHERE o.status='active' GROUP BY 1 ORDER BY 2 DESC")
+        "SELECT p.id, replace(p.canonical, 'repo:', '') AS tree, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=p.id "
+        "   AND a.name='on_disk_path' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS path, "
+        " (SELECT count(*) FROM links l JOIN objects c ON c.id=l.from_id AND c.type='Commit' "
+        "  WHERE l.to_id=p.id AND l.type='in_repo') AS commits, "
+        " (SELECT count(*) FROM links l JOIN objects m ON m.id=l.from_id "
+        "  WHERE l.to_id=p.id AND l.type='in_repo') AS activity "
+        "FROM objects p WHERE p.type='SoftwareProject' AND p.status='active' "
+        "ORDER BY commits DESC, activity DESC")
+    last_ingested = {
+        r["key"].removeprefix("devhead:"): r["updated_at"]
+        for r in await pool.fetch(
+            "SELECT key, updated_at FROM watermarks WHERE key LIKE 'devhead:%'")
+    }
     seen = {Path(w).name for w in watched if w.strip()}
     out: list[dict[str, Any]] = []
     for r in rows:
-        tree = r["tree"]
-        path = next((str(c) for c in (Path(root) / tree for root in roots)
-                     if (c / ".git").is_dir()), None)
+        tree, path, commits = r["tree"], r["path"], r["commits"]
+        is_watched = tree in seen
+        when = last_ingested.get(tree)
+        reason = None
+        if commits == 0:
+            if not path:
+                reason = "no on_disk_path registered — the disk census hasn't found it yet"
+            elif not is_watched:
+                reason = f"on disk at {path}, not in the ingest watch list"
+            elif when is None:
+                reason = "in the watch list but ingest has never ticked for it yet"
+            else:
+                reason = "ingest has run and found nothing — the path may no longer be a git repo"
         out.append({
-            "tree": tree, "threads": r["threads"], "commits": r["commits"],
-            "path": path, "watched": tree in seen,
+            "tree": tree, "path": path, "watched": is_watched, "commits": commits,
+            "activity": r["activity"], "last_ingested_at": when, "reason": reason,
             # the gap that matters: the graph knows this tree, work exists on disk, nobody looks
-            "blind": bool(path) and tree not in seen,
+            "blind": bool(path) and not is_watched,
         })
     return out
 
