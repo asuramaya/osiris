@@ -3138,6 +3138,31 @@ async def detach_seat(seat: str, because: str, ctx: Context | None = None) -> di
 
 
 @mcp.tool()
+async def attach_seat(
+    worker: str, manager: str, evidence: str, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Create a managed_by edge — the mirror of detach_seat, and the other half of the
+    toolkit hole named at thread fad0dc14. managed_by is created in exactly two places in
+    the whole codebase (mint_seat's birth-time edge, fold_seat's re-point) — every seat
+    that predates mint_seat, was adopted, or lost its edge to a detach nobody re-pointed
+    has had no path back except raw SQL until this. Confirmed live: 30 active seats, 23
+    with no managed_by edge at all — an absent edge raises no error, it just renders as an
+    empty chart, which is why nobody noticed you could not attach even after #99 built the
+    way to detach.
+
+    Refuses LOUDLY on: blank `evidence`; either seat unknown/inactive; `worker == manager`;
+    or an already-active managed_by edge out of `worker` — this is a CREATE, never a silent
+    repoint (detach_seat first, then attach, if that's what's meant)."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — attaching a seat to a manager is a deliberate "
+                         "act on the record", "why": _anchorless(ctx)}
+    from src.orchestrator.seats import attach_seat as _attach
+    return await _attach(Actions(await _pool_get()), worker, manager, evidence=evidence,
+                         actor=ident.agent_id)
+
+
+@mcp.tool()
 async def correct_agent_house(agent_id: str, project: str | None = None,
                               seat_generation: int | None = None,
                               ctx: Context | None = None) -> dict[str, Any]:

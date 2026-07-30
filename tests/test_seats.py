@@ -1211,6 +1211,153 @@ async def test_detach_seat_refuses_an_unknown_seat(actions: Actions) -> None:
     assert "no such active seat" in out["error"]
 
 
+# ═══ ATTACH_SEAT (thread fad0dc14, the other half) — managed_by is created in exactly two
+# places in the whole codebase (mint_seat's birth edge, fold_seat's re-point); this is the
+# third, deliberate one, the mirror of detach_seat above. ═══════════════════════════════
+
+async def test_attach_seat_creates_the_managed_by_edge(actions: Actions) -> None:
+    from src.orchestrator.boot_compiler import derive_role
+    from src.orchestrator.seats import attach_seat, manager_of_seat
+
+    await actions.create_or_find_object("Seat", "seat:att1aaaa", "test")
+    await actions.create_or_find_object("Seat", "seat:att1bbbb", "test")
+    assert await derive_role(actions.pool, "seat:att1aaaa") == "coordinator"
+
+    out = await attach_seat(actions, "seat:att1aaaa", "seat:att1bbbb",
+                            evidence="operator: alfred manages this seat", actor="test")
+
+    assert out == {"attached": "seat:att1aaaa", "now_managed_by": "seat:att1bbbb",
+                   "evidence": "operator: alfred manages this seat"}
+    assert await manager_of_seat(actions.pool, "seat:att1aaaa") == "seat:att1bbbb"
+    assert await derive_role(actions.pool, "seat:att1aaaa") == "worker"
+    reason = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id AND a.name='attached_evidence' WHERE o.canonical=$1",
+        "seat:att1aaaa")
+    assert reason == "operator: alfred manages this seat"
+
+
+async def test_attach_seat_refuses_blank_evidence(actions: Actions) -> None:
+    from src.orchestrator.seats import attach_seat
+
+    await actions.create_or_find_object("Seat", "seat:att2aaaa", "test")
+    await actions.create_or_find_object("Seat", "seat:att2bbbb", "test")
+
+    out = await attach_seat(actions, "seat:att2aaaa", "seat:att2bbbb", evidence=" ",
+                            actor="test")
+    assert "evidence is required" in out["error"]
+
+
+async def test_attach_seat_refuses_an_unknown_worker(actions: Actions) -> None:
+    from src.orchestrator.seats import attach_seat
+
+    await actions.create_or_find_object("Seat", "seat:att3bbbb", "test")
+
+    out = await attach_seat(actions, "seat:no-such-worker", "seat:att3bbbb",
+                            evidence="test", actor="test")
+    assert "no such active seat" in out["error"]
+
+
+async def test_attach_seat_refuses_an_unknown_manager(actions: Actions) -> None:
+    from src.orchestrator.seats import attach_seat
+
+    await actions.create_or_find_object("Seat", "seat:att4aaaa", "test")
+
+    out = await attach_seat(actions, "seat:att4aaaa", "seat:no-such-manager",
+                            evidence="test", actor="test")
+    assert "no such active seat" in out["error"]
+
+
+async def test_attach_seat_refuses_self_management(actions: Actions) -> None:
+    from src.orchestrator.seats import attach_seat
+
+    await actions.create_or_find_object("Seat", "seat:att5aaaa", "test")
+
+    out = await attach_seat(actions, "seat:att5aaaa", "seat:att5aaaa", evidence="test",
+                            actor="test")
+    assert "cannot manage itself" in out["error"]
+
+
+async def test_attach_seat_refuses_a_silent_repoint(actions: Actions) -> None:
+    from src.orchestrator.seats import attach_seat
+
+    worker = await actions.create_or_find_object("Seat", "seat:att6aaaa", "test")
+    original = await actions.create_or_find_object("Seat", "seat:att6bbbb", "test")
+    await actions.create_or_find_object("Seat", "seat:att6cccc", "test")
+    await actions.create_link(worker, original, "managed_by", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+
+    out = await attach_seat(actions, "seat:att6aaaa", "seat:att6cccc", evidence="test",
+                            actor="test")
+    assert "already has an active manager" in out["error"]
+    assert "seat:att6bbbb" in out["error"]
+
+
+async def test_attach_seat_after_detach_seat_succeeds(actions: Actions) -> None:
+    """The documented path for a real repoint: detach, then attach — not a single call
+    silently swapping the manager out from under the worker."""
+    from src.orchestrator.seats import attach_seat, detach_seat, manager_of_seat
+
+    worker = await actions.create_or_find_object("Seat", "seat:att7aaaa", "test")
+    old_manager = await actions.create_or_find_object("Seat", "seat:att7bbbb", "test")
+    await actions.create_or_find_object("Seat", "seat:att7cccc", "test")
+    await actions.create_link(worker, old_manager, "managed_by", "test", datetime.now(UTC),
+                              0.9, evidence_class="self_declared")
+
+    await detach_seat(actions, "seat:att7aaaa", because="reorg", actor="test")
+    out = await attach_seat(actions, "seat:att7aaaa", "seat:att7cccc",
+                            evidence="reorg: reassigned", actor="test")
+
+    assert out["attached"] == "seat:att7aaaa" and out["now_managed_by"] == "seat:att7cccc"
+    assert await manager_of_seat(actions.pool, "seat:att7aaaa") == "seat:att7cccc"
+
+
+# --- the MCP tool wrapper (same srv._pool monkey-patch pattern test_doors.py's own wrapper
+# test uses) -------------------------------------------------------------------------------
+
+async def test_attach_seat_mcp_wrapper_delegates_and_stamps_the_caller(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.seats import manager_of_seat
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    await actions.create_or_find_object("Seat", "seat:attw1aaa", "test")
+    await actions.create_or_find_object("Seat", "seat:attw1bbb", "test")
+    ident = AgentIdentity(agent_id="agent:attachwrap1", session="attachwrap1",
+                          project="p", model="claude-sonnet-5", cwd=None,
+                          model_method="job_dir", model_history=("claude-sonnet-5",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = ident
+    try:
+        out = await srv.attach_seat("seat:attw1aaa", "seat:attw1bbb",
+                                    "operator: real report line", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["attached"] == "seat:attw1aaa" and out["now_managed_by"] == "seat:attw1bbb"
+    assert await manager_of_seat(actions.pool, "seat:attw1aaa") == "seat:attw1bbb"
+
+
+async def test_attach_seat_mcp_wrapper_refuses_before_mount(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.attach_seat("seat:no-mount-a", "seat:no-mount-b", "test")
+    finally:
+        srv._pool = saved_pool
+    assert "mount first" in out["error"]
+
+
 # ═══ RESOLVE_PROJECT (ruling 577988ed, hoisted msg 1888) — the ONE project resolver every
 # reader (mount, the stop hook, census) now funnels through, replacing four hand-rolled
 # `Path(cwd).name` copies that could mint a phantom "seats" project. ═══════════

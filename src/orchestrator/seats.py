@@ -1293,3 +1293,54 @@ async def detach_seat(
     await actions.assert_property(row["id"], "detached_because", because, actor, now, _CONF,
                                   evidence_class=_EC)
     return {"detached": row["canonical"], "was_managed_by": link["manager"], "because": because}
+
+
+async def attach_seat(
+    actions: Actions, worker: str, manager: str, *, evidence: str, actor: str,
+) -> dict[str, Any]:
+    """Create a managed_by edge — the mirror of detach_seat, and the other half of the
+    toolkit hole named at thread fad0dc14. #99 built the way to CUT a management edge;
+    nothing built the way to MAKE one except mint_seat's own birth-time create_link
+    (mintseat.py:308, fires once, only at minting) and fold_seat's re-point (seats.py:1016,
+    only for an existing edge). Every seat that predates mint_seat, was adopted, or lost
+    its edge to a detach nobody re-pointed has had no path back except raw SQL — the
+    graph's own defect report this house refuses to write around (raw SQL against the
+    kernel is a missing verb, never a shortcut). Confirmed live: 30 active seats, 23 with
+    no managed_by edge at all — the operator names Alfred managing eight; the graph, before
+    this, could represent two.
+
+    Refuses LOUDLY on: blank `evidence`; either seat unknown/inactive; `worker == manager`
+    (a seat cannot manage itself); or an ALREADY-active managed_by edge out of `worker` —
+    this is a CREATE, never a silent repoint, the same asymmetry detach_seat's own
+    docstring draws (repointing onto a new manager is a different act than either half
+    alone; detach first, then attach, if that's what's meant)."""
+    evidence = (evidence or "").strip()
+    if not evidence:
+        return {"error": "evidence is required — attaching a seat to a manager is a "
+                         "deliberate act on the record"}
+    worker_row = await actions.pool.fetchrow(
+        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
+        "AND status='active'", (worker or "").strip())
+    if worker_row is None:
+        return {"error": f"no such active seat: {worker!r}"}
+    manager_row = await actions.pool.fetchrow(
+        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
+        "AND status='active'", (manager or "").strip())
+    if manager_row is None:
+        return {"error": f"no such active seat: {manager!r}"}
+    if worker_row["id"] == manager_row["id"]:
+        return {"error": f"{worker_row['canonical']} cannot manage itself"}
+    existing = await actions.pool.fetchrow(
+        "SELECT t.canonical AS manager FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='managed_by' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", worker_row["id"])
+    if existing is not None:
+        return {"error": f"{worker_row['canonical']} already has an active manager "
+                         f"({existing['manager']}) — detach_seat first, then attach"}
+    now = datetime.now(UTC)
+    await actions.create_link(worker_row["id"], manager_row["id"], "managed_by", actor, now,
+                              _CONF, evidence_class=_EC)
+    await actions.assert_property(worker_row["id"], "attached_evidence", evidence, actor, now,
+                                  _CONF, evidence_class=_EC)
+    return {"attached": worker_row["canonical"], "now_managed_by": manager_row["canonical"],
+            "evidence": evidence}
