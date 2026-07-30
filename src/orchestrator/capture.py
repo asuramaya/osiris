@@ -100,6 +100,36 @@ async def _resolve_commit(pool: asyncpg.Pool, sha: str) -> uuid.UUID | None:
     )
 
 
+# TASK #107 (John XVI of redmonth, cross-house find): `link_repo` find-or-CREATED a
+# SoftwareProject from ANY caller-supplied `repo` string, with zero validation — pass
+# "ballgem" and it resolves; pass "/home/asuramaya/code/ballgem" and it silently mints a
+# SECOND, bogus project, because the caller (and the graph) have no way to tell a project
+# name from a path to one. Every legitimate minting path in this codebase (gitlog.py's
+# `ingest_repo`, sessions.py's `_repo_from_cwd`, neighborhoods.py's `census_trees`) derives
+# the name as a bare directory BASENAME (`Path(...).name`) — never a path, never empty,
+# never a stray punctuation character standing in for a name that was never resolved. This
+# is that shape, POSITIVELY defined: a boundary that refuses anything that isn't a
+# well-formed project ref, rather than trying to cleverly widen to accept more shapes
+# (John's own framing, the design constraint: "you can act on an object you already know
+# about, and you cannot discover one you don't" — a caller that doesn't already know the
+# name cannot be allowed to conjure a new project from an arbitrary string).
+_REPO_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _validate_repo_name(name: str, raw: str) -> None:
+    """Raise ValueError, naming what was wrong, when `name` (the repo string with any
+    `repo:` prefix already stripped) is not a well-formed project ref. `raw` is the
+    caller's original, unstripped string — quoted in the message so the refusal is legible
+    even when the stripped form alone wouldn't explain it (an all-whitespace `raw` strips
+    to an empty `name`)."""
+    if not _REPO_NAME_RE.fullmatch(name):
+        raise ValueError(
+            f"repo must be a bare project name, not {raw!r} — pass the project's own name "
+            "(e.g. its directory basename), never a filesystem path or a placeholder; "
+            "find-or-create refuses anything that isn't a well-formed project ref"
+        )
+
+
 async def _resolve_repo(pool: asyncpg.Pool, name: str) -> uuid.UUID | None:
     """An active SoftwareProject by its `name` property or its `repo:<name>` canonical."""
     return await pool.fetchval(  # type: ignore[no-any-return]
@@ -121,8 +151,13 @@ async def link_repo(
     always lands — and a decision recorded before the repo is ingested pre-attaches to the
     same object gitlog will later find-or-create. The edge is deduped (re-capture is a no-op).
     The session-miner reuses this with its own source + DERIVED grade — one implementation,
-    two trust tiers (the same split capture/miner already have)."""
+    two trust tiers (the same split capture/miner already have). `repo` must be a bare
+    project name (task #107, `_validate_repo_name`): a path-shaped or otherwise malformed
+    string refuses here, BEFORE any object is touched, so a caller can never mint a bogus
+    project by accident — this validates first so the failure never depends on transaction
+    rollback to stay clean."""
     name = repo.removeprefix("repo:").strip()
+    _validate_repo_name(name, repo)
     proj = await _resolve_repo(actions.pool, name)
     if proj is None:  # a stub the eventual gitlog ingest will land on (same repo: canonical)
         proj = await actions.create_or_find_object("SoftwareProject", f"repo:{name}", source)

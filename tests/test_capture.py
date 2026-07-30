@@ -92,6 +92,84 @@ async def test_record_decision_with_repo_links_in_repo_and_still_renders(
     assert row["kind"] == "reset" and row["in"] is None and row["when"] is None
 
 
+# --- task #107: a path-shaped `repo` refuses, it never mints a bogus second project -----
+
+async def test_link_repo_refuses_a_filesystem_path(actions: Actions) -> None:
+    import pytest
+
+    obj = await actions.create_or_find_object("Thread", "thread:repo-guard-probe", "session")
+    with pytest.raises(ValueError, match="never a filesystem path or a placeholder"):
+        await link_repo(actions, obj, "/home/asuramaya/code/ballgem", datetime.now(UTC))
+    # the exact old failure mode: no bogus SoftwareProject minted from the path string
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 0
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='in_repo'", obj) == 0
+
+
+async def test_link_repo_still_accepts_a_bare_name_and_the_repo_prefixed_form(
+    actions: Actions,
+) -> None:
+    obj = await actions.create_or_find_object("Thread", "thread:repo-guard-ok", "session")
+    await link_repo(actions, obj, "ballgem", datetime.now(UTC))
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' "
+        "AND canonical='repo:ballgem'") == 1
+    # the repo:<name> alias resolves to the SAME project, never a second one
+    await link_repo(actions, obj, "repo:ballgem", datetime.now(UTC))
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 1
+
+
+async def test_record_decision_refuses_a_path_shaped_repo_and_mints_nothing(
+    actions: Actions,
+) -> None:
+    """Not just a raised error — the WHOLE call rolls back (task #107's acceptance bar,
+    mirroring test_record_decision_is_atomic_no_orphan_husk): proves the old silent
+    find-or-CREATE path is genuinely gone, not merely unreached."""
+    import pytest
+
+    with pytest.raises(ValueError, match="never a filesystem path or a placeholder"):
+        await record_decision(actions, "a decision filed under a path, not a project",
+                              repo="/home/asuramaya/code/ballgem")
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Decision'") == 0
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 0
+
+
+async def test_open_thread_refuses_a_path_shaped_repo_and_mints_nothing(
+    actions: Actions,
+) -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="never a filesystem path or a placeholder"):
+        await open_thread(actions, "a thread filed under a path, not a project",
+                          repo="/home/asuramaya/code/ballgem")
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Thread'") == 0
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 0
+
+
+async def test_link_repo_refuses_a_placeholder_that_is_not_a_well_formed_name(
+    actions: Actions,
+) -> None:
+    """The boundary is a POSITIVE definition of a well-formed ref, not just a slash
+    blacklist — it also catches the "?"-named project symptom John's report named,
+    without touching the existing bad data (out of scope, #108's cleanup)."""
+    import pytest
+
+    obj = await actions.create_or_find_object("Thread", "thread:repo-guard-placeholder",
+                                               "session")
+    with pytest.raises(ValueError, match="never a filesystem path or a placeholder"):
+        await link_repo(actions, obj, "?", datetime.now(UTC))
+    with pytest.raises(ValueError, match="never a filesystem path or a placeholder"):
+        await link_repo(actions, obj, "   ", datetime.now(UTC))  # strips to empty
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 0
+
+
 async def test_open_thread_surfaces_in_the_briefing_open_section(actions: Actions) -> None:
     await open_thread(actions, "wire the composed watcher into SOURCE_TICKS with a live key")
     await seed_default_compositions(actions.pool)
