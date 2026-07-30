@@ -33,6 +33,10 @@ dependencies = [
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    "pytest-xdist>=3.6",  # task #100 tail (Thoth msg 2224): `-n auto` parallelizes the
+                          # suite across worker PROCESSES; tests/conftest.py shares ONE
+                          # Postgres container across them (PYTEST_XDIST_WORKER_COUNT/
+                          # workerinput), not one per worker
     "testcontainers[postgres]>=4.8",  # real Postgres in Docker for tests (not SQLite, not mocks)
     "ruff>=0.8",
     "mypy>=1.13",

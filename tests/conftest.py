@@ -5,11 +5,13 @@ import os
 import threading
 from collections.abc import AsyncIterator, Iterator
 
+import psycopg
 import pytest
 import pytest_asyncio
 import redis.asyncio as aioredis
 from alembic import command
 from alembic.config import Config
+from psycopg import sql
 from src.actions.core import Actions
 from src.db.pool import create_pool
 from src.db.redis import create_redis
@@ -97,20 +99,101 @@ _RESET_TABLES = (
 )
 
 
+# PYTEST-XDIST PARALLELIZATION (task #100's tail, Thoth msg 2224): pg_dsn used to be
+# one session-scoped PostgresContainer per pytest PROCESS. Under `-n auto`, xdist
+# runs each worker as its OWN process — that fixture, unmodified, would silently
+# start N separate containers (one per worker), which is legal but exactly the
+# "one container per run" docker load this build exists to keep flat, multiplied by
+# worker count instead of collapsed to one. ONE container instead, shared by every
+# worker, each worker with its OWN DATABASE inside it (test_gw0, test_gw1, ... —
+# "test" itself, unchanged, outside xdist) — parallelism at the pytest level, on top
+# of (not instead of) task #100's own per-database ordered-DELETE isolation between
+# tests within a worker.
+#
+# WHY HOOKS, NOT A FIXTURE, OWN THE CONTAINER: xdist's controller process never runs
+# a test and never evaluates a test-scoped fixture — only worker processes do. A
+# session-scoped fixture body only runs inside a worker, so nothing "session-scoped"
+# can single-flight across workers; every worker would independently race to be the
+# one that starts it. `pytest_configure`/`pytest_unconfigure` are different: real
+# pytest hooks, and they DO fire once in the controller too. `hasattr(config,
+# "workerinput")` is xdist's own documented way to tell a worker's pytest_configure
+# from the controller's (or a plain non-xdist run's, which takes the same branch as
+# the controller since it IS the only process either way) — a worker's config
+# carries that attribute, the others don't. So the controller starts the ONE
+# container in its own pytest_configure and stops it in pytest_unconfigure; a
+# worker's pytest_configure sees workerinput and does nothing.
+#
+# HANDOFF VIA workerinput, NOT A SHARED TEMP FILE: `pytest_configure_node(node)` is
+# xdist's own controller-side hook, fired once per worker right before that worker
+# starts, specifically for handing controller-computed data down
+# (`node.workerinput[...] = ...`) — the documented channel for exactly this, no
+# polling and no lock file needed.
+#
+# NO RYUK-DISABLE NEEDED: testcontainers' default reaper ties a container's cleanup
+# to the process that started it staying connected; that process here is the
+# controller, which by construction stays alive for the whole run (xdist's
+# controller doesn't finish until every worker has finished and reported back) — the
+# same lifetime invariant that already held before this change, now spanning N
+# workers instead of one process's own tests.
+_CONTAINER: dict[str, PostgresContainer] = {}
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    if hasattr(config, "workerinput"):
+        return  # an xdist worker: the controller (or, outside xdist, this same
+        # process, since it then takes this same branch itself) owns the container
+    pg = PostgresContainer("postgres:16", username="test", password="test", dbname="test")
+    pg.start()
+    _CONTAINER["pg"] = pg
+
+
+def pytest_configure_node(node: pytest.Item) -> None:  # xdist controller-only hook
+    pg = _CONTAINER["pg"]
+    node.workerinput["pg_host"] = pg.get_container_host_ip()  # type: ignore[attr-defined]
+    node.workerinput["pg_port"] = pg.get_exposed_port(5432)  # type: ignore[attr-defined]
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    pg = _CONTAINER.pop("pg", None)
+    if pg is not None:
+        pg.stop()
+
+
 @pytest.fixture(scope="session")
-def pg_dsn() -> Iterator[str]:
-    """A real Postgres in Docker (not SQLite, not mocks), migrated to head. The Type
-    catalog (task #97) is seeded lazily by the `actions` fixture below (a cheap
-    existence check, real seed only on the first test that needs it) rather than
-    here — a session-scoped ASYNC fixture proved unreliable under pytest-asyncio's
-    per-function event loop default (see `actions`'s own docstring)."""
-    with PostgresContainer("postgres:16", username="test", password="test", dbname="test") as pg:
-        host = pg.get_container_host_ip()
-        port = pg.get_exposed_port(5432)
-        dsn = f"postgresql://test:test@{host}:{port}/test"
-        os.environ["DATABASE_URL"] = dsn  # env.py reads this and converts to a sync psycopg URL
-        command.upgrade(Config("alembic.ini"), "head")
-        yield dsn
+def pg_dsn(request: pytest.FixtureRequest, worker_id: str) -> Iterator[str]:
+    """The shared container's DSN for THIS worker's own database. `worker_id`
+    ("master" outside xdist, "gw0"/"gw1"/... under it) is pytest-xdist's own
+    fixture. Migrated to head once per worker process (session-scoped: once per
+    worker under xdist, once total otherwise) since each worker's database starts
+    empty. The Type catalog (task #97) is seeded lazily by the `actions` fixture
+    below (a cheap existence check, real seed only on the first test that needs it)
+    rather than here — a session-scoped ASYNC fixture proved unreliable under
+    pytest-asyncio's per-function event loop default (see `actions`'s own
+    docstring); unaffected by this change, it already ran per-database, not
+    per-container."""
+    workerinput = getattr(request.config, "workerinput", None)
+    if workerinput is not None:
+        host, port = workerinput["pg_host"], workerinput["pg_port"]
+    else:
+        pg = _CONTAINER["pg"]
+        host, port = pg.get_container_host_ip(), pg.get_exposed_port(5432)
+
+    # "test" (the container's own default db) IS worker "master"'s database — matches
+    # this fixture's exact pre-xdist behavior 1:1 when nobody passes -n. Only actual
+    # xdist workers get a freshly CREATEd database.
+    db_name = "test" if worker_id == "master" else f"test_{worker_id}"
+    admin_dsn = f"postgresql://test:test@{host}:{port}/test"
+    if db_name != "test":
+        # no existence check needed: db_name is unique per (fresh, ephemeral)
+        # container per worker, and this fixture body runs at most once per worker
+        # process (session scope) — nothing else can have created it first.
+        with psycopg.connect(admin_dsn, autocommit=True) as conn:
+            conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(db_name)))
+
+    dsn = f"postgresql://test:test@{host}:{port}/{db_name}"
+    os.environ["DATABASE_URL"] = dsn  # env.py reads this and converts to a sync psycopg URL
+    command.upgrade(Config("alembic.ini"), "head")
+    yield dsn
 
 
 @pytest.fixture(autouse=True)
