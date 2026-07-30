@@ -68,6 +68,53 @@ async def test_create_link(actions: Actions, case_id: str) -> None:
     ) == 1
 
 
+async def test_create_or_find_object_accretes_an_undeclared_type(
+    actions: Actions, case_id: str
+) -> None:
+    """Task #97 workstream 2 — the accretion hook: an undeclared type SELF-DECLARES as a
+    stub instead of merely warning. The write always succeeds even in the default
+    warn-only runtime mode, and a real Type object materializes for it."""
+    from src.ontology.catalog import is_known_object_type, set_strict
+
+    set_strict(False)
+    try:
+        obj = await actions.create_or_find_object(
+            "NeverDeclaredWidget", "widget-1", "analyst:test", case_id)
+    finally:
+        set_strict(True)
+    assert obj is not None
+    assert await is_known_object_type(actions.pool, "NeverDeclaredWidget")
+
+
+async def test_create_or_find_object_still_raises_in_strict_mode(
+    actions: Actions, case_id: str
+) -> None:
+    """Strict mode ALWAYS wins over accretion — it exists so CI catches a real typo as
+    a hard failure, and silently minting a stub past that would defeat the point."""
+    from src.ontology.catalog import UnknownTypeError, is_known_object_type
+
+    with pytest.raises(UnknownTypeError):
+        await actions.create_or_find_object("ShouldRaiseWidget", "widget-2", "analyst:test",
+                                            case_id)
+    assert not await is_known_object_type(actions.pool, "ShouldRaiseWidget")
+
+
+async def test_create_link_accretes_an_undeclared_link_type(
+    actions: Actions, case_id: str
+) -> None:
+    from src.ontology.catalog import is_known_link_type, set_strict
+
+    a = await actions.create_or_find_object("Email", "a2@x.com", "analyst:test", case_id)
+    b = await actions.create_or_find_object("Account", "github:a2", "analyst:test", case_id)
+    set_strict(False)
+    try:
+        link_id = await actions.create_link(a, b, "never_declared_rel", "helper:test", NOW, 0.8)
+    finally:
+        set_strict(True)
+    assert link_id > 0
+    assert await is_known_link_type(actions.pool, "never_declared_rel")
+
+
 async def test_merge_objects_is_event_sourced_and_resolves(
     actions: Actions, case_id: str
 ) -> None:

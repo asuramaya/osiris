@@ -234,16 +234,40 @@ def _complain(kind: str, name: str) -> None:
     logger.warning(msg)
 
 
-async def check_object_type(pool: _PoolOrConn, name: str) -> None:
+# THE ACCRETION HOOK (task #97 workstream 2): an undeclared type SELF-DECLARES as a bare
+# stub instead of merely logging — the write that triggered the check always succeeds, and
+# a real Type object materializes for it to accrete richness onto later (a human, or a
+# future seed_catalog run, fills it in; ensure_type's own keep-prior-on-omission contract
+# means neither this stub nor a later real declaration can clobber the other's fields).
+# STRICT MODE ALWAYS WINS regardless of whether `actions`/`actor` are supplied — it exists
+# so tests can catch a real typo as a hard failure, and silently accreting past that would
+# defeat the entire point. `actions`/`actor` are optional because not every caller of these
+# checks has a live Actions instance to accrete through (e.g. a bare pool-only read path);
+# when absent, the original warn-only behavior is unchanged.
+async def check_object_type(
+    pool: _PoolOrConn, name: str, *, actions: Actions | None = None,
+    actor: str | None = None,
+) -> None:
     if name == "Type":
         return  # THE BOOTSTRAP AXIOM — see module docstring; never consults the catalog
-    if not await is_known_object_type(pool, name):
-        _complain("object type", name)
+    if await is_known_object_type(pool, name):
+        return
+    if not _STRICT and actions is not None and actor is not None:
+        await ensure_type(actions, name=name, kind="object", actor=actor)
+        return
+    _complain("object type", name)
 
 
-async def check_link_type(pool: _PoolOrConn, name: str) -> None:
-    if not await is_known_link_type(pool, name):
-        _complain("link type", name)
+async def check_link_type(
+    pool: _PoolOrConn, name: str, *, actions: Actions | None = None,
+    actor: str | None = None,
+) -> None:
+    if await is_known_link_type(pool, name):
+        return
+    if not _STRICT and actions is not None and actor is not None:
+        await ensure_type(actions, name=name, kind="link", actor=actor)
+        return
+    _complain("link type", name)
 
 
 async def ensure_type(

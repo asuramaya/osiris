@@ -128,6 +128,55 @@ async def test_check_object_type_passes_silently_once_declared(actions: Actions)
         set_strict(False)
 
 
+async def test_check_object_type_accretes_when_actions_and_actor_given(
+    actions: Actions,
+) -> None:
+    """Task #97 workstream 2: the accretion hook — check_object_type mints a bare stub
+    instead of warning once an Actions instance and an actor are available."""
+    set_strict(False)
+    try:
+        await check_object_type(actions.pool, "AutoWidget", actions=actions, actor="accretor")
+    finally:
+        set_strict(True)
+    assert await is_known_object_type(actions.pool, "AutoWidget")
+    rec = await object_type(actions.pool, "AutoWidget")
+    assert rec.name == "AutoWidget" and rec.description == ""
+
+
+async def test_check_object_type_strict_mode_wins_over_accretion(actions: Actions) -> None:
+    """Strict mode must never be silently bypassed by supplying actions/actor — it is
+    CI's hard-failure net, and accretion swallowing that defeats its whole purpose."""
+    with pytest.raises(UnknownTypeError):
+        await check_object_type(actions.pool, "ShouldRaiseToo", actions=actions,
+                                actor="accretor")
+    assert not await is_known_object_type(actions.pool, "ShouldRaiseToo")
+
+
+async def test_check_object_type_still_warns_without_actions_or_actor(
+    actions: Actions, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The original warn-only contract is unchanged for a caller with no Actions/actor
+    to accrete through."""
+    set_strict(False)
+    try:
+        with caplog.at_level("WARNING"):
+            await check_object_type(actions.pool, "StillJustAWarning")
+    finally:
+        set_strict(True)
+    assert any("StillJustAWarning" in r.message for r in caplog.records)
+    assert not await is_known_object_type(actions.pool, "StillJustAWarning")
+
+
+async def test_check_link_type_accretes_when_actions_and_actor_given(actions: Actions) -> None:
+    set_strict(False)
+    try:
+        await check_link_type(actions.pool, "auto_relates_to", actions=actions,
+                              actor="accretor")
+    finally:
+        set_strict(True)
+    assert await is_known_link_type(actions.pool, "auto_relates_to")
+
+
 async def test_check_link_type_same_contract(actions: Actions) -> None:
     set_strict(True)
     try:

@@ -37,13 +37,13 @@ from src.ingest.gleif import aim_gleif
 from src.ingest.orgbook import aim_orgbook
 from src.ingest.transcript_store import identity_reading
 from src.ingest.wikidata import aim as wikidata_aim
+from src.ontology.catalog import full_catalog
 from src.ontology.resolution import (
     consolidate_companies,
     find_cross_base_candidates,
     reclassify_mistyped_entities,
     resolve_cross_base,
 )
-from src.ontology.schema import catalog
 from src.orchestrator import capture, census, digest, handshake, mailbox, mounts
 from src.orchestrator import compositions as comp
 from src.orchestrator import dispose as dispose_seam
@@ -812,8 +812,10 @@ async def get_schema() -> dict[str, Any]:
     """The ontology — the object types (with category + canonical schemes) and link types
     the graph declares. Read this before authoring a composition or reading a result, so you
     reference REAL types/links, not guesses; it is the vocabulary of the whole graph. Compact
-    by design (colours/shapes dropped — those are for the UI)."""
-    cat = catalog()
+    by design (colours/shapes dropped — those are for the UI). Graph-backed (task #97
+    workstream 2): reads the live Type catalog, not schema.py's static seed manifest, so a
+    type minted through accretion shows up here the moment it exists."""
+    cat = await full_catalog(await _pool_get())
     return {
         "object_types": [
             {"name": t["name"], "category": t["category"], "schemes": t["schemes"],

@@ -114,7 +114,12 @@ class Actions:
             # the pool's N connections; a second acquire here would need an (N+1)th that
             # concurrent atomic() callers holding all N can never free (a real deadlock,
             # found live under test_concurrency.py's 40-way concurrent record_decision).
-            await check_object_type(conn, type_)
+            # An accretion (an undeclared type self-declaring as a stub, task #97 workstream
+            # 2) joins THIS SAME transaction — the throwaway Actions below is bound to `conn`,
+            # never a second acquire, so the stub Type's creation is atomic with whatever
+            # write triggered it.
+            await check_object_type(conn, type_, actions=Actions(self.pool, conn=conn),
+                                    actor=actor)
             row = await conn.fetchrow(
                 "INSERT INTO objects (type, canonical) VALUES ($1,$2) "
                 "ON CONFLICT (type, canonical) DO NOTHING RETURNING id",
@@ -369,8 +374,9 @@ class Actions:
         async with self._tx() as conn:
             # this transaction's own connection, never a fresh self.pool.acquire() — see
             # create_or_find_object's identical note (the pool-exhaustion deadlock inside
-            # atomic())
-            await check_link_type(conn, type_)
+            # atomic()); the accretion path shares it the same way, see that method's note
+            await check_link_type(conn, type_, actions=Actions(self.pool, conn=conn),
+                                  actor=actor)
             new_id = cast(
                 int,
                 await conn.fetchval(
@@ -424,7 +430,8 @@ class Actions:
         name, and why. Idempotent — a triple with nothing active returns 0."""
         async with self._tx() as conn:
             # this transaction's own connection — see create_or_find_object's identical note
-            await check_link_type(conn, type_)
+            await check_link_type(conn, type_, actions=Actions(self.pool, conn=conn),
+                                  actor=actor)
             tag = await conn.execute(
                 "UPDATE links SET valid_until=$4 WHERE from_id=$1 AND to_id=$2 AND type=$3 "
                 "AND valid_until IS NULL",

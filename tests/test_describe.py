@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from src.actions.core import Actions
+from src.ontology.catalog import ensure_type
 from src.orchestrator.describe import describe_table
 
 
@@ -47,3 +48,31 @@ async def test_the_mcp_tool_wrapper_delegates_to_describe_table(actions: Actions
         srv._pool = saved_pool
     assert out["exists"] is True
     assert {"name": "key", "type": "text", "nullable": False, "default": None} in out["columns"]
+
+
+async def test_get_schema_reads_the_live_catalog_not_the_static_seed(actions: Actions) -> None:
+    """Task #97 workstream 2: get_schema must read the graph-backed Type catalog, not
+    schema.py's static seed manifest — a type minted through accretion (or ensure_type
+    directly) shows up here the moment it exists, with no deploy/reseed in between."""
+    from src import mcp_server as srv
+
+    await ensure_type(actions, name="LiveMintedWidget", kind="object", actor="test",
+                      description="minted mid-test, not in the static seed manifest",
+                      category=["Software"])
+    await ensure_type(actions, name="live_minted_rel", kind="link", actor="test",
+                      description="a live-minted relationship", domain=["LiveMintedWidget"])
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.get_schema()
+    finally:
+        srv._pool = saved_pool
+
+    assert {"object_types", "link_types", "categories"} <= out.keys()
+    widget = next(t for t in out["object_types"] if t["name"] == "LiveMintedWidget")
+    assert widget["description"] == "minted mid-test, not in the static seed manifest"
+    assert widget["category"] == ["Software"]
+    rel = next(lt for lt in out["link_types"] if lt["name"] == "live_minted_rel")
+    assert rel["connects"] == "LiveMintedWidget -> *"
+    assert "Software" in out["categories"]
