@@ -1513,6 +1513,77 @@ async def test_record_decision_grounds_mint_grounded_by_edges_at_birth(
     assert n == 1
 
 
+async def test_record_decision_mints_decided_in_from_a_cited_commit_sha(
+        actions: Actions) -> None:
+    """Task #101: a ruling that names its own commit ("commit 238b48f", this house's own
+    standing practice) gets `decided_in` for free — no separate mining pass. gitlog.py
+    stores a 12-char canonical (commit:<sha[:12]>); the citation here is git's conventional
+    7-char short form, proving the prefix match (not an exact-canonical match) is real."""
+    c = await actions.create_or_find_object("Commit", "commit:238b48fb7104", "git")
+    d = await record_decision(
+        actions, "Wire seed_catalog into the lifespan", kind="decision",
+        rationale="Fixed by calling it once in create_app()'s lifespan (commit 238b48f).",
+        source="agent:test-i")
+    edges = await actions.pool.fetch(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='decided_in'", d)
+    assert [e["to_id"] for e in edges] == [c]
+
+
+async def test_record_decision_decided_in_is_idempotent(actions: Actions) -> None:
+    await actions.create_or_find_object("Commit", "commit:69f9842da653", "git")
+    d = await record_decision(actions, "Replace TRUNCATE with ordered DELETE",
+                              rationale="Landed, commit 69f9842.", source="agent:test-i")
+    await record_decision(actions, "Replace TRUNCATE with ordered DELETE",
+                          rationale="Landed, commit 69f9842.", source="agent:test-i")
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='decided_in'", d)
+    assert n == 1
+
+
+async def test_record_decision_skips_a_sha_with_no_matching_commit(actions: Actions) -> None:
+    """Not (yet) ingested, or a typo — either way, silently skipped rather than minting a
+    property-less ghost Commit (the deliberate asymmetry with `link_repo`'s repo stub:
+    see `_resolve_commit`'s own docstring for why a sha doesn't get the same treatment)."""
+    d = await record_decision(actions, "A ruling citing an unminted commit",
+                              rationale="See commit deadbeefcafe for detail.",
+                              source="agent:test-i")
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='decided_in'", d)
+    assert n == 0
+    ghost = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Commit' AND canonical LIKE 'commit:deadbeef%'")
+    assert ghost == 0
+
+
+async def test_record_decision_decided_in_scans_summary_and_protocol_too(
+        actions: Actions) -> None:
+    """Not just `rationale` — this house's own decisions cite the commit in the summary
+    ("...(commit 238b48f)") and/or a trailing "Commit: <sha>." in `protocol` just as often."""
+    c1 = await actions.create_or_find_object("Commit", "commit:aaaaaaaaaaaa", "git")
+    c2 = await actions.create_or_find_object("Commit", "commit:bbbbbbbbbbbb", "git")
+    d = await record_decision(
+        actions, "Two-part fix, landed (commit aaaaaaa)", kind="decision",
+        protocol="Verified end to end. Commit: bbbbbbb.", source="agent:test-i")
+    edges = {r["to_id"] for r in await actions.pool.fetch(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='decided_in'", d)}
+    assert edges == {c1, c2}
+
+
+async def test_record_decision_never_mistakes_a_decision_short_id_for_a_commit(
+        actions: Actions) -> None:
+    """The precision guarantee: `_COMMIT_CITATION_RE` requires the literal word "commit"
+    immediately before the hex token, so a rationale that cites another DECISION's short id
+    ("decision 335ddd13") — a routine cross-reference in this house's own prose — never
+    gets misread as a commit sha, even though both are hex-looking 8-char tokens."""
+    await actions.create_or_find_object("Commit", "commit:335ddd13aaaa", "git")  # a decoy
+    d = await record_decision(
+        actions, "Builds on an earlier measurement",
+        rationale="See decision 335ddd13 for the full protocol.", source="agent:test-i")
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='decided_in'", d)
+    assert n == 0
+
+
 async def test_record_decision_protocol_makes_a_ruling_rerunnable(actions: Actions) -> None:
     """Anubis VIII's grievance (msg 236): a ruling that states the conclusion but not the
     INVOCATION forces the successor to re-derive it from tmp logs. `protocol` is its own

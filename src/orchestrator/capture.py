@@ -19,11 +19,18 @@ its job:
     strictly higher trust than the miner's DERIVED regex inference over prose. The miner
     is demoted to backfill: it fills in decisions the session forgot to capture.
 
-A session decision has no commit to attach to, so where the miner links `decided_in` →
-Commit, we link `in_repo` → the SoftwareProject directly (find-or-create on `repo:<name>`,
-so a decision recorded before the repo is ingested pre-attaches to the eventual project).
-The `decision-log` composition reads the decided_in rollup for its "in"/"when" columns, so
-those render empty for a session decision — gracefully (verified in tests).
+A session decision RARELY has a commit to attach to at the moment it's stated — a ruling
+usually precedes the work it justifies — so where the miner links `decided_in` → Commit, we
+link `in_repo` → the SoftwareProject directly (find-or-create on `repo:<name>`, so a
+decision recorded before the repo is ingested pre-attaches to the eventual project). The
+`decision-log` composition reads the decided_in rollup for its "in"/"when" columns, so those
+render empty for a session decision with no cited commit — gracefully (verified in tests).
+
+TASK #101: when a decision IS recorded after the fact — landed, gated, and cited in its own
+prose ("commit 238b48f", the house's own standing practice) — `record_decision` mints
+`decided_in` too, straight from that citation (`_cited_commit_shas`/`_resolve_commit`
+below), the same edge the miner would eventually add by reading it back out of the commit
+body, just without waiting on a mining pass that never runs over session capture at all.
 """
 
 from __future__ import annotations
@@ -49,11 +56,48 @@ _SOURCE = "session"
 _EC = EvidenceClass.SELF_DECLARED.value
 _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 
+# task #101: most rulings already cite the commit they landed in, in ENGLISH prose
+# ("commit 238b48f", "Commit: 238b48f.") — this is the only thing standing between that
+# text and a real `decided_in` edge. Requires the word "commit(s)" immediately before the
+# hex token (word boundary through an optional ":"/"#" and whitespace) so it never mistakes
+# a decision/thread short id or a UUID fragment quoted nearby ("decision 335ddd13") for a
+# commit — those are never preceded by the word "commit".
+_COMMIT_CITATION_RE = re.compile(r"\bcommits?\b\s*[:#]?\s*([0-9a-f]{7,40})\b", re.IGNORECASE)
+
+
+def _cited_commit_shas(*texts: str | None) -> list[str]:
+    """Every distinct sha cited as "commit <sha>" across the given texts, in first-seen
+    order. Case-normalized to lowercase (git shas are lowercase hex; a citation typed in
+    caps should still resolve)."""
+    seen: dict[str, None] = {}
+    for text in texts:
+        if not text:
+            continue
+        for m in _COMMIT_CITATION_RE.finditer(text):
+            seen.setdefault(m.group(1).lower(), None)
+    return list(seen)
+
 
 def _canon(prefix: str, text: str) -> str:
     """The miner's exact canonical scheme, so a captured item dedups against a mined one
     with identical text (find-or-create idempotency) and renders in the same composition."""
     return f"{prefix}:{hashlib.sha1(text.encode()).hexdigest()[:12]}"
+
+
+async def _resolve_commit(pool: asyncpg.Pool, sha: str) -> uuid.UUID | None:
+    """A cited sha almost never matches a Commit's canonical byte-for-byte: gitlog.py
+    stores `commit:<sha[:12]>` (a 12-char prefix) while this house's own rulings cite git's
+    conventional 7-char short form ("commit 238b48f"). Prefix-match instead of exact-match
+    — `sha[:12]` bounds the LIKE pattern at the stored canonical's own length, so neither a
+    short 7-char citation nor a full 40-char paste ever over- or under-shoots it. READ-ONLY,
+    unlike `link_repo`'s repo stub: a repo name is a small, guessable, eventually-real set
+    worth pre-attaching to; a mistyped or not-yet-ingested sha is not — silently skipping
+    (never minting a property-less ghost Commit) is the deliberate choice here."""
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT id FROM objects WHERE type='Commit' AND canonical LIKE 'commit:' || $1 || '%' "
+        "LIMIT 1",
+        sha[:12],
+    )
 
 
 async def _resolve_repo(pool: asyncpg.Pool, name: str) -> uuid.UUID | None:
@@ -109,7 +153,11 @@ async def record_decision(
     records WHICH instance decided (still SELF_DECLARED, still the high-trust channel).
     `grounds` cites the Reference objects the decision rests on — `grounded_by` edges
     minted AT BIRTH, so the citation carries the decider's grade instead of being
-    reconstructed later from prose. Idempotent on the summary hash — AND, when `repo` is
+    reconstructed later from prose. `decided_in` needs no parameter of its own (task #101):
+    any commit sha already named in `summary`/`rationale`/`protocol` ("commit 238b48f") is
+    resolved by prefix against an ingested Commit and linked automatically — silently
+    skipped, never guessed, when the sha doesn't (yet) match anything. Idempotent on the
+    summary hash — AND, when `repo` is
     given, on a near-duplicate reword of it too (thread af77073a, Thoth's own retry-after-
     ambiguous-failure bug: a rejected-but-actually-committed call, retried with the summary
     reworded by one word, minted a twin). `find_near_duplicate_decision` runs first; a hit
@@ -207,6 +255,20 @@ async def record_decision(
                 d, ref)
             if not exists:  # re-capture is a no-op, like link_repo
                 await a.create_link(d, ref, "grounded_by", source, observed, _CONF,
+                                    evidence_class=_EC)
+        # task #101: mint `decided_in` from a sha already named in the decider's OWN prose
+        # (summary/rationale/protocol) — the same edge the miner writes when it finds the
+        # decision the other way around (starting from the Commit), now written at birth
+        # too instead of waiting on a mining pass that never runs over session capture.
+        for sha in _cited_commit_shas(summary, rationale, protocol):
+            commit_id = await _resolve_commit(a.pool, sha)
+            if commit_id is None:  # not (yet) ingested, or a typo — skip, never guess
+                continue
+            exists = await a.pool.fetchval(
+                "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='decided_in'",
+                d, commit_id)
+            if not exists:
+                await a.create_link(d, commit_id, "decided_in", source, observed, _CONF,
                                     evidence_class=_EC)
         if old is not None and old != d:  # a decision never buries itself (idempotent re-record)
             await a.assert_property(old, "superseded_by", str(d), source, observed, _CONF,
