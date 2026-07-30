@@ -354,8 +354,11 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             "FROM current_assertions WHERE object_id=$1 ORDER BY name, source_id",
             object_id,
         )
+        label_props = (await fetch_label_props(p, [object_id])).get(object_id, {})
+        name = resolve_label(obj["type"], label_props, obj["canonical"]).label
         return {
             **dict(obj),
+            "name": name,
             "properties": [
                 {
                     "name": r["name"], "value": r["value"], "source_id": r["source_id"],

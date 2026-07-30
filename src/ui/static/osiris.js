@@ -76,9 +76,12 @@ const Osiris = (() => {
   // the object detail (the one noun) — type chip, title, graded facts, slots for rels.
   // `acts` is HTML for action buttons the shell injects (search-around, dossier, …).
   function objectDetail(o, acts = "") {
-    const nameP = o.properties.find((p) => p.name === "name");
     const demo = o.properties.some((p) => p.name === "demo" && String(p.value).toLowerCase() === "true");
-    const title = (nameP && nameP.value) || o.canonical;
+    // the focus pane always shows the FULL resolved label, untruncated (o.name comes
+    // from /objects/{id}'s resolve_label — rule/chain/canonical tiers, task #97) — a
+    // Practice/BlindSpot/etc with no `name` property used to fall straight to its raw
+    // canonical hash here even though every list view already resolved it correctly.
+    const title = o.name || o.canonical;
     const m = ty(o.type);
     const facts = o.properties.filter((p) => !["name", "demo", "tag"].includes(p.name));
     const pv = facts.map(propRow).join("") || `<div class="o-muted" style="grid-column:1/4">No properties.</div>`;
@@ -306,9 +309,9 @@ const Osiris = (() => {
       const d = _pickDate(p), s = _pickSummary(p);
       const when = d ? esc(String(d).slice(0, 10)) : `#${i + 1}`;
       const sum = s ? `<div class="tl-sum">${esc(String(s).slice(0, 160))}</div>` : "";
-      return `<div class="tl-item" data-pick="${o.id}" data-type="${esc(o.type)}">
+      return `<div class="tl-item" data-pick="${o.id}" data-type="${esc(o.type)}" title="${esc(o.label || "")}">
         <span class="tl-when">${when}</span>
-        <div class="tl-main"><span class="o-faint">${esc(o.type)}</span> ${esc(o.label)}${sum}</div></div>`;
+        <div class="tl-main"><span class="o-faint">${esc(o.type)}</span> ${esc(o.display_label || o.label)}${sum}</div></div>`;
     }).join("");
     panel.innerHTML = `<div class="r-head">${items.length} item${items.length === 1 ? "" : "s"} · in order</div>
       <div class="tl">${body}</div>` + (items.length > shown.length ? _more(items.length - shown.length) : "");
@@ -374,10 +377,10 @@ const Osiris = (() => {
     const { cols, chips, showType } = _tableShape(shown);
     const head = (showType ? "<th>Type</th>" : "") + "<th>Name</th>" +
       cols.map((c) => `<th>${esc(c)}</th>`).join("");
-    const cell = (v) => `<td title="${esc(v)}"><span class="clamp">${esc(v)}</span></td>`;
+    const cell = (v, full) => `<td title="${esc(full != null ? full : v)}"><span class="clamp">${esc(v)}</span></td>`;
     const body = shown
       .map((o) => `<tr data-pick="${o.id}" data-type="${esc(o.type)}" style="cursor:pointer">
-        ${showType ? `<td><span class="o-faint">${esc(o.type)}</span></td>` : ""}${cell(o.label || "")}
+        ${showType ? `<td><span class="o-faint">${esc(o.type)}</span></td>` : ""}${cell(o.display_label || o.label || "", o.label)}
         ${cols.map((c) => cell((o.props || {})[c] || "")).join("")}</tr>`)
       .join("");
     const chipbar = chips.map((c) => `<span class="r-chip">${esc(c)}</span>`).join("");

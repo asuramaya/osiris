@@ -84,6 +84,22 @@ async def test_list_and_get_object(client: httpx.AsyncClient, actions: Actions) 
     assert "Lazarus Group" in names
 
 
+async def test_get_object_resolves_name_via_the_full_chain(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """Task #97 workstream 3 (client half): osiris.js's objectDetail rendered the
+    inspector's title from a raw `name`-property scan — a Practice (statement/
+    failure_prevented/surface, no name) showed its canonical hash there even though
+    every list view of the SAME object already resolved it correctly. GET /objects/{id}
+    now carries a top-level `name` via resolve_label, same as /objects and the dossier."""
+    p = await actions.create_or_find_object("Practice", "practice:gettest", "test")
+    await actions.assert_property(p, "statement", "measure it yourself, not from memory",
+                                  "test", datetime.now(UTC), 0.9)
+    r = await client.get(f"/objects/{p}")
+    assert r.status_code == 200
+    assert r.json()["name"] == "measure it yourself, not from memory"
+
+
 async def test_objects_search_is_word_order_proof(
     client: httpx.AsyncClient, actions: Actions
 ) -> None:
