@@ -65,6 +65,11 @@ from src.orchestrator.describe import describe_table
 from src.orchestrator.doors import doors as _doors_lookup
 from src.orchestrator.dossier import entity_dossier
 from src.orchestrator.fleetview import render_fleet_tree
+from src.orchestrator.handoff_compiler import (
+    compile_handoff,
+    render_handoff_briefing,
+    since_last_handoff,
+)
 from src.orchestrator.mailbox import (
     OPERATOR_ADDR,
     ack_messages,
@@ -1036,6 +1041,67 @@ async def dossier_report(object_ref: str) -> str:
     pool = await _pool_get()
     oid = await _resolve(pool, object_ref)
     return await build_dossier_report(pool, oid) if oid else f"# no object {object_ref!r}"
+
+
+@mcp.tool()
+async def handoff_briefing(
+    repo: str, agent_ref: str | None = None, since: str | None = None,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """A SUCCESSION BRIEFING COMPILED FROM THE GRAPH (Thoth's dispatch, DM 2338) — not
+    hand-written from memory. Reads back, for `repo`: what SHIPPED (Decisions minted since
+    the boundary, each showing its `decided_in` commit(s) and whether that commit is an
+    ancestor of the project's own deploy cursor — deployed / landed-not-deployed / unknown),
+    what's OPEN and whose move it is (`compositions.open_thread_wall`, the one wall law),
+    what's OPERATOR-GATED (named explicitly, never silently inherited as someone's task),
+    what was CORRECTED (`supersedes` chains, both sides' summaries), and a best-effort,
+    explicitly-labeled HEURISTIC flag for text that self-declares unconfirmed ("UNVERIFIED",
+    "FALSIFIABLE PREDICTION", ...) — no structured marker exists for that yet, unlike
+    `is_handoff`.
+
+    `since` defaults to the boundary `since_last_handoff` finds by walking YOUR OWN mounted
+    lineage (or `agent_ref`'s, to preview another agent's — an operator or a manager
+    checking before asking for one) back through `succeeded_from` for the freshest
+    `is_handoff` marker; pass an explicit ISO-8601 `since` to override. Returns both the
+    structured data AND a rendered `markdown` string ending in an empty JUDGMENT section —
+    the compiled facts are the 90% win, the departing seat's own prose on top (why any of
+    this mattered) is the irreducible rest; this tool never writes that prose, or anything
+    else — READ-ONLY, renders on demand, never automatic, never mints a Decision or Thread
+    itself. Pair it with your own `record_decision(..., is_handoff=True)` / `settle()` once
+    you've read and judged it."""
+    pool = await _pool_get()
+    if agent_ref:
+        oid = await _resolve(pool, agent_ref)
+        row = await pool.fetchrow(
+            "SELECT canonical FROM objects WHERE id=$1 AND type='Agent'", oid
+        ) if oid else None
+        if row is None:
+            return {"error": f"no such agent: {agent_ref!r}"}
+        agent_id = row["canonical"]
+    else:
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — handoff_briefing walks YOUR OWN lineage by "
+                             "default; pass agent_ref to preview another agent's instead"}
+        agent_id = ident.agent_id
+
+    since_dt: datetime | None
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since)
+        except ValueError:
+            return {"error": f"since must be ISO-8601, got {since!r}"}
+        since_note = "explicit since given"
+    else:
+        since_dt, since_note = await since_last_handoff(pool, agent_id)
+
+    data = await compile_handoff(pool, repo=repo, since=since_dt)
+    if not data:
+        return {"error": f"no such SoftwareProject: {repo!r}"}
+    data["since_note"] = since_note
+    data["markdown"] = render_handoff_briefing(data)
+    return data
 
 
 # --- the composer: author/run/list compositions (the front end as a primitive) ---
