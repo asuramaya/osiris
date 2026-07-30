@@ -138,7 +138,26 @@ _RESET_TABLES = (
 _CONTAINER: dict[str, PostgresContainer] = {}
 
 
+# AF_UNIX SOCKET PATH LENGTH (Sekhmet's find, msg 2261, task #119's gate): pytest's own
+# default basetemp is "/tmp/pytest-of-<user>/pytest-<N>/", N an EVER-GROWING counter
+# shared fleet-wide across every pytest invocation on this box (already past 270 the
+# night this was found, from this house's own overnight test-running alone) — plus, under
+# `-n auto`, xdist's own "popen-gwN/" worker segment, plus a long test function name (a
+# tests/test_pty_broker.py socket test's tmp_path directory alone is its function name)
+# comfortably exceeds AF_UNIX's ~108-byte sun_path limit on Linux. Confirmed live: 121
+# bytes for that file's two longest-named socket tests under -n auto; 111 even under BARE
+# pytest once the counter climbs high enough — this was never xdist-exclusive, only newly
+# EXPOSED by the extra worker segment tipping an already-fragile path over TODAY's counter
+# value (a length bug waiting to recur in bare pytest too, on a long-lived box, xdist or
+# not). A short, PID-keyed basetemp — not pytest's own incrementing counter, which only
+# grows and is shared fleet-wide, and unrelated to _CONTAINER's per-run Postgres — buys
+# back the byte budget without colliding with any other concurrent pytest invocation on
+# this box (a PID is unique to the OS process that holds it, controller or worker alike,
+# no coordination needed). Only applied when the caller hasn't already passed --basetemp
+# themselves (CI or a human override always wins).
 def pytest_configure(config: pytest.Config) -> None:
+    if config.option.basetemp is None:
+        config.option.basetemp = f"/tmp/pt-{os.getpid()}"
     if hasattr(config, "workerinput"):
         return  # an xdist worker: the controller (or, outside xdist, this same
         # process, since it then takes this same branch itself) owns the container
