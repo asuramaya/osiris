@@ -607,6 +607,44 @@ def test_practice_violation_pure() -> None:
     assert stophook._practice_violation("never mind", []) is None
 
 
+def test_practice_violation_does_not_flag_reporting_a_violation_while_quoting_it() -> None:
+    """TASK #104 (Thoth's DM 2228; thread b318a9d3): six false positives one night, same
+    shape — a genuine REPORT of someone ELSE's violation reads as reversal language in
+    its OWN sentence ("they skipped checking git status... instead of verifying every
+    path"), while the practice cited as evidence is quoted verbatim in the NEXT sentence,
+    not the same one. The original quote-suppressor (SPECIMEN 1 in the test above) only
+    ever checked the SAME sentence the cue lived in, so it was blind to this. THE
+    SHARPEST SPECIMEN (Thoth's own framing, msg 2228): msg 2211 — Sekhmet quoted practice
+    6aeb2067 while correctly reporting a violation of it BY SOMEONE ELSE, and Stage C
+    flagged HER for it. Confirmed against the real (unmodified) detector before this fix
+    landed: this exact text reproduced the false positive with no cross-practice
+    collision needed."""
+    practice = {"id": "6aeb2067-3d0f-4f34-ae71-ed10ad05d2cc",
+               "statement": "A stash's blast radius is the FILE, not the AUTHOR — before "
+                            "pathspec-scoping `git stash push -- <files>` to \"agent X's "
+                            "known files,\" check the FULL current `git status --short` "
+                            "for every path about to be targeted, not just the one agent "
+                            "you have in mind."}
+    text = (
+        "Confirmed: they skipped checking git status before stashing — instead of "
+        "verifying every path, they assumed it was scoped to one agent. Exactly "
+        "practice 6aeb2067's own warning: \"A stash's blast radius is the FILE, not "
+        "the AUTHOR — before pathspec-scoping git stash push -- <files> to agent X's "
+        "known files, check the FULL current git status --short for every path about "
+        "to be targeted, not just the one agent you have in mind.\""
+    )
+    assert stophook._practice_violation(text, [practice]) is None
+    # control: quoting practice A elsewhere in the turn must not blanket-shield a
+    # GENUINE, unrelated violation of a DIFFERENT practice B in the same turn — the fix
+    # widens the scope of "is THIS practice quoted", not "suppress this whole turn"
+    practice_b = {"id": "violate1-eeee-4eee-8eee-eeeeeeeeeeee",
+                 "statement": "dispatches and un-parks go as DMs, never as broadcast replies"}
+    mixed = text + (" Separately: let's stop sending DMs for un-parks and just reply on "
+                    "the broadcast thread instead, it's fine.")
+    hit = stophook._practice_violation(mixed, [practice, practice_b])
+    assert hit is not None and hit["practice_id"] == "violate1"
+
+
 async def test_sent_a_real_ask_true_only_for_a_recent_ask_from_this_agent(
     actions: Actions,
 ) -> None:
@@ -862,6 +900,146 @@ async def test_stage_a_does_not_confess_when_the_turn_quotes_the_practice_verbat
         {"cwd": str(office), "session_id": sid, "transcript_path": str(transcript)})
     after = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
     assert after == before  # quoting the practice's own text is citation, not reversal
+
+
+async def test_stage_a_does_not_confess_when_reporting_someone_elses_violation_while_quoting_it(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
+) -> None:
+    """TASK #104 (Thoth's DM 2228; thread b318a9d3), end to end — the named regression
+    case (msg 2211): reporting a violation BY SOMEONE ELSE reads as reversal language in
+    its own sentence, while the practice cited as evidence is quoted verbatim one
+    sentence over. Same discipline as the msg-1800 test above, but proving the WIDER
+    (whole-turn, not same-sentence) quote scope this task added."""
+    monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    worker_agent, worker_seat = "agent:pviol004", "seat:pviol004"
+    manager_agent, manager_seat = "agent:pvmgr004", "seat:pvmgr004"
+    worker_obj = await actions.create_or_find_object("Seat", worker_seat, worker_agent)
+    manager_obj = await actions.create_or_find_object("Seat", manager_seat, manager_agent)
+    now = datetime.now(UTC)
+    await actions.assert_property(worker_obj, "handle", "pviolworker4", worker_agent, now,
+                                  0.9, evidence_class="self_declared")
+    await actions.create_link(worker_obj, manager_obj, "managed_by", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await bind_holder(actions, seat_id=worker_seat, agent_id=worker_agent)
+    await record_practice(
+        actions, "A stash's blast radius is the FILE, not the AUTHOR — before "
+                 "pathspec-scoping git stash push to agent X's known files, check the "
+                 "FULL current git status for every path about to be targeted, not "
+                 "just the one agent you have in mind.")
+
+    office = tmp_path / "office4"
+    office.mkdir()
+    transcript = tmp_path / "t4.jsonl"
+    _write_transcript(
+        transcript,
+        {"type": "assistant", "isSidechain": False, "message": {"content":
+            "Confirmed: they skipped checking git status before stashing — instead of "
+            "verifying every path, they assumed it was scoped to one agent. Exactly "
+            "the practice's own warning: \"A stash's blast radius is the FILE, not the "
+            "AUTHOR — before pathspec-scoping git stash push to agent X's known files, "
+            "check the FULL current git status for every path about to be targeted, "
+            "not just the one agent you have in mind.\""}},
+    )
+    job_dir = str(tmp_path / "jobs" / "pviolat4")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=worker_agent, project="testhouse",
+                     cwd=str(office), model=None, session_key=None)
+    sid = "pviolat4-0000-4000-8000-000000000000"
+
+    before = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    await stophook._stage_a_async(
+        {"cwd": str(office), "session_id": sid, "transcript_path": str(transcript)})
+    after = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    assert after == before  # reporting a violation is not the reporter's own reversal
+
+
+# ═══════════ STAGE C DEDUP — thread e96ed0c5 ═══════════
+
+async def test_already_flagged_today_true_only_for_the_same_agent_practice_pair_today(
+    actions: Actions,
+) -> None:
+    agent = "agent:dedupflag1"
+    await send_message(
+        actions.pool, from_agent=agent, from_project="osiris", to_project="osiris",
+        body="stopping; this turn may have violated standing Practice abc12345 "
+             "(\"some statement\") — reversal language found (stop); a heuristic flag, "
+             "not a verdict, worth a look",
+        grade="fyi")
+    assert await stophook._already_flagged_today(actions.pool, agent, "abc12345") is True
+    # a DIFFERENT practice id is not covered by the same flag
+    assert await stophook._already_flagged_today(actions.pool, agent, "zzz99999") is False
+    # a different agent never flagged today
+    assert await stophook._already_flagged_today(
+        actions.pool, "agent:neverflagged", "abc12345") is False
+
+
+async def test_already_flagged_today_ignores_a_flag_from_a_prior_day(
+    actions: Actions,
+) -> None:
+    agent = "agent:dedupflag2"
+    r = await send_message(
+        actions.pool, from_agent=agent, from_project="osiris", to_project="osiris",
+        body="stopping; this turn may have violated standing Practice def67890 "
+             "(\"some statement\") — reversal language found (stop); a heuristic flag, "
+             "not a verdict, worth a look",
+        grade="fyi")
+    await actions.pool.execute(
+        "UPDATE fleet_messages SET created_at=now() - interval '1 day' WHERE id=$1", r["id"])
+    assert await stophook._already_flagged_today(actions.pool, agent, "def67890") is False
+
+
+async def test_stage_a_sends_the_practice_confession_once_per_agent_practice_per_day(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
+) -> None:
+    """Thread e96ed0c5 (Thoth, msg 1819): the SAME (agent, practice) violating turn,
+    hit twice in one day (two separate stops), sends its courtesy confession only once —
+    detection still runs both times, only the duplicate DM is suppressed."""
+    monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    worker_agent, worker_seat = "agent:pviol005", "seat:pviol005"
+    manager_agent, manager_seat = "agent:pvmgr005", "seat:pvmgr005"
+    worker_obj = await actions.create_or_find_object("Seat", worker_seat, worker_agent)
+    manager_obj = await actions.create_or_find_object("Seat", manager_seat, manager_agent)
+    now = datetime.now(UTC)
+    await actions.assert_property(worker_obj, "handle", "pviolworker5", worker_agent, now,
+                                  0.9, evidence_class="self_declared")
+    await actions.create_link(worker_obj, manager_obj, "managed_by", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await bind_holder(actions, seat_id=worker_seat, agent_id=worker_agent)
+    await record_practice(
+        actions, "batch small commits into one PR for this class of change")
+
+    office = tmp_path / "office5"
+    office.mkdir()
+    transcript = tmp_path / "t5.jsonl"
+    _write_transcript(
+        transcript,
+        {"type": "assistant", "isSidechain": False, "message": {"content":
+            "Let's stop doing small batch commits for this kind of change — one big "
+            "commit instead. Done."}},
+    )
+    job_dir = str(tmp_path / "jobs" / "pviolat5")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=worker_agent, project="testhouse",
+                     cwd=str(office), model=None, session_key=None)
+    sid = "pviolat5-0000-4000-8000-000000000000"
+
+    before = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    await stophook._stage_a_async(
+        {"cwd": str(office), "session_id": sid, "transcript_path": str(transcript)})
+    after_first = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    assert after_first == before + 1  # the first hit today still confesses
+
+    # push the first confession's own created_at outside send_message's OWN identical-
+    # body dedup window (600s default) — without this, a second identical send would be
+    # silently deduped by that generic mechanism, and the test would prove nothing about
+    # THIS task's (agent, practice)-per-day dedup specifically. Still comfortably the
+    # same calendar day.
+    await actions.pool.execute(
+        "UPDATE fleet_messages SET created_at=now() - interval '700 seconds' "
+        "WHERE id=(SELECT id FROM fleet_messages WHERE from_agent=$1 "
+        "ORDER BY id DESC LIMIT 1)", worker_agent)
+    await stophook._stage_a_async(
+        {"cwd": str(office), "session_id": sid, "transcript_path": str(transcript)})
+    after_second = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    assert after_second == after_first  # the second hit, same day, same practice: no duplicate
 
 
 # ═══════════ INTEGRATION — _stage_a_async end to end ═══════════

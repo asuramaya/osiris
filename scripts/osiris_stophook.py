@@ -630,6 +630,26 @@ def _practice_violation(
     not merely co-present. A cue alone is still too cheap a trigger on its own, so each
     sentence also requires topical overlap with the practice's own statement: at least 2
     shared significant words (len >= 4, crude but stopword-free by construction).
+
+    TASK #104 (Thoth's DM 2228; thread b318a9d3; msgs 1906/1878/2204/2211, six false
+    positives one night, same shape): fix (1) above suppressed a quote only within the
+    SAME sentence the cue lived in — but the natural way to REPORT a violation is to
+    describe it in one sentence ("they skipped checking git status before stashing")
+    and substantiate it by quoting the practice's own text in an adjacent one ("exactly
+    practice 6aeb2067's own warning: '...'"). The describing sentence legitimately
+    carries a cue (the violation itself reads as reversal language) and topical overlap,
+    while the quote proving this is a CITATION, not the reporter's own reversal, sits one
+    sentence over — invisible to a same-sentence-only quote check. Confirmed against the
+    real code before changing it (not assumed from the dispatch): a hand-built repro of
+    exactly this shape reproduced the false positive using only the real, unmodified
+    detector and one real practice, no cross-practice collision required. Fix: quoting is
+    now checked once, over the WHOLE turn, per practice — a practice quoted verbatim
+    ANYWHERE in this turn is exempted from matching in EVERY sentence of it, not just the
+    one holding the quote. The cue+topical-overlap proximity requirement from fix (2)
+    is untouched (still same-sentence only) — only the SCOPE of "is this a quote"
+    widened, per Thoth's framing: exclude the quoted-practice span from the scan, don't
+    widen the cue list.
+
     Returns the first (highest-confirmed, since `practices` arrives pre-ordered) match,
     or None — a miss is not proof of compliance, only that this fingerprint found
     nothing; the caller's job is a courtesy nudge, never a verdict."""
@@ -637,6 +657,11 @@ def _practice_violation(
         return None
     from src.orchestrator.capture import practice_contradiction_cues
 
+    text_words = text.lower().split()
+    quoted_ids = {
+        p["id"] for p in practices
+        if _quotes_the_practice(text_words, (p.get("statement") or "").lower().split())
+    }
     for sentence in _SENTENCE_SPLIT.split(text):
         cues = practice_contradiction_cues(sentence)
         if not cues:
@@ -646,14 +671,37 @@ def _practice_violation(
             continue
         sent_topic = set(sent_words)
         for p in practices:
+            if p["id"] in quoted_ids:
+                continue  # cited verbatim somewhere in this turn — citation, not reversal
             stmt = p.get("statement") or ""
             stmt_topic = set(re.findall(r"[a-z]{4,}", stmt.lower()))
             if len(sent_topic & stmt_topic) < 2:
                 continue
-            if _quotes_the_practice(sentence.lower().split(), stmt.lower().split()):
-                continue
             return {"practice_id": p["id"][:8], "statement": stmt, "cues": cues}
     return None
+
+
+async def _already_flagged_today(conn: Any, agent_id: str, practice_id: str) -> bool:
+    """Thread e96ed0c5 (Thoth, msg 1819: "build when next touching osiris_stophook.py") —
+    ONE Stage C flag per (agent, practice) per calendar day. A detector that repeats the
+    SAME diagnosis five times in a shift trains its reader to skim past every later
+    instance of it, including the one day it's a genuinely NEW violation elsewhere —
+    exactly the alert-fatigue mechanism task #104's dispatch names ("an alarm nobody
+    believes is worse than no alarm"). Lineage-matched the same way `_sent_a_real_ask`/
+    `_mail_gap` already do (a generation suffix earns no fresh quota); scoped by the
+    practice's own short id appearing in a PRIOR confession body sent today — no schema
+    change, the existing message text already carries the fact, so this is a read against
+    history rather than a new column."""
+    from src.orchestrator.agents import _generation
+
+    base = _generation(agent_id)[0]
+    since = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    row = await conn.fetchval(
+        "SELECT 1 FROM fleet_messages WHERE (from_agent=$1 OR from_agent LIKE $1 || '-%') "
+        "AND body LIKE '%violated standing Practice ' || $2 || '%' AND created_at >= $3 "
+        "LIMIT 1",
+        base, practice_id, since)
+    return row is not None
 
 
 async def _confess_if_practice_violated(
@@ -664,11 +712,16 @@ async def _confess_if_practice_violated(
     proved out, applied to a standing Practice instead of a parked question. Fail-open by
     construction (an empty `practices` list or an unreadable transcript both just return
     None from `_practice_violation`, never raise). `project` — see `_confess_if_parked`'s
-    own note: the caller's already-resolved seats.resolve_project, never re-derived here."""
+    own note: the caller's already-resolved seats.resolve_project, never re-derived here.
+    DEDUP (thread e96ed0c5): a repeat hit against the SAME (agent, practice) already
+    confessed today sends nothing further — detection still ran, only the duplicate DM
+    is suppressed."""
     text = _last_assistant_text(str(payload.get("transcript_path") or ""))
     practices = await _active_practices(conn)
     hit = _practice_violation(text, practices)
     if hit is None:
+        return
+    if await _already_flagged_today(conn, agent_id, hit["practice_id"]):
         return
     from src.orchestrator.mailbox import send_message
     await send_message(
