@@ -13,6 +13,7 @@ from src.orchestrator.capture import open_thread
 from src.orchestrator.compositions import (
     list_compositions,
     open_thread_wall,
+    rank_open_threads,
     run_composition,
     seed_default_compositions,
 )
@@ -440,3 +441,47 @@ async def test_open_thread_tool_refuses_an_arc_outside_the_locked_taxonomy(
     finally:
         srv._pool = saved_pool
     assert "error" in out and "arc must be one of" in out["error"]
+
+
+async def test_rank_open_threads_prefers_a_recent_touch_over_a_recent_mint(
+    actions: Actions,
+) -> None:
+    """RELEVANCE OBSERVED, NOT DECLARED (ruling a4bd555c, #121's catalog-usage law applied
+    to threads — Thoth msg 2332): the old tie-break was raw SQL input order, i.e. mint
+    time. A thread minted a month ago and re-annotated moments ago must outrank one minted
+    moments ago and never touched since — "annotated recently vs. abandoned," Thoth's own
+    fifth signal, answered directly by `last_touched`."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:touchrank", "session")
+    old_but_touched = await open_thread(actions, "an old thread someone just re-read",
+                                        repo="touchrank", source="agent:me")
+    await actions.pool.execute(
+        "UPDATE objects SET created_at = now() - interval '30 days' WHERE id=$1",
+        old_but_touched)
+    fresh_but_ignored = await open_thread(actions, "a brand new thread nobody has revisited",
+                                          repo="touchrank", source="agent:me")
+    # re-touch the OLD thread just now — a fresh self_declared observation, no content
+    # change needed; annotating IS the signal, not what the annotation says
+    await actions.assert_property(old_but_touched, "summary", "an old thread someone just re-read",
+                                  "agent:me", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+
+    wall, _echoes = await open_thread_wall(actions.pool, proj)
+    shown, _more = rank_open_threads(wall)
+    ids = [t["id"] for t in shown]
+    assert ids.index(str(old_but_touched)[:8]) < ids.index(str(fresh_but_ignored)[:8])
+
+
+async def test_wall_items_carry_arc_only_when_declared(actions: Actions) -> None:
+    """`arc` rides the wall item exactly like `kind`/`owner` already do — present only when
+    a mind (or the miner) actually named one, never a null-key placeholder (Fulcrum III's
+    verdict, extended to the new field)."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:arcrank", "session")
+    await open_thread(actions, "a thread with a named arc", repo="arcrank",
+                      arc="Token-Cost", source="agent:me")
+    await open_thread(actions, "a thread with no arc at all", repo="arcrank",
+                      source="agent:me")
+
+    wall, _echoes = await open_thread_wall(actions.pool, proj)
+    by_summary = {t["summary"]: t for t in wall}
+    assert by_summary["a thread with a named arc"]["arc"] == "Token-Cost"
+    assert "arc" not in by_summary["a thread with no arc at all"]

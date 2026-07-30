@@ -1729,17 +1729,38 @@ def rank_open_threads(
     AWARE (finding D, Khnum audit thread ffb13bd9): an obligation owned by an earlier or
     later generation of the same agent lineage (agent:foo-iii vs agent:foo-iv, post-
     compaction succession) still ranks as mine — the compositions layer had never inherited
-    the `_generation()` treatment held_seat/manager_of_seat already carry. Input (recency)
-    order breaks remaining ties — Python's sort is stable. Pure."""
+    the `_generation()` treatment held_seat/manager_of_seat already carry.
+
+    WITHIN each (kind, ownership) band, RELEVANCE OBSERVED, NOT DECLARED (ruling a4bd555c,
+    #121's catalog-usage law applied to the object that matters most, Thoth msg 2332):
+    `last_touched` — the freshest self_declared `observed_at` a caller of `open_thread_wall`
+    hands in — breaks the tie, not raw creation order. A thread minted months ago and
+    re-annotated yesterday answers "annotated recently vs. abandoned" directly and outranks
+    one merely minted yesterday and never touched since; a thread's `last_touched` is never
+    absent on a genuine wall row (an untouched thread is an echo, never a wall entry —
+    `open_thread_wall`'s own split). `arc` is the last tie-break — grouping, not priority:
+    no arc in the closed taxonomy outranks another, so it never overrides an observed
+    signal, only orders otherwise-identical ties so same-arc threads sit together on a
+    capped page. Input order is the final fallback — Python's sort is stable. Pure."""
     me_roots = frozenset(_generation(m)[0] for m in me)
+    never = datetime.min.replace(tzinfo=UTC)
+    latest = datetime.max.replace(tzinfo=UTC)
 
     def whose_move(r: dict[str, Any]) -> int:
         owner = (r.get("owner") or "").strip()
         if not owner or owner in me or _generation(owner)[0] in me_roots:
             return 0  # mine to act (unowned = anyone who reads it may act)
         return 2 if owner == "operator" else 1
+
+    def touched_at(r: dict[str, Any]) -> datetime:
+        v = r.get("last_touched")
+        return v if isinstance(v, datetime) else never
+
     summ = [r for r in rows if r.get("summary")]
-    ranked = sorted(summ, key=lambda r: (r.get("kind") != "obligation", whose_move(r)))
+    ranked = sorted(summ, key=lambda r: (
+        r.get("kind") != "obligation", whose_move(r),
+        latest - touched_at(r),        # ascending on this = most-recently-touched first
+        r.get("arc") or ""))
     shown = ranked[:ORIENT_OPEN_THREADS]
     return shown, len(ranked) - len(shown)
 
@@ -1762,7 +1783,15 @@ async def open_thread_wall(
     ever touched — not one self_declared assertion in its whole history — that is either
     kind='question' or older than the freshness window. Its status stays OPEN in the record
     (untouched ≠ resolved, ruling 758ded94); only the LENS stops hauling it. Rows carry the
-    8-char short id so triage verbs can name their target directly."""
+    8-char short id so triage verbs can name their target directly.
+
+    `arc` and `last_touched` ride along for `rank_open_threads` (ruling a4bd555c, same law
+    as #121's catalog ranking — RELEVANCE OBSERVED, NOT DECLARED): `last_touched` is the
+    freshest self_declared `observed_at` on the object, the same authoritative clock
+    `current_assertions` itself resolves "current" by — a thread re-annotated last week
+    outranks one merely minted yesterday and never touched again. `untouched` already
+    proves this is never null for a WALL row (an untouched thread is an echo, not a wall
+    entry)."""
     rows = await pool.fetch(
         "SELECT o.id, o.created_at, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -1774,6 +1803,11 @@ async def open_thread_wall(
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='owner' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS owner, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='arc' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS arc, "
+        " (SELECT max(sa.observed_at) FROM assertions sa WHERE sa.object_id=o.id "
+        "   AND sa.evidence_class='self_declared') AS last_touched, "
         " NOT EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
         "   AND sa.evidence_class='self_declared') AS untouched "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
@@ -1803,6 +1837,11 @@ async def open_thread_wall(
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
             "   AND a.name='owner' "
             "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS owner, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "   AND a.name='arc' "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS arc, "
+            " (SELECT max(sa.observed_at) FROM assertions sa WHERE sa.object_id=o.id "
+            "   AND sa.evidence_class='self_declared') AS last_touched, "
             " NOT EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
             "   AND sa.evidence_class='self_declared') AS untouched "
             "FROM objects o "
@@ -1832,11 +1871,13 @@ async def open_thread_wall(
         # kind/owner render only when DECLARED (no null-key noise): an absent kind means no
         # mind — and no mechanical rule — ever said what this is (Fulcrum III's verdict,
         # answered at the lens).
-        item = {"id": str(r["id"])[:8], "summary": r["summary"]}
+        item: dict[str, Any] = {"id": str(r["id"])[:8], "summary": r["summary"]}
         if r["kind"]:
             item["kind"] = r["kind"]
         if r["owner"]:  # whose move it is — absent means anyone's
             item["owner"] = r["owner"]
+        if r["arc"]:
+            item["arc"] = r["arc"]
         # THE MINER MAY NOTICE, BUT MUST NEVER OBLIGE (ruling 61c1b20d, extended from the desk
         # to the wall — 2026-07-12, the operator: "it's a snowball to hell").
         #
@@ -1856,8 +1897,11 @@ async def open_thread_wall(
         # open until testimony says otherwise (untouched ≠ resolved, 758ded94). It simply stops
         # being presented as though someone had promised it.
         is_echo = r["kind"] == "question" or bool(r["untouched"])
-        (echoes if is_echo else wall).append(
-            {**item, "born": r["created_at"].date().isoformat()} if is_echo else item)
+        if is_echo:
+            echoes.append({**item, "born": r["created_at"].date().isoformat()})
+        else:
+            # untouched -> echo above means a WALL row always has a real touch
+            wall.append({**item, "last_touched": r["last_touched"]})
     echoes.reverse()  # oldest first — triage drains from the bottom of the pile
     return wall, echoes
 
@@ -1907,7 +1951,7 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     # actually TOUCHED — never the untouched echo mass; repo-less threads included (a
     # deliberate open_thread with no repo must still surface where it was promised to)
     top_rows = [dict(r) for r in await pool.fetch(
-        "SELECT str_id AS id, summary, kind, owner, project FROM ("
+        "SELECT str_id AS id, summary, kind, owner, arc, last_touched, project FROM ("
         " SELECT substr(o.id::text, 1, 8) AS str_id, o.created_at, "
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "    AND a.name='summary' "
@@ -1918,6 +1962,11 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "    AND a.name='owner' "
         "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS owner, "
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "    AND a.name='arc' "
+        "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS arc, "
+        "  (SELECT max(sa2.observed_at) FROM assertions sa2 WHERE sa2.object_id=o.id "
+        "    AND sa2.evidence_class='self_declared') AS last_touched, "
         "  (SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
         "    WHERE l.from_id=o.id AND l.type='in_repo' LIMIT 1) AS project, "
         "  EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
