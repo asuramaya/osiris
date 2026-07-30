@@ -41,7 +41,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal
 
 import asyncpg
 
@@ -89,7 +89,7 @@ _DEFAULT_LINK = TypeRecord("unknown", "link", description="An undeclared relatio
 # same pool mid-transaction) is what keeps check_object_type/check_link_type from
 # deadlocking a pool that Actions.atomic() callers have already exhausted (found live
 # under test_concurrency.py's 40-way concurrent record_decision).
-_PoolOrConn: TypeAlias = asyncpg.Pool | asyncpg.Connection
+type _PoolOrConn = asyncpg.Pool | asyncpg.Connection
 
 _CACHE_TTL = 120.0  # fail-safe only, see module docstring — the fingerprint is the real gate
 _cache: dict[str, Any] = {}  # "v" -> (fingerprint, cached_at, {(kind,name): TypeRecord})

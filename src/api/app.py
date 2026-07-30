@@ -44,6 +44,7 @@ from src.db.pool import create_pool
 from src.db.redis import create_redis
 from src.dissemination.brief import build_case_brief
 from src.ingest.harris_foreclosure import demo_fetch, make_harris_foreclosure_watcher
+from src.ontology.catalog import seed_catalog
 from src.ontology.classify import classify
 from src.ontology.intake import intake
 from src.ontology.labels import disambiguate_labels, fetch_label_props, resolve_label
@@ -120,6 +121,10 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         settings = get_settings()
         own = pool is None
         app.state.pool = pool or await create_pool(settings.database_url)
+        # the Type catalog (task #97): schema.py's declared types as graph objects.
+        # ensure_type's keep-prior-on-omission contract makes this safe to run on
+        # every boot — idempotent, never blanks an already-richer Type.
+        await seed_catalog(Actions(app.state.pool))
         # manifests = file helpers + search-engine dorking + osint4all suggest sources
         searches = search_manifests()
         app.state.manifests = {**load_manifests(_HELPERS_DIR), **searches, **suggest_manifests()}

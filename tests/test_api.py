@@ -225,6 +225,67 @@ async def test_merge_candidates_endpoint(client: httpx.AsyncClient, actions: Act
     assert len(r.json()) == 1
 
 
+async def test_lifespan_seeds_the_type_catalog_on_boot(
+    pg_dsn: str, redis_url: str, actions: Actions
+) -> None:
+    """Task #97 workstream 1 shipped `seed_catalog()` but nothing called it on a real
+    boot (Thoth msg 2131, caught live: 0f139b9 deployed with the catalog machinery
+    correct and production sitting at zero Type objects). This proves the FIX, not
+    just the unit — the real ASGI lifespan protocol, driven exactly like uvicorn
+    drives it, against a DB where Type rows have deliberately been wiped.
+
+    The expected count is schema.py's own tuple lengths, not a hardcoded guess — the
+    manifest is the source of truth and this test breaks loudly the day it drifts."""
+    import os
+
+    from src.ontology import schema
+
+    n_expect_object = len(schema._OBJECT_TYPES)
+    n_expect_link = len(schema._LINK_TYPES)
+
+    # unwind exactly what the earlier (actions fixture's own) seed_catalog call wrote
+    # for the Type rows this test is about to delete — every table it inserts into
+    # (src/actions/core.py: assert_property -> outbox/object_events, create_or_find_object
+    # -> object_events), mirroring the FK-reachability discipline conftest.py's own
+    # comment documents for the shared fixture.
+    await actions.pool.execute(
+        "DELETE FROM outbox o2 USING objects o "
+        "WHERE o2.object_id = o.id AND o.type = 'Type'"
+    )
+    await actions.pool.execute(
+        "DELETE FROM assertions a USING objects o "
+        "WHERE a.object_id = o.id AND o.type = 'Type'"
+    )
+    await actions.pool.execute(
+        "DELETE FROM object_events e USING objects o "
+        "WHERE e.object_id = o.id AND o.type = 'Type'"
+    )
+    await actions.pool.execute("DELETE FROM objects WHERE type = 'Type'")
+    n_before = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type = 'Type'")
+    assert n_before == 0
+
+    os.environ["DATABASE_URL"] = pg_dsn
+    os.environ["REDIS_URL"] = redis_url
+    app = create_app()  # own pool: exercises the exact lifespan a real boot runs
+    async with app.router.lifespan_context(app):
+        n_object = await app.state.pool.fetchval(
+            "SELECT count(*) FROM objects o JOIN assertions a ON a.object_id = o.id "
+            "WHERE o.type = 'Type' AND a.name = 'kind' AND a.value = '\"object\"'"
+        )
+        n_link = await app.state.pool.fetchval(
+            "SELECT count(*) FROM objects o JOIN assertions a ON a.object_id = o.id "
+            "WHERE o.type = 'Type' AND a.name = 'kind' AND a.value = '\"link\"'"
+        )
+    assert n_object == n_expect_object
+    assert n_link == n_expect_link
+
+    # idempotent on a second boot (the real restart case) — no duplicates, no error
+    app2 = create_app()
+    async with app2.router.lifespan_context(app2):
+        n2 = await app2.state.pool.fetchval("SELECT count(*) FROM objects WHERE type = 'Type'")
+    assert n2 == n_expect_object + n_expect_link
+
+
 async def test_object_card_title_uses_resolve_label_not_name_only(actions: Actions) -> None:
     """Task #97 workstream 3: _object_card (the watch/subscription card-preview
     endpoint) used to check ONLY the `name` property for its title — a Practice
