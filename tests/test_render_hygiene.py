@@ -71,23 +71,20 @@ _TAG_RE = re.compile(r"</?(?:" + "|".join(_TAGS) + r")\b", re.IGNORECASE)
 # ratchet working, not friction to route around.
 _ALLOWLIST: dict[str, int] = {
     # chrome.py — /desk /mail /fleet /overhead, task #44's own unfinished half (thread
-    # d56e7073). CURRENT-AND-FALLING, 26 render functions as of this ratchet's creation,
-    # verified against the actual tree with the scanner below, TWICE (msg 1914's brief said
-    # "~25" from memory, msg 1921's follow-up restated "25" — both corrected here rather than
-    # trusted, the same discipline that caught this file's own live app.py false-positive).
+    # d56e7073). CURRENT-AND-FALLING, 21 render functions (Sekhmet, task #96 second cut,
+    # 2026-07-30: /canon's own render_composition + its whole _comp_* helper chain retired
+    # — a SECOND generic composition renderer in Python, duplicating osiris.js client-side;
+    # ratchet moved 26 -> 21, verified by this test failing before the number was lowered).
     # Only 3 functions in this file are irreplaceable data (mail_overview, mail_threads,
-    # fleet_data — async, they fetch, they don't render); the 26 render functions retire as
-    # each page moves onto render_composition/the Block vocabulary (src/api/inbox/*) the way
-    # /live-desk and /roadmap just did (commit bb86bbe). /fleet and /canon are the two named
-    # exits still open (Thoth, msg 1938, after Seshat verified both live in /ui): /fleet's
-    # composition is 721 unfolded Agent rows with no liveness signal — neither it nor
-    # fleet-strip reproduces render_fleet's soul-folding by generation, the wake ledger, the
-    # wake budget, the visitor-vs-seated split, or the cross-project view; /canon's route
-    # carries a fixed topic order the raw docs composition lacks. render_fleet and
-    # render_composition retire when those two ports land, not before. chrome.render_composition
-    # is itself a SECOND generic composition renderer, duplicating osiris.js client-side —
-    # counted here as debt, not architecture, and NOT to be extended (it is scheduled to die).
-    "chrome.py": 26,
+    # fleet_data — async, they fetch, they don't render); the remaining render functions
+    # retire as each page moves onto the composition engine/the Block vocabulary
+    # (src/api/inbox/*) the way /live-desk and /roadmap did (commit bb86bbe) and /canon just
+    # did. /fleet is the one named exit still open (Thoth, msg 1938, after Seshat verified it
+    # live in /ui): its composition is 721 unfolded Agent rows with no liveness signal —
+    # neither it nor fleet-strip reproduces render_fleet's soul-folding by generation, the
+    # wake ledger, the wake budget, the visitor-vs-seated split, or the cross-project view.
+    # render_fleet retires when that port lands, not before.
+    "chrome.py": 21,
     # membrane.py — TERMINAL, not ongoing debt: retired (commit 75297cf, "THE INBOX cutover:
     # retire /membrane"), UNROUTED, slated for OUTRIGHT DELETION in wave 3 (Thoth, msg 1921) —
     # kept in the tree only because app.py still imports `_e` from it. Expected to reach 0 and

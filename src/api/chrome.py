@@ -13,7 +13,6 @@ Renderers are PURE (fixture-fed in tests); the routes in app.py feed them the li
 """
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
@@ -130,8 +129,9 @@ setInterval(tick,4000);
 </script>"""
 
 # "docs" (/canon) RETIRED 2026-07-30, task #96 — the route was a pure pass-through to the
-# "docs" composition, which lives in /ui. render_composition and its _comp_* chain are now
-# unreachable from any route and retire with it (held one step, see thread on #96).
+# "docs" composition, which lives in /ui. render_composition and its whole _comp_* chain
+# retired with it (task #96, second cut) — a second generic composition renderer in
+# Python, duplicating osiris.js client-side; no capability lost, a duplicate died.
 _TABS = (("inbox", "/"), ("desk", "/desk"), ("mail", "/mail"), ("fleet", "/fleet"),
          ("overhead", "/overhead"))
 
@@ -730,151 +730,6 @@ def render_fleet(data: dict[str, Any]) -> str:
         for w in data["wakes"]) or '<tr><td class="dim">no wakes yet</td></tr>'
     out.append(f"<h2>wake ledger</h2><table>{wrows}</table>")
     return "".join(out)
-
-
-# ── the generic composition renderer (ruling c5b184cd, thread d56e7073/#44) ────────────────
-# THE READ HALF, FINISHED: mirrors osiris.js's renderResult/renderData EXACTLY (dispatch by
-# `kind`; a dict recurses into nested bands, a list becomes items, a scalar becomes a line;
-# a shape this renderer doesn't expect is rendered AS ITSELF, never discarded or dropped).
-# Zero domain knowledge — this function has never heard of "arc" or "status" or "owner";
-# whatever a composition's op-tree computed, this renders it generically. The ONE thing it
-# knows about depth (not domain): alternate two collapsible styles by nesting level, purely
-# for visual hierarchy, and default-collapse a "(none)" bucket (a structural convention, not
-# a fact about any particular property) — everything else opens.
-
-_COMPOSITION_CAP = 25
-# Task #97 workstream 3 (ruling 52daab71): `statement`/`surface`/`handle` added so a
-# Practice/Superstition/BlindSpot/unclaimed-Agent row leads with its real content
-# instead of falling through to a raw id — the same universal CHAIN tier
-# src.ontology.labels.LABEL_CHAIN declares. NOT a full swap to that chain: this
-# renderer is deliberately domain-agnostic (any composition row, not just typed graph
-# objects — desk_project's own debt/ask dicts have neither `type` nor a matching
-# ObjectType), so there is no RULE tier to apply here the way resolve_label has one.
-# A Tension row (pole_a/pole_b/lean_why, none of which appear here or in the
-# universal chain) still falls to raw id THROUGH THIS RENDERER SPECIFICALLY — a known,
-# narrower gap than before, not a new one; flagged rather than silently left.
-_COMP_SALIENT = ("summary", "name", "title", "label", "subject", "statement", "surface", "handle")
-# "_action" is a PRIVATE key (compositions._table's row_action, ruling c5b184cd, thread
-# d56e7073/#44) — a control this row carries, never a displayed fact; skip it same as id/
-# props/canonical, which are structural too.
-_COMP_SKIP = frozenset({"id", "props", "canonical", "_action", *_COMP_SALIENT})
-
-# The one verb-name -> button-label map this renderer is allowed to know — NOT because it
-# has domain knowledge (it still never calls anything, only labels a button), but because
-# "resolve_thread" as raw button text would be unreadable chrome. Anything not listed here
-# falls back to its own action name verbatim — new registry entries need no renderer change.
-_ACTION_LABELS = {"resolve_thread": "resolve", "assign_thread": "not mine",
-                  "defer_thread": "later", "reclassify_thread": "reclassify",
-                  "settle": "settle"}
-
-
-def _comp_label(item: dict[str, Any]) -> str:
-    """The one salient field to lead with — the same 'pick a summary, don't dump every
-    column' law osiris.js's own timelineList/_pickSummary follows, generalized past objects
-    to any row/dict shape a composition might hand back."""
-    for k in _COMP_SALIENT:
-        v = item.get(k)
-        if v:
-            return str(v)
-    oid = item.get("id")
-    return str(oid) if oid else "—"
-
-
-def _comp_action_button(action: dict[str, Any]) -> str:
-    """One row's declared control (compositions._table's `row_action`) rendered as an
-    actual button — zero domain knowledge past the cosmetic label map above. The click
-    handler (chrome.py's `_ACTIONS` script) POSTs {action, args} to /act verbatim; this
-    function never calls anything, it only describes what to render."""
-    name = str(action.get("action") or "")
-    label = _ACTION_LABELS.get(name, name)
-    args = _e(json.dumps(action.get("args") or {}))
-    return (f'<button data-action="{_e(name)}" data-args="{args}">{_e(label)}</button>')
-
-
-def _comp_item(item: Any) -> str:
-    if not isinstance(item, dict):
-        return f'<div class="debt">{_e(item)}</div>'
-    label = _e(_comp_label(item))
-    extras = ", ".join(f"{_e(k)}={_e(v)}" for k, v in item.items() if v and k not in _COMP_SKIP)
-    action = item.get("_action")
-    button = _comp_action_button(action) if action and action.get("action") else ""
-    return (f'<div class="debt">{label}'
-            + (f' <span class="dim">{extras}</span>' if extras else "")
-            + (f' <span class="verbs">{button}</span>' if button else "") + "</div>")
-
-
-def _comp_items(items: list[Any]) -> str:
-    if not items:
-        return '<p class="dim">—</p>'
-    shown = items[:_COMPOSITION_CAP]
-    rows = "".join(_comp_item(i) for i in shown)
-    more = (f'<p class="dim">+{len(items) - len(shown)} more — narrow the composition '
-            "to see the rest.</p>" if len(items) > len(shown) else "")
-    return rows + more
-
-
-def _comp_count(value: Any) -> int:
-    if isinstance(value, dict):
-        return sum(_comp_count(v) for v in value.values())
-    if isinstance(value, list):
-        return len(value)
-    return 1
-
-
-def _comp_band(title: str, value: Any, depth: int) -> str:
-    """One nested band. A dict recurses (another collapsible level, style alternating by
-    depth for readability only); a list renders as items; anything else is a fact line —
-    same three-way split renderData makes (dicts → recurse, lists → table, scalars → chip)."""
-    if isinstance(value, dict):
-        body = "".join(_comp_band(k, v, depth + 1) for k, v in value.items())
-    elif isinstance(value, list):
-        body = _comp_items(value)
-    else:
-        return f'<div class="debt">{_e(title)}: {_e(value)}</div>'
-    cls = "proj" if depth % 2 == 0 else "band"
-    # "(none)" (group's own convention for a missing property value) is the one generic,
-    # structural reason to default-collapse — never a fact about what the value IS.
-    open_attr = "" if title == "(none)" else " open"
-    return (f'<details class="{cls}"{open_attr}>'
-            f'<summary>{_e(title)} <span class="pill">{_comp_count(value)}</span></summary>'
-            f"{body}</details>")
-
-
-def render_composition(result: dict[str, Any], *, title: str | None = None) -> str:
-    """The generic composition -> chrome-HTML renderer. `result` is exactly what
-    `run_composition`/`run_spec` return ({kind, count, items, ...}) — this function is the
-    piece that was missing; the op-tree and the client-side renderer were already there."""
-    if "error" in result:
-        return f'<p class="dim">{_e(result["error"])}</p>'
-    kind, items = result.get("kind"), result.get("items")
-    # `run_spec`'s own `count` is len(items) — correct for a flat list, but for a nested
-    # "data" dict (sections/group) that counts SECTION KEYS, not the underlying items. The
-    # heading means "how much is here," so a nested result recounts the real leaves.
-    count = _comp_count(items) if kind == "data" and isinstance(items, dict) \
-        else result.get("count", 0)
-    heading = f'<h2>{_e(title)} <span class="pill">{count}</span></h2>' if title else ""
-    if kind == "data" and isinstance(items, dict):
-        return heading + "".join(_comp_band(k, v, 0) for k, v in items.items())
-    if kind in ("objects", "rows") and isinstance(items, list):
-        return heading + _comp_items(items)
-    if kind == "values" and isinstance(items, list):
-        return heading + (
-            f'<ul>{"".join(f"<li>{_e(v)}</li>" for v in items)}</ul>' if items
-            else '<p class="dim">—</p>')
-    return heading + f'<p class="dim">{_e(items)}</p>'
-
-
-# ── /roadmap — RETIRED as a bespoke renderer (ruling c5b184cd, thread d56e7073/#44) ────────
-# The hand-written arc/status/owner band renderer that used to live here is gone; /roadmap
-# now reads compositions.ROADMAP through `render_composition` (above), the generic
-# composition -> chrome-HTML renderer. See app.py's roadmap_page for the route.
-
-
-# ── /canon — render_docs RETIRED (ruling c5b184cd, thread d56e7073/#44) ────────────────────
-# Routed at /canon, not /docs: FastAPI reserves /docs for its own Swagger UI (discovered live
-# when the first route test hit the swagger page instead of this renderer). The nav LABEL
-# stays "docs" (page()'s active-tab match is on the tab name, never the href). /canon now
-# reads compositions.DOCS through render_composition — see app.py's canon_page.
 
 
 # ── /overhead ────────────────────────────────────────────────────────────────────────────

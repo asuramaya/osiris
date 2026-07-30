@@ -6,9 +6,7 @@ from datetime import UTC, datetime
 
 from src.actions.core import Actions
 from src.api.chrome import (
-    _comp_label,
     page,
-    render_composition,
     render_desk,
     render_desk_project,
     render_fleet,
@@ -431,124 +429,14 @@ def test_render_overhead_telemetry_band() -> None:
 
 
 # ── /roadmap — render_roadmap RETIRED (ruling c5b184cd, thread d56e7073/#44) ───────────────
-# /roadmap now reads compositions.ROADMAP through render_composition — its own tests live
-# in test_compositions.py (the composition end to end) and the render_composition section
-# just below (the generic renderer, fixture-fed, same as every other pure renderer here).
+# /roadmap now reads compositions.ROADMAP through the generic composition renderer (osiris.js's
+# table()/renderResult) — its own tests live in test_compositions.py (the composition end to
+# end). chrome.py's own render_composition + _comp_* chain, once the Python-side generic
+# renderer, retired with /canon (task #96, second cut) — its tests retired with it.
 
-# --- render_composition (ruling c5b184cd, thread d56e7073/#44): the generic composition ->
-# chrome-HTML renderer, zero domain knowledge — fed run_composition's own {kind,items} shape.
-
-def test_render_composition_walks_nested_dicts_as_bands() -> None:
-    """A `group`-produced data result (dict of dicts of lists) recurses into nested
-    collapsible bands — exactly what render_roadmap's own arc->status->owner hand-wrote,
-    now generic."""
-    result = {"kind": "data", "count": 2, "items": {
-        "Identity-Succession": {"open": [{"summary": "a duty"}]},
-        "Compaction-Resilience": {"open": [{"summary": "another"}]},
-    }}
-    html = render_composition(result)
-    assert "Identity-Succession" in html and "Compaction-Resilience" in html
-    assert "a duty" in html and "another" in html
-    assert html.count("<details") >= 4  # 2 arcs + 2 statuses, each its own band
-
-
-def test_render_composition_none_bucket_collapses_by_default() -> None:
-    result = {"kind": "data", "count": 1, "items": {"(none)": [{"summary": "untagged"}]}}
-    html = render_composition(result)
-    assert '<details class="proj">' in html  # no `open` attribute — collapsed
-
-
-def test_render_composition_named_bucket_opens_by_default() -> None:
-    result = {"kind": "data", "count": 1, "items": {"real-arc": [{"summary": "x"}]}}
-    html = render_composition(result)
-    assert '<details class="proj" open>' in html
-
-
-def test_comp_label_finds_statement_surface_and_handle() -> None:
-    """Task #97 workstream 3: _COMP_SALIENT gained statement/surface/handle so a
-    Practice/BlindSpot/unclaimed-Agent row leads with its content, not a raw id —
-    chrome.py has no per-type RULE tier (rows here aren't always typed objects), so
-    this only widens the universal fallback, same members as LABEL_CHAIN minus the
-    RULE lookup."""
-    assert _comp_label({"id": "x", "statement": "measure it yourself"}) == "measure it yourself"
-    assert _comp_label({"id": "x", "surface": "mcp-tool-list-refresh"}) == "mcp-tool-list-refresh"
-    assert _comp_label({"id": "x", "handle": "Imhotep"}) == "Imhotep"
-    # summary still leads when present (unchanged ordering for this generic renderer)
-    assert _comp_label({"summary": "s", "statement": "st"}) == "s"
-    assert _comp_label({"id": "x"}) == "x"
-    assert _comp_label({}) == "—"
-
-
-def test_render_composition_rows_and_objects_render_as_items() -> None:
-    rows = render_composition({"kind": "rows", "count": 1,
-                               "items": [{"summary": "a row", "amount": "5"}]})
-    assert "a row" in rows and "amount=5" in rows
-    objects = render_composition({"kind": "objects", "count": 1,
-                                  "items": [{"id": "x", "type": "Thread", "label": "an object"}]})
-    assert "an object" in objects
-
-
-def test_render_composition_values_render_as_a_list() -> None:
-    html = render_composition({"kind": "values", "count": 2, "items": ["US", "UAE"]})
-    assert "<li>US</li>" in html and "<li>UAE</li>" in html
-
-
-def test_render_composition_empty_says_so_not_a_blank_page() -> None:
-    assert "—" in render_composition({"kind": "objects", "count": 0, "items": []})
-    assert "—" in render_composition({"kind": "values", "count": 0, "items": []})
-
-
-def test_render_composition_refuses_honestly() -> None:
-    html = render_composition({"error": "no composition 'ghost'"})
-    assert "no composition" in html
-
-
-def test_render_composition_caps_a_long_item_list() -> None:
-    items = [{"summary": f"item {i}"} for i in range(40)]
-    html = render_composition({"kind": "rows", "count": 40, "items": items})
-    assert "item 0" in html and "item 24" in html and "item 25" not in html
-    assert "+15 more" in html
-
-
-def test_render_composition_a_scalar_leaf_is_a_fact_line_not_dropped() -> None:
-    """The same law renderData follows — a shape this renderer doesn't expect (here, a
-    scalar nested under a dict key) is rendered AS ITSELF, never silently discarded."""
-    result = {"kind": "data", "count": 1, "items": {"totals": {"open": 12}}}
-    html = render_composition(result)
-    assert "open: 12" in html
-
-
-# --- row_action -> a real button (ruling c5b184cd, thread d56e7073/#44, the write leg) ------
-
-def test_render_composition_renders_a_button_for_a_row_action() -> None:
-    result = {"kind": "rows", "count": 1, "items": [
-        {"summary": "a real duty", "_action": {"action": "resolve_thread",
-                                                "args": {"ref": "aaaa1111"}}}]}
-    html = render_composition(result)
-    assert 'data-action="resolve_thread"' in html
-    assert 'data-args="' in html and "aaaa1111" in html
-    assert ">resolve<" in html  # the cosmetic label, not the raw verb name
-
-
-def test_render_composition_action_args_are_html_escaped() -> None:
-    """A summary/arg containing a quote must never break out of the data-args attribute."""
-    result = {"kind": "rows", "count": 1, "items": [
-        {"summary": 'a "quoted" duty', "_action": {"action": "resolve_thread",
-                                                    "args": {"ref": "a's-id"}}}]}
-    html = render_composition(result)
-    assert "&#x27;" in html or "&quot;" in html  # the quote landed escaped, not raw
-
-
-def test_render_composition_no_button_without_an_action() -> None:
-    result = {"kind": "rows", "count": 1, "items": [{"summary": "plain, no control"}]}
-    html = render_composition(result)
-    assert "<button" not in html
-    assert "_action" not in html  # the private key itself never leaks into the extras text
-
-
-# ── /docs — render_docs RETIRED (ruling c5b184cd, thread d56e7073/#44) ─────────────────────
-# /canon now reads compositions.DOCS through render_composition — its own tests live in
-# test_compositions.py (the composition end to end) and the render_composition section above.
+# ── /docs — render_docs RETIRED (ruling c5b184cd, thread d56e7073/#44); /canon (its route)
+# and render_composition (its renderer) both RETIRED (task #96, 2026-07-30) — the composition
+# end-to-end tests live in test_compositions.py.
 
 
 def test_page_shell_has_no_dead_nav_links() -> None:
