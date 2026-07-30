@@ -2866,12 +2866,16 @@ async def rebind_seat(seat: str, new_cwd: str, extract: bool = False,
                       ctx: Context | None = None) -> dict[str, Any]:
     """Move a seat's ANCHOR cwd, preserving identity, lineage, attribution, and mail (Phase 1
     §4.1, ruling `dd47c1da` — the operator's own folder move orphaned alfred; this is the cure).
-    `seat` accepts a claimed name OR a raw agent id. Writes/refreshes `.osiris` in `new_cwd`
-    pinning the seat's DURABLE project label (unchanged by this call — mail and attribution key
-    on it), re-points the WHOLE LINEAGE's durable mount rows at the new path, stamps the
-    move on the Agent's own record, and carries the HARNESS metadata (transcripts, project
-    state) so resume and history survive the move. Mints nothing: no new Agent, no
-    handle/lineage edge is touched. Refuses loudly on an unknown seat.
+    `seat` accepts a claimed name, a raw agent id, OR (thread 3ae57d36) an unclaimed seat's
+    own handle/canonical directly — a seat nobody has ever claim_name'd resolves to NO agent
+    at all, so this now succeeds off the Seat record alone: only `.osiris` + the seat's own
+    `anchor_cwd` get written (no mount rows to repoint, no lineage to stamp — there isn't one
+    yet). Otherwise: writes/refreshes `.osiris` in `new_cwd` pinning the seat's DURABLE
+    project label (unchanged by this call — mail and attribution key on it), re-points the
+    WHOLE LINEAGE's durable mount rows at the new path, stamps the move on the Agent's own
+    record, and carries the HARNESS metadata (transcripts, project state) so resume and
+    history survive the move. Mints nothing: no new Agent, no handle/lineage edge is touched.
+    Refuses loudly on a name that resolves to neither an agent nor a seat.
 
     `extract=True` is the SEAT-OFFICES move (ruling ed5f5ce2): the seat leaves a SHARED cwd
     (e.g. into its ~/.osiris/seats/<handle>/ office) taking ONLY its own lineage's

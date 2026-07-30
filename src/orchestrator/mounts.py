@@ -975,10 +975,23 @@ async def rebind_seat(
         caller): a rebind is a mind's act on another seat, so the record must say whose hand
         moved it, never pretend the seat moved itself.
 
-    Refuses LOUDLY (an error dict, nothing written) when `seat_or_agent` resolves to nobody —
-    an unknown seat is never a silent no-op."""
+    THE SEAT-DIRECT PATH (thread 3ae57d36, the GRAVE RULE's other half): a seat nobody has
+    ever claim_name'd resolves to NO agent at all — 'grantprobe' matches neither a claimed
+    handle nor an Agent canonical — so (a)'s existing resolution used to refuse outright, and
+    even when some agent id DID resolve (a dead one-off body with no `holds` link), the seat-
+    anchor write at the end silently no-op'd behind `held_seat`'s graph-link lookup while the
+    receipt still read like success. An explicit SEAT identifier — its own canonical, or its
+    `handle` property — is checked directly whenever agent resolution can't supply one, and a
+    hit there IS the grave rule firing for a seat instead of an agent: (b)-(e) are all agent-
+    lineage concepts (mounts, harness, an `anchor_moved` stamp) with nothing to act on for a
+    seat that was never occupied, so this path writes ONLY `.osiris` + the Seat's own
+    `anchor_cwd`, using the seat's OWN derived house rather than an agent's.
+
+    Refuses LOUDLY (an error dict, nothing written) when `seat_or_agent` resolves to nobody at
+    all — neither an agent nor a seat — an unknown seat is never a silent no-op."""
     seat_or_agent = (seat_or_agent or "").strip()
     from src.orchestrator.agents import _generation, house_of, resolve_handle
+    from src.orchestrator.seats import derive_house
 
     agent_id = await resolve_handle(actions, seat_or_agent) if seat_or_agent else None
     if agent_id is None and seat_or_agent:
@@ -988,9 +1001,38 @@ async def rebind_seat(
             "SELECT 1 FROM objects WHERE canonical=$1 AND type='Agent' AND status='active'",
             seat_or_agent)
         agent_id = seat_or_agent if exists else None
-    if agent_id is None:
+    direct_seat_id: str | None = None
+    if seat_or_agent:
+        direct_seat_id = await actions.pool.fetchval(
+            "SELECT o.canonical FROM objects o WHERE o.type='Seat' AND o.status='active' "
+            "AND (o.canonical=$1 OR EXISTS (SELECT 1 FROM current_assertions a "
+            "WHERE a.object_id=o.id AND a.name='handle' AND a.value #>> '{}' = $1))",
+            seat_or_agent)
+    if agent_id is None and direct_seat_id is None:
         return {"error": f"no such seat or agent: {seat_or_agent!r} — unknown to the graph; "
                          "a rebind never silently no-ops on a name nobody holds"}
+    if agent_id is None:
+        # PURE SEAT PATH: no claimed occupant, so no agent lineage to repoint at all — the
+        # seat's own record is the whole ask. direct_seat_id is guaranteed set here (the
+        # refusal above already ruled out both being None).
+        assert direct_seat_id is not None
+        label = await derive_house(actions.pool, direct_seat_id)
+        if not label:
+            return {"error": f"{direct_seat_id} has no derivable house to preserve — nothing "
+                             "to anchor a project label against"}
+        osiris_path = _write_osiris_file(new_cwd, label)
+        now = datetime.now(UTC)
+        soid = await actions.create_or_find_object("Seat", direct_seat_id,
+                                                   actor or direct_seat_id)
+        await actions.assert_property(soid, "anchor_cwd", new_cwd, actor or direct_seat_id, now,
+                                      _CONF, evidence_class=_EC)
+        return {
+            "seat": direct_seat_id, "project": label, "new_cwd": new_cwd,
+            "osiris_written": osiris_path,
+            "note": f"{direct_seat_id}'s anchor moved to {new_cwd} — no claimed agent for "
+                    "this seat, so only the seat's own record was written (nothing to "
+                    "repoint in agent_mounts/harness for a lineage that never existed)",
+        }
     label = await house_of(actions.pool, agent_id)
     if not label:
         return {"error": f"{agent_id} has no durable project label to preserve — it has never "
@@ -1045,11 +1087,15 @@ async def rebind_seat(
                                         claude_json=claude_json, only_sids=only_sids)
                if old_cwd and old_cwd != new_cwd else {})
     now = datetime.now(UTC)
-    # the Seat OBJECT's anchor follows — the daemon summons at the office (5cef856b)
+    # the Seat OBJECT's anchor follows — the daemon summons at the office (5cef856b). A LIVE
+    # `holds` link is the common case, but it is not the only source of truth: `direct_seat_id`
+    # (computed above from `seat_or_agent` itself) covers an agent that resolved fine yet holds
+    # no seat at all — thread 3ae57d36's lying receipt, where this used to just skip in silence.
     from src.orchestrator.seats import held_seat
     bound = await held_seat(actions.pool, agent_id)
-    if bound:
-        soid = await actions.create_or_find_object("Seat", bound["seat_id"],
+    seat_to_anchor = bound["seat_id"] if bound else direct_seat_id
+    if seat_to_anchor:
+        soid = await actions.create_or_find_object("Seat", seat_to_anchor,
                                                    actor or agent_id)
         await actions.assert_property(soid, "anchor_cwd", new_cwd, actor or agent_id, now,
                                       _CONF, evidence_class=_EC)
@@ -1060,10 +1106,15 @@ async def rebind_seat(
     return {
         "agent": agent_id, "project": label, "old_cwd": old_cwd, "new_cwd": new_cwd,
         "mount_rows_updated": rows_updated, "osiris_written": osiris_path,
+        "seat": seat_to_anchor,
+        **({"seat_anchor_skipped": True} if not seat_to_anchor else {}),
         **({"old_cwd_evidence": old_cwd_evidence} if old_cwd_evidence else {}),
         **({"co_resident_rows_repointed": co_repointed} if co_repointed else {}),
         **({"harness": harness} if harness else {}),
         "note": f"{label}'s anchor moved to {new_cwd} — identity, lineage, attribution, and "
                 "mail all key on the label, untouched by this move; the harness metadata "
-                "(transcripts, project state) moved with it",
+                "(transcripts, project state) moved with it"
+                + ("" if seat_to_anchor else " — NO SEAT ANCHORED: this agent holds no seat "
+                   "and seat_or_agent didn't name one directly either, so the graph still "
+                   "has no office on record for it"),
     }

@@ -118,6 +118,32 @@ async def test_rebind_of_a_raw_agent_id_works(actions: Actions, tmp_path: Path) 
     assert row is not None and row["cwd"] == str(b_dir)
 
 
+async def test_rebind_writes_the_seat_anchor_for_a_never_claimed_seat(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thread 3ae57d36's lying receipt: a seat nobody has ever claim_name'd resolves to NO
+    agent at all (grantprobe's real shape — its one-off occupant never claimed the name), so
+    the old code's early resolution refused outright before ever reaching the seat-anchor
+    write. Calling by the seat's OWN handle must now succeed on the seat record alone."""
+    from src.orchestrator.seats import ensure_seat
+
+    seat = await ensure_seat(actions, house="anchorhouse", handle="Orphaned",
+                             source="test")
+    new = str(tmp_path / "orphaned-office")
+
+    out = await rebind_seat(actions, seat_or_agent="Orphaned", new_cwd=new,
+                            actor="agent:test", projects_root=tmp_path / "projects",
+                            claude_json=tmp_path / "cj.json")
+
+    assert "error" not in out
+    assert out["seat"] == seat["seat_id"]
+    anchor = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='anchor_cwd' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", seat["seat_id"])
+    assert anchor == new
+
+
 async def test_rebind_refuses_an_unknown_seat_loudly(actions: Actions, tmp_path: Path) -> None:
     target = tmp_path / "nowhere"
     out = await rebind_seat(actions, seat_or_agent="NobodyHome", new_cwd=str(target))
