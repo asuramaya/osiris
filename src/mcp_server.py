@@ -763,7 +763,7 @@ async def graph_lint(stale_days: int = 14, check: str | None = None, limit: int 
 
 @mcp.tool()
 async def triage(mode: str = "census", object_type: str | None = None, status: str = "active",
-                 stale_days: int = 30, limit: int | None = None,
+                 stale_days: int = 30, cohort_min: int = 3, limit: int | None = None,
                  offset: int = 0) -> list[dict[str, Any]]:
     """Judge the object set itself — the reusable primitive behind eight ad-hoc SQL scripts
     a manager once ran through a shell by hand (task #98). TWO MODES, `mode`:
@@ -775,12 +775,15 @@ async def triage(mode: str = "census", object_type: str | None = None, status: s
 
     'buckets' — `object_type` required (a note names every real type when it's missing or
     unknown). One row per object of that type+`status` (default "active"), each carrying
-    exactly one `bucket`: `duplicate_suspect` (a same-type+status object shares its
-    basename), `orphan` (zero live links), `hub` (live links at/above the type's own 95th
-    percentile, floor 10), `stale` (linked but untouched past `stale_days`, default 30),
-    `thin` (1-2 live links), or `normal`. Every object in scope is listed, not only flagged
-    ones — this doubles as a plain browse. `limit`/`offset` (default 200/0, capped 2000)
-    page it; `census` already carries the true count per type, so this never needs to.
+    exactly one `bucket`, by priority: `duplicate_suspect` (a same-type+status object
+    shares its basename), `bulk_import` (`cohort_min` or more objects — default 3 — born
+    the same calendar second with an IDENTICAL live-link fingerprint, same types AND same
+    counts per type, not just the same total — one script's insert loop, machine-detected),
+    `orphan` (zero live links), `hub` (live links at/above the type's own 95th percentile,
+    floor 10), `stale` (linked but untouched past `stale_days`, default 30), `thin` (1-2
+    live links), or `normal`. Every object in scope is listed, not only flagged ones — this
+    doubles as a plain browse. `limit`/`offset` (default 200/0, capped 2000) page it;
+    `census` already carries the true count per type, so this never needs to.
 
     Read-only, no writes — findings are testimony for a mind's own triage verbs, same rule
     graph_lint runs on."""
@@ -792,6 +795,8 @@ async def triage(mode: str = "census", object_type: str | None = None, status: s
         args["status"] = status
     if stale_days:
         args["stale_days"] = stale_days
+    if cohort_min:
+        args["cohort_min"] = cohort_min
     if limit is not None:
         args["limit"] = limit
     if offset:

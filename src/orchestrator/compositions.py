@@ -102,6 +102,7 @@ from typing import Any
 
 import asyncpg
 
+from src.ontology.labels import LABEL_CHAIN, disambiguate_labels, resolve_label
 from src.ontology.resolution import screen_network
 from src.orchestrator.agents import _generation
 from src.orchestrator.coinvest import coinvestment_ties
@@ -291,6 +292,37 @@ async def _hide_foreign_reflections(
     return [h for h in hits if h.get("type") != "Reflection" or h["id"] in ok]
 
 
+async def _attach_labels(pool: asyncpg.Pool, hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Task #97 workstream 3 (ruling 52daab71): search hits carry `field`/`snippet` —
+    WHERE the query matched — but never what to CALL the object, which is exactly the
+    reported bug (a hex hash where a sentence belongs, e.g. `practice:b1eb7520e783`).
+    One batched fetch of each hit's LABEL_CHAIN-candidate properties (the same winning-
+    value tie-break as everywhere else: confidence DESC, observed_at DESC), resolved
+    through the single canonical `resolve_label`, then `disambiguate_labels` across
+    THIS result set so two hits that would otherwise truncate identically stay
+    distinguishable. Adds `label`/`label_source` (resolve_label's own fields) and
+    `display_label` (disambiguated, truncated) to each hit; never raises — a hit with
+    nothing resolvable just keeps its canonical, same as before this existed."""
+    if not hits:
+        return hits
+    ids = [uuid.UUID(h["id"]) for h in hits]
+    rows = await pool.fetch(
+        "SELECT DISTINCT ON (object_id, name) object_id, name, value #>> '{}' AS v "
+        "FROM current_assertions WHERE object_id = ANY($1::uuid[]) AND name = ANY($2::text[]) "
+        "ORDER BY object_id, name, confidence DESC, observed_at DESC",
+        ids, list(LABEL_CHAIN))
+    props_by_id: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        props_by_id.setdefault(str(r["object_id"]), {})[r["name"]] = r["v"]
+    for h in hits:
+        res = resolve_label(h["type"], props_by_id.get(h["id"], {}), h["canonical"])
+        h["label"], h["label_source"] = res.label, res.source
+    disp = disambiguate_labels([(h["id"], h["label"], h["canonical"]) for h in hits])
+    for h in hits:
+        h["display_label"] = disp[h["id"]]
+    return hits
+
+
 _ID_TOKEN_OUTER = re.compile(r"[0-9a-f][0-9a-f-]{5,35}")
 _ID_TOKEN_HEX = re.compile(r"[0-9a-f]{6,32}")
 
@@ -355,7 +387,10 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
             # the id door is still a read lens — knowing a reflection's id is not a key
             id_hits = await _hide_foreign_reflections(pool, id_hits, caller)
     if len(words) == 1 and id_hits:
-        # the WHOLE query is one id token — answer directly, the legacy shape unchanged
+        # the WHOLE query is one id token — answer directly, the legacy shape unchanged.
+        # This is the MOST likely path to hit the reported bug (someone pastes a bare
+        # hash to search it) — label it same as the merged-hits path below.
+        id_hits = await _attach_labels(pool, id_hits)
         await pool.execute(
             "INSERT INTO search_log (query, caller, hits, top_rank, relaxed) "
             "VALUES ($1,$2,$3,1.0,false)", q, caller, len(id_hits))
@@ -448,6 +483,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     # strict, relaxed, trigram and semantic alike (id_hits were already filtered when
     # computed, so re-filtering here is a no-op for them and real work for the rest)
     hits = await _hide_foreign_reflections(pool, hits, caller)
+    hits = await _attach_labels(pool, hits)
     semantic = any(h["via"] in ("semantic", "both") for h in hits)
     # a superseded decision must not read as live testimony (the supersedes verb,
     # dd04d7dd): one batched lookup marks such hits — still findable, honestly flagged
@@ -2479,7 +2515,8 @@ assertion_stats AS (
 """
 
 _TRIAGE_BUCKET_PRIORITY = {
-    "duplicate_suspect": 0, "orphan": 1, "hub": 2, "stale": 3, "thin": 4, "normal": 5,
+    "duplicate_suspect": 0, "bulk_import": 1, "orphan": 2, "hub": 3, "stale": 4, "thin": 5,
+    "normal": 6,
 }
 
 
@@ -2499,19 +2536,25 @@ async def _fn_triage(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
 
     BUCKETS — requires `args.object_type` (a note naming every real type is returned when
     it's missing or unknown, never a silent empty page); optional `args.status` (default
-    "active"), `args.stale_days` (default 30, clamped 1-365), `args.limit`/`args.offset`
-    (default 200/0, capped 2000 — the no-silent-caps law: CENSUS already carries the true
-    `n` per type, this is the browse/page surface, not the count of record). One row per
-    object, ONE bucket each by priority (an object can meet more than one definition; the
-    most actionable wins): `duplicate_suspect` (another object of the SAME type+status
-    shares its basename — the canonical's last path segment, or the text after its first
-    ':', case-folded; catches File-path collisions and scheme-prefix near-dupes alike) >
-    `orphan` (zero live links) > `hub` (live link count at or above the type's OWN 95th
-    percentile, floor 10 — self-normalizing per type rather than one global number, since
-    e.g. SoftwareProject's own median can run past 80 while sparser types sit near 1) >
-    `stale` (linked, but untouched longer than `stale_days`) > `thin` (1-2 live links) >
-    `normal` (none of the above — BUCKETS lists every object in scope, not only flagged
-    ones, so it doubles as a plain browse of the type).
+    "active"), `args.stale_days` (default 30, clamped 1-365), `args.cohort_min` (default 3,
+    clamped 2-50 — see `bulk_import` below), `args.limit`/`args.offset` (default 200/0,
+    capped 2000 — the no-silent-caps law: CENSUS already carries the true `n` per type,
+    this is the browse/page surface, not the count of record). One row per object, ONE
+    bucket each by priority (an object can meet more than one definition; the most
+    actionable wins): `duplicate_suspect` (another object of the SAME type+status shares
+    its basename — the canonical's last path segment, or the text after its first ':',
+    case-folded; catches File-path collisions and scheme-prefix near-dupes alike) >
+    `bulk_import` (task #98 follow-up, Thoth msg 2065 — `args.cohort_min` or more objects
+    born in the same calendar second, sharing an IDENTICAL live-link fingerprint — same
+    types AND same counts per type, not just the same total; the machine-detectable
+    signature of one script's insert loop, distinct from every other bucket here since it
+    names WHY an object looks the way it does rather than just how it's currently
+    connected) > `orphan` (zero live links) > `hub` (live link count at or above the
+    type's OWN 95th percentile, floor 10 — self-normalizing per type rather than one
+    global number, since e.g. SoftwareProject's own median can run past 80 while sparser
+    types sit near 1) > `stale` (linked, but untouched longer than `stale_days`) > `thin`
+    (1-2 live links) > `normal` (none of the above — BUCKETS lists every object in scope,
+    not only flagged ones, so it doubles as a plain browse of the type).
 
     Read-only, no writes, same rule graph_lint runs on (a triage that healed would be a
     loop pathology — findings are testimony for a mind's own triage verbs, not an
@@ -2559,6 +2602,7 @@ async def _triage_buckets(pool: asyncpg.Pool, args: dict[str, Any]) -> Any:
         return [{"note": note, "valid_types": ", ".join(r["type"] for r in types)}]
     status = str(args.get("status") or "active").strip()
     stale_days = max(1, min(int(args.get("stale_days") or 30), 365))
+    cohort_min = max(2, min(int(args.get("cohort_min") or 3), 50))
     raw_limit = args.get("limit")
     limit = max(1, min(int(raw_limit), 2000)) if raw_limit is not None else 200
     offset = max(0, int(args.get("offset") or 0))
@@ -2588,10 +2632,46 @@ async def _triage_buckets(pool: asyncpg.Pool, args: dict[str, Any]) -> Any:
         ),
         basename_counts AS (
             SELECT basename, count(*) AS n FROM per_object GROUP BY basename
+        ),
+        -- BULK IMPORT (task #98 follow-up, Thoth msg 2065): a per-object FINGERPRINT of its
+        -- live link shape — "dir:type:count" pairs, e.g. "in:informs:17" — so two objects
+        -- with the SAME shape (not just the same total count) can be told apart from two
+        -- objects that coincidentally have equal link counts of different kinds.
+        link_shape_counts AS (
+            SELECT o.id AS obj_id,
+                   (CASE WHEN l.from_id=o.id THEN 'out' ELSE 'in' END || ':' || l.type)
+                       AS dir_type,
+                   count(*) AS cnt
+            FROM objects o
+            JOIN links l ON (l.from_id=o.id OR l.to_id=o.id)
+                AND (l.valid_until IS NULL OR l.valid_until > now())
+            WHERE o.type = $1 AND o.status = $2
+            GROUP BY o.id, dir_type
+        ),
+        link_shapes AS (
+            SELECT obj_id, string_agg(dir_type || ':' || cnt, ',' ORDER BY dir_type)
+                       AS fingerprint
+            FROM link_shape_counts GROUP BY obj_id
+        ),
+        -- the cohort key: born in the SAME calendar second (a single script's insert loop,
+        -- not a coincidence spread across a session) AND an identical link-shape fingerprint.
+        -- `cohort_min` objects or more sharing both is the bulk-import signature; a zero-link
+        -- object has no fingerprint to cohort on and is never counted here (that's `orphan`'s
+        -- job, not this one's).
+        cohorts AS (
+            SELECT p.id AS obj_id, date_trunc('second', p.created_at) AS born_bucket,
+                   ls2.fingerprint
+            FROM per_object p JOIN link_shapes ls2 ON ls2.obj_id = p.id
+        ),
+        cohort_counts AS (
+            SELECT born_bucket, fingerprint, count(*) AS n
+            FROM cohorts GROUP BY born_bucket, fingerprint
+            HAVING count(*) >= $4
         )
         SELECT p.id, p.canonical, p.created_at AS born, p.last_touch, p.link_count,
                CASE
                  WHEN bc.n > 1 THEN 'duplicate_suspect'
+                 WHEN cc.n IS NOT NULL THEN 'bulk_import'
                  WHEN p.link_count = 0 THEN 'orphan'
                  WHEN p.link_count >= GREATEST(10, s.p95_links) THEN 'hub'
                  WHEN p.last_touch < now() - make_interval(days => $3) THEN 'stale'
@@ -2601,8 +2681,11 @@ async def _triage_buckets(pool: asyncpg.Pool, args: dict[str, Any]) -> Any:
         FROM per_object p
         JOIN basename_counts bc ON bc.basename = p.basename
         CROSS JOIN stats s
+        LEFT JOIN cohorts co ON co.obj_id = p.id
+        LEFT JOIN cohort_counts cc
+            ON cc.born_bucket = co.born_bucket AND cc.fingerprint = co.fingerprint
         ORDER BY p.canonical
-    """, object_type, status, stale_days)
+    """, object_type, status, stale_days, cohort_min)
     bucketed = sorted(rows, key=lambda r: (_TRIAGE_BUCKET_PRIORITY[r["bucket"]], r["canonical"]))
     page = bucketed[offset:offset + limit]
     listed = [

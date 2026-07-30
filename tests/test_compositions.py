@@ -1696,6 +1696,67 @@ async def test_triage_buckets_flags_duplicate_suspect_on_basename_collision(
     assert by_canon["repo:unique-thing"] == "orphan"  # distinct basename, zero links
 
 
+async def test_triage_buckets_flags_bulk_import_cohort(actions: Actions) -> None:
+    ids = []
+    for i in range(3):
+        oid = await actions.create_or_find_object("Organization", f"org:bulk{i}", "test")
+        p = await actions.create_or_find_object("Person", f"person:bulk-link{i}", "test")
+        await actions.create_link(oid, p, "owns", "test", NOW, 0.9)
+        ids.append(oid)
+    # pin all three to the SAME calendar second — a real bulk import's actual signature,
+    # not left to luck that the test happens to execute fast enough to land in one second.
+    for oid in ids:
+        await actions.pool.execute("UPDATE objects SET created_at=$1 WHERE id=$2", NOW, oid)
+
+    rows = await _fn_triage(actions.pool, None,
+                            {"mode": "buckets", "object_type": "Organization",
+                             "stale_days": 999_999})
+    by_canon = {r["canonical"]: r["bucket"] for r in rows}
+    assert by_canon["org:bulk0"] == "bulk_import"
+    assert by_canon["org:bulk1"] == "bulk_import"
+    assert by_canon["org:bulk2"] == "bulk_import"
+
+
+async def test_triage_buckets_does_not_flag_a_pair_below_the_default_cohort_min(
+    actions: Actions,
+) -> None:
+    ids = []
+    for i in range(2):
+        oid = await actions.create_or_find_object("Organization", f"org:pair{i}", "test")
+        p = await actions.create_or_find_object("Person", f"person:pair-link{i}", "test")
+        await actions.create_link(oid, p, "owns", "test", NOW, 0.9)
+        ids.append(oid)
+    for oid in ids:
+        await actions.pool.execute("UPDATE objects SET created_at=$1 WHERE id=$2", NOW, oid)
+
+    rows = await _fn_triage(actions.pool, None,
+                            {"mode": "buckets", "object_type": "Organization",
+                             "stale_days": 999_999})
+    by_canon = {r["canonical"]: r["bucket"] for r in rows}
+    assert by_canon["org:pair0"] == "thin"  # cohort_min defaults to 3 — a pair isn't enough
+    assert by_canon["org:pair1"] == "thin"
+
+
+async def test_triage_buckets_cohort_min_arg_lowers_the_bulk_import_threshold(
+    actions: Actions,
+) -> None:
+    ids = []
+    for i in range(2):
+        oid = await actions.create_or_find_object("Organization", f"org:pair{i}", "test")
+        p = await actions.create_or_find_object("Person", f"person:pair-link{i}", "test")
+        await actions.create_link(oid, p, "owns", "test", NOW, 0.9)
+        ids.append(oid)
+    for oid in ids:
+        await actions.pool.execute("UPDATE objects SET created_at=$1 WHERE id=$2", NOW, oid)
+
+    rows = await _fn_triage(actions.pool, None,
+                            {"mode": "buckets", "object_type": "Organization",
+                             "stale_days": 999_999, "cohort_min": 2})
+    by_canon = {r["canonical"]: r["bucket"] for r in rows}
+    assert by_canon["org:pair0"] == "bulk_import"
+    assert by_canon["org:pair1"] == "bulk_import"
+
+
 async def test_triage_buckets_names_valid_types_when_object_type_missing_or_unknown(
     actions: Actions,
 ) -> None:
