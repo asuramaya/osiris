@@ -100,6 +100,98 @@ async def _resolve_commit(pool: asyncpg.Pool, sha: str) -> uuid.UUID | None:
     )
 
 
+# task #101's BACKFILL source, distinct from live capture's `_SOURCE` ("session") — the
+# same trust tier (SELF_DECLARED, below), just a provenance-traceable marker that this
+# particular decided_in edge was minted by the backward pass, not at the decision's own
+# birth.
+_BACKFILL_SOURCE = "decided_in-backfill"
+
+
+# TASK #101's BACKFILL (Thoth's measured harvest, DM 2253, thread 32e2d5cb): the citation
+# scan above runs ONLY inside record_decision, at write time — a decision that cites a
+# commit the gitlog ingest hasn't reached YET resolves to nothing, and nothing ever
+# retries it (the named gap that fired on #101's own first production use). Ruling
+# c5ab0dcb's Mode B (OMISSION): the resolution was PREMATURE, not wrong — a race, not an
+# ambiguity — so re-running the identical matcher later, once the referent has actually
+# arrived, succeeds not because it got smarter but because the world caught up. That is
+# what makes a plain backward pass safe: mechanical, idempotent, and re-runnable without
+# limit — the OTHER starvation mode (duplication, Mode A) does NOT share this property and
+# stays operator-gated under #108; this function never touches it.
+async def backfill_decided_in(
+    actions: Actions, *, dry_run: bool = False,
+) -> dict[str, Any]:
+    """A backward pass over every active Decision, minting the `decided_in` edges the live
+    path (`record_decision`, above) only ever mints going FORWARD, at record time. Reuses
+    `_cited_commit_shas`/`_resolve_commit` unchanged — same regex, same prefix match, same
+    silent-skip-on-miss discipline — run backward instead of forward, so a citation gets a
+    second chance once its commit has since been ingested.
+
+    Each edge is minted through its own `create_link` call, OUTSIDE any enclosing
+    transaction (unlike `record_decision`'s single atomic block) — deliberately: over
+    hundreds of Decisions, one giant transaction would hold a lock the whole pass and turn
+    any single unexpected error into a full rollback of edges that were each independently
+    correct. `create_link` already wraps itself in its own transaction (`Actions._tx`), so
+    a mid-pass death leaves every edge minted so far intact — exactly what makes a re-run
+    safe: already-linked pairs are skipped (below), never re-minted.
+
+    `dry_run=True` (the default) counts what WOULD mint without writing anything —
+    `scripts/backfill_decided_in.py` defaults to this, `--apply` flips it, matching this
+    codebase's existing backfill convention (`backfill_seat_bindings.py`).
+
+    Graded SELF_DECLARED, same as the live path (`_EC`) — this is not a NEW inference over
+    the prose (that would be DERIVED, the miner's tier): it is the exact same deterministic
+    extraction the ORIGINAL decider's own self-declared citation already licensed, delayed
+    only by timing. `source` is `_BACKFILL_SOURCE`, distinct from live capture's "session",
+    so provenance can tell a backfilled edge from one minted at the decision's own birth,
+    without changing its trust tier.
+
+    Returns `{"scanned": N, "minted": N, "already_had": N, "skipped": [...]}` — `skipped`
+    NAMES every citation that resolved to nothing (Thoth's hard requirement, DM 2253: a
+    backfill that reports a mint count and stays silent about what it could not resolve
+    repeats this house's named instrument-dishonesty bug). A skip here means the cited
+    commit has never been gitlog-ingested at all (a typo, or a repo the fleet doesn't
+    track) — the backward pass has no scan-order effect on that (unlike the forward path's
+    genuine race), so a skip today stays a skip on every future re-run unless that exact
+    commit is later ingested."""
+    rows = await actions.pool.fetch(
+        "SELECT o.id, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS summary, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='rationale' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS rationale, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='protocol' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS protocol "
+        "FROM objects o WHERE o.type='Decision' AND o.status='active' "
+        "AND o.merged_into IS NULL"
+    )
+    observed = datetime.now(UTC)
+    minted = 0
+    already_had = 0
+    skipped: list[dict[str, str]] = []
+    for row in rows:
+        for sha in _cited_commit_shas(row["summary"], row["rationale"], row["protocol"]):
+            commit_id = await _resolve_commit(actions.pool, sha)
+            if commit_id is None:
+                skipped.append({"decision": str(row["id"]), "sha": sha})
+                continue
+            exists = await actions.pool.fetchval(
+                "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='decided_in'",
+                row["id"], commit_id)
+            if exists:
+                already_had += 1
+                continue
+            minted += 1
+            if not dry_run:
+                await actions.create_link(row["id"], commit_id, "decided_in",
+                                          _BACKFILL_SOURCE, observed, _CONF,
+                                          evidence_class=_EC)
+    return {"scanned": len(rows), "minted": minted, "already_had": already_had,
+            "skipped": skipped}
+
+
 # TASK #107 (John XVI of redmonth, cross-house find): `link_repo` find-or-CREATED a
 # SoftwareProject from ANY caller-supplied `repo` string, with zero validation — pass
 # "ballgem" and it resolves; pass "/home/asuramaya/code/ballgem" and it silently mints a

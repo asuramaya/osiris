@@ -15,6 +15,7 @@ from src.actions.core import Actions
 from src.ingest.mined import consolidate_memory
 from src.mcp_server import _project_briefing
 from src.orchestrator.capture import (
+    backfill_decided_in,
     find_near_duplicate_decision,
     find_near_duplicate_open_thread,
     link_repo,
@@ -1660,6 +1661,112 @@ async def test_record_decision_never_mistakes_a_decision_short_id_for_a_commit(
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE from_id=$1 AND type='decided_in'", d)
     assert n == 0
+
+
+async def test_backfill_decided_in_mints_what_the_live_path_missed(actions: Actions) -> None:
+    """Task #101's named gap, closed: a decision citing a commit BEFORE gitlog reaches it
+    mints nothing at write time (identical to test_record_decision_skips_a_sha_with_no_
+    matching_commit) — the backfill, run AFTER the commit finally lands, mints the edge
+    the live path could never have minted (Mode B: the resolution was premature, not
+    wrong)."""
+    d = await record_decision(actions, "A ruling citing a not-yet-ingested commit",
+                              rationale="See commit fadedcafe123 for detail.",
+                              source="agent:test-i")
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='decided_in'", d)
+    assert n == 0  # the live path's skip, unchanged
+
+    c = await actions.create_or_find_object("Commit", "commit:fadedcafe123", "git")
+    out = await backfill_decided_in(actions)
+    assert out["minted"] == 1
+    assert out["skipped"] == []
+    edges = await actions.pool.fetch(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='decided_in'", d)
+    assert [e["to_id"] for e in edges] == [c]
+
+
+async def test_backfill_decided_in_is_idempotent(actions: Actions) -> None:
+    d = await record_decision(actions, "Another citation, ingested later",
+                              rationale="Commit beefc0ffee00 has the detail.",
+                              source="agent:test-i")
+    await actions.create_or_find_object("Commit", "commit:beefc0ffee00", "git")
+    first = await backfill_decided_in(actions)
+    assert first["minted"] == 1
+    second = await backfill_decided_in(actions)
+    assert second["minted"] == 0
+    assert second["already_had"] == 1
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='decided_in'", d)
+    assert n == 1
+
+
+async def test_backfill_decided_in_does_not_recount_a_live_mint(actions: Actions) -> None:
+    """A decision whose commit WAS already ingested at write time gets its edge from the
+    live path (record_decision) — the backfill must recognize that edge as already_had,
+    never mint a second one or claim credit for what it didn't do."""
+    await actions.create_or_find_object("Commit", "commit:0ddc0ffee000", "git")
+    d = await record_decision(actions, "A citation resolved live, no gap here",
+                              rationale="Landed as commit 0ddc0ff.", source="agent:test-i")
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='decided_in'", d)
+    assert n == 1  # the live path already minted it
+
+    out = await backfill_decided_in(actions)
+    assert out["minted"] == 0
+    assert out["already_had"] == 1
+    n2 = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='decided_in'", d)
+    assert n2 == 1
+
+
+async def test_backfill_decided_in_reports_unresolvable_citations_by_name(
+        actions: Actions) -> None:
+    """Thoth's hard requirement (DM 2253): a skip is a FINDING, not silence — it names the
+    exact decision and sha that never resolved, because the commit was never ingested at
+    all (a permanent skip, not a timing artifact a later run would fix)."""
+    d = await record_decision(actions, "Cites a commit that will never be ingested",
+                              rationale="See commit 1234567890ab.", source="agent:test-i")
+    out = await backfill_decided_in(actions)
+    assert out["skipped"] == [{"decision": str(d), "sha": "1234567890ab"}]
+    assert out["minted"] == 0
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='decided_in'", d)
+    assert n == 0
+
+
+async def test_backfill_decided_in_dry_run_writes_nothing(actions: Actions) -> None:
+    d = await record_decision(actions, "A dry-run probe citation",
+                              rationale="Commit facefeed0001, once ingested.",
+                              source="agent:test-i")
+    await actions.create_or_find_object("Commit", "commit:facefeed0001", "git")
+    out = await backfill_decided_in(actions, dry_run=True)
+    assert out["minted"] == 1  # counts what WOULD mint
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='decided_in'", d)
+    assert n == 0  # but writes nothing
+
+    applied = await backfill_decided_in(actions)  # apply=True path
+    assert applied["minted"] == 1
+    n2 = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='decided_in'", d)
+    assert n2 == 1
+
+
+async def test_backfill_decided_in_scans_only_active_unmerged_decisions(
+        actions: Actions) -> None:
+    """A retired/merged Decision's own citation is not this pass's business — its content,
+    if it matters, lives under whatever object it merged into."""
+    d = await record_decision(actions, "A decision about to be retired",
+                              rationale="Commit deadbeef0001 landed it.",
+                              source="agent:test-i")
+    await actions.pool.execute("UPDATE objects SET status='retired' WHERE id=$1", d)
+    await actions.create_or_find_object("Commit", "commit:deadbeef0001", "git")
+    out = await backfill_decided_in(actions)
+    for skip in out["skipped"]:
+        assert skip["decision"] != str(d)
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='decided_in'", d)
+    assert n == 0  # retired — never touched by the backward pass
 
 
 async def test_record_decision_protocol_makes_a_ruling_rerunnable(actions: Actions) -> None:
