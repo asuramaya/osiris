@@ -142,6 +142,49 @@ async def test_establish_office_refuses_the_unknown(
     assert "never invents" in out["error"]
 
 
+async def test_establish_office_builds_for_a_never_claimed_seat(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thread 236d3940 (mirroring 3ae57d36's rebind_seat fix): a seat minted by
+    mint_seat/ensure_seat but never claim_name'd by any agent (grantprobe's real shape) used
+    to refuse outright here — agent resolution found nobody, and the ceremony never checked
+    the Seat record directly. Calling by the seat's OWN handle must now build a full office
+    off the seat alone, with no Agent object involved anywhere in this test."""
+    from src.orchestrator.seats import ensure_seat
+
+    seat = await ensure_seat(actions, house="anchorhouse", handle="Orphaned", source="test")
+
+    out = await establish_office(
+        actions, seat_or_agent="Orphaned", actor="agent:test",
+        office_root=tmp_path / "seats", projects_root=tmp_path / "projects",
+        claude_json=tmp_path / "cj.json")
+
+    assert "error" not in out
+    assert out["seat"] == seat["seat_id"]
+    assert out["handle"] == "Orphaned"
+    assert out["house"] == "anchorhouse"
+    assert out["office_deed"].startswith("n/a")
+    office = tmp_path / "seats" / "orphaned"
+    assert out["office"] == str(office)
+    orders = (office / "CLAUDE.md").read_text()
+    assert f"durable identity `{seat['seat_id']}`" in orders
+    assert "never formally declared" in orders          # no governs links: nobody to declare
+    assert (office / ".osiris").read_text().startswith('project = "anchorhouse"')
+    assert out["charter_file"] == "written"
+    anchor = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='anchor_cwd' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", seat["seat_id"])
+    assert anchor == str(office)
+
+    # idempotent, same guarantee as the agent-lineage path
+    again = await establish_office(
+        actions, seat_or_agent="Orphaned", actor="agent:test",
+        office_root=tmp_path / "seats", projects_root=tmp_path / "projects",
+        claude_json=tmp_path / "cj.json")
+    assert again["standing_orders"].startswith("left in place")
+
+
 async def test_establish_office_renders_peer_addendum_when_peered(
     actions: Actions, tmp_path: Path,
 ) -> None:

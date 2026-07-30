@@ -138,6 +138,87 @@ async def _lineage_charter(pool: asyncpg.Pool, agent_id: str) -> list[str]:
     return sorted(r["canonical"].removeprefix("repo:") for r in rows)
 
 
+async def _establish_pure_seat_office(
+    actions: Actions, *, seat_id: str, actor: str | None,
+    office_root: Path | None, projects_root: Path | None, claude_json: Path | None,
+) -> dict[str, Any]:
+    """The office ceremony for a seat with NO Agent lineage at all (thread 236d3940) — every
+    fact comes off the Seat record alone, since there is no claimed occupant to resolve a
+    handle/house/charter/deed through. `seat_facts` already derives house the same way the
+    agent-lineage path does (`derive_house`, ruling ff6148b0); charter reads through the
+    seat's occupant ONLY if it has ever had one (`seat_occupancy`'s `holder` — usually None
+    for a seat this ceremony is building for); `file_office_deed` is skipped outright — it
+    is Agent-only by construction (handshake.py), and there is nothing to deed until an
+    actual agent launches and claims this seat."""
+    from src.orchestrator.seats import peer_of_seat, seat_facts, seat_occupancy
+
+    facts = await seat_facts(actions.pool, seat_id)
+    handle = facts["handle"]
+    if not handle:
+        return {"error": f"{seat_id} has no handle on record — an office is named for its "
+                         "seat's handle, and this one has none"}
+    house = facts["house"]
+    if not house:
+        return {"error": f"{seat_id} has no derivable house — nothing to pin at an office"}
+    root = office_root or _DEFAULT_OFFICE_ROOT
+    office = root / handle.lower()
+    office.mkdir(parents=True, exist_ok=True)
+    seat_line = f" — durable identity `{seat_id}`."
+    occ = await seat_occupancy(actions.pool, seat_id)
+    holder = occ.get("holder")
+    repos = await _lineage_charter(actions.pool, holder) if holder else []
+    charter_block = (
+        "You govern: " + ", ".join(f"`{r}`" for r in repos) + "." if repos else
+        "Your charter was never formally declared — it lives only in prose. First act: "
+        "`charter(repos=[...])` naming the repos you actually govern. A house is what a "
+        "seat GOVERNS, not where it sits.")
+    peer_addendum = "\n"
+    peer_seat = await peer_of_seat(actions.pool, seat_id)
+    if peer_seat is not None:
+        peer_handle = await actions.pool.fetchval(
+            "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+            "ON a.object_id=o.id AND a.name='handle' WHERE o.canonical=$1 "
+            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", peer_seat)
+        peer_addendum = _peer_addendum(peer_seat, peer_handle)
+    orders = office / "CLAUDE.md"
+    if orders.exists():
+        orders_state = "left in place — the office already has standing orders"
+    else:
+        from src.orchestrator.boot_compiler import (
+            compile_managed_body,
+            template_version,
+            wrap_managed,
+        )
+
+        body = await compile_managed_body(
+            actions, seat_id=seat_id, handle=handle, house=house, office=str(office),
+            seat_line=seat_line, charter_block=charter_block, peer_block=peer_addendum)
+        orders.write_text(wrap_managed(body, template_version()))
+        orders_state = "written"
+    charter_file = office / "charter.md"
+    if charter_file.exists():
+        charter_file_state = "left in place — the seat's own live state, never overwritten"
+    else:
+        charter_file.write_text(_CHARTER_TEMPLATE.format(handle=handle))
+        charter_file_state = "written"
+    rebind = await rebind_seat(
+        actions, seat_or_agent=seat_id, new_cwd=str(office), actor=actor,
+        projects_root=projects_root, claude_json=claude_json, extract=True)
+    return {
+        "office": str(office), "handle": handle, "house": house,
+        "office_deed": "n/a — no claimed occupant yet to deed an office to",
+        "seat": seat_id,
+        "charter": repos or "UNDECLARED — the standing orders instruct the seat to declare",
+        "standing_orders": orders_state,
+        "charter_file": charter_file_state,
+        "rebind": rebind,
+        "launch": f"cd {office} && claude   (or claude --resume there)",
+        "note": f"{handle}'s office stands at {office} — no agent has ever claimed this "
+                "seat, so this ceremony ran off the Seat record alone; the first launch at "
+                "this office is what claims it",
+    }
+
+
 async def establish_office(
     actions: Actions, *, seat_or_agent: str, actor: str | None = None,
     office_root: Path | None = None, projects_root: Path | None = None,
@@ -147,7 +228,19 @@ async def establish_office(
     (never clobbering — an occupied office's orders may be hand-tuned), then
     `rebind_seat(extract=True)` into ~/.osiris/seats/<handle>/. Refuses loudly on an
     unknown seat and on an ANONYMOUS lineage (claim_name first — an office is named for
-    its seat). Idempotent: re-running converges on the same office."""
+    its seat). Idempotent: re-running converges on the same office.
+
+    THE PURE SEAT PATH (thread 236d3940, mirroring rebind_seat's 3ae57d36 fix): a seat
+    minted by mint_seat/ensure_seat but never claim_name'd by any agent (grantprobe's real
+    shape) used to resolve to NO agent at all here — 'grantprobe' matches neither a claimed
+    handle nor an Agent canonical — so this refused outright before an office could ever be
+    built for the house's next never-yet-launched worker. An explicit SEAT identifier (its
+    own canonical, or its `handle` property) is now checked directly whenever agent
+    resolution supplies nothing, and a hit there builds the office off the Seat record
+    alone: `seat_facts` supplies handle/house (house already DERIVED there), charter is read
+    through the seat's occupant if it has ever had one (usually none), and `file_office_deed`
+    is skipped entirely (it is Agent-only by construction — nothing to deed an office to
+    until someone actually claims this seat by launching in it)."""
     from src.orchestrator.agents import house_of, resolve_handle
     from src.orchestrator.seats import held_seat
 
@@ -158,9 +251,23 @@ async def establish_office(
             "SELECT 1 FROM objects WHERE canonical=$1 AND type='Agent' AND status='active'",
             seat_or_agent)
         agent_id = seat_or_agent if exists else None
-    if agent_id is None:
+    direct_seat_id: str | None = None
+    if seat_or_agent:
+        direct_seat_id = await actions.pool.fetchval(
+            "SELECT o.canonical FROM objects o WHERE o.type='Seat' AND o.status='active' "
+            "AND (o.canonical=$1 OR EXISTS (SELECT 1 FROM current_assertions a "
+            "WHERE a.object_id=o.id AND a.name='handle' AND a.value #>> '{}' = $1))",
+            seat_or_agent)
+    if agent_id is None and direct_seat_id is None:
         return {"error": f"no such seat or agent: {seat_or_agent!r} — an office ceremony "
                          "never invents its occupant"}
+    if agent_id is None:
+        # direct_seat_id is guaranteed set here (the refusal above already ruled out both
+        # being None) — mirrors rebind_seat's own PURE SEAT PATH assert exactly.
+        assert direct_seat_id is not None
+        return await _establish_pure_seat_office(
+            actions, seat_id=direct_seat_id, actor=actor, office_root=office_root,
+            projects_root=projects_root, claude_json=claude_json)
     handle = await _handle_of(actions.pool, agent_id)
     if not handle:
         return {"error": f"{agent_id} has never claimed a name — an office is named for its "
