@@ -80,8 +80,8 @@ _RESET_TABLES = (
     "collection_jobs", "console_state", "cookie_leases", "dev_pulses", "handoffs",
     "harness_telemetry", "harness_telemetry_files", "harness_turns", "helper_cache",
     "links", "llm_usage", "merge_candidates", "message_recipients", "object_events",
-    "outbox", "pit_watch_alarms", "search_log", "search_vectors", "sweep_ledger",
-    "triggers", "watermarks",
+    "outbox", "pit_watch_alarms", "resource_leases", "search_log", "search_vectors",
+    "sweep_ledger", "triggers", "watermarks",
     # these four must come LAST, in this order — each is the PARENT side of an
     # internal FK from a table above it in this tuple (alerts->compositions,
     # handoffs->helper_runs, harness_turns->harness_sessions,
