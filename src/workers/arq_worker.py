@@ -566,6 +566,25 @@ async def pit_watch_heartbeat(ctx: dict[str, Any]) -> int:
     return report["escalated"]
 
 
+async def fleet_reconcile_heartbeat(ctx: dict[str, Any]) -> int:
+    """Task #59 phase 2's scheduled leg — a thin cron shim, same shape as trigger_mail /
+    pit_watch_heartbeat: the flag gate (osiris_fleet_reconcile_enabled) and the acting
+    logic both live in fleet_reconcile.reconcile_scheduled_tick, never here, so a test can
+    exercise the real gate without touching arq. A DB hiccup logs, never sinks the cron."""
+    from src.orchestrator.fleet_reconcile import reconcile_scheduled_tick
+
+    actions: Actions = ctx["cascade"].actions
+    try:
+        report = await reconcile_scheduled_tick(actions)
+    except Exception as exc:  # a DB hiccup must not kill the cron
+        _log.warning("fleet reconcile heartbeat failed: %r", exc)
+        return 0
+    acted = len(report.get("folded") or []) + len(report.get("dropped") or [])
+    if acted:
+        _log.info("fleet reconcile heartbeat: %s", report)
+    return acted
+
+
 def watched(fn: Any, *, every: int) -> Any:
     """THE SEAM WHERE A JOB CANNOT LIE ABOUT ITS OWN HEALTH.
 
@@ -695,6 +714,11 @@ class WorkerSettings:
         # enough consecutive sightings — a no-op unless osiris_pit_watch_enabled.
         cron(watched(pit_watch_heartbeat, every=300), minute=set(range(0, 60, 5)),
              second={30}, run_at_startup=True),
+        # task #59's reaper: bulk-fold/roll-up/drop the reconcile tray's high-confidence
+        # rows on a schedule — a no-op unless osiris_fleet_reconcile_enabled (the kill
+        # switch), same cadence class as reap_orphans (every 15 min, not urgent cleanup).
+        cron(watched(fleet_reconcile_heartbeat, every=900), minute={4, 19, 34, 49},
+             second={0}, timeout=600, run_at_startup=True),
     ]
     on_startup = startup
     on_shutdown = shutdown

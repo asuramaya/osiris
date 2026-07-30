@@ -41,11 +41,20 @@ to every row — never a bucket that just says "trust me":
                             never this module's business to guess at).
 
 ZERO FALSE DROPS is the bar (Thoth's own words: "a false drop here deletes a real agent's
-registration and there is no undo in the UI"). This module never drops, folds, or retires
-anything — reconcile_dry_run() is a REPORT. The execution half (composing fold_agent /
-resolve_fold_candidate for buckets 1+2, and whatever verb bucket 3 needs) is a SEPARATE,
-explicitly-reviewed build, on the far side of Thoth reading this report against real data —
-the same two-phase discipline folds.py already proved.
+registration and there is no undo in the UI"). `reconcile_dry_run()` never drops, folds, or
+retires anything — it is a REPORT, full stop.
+
+PHASE 2 — `reconcile_execute()` (task #59 phase 2, Thoth's gate DM 2042) — is the acting
+half, built only after Thoth read phase 1's live dry-run output against real data (the same
+two-phase discipline folds.py already proved: propose, then a SEPARATE, explicitly-gated
+act). It composes the SAME primitives this module has always named — fold_agent /
+resolve_fold_candidate for buckets 1+2, mounts.drop_dead_project_mount (row-scoped, never
+agent-id-wide) for bucket 3 — and does nothing to bucket 4, ever. DRY RUN IS ITS OWN DEFAULT
+TOO (`execute=False`, unfold_agent's own convention): it returns the exact plan without
+writing anything unless called with `execute=True`. And even once merged and deployed, the
+SCHEDULED leg (arq_worker.fleet_reconcile_heartbeat) stays inert behind its own kill switch
+(`osiris_fleet_reconcile_enabled`, default False) — flipping that flag is a second signature
+a human gives separately from approving the diff, never a side effect of a deploy.
 """
 from __future__ import annotations
 
@@ -54,6 +63,8 @@ from typing import Any
 
 import asyncpg
 
+from src.actions.core import Actions
+from src.config.settings import Settings, get_settings
 from src.orchestrator.folds import find_agent_fold_candidates
 
 # the confidence bar find_agent_fold_candidates already draws for itself, reused here rather
@@ -81,7 +92,8 @@ async def _dead_project_mounts(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     stub's old cwd). Read-only join against objects.status, which retire_project already
     set — this reuses that verdict rather than inventing a second one."""
     rows = await pool.fetch(
-        "SELECT m.agent_id, m.project, m.cwd, m.last_seen, p.status AS project_status "
+        "SELECT m.agent_id, m.project, m.cwd, m.job_dir, m.last_seen, "
+        "       p.status AS project_status "
         "FROM agent_mounts m "
         "JOIN objects p ON p.type='SoftwareProject' AND p.canonical = 'repo:' || m.project "
         "WHERE p.status <> 'active' "
@@ -92,6 +104,7 @@ async def _dead_project_mounts(pool: asyncpg.Pool) -> list[dict[str, Any]]:
             "agent_id": r["agent_id"],
             "project": r["project"],
             "cwd": r["cwd"],
+            "job_dir": r["job_dir"],
             "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None,
             "bucket": "drop_ephemeral_test_cwd",
             "rule": f"project {r['project']!r} is SoftwareProject status={r['project_status']!r} "
@@ -164,3 +177,117 @@ async def reconcile_dry_run(
         "note": "REPORT ONLY — nothing folded, dropped, or retired. Every row above names "
                 "its own bucket and the rule that put it there.",
     }
+
+
+async def reconcile_execute(
+    actions: Actions, *, actor: str, projects_root: Path | None = None,
+    jobs_home: Path | None = None, execute: bool = False,
+) -> dict[str, Any]:
+    """THE ACTING HALF (task #59 phase 2, Thoth's gate DM 2042). DRY RUN IS THE DEFAULT
+    (`execute=False`, `unfold_agent`'s own convention, folds.py): returns the exact plan —
+    which candidates would be folded, which mount rows would be dropped, how many rows sit
+    in leave_for_human untouched — without writing anything. `execute=True` performs it.
+
+    Re-reads the tray itself via `reconcile_dry_run` (never trusts a caller-supplied stale
+    report) — the plan and the act must see the same instant, not a report gathered a query
+    or a deploy ago.
+
+    bulk_fold_swarm + rollup_office_remount: `resolve_fold_candidate(decision='merged')`
+    per candidate — the SAME estate-carrying fold folds.py already proves (mail, mount
+    rows, thread ownership all move with it), never a bare kernel merge.
+
+    drop_ephemeral_test_cwd: `mounts.drop_dead_project_mount` per row, scoped by
+    (job_dir, project) — a row-scoped delete, never agent-id-wide (`release_mounts`' own
+    lesson, the g40-v/vi false-succession incident).
+
+    leave_for_human: NEVER acted on, by construction — not filtered out, not deferred,
+    simply absent from every write this function performs. Thoth's own words: "a reaper
+    that never punts is a reaper that will eventually eat something real."
+
+    A single row's fold or drop failing (a race, an already-resolved candidate) is caught
+    and reported inline rather than aborting the batch — ZERO FALSE DROPS means every row
+    that WAS acted on must be a true positive, not that one failure may silently swallow
+    the rest of a correct plan.
+
+    POST-ACT VERIFICATION (`execute=True` only): re-reads the tray a SECOND time after
+    acting and reports before/after counts — proof the acted rows actually left the tray,
+    never a trusted return value from the fold/drop calls alone."""
+    from src.orchestrator.folds import resolve_fold_candidate
+    from src.orchestrator.mounts import drop_dead_project_mount
+
+    report = await reconcile_dry_run(actions.pool, projects_root=projects_root,
+                                     jobs_home=jobs_home)
+    would_fold = [
+        {"candidate_id": row["candidate_id"], "dupe": row["dupe"], "into": row["into"],
+         "bucket": bucket}
+        for bucket in ("bulk_fold_swarm", "rollup_office_remount")
+        for row in report["buckets"][bucket]
+    ]
+    would_drop = [
+        {"agent_id": row["agent_id"], "project": row["project"], "job_dir": row["job_dir"]}
+        for row in report["buckets"]["drop_ephemeral_test_cwd"]
+    ]
+    plan: dict[str, Any] = {
+        "would_fold": would_fold, "would_drop": would_drop,
+        "left_for_human": len(report["buckets"]["leave_for_human"]),
+        "execute": execute,
+    }
+    if not execute:
+        plan["note"] = "PLAN ONLY — call with execute=True to write. Nothing touched."
+        return plan
+
+    folded, drops = [], []
+    for item in would_fold:
+        try:
+            out = await resolve_fold_candidate(
+                actions, candidate_id=item["candidate_id"], decision="merged", actor=actor)
+        except Exception as exc:  # one bad row must not abort a correct plan
+            out = {"error": f"{type(exc).__name__}: {exc}"}
+        folded.append({**item, "result": out})
+    for item in would_drop:
+        try:
+            n = await drop_dead_project_mount(
+                actions.pool, job_dir=item["job_dir"], project=item["project"])
+        except Exception as exc:
+            drops.append({**item, "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        drops.append({**item, "rows_deleted": n})
+
+    after = await reconcile_dry_run(actions.pool, projects_root=projects_root,
+                                    jobs_home=jobs_home)
+    plan.update({
+        "folded": folded, "dropped": drops,
+        "before_counts": report["counts"], "after_counts": after["counts"],
+        "note": "EXECUTED — before/after counts prove the acted rows left the tray; "
+                "leave_for_human rows were never touched.",
+    })
+    return plan
+
+
+async def reconcile_scheduled_tick(
+    actions: Actions, *, settings: Settings | None = None,
+    projects_root: Path | None = None, jobs_home: Path | None = None,
+) -> dict[str, Any]:
+    """THE SCHEDULED LEG's own tick — `arq_worker.fleet_reconcile_heartbeat` calls this
+    unconditionally, the same thin-shim shape `trigger_mail`/`pit_watch_heartbeat` already
+    use (real logic and the flag gate live in the orchestrator tick, not the cron wrapper).
+
+    OFF unless `osiris_fleet_reconcile_enabled` — the kill switch (Thoth's gate DM 2042):
+    the code ships inert, and flipping this flag is a SECOND signature a human gives
+    separately from approving the diff, never a side effect of deploying it. When on,
+    composes `reconcile_execute(execute=True)` — the exact same acting verb reachable by
+    hand, so the schedule and a human's own manual call are provably the same path, never
+    two implementations that could drift.
+
+    `settings` is the injected test seam (`trigger_mail_tick`'s own convention, `st =
+    settings or get_settings()`) so a test can flip the flag without touching the real
+    environment or monkeypatching `get_settings`."""
+    st = settings or get_settings()
+    if not st.osiris_fleet_reconcile_enabled:
+        return {"enabled": False, "folded": [], "dropped": [],
+                "note": "the reaper's scheduled leg is dark "
+                        "(osiris_fleet_reconcile_enabled=0)"}
+    out = await reconcile_execute(actions, actor="cron:fleet_reconcile_heartbeat",
+                                  execute=True, projects_root=projects_root,
+                                  jobs_home=jobs_home)
+    return {"enabled": True, **out}

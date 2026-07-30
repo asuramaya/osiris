@@ -262,6 +262,15 @@ class Settings(BaseSettings):
     # it from ever firing twice on the same message.
     osiris_pit_watch_enabled: bool = False
     osiris_pit_watch_escalate_at: int = 3
+    # THE FLEET RECONCILE REAPER (task #59 phase 2, Thoth's gate DM 2042) — OFF by default,
+    # the same law as osiris_trigger_enabled: a mechanism that WRITES to the graph on a
+    # schedule earns its own kill switch, never inherits one. When on, a tick runs
+    # fleet_reconcile.reconcile_execute(execute=True) — the exact same acting verb reachable
+    # by hand, composing fold_agent/resolve_fold_candidate for the two bulk-act buckets and
+    # a row-scoped mount drop for dead-project residue. leave_for_human rows are never
+    # touched, by construction. Flipping this flag is a SECOND signature on top of a reviewed
+    # diff — the code ships inert; a human decides separately when it may actually act.
+    osiris_fleet_reconcile_enabled: bool = False
     # THE FROZEN LANE (wake(), thread 9f566244 / handoff 8f005905) — OFF by default, and this
     # QUARANTINE LIFTED (ruling 85fba696, operator 2026-07-29, superseding 482c3d0f). This was
     # dark because the house read the Claude daemon reply lane as a harness-level RCE (decisions

@@ -820,3 +820,47 @@ async def test_sweep_ghost_doors_grace_shields_the_newborn(actions: Actions) -> 
     released = await mounts.sweep_ghost_doors(p, body_cwds=set(), body_projects=set())
     assert released == 0
     assert await p.fetchval("SELECT count(*) FROM agent_mounts") == 1
+
+
+async def test_drop_dead_project_mount_releases_the_matched_row(actions: Actions) -> None:
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/deadstub1", agent_id="agent:deadstub1",
+                            project="deadstub", cwd="/tmp/deadstub", model=None,
+                            session_key="whisper:deadstub1")
+    n = await mounts.drop_dead_project_mount(p, job_dir="/x/jobs/deadstub1",
+                                             project="deadstub")
+    assert n == 1
+    assert await p.fetchval(
+        "SELECT count(*) FROM agent_mounts WHERE job_dir='/x/jobs/deadstub1'") == 0
+
+
+async def test_drop_dead_project_mount_never_touches_a_sibling_row(actions: Actions) -> None:
+    """Row-scoped by job_dir, never agent-id-wide (release_mounts' own lesson) — a second,
+    LIVE row for the same agent under a different project must survive untouched."""
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/split0001", agent_id="agent:split0001",
+                            project="deadstub", cwd="/tmp/deadstub", model=None,
+                            session_key="whisper:split0001")
+    await mounts.save_mount(p, job_dir="/x/jobs/split0002", agent_id="agent:split0001",
+                            project="livehouse", cwd="/repo/live", model=None,
+                            session_key="whisper:split0002")
+    n = await mounts.drop_dead_project_mount(p, job_dir="/x/jobs/split0001",
+                                             project="deadstub")
+    assert n == 1
+    left = {r["job_dir"] for r in await p.fetch("SELECT job_dir FROM agent_mounts")}
+    assert left == {"/x/jobs/split0002"}
+
+
+async def test_drop_dead_project_mount_refuses_a_project_mismatch(actions: Actions) -> None:
+    """The WHERE re-checks project at delete time — a row that moved to a different
+    (live) project between a sweep's report and this call is left untouched, never
+    dropped on a stale belief about what it held."""
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/moved0001", agent_id="agent:moved0001",
+                            project="livehouse", cwd="/repo/live", model=None,
+                            session_key="whisper:moved0001")
+    n = await mounts.drop_dead_project_mount(p, job_dir="/x/jobs/moved0001",
+                                             project="deadstub")
+    assert n == 0
+    assert await p.fetchval(
+        "SELECT count(*) FROM agent_mounts WHERE job_dir='/x/jobs/moved0001'") == 1

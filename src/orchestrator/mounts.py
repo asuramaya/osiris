@@ -148,6 +148,25 @@ async def release_session_mounts(
     return int(n or 0)
 
 
+async def drop_dead_project_mount(pool: asyncpg.Pool, *, job_dir: str, project: str) -> int:
+    """Release ONE mount row that is residue against an already-retired project (task #59
+    phase 2, fleet_reconcile.py's drop_ephemeral_test_cwd bucket). Row-scoped by `job_dir`
+    — the durable per-row key (`agent_mounts.job_dir` is the table's own ON CONFLICT target)
+    — never agent-id-wide: `release_mounts`' own lesson, the g40-v/vi false-succession
+    incident, where an agent-id-wide DELETE killed a LIVE sibling session's row. The same
+    doctrine `release_session_mounts` already keeps: a row is an ADDRESS, and only the
+    addressed door's own death may release it.
+
+    Re-checks `project` at delete time rather than trusting the caller's earlier read — a
+    row whose project changed between a sweep's report and this call (re-mounted into a
+    live project in the interim) no longer matches and is left untouched; the WHERE clause
+    is the safety, not a prior belief about what the row held. Returns rows released (0 or
+    1 — job_dir is unique)."""
+    tag = await pool.execute(
+        "DELETE FROM agent_mounts WHERE job_dir=$1 AND project=$2", job_dir, project)
+    return int(tag.rsplit(" ", 1)[-1])
+
+
 async def find_session_row(
     db: Any, session_id: str,
 ) -> Any | None:

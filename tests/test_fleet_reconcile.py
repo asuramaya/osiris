@@ -8,7 +8,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from src.actions.core import Actions
-from src.orchestrator.fleet_reconcile import reconcile_dry_run
+from src.config.settings import Settings
+from src.orchestrator.fleet_reconcile import (
+    reconcile_dry_run,
+    reconcile_execute,
+    reconcile_scheduled_tick,
+)
 from src.orchestrator.mounts import save_mount
 
 
@@ -205,3 +210,155 @@ async def test_empty_fleet_reports_all_zero_counts_and_never_errors(actions: Act
         "bulk_fold_swarm", "rollup_office_remount", "drop_ephemeral_test_cwd",
         "leave_for_human",
     }
+
+
+# ── reconcile_execute (task #59 phase 2) ────────────────────────────────────────────────
+
+
+async def test_execute_default_is_plan_only_and_writes_nothing(
+    actions: Actions, tmp_path,
+) -> None:
+    p = actions.pool
+    root = tmp_path / "projects"
+    jobs = tmp_path / "jobs"
+    slug = root / "-w-swarm-repo"
+    slug.mkdir(parents=True)
+    (slug / "rea1baaa-full-session.jsonl").write_text("{}\n")
+    await _mk_agent(actions, "agent:a11a5000")
+    await _mk_agent(actions, "agent:rea1baaa")
+    await save_mount(p, job_dir=str(jobs / "a11a5000"), agent_id="agent:a11a5000",
+                     project="reconhouse", cwd="/w/swarm-repo", model=None,
+                     session_key="whisper:a11a5000")
+    await save_mount(p, job_dir=str(jobs / "rea1baaa"), agent_id="agent:rea1baaa",
+                     project="reconhouse", cwd="/w/swarm-repo", model=None,
+                     session_key="sid:conn")
+
+    plan = await reconcile_execute(actions, actor="agent:test-actor",
+                                   projects_root=root, jobs_home=jobs)
+
+    assert plan["execute"] is False
+    assert any(f["dupe"] == "agent:a11a5000" for f in plan["would_fold"])
+    assert "folded" not in plan and "dropped" not in plan
+    st = await p.fetchval("SELECT status FROM objects WHERE canonical='agent:a11a5000'")
+    assert st == "active"  # unfolded — a plan writes nothing
+
+
+async def test_execute_true_folds_the_high_confidence_view_alias(
+    actions: Actions, tmp_path,
+) -> None:
+    p = actions.pool
+    root = tmp_path / "projects"
+    jobs = tmp_path / "jobs"
+    slug = root / "-w-swarm-repo"
+    slug.mkdir(parents=True)
+    (slug / "rea1baaa-full-session.jsonl").write_text("{}\n")
+    await _mk_agent(actions, "agent:a11a5000")
+    await _mk_agent(actions, "agent:rea1baaa")
+    await save_mount(p, job_dir=str(jobs / "a11a5000"), agent_id="agent:a11a5000",
+                     project="reconhouse", cwd="/w/swarm-repo", model=None,
+                     session_key="whisper:a11a5000")
+    await save_mount(p, job_dir=str(jobs / "rea1baaa"), agent_id="agent:rea1baaa",
+                     project="reconhouse", cwd="/w/swarm-repo", model=None,
+                     session_key="sid:conn")
+
+    out = await reconcile_execute(actions, actor="agent:test-actor", execute=True,
+                                  projects_root=root, jobs_home=jobs)
+
+    assert len(out["folded"]) == 1
+    assert out["folded"][0]["result"].get("folded") == "agent:a11a5000"
+    st = await p.fetchval("SELECT status FROM objects WHERE canonical='agent:a11a5000'")
+    assert st == "merged"
+    assert out["before_counts"]["bulk_fold_swarm"] == 1
+    assert out["after_counts"]["bulk_fold_swarm"] == 0  # proof it left the tray, not trust
+
+
+async def test_execute_true_drops_the_dead_project_mount_leaves_the_agent_alone(
+    actions: Actions,
+) -> None:
+    p = actions.pool
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:deadstub",
+                                                "repo:deadstub")
+    await actions.set_status(proj, "retired", "test: stub cull", "agent:test-actor")
+    await save_mount(p, job_dir="/tmp/jobs/ghost0001", agent_id="agent:ghost0001",
+                     project="deadstub", cwd="/tmp/deadstub", model=None,
+                     session_key="whisper:ghost0001")
+
+    out = await reconcile_execute(actions, actor="agent:test-actor", execute=True)
+
+    assert len(out["dropped"]) == 1
+    assert out["dropped"][0]["rows_deleted"] == 1
+    assert await p.fetchval(
+        "SELECT count(*) FROM agent_mounts WHERE agent_id='agent:ghost0001'") == 0
+    # a drop releases the RESIDUE ROW only — no Agent object was ever minted here, and
+    # this proves reconcile_execute never mints or touches one on its own
+    st = await p.fetchval("SELECT status FROM objects WHERE canonical='agent:ghost0001'")
+    assert st is None
+
+
+async def test_execute_true_never_touches_leave_for_human(
+    actions: Actions, tmp_path,
+) -> None:
+    p = actions.pool
+    root = tmp_path / "projects"
+    jobs = tmp_path / "jobs"
+    slug = root / "-w-seatless-repo"
+    slug.mkdir(parents=True)
+    (slug / "an0nseat-full.jsonl").write_text("{}\n")
+    await _mk_agent(actions, "agent:an0nseat", project="seatlesshouse")
+    await save_mount(p, job_dir=str(jobs / "an0nseat"), agent_id="agent:an0nseat",
+                     project="seatlesshouse", cwd="/w/seatless-repo", model=None,
+                     session_key="whisper:an0nseat")
+
+    out = await reconcile_execute(actions, actor="agent:test-actor", execute=True,
+                                  projects_root=root, jobs_home=jobs)
+
+    assert out["left_for_human"] >= 1
+    assert out["folded"] == []
+    assert out["dropped"] == []
+    st = await p.fetchval("SELECT status FROM objects WHERE canonical='agent:an0nseat'")
+    assert st == "active"
+    assert await p.fetchval(
+        "SELECT count(*) FROM agent_mounts WHERE agent_id='agent:an0nseat'") == 1
+
+
+# ── reconcile_scheduled_tick (the cron leg's own kill switch) ──────────────────────────
+
+
+async def test_scheduled_tick_is_dark_by_default_and_writes_nothing(
+    actions: Actions,
+) -> None:
+    """osiris_fleet_reconcile_enabled defaults False (Settings()'s own default, matching
+    the field declared in settings.py) — the scheduled leg is inert out of the box, no
+    override needed to prove it."""
+    p = actions.pool
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:deadstub",
+                                                "repo:deadstub")
+    await actions.set_status(proj, "retired", "test: stub cull", "agent:test-actor")
+    await save_mount(p, job_dir="/tmp/jobs/ghost0001", agent_id="agent:ghost0001",
+                     project="deadstub", cwd="/tmp/deadstub", model=None,
+                     session_key="whisper:ghost0001")
+
+    out = await reconcile_scheduled_tick(actions, settings=Settings())
+
+    assert out["enabled"] is False
+    assert out["folded"] == [] and out["dropped"] == []
+    assert await p.fetchval(
+        "SELECT count(*) FROM agent_mounts WHERE agent_id='agent:ghost0001'") == 1
+
+
+async def test_scheduled_tick_acts_once_the_flag_is_flipped_on(actions: Actions) -> None:
+    p = actions.pool
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:deadstub",
+                                                "repo:deadstub")
+    await actions.set_status(proj, "retired", "test: stub cull", "agent:test-actor")
+    await save_mount(p, job_dir="/tmp/jobs/ghost0001", agent_id="agent:ghost0001",
+                     project="deadstub", cwd="/tmp/deadstub", model=None,
+                     session_key="whisper:ghost0001")
+
+    out = await reconcile_scheduled_tick(
+        actions, settings=Settings(osiris_fleet_reconcile_enabled=True))
+
+    assert out["enabled"] is True
+    assert len(out["dropped"]) == 1
+    assert await p.fetchval(
+        "SELECT count(*) FROM agent_mounts WHERE agent_id='agent:ghost0001'") == 0
