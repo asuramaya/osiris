@@ -1464,6 +1464,69 @@ async def test_mint_stamps_the_parallel_pulse(actions: Actions) -> None:
         "WHERE object_id=$1 AND name='predecessor_last_seen'", hoid2) == 1
 
 
+async def test_mint_heir_never_lands_on_a_healed_canonical(actions: Actions) -> None:
+    """THE GRAVE-GUARD SEES ASSERTIONS TOO (msg 2325, live case: John/d5c671c1-xv): a heal
+    (husk-heal / phantom-fold) never flips objects.status away from 'active' — compensating
+    events only, constitution 3 — so the numeral-walk's old status-only check silently
+    reused a healed canonical, dragging a real generation onto marks that record a false
+    start. The walk must skip a healed -ii exactly like it skips a merged one."""
+    from src.orchestrator.agents import mint_heir
+
+    now = datetime.now(UTC)
+    root = await actions.create_or_find_object("Agent", "agent:heal0001", "agent:heal0001")
+    # -ii was minted once, diagnosed as a husk, and healed — status stays 'active'
+    husk = await actions.create_or_find_object("Agent", "agent:heal0001-ii",
+                                                "agent:heal0001-ii")
+    await actions.assert_property(husk, "false_mint", True, "seam-debounce", now, 0.6,
+                                  evidence_class="direct_observation")
+    await actions.assert_property(husk, "retired", True, "seam-debounce", now, 0.6,
+                                  evidence_class="direct_observation")
+    assert await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE canonical='agent:heal0001-ii'") == "active"
+
+    heir, heir_oid = await mint_heir(actions, "agent:heal0001", root, because="compaction",
+                                     succession=None)
+    assert heir == "agent:heal0001-iii"                # -ii was refused, not reused
+    assert heir_oid != husk
+
+
+async def test_mint_heir_still_never_lands_on_a_merged_canonical(actions: Actions) -> None:
+    """Regression guard: the healed-canonical check is ADDED to the walk, not a replacement
+    for the original merge check (Ra's resurrection, 2026-07-17) — a merged -ii must still
+    be skipped exactly as before."""
+    from src.orchestrator.agents import mint_heir
+
+    root = await actions.create_or_find_object("Agent", "agent:merge0001", "agent:merge0001")
+    grave = await actions.create_or_find_object("Agent", "agent:merge0001-ii",
+                                                 "agent:merge0001-ii")
+    winner = await actions.create_or_find_object("Agent", "agent:mergewinner",
+                                                  "agent:mergewinner")
+    await actions.merge_objects(winner, grave, "test merge", "agent:test")
+    assert await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE id=$1", grave) == "merged"
+
+    heir, _heir_oid = await mint_heir(actions, "agent:merge0001", root, because="compaction",
+                                      succession=None)
+    assert heir == "agent:merge0001-iii"
+
+
+async def test_mint_heir_a_fresh_canonical_is_unaffected_by_the_healed_grave_check(
+    actions: Actions,
+) -> None:
+    """Sekhmet's negative-control standard (msg 2325): a guard that refuses everything
+    passes the healed-reuse test and fails the job. A plain first-time mint — no prior
+    generation, nothing healed, nothing merged — must land on the natural next numeral,
+    unaffected by the new check."""
+    from src.orchestrator.agents import mint_heir
+
+    root = await actions.create_or_find_object("Agent", "agent:fresh0001", "agent:fresh0001")
+    heir, heir_oid = await mint_heir(actions, "agent:fresh0001", root, because="compaction",
+                                     succession=None)
+    assert heir == "agent:fresh0001-ii"
+    assert await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE id=$1", heir_oid) == "active"
+
+
 # ═══════════ SUCCESSION FOLLOWS TURNS, NOT HARNESS EVENTS (ruling d3531cd8, msg 1398) ═══════════
 
 async def _false_mint(actions: Actions, canonical: str) -> str | None:

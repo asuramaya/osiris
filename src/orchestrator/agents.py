@@ -1022,10 +1022,22 @@ async def mint_heir(
     # and the estate transfer would drag the living head's unread mail onto a corpse
     # (witnessed: 10 unread on merged 443cd9d4-iii within the hour of its folding). The
     # numeral walks forward until it names either nothing or something still active.
+    #
+    # A GRAVE IS ALSO A HEAL, NOT ONLY A MERGE (msg 2325, live case: John/d5c671c1-xv):
+    # a heal (husk-heal / phantom-fold) never flips objects.status away from 'active' —
+    # compensating events only, per constitution 3 — so a healed canonical passes the
+    # status check above while still being a death in every sense that matters. Refuse to
+    # reuse it (same law as #107/#117: refuse, don't widen/search) rather than silently
+    # minting a real generation onto marks that record a false start.
     for _ in range(64):
-        taken = await actions.pool.fetchval(
-            "SELECT status FROM objects WHERE canonical=$1 AND type='Agent'", heir)
-        if taken is None or taken == "active":
+        row = await actions.pool.fetchrow(
+            "SELECT id, status FROM objects WHERE canonical=$1 AND type='Agent'", heir)
+        if row is None:
+            break
+        if row["status"] == "active" and not await actions.pool.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM current_assertions r WHERE r.object_id=$1 "
+                "AND r.name IN ('retired', 'false_mint') AND r.value #>> '{}' = 'true')",
+                row["id"]):
             break
         heir = next_generation(heir)
     a = await actions.create_or_find_object("Agent", heir, heir)
