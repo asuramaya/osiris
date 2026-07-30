@@ -4014,6 +4014,14 @@ async def settle(
     verb, unchanged, then CONFIRMS by re-checking the boxes and your obligations against the
     now-updated graph. `complete` is only true when nothing is left explicitly unwritten.
 
+    A bad `decisions`/`threads_open` item (task #107's fork, e.g. a path-shaped `repo`)
+    NEVER sinks the rest of the dump — settle is the end-of-context ritual; a whole-batch
+    abort here would lose everything ELSE in the same call, exactly the failure this verb
+    exists to prevent. Each dropped item lands in `rejected` (kind/summary/error — the same
+    "name what was wrong" shape record_decision/open_thread already raise), and `complete`
+    reads False whenever `rejected` is non-empty: a dropped item is unwritten state, same
+    class as a missing box, never a silent partial accept.
+
     `is_handoff: true` on a decision or thread item MINTS A STRUCTURED HANDOFF MARKER on
     that object (a typed property, not a summary text the reader greps for — the ROOT
     fragility behind every 'Thoth II'-style mislabel this house has hit): your successor's
@@ -4041,13 +4049,26 @@ async def settle(
     now = datetime.now(UTC)
 
     accepted: dict[str, list[Any]] = {"decisions": [], "threads_opened": [], "threads_resolved": []}
+    # task #107's fork (Thoth's ruling, DM 2250): settle is the END-OF-CONTEXT RITUAL — its
+    # entire reason to exist is depositing what a dying session knows before that context is
+    # destroyed. A whole-batch abort on one bad item (e.g. a path-shaped repo) would lose
+    # EVERYTHING else in the same call, exactly the failure settle exists to prevent — the
+    # inverse of resolves/confirms/grounds's own "one bad ref must not veto the rest of the
+    # set" a few hundred lines above. `rejected` NAMES every dropped item and why (never a
+    # silent partial accept — see `complete` below, which now reads False on any rejection).
+    rejected: list[dict[str, str]] = []
     for item in decisions or []:
         item = dict(item)
         is_handoff = bool(item.pop("is_handoff", False))
-        did = await capture.record_decision(
-            Actions(pool), item.pop("summary"), kind=item.pop("kind", "ruling"),
-            rationale=item.pop("rationale", None), repo=item.pop("repo", None),
-            resolves=item.pop("resolves", None), source=actor)
+        summary = item.pop("summary")
+        try:
+            did = await capture.record_decision(
+                Actions(pool), summary, kind=item.pop("kind", "ruling"),
+                rationale=item.pop("rationale", None), repo=item.pop("repo", None),
+                resolves=item.pop("resolves", None), source=actor)
+        except ValueError as e:
+            rejected.append({"kind": "decision", "summary": summary, "error": str(e)})
+            continue
         if is_handoff:
             await Actions(pool).assert_property(did, "is_handoff", "true", actor, now, 0.9,
                                                 evidence_class="self_declared")
@@ -4055,9 +4076,14 @@ async def settle(
     for item in threads_open or []:
         item = dict(item)
         is_handoff = bool(item.pop("is_handoff", False))
-        tid = await capture.open_thread(
-            Actions(pool), item.pop("summary"), repo=item.pop("repo", None),
-            kind=item.pop("kind", None), owner=item.pop("owner", None), source=actor)
+        summary = item.pop("summary")
+        try:
+            tid = await capture.open_thread(
+                Actions(pool), summary, repo=item.pop("repo", None),
+                kind=item.pop("kind", None), owner=item.pop("owner", None), source=actor)
+        except ValueError as e:
+            rejected.append({"kind": "thread", "summary": summary, "error": str(e)})
+            continue
         if is_handoff:
             await Actions(pool).assert_property(tid, "is_handoff", "true", actor, now, 0.9,
                                                 evidence_class="self_declared")
@@ -4096,12 +4122,17 @@ async def settle(
     obligations = await _owned_open_threads(pool, ident.agent_id)
     git_dir = repo_path or ident.cwd
     uncommitted = await uncommitted_git_work(git_dir)
-    complete = not missing and not uncommitted
+    # a REJECTED item is unwritten state, same class as a missing box or an uncommitted git
+    # file (unlike `obligations` above, which are already durably recorded and never gate
+    # this) — so it gates `complete` too: a dump that dropped something is not yet deposited.
+    complete = not missing and not uncommitted and not rejected
     reasons = []
     if missing:
         reasons.append(f"{len(missing)} missing box(es)")
     if uncommitted:
         reasons.append(f"{len(uncommitted)} uncommitted git file(s)")
+    if rejected:
+        reasons.append(f"{len(rejected)} rejected item(s)")
     carried_note = (f" ({len(obligations)} open obligation(s) carried forward — "
                     "informational, already durably recorded, never blocks this)"
                     if obligations else "")
@@ -4113,6 +4144,7 @@ async def settle(
         "uncommitted_git_files": uncommitted,
         "git_checked_path": git_dir,
         "accepted": accepted,
+        "rejected": rejected,
         "note": (f"compaction-safe by construction{carried_note}" if complete else
                  f"still unsettled ({', '.join(reasons)}) — settle again once they're "
                  "closed, or accept them in your next call"),

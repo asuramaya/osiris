@@ -171,6 +171,123 @@ async def test_settle_tool_accepts_a_decision_and_a_thread_and_verifies_landed(
     assert d_landed == 1 and t_landed == 1
 
 
+async def test_settle_tool_rejects_a_bad_repo_decision_without_sinking_the_dump(
+    actions: Actions,
+) -> None:
+    """Thoth's ruling on #107's fork (DM 2250): settle is the end-of-context ritual — a
+    whole-batch abort on one bad item (a path-shaped repo) would lose EVERYTHING else in
+    the same call, exactly the failure settle exists to prevent. The good sibling still
+    lands; the bad one is NAMED in `rejected`, never silently dropped; `complete` reads
+    False because a rejected item is unwritten state, same class as a missing box."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    good_summary = "settle's good decision survives a bad sibling in the same call"
+    bad_summary = "settle's decision filed under a path, not a project"
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:settlerj1", session="settlerj1", project="settleproj",
+        model=None, cwd=None)
+    try:
+        out = await srv.settle(
+            decisions=[
+                {"summary": good_summary},
+                {"summary": bad_summary, "repo": "/home/asuramaya/code/ballgem"},
+            ],
+            threads_open=[
+                {"summary": "settle's thread, unaffected by its sibling decision's reject"},
+            ],
+            ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    # the good decision AND the unrelated thread both still landed — the bad sibling never
+    # vetoed either of them
+    assert len(out["accepted"]["decisions"]) == 1
+    assert len(out["accepted"]["threads_opened"]) == 1
+    assert len(out["rejected"]) == 1
+    rej = out["rejected"][0]
+    assert rej["kind"] == "decision" and rej["summary"] == bad_summary
+    assert "never a filesystem path or a placeholder" in rej["error"]
+    # a rejected item gates complete, the same as a missing box or an uncommitted file
+    assert out["complete"] is False
+    assert "1 rejected item(s)" in out["note"]
+
+    # prove it against the DB, not the receipt: the good items are genuinely there...
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.type='Decision' AND a.name='summary' AND a.value #>> '{}' = $1",
+        good_summary) == 1
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Thread'") == 1
+    # ...and the bad one genuinely never landed — no Decision, no bogus SoftwareProject
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE name='summary' "
+        "AND value #>> '{}' = $1", bad_summary) == 0
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 0
+
+
+async def test_settle_tool_rejects_a_bad_repo_thread_without_sinking_the_dump(
+    actions: Actions,
+) -> None:
+    """Same per-item degrade, the threads_open loop — a distinct code path from decisions,
+    tested independently rather than assumed to behave the same way."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    good_summary = "settle's good thread survives a bad sibling in the same call"
+    bad_summary = "settle's thread filed under a path, not a project"
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:settlerj2", session="settlerj2", project="settleproj",
+        model=None, cwd=None)
+    try:
+        out = await srv.settle(
+            threads_open=[
+                {"summary": good_summary},
+                {"summary": bad_summary, "repo": "/home/asuramaya/code/ballgem"},
+            ],
+            ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert len(out["accepted"]["threads_opened"]) == 1
+    assert len(out["rejected"]) == 1
+    rej = out["rejected"][0]
+    assert rej["kind"] == "thread" and rej["summary"] == bad_summary
+    assert "never a filesystem path or a placeholder" in rej["error"]
+    assert out["complete"] is False
+
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.type='Thread' AND a.name='summary' AND a.value #>> '{}' = $1",
+        good_summary) == 1
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE name='summary' "
+        "AND value #>> '{}' = $1", bad_summary) == 0
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 0
+
+
 async def test_settle_tool_resolve_thread_item_reports_a_miss_without_erroring(
     actions: Actions,
 ) -> None:
