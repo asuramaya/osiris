@@ -1752,6 +1752,33 @@ async def test_backfill_decided_in_dry_run_writes_nothing(actions: Actions) -> N
     assert n2 == 1
 
 
+async def test_backfill_decided_in_heartbeat_wires_through_to_the_real_function(
+        actions: Actions) -> None:
+    """The arq cron shim (Thoth's grant, DM 2271): a thin wrapper around
+    backfill_decided_in, same shape as this file's siblings (trigger_mail,
+    pit_watch_heartbeat, fleet_reconcile_heartbeat) — none of which get a dedicated test
+    of their own either, since the real logic lives in (and is fully tested by) the
+    function they wrap. This one proves the WIRING itself: ctx["cascade"].actions reaches
+    the real actions, the real mint happens, and the return value is the minted count —
+    not just that the module imports cleanly."""
+    from types import SimpleNamespace
+
+    from src.workers.arq_worker import backfill_decided_in_heartbeat
+
+    d = await record_decision(actions, "A citation for the cron shim to catch",
+                              rationale="Landed as commit 5eaf00d123.", source="agent:test-i")
+    await actions.create_or_find_object("Commit", "commit:5eaf00d123", "git")
+    ctx = {"cascade": SimpleNamespace(actions=actions)}
+    minted = await backfill_decided_in_heartbeat(ctx)
+    assert minted == 1
+    edges = await actions.pool.fetch(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='decided_in'", d)
+    assert len(edges) == 1
+
+    again = await backfill_decided_in_heartbeat(ctx)  # idempotent, same as the sweep itself
+    assert again == 0
+
+
 async def test_backfill_decided_in_scans_only_active_unmerged_decisions(
         actions: Actions) -> None:
     """A retired/merged Decision's own citation is not this pass's business — its content,

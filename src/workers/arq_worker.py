@@ -585,6 +585,39 @@ async def fleet_reconcile_heartbeat(ctx: dict[str, Any]) -> int:
     return acted
 
 
+async def backfill_decided_in_heartbeat(ctx: dict[str, Any]) -> int:
+    """Task #101's own periodic retry (Thoth's grant, DM 2271, riding behind the one-off
+    sweep in decisions c6d1598c/e73c1453): the live path (record_decision) only ever
+    mints `decided_in` FORWARD, at write time — a decision citing a commit gitlog hasn't
+    reached yet is a genuine RACE (ruling c5ab0dcb's Mode B, omission), not an ambiguity,
+    and nothing retried it before this. Same idempotent backfill_decided_in the one-off
+    sweep used, run on a schedule instead of by hand — most ticks just re-confirm an
+    already-near-empty backlog, since the live path already handles the common case.
+
+    DELIBERATELY QUIET ON THE STABLE SKIP: the one-off sweep confirmed 132 commit shas
+    cited in this house's own decisions were NEVER ingested at all — a permanent gap this
+    cron structurally cannot close (the referent does not exist; no amount of retrying
+    changes that). Logging that count every tick would be the exact Stage C disease Thoth
+    named: a stable, already-known, unfixable-here fact read back as a fresh alarm 132
+    times a day. So only `minted` (a genuinely NEW edge — a real race that just closed)
+    triggers a log line, matching this file's own "log only when something happened"
+    convention (trigger_mail/pit_watch_heartbeat/fleet_reconcile_heartbeat, above);
+    `skipped` still rides in the returned report for record_job's own telemetry, silent
+    unless a mind goes looking, never repeated as noise."""
+    from src.orchestrator.capture import backfill_decided_in
+
+    actions: Actions = ctx["cascade"].actions
+    try:
+        report = await backfill_decided_in(actions)
+    except Exception as exc:  # a DB hiccup must not kill the cron
+        _log.warning("decided_in backfill heartbeat failed: %r", exc)
+        return 0
+    if report["minted"]:
+        _log.info("decided_in backfill heartbeat: minted %d edge(s) (a race just closed)",
+                  report["minted"])
+    return int(report["minted"])
+
+
 def watched(fn: Any, *, every: int) -> Any:
     """THE SEAM WHERE A JOB CANNOT LIE ABOUT ITS OWN HEALTH.
 
@@ -719,6 +752,13 @@ class WorkerSettings:
         # switch), same cadence class as reap_orphans (every 15 min, not urgent cleanup).
         cron(watched(fleet_reconcile_heartbeat, every=900), minute={4, 19, 34, 49},
              second={0}, timeout=600, run_at_startup=True),
+        # task #101's backfill, on a schedule (Thoth's grant DM 2271): closes the RACE
+        # where a decision cites a commit before gitlog has ingested it — a cheap,
+        # SQL-only scan (no LLM/embedding cost), offset from the other 10-minute jobs
+        # (backfill_transcripts@8, embed_pass@5, meter_the_wakes@3) to avoid CPU
+        # contention with them.
+        cron(watched(backfill_decided_in_heartbeat, every=600), minute=set(range(1, 60, 10)),
+             second={50}, timeout=300, run_at_startup=True),
     ]
     on_startup = startup
     on_shutdown = shutdown
