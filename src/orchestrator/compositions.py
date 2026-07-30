@@ -70,8 +70,13 @@ Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
        docstring). The client renders `_actions` as N buttons, same click delegate, same /act
        round trip per button as the singular form (task #91, Thoth msg 1976/2029) — a Function
        may also embed `_actions`/`_action` directly on rows it returns, without this node-level
-       declaration, when a saved composition can't express the shape (see `desk_project`'s own
-       docstring for why: two row kinds in one list, needing two different action shapes).
+       declaration, when a saved composition can't express the shape. Two distinct reasons seen
+       so far, not one: `desk_project` (two row kinds in one list, needing two different action
+       shapes — see its own docstring) and `_fn_echoes` (task #92: the node-level grammar
+       decorates a Function's OWN top-level rows, but echoes' top level is a dict wrapping a
+       nested list — nothing for it to hook. Two Functions hitting embedding for the SAME
+       reason would be the signal to promote that reason to a real op; these are two different
+       reasons, so it isn't, yet — see `_fn_echoes`'s own docstring).
 
 The old `discrepancy` read-model is just one composition (opinion left the engine):
   subtract( collect(location, country) over traverse(subject, 2 hops),
@@ -1131,7 +1136,18 @@ async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     wall — miner echoes no mind has ever touched (not one self_declared assertion, AT ANY AGE)
     plus judged questions (kind='question'). Their status is OPEN and stays open: untouched is
     a fact about readers, never a resolution. Oldest first — triage drains from the bottom.
-    `args.repo` scopes to one project; report-only."""
+    `args.repo` scopes to one project; report-only.
+
+    Each row carries `_actions` (task #92, replacing index.html's own bespoke checkbox+
+    bulk-triage bar) embedded directly here rather than declared via the composition's own
+    `row_actions` node-level grammar — NOT desk_project's reason (mixed row shapes one
+    declaration can't express uniformly): every echo row is the same shape and gets the
+    same three verbs. The reason here is structural: this Function's own TOP-LEVEL return is
+    a dict (`{"echoes": [...], "count": ..., ...}`, kind='data'), not a bare list[dict]
+    (kind='rows') — the node-level grammar decorates a Function's OWN output rows, and a
+    dict has none to decorate; only the nested `echoes` list does. A second, distinct
+    boundary condition from Thoth's ruling on desk_project (msg 2043) — flagged here so it
+    doesn't have to be rediscovered."""
     repo = str(args.get("repo") or "").strip()
     limit = max(1, min(int(args.get("limit") or 100), 500))
     rows = await pool.fetch(
@@ -1169,11 +1185,25 @@ async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         # is exactly what let the pile grow). A ROT CANDIDATE rides the pile whatever its age —
         # it carries EVIDENCE, which is the entire point of it.
         if r["kind"] == "question" or r["probably_done"] or bool(r["untouched"]):
+            eid = str(r["id"])[:8]
             echoes.append({
-                "id": str(r["id"])[:8], "born": r["created_at"].date().isoformat(),
+                "id": eid, "born": r["created_at"].date().isoformat(),
                 "project": (r["project"] or "").removeprefix("repo:") or None,
                 "kind": r["kind"], "summary": r["summary"][:200],
-                **({"probably_done": r["probably_done"]} if r["probably_done"] else {})})
+                **({"probably_done": r["probably_done"]} if r["probably_done"] else {}),
+                # per-row triage (task #92 — row_actions, not a bulk-select toolbar: this
+                # Function's own `verbs` field below already documented "triage with
+                # testimony, never bulk writes" before the UI ever caught up to it). Same
+                # ACTION_VERBS/`_find_thread` short-id resolution proven live for desk's
+                # debt rows (task #91) — `eid` is the same 8-char truncated form.
+                "_actions": [
+                    {"label": "resolve", "action": "resolve_thread",
+                     "args": {"ref": eid, "because": "operator: resolved from the echo pile"}},
+                    {"label": "adopt", "action": "reclassify_thread",
+                     "args": {"ref": eid, "kind": "obligation"}},
+                    {"label": "question", "action": "reclassify_thread",
+                     "args": {"ref": eid, "kind": "question"}},
+                ]})
     # evidence first: these are the ones a human can actually settle in one glance
     echoes.sort(key=lambda e: (0 if e.get("probably_done") else 1, e["born"]))
     return {

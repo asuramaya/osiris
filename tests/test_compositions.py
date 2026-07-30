@@ -14,6 +14,7 @@ from src.orchestrator.compositions import (
     _eval,
     _fn_desk_overview,
     _fn_desk_project,
+    _fn_echoes,
     create_room,
     list_compositions,
     run_composition,
@@ -1330,6 +1331,37 @@ async def test_desk_project_debt_row_carries_the_three_triage_actions(
                   "because": "operator: not mine — neo owns this"}},
         {"label": "later", "action": "defer_thread",
          "args": {"ref": short, "days": 30, "because": "operator: not now"}},
+    ]
+
+
+async def test_echoes_row_carries_the_three_triage_actions(actions: Actions) -> None:
+    """task #92 — replacing index.html's own bespoke checkbox+bulk-triage bar (renderWallView's
+    third branch) with the same row_actions mechanism task #91 armed for desk's debt rows.
+    An untouched miner echo gets THREE per-row actions matching the Function's own `verbs`
+    field, which documented this exact interaction model ("triage with testimony, never bulk
+    writes") before the UI ever caught up to it: resolve/adopt/question, through the same
+    /act registry chrome's old triage route wrapped."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:echotest", "test")
+    await actions.assert_property(proj, "name", "echotest", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    echo = await actions.create_or_find_object("Thread", "thread:echo-actions", "session-miner")
+    for n, v in (("summary", "an untouched miner guess"), ("status", "open"),
+                 ("kind", "obligation")):
+        await actions.assert_property(echo, n, v, "session-miner", NOW, 0.4,
+                                      evidence_class="derived")
+    await actions.create_link(echo, proj, "in_repo", "session-miner", NOW, 0.4,
+                              evidence_class="derived")
+    short = str(echo)[:8]  # same 8-char truncation _fn_echoes has always used
+
+    result = await _fn_echoes(actions.pool, None, {})
+    row = next(r for r in result["echoes"] if r["id"] == short)
+    assert row["_actions"] == [
+        {"label": "resolve", "action": "resolve_thread",
+         "args": {"ref": short, "because": "operator: resolved from the echo pile"}},
+        {"label": "adopt", "action": "reclassify_thread",
+         "args": {"ref": short, "kind": "obligation"}},
+        {"label": "question", "action": "reclassify_thread",
+         "args": {"ref": short, "kind": "question"}},
     ]
 
 
