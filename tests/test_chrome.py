@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from src.actions.core import Actions
 from src.api.chrome import (
+    _comp_label,
     page,
     render_composition,
     render_desk,
@@ -461,6 +462,21 @@ def test_render_composition_named_bucket_opens_by_default() -> None:
     result = {"kind": "data", "count": 1, "items": {"real-arc": [{"summary": "x"}]}}
     html = render_composition(result)
     assert '<details class="proj" open>' in html
+
+
+def test_comp_label_finds_statement_surface_and_handle() -> None:
+    """Task #97 workstream 3: _COMP_SALIENT gained statement/surface/handle so a
+    Practice/BlindSpot/unclaimed-Agent row leads with its content, not a raw id —
+    chrome.py has no per-type RULE tier (rows here aren't always typed objects), so
+    this only widens the universal fallback, same members as LABEL_CHAIN minus the
+    RULE lookup."""
+    assert _comp_label({"id": "x", "statement": "measure it yourself"}) == "measure it yourself"
+    assert _comp_label({"id": "x", "surface": "mcp-tool-list-refresh"}) == "mcp-tool-list-refresh"
+    assert _comp_label({"id": "x", "handle": "Imhotep"}) == "Imhotep"
+    # summary still leads when present (unchanged ordering for this generic renderer)
+    assert _comp_label({"summary": "s", "statement": "st"}) == "s"
+    assert _comp_label({"id": "x"}) == "x"
+    assert _comp_label({}) == "—"
 
 
 def test_render_composition_rows_and_objects_render_as_items() -> None:

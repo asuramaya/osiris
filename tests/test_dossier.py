@@ -71,6 +71,29 @@ async def test_dossier_missing_object_is_empty(actions: Actions) -> None:
     assert await entity_dossier(actions.pool, uuid.uuid4()) == {}
 
 
+async def test_dossier_resolves_own_name_and_neighbor_name_via_the_full_chain(
+    actions: Actions,
+) -> None:
+    """Task #97 workstream 3: both the entity's own name and a neighbor's name used to
+    check ONLY the `name` property — a Thread (summary, no name) or a Practice
+    (statement, no name) rendered its raw canonical hash here, even in a dossier for
+    an object the graph/table views already labelled correctly."""
+    from datetime import UTC, datetime
+
+    thread = await actions.create_or_find_object("Thread", "thread:dossiertest", "test")
+    await actions.assert_property(thread, "summary", "a thread with no name property",
+                                  "test", datetime.now(UTC), 0.9)
+    practice = await actions.create_or_find_object("Practice", "practice:dossiertest", "test")
+    await actions.assert_property(practice, "statement", "a practice with no name property",
+                                  "test", datetime.now(UTC), 0.9)
+    await actions.create_link(thread, practice, "linked_to", "test", datetime.now(UTC), 0.9)
+
+    d = await entity_dossier(actions.pool, thread)
+    assert d["name"] == "a thread with no name property"
+    nbr = next(r for r in d["relationships"] if r["type"] == "linked_to")
+    assert nbr["neighbor"]["name"] == "a practice with no name property"
+
+
 async def test_the_mcp_dossier_tool_resolves_a_short_id(actions: Actions) -> None:
     """task #64 (ruling ad19a779): every id a composition ROW hands out (a table/Function
     row's own 8-char "id" column) must feed straight back into dossier(), not just

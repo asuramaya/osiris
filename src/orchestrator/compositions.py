@@ -3524,7 +3524,14 @@ async def list_compositions(
 async def object_items(pool: asyncpg.Pool, ids: list[uuid.UUID]) -> list[dict[str, Any]]:
     """Label a result set's objects AND carry their compact properties — in two batch
     queries, not N. The view-switcher needs this: the Graph view uses label/type, the
-    Table view shows property columns (sector, date, …) without a per-row fetch."""
+    Table view shows property columns (sector, date, …) without a per-row fetch.
+
+    Label resolution is `resolve_label` (task #97 workstream 3, ruling 52daab71) — the
+    same rule/chain/canonical engine every other consumer now shares, not a fourth
+    hand-rolled fallback chain agreeing with the others by coincidence. `display_label`
+    is `disambiguate_labels` across THIS result set — the board/table views are exactly
+    where the reported bug (three rows truncating to one indistinguishable string) is
+    most visible."""
     if not ids:
         return []
     objs = await pool.fetch(
@@ -3542,11 +3549,13 @@ async def object_items(pool: asyncpg.Pool, ids: list[uuid.UUID]) -> list[dict[st
         if o is None:
             continue
         p = props.get(oid, {})
-        # the best human label — never a raw hash when a name/title/summary exists
-        label = (p.get("name") or p.get("title") or p.get("summary")
-                 or p.get("subject") or o["canonical"])
+        res = resolve_label(o["type"], p, o["canonical"])
         out.append({"id": str(oid), "type": o["type"], "canonical": o["canonical"],
-                    "label": label, "props": p})
+                    "label": res.label, "props": p,
+                    **({"subtitle": res.subtitle} if res.subtitle else {})})
+    disp = disambiguate_labels([(o["id"], o["label"], o["canonical"]) for o in out])
+    for o in out:
+        o["display_label"] = disp[o["id"]]
     return out
 
 

@@ -736,6 +736,33 @@ async def test_object_items_resolves_props_by_grade_not_recency(actions: Actions
     assert status == "resolved"   # GRADE wins over the fresher DERIVED re-open (was "open")
 
 
+async def test_object_items_labels_a_tension_via_its_rule_and_disambiguates_the_set(
+    actions: Actions,
+) -> None:
+    """Task #97 workstream 3: object_items now shares resolve_label/disambiguate_labels
+    with every other consumer (search, etc.) instead of its own fourth hand-rolled
+    chain — a Tension (pole_a/pole_b/lean_why, none of which match the universal
+    chain) needs the RULE tier to avoid falling to its raw canonical hash, and a
+    genuine label collision within one result set must stay distinguishable."""
+    from src.orchestrator.compositions import object_items
+
+    t = await actions.create_or_find_object("Tension", "tension:t1", "session")
+    await actions.assert_property(t, "pole_a", "bounded recall", "session", NOW, 0.9)
+    await actions.assert_property(t, "pole_b", "complete memory", "session", NOW, 0.9)
+    dup1 = await actions.create_or_find_object("Person", "person:dup1", "session")
+    await actions.assert_property(dup1, "name", "duplicate", "session", NOW, 0.9)
+    dup2 = await actions.create_or_find_object("Person", "person:dup2", "session")
+    await actions.assert_property(dup2, "name", "duplicate", "session", NOW, 0.9)
+
+    items = await object_items(actions.pool, [t, dup1, dup2])
+    by_id = {it["id"]: it for it in items}
+    assert by_id[str(t)]["label"] == "bounded recall"
+    assert by_id[str(t)]["subtitle"] == "complete memory"
+    assert by_id[str(dup1)]["label"] == by_id[str(dup2)]["label"] == "duplicate"
+    # two distinct objects with the identical resolved label must not display identically
+    assert by_id[str(dup1)]["display_label"] != by_id[str(dup2)]["display_label"]
+
+
 # --- the migrated ROADMAP (ruling c5b184cd, thread d56e7073/#44): the proof case for the
 # Function/op line — `open` stays a Function (echo-filter, a real domain gap), `resolved`/
 # `retracted` are pure `group`-by-arc-then-owner over live data. ---------------------------

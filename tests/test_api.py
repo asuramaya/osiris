@@ -190,3 +190,21 @@ async def test_merge_candidates_endpoint(client: httpx.AsyncClient, actions: Act
     await find_person_merge_candidates(actions.pool)
     r = await client.get("/merge-candidates")
     assert len(r.json()) == 1
+
+
+async def test_object_card_title_uses_resolve_label_not_name_only(actions: Actions) -> None:
+    """Task #97 workstream 3: _object_card (the watch/subscription card-preview
+    endpoint) used to check ONLY the `name` property for its title — a Practice
+    (statement/failure_prevented/surface, no name) rendered its raw canonical hash.
+    Now shares the same resolve_label every other consumer does."""
+    from src.api.app import _object_card
+
+    p = await actions.create_or_find_object("Practice", "practice:cardtest", "test")
+    await actions.assert_property(p, "statement", "measure it yourself", "test",
+                                  datetime.now(UTC), 0.9)
+    card = await _object_card(actions.pool, p)
+    assert card is not None
+    assert card["title"] == "measure it yourself"
+    # the statement still appears in the generic properties list too (unchanged
+    # behavior for any field besides `name`, which alone gets excluded)
+    assert any(pr["name"] == "statement" for pr in card["properties"])

@@ -740,7 +740,17 @@ def render_fleet(data: dict[str, Any]) -> str:
 # a fact about any particular property) — everything else opens.
 
 _COMPOSITION_CAP = 25
-_COMP_SALIENT = ("summary", "name", "title", "label", "subject")
+# Task #97 workstream 3 (ruling 52daab71): `statement`/`surface`/`handle` added so a
+# Practice/Superstition/BlindSpot/unclaimed-Agent row leads with its real content
+# instead of falling through to a raw id — the same universal CHAIN tier
+# src.ontology.labels.LABEL_CHAIN declares. NOT a full swap to that chain: this
+# renderer is deliberately domain-agnostic (any composition row, not just typed graph
+# objects — desk_project's own debt/ask dicts have neither `type` nor a matching
+# ObjectType), so there is no RULE tier to apply here the way resolve_label has one.
+# A Tension row (pole_a/pole_b/lean_why, none of which appear here or in the
+# universal chain) still falls to raw id THROUGH THIS RENDERER SPECIFICALLY — a known,
+# narrower gap than before, not a new one; flagged rather than silently left.
+_COMP_SALIENT = ("summary", "name", "title", "label", "subject", "statement", "surface", "handle")
 # "_action" is a PRIVATE key (compositions._table's row_action, ruling c5b184cd, thread
 # d56e7073/#44) — a control this row carries, never a displayed fact; skip it same as id/
 # props/canonical, which are structural too.

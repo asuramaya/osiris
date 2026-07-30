@@ -46,6 +46,7 @@ from src.dissemination.brief import build_case_brief
 from src.ingest.harris_foreclosure import demo_fetch, make_harris_foreclosure_watcher
 from src.ontology.classify import classify
 from src.ontology.intake import intake
+from src.ontology.labels import resolve_label
 from src.ontology.resolution import (
     find_person_merge_candidates,
     resolve_candidate,
@@ -1186,8 +1187,8 @@ async def _object_card(p: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, Any] 
         "ORDER BY name, observed_at DESC",
         object_id,
     )
-    title = o["canonical"]
     props: list[dict[str, Any]] = []
+    label_props: dict[str, Any] = {}
     sources: set[str] = set()
     strongest: str | None = None
     confidence: float | None = None
@@ -1200,9 +1201,8 @@ async def _object_card(p: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, Any] 
         if name == "demo":
             demo = str(r["v"]).lower() == "true"
             continue
-        if name == "name":
-            title = r["v"] or title
-        else:
+        label_props[name] = r["v"]
+        if name != "name":
             props.append({"name": name, "value": r["v"]})
         if r["source_id"]:
             sources.add(r["source_id"])
@@ -1213,6 +1213,7 @@ async def _object_card(p: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, Any] 
             confidence = max(confidence or 0.0, float(r["confidence"]))
         if r["observed_at"] and (observed is None or r["observed_at"] > observed):
             observed = r["observed_at"]
+    title = resolve_label(o["type"], label_props, o["canonical"]).label
     return {
         "object_id": str(object_id), "type": o["type"], "title": title,
         "properties": props,
