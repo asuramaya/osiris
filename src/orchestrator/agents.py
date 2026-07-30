@@ -1029,16 +1029,29 @@ async def mint_heir(
     # status check above while still being a death in every sense that matters. Refuse to
     # reuse it (same law as #107/#117: refuse, don't widen/search) rather than silently
     # minting a real generation onto marks that record a false start.
+    #
+    # BUT NOT EVERY HEAL IS A DEATH — SOME ARE THIS SAME BREATH (caught by
+    # test_two_zero_turn_compactions_fold before this shipped): _fold_zero_turn_ancestors
+    # heals a zero-turn phantom and returns the CORRECTED ancestor for THIS SAME mint_heir
+    # call to mint against — next_generation() naturally reproduces the exact numeral it
+    # just folded, and reusing it there is the fold's whole point (MINT ONCE, not MINT
+    # ZERO, ruling d3531cd8), not a resurrection. The two cases share the identical
+    # false_mint/retired shape and are distinguished only by AGE: a heal still inside the
+    # mint gate's own debounce window (_SEAM_DEBOUNCE_SECS — the SAME window the fold uses
+    # for its own back-to-back check, not a second one) is part of the seam being resolved
+    # right now; a heal older than that — John's, 20 hours cold — is a closed one-way door.
     for _ in range(64):
         row = await actions.pool.fetchrow(
             "SELECT id, status FROM objects WHERE canonical=$1 AND type='Agent'", heir)
         if row is None:
             break
-        if row["status"] == "active" and not await actions.pool.fetchval(
-                "SELECT EXISTS (SELECT 1 FROM current_assertions r WHERE r.object_id=$1 "
-                "AND r.name IN ('retired', 'false_mint') AND r.value #>> '{}' = 'true')",
-                row["id"]):
-            break
+        if row["status"] == "active":
+            healed_at = await actions.pool.fetchval(
+                "SELECT max(r.observed_at) FROM current_assertions r WHERE r.object_id=$1 "
+                "AND r.name IN ('retired', 'false_mint') AND r.value #>> '{}' = 'true'",
+                row["id"])
+            if healed_at is None or (now - healed_at).total_seconds() <= _SEAM_DEBOUNCE_SECS:
+                break
         heir = next_generation(heir)
     a = await actions.create_or_find_object("Agent", heir, heir)
     do = EvidenceClass.DIRECT_OBSERVATION

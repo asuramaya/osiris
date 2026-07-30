@@ -1464,22 +1464,24 @@ async def test_mint_stamps_the_parallel_pulse(actions: Actions) -> None:
         "WHERE object_id=$1 AND name='predecessor_last_seen'", hoid2) == 1
 
 
-async def test_mint_heir_never_lands_on_a_healed_canonical(actions: Actions) -> None:
+async def test_mint_heir_never_lands_on_a_stale_healed_canonical(actions: Actions) -> None:
     """THE GRAVE-GUARD SEES ASSERTIONS TOO (msg 2325, live case: John/d5c671c1-xv): a heal
     (husk-heal / phantom-fold) never flips objects.status away from 'active' — compensating
     events only, constitution 3 — so the numeral-walk's old status-only check silently
     reused a healed canonical, dragging a real generation onto marks that record a false
-    start. The walk must skip a healed -ii exactly like it skips a merged one."""
-    from src.orchestrator.agents import mint_heir
+    start. THE HEAL IS A ONE-WAY DOOR WITH NO RE-ENTRY (decision 7a37327c) once it is
+    STALE — John's was 20 hours cold with no seam in between. A heal outside the mint
+    gate's own debounce window must be refused, exactly like a merged canonical."""
+    from src.orchestrator.agents import _SEAM_DEBOUNCE_SECS, mint_heir
 
-    now = datetime.now(UTC)
+    stale = datetime.now(UTC) - timedelta(seconds=_SEAM_DEBOUNCE_SECS + 100)
     root = await actions.create_or_find_object("Agent", "agent:heal0001", "agent:heal0001")
-    # -ii was minted once, diagnosed as a husk, and healed — status stays 'active'
+    # -ii was minted once, diagnosed as a husk, and healed LONG AGO — status stays 'active'
     husk = await actions.create_or_find_object("Agent", "agent:heal0001-ii",
                                                 "agent:heal0001-ii")
-    await actions.assert_property(husk, "false_mint", True, "seam-debounce", now, 0.6,
+    await actions.assert_property(husk, "false_mint", True, "seam-debounce", stale, 0.6,
                                   evidence_class="direct_observation")
-    await actions.assert_property(husk, "retired", True, "seam-debounce", now, 0.6,
+    await actions.assert_property(husk, "retired", True, "seam-debounce", stale, 0.6,
                                   evidence_class="direct_observation")
     assert await actions.pool.fetchval(
         "SELECT status FROM objects WHERE canonical='agent:heal0001-ii'") == "active"
@@ -1488,6 +1490,31 @@ async def test_mint_heir_never_lands_on_a_healed_canonical(actions: Actions) -> 
                                      succession=None)
     assert heir == "agent:heal0001-iii"                # -ii was refused, not reused
     assert heir_oid != husk
+
+
+async def test_mint_heir_reuses_a_freshly_folded_phantoms_numeral(actions: Actions) -> None:
+    """The other half of the same law, and the case that would have shipped broken without
+    it (caught by test_two_zero_turn_compactions_fold, which regressed against the first
+    cut of this guard): _fold_zero_turn_ancestors heals a zero-turn phantom and hands its
+    OWN caller the corrected ancestor to mint against — next_generation() naturally
+    reproduces the exact numeral just folded, moments earlier, in the SAME seam-resolution
+    operation. Refusing that would break the fold's whole point (MINT ONCE, not MINT ZERO,
+    ruling d3531cd8) — a heal still inside the debounce window is not a resurrection."""
+    from src.orchestrator.agents import mint_heir
+
+    now = datetime.now(UTC)
+    root = await actions.create_or_find_object("Agent", "agent:heal0002", "agent:heal0002")
+    phantom = await actions.create_or_find_object("Agent", "agent:heal0002-ii",
+                                                   "agent:heal0002-ii")
+    await actions.assert_property(phantom, "false_mint", True, "phantom-fold", now, 0.9,
+                                  evidence_class="direct_observation")
+    await actions.assert_property(phantom, "retired", True, "phantom-fold", now, 0.9,
+                                  evidence_class="direct_observation")
+
+    heir, heir_oid = await mint_heir(actions, "agent:heal0002", root, because="compaction",
+                                     succession=None, now=now)
+    assert heir == "agent:heal0002-ii"                  # the fold's numeral, reused
+    assert heir_oid == phantom
 
 
 async def test_mint_heir_still_never_lands_on_a_merged_canonical(actions: Actions) -> None:
