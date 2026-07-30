@@ -629,6 +629,37 @@ async def test_save_composition_defaults_refresh_secs_to_none(actions: Actions) 
     assert rows[0]["refresh_secs"] is None
 
 
+# --- MUST BE SECTIONED (task #94): the invariant the orphan class needed --------------------
+
+async def test_save_composition_defaults_missing_section_to_more_on_create(
+    actions: Actions,
+) -> None:
+    """Neither the MCP save_composition tool nor the HTTP /compositions route ever pass
+    section — a fresh create through either must never land with section=NULL (the exact
+    room=NULL + section=NULL shape that rendered nowhere, task #94's own finding)."""
+    await save_composition(actions.pool, "wm-nosec", {"op": "select"})
+    rows = [c for c in await list_compositions(actions.pool) if c["name"] == "wm-nosec"]
+    assert rows[0]["section"] == "_more"  # the client's own existing fallback label, reused
+
+
+async def test_save_composition_explicit_section_wins_on_create(actions: Actions) -> None:
+    await save_composition(actions.pool, "wm-sec", {"op": "select"}, section="engine")
+    rows = [c for c in await list_compositions(actions.pool) if c["name"] == "wm-sec"]
+    assert rows[0]["section"] == "engine"
+
+
+async def test_save_composition_omitting_section_keeps_the_prior_value_on_resave(
+    actions: Actions,
+) -> None:
+    """The default-to-_more guard must only fire on a genuine CREATE — a re-save that omits
+    section keeps the COALESCE-keeps-prior contract the docstring already promises for it."""
+    await save_composition(actions.pool, "wm-resec", {"op": "select"}, section="fleet")
+    await save_composition(actions.pool, "wm-resec", {"op": "select", "object_type": "X"})
+    rows = [c for c in await list_compositions(actions.pool) if c["name"] == "wm-resec"]
+    assert rows[0]["section"] == "fleet"          # not overwritten to _more
+    assert rows[0]["spec"]["object_type"] == "X"  # the actual edit still landed
+
+
 async def _save(actions: Actions, name: str, spec: dict) -> str:
     await save_composition(actions.pool, name, spec)
     return name

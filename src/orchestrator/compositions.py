@@ -3059,7 +3059,28 @@ async def save_composition(
     default) means MANUAL ONLY: a lens goes live because someone decided it should, never
     because it inherited a global tick. Unlike description/section, an explicit re-save
     passing None does NOT clear a prior value either — same COALESCE-keeps-prior contract,
-    consistent across all three, not a special case for this one."""
+    consistent across all three, not a special case for this one.
+
+    MUST BE SECTIONED (task #94): neither the MCP save_composition tool nor the HTTP
+    /compositions route ever pass `section` — a fresh save through either always arrives here
+    with section=None. Without a guard, that upserts section=NULL directly (the UPDATE
+    branch's COALESCE only ever protects a RE-save, never a genuine CREATE), and a
+    room_id=NULL, section=NULL composition renders nowhere: room=NULL excludes it from every
+    room-scoped read, and section=NULL used to have no NOT-NULL backstop either. `_more` is
+    already the CLIENT's own fallback shelf label (osiris.js: `c.section||'_more'`) for
+    exactly this case — reused here rather than inventing a second sentinel, so an
+    uncategorized composition still lands somewhere a reader can find it."""
+    if section is None:
+        # Postgres validates NOT NULL against the ATTEMPTED insert row even on a path that
+        # will end up taking the ON CONFLICT DO UPDATE branch — the UPDATE SET clause's own
+        # COALESCE(EXCLUDED.section, compositions.section) below never gets a chance to run
+        # if the plain INSERT tuple itself already violates the constraint. So the "keep
+        # prior value on omission" resolution has to happen HERE, in Python, for section
+        # specifically: reuse the existing row's section on a re-save, or '_more' if there's
+        # no prior row at all (a genuine create) — section is never passed as a literal NULL
+        # into the query below, in either case.
+        section = await pool.fetchval(
+            "SELECT section FROM compositions WHERE name=$1", name) or "_more"
     return await pool.fetchval(  # type: ignore[no-any-return]
         "INSERT INTO compositions (name, kind, spec, webhook_url, active, room_id, "
         " description, section, refresh_secs) "
