@@ -1258,3 +1258,38 @@ async def unpeer(
         await actions.assert_property(oid, "unpeer_because", because, actor, now, _CONF,
                                       evidence_class=_EC)
     return {"unpeered": [row_a["canonical"], row_b["canonical"]], "because": because}
+
+
+async def detach_seat(
+    actions: Actions, seat: str, *, because: str, actor: str,
+) -> dict[str, Any]:
+    """Invalidate an active managed_by edge — the compensating-event complement to whatever
+    minted it (a cross-house adoption, an office ceremony's default binding), and the toolkit
+    hole named at thread fad0dc14: `unpeer` heals peer_of, but nothing healed managed_by
+    before this, so the only path was raw SQL. A COORDINATOR IS DEFINED BY HAVING NO MANAGER
+    (`derive_role`: 'worker' if a manager exists else 'coordinator') — this is a REMOVAL,
+    never a repoint, because repointing a detach onto a new manager is a DIFFERENT act
+    (whatever mints the replacement edge does that, not this).
+
+    Refuses LOUDLY on: blank `because`; an unknown/inactive seat; or no active managed_by
+    edge out of it (nothing to detach)."""
+    because = (because or "").strip()
+    if not because:
+        return {"error": "because is required — detaching a seat from its manager is a "
+                         "deliberate act on the record"}
+    row = await actions.pool.fetchrow(
+        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
+        "AND status='active'", (seat or "").strip())
+    if row is None:
+        return {"error": f"no such active seat: {seat!r}"}
+    link = await actions.pool.fetchrow(
+        "SELECT l.from_id, l.to_id, t.canonical AS manager FROM links l "
+        "JOIN objects t ON t.id=l.to_id WHERE l.from_id=$1 AND l.type='managed_by' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", row["id"])
+    if link is None:
+        return {"error": f"{row['canonical']} has no active manager — nothing to detach"}
+    now = datetime.now(UTC)
+    await actions.invalidate_link(link["from_id"], link["to_id"], "managed_by", actor, now)
+    await actions.assert_property(row["id"], "detached_because", because, actor, now, _CONF,
+                                  evidence_class=_EC)
+    return {"detached": row["canonical"], "was_managed_by": link["manager"], "because": because}

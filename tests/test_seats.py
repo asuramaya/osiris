@@ -1151,8 +1151,64 @@ async def test_manager_of_seat_none_when_unmanaged(actions: Actions) -> None:
     from src.orchestrator.seats import manager_of_seat
 
     await actions.create_or_find_object("Seat", "seat:mos2cccc", "test")
-
     assert await manager_of_seat(actions.pool, "seat:mos2cccc") is None
+
+
+# ═══ DETACH_SEAT (thread fad0dc14) — the toolkit hole: unpeer heals peer_of, nothing healed
+# managed_by before this. A coordinator is DEFINED by having no manager, so this is a
+# REMOVAL of the edge, never a repoint. ══════════════════════════════════════════════════
+
+
+async def test_detach_seat_removes_the_managed_by_edge(actions: Actions) -> None:
+    from src.orchestrator.boot_compiler import derive_role
+    from src.orchestrator.seats import detach_seat, manager_of_seat
+
+    worker = await actions.create_or_find_object("Seat", "seat:det1aaaa", "test")
+    manager = await actions.create_or_find_object("Seat", "seat:det1bbbb", "test")
+    await actions.create_link(worker, manager, "managed_by", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+    assert await derive_role(actions.pool, "seat:det1aaaa") == "worker"
+
+    out = await detach_seat(actions, "seat:det1aaaa", because="promoted to coordinator",
+                            actor="test")
+
+    assert out == {"detached": "seat:det1aaaa", "was_managed_by": "seat:det1bbbb",
+                   "because": "promoted to coordinator"}
+    assert await manager_of_seat(actions.pool, "seat:det1aaaa") is None
+    assert await derive_role(actions.pool, "seat:det1aaaa") == "coordinator"
+    reason = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id AND a.name='detached_because' WHERE o.canonical=$1",
+        "seat:det1aaaa")
+    assert reason == "promoted to coordinator"
+
+
+async def test_detach_seat_refuses_blank_because(actions: Actions) -> None:
+    from src.orchestrator.seats import detach_seat
+
+    worker = await actions.create_or_find_object("Seat", "seat:det2aaaa", "test")
+    manager = await actions.create_or_find_object("Seat", "seat:det2bbbb", "test")
+    await actions.create_link(worker, manager, "managed_by", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+
+    out = await detach_seat(actions, "seat:det2aaaa", because=" ", actor="test")
+    assert "because is required" in out["error"]
+
+
+async def test_detach_seat_refuses_an_unmanaged_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import detach_seat
+
+    await actions.create_or_find_object("Seat", "seat:det3cccc", "test")
+
+    out = await detach_seat(actions, "seat:det3cccc", because="test", actor="test")
+    assert "no active manager" in out["error"]
+
+
+async def test_detach_seat_refuses_an_unknown_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import detach_seat
+
+    out = await detach_seat(actions, "seat:no-such-seat", because="test", actor="test")
+    assert "no such active seat" in out["error"]
 
 
 # ═══ RESOLVE_PROJECT (ruling 577988ed, hoisted msg 1888) — the ONE project resolver every

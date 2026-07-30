@@ -3110,6 +3110,25 @@ async def unpeer(seat_a: str, seat_b: str, because: str,
 
 
 @mcp.tool()
+async def detach_seat(seat: str, because: str, ctx: Context | None = None) -> dict[str, Any]:
+    """Invalidate an active managed_by edge — the toolkit hole named at thread fad0dc14
+    (unpeer heals peer_of, nothing healed managed_by before this). A COORDINATOR IS DEFINED
+    BY HAVING NO MANAGER (derive_role: 'worker' if a manager exists else 'coordinator'), so
+    this REMOVES the edge, never repoints it — a fresh manager, if one is ever assigned, is
+    a separate act.
+
+    Refuses LOUDLY on: blank `because`; an unknown/inactive seat; or no active managed_by
+    edge out of it (nothing to detach)."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — detaching a seat from its manager is a deliberate "
+                         "act on the record", "why": _anchorless(ctx)}
+    from src.orchestrator.seats import detach_seat as _detach
+    return await _detach(Actions(await _pool_get()), seat, because=because,
+                         actor=ident.agent_id)
+
+
+@mcp.tool()
 async def correct_agent_house(agent_id: str, project: str | None = None,
                               seat_generation: int | None = None,
                               ctx: Context | None = None) -> dict[str, Any]:
