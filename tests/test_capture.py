@@ -2049,6 +2049,50 @@ async def test_record_decision_tool_grounds_receipt_names_landed_and_skipped(
     assert landed == 1
 
 
+# --- task #107 wrapper gap: the MCP tool layer refuses clean, never an unhandled traceback -
+
+async def test_record_decision_tool_refuses_a_path_shaped_repo(actions: Actions) -> None:
+    """Mirrors test_open_thread_tool_refuses_an_arc_outside_the_locked_taxonomy (test_wall.py)
+    — record_decision's wrapper had NO try/except around capture.record_decision until this
+    fix, so #107's new ValueError propagated as an unhandled exception instead of the same
+    clean {"error": ...} open_thread's wrapper already returns for its own arc guard."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.record_decision(
+            "a decision filed under a path, not a project",
+            repo="/home/asuramaya/code/ballgem")
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out and "never a filesystem path or a placeholder" in out["error"]
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Decision'") == 0
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 0
+
+
+async def test_ingest_reference_tool_refuses_a_path_shaped_repo(actions: Actions) -> None:
+    """Same wrapper gap as record_decision — ingest_reference's tool wrapper had no
+    try/except at all around capture.ingest_reference."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.ingest_reference(
+            "a reference filed under a path, not a project",
+            repo="/home/asuramaya/code/ballgem")
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out and "never a filesystem path or a placeholder" in out["error"]
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Reference'") == 0
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 0
+
+
 # --- single-assignee leased obligations (§4.3, alfred's ask 5, ruling dd47c1da) -----------
 
 async def test_open_thread_with_assignee_stamps_the_owner_property(actions: Actions) -> None:

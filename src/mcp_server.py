@@ -3616,13 +3616,16 @@ async def record_decision(
         confirm_ids.append(pid)
         confirm_receipt.append({"ref": ref, "matched": "true", "id": str(pid)[:8]})
     actor = await _actor_for(ctx, subagent_id, subagent_type)
-    d = await capture.record_decision(
-        Actions(pool), summary, kind=kind, rationale=rationale, repo=repo,
-        source=actor, grounds=gids,
-        protocol=protocol, supersedes=str(old) if old else None,
-        resolves=[str(a) for a in answered] if isinstance(resolves, list) else
-                 (str(answered[0]) if answered else None),
-    )
+    try:
+        d = await capture.record_decision(
+            Actions(pool), summary, kind=kind, rationale=rationale, repo=repo,
+            source=actor, grounds=gids,
+            protocol=protocol, supersedes=str(old) if old else None,
+            resolves=[str(a) for a in answered] if isinstance(resolves, list) else
+                     (str(answered[0]) if answered else None),
+        )
+    except ValueError as e:  # task #107: e.g. a path-shaped repo — refuse clean, no traceback
+        return {"error": str(e)}
     out: dict[str, Any] = {"id": str(d), "kind": kind, "summary": summary}
     # PRIOR-ART SURFACING (thread 44635c42, task #67; UNIFIED across {Decisions, Practices,
     # Superstitions} by THE THAW, ruling 1e6d7367): before a ruling stands, name what
@@ -3858,11 +3861,14 @@ async def ingest_reference(
     for c in cites or []:
         rid = await _resolve(pool, c)
         (cids.append(rid) if rid is not None else missing.append(c))
-    ref, canon = await capture.ingest_reference(
-        Actions(pool), title, source_url=source_url, vendor=vendor,
-        body=body, caveats=caveats, repo=repo, cites=cids,
-        source=await _actor_for(ctx, subagent_id, subagent_type),
-    )
+    try:
+        ref, canon = await capture.ingest_reference(
+            Actions(pool), title, source_url=source_url, vendor=vendor,
+            body=body, caveats=caveats, repo=repo, cites=cids,
+            source=await _actor_for(ctx, subagent_id, subagent_type),
+        )
+    except ValueError as e:  # task #107: e.g. a path-shaped repo — refuse clean, no traceback
+        return {"error": str(e)}
     out: dict[str, Any] = {"id": str(ref), "canonical": canon,
                            "note": "cite it: record_decision(..., grounds=['" + canon + "'])"}
     if missing:
