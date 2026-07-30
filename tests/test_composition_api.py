@@ -81,16 +81,20 @@ async def test_watch_appears_as_a_composition(client: httpx.AsyncClient) -> None
     assert watch["spec"]["op"] == "select"  # a watch's spec is a runnable select
 
 
-async def test_watermark_endpoint_returns_the_four_markers_and_moves_on_a_write(
+async def test_watermark_endpoint_returns_the_seven_markers_and_moves_on_a_write(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
     """ruling cf9286b2's whole poll target — osiris.js fetches this, never a composition,
-    to decide whether to re-run one. Full behavioral coverage of graph_watermark lives in
-    test_watermark.py; this just proves the REST route (the thing the browser actually
-    calls) wires through to it correctly."""
+    to decide whether to re-run one. task #109 added rooms/compositions/cases (the CATALOG
+    half osiris.js's separate catalogTick watches). Full behavioral coverage of
+    graph_watermark lives in test_watermark.py — including why `audit_log` alone is left
+    out of the "empty" assertion below (task #97's catalog seed can leave it non-None
+    depending on test collection order; the other six carry no such exception) — this just
+    proves the REST route (the thing the browser actually calls) wires through correctly."""
     before = (await client.get("/watermark")).json()
-    assert before == {"audit_log": None, "fleet_messages": None, "agent_mounts": None,
-                      "agent_wakes": None}
+    assert before["fleet_messages"] is None and before["agent_mounts"] is None
+    assert before["agent_wakes"] is None and before["rooms"] is None
+    assert before["compositions"] is None and before["cases"] is None
     await actions.create_or_find_object("Thread", "thread:wmapi1", "test")
     after = (await client.get("/watermark")).json()
     assert after["audit_log"] is not None and after["audit_log"] != before["audit_log"]

@@ -382,12 +382,17 @@ async function startAutoRefresh(name){
 // RESULT.spec resync on every runWorking() call, so there is no cheap signal left to tell
 // "edited" from "freshly loaded" once the composer bar has already re-run. mail and
 // fleet-strip are simple ranked lists; filtering either mid-poll is a real but narrow risk.
+// task #109 added rooms/compositions/cases to the SAME /watermark payload (the catalog
+// half, below) — diff only the four LENS keys here, never the whole object, or a new
+// saved composition would needlessly re-run whatever unrelated composition is on screen.
+const _LENS_KEYS=['audit_log','fleet_messages','agent_mounts','agent_wakes'];
+function _lensMark(mark){ return _LENS_KEYS.map(k=>mark[k]).join('|'); }
 async function refreshTick(name, secs){
   if(name!==ACTIVE || !RESULT || RESULT.name!==name) return;  // switched away or drilled in
   let mark;
   try{ mark = await fetch('/watermark').then(r=>r.json()); }
   catch(e){ $('refreshdot').textContent=' · not refreshing'; return; }
-  if(JSON.stringify(mark)===JSON.stringify(REFRESH_MARK)){ $('refreshdot').textContent=` · live ${secs}s`; return; }
+  if(_lensMark(mark)===_lensMark(REFRESH_MARK)){ $('refreshdot').textContent=` · live ${secs}s`; return; }
   REFRESH_MARK=mark;
   const res = await fetch(`/compositions/${encodeURIComponent(name)}/run`,{method:'POST',
     headers:{'content-type':'application/json'},body:JSON.stringify({subject:FOCUS})}).then(r=>r.json());
@@ -396,6 +401,41 @@ async function refreshTick(name, secs){
   if(!Osiris.viewsFor(RESULT).includes(VIEW)) VIEW=Osiris.defaultView(RESULT);
   renderSwitcher(); await renderCurrent();
   $('refreshdot').textContent=` · live ${secs}s`;
+}
+
+// ---- catalog watch (task #109, Thoth DM 2133): the CATALOG half of auto-refresh — the
+// room switcher's own cases/compositions counts (loadRooms) and the composer sidebar's
+// shelf of lenses (loadComps), neither of which the lens-poller above ever touches (it
+// only re-runs whichever composition is ACTIVE). The operator's cited case: a compositions
+// backfill landed, verified, deployed — and his sidebar kept reading a stale count because
+// nothing was watching the CATALOG move, only the currently-open lens's own data.
+//
+// Runs unconditionally from boot, never gated by refresh_secs: /rooms and /compositions are
+// two flat, bounded queries already (not run_composition's dynamic op-tree), so there is no
+// "expensive Function on a timer" risk to opt out of the way a lens has — the idle-is-free
+// property the lens-poller earns through an explicit per-composition choice comes for free
+// here from the shape of the data. 8s reuses _COMP_REFRESH_SECS' own measured/reasoned tick
+// (mail/fleet-strip/fleet-live) rather than inventing a second arbitrary number.
+//
+// KNOWN LIMITATION, accepted to keep this v1 small (same spirit as the lens-poller's own
+// accepted composer-clobber gap above): a background loadComps() rebuild resets any
+// shelf a human had manually expanded/collapsed back to its default open/closed state —
+// only fires on an actual catalog move, so the window is narrow, but it is real.
+let CATALOG_MARK=null;
+const _CATALOG_KEYS=['rooms','compositions','cases'];
+function _catalogMark(mark){ return mark ? _CATALOG_KEYS.map(k=>mark[k]).join('|') : null; }
+async function startCatalogWatch(){
+  try{ CATALOG_MARK = await fetch('/watermark').then(r=>r.json()); }
+  catch(e){ CATALOG_MARK=null; }
+  setInterval(catalogTick, 8000);
+}
+async function catalogTick(){
+  let mark;
+  try{ mark = await fetch('/watermark').then(r=>r.json()); }
+  catch(e){ return; }  // network hiccup — leave CATALOG_MARK as-is, retry next tick
+  const moved = _catalogMark(mark)!==_catalogMark(CATALOG_MARK);
+  CATALOG_MARK=mark;
+  if(moved) await Promise.all([loadRooms(), loadComps()]);
 }
 
 // W4: the inline composer. The active result's op-tree is shown as a lineage breadcrumb +
@@ -1096,7 +1136,8 @@ Osiris.loadSchema().then(async()=>{
     await runComp(cur.composition);
   await applyDeepLink();
   loadPanes(); wireGrips();          // both rails: remembered widths + drag handles
-  watchConsole(); });  // open the shared-cursor link with Claude
+  watchConsole();                    // open the shared-cursor link with Claude
+  startCatalogWatch(); });           // task #109: keep the room/composition catalog live
 </script>
 </body>
 </html>
