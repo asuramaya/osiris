@@ -111,6 +111,13 @@ a:focus-visible, button:focus-visible, [tabindex]:focus-visible {
 
 .queue-row .queue-row-title {
   flex: 1 1 auto;
+  min-width: 0;              /* flex items default to min-width:auto (content-sized), which
+                                 would defeat the shrink overflow/ellipsis below depends on —
+                                 EXCEPT the spec already zeroes the automatic minimum whenever
+                                 overflow isn't visible (it isn't, two lines down), so this line
+                                 is redundant with the current CSS. Kept anyway: explicit, not
+                                 implicit, so the truncation doesn't quietly break if `overflow`
+                                 is ever touched without anyone re-deriving this carve-out. */
   font-family: var(--font-serif);
   font-size: var(--size-3);
   overflow: hidden;
