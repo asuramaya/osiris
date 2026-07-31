@@ -8,7 +8,12 @@ from datetime import UTC, datetime, timedelta
 
 from src.actions.core import Actions
 from src.orchestrator.mounts import save_mount
-from src.orchestrator.projects import assert_project_property, fold_project, retire_project
+from src.orchestrator.projects import (
+    assert_project_property,
+    correct_project_name,
+    fold_project,
+    retire_project,
+)
 from src.orchestrator.seats import ensure_seat
 
 NOW = datetime.now(UTC)
@@ -496,3 +501,149 @@ async def test_fold_project_tool_surfaces_the_merge_event_and_same_as_link(
         dupe_id, into_id)
     assert out["merge_event_id"] == event_id
     assert out["same_as_link_id"] == link_id
+
+
+# --- ambiguity refusal (#110, decision 1db1ff41) ------------------------------------------
+
+async def test_resolve_refuses_a_label_collision_rather_than_guess(actions: Actions) -> None:
+    """The ballgem/sutra SHAPE, synthesized: one object findable by canonical alone
+    (repo:twin), a SIBLING findable only through its own `name` property (canonicaled
+    something else entirely) — the old fallback was LIMIT 1 with no ORDER BY, whichever
+    row postgres felt like. Every caller (retire_project here; fold_project/
+    correct_project_name share the same wrapper) must refuse and name both, never pick."""
+    await _stub_project(actions, "repo:twin", "twin")
+    await _stub_project(actions, "repo:twin-elsewhere", "twin")
+
+    out = await retire_project(actions, project="twin", actor="agent:test", because="x")
+
+    assert "ambiguous" in out["error"]
+    assert "repo:twin" in out["error"] and "repo:twin-elsewhere" in out["error"]
+    row = await actions.pool.fetchrow("SELECT status FROM objects WHERE canonical='repo:twin'")
+    assert row["status"] == "active"  # refused — nothing written
+
+
+async def test_resolve_by_exact_canonical_is_never_ambiguous_even_with_a_name_collision(
+    actions: Actions,
+) -> None:
+    """A caller who names the exact canonical is never blocked by a collision on the
+    FUZZY name lookup alone — an id/canonical reference is a real disambiguation the
+    caller already did, and the combined check still finds it as one of the matches,
+    not zero."""
+    await _stub_project(actions, "repo:exactcase", "exactcase")
+    await _stub_project(actions, "repo:exactcase-twin", "exactcase")
+
+    out = await retire_project(actions, project="repo:exactcase", actor="agent:test",
+                               because="x")
+    assert "ambiguous" in out["error"]  # still correctly caught — canonical alone matched
+    assert "repo:exactcase" in out["error"] and "repo:exactcase-twin" in out["error"]
+
+
+async def test_fold_project_refuses_an_ambiguous_dupe_or_into(actions: Actions) -> None:
+    await _stub_project(actions, "repo:famb1", "amb")
+    await _stub_project(actions, "repo:famb2", "amb")
+    await _stub_project(actions, "repo:fclean", "clean")
+
+    out = await fold_project(actions, dupe="amb", into="fclean",
+                             evidence="x", actor="agent:test")
+    assert "ambiguous" in out["error"]
+
+
+# --- correct_project_name (#110, decision 1db1ff41 — the delegated exception) -------------
+
+async def _name_history(actions: Actions, canon: str, values: list[str]) -> None:
+    pid = await actions.create_or_find_object("SoftwareProject", canon, "test")
+    for i, v in enumerate(values):
+        await actions.assert_property(pid, "name", v, f"agent:hist{i:04d}",
+                                      NOW + timedelta(minutes=i), 0.9,
+                                      evidence_class="self_declared")
+
+
+async def test_correct_project_name_refuses_the_real_bytebye_pair_its_not_case_drift(
+    actions: Actions,
+) -> None:
+    """THE OPENING TEST, per Thoth's own order — and it does NOT settle. I mischaracterized
+    repo:bytebye's contradiction as case-only drift when I first found it (DM 2441/2443),
+    and Thoth built on that framing too. Building this verb caught the error: 'bytebye'
+    (byte+bye: b-y-t-e-b-y-e) and 'ByeByte' (Bye+Byte: b-y-e-b-y-t-e) are NOT case
+    variants of one string — they differ at the THIRD character even after casefold
+    ('t' vs 'e'). It is a genuine transposition, not a flip-flop, and the negative
+    control is exactly what stops correct_project_name from settling it wrong. Using the
+    real values here, not a synthesized stand-in, because the mistake was in reading the
+    real data, and the regression test has to be the real data."""
+    await _name_history(actions, "repo:bytebyereal",
+                        ["bytebye", "ByeByte", "bytebye", "ByeByte", "bytebye"])
+
+    out = await correct_project_name(actions, project="bytebyereal", actor="agent:test")
+
+    assert "error" in out and "rename_project" in out["error"]
+    assert set(out["distinct_names"]) == {"bytebye", "ByeByte"}
+    winner = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='repo:bytebyereal' AND a.name='name' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1")
+    assert winner == "bytebye"  # unchanged — refused, nothing written
+
+
+async def test_correct_project_name_settles_a_genuine_case_only_flip_flop(
+    actions: Actions,
+) -> None:
+    """The shape correct_project_name actually exists for: TRUE case variants of the
+    SAME letters, oscillating because the resolver picks whichever was asserted most
+    recently at identical confidence. Settling to the MAJORITY (not the latest) is what
+    stops the oscillation; settling to the latest would just be the same bug with extra
+    steps."""
+    await _name_history(actions, "repo:trueflipflop",
+                        ["byteclub", "ByteClub", "byteclub", "ByteClub", "byteclub"])
+
+    out = await correct_project_name(actions, project="trueflipflop", actor="agent:test")
+
+    assert out["corrected"] is True
+    assert out["settled_to"] == "byteclub"  # 3 of 5, the majority
+    assert out["vote"] == {"byteclub": 3, "ByteClub": 2}
+    winner = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='repo:trueflipflop' AND a.name='name' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1")
+    assert winner == "byteclub"
+
+
+async def test_correct_project_name_refuses_a_genuine_rename(actions: Actions) -> None:
+    """THE NEGATIVE CONTROL (ruling 1db1ff41's own bar): redmonth vs ballgem is not
+    case/whitespace drift, it is two different names — correct_project_name must refuse
+    rather than silently pick a majority, or the delegation stops being safe."""
+    await _name_history(actions, "repo:driftorfork", ["redmonth", "redmonth", "ballgem"])
+
+    out = await correct_project_name(actions, project="driftorfork", actor="agent:test")
+
+    assert "error" in out and "rename_project" in out["error"]
+    assert set(out["distinct_names"]) == {"redmonth", "ballgem"}
+    winner = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='repo:driftorfork' AND a.name='name' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1")
+    assert winner == "ballgem"  # unchanged — refused, nothing written
+
+
+async def test_correct_project_name_refuses_a_tie_rather_than_guess(actions: Actions) -> None:
+    await _name_history(actions, "repo:tiedname", ["Foo", "foo"])
+
+    out = await correct_project_name(actions, project="tiedname", actor="agent:test")
+
+    assert "error" in out and "tied" in out["error"]
+
+
+async def test_correct_project_name_is_a_noop_on_an_already_settled_name(
+    actions: Actions,
+) -> None:
+    await _stub_project(actions, "repo:settled", "settled")
+
+    out = await correct_project_name(actions, project="settled", actor="agent:test")
+
+    assert out == {"project": "repo:settled", "corrected": False,
+                   "note": "already a single value — nothing to correct"}
+
+
+async def test_correct_project_name_refuses_unknown_project(actions: Actions) -> None:
+    out = await correct_project_name(actions, project="nope-does-not-exist",
+                                     actor="agent:test")
+    assert "no such SoftwareProject" in out["error"]

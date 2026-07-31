@@ -38,11 +38,33 @@ _EC = EvidenceClass.SELF_DECLARED.value
 _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 
 
+class AmbiguousProjectRef(Exception):
+    """Raised by `_resolve_software_project` when a bare label resolves to MORE THAN ONE
+    active SoftwareProject (#110, decision 1db1ff41 — the ballgem/sutra shape: two live
+    objects, one canonicaled by its bare name and one by its full disk path, each still
+    answering to the same `name` assertion). The old fallback was `LIMIT 1` with no
+    `ORDER BY` — whichever row postgres felt like, silently, for every caller including
+    retire_project and fold_project. A PERMANENT correctness property, not a workaround
+    for today's specific duplicates: a verb that mutates the graph must never guess which
+    of two live objects a bare label meant, this month or the next time a pair collides.
+    `candidates` names every match so the caller reports, never guesses."""
+
+    def __init__(self, ref: str, candidates: list[str]) -> None:
+        self.ref = ref
+        self.candidates = candidates
+        super().__init__(f"{ref!r} resolves to {len(candidates)} active SoftwareProjects: "
+                         f"{', '.join(candidates)}")
+
+
 async def _resolve_software_project(pool: asyncpg.Pool, ref: str) -> asyncpg.Record | None:
     """A SoftwareProject ONLY — a full UUID, an 8-char short id, an exact canonical
     (`repo:<name>` accepted with or without the prefix), or its `name` property. Never
     widens to another object type: this is the structural half of the seshat/ra
-    disambiguation, not just wording in the receipt."""
+    disambiguation, not just wording in the receipt.
+
+    Raises `AmbiguousProjectRef` (never silently picks) when the `name`-property fallback
+    matches more than one distinct active object — the UUID/short-id/canonical paths above
+    stay exact-key lookups and can never collide."""
     ref = ref.strip()
     try:
         oid = uuid.UUID(ref)
@@ -53,25 +75,57 @@ async def _resolve_software_project(pool: asyncpg.Pool, ref: str) -> asyncpg.Rec
             "SELECT id, canonical, status FROM objects WHERE id=$1 AND type='SoftwareProject'",
             oid)
         if row is not None:
-            return row
+            return row  # an exact object id — never ambiguous by construction
     short = ref.lower()
     if re.fullmatch(r"[0-9a-f]{8}[0-9a-f-]*", short):
         row = await pool.fetchrow(
             "SELECT id, canonical, status FROM objects "
             "WHERE type='SoftwareProject' AND id::text LIKE $1 || '%' LIMIT 1", short)
         if row is not None:
-            return row
+            return row  # a short id prefix — practically unique, same convention elsewhere
+
+    # From here `ref` denotes a LABEL, not an object id — canonical-string match and
+    # `name`-property match are BOTH label lookups and must be checked for a collision
+    # TOGETHER, or an object findable only by canonical (repo:ballgem) would hide a
+    # sibling findable only by its own `name` property (a differently-canonicaled twin
+    # whose winning name still equals this same bare label) without either lookup ever
+    # noticing the other existed.
+    bare = ref.removeprefix("repo:")
     canon = ref if ref.startswith("repo:") else f"repo:{ref}"
-    row = await pool.fetchrow(
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical, o.status FROM objects o "
+        "WHERE o.type='SoftwareProject' AND o.status='active' "
+        "AND (o.canonical=$1 OR (SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='name' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = $2)", canon, bare)
+    if len(rows) > 1:
+        raise AmbiguousProjectRef(ref, sorted(str(r["canonical"]) for r in rows))
+    if rows:
+        return rows[0]
+    # a non-active (retired/merged) object is reachable only by its exact canonical — a
+    # caller resolving a KNOWN-dead label (retire_project's own "already retired" message)
+    # must still find it, just never through the ambiguity-checked label path above
+    return await pool.fetchrow(
         "SELECT id, canonical, status FROM objects WHERE type='SoftwareProject' AND "
         "canonical=$1", canon)
-    if row is not None:
-        return row
-    return await pool.fetchrow(
-        "SELECT o.id, o.canonical, o.status FROM objects o "
-        "JOIN current_assertions a ON a.object_id=o.id "
-        "WHERE o.type='SoftwareProject' AND a.name='name' AND a.value #>> '{}' = $1 LIMIT 1",
-        ref)
+
+
+async def _resolve_project_ref(
+    pool: asyncpg.Pool, ref: str, *, verb: str,
+) -> tuple[asyncpg.Record | None, dict[str, Any] | None]:
+    """Shared refusal wrapper over `_resolve_software_project`: (row, None) on a clean
+    resolution, (None, error_dict) on an ambiguous ref — every verb below reports that
+    shape identically rather than re-writing the same try/except each time. A `None` row
+    with no error still means "not found," exactly as `_resolve_software_project` itself
+    signals it; callers keep their own "no such SoftwareProject" message."""
+    try:
+        row = await _resolve_software_project(pool, ref)
+    except AmbiguousProjectRef as amb:
+        return None, {"error": f"{amb.ref!r} is ambiguous — {len(amb.candidates)} active "
+                               f"SoftwareProjects answer to it: "
+                               f"{', '.join(amb.candidates)}. Name the exact one "
+                               f"(canonical or id) — {verb} never guesses which."}
+    return row, None
 
 
 async def retire_project(
@@ -89,7 +143,9 @@ async def retire_project(
     project = (project or "").strip()
     if not project:
         return {"error": "project is required"}
-    row = await _resolve_software_project(actions.pool, project)
+    row, err = await _resolve_project_ref(actions.pool, project, verb="retire_project")
+    if err:
+        return err
     if row is None:
         return {"error": f"no such SoftwareProject: {project!r}"}
     pid, canonical, status = row["id"], row["canonical"], row["status"]
@@ -145,7 +201,9 @@ async def assert_project_property(
         return {"error": "status has its own compensating-event path — use "
                          "retire_project (or a future sibling), never a bare property "
                          "assertion"}
-    row = await _resolve_software_project(actions.pool, project)
+    row, err = await _resolve_project_ref(actions.pool, project, verb="assert_project_property")
+    if err:
+        return err
     if row is None:
         return {"error": f"no such SoftwareProject: {project!r}"}
     await actions.assert_property(row["id"], name, value, actor, datetime.now(UTC), _CONF,
@@ -237,8 +295,12 @@ async def fold_project(
         return {"error": "fold_project needs both labels: dupe and into"}
     if dupe == into:
         return {"error": "dupe and into name the same project — nothing to fold"}
-    dupe_row = await _resolve_software_project(actions.pool, dupe)
-    into_row = await _resolve_software_project(actions.pool, into)
+    dupe_row, dupe_err = await _resolve_project_ref(actions.pool, dupe, verb="fold_project")
+    if dupe_err:
+        return dupe_err
+    into_row, into_err = await _resolve_project_ref(actions.pool, into, verb="fold_project")
+    if into_err:
+        return into_err
     if dupe_row is None or into_row is None:
         missing = [label for label, row in ((dupe, dupe_row), (into, into_row))
                   if row is None]
@@ -285,3 +347,80 @@ async def fold_project(
     await actions.merge_objects(into_oid, dupe_oid, justification=evidence, actor=actor)
     return {"folded": dupe_row["canonical"], "into": into_row["canonical"],
            "edges_moved": moved, "mounts_moved": mounts_moved}
+
+
+# --- correct_project_name (#110, decision 1db1ff41 — the delegated exception) ------------
+
+async def correct_project_name(
+    actions: Actions, *, project: str, actor: str, because: str | None = None,
+) -> dict[str, Any]:
+    """THE DELEGATED EXCEPTION (operator ruling 1db1ff41, verbatim: case/whitespace
+    normalization "where identity is provably unchanged... is a CORRECTION, not a
+    rename, and is agent-safe"). Mirrors correct_house/correct_agent_house's own naming
+    and self-authorizing shape: no operator citation required — BECAUSE this function
+    re-proves the identity-unchanged claim itself before writing, rather than trusting
+    the caller's word for it. `because` is accepted for the record but never required;
+    the proof below is what authorizes the write, not a stated reason.
+
+    PROOF, not assumption: every current `name` value this project's own assertion
+    history carries (not just the winning one — bytebye's own case has 20, 12 lowercase
+    and 8 mixed-case, all at the SAME confidence, so "current" has been flip-flopping
+    for two weeks depending only on which was asserted last) must reduce to exactly ONE
+    normalized form (`strip().casefold()`). A single genuinely different name anywhere
+    in that set — redmonth vs ballgem, not bytebye vs ByeByte — REFUSES loudly and names
+    rename_project as the right tool instead; that refusal IS the negative control that
+    keeps this delegation safe (ruling 1db1ff41's own bar: "prove a genuine rename
+    refuses without an explicit declaration").
+
+    SETTLES TO THE MAJORITY, not the most recent: most-recent-wins is the exact
+    mechanism that let bytebye's name genuinely oscillate for two weeks — majority vote
+    among the raw historical assertions picks whichever casing this object's own history
+    actually favors, using that casing's own most-recent instance to break nothing extra.
+    A TIE refuses rather than guess; the caller settles it by hand
+    (assert_project_property) with a stated reason on the record."""
+    row, err = await _resolve_project_ref(actions.pool, project, verb="correct_project_name")
+    if err:
+        return err
+    if row is None:
+        return {"error": f"no such SoftwareProject: {project!r}"}
+    if row["status"] != "active":
+        return {"error": f"{row['canonical']} is {row['status']}, not active — nothing to "
+                         "correct"}
+    values = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v, observed_at FROM current_assertions "
+        "WHERE object_id=$1 AND name='name' ORDER BY observed_at", row["id"])
+    distinct_raw = sorted({v["v"] for v in values if v["v"]})
+    if len(distinct_raw) <= 1:
+        return {"project": row["canonical"], "corrected": False,
+                "note": "already a single value — nothing to correct"}
+    normalized = {v.strip().casefold() for v in distinct_raw}
+    if len(normalized) > 1:
+        return {"error": f"{row['canonical']} carries genuinely different names, not just "
+                         f"case/whitespace drift: {', '.join(distinct_raw)} — this is a "
+                         "rename, not a correction; correct_project_name refuses rather "
+                         "than guess. Use rename_project with an explicit declaration "
+                         "instead.",
+                "distinct_names": distinct_raw}
+    counts: dict[str, int] = {}
+    latest: dict[str, Any] = {}
+    for v in values:
+        val = v["v"]
+        if not val:
+            continue
+        counts[val] = counts.get(val, 0) + 1
+        latest[val] = v["observed_at"]
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], -latest[kv[0]].timestamp()))
+    if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+        return {"error": f"{row['canonical']}'s name assertions are tied "
+                         f"{ranked[0][1]}-{ranked[1][1]} between {ranked[0][0]!r} and "
+                         f"{ranked[1][0]!r} — correct_project_name refuses to break a tie "
+                         "by guessing; settle it by hand (assert_project_property) with a "
+                         "stated reason.",
+                "vote": dict(counts)}
+    settled = ranked[0][0]
+    now = datetime.now(UTC)
+    await actions.assert_property(row["id"], "name", settled, actor, now, _CONF,
+                                  evidence_class=_EC)
+    return {"project": row["canonical"], "corrected": True, "settled_to": settled,
+           "was": distinct_raw, "vote": dict(counts),
+           "because": because or "case/whitespace-only correction, self-proved"}
