@@ -8,7 +8,7 @@ per-reader lease cycle, the group visibility (two agents both see a broadcast), 
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from src.actions.core import Actions
@@ -459,6 +459,35 @@ async def test_send_still_delivers_to_a_name_with_an_eligible_seat_holder(
     assert dm["seat"] == "Clean"
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM fleet_messages WHERE to_agent=$1", seat["seat_id"]) == 1
+
+
+async def test_send_delivers_through_an_older_eligible_holder_despite_a_newer_marked_one(
+    actions: Actions,
+) -> None:
+    """THE ACCEPTANCE TEST FOR THOTH'S CORRECTION (DM 2377): two active holds edges on one
+    seat — the newer marked, the older eligible — the exact shape live on seat:c476e7a2
+    (decision 6ce4ac5f). Before this fix, seat_holder_ineligible looked only at the newest
+    edge and refused; after it, send() must DELIVER to the seat (binding_of_handle's own
+    ranking, unaffected by the fix, already resolved this correctly)."""
+    from src.orchestrator.seats import ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="TwoHoldersLive", source="test")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    now = datetime.now(UTC)
+    older = await actions.create_or_find_object("Agent", "agent:live-older", "agent:live-older")
+    await actions.create_link(older, seat_oid, "holds", "test", now - timedelta(minutes=5), 0.9,
+                              evidence_class="self_declared")
+    newer = await actions.create_or_find_object("Agent", "agent:live-newer", "agent:live-newer")
+    await actions.create_link(newer, seat_oid, "holds", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await actions.assert_property(newer, "false_mint", "true", "agent:live-newer", now, 0.9,
+                                  evidence_class="self_declared")
+
+    dm = await send_message(actions.pool, from_agent="agent:boss", from_project="osiris",
+                            to_agent="TwoHoldersLive", body="ship it")
+    assert dm["to_agent"] == seat["seat_id"]
+    assert dm["seat"] == "TwoHoldersLive"
 
 
 async def test_send_to_a_raw_seat_id_is_unaffected_by_the_new_check(

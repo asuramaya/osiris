@@ -9,7 +9,7 @@ ATTACHES with a one-time token — refusals loud, nothing written.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -469,6 +469,64 @@ async def test_seat_holder_ineligible_ignores_a_superseded_holders_own_marks(
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:heal-new")  # supersedes
 
     assert await seat_holder_ineligible(actions.pool, "Healed") is None
+
+
+async def test_seat_holder_ineligible_none_when_an_older_active_holder_is_eligible(
+    actions: Actions,
+) -> None:
+    """THOTH'S CORRECTION (DM 2377, caught in review — held the deploy of ddb8104): the
+    first build of this function checked whether the NEWEST active holds edge was marked,
+    not whether ANY eligible holder existed among them. `bind_holder` always heals a prior
+    edge before creating a new one, so it can never itself produce two simultaneously
+    active `holds` edges — but nothing else in the schema enforces single-holder (decision
+    6ce4ac5f), and seat:c476e7a2 carries exactly this shape live: two active edges, the
+    newer one marked, the older one still eligible. Constructed here with create_link
+    directly (bypassing bind_holder's own invalidation) to reproduce that shape, not
+    theorize it. binding_of_handle filters marked holders out before ranking by recency, so
+    it resolves the older, eligible one fine — this function must agree, not refuse."""
+    from src.orchestrator.seats import seat_holder_ineligible
+
+    seat = await ensure_seat(actions, house="osiris", handle="TwoHolders", source="test")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    now = datetime.now(UTC)
+    older = await actions.create_or_find_object("Agent", "agent:two-older", "agent:two-older")
+    await actions.create_link(older, seat_oid, "holds", "test", now - timedelta(minutes=5), 0.9,
+                              evidence_class="self_declared")
+    newer = await actions.create_or_find_object("Agent", "agent:two-newer", "agent:two-newer")
+    await actions.create_link(newer, seat_oid, "holds", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await actions.assert_property(newer, "false_mint", "true", "agent:two-newer", now, 0.9,
+                                  evidence_class="self_declared")
+
+    assert await seat_holder_ineligible(actions.pool, "TwoHolders") is None
+
+
+async def test_seat_holder_ineligible_fires_when_every_active_holder_is_ineligible(
+    actions: Actions,
+) -> None:
+    """The genuine positive case with TWO active holders: both marked. Must still refuse —
+    the fix narrows the false-positive, it must not swallow the real one."""
+    from src.orchestrator.seats import seat_holder_ineligible
+
+    seat = await ensure_seat(actions, house="osiris", handle="BothMarked", source="test")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:both-a", "agent:both-a")
+    await actions.create_link(a, seat_oid, "holds", "test", now - timedelta(minutes=5), 0.9,
+                              evidence_class="self_declared")
+    await actions.assert_property(a, "retired", "true", "agent:both-a", now, 0.9,
+                                  evidence_class="self_declared")
+    b = await actions.create_or_find_object("Agent", "agent:both-b", "agent:both-b")
+    await actions.create_link(b, seat_oid, "holds", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await actions.assert_property(b, "false_mint", "true", "agent:both-b", now, 0.9,
+                                  evidence_class="self_declared")
+
+    reason = await seat_holder_ineligible(actions.pool, "BothMarked")
+    assert reason is not None
+    assert "agent:both-a" in reason and "agent:both-b" in reason
 
 
 # --- Phase B4: the hand-resume follows the seat ---

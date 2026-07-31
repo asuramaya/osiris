@@ -811,14 +811,30 @@ async def seat_holder_ineligible(pool: asyncpg.Pool, name: str) -> str | None:
 
     Returns None for the other three shapes (no seat / ambiguous / genuinely vacant) — the
     fallback is the CORRECT answer for an un-seated or truly-empty lineage, and this
-    function must never block it. Returns a REASON STRING, naming the seat and the marked
-    holder, ONLY for the fourth shape: a seat exists, uniquely, and DOES have an active
-    holder, but that holder is exactly what binding_of_handle's own NOT EXISTS guard (this
-    function's holder query mirrors it) excludes. A caller (send_message) that sees this
-    string must REFUSE before ever calling resolve_seat — the refusal belongs in the
-    resolution, not a post-hoc check on the receipt (both `dm_to` and `lineage_head` agree
-    on the SAME wrong answer once the fallback has already run, so no receipt-side check can
-    catch this after the fact)."""
+    function must never block it. Returns a REASON STRING, naming the seat and its
+    ineligible holder(s), ONLY for the fourth shape: a seat exists, uniquely, DOES have at
+    least one active holder, and NONE of them are eligible. A caller (send_message) that
+    sees this string must REFUSE before ever calling resolve_seat — the refusal belongs in
+    the resolution, not a post-hoc check on the receipt (both `dm_to` and `lineage_head`
+    agree on the SAME wrong answer once the fallback has already run, so no receipt-side
+    check can catch this after the fact).
+
+    ANY ELIGIBLE HOLDER, NOT JUST THE NEWEST (Thoth's correction to this function's first
+    build, DM 2377 — caught in review, HELD the deploy of ddb8104): `binding_of_handle`
+    FILTERS OUT marked/visitor holders in its own WHERE clause, THEN takes the newest of
+    what remains — so a seat with an OLDER eligible holder still resolves correctly even
+    when a NEWER active holds edge belongs to a marked one. The first build of this
+    function asked the wrong question ("is the newest holder eligible") instead of the one
+    its own docstring already promised ("does any eligible holder exist") — those two
+    disagree exactly whenever a Seat carries more than one active `holds` edge with the
+    newest marked and an older one still eligible. NOT hypothetical: seat:c476e7a2 carries
+    exactly this shape right now (decision 6ce4ac5f) — a zero-turn phantom mint's own
+    ordinary seam (gen N+1 takes the newest holds edge, gets marked false_mint seconds
+    later, gen N still holds and is still eligible) reproduces it on demand. A
+    fleet-wide single point of failure (send_message) must never refuse-to-serve on a check
+    that can false-positive (ruling 577988ed) — this now checks the FILTERED (eligible) set
+    first, mirroring binding_of_handle exactly, and only names a refusal when that set is
+    empty while active holders exist at all."""
     seats = [r["canonical"] for r in await pool.fetch(
         "SELECT o.canonical FROM objects o WHERE o.type='Seat' AND o.status='active' "
         "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
@@ -826,7 +842,7 @@ async def seat_holder_ineligible(pool: asyncpg.Pool, name: str) -> str | None:
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1)", name)]
     if len(seats) != 1:
         return None  # no seat, or an ambiguous handle — not this function's shape to name
-    row = await pool.fetchrow(
+    rows = await pool.fetch(
         "SELECT f.canonical, "
         " EXISTS(SELECT 1 FROM current_assertions r WHERE r.object_id=f.id "
         "   AND r.name IN ('retired','false_mint') AND r.value #>> '{}' = 'true') AS marked, "
@@ -835,14 +851,18 @@ async def seat_holder_ineligible(pool: asyncpg.Pool, name: str) -> str | None:
         "FROM links l JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
         "WHERE t.canonical=$1 AND l.type='holds' AND f.type='Agent' "
         "AND (l.valid_until IS NULL OR l.valid_until > now()) "
-        "ORDER BY l.first_seen DESC LIMIT 1", seats[0])
-    if row is None:
+        "ORDER BY l.first_seen DESC", seats[0])
+    if not rows:
         return None  # a genuinely vacant seat — the un-seated fallback is the right answer
-    if not row["marked"] and not row["visitor"]:
-        return None  # an eligible holder — binding_of_handle would already have found it
-    why = "marked retired/false_mint" if row["marked"] else "a visitor spawn wearing the handle"
-    return (f"{seats[0]} is the unique living seat for {name!r}, but its only active holder "
-            f"({row['canonical']}) is {why} — no eligible holder exists")
+    ineligible = [r for r in rows if r["marked"] or r["visitor"]]
+    if len(ineligible) < len(rows):
+        return None  # AT LEAST ONE eligible holder — binding_of_handle resolves fine
+    names = ", ".join(
+        f"{r['canonical']} ({'marked retired/false_mint' if r['marked'] else 'a visitor spawn'})"
+        for r in rows)
+    why = f"every active holder is ineligible ({names})"
+    return (f"{seats[0]} is the unique living seat for {name!r}, but {why} — "
+            "no eligible holder exists")
 
 
 async def _seat_display(pool: asyncpg.Pool, seat_id: str) -> dict[str, Any]:
