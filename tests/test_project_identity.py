@@ -234,6 +234,36 @@ async def test_candidates_key_by_live_name_not_stale_canonical_after_a_rename(
     assert fresh["write_attribution"]["count"] == 1
 
 
+async def test_write_attribution_ignores_a_healed_invalidated_edge(
+    actions: Actions, tmp_path,
+) -> None:
+    """Caught live re-running this tool right after Sekhmet/Thoth confirmed the real
+    redmonth/ballgem duplicate fold complete: it still reported writes split 33/112
+    across two projects, one of them already merged and dead. Root cause: this query
+    had NO `valid_until` filter at all — every in_repo edge ever asserted counted,
+    including ones a compensating event (fold_project's own estate-heal, invalidate_link
+    generally) had already superseded. An invalidated edge must not count."""
+    office = tmp_path / "office"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="osiris", handle="Healseat",
+                             anchor_cwd=str(office), source="test")
+    await _mk_agent(actions, "agent:hea1seat")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:hea1seat")
+    proj = await _mk_project(actions, "healproj")
+    live_t = await actions.create_or_find_object("Thread", "thread:healkeeplive", "test")
+    await actions.create_link(live_t, proj, "in_repo", "agent:hea1seat", datetime.now(UTC), 0.9)
+    dead_t = await actions.create_or_find_object("Thread", "thread:healkeepdead", "test")
+    await actions.create_link(dead_t, proj, "in_repo", "agent:hea1seat", datetime.now(UTC), 0.9)
+    await actions.invalidate_link(dead_t, proj, "in_repo", "agent:test", datetime.now(UTC))
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+
+    ev = await project_identity_evidence(actions.pool, seat_id=seat["seat_id"])
+
+    assert ev["candidates"]["healproj"]["write_attribution"]["count"] == 1
+
+
 async def test_self_authored_reports_existence_only_never_content(
     actions: Actions, tmp_path,
 ) -> None:

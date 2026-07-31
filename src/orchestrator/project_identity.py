@@ -180,13 +180,17 @@ async def _write_attribution(pool: asyncpg.Pool, bases: list[str]) -> dict[str, 
     """The majority in_repo target across every Thread/Decision/Commit this lineage's
     write-attribution names — DERIVED, the weakest tier, John/ballgem's own evidence
     (145 of 163) when nothing else has signal at all. Keyed by live display label (see
-    `_live_label`), not canonical."""
+    `_live_label`), not canonical. LIVE edges only (`valid_until`): fold_project heals
+    an estate by invalidating the old in_repo edge and creating a fresh one on the
+    surviving object — counting both would double-count exactly the writes a fold was
+    just run to consolidate, showing a split that no longer exists."""
     if not bases:
         return {"total": 0, "top": None, "breakdown": {}}
     rows = await pool.fetch(
         "SELECT ro.id, ro.canonical, count(*) AS n FROM links l "
         "JOIN objects ro ON ro.id=l.to_id AND ro.type='SoftwareProject' "
         "WHERE l.type='in_repo' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "AND EXISTS (SELECT 1 FROM unnest($1::text[]) b "
         "            WHERE l.source_id=b OR l.source_id LIKE b || '-%') "
         "GROUP BY ro.id, ro.canonical ORDER BY n DESC", bases)
