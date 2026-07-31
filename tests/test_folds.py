@@ -346,6 +346,55 @@ async def test_archaeologist_charter_match_prefers_the_declared_governor(
     assert "agent:4e51den7" in str(mine[0]["signals"])  # the resident is named
 
 
+async def test_archaeologist_charter_match_reads_a_seat_keyed_governs_edge(
+    actions: Actions, tmp_path,
+) -> None:
+    """RULING 3 (decision 1db1ff41) re-keys governs onto the Seat, not any one Agent
+    generation (Imhotep, DM 2415/2416 — caught before it shipped): a governs join
+    hard-coded to fo.type='Agent' would silently stop matching every governs link the
+    instant that re-key lands, degrading this whole reversal back to works_in-only with
+    no crash and no failing test unless something exercises this exact shape. A
+    Seat-origin governs edge must resolve through its CURRENT holder and still win."""
+    from src.orchestrator.folds import find_agent_fold_candidates
+    from src.orchestrator.seats import bind_holder
+
+    p = actions.pool
+    root = tmp_path / "projects"
+    jobs = tmp_path / "jobs"
+    slug = root / "-w-seatgoverned-repo"
+    slug.mkdir(parents=True)
+    (slug / "5ea7go10-full.jsonl").write_text("{}\n")
+    await _mk_agent(actions, "agent:5ea7go10", project="seatgoverned")
+    room = await actions.create_or_find_object("SoftwareProject", "repo:seatgoverned",
+                                               "repo:seatgoverned")
+    resident = await actions.create_or_find_object("Agent", "agent:4e51den8",
+                                                   "agent:4e51den8")
+    await actions.assert_property(resident, "handle", "Resi2", "agent:4e51den8",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await actions.create_link(resident, room, "works_in", "agent:4e51den8",
+                              datetime.now(UTC), 0.9)
+    boss_seat = await actions.create_or_find_object("Seat", "seat:b0551eat",
+                                                     "seat:b0551eat")
+    await actions.assert_property(boss_seat, "handle", "Boss2", "seat:b0551eat",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    boss_holder = await actions.create_or_find_object("Agent", "agent:b055ho1d",
+                                                       "agent:b055ho1d")
+    await actions.assert_property(boss_holder, "handle", "Boss2", "agent:b055ho1d",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await bind_holder(actions, seat_id="seat:b0551eat", agent_id="agent:b055ho1d")
+    await actions.create_link(boss_seat, room, "governs", "seat:b0551eat",
+                              datetime.now(UTC), 0.9)
+    await save_mount(p, job_dir=str(jobs / "5ea7go10"), agent_id="agent:5ea7go10",
+                     project="seatgoverned", cwd="/w/seatgoverned-repo", model=None,
+                     session_key="whisper:5ea7go10")
+
+    out = await find_agent_fold_candidates(p, projects_root=root, jobs_home=jobs)
+
+    mine = [c for c in out["pending"] if c["dupe"] == "agent:5ea7go10"]
+    assert mine and mine[0]["into_label"] == "agent:b055ho1d"  # resolved through the seat
+    assert abs(float(mine[0]["score"]) - 0.55) < 1e-6
+
+
 async def test_unfold_reverses_a_fold_dry_run_writes_nothing(actions: Actions) -> None:
     await _mk_agent(actions, "agent:un1dead0")
     await _mk_agent(actions, "agent:un1live0")

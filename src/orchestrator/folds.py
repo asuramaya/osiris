@@ -412,10 +412,20 @@ async def find_agent_fold_candidates(
             # but the ROOM may still have a seat on the graph's record. Mount rows are
             # mortal and move house (the office migrations); works_in/governs edges are
             # the durable evidence of whose room this is.
+            # governs' from_type spans BOTH Agent (pre-1db1ff41-ruling-3) and Seat
+            # (post-re-key, decision 1db1ff41) — a fixed join on fo.type='Agent' would
+            # silently stop matching every governs link the moment the re-key lands, no
+            # crash, degrading this whole reversal back to works_in-only (Imhotep, DM
+            # 2415/2416, caught before it shipped). works_in stays Agent-only; governs is
+            # read either way and a Seat-origin edge is resolved to its current holder
+            # below, before it ever reaches the souls bookkeeping.
+            from src.orchestrator.seats import seat_occupancy
+
             holders = await pool.fetch(
-                "SELECT DISTINCT fo.canonical AS holder, l.type AS via "
+                "SELECT DISTINCT fo.canonical AS holder, fo.type AS holder_type, "
+                "l.type AS via "
                 "FROM links l "
-                "JOIN objects fo ON fo.id=l.from_id AND fo.type='Agent' "
+                "JOIN objects fo ON fo.id=l.from_id AND fo.type IN ('Agent','Seat') "
                 "JOIN objects ro ON ro.id=l.to_id "
                 "WHERE ro.canonical = 'repo:' || $1 "
                 "  AND l.type IN ('works_in','governs') "
@@ -426,10 +436,17 @@ async def find_agent_fold_candidates(
                 "          OR fo.canonical LIKE ho.canonical||'-%'))", r["project"])
             souls: dict[str, set[str]] = {}
             for h in holders:
+                if h["holder_type"] == "Seat":
+                    occ = await seat_occupancy(pool, str(h["holder"]))
+                    holder_agent = occ.get("holder")
+                    if not holder_agent:  # a vacant seat's charter proposes nothing
+                        continue
+                else:
+                    holder_agent = str(h["holder"])
                 # key souls by the LIVING head's base — a rebased lineage (Ra:
                 # c7ef52a9 -> 443cd9d4) is one soul, not two, and must not
                 # deflate the single-seat score
-                head_ = await living_head(pool, _generation(str(h["holder"]))[0])
+                head_ = await living_head(pool, _generation(str(holder_agent))[0])
                 base = _generation(head_)[0]
                 if base != _generation(mine)[0]:
                     souls.setdefault(base, set()).add(str(h["via"]))
