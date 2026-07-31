@@ -2209,8 +2209,16 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
     # THE CHARTER, MADE VISIBLE (Phase 1 §4.1, `dd47c1da`): a house is what a seat RULES, not
     # where it sits — but a charter nobody can see is not an inheritance. No aggregation here
     # (that's wave 2's charter-scoped briefing); just the fact, named.
-    from src.orchestrator.charter import charter_of
-    charter = await charter_of(pool, ident.agent_id) if ident else []
+    #
+    # LINEAGE-AWARE, NOT EXACT-ID (Lane C, decision 1913683e): charter_of is agent-exact and
+    # a `governs` link does not carry forward across succession — a seat that declared its
+    # charter three generations ago read back EMPTY here, live, proven on Imhotep's own seat.
+    # _lineage_charter (already proven at offices.py/boot_compiler.py) walks the whole
+    # lineage instead. Does NOT fix set_charter's own limitation: a successor re-declaring
+    # still can't heal an ancestor's link (invalidate_link needs the exact from_id) — that
+    # stays open, on the record, not silently assumed closed by this swap.
+    from src.orchestrator.offices import _lineage_charter
+    charter = await _lineage_charter(pool, ident.agent_id) if ident else []
     # THE STANDING-CHOICE STANDDOWN (Metron IV, wave-2 fa918939): a repo whose model
     # choice is SETTLED — a .osiris file, or an intended_model property recorded on the
     # SoftwareProject — must not re-confront every successor with the fleet default.
@@ -2929,11 +2937,15 @@ async def charter(repos: list[str] | None = None, ctx: Context | None = None) ->
     if ident is None:
         return {"error": "mount first — a charter names WHOSE seat rules which repos",
                 "why": _anchorless(ctx)}
-    from src.orchestrator.charter import charter_of, set_charter
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.offices import _lineage_charter
     pool = await _pool_get()
     if repos is not None:
         return await set_charter(Actions(pool), ident.agent_id, repos)
-    return {"agent": ident.agent_id, "charter": await charter_of(pool, ident.agent_id)}
+    # LINEAGE-AWARE READ (Lane C, decision 1913683e) — see orient()'s own charter line for
+    # the full rationale; set_charter's write path is UNCHANGED (still agent-exact, still
+    # cannot heal an ancestor generation's governs link).
+    return {"agent": ident.agent_id, "charter": await _lineage_charter(pool, ident.agent_id)}
 
 
 @mcp.tool()

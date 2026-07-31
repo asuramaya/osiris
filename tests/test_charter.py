@@ -90,3 +90,114 @@ def test_schema_declares_governs() -> None:
     assert "governs" in LINK_TYPES
     assert LINK_TYPES["governs"].domain == ("Agent",)
     assert LINK_TYPES["governs"].range == ("SoftwareProject",)
+
+
+# ═══ _lineage_charter — Lane C, decision 1913683e: charter_of is agent-EXACT, so a governs
+# link declared by an earlier generation reads back EMPTY for its own successor (proven live
+# on Imhotep's own seat). _lineage_charter walks the whole lineage; these tests pin both the
+# fix and the over-match risk Thoth named it against. ═══
+
+
+async def test_lineage_charter_reads_forward_from_an_ancestor_generation(
+    actions: Actions,
+) -> None:
+    """The exact bug: a charter declared by generation 1 must still read back for
+    generation 2 — a DIFFERENT Agent object, no governs link of its own."""
+    from src.orchestrator.offices import _lineage_charter
+
+    await _agent(actions, "agent:linchart")
+    await set_charter(actions, "agent:linchart", ["osiris"])
+    heir = "agent:linchart-ii"
+    await _agent(actions, heir)
+    assert await charter_of(actions.pool, heir) == []          # the OLD bug, still true
+    assert await _lineage_charter(actions.pool, heir) == ["osiris"]  # the fix
+
+
+async def test_lineage_charter_negative_control_reports_none_for_an_unrelated_lineage(
+    actions: Actions,
+) -> None:
+    """A lineage that never declared a charter reports none — even in a graph where OTHER
+    lineages have real charters on record."""
+    from src.orchestrator.offices import _lineage_charter
+
+    await _agent(actions, "agent:haschart")
+    await set_charter(actions, "agent:haschart", ["osiris"])
+    await _agent(actions, "agent:nochart")
+    assert await _lineage_charter(actions.pool, "agent:nochart") == []
+
+
+async def test_lineage_charter_does_not_over_match_a_similarly_prefixed_root(
+    actions: Actions,
+) -> None:
+    """THE OVER-MATCH RISK, NAMED AND KILLED (Thoth's gate, msg 2393): the LIKE-prefix walk
+    (`base || '-%'`) must require the hyphen boundary — 'agent:ab' governing something must
+    never leak into 'agent:abc's lineage just because 'ab' is a literal string prefix of
+    'abc'. Only a genuine `-ii`/`-iii`/... generation suffix counts as the same lineage."""
+    from src.orchestrator.offices import _lineage_charter
+
+    await _agent(actions, "agent:ab")
+    await set_charter(actions, "agent:ab", ["osiris"])
+    await _agent(actions, "agent:abc")  # a DIFFERENT root, not a generation of "agent:ab"
+    assert await _lineage_charter(actions.pool, "agent:abc") == []
+    # and the true lineage is unaffected by the near-miss existing alongside it
+    assert await _lineage_charter(actions.pool, "agent:ab") == ["osiris"]
+
+
+async def test_charter_tool_reads_the_lineage_not_just_the_exact_generation(
+    actions: Actions,
+) -> None:
+    """Integration: the charter() MCP tool's no-args read path, through a real succession."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    await _agent(actions, "agent:chtool1")
+    await set_charter(actions, "agent:chtool1", ["osiris", "bytebye"])
+    heir = "agent:chtool1-ii"
+    await _agent(actions, heir)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=heir, session="chtool1", project="chtoolproj", model=None, cwd=None)
+    try:
+        out = await srv.charter(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out == {"agent": heir, "charter": ["bytebye", "osiris"]}
+
+
+async def test_orient_tool_surfaces_the_lineage_charter(actions: Actions) -> None:
+    """Integration: orient()'s own charter line — the exact live case Lane C proved (a
+    seat's CLAUDE.md says 'You govern: X' but orient() showed nothing) — through a real
+    successor identity."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    await _agent(actions, "agent:orichart1")
+    await set_charter(actions, "agent:orichart1", ["osiris"])
+    heir = "agent:orichart1-ii"
+    await _agent(actions, heir)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=heir, session="orichart1", project="orichartproj", model=None, cwd=None)
+    try:
+        out = await srv.orient(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out.get("charter") == ["osiris"]
