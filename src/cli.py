@@ -35,6 +35,12 @@ EXISTING verb rather than re-deriving it:
                                      point of view), restart osiris-mcp/worker/console, run
                                      smoke, and name any un-run seeder step by comparison
                                      instead of assuming one happened
+  osiris fold-project <dupe> <into> the same evidence-gated projects.fold_project the
+             --evidence --actor     fold_project MCP tool wraps (thread 2446) — the
+                                     sanctioned second door for a worker whose sandbox
+                                     classifier permits an installed entrypoint but refuses
+                                     a raw DATABASE_URL script, or when a client's MCP tool
+                                     index is stale
 
 CANONICAL ENV RESOLUTION (the actual root-fix, 3e96c10e's cousin): every DB-backed command
 applies src.config.dev_env.apply_dev_fallback() first — a bare invocation must target the
@@ -1012,6 +1018,60 @@ async def cmd_deploy(
             await pool.close()
 
 
+# --- fold-project ------------------------------------------------------------------------------
+
+async def cmd_fold_project(
+    dupe: str, into: str, evidence: str, *, actor: str,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris fold-project <dupe> <into> --evidence <text> --actor <who> — the console-
+    script door onto projects.fold_project, the SAME function the fold_project MCP tool
+    wraps (no duplicated logic, no softened gate: the evidence check and
+    _contradicting_properties refusal are exactly fold_project's own, untouched here).
+
+    THE SANCTIONED SECOND DOOR (thread 2446): the MCP tool exists (cc8823d) but a live
+    client's deferred-tool index can sit frozen across multiple deploys — not this
+    module's bug, flagged upstream per ruling 482c3d0f rather than worked around — and a
+    worker whose sandbox classifier correctly refuses a raw DATABASE_URL script needs a
+    path that isn't the MCP index at all. An installed entrypoint is that path, the same
+    class of thing as `osiris deploy` (task #69/45b074bf, #63: one installed entrypoint,
+    no raw DB, no runes). Never executes on its own initiative — dupe/into/evidence/actor
+    are all named explicitly by the caller, every time; this command performs exactly one
+    fold, for the invocation it was given."""
+    from src.actions.core import Actions
+    from src.orchestrator.projects import fold_project
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris fold-project: could not reach postgres at {settings.database_url} "
+                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await fold_project(Actions(pool), dupe=dupe, into=into, evidence=evidence,
+                                 actor=actor)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris fold-project: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"folded {out['folded']} into {out['into']}")
+    if out.get("edges_moved"):
+        print("edges moved: " + ", ".join(f"{k}={v}" for k, v in out["edges_moved"].items()))
+    if out.get("mounts_moved"):
+        print(f"mounts moved: {out['mounts_moved']}")
+    return 0
+
+
 # --- argv dispatch -----------------------------------------------------------------------------
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -1049,6 +1109,16 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("deploy", help="the deploy ritual: dirty-guard, migrate, restart, smoke, "
                    "un-run-step report")
 
+    p_fold_project = sub.add_parser("fold-project", help="fold a duplicate SoftwareProject "
+                                    "into its survivor — the same evidence-gated fold_project "
+                                    "the MCP tool wraps, exposed as the sanctioned second door")
+    p_fold_project.add_argument("dupe", help="the duplicate project's label")
+    p_fold_project.add_argument("into", help="the surviving project's label")
+    p_fold_project.add_argument("--evidence", required=True,
+                                help="why these are one project, not two")
+    p_fold_project.add_argument("--actor", required=True,
+                                help="who is performing this fold")
+
     return p
 
 
@@ -1070,6 +1140,9 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_migrate(check=args.check))
     if args.command == "deploy":
         return asyncio.run(cmd_deploy())
+    if args.command == "fold-project":
+        return asyncio.run(cmd_fold_project(args.dupe, args.into, args.evidence,
+                                            actor=args.actor))
     return 2  # pragma: no cover - argparse's own `required=True` makes this unreachable
 
 

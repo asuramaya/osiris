@@ -2959,6 +2959,33 @@ async def charter(repos: list[str] | None = None, ctx: Context | None = None) ->
 
 
 @mcp.tool()
+async def charter_for(seat_id: str, repos: list[str], because: str,
+                      ctx: Context | None = None) -> dict[str, Any]:
+    """Declare a charter ON BEHALF OF `seat_id` — the manager-invoked sibling of `charter()`
+    (thread 2446), never a widening of it: `charter()` stays self-declaration only, which is
+    what makes the STRANGER case work with no operator in the loop at all (ruling 1db1ff41's
+    own acceptance bar). This is for a seat that cannot yet speak for itself (ruling 5's 24
+    undeclared seats) — the operator's own model, 2026-07-31: a seat may declare its own
+    charter, its manager may declare for it, and the operator is every seat's ultimate
+    manager, so no seat is ever authority-less.
+
+    ENFORCED, not just documented: the caller must be `seat_id`'s manager (the live
+    `managed_by` edge) or an operator actor — refuses loudly otherwise, naming both who the
+    caller resolved to and who the seat's actual manager is. `because` is required
+    (testimony, same discipline `rename_seat` runs). Blind to any pre-existing Agent-origin
+    `governs` edges the target seat may still carry from before ruling 1db1ff41's re-key —
+    see `charter_for`'s own docstring (src/orchestrator/charter.py) for exactly what that
+    does and does not make safe."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a charter declared for another seat is a mind's "
+                         "act, and the graph must know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.charter import charter_for as _charter_for
+    return await _charter_for(Actions(await _pool_get()), seat_id, repos, because=because,
+                              actor=ident.agent_id)
+
+
+@mcp.tool()
 async def rebind_seat(seat: str, new_cwd: str, extract: bool = False,
                       ctx: Context | None = None) -> dict[str, Any]:
     """Move a seat's ANCHOR cwd, preserving identity, lineage, attribution, and mail (Phase 1

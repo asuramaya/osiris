@@ -18,6 +18,7 @@ from src.cli import (
     cmd_attach,
     cmd_boot_status,
     cmd_deploy,
+    cmd_fold_project,
     cmd_launch,
     cmd_migrate,
     cmd_seed,
@@ -865,3 +866,83 @@ async def test_cmd_boot_status_names_a_gap_and_exits_nonzero(
     assert out == 1
     assert "CliGapSeat" in buf.getvalue()
     assert "reissue_office(adopt=True)" in buf.getvalue()
+
+
+# --- fold-project: the sanctioned second door (thread 2446) — calls the SAME
+# projects.fold_project the MCP wrapper calls, gate untouched -------------------------------
+
+async def _cli_stub_project(actions: Actions, canon: str, name: str) -> None:
+    from datetime import UTC, datetime
+
+    pid = await actions.create_or_find_object("SoftwareProject", canon, "test")
+    await actions.assert_property(pid, "name", name, "test", datetime.now(UTC), 0.9)
+
+
+async def test_cmd_fold_project_folds_and_reports(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    await _cli_stub_project(actions, "repo:clidupe1", "clidupe1")
+    await _cli_stub_project(actions, "repo:cliinto1", "cliinto1")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_fold_project("clidupe1", "cliinto1", "both mint the same repo",
+                                     actor="operator", pool=actions.pool)
+    assert out == 0
+    assert "folded repo:clidupe1 into repo:cliinto1" in buf.getvalue()
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:clidupe1'")
+    assert row["status"] == "merged"
+
+
+async def test_cmd_fold_project_does_not_soften_the_contradiction_gate(
+    actions: Actions,
+) -> None:
+    """The console-script door must not become a second, weaker path to the same act —
+    same test shape as the MCP wrapper's own negative control."""
+    import io
+    from contextlib import redirect_stderr
+    from datetime import UTC, datetime
+
+    await _cli_stub_project(actions, "repo:clicd1", "clicd1")
+    await _cli_stub_project(actions, "repo:clicd2", "clicd2")
+    cd1 = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:clicd1'")
+    cd2 = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:clicd2'")
+    now = datetime.now(UTC)
+    await actions.assert_property(cd1, "language", "python", "agent:alice", now, 0.9)
+    await actions.assert_property(cd2, "language", "go", "agent:bob", now, 0.9)
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_fold_project("clicd1", "clicd2", "looks like a twin",
+                                     actor="operator", pool=actions.pool)
+    assert out == 1
+    assert "contradicting values" in buf.getvalue() and "language" in buf.getvalue()
+    row = await actions.pool.fetchrow("SELECT status FROM objects WHERE canonical='repo:clicd1'")
+    assert row["status"] == "active"
+
+
+async def test_cmd_fold_project_refuses_blank_evidence(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    await _cli_stub_project(actions, "repo:clibe1", "clibe1")
+    await _cli_stub_project(actions, "repo:clibe2", "clibe2")
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_fold_project("clibe1", "clibe2", "  ", actor="operator",
+                                     pool=actions.pool)
+    assert out == 1
+    assert "auto-merge wearing a signature" in buf.getvalue()
+
+
+async def test_cli_parser_accepts_fold_project(actions: Actions) -> None:
+    """argparse wiring: dupe/into positional, --evidence/--actor required."""
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["fold-project", "a", "b", "--evidence", "e", "--actor", "operator"])
+    assert args.command == "fold-project"
+    assert (args.dupe, args.into, args.evidence, args.actor) == ("a", "b", "e", "operator")

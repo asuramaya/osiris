@@ -457,3 +457,172 @@ async def test_orient_tool_surfaces_the_seats_charter(actions: Actions) -> None:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
     assert out.get("charter") == ["osiris"]
+
+
+# ═══ charter_for — the manager-invoked sibling (thread 2446): a seat may declare its own
+# charter, its manager may declare for it, the operator is every seat's ultimate manager. ═══
+
+
+async def test_charter_for_the_manager_declares_successfully(actions: Actions) -> None:
+    from src.orchestrator.charter import charter_for
+    from src.orchestrator.seats import attach_seat
+
+    await _repo(actions, "osiris")
+    manager_seat = await _seated(actions, "agent:manager1", "Manager1")
+    worker_seat = await _seat(actions, "Worker1")
+    await attach_seat(actions, worker_seat, manager_seat, evidence="org chart", actor="test")
+    out = await charter_for(actions, worker_seat, ["osiris"], because="onboarding",
+                            actor="agent:manager1")
+    assert out["charter"] == ["osiris"] and out["because"] == "onboarding"
+    assert out["declared_by"] == "agent:manager1"
+    assert await charter_of(actions.pool, worker_seat) == ["osiris"]
+
+
+async def test_charter_for_refuses_a_non_manager_non_operator(actions: Actions) -> None:
+    from src.orchestrator.charter import charter_for
+    from src.orchestrator.seats import attach_seat
+
+    await _repo(actions, "osiris")
+    manager_seat = await _seated(actions, "agent:manager2", "Manager2")
+    worker_seat = await _seat(actions, "Worker2")
+    await attach_seat(actions, worker_seat, manager_seat, evidence="org chart", actor="test")
+    await _seated(actions, "agent:stranger2", "Stranger2")  # a seat, but not the manager
+
+    out = await charter_for(actions, worker_seat, ["osiris"], because="unauthorized try",
+                            actor="agent:stranger2")
+    assert "not authorized" in out["error"]
+    assert manager_seat in out["error"] and "agent:stranger2" in out["error"]
+    assert await charter_of(actions.pool, worker_seat) == []
+
+
+async def test_charter_for_refuses_an_unmanaged_seat_from_a_non_manager(
+    actions: Actions,
+) -> None:
+    """No manager on record must be named plainly, not left implicit."""
+    from src.orchestrator.charter import charter_for
+
+    await _repo(actions, "osiris")
+    worker_seat = await _seat(actions, "Worker3")
+    await _seated(actions, "agent:stranger3", "Stranger3")
+    out = await charter_for(actions, worker_seat, ["osiris"], because="try anyway",
+                            actor="agent:stranger3")
+    assert "no manager on record" in out["error"]
+
+
+async def test_charter_for_succeeds_for_an_operator_actor(actions: Actions) -> None:
+    """One of seats._OPERATOR_ACTORS — authorized regardless of managed_by (the operator
+    is every seat's ultimate manager)."""
+    from src.orchestrator.charter import charter_for
+
+    await _repo(actions, "osiris")
+    worker_seat = await _seat(actions, "Worker4")  # no manager at all
+    out = await charter_for(actions, worker_seat, ["osiris"], because="operator backfill",
+                            actor="operator")
+    assert out["charter"] == ["osiris"]
+    assert await charter_of(actions.pool, worker_seat) == ["osiris"]
+
+
+async def test_charter_for_refuses_blank_because(actions: Actions) -> None:
+    from src.orchestrator.charter import charter_for
+
+    await _repo(actions, "osiris")
+    worker_seat = await _seat(actions, "Worker5")
+    out = await charter_for(actions, worker_seat, ["osiris"], because="  ", actor="operator")
+    assert "because is required" in out["error"]
+    assert await charter_of(actions.pool, worker_seat) == []
+
+
+async def test_charter_for_never_touches_a_legacy_agent_origin_governs_edge(
+    actions: Actions,
+) -> None:
+    """Seshat's blocker 2, carried into the design (thread 2446): a seat with pre-existing
+    Agent-origin governs links (the un-migrated shape) must see charter_for act ONLY on
+    the Seat-origin side — the legacy row stays exactly as it was, neither healed nor
+    duplicated, because set_charter's own SQL can never match it at all."""
+    from src.orchestrator.charter import charter_for
+
+    await _agent(actions, "agent:legacyholder")
+    await _repo(actions, "legacyrepo")
+    await _repo(actions, "newrepo")
+    worker_seat = await _seated(actions, "agent:legacyholder", "LegacyWorker")
+    a_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='agent:legacyholder'")
+    legacy_repo = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:legacyrepo'")
+    await actions.create_link(a_oid, legacy_repo, "governs", "agent:legacyholder", NOW, 0.9)
+
+    out = await charter_for(actions, worker_seat, ["newrepo"], because="fresh declaration",
+                            actor="operator")
+    assert out["charter"] == ["newrepo"]
+    legacy_still_active = await actions.pool.fetchval(
+        "SELECT valid_until FROM links WHERE from_id=$1 AND to_id=$2 AND type='governs'",
+        a_oid, legacy_repo)
+    assert legacy_still_active is None  # untouched — never healed
+    assert await charter_of(actions.pool, worker_seat) == ["newrepo"]  # legacy invisible here
+
+
+async def test_charter_for_tool_the_manager_declares_through_the_wrapper(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.seats import attach_seat
+
+    await _repo(actions, "osiris")
+    manager_seat = await _seated(actions, "agent:mgrtool1", "Mgrtool1")
+    worker_seat = await _seat(actions, "Workertool1")
+    await attach_seat(actions, worker_seat, manager_seat, evidence="org chart", actor="test")
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:mgrtool1", session="mgrtool1", project="mgrtoolproj", model=None,
+        cwd=None)
+    try:
+        out = await srv.charter_for(seat_id=worker_seat, repos=["osiris"],
+                                    because="onboarding via tool", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["charter"] == ["osiris"] and out["declared_by"] == "agent:mgrtool1"
+
+
+async def test_charter_for_tool_refuses_a_stranger_through_the_wrapper(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.seats import attach_seat
+
+    await _repo(actions, "osiris")
+    manager_seat = await _seated(actions, "agent:mgrtool2", "Mgrtool2")
+    worker_seat = await _seat(actions, "Workertool2")
+    await attach_seat(actions, worker_seat, manager_seat, evidence="org chart", actor="test")
+    await _seated(actions, "agent:strangertool2", "Strangertool2")
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:strangertool2", session="strangertool2", project="strangertoolproj",
+        model=None, cwd=None)
+    try:
+        out = await srv.charter_for(seat_id=worker_seat, repos=["osiris"],
+                                    because="unauthorized try", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "not authorized" in out["error"]
+    assert await charter_of(actions.pool, worker_seat) == []
+
+
+def test_charter_tool_stays_self_declaration_only() -> None:
+    """charter() must never widen to accept a target — that would break the STRANGER
+    acceptance bar this whole ruling was built on (ruling 1db1ff41)."""
+    import inspect
+
+    from src import mcp_server as srv
+
+    params = set(inspect.signature(srv.charter).parameters)
+    assert params == {"repos", "ctx"}

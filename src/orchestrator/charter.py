@@ -125,6 +125,71 @@ async def set_charter(
     return out
 
 
+async def charter_for(
+    actions: Actions, seat_id: str, repos: list[str], *, because: str, actor: str,
+) -> dict[str, Any]:
+    """THE MANAGER-INVOKED SIBLING (thread 2446), not a widening of `charter()`: the
+    operator's own model, 2026-07-31 — "a seat with no manager should be able to
+    recharter itself, it has no upstream agent authority, IM THE NODE THAT EVERY AGENT
+    LINKS BACK TO" — makes the rule uniform. A seat may declare its own charter; its
+    manager may declare FOR it; the operator is every seat's ultimate manager, so no seat
+    is ever authority-less. `charter()` stays EXACTLY as it is — self-declaration only,
+    no target param — because that is what makes the STRANGER case work unaided, with no
+    operator in the loop at all (ruling 1db1ff41's own acceptance bar). This is the OTHER
+    half: declaring on behalf of a seat that cannot yet speak for itself (ruling 5's own
+    24 undeclared seats).
+
+    GUARD, ENFORCED (not merely a naming convention — rename_seat/set_seat_attended's own
+    "manager/operator-invoked" claim is not actually checked in their code; this one
+    checks): `actor` must be either one of `seats._OPERATOR_ACTORS`'s sentinels, OR the
+    seat `actor`'s own lineage currently holds must BE the target seat's manager
+    (`manager_of_seat`'s live `managed_by` edge). Refuses loudly otherwise, naming both
+    who the caller resolved to and who the seat's actual manager is (or that it has
+    none on record) — never a bare permission-denied.
+
+    `because` is required, same testimony discipline `rename_seat` runs: declaring a
+    charter on someone else's behalf is a deliberate act, not a routine one. Every write
+    stamps `actor` (rebind_seat's own law: a rebind is a mind's act on another seat, so
+    the record must say whose hand moved it — applied identically here); the receipt
+    carries both `because` and who declared it.
+
+    BLIND TO LEGACY AGENT-ORIGIN GOVERNS EDGES, BY CONSTRUCTION (Seshat's blocker 2, live
+    and unresolved: `migrate_charter_to_seat` has not run — Atlas's 27 governs edges
+    still sit on `agent:f84d55be-v` as Agent-origin links while his Seat reads zero).
+    This delegates straight to `set_charter`, which only ever reads/writes governs links
+    FROM a Seat object — it cannot see, heal, or interact with an Agent-origin row at
+    all, so calling `charter_for` on an unmigrated seat is safe from THAT angle: it never
+    touches the legacy rows, never orphans them further. It does NOT solve the reverse
+    risk, named here so nobody finds it by accident rather than fixed (out of scope for
+    this piece): if `migrate_charter_to_seat` runs LATER on a seat `charter_for` already
+    declared for, that function computes its target set purely from the legacy
+    Agent-origin union, with no awareness of a charter already declared post-rekey — it
+    could heal away what `charter_for` just wrote. A real, separate gap in the migration
+    itself, still open."""
+    from src.orchestrator.seats import _OPERATOR_ACTORS, held_seat, manager_of_seat
+
+    because = (because or "").strip()
+    if not because:
+        return {"error": "because is required — a charter declared on another seat's "
+                         "behalf is testimony, same discipline rename_seat runs"}
+    if actor not in _OPERATOR_ACTORS:
+        caller_seat = await held_seat(actions.pool, actor)
+        caller_seat_id = str(caller_seat["seat_id"]) if caller_seat else None
+        manager_seat_id = await manager_of_seat(actions.pool, seat_id)
+        if caller_seat_id is None or caller_seat_id != manager_seat_id:
+            caller_desc = (f"{actor} (seat {caller_seat_id})" if caller_seat_id
+                          else f"{actor} (holds no seat)")
+            manager_desc = manager_seat_id or "no manager on record"
+            return {"error": f"{caller_desc} is not authorized to declare a charter for "
+                             f"{seat_id} — its manager is {manager_desc}, and {actor} is "
+                             "neither that manager nor an operator actor"}
+    out = await set_charter(actions, seat_id, repos, actor=actor)
+    if "error" not in out:
+        out["because"] = because
+        out["declared_by"] = actor
+    return out
+
+
 async def migrate_charter_to_seat(
     actions: Actions, *, dry_run: bool = True, only_seats: set[str] | None = None,
 ) -> dict[str, Any]:
