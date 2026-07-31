@@ -137,41 +137,65 @@ async def _seat_lineage_bases(pool: asyncpg.Pool, seat_oid: Any) -> list[str]:
     return sorted({_generation(str(r["canonical"]))[0] for r in rows})
 
 
+async def _live_label(pool: asyncpg.Pool, oid: Any, canonical: str) -> str:
+    """A SoftwareProject's CURRENT display label — its live `name` property when one
+    exists, falling back to the canonical's own bare form only for an object that never
+    got a `name` asserted at all. Every candidate key in this module goes through this:
+    rename_project changes ONLY the `name` property, never `canonical` (the same
+    discipline that keeps every existing edge correct without re-pointing) — a reader
+    keyed on canonical instead would report the OLD label forever after every future
+    rename. Caught live: re-running this tool against deckard/metron right after
+    renaming xxit->handlingtheloop still reported 'xxit' with the remote 'disagreeing',
+    when the rename had already made them agree — the read-back that was supposed to
+    CONFIRM the rename would have reported it as still broken."""
+    name = await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", oid)
+    return str(name) if name else str(canonical).removeprefix("repo:")
+
+
 async def _declared_charter(pool: asyncpg.Pool, seat_id: str, seat_oid: Any,
                             bases: list[str]) -> list[str]:
-    """governs targets, checked from BOTH origins (module docstring) — bare project
-    labels, deduplicated."""
+    """governs targets, checked from BOTH origins (module docstring) — live display
+    labels (see `_live_label`), deduplicated."""
     rows = list(await pool.fetch(
-        "SELECT DISTINCT ro.canonical FROM links l JOIN objects ro ON ro.id=l.to_id "
+        "SELECT DISTINCT ro.id, ro.canonical FROM links l JOIN objects ro ON ro.id=l.to_id "
         "WHERE l.from_id=$1 AND l.type='governs' "
         "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_oid))
     if bases:
         rows += await pool.fetch(
-            "SELECT DISTINCT ro.canonical FROM links l "
+            "SELECT DISTINCT ro.id, ro.canonical FROM links l "
             "JOIN objects fo ON fo.id=l.from_id AND fo.type='Agent' "
             "JOIN objects ro ON ro.id=l.to_id "
             "WHERE l.type='governs' AND (l.valid_until IS NULL OR l.valid_until > now()) "
             "AND EXISTS (SELECT 1 FROM unnest($1::text[]) b "
             "            WHERE fo.canonical=b OR fo.canonical LIKE b || '-%')", bases)
-    return sorted({str(r["canonical"]).removeprefix("repo:") for r in rows})
+    labels = set()
+    for r in rows:
+        labels.add(await _live_label(pool, r["id"], r["canonical"]))
+    return sorted(labels)
 
 
 async def _write_attribution(pool: asyncpg.Pool, bases: list[str]) -> dict[str, Any]:
     """The majority in_repo target across every Thread/Decision/Commit this lineage's
     write-attribution names — DERIVED, the weakest tier, John/ballgem's own evidence
-    (145 of 163) when nothing else has signal at all."""
+    (145 of 163) when nothing else has signal at all. Keyed by live display label (see
+    `_live_label`), not canonical."""
     if not bases:
         return {"total": 0, "top": None, "breakdown": {}}
     rows = await pool.fetch(
-        "SELECT ro.canonical AS project, count(*) AS n FROM links l "
+        "SELECT ro.id, ro.canonical, count(*) AS n FROM links l "
         "JOIN objects ro ON ro.id=l.to_id AND ro.type='SoftwareProject' "
         "WHERE l.type='in_repo' "
         "AND EXISTS (SELECT 1 FROM unnest($1::text[]) b "
         "            WHERE l.source_id=b OR l.source_id LIKE b || '-%') "
-        "GROUP BY ro.canonical ORDER BY n DESC", bases)
-    breakdown = {str(r["project"]).removeprefix("repo:"): int(r["n"]) for r in rows}
+        "GROUP BY ro.id, ro.canonical ORDER BY n DESC", bases)
+    breakdown: dict[str, int] = {}
+    for r in rows:
+        label = await _live_label(pool, r["id"], r["canonical"])
+        breakdown[label] = breakdown.get(label, 0) + int(r["n"])
     total = sum(breakdown.values())
-    top = next(iter(breakdown), None)
+    top = max(breakdown, key=lambda k: breakdown[k]) if breakdown else None
     return {"total": total, "top": top, "breakdown": breakdown}
 
 

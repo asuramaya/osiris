@@ -198,6 +198,42 @@ async def test_declared_charter_reads_both_seat_and_agent_origin_governs(
     assert out["candidates"]["legacyproj"]["declared_charter"] is True
 
 
+async def test_candidates_key_by_live_name_not_stale_canonical_after_a_rename(
+    actions: Actions, tmp_path,
+) -> None:
+    """Caught live on the real xxit->handlingtheloop rename (#110): rename_project
+    changes ONLY the `name` property, never `canonical` — a reader keyed on canonical
+    would report the OLD label forever, and the read-back meant to CONFIRM a rename
+    would instead show it as still unresolved. charter/write-attribution here must key
+    by the object's CURRENT name."""
+    from src.orchestrator.project_identity import rename_project
+
+    office = tmp_path / "office"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="osiris", handle="Renameseat",
+                             anchor_cwd=str(office), source="test")
+    await _mk_agent(actions, "agent:1e11ab01")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:1e11ab01")
+    proj = await _mk_project(actions, "staleslug")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+    t = await actions.create_or_find_object("Thread", "thread:renamekeep1", "test")
+    await actions.create_link(t, proj, "in_repo", "agent:1e11ab01", datetime.now(UTC), 0.9)
+
+    out = await rename_project(actions, project="staleslug", new_name="freshname",
+                               because="x", actor="agent:test")
+    assert out["new_name"] == "freshname"
+
+    ev = await project_identity_evidence(actions.pool, seat_id=seat["seat_id"])
+
+    assert "freshname" in ev["candidates"]
+    assert "staleslug" not in ev["candidates"]  # the OLD label must not linger as a ghost
+    fresh = ev["candidates"]["freshname"]
+    assert fresh["declared_charter"] is True
+    assert fresh["write_attribution"]["count"] == 1
+
+
 async def test_self_authored_reports_existence_only_never_content(
     actions: Actions, tmp_path,
 ) -> None:
