@@ -1732,12 +1732,18 @@ async def seat_bearings(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
     from src.orchestrator.seats import held_seat
     bound = await held_seat(pool, agent_id)
     binding = {"seat_binding": bound} if bound else {}
+    # RULING 1 (decision 1db1ff41): a SEATED mind's house is DERIVED — held_seat already
+    # walked the managed_by chain to compute `binding`'s own seat_binding.house; this
+    # function used to ignore that and read the Agent's own raw `project` stamp instead (the
+    # same duplicate house_of() reads independently), the exact bypass orient() shipped
+    # through. An UNSEATED mind has no seat to walk, so the raw stamp remains its only
+    # signal — that branch is unchanged.
+    house = bound["house"] if bound and bound.get("house") else (seat["house"] if seat else None)
     if seat and seat["handle"]:
         gen = int(seat["gen"]) if seat["gen"] else None
-        return {"seat": seat_label(agent_id, seat["handle"], gen), "house": seat["house"],
+        return {"seat": seat_label(agent_id, seat["handle"], gen), "house": house,
                 **binding}
 
-    house = seat["house"] if seat else None
     if not house:
         return binding
     # anonymous: what jobs does this house have, and is anyone sitting in them?

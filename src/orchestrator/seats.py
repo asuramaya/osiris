@@ -866,18 +866,19 @@ async def seat_holder_ineligible(pool: asyncpg.Pool, name: str) -> str | None:
 
 
 async def _seat_display(pool: asyncpg.Pool, seat_id: str) -> dict[str, Any]:
+    """Handle + house for a seat ADDRESS. `house` is DERIVED (ruling ff6148b0, decision
+    4c9e4bd7 — reaffirmed as the consolidation target by 1db1ff41's ruling 1), never this
+    seat's own stored `house` property: reading the raw stamp here was the same bypass
+    seat_bearings shipped, just for mail receipts (seat_receipt) instead of orient()."""
     row = await pool.fetchrow(
         "SELECT "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS handle, "
-        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='house' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS house "
+        "   AS handle "
         "FROM objects o WHERE o.canonical=$1 AND o.type='Seat' AND o.status='active'", seat_id)
     if row is None:
         return {}
-    return {"handle": row["handle"], "house": row["house"]}
+    return {"handle": row["handle"], "house": await derive_house(pool, seat_id)}
 
 
 async def attach_session(
