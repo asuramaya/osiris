@@ -250,8 +250,9 @@ async def reissue_office(
     naming the seat, since adopt is for a first compile, not a second."""
     if not because.strip():
         return {"error": "because is required — a reissue is testimony, same as a rename"}
-    from src.orchestrator.offices import _lineage_charter, _peer_addendum
-    from src.orchestrator.seats import peer_of_seat, seat_facts, seat_occupancy
+    from src.orchestrator.charter import charter_of
+    from src.orchestrator.offices import _peer_addendum
+    from src.orchestrator.seats import peer_of_seat, seat_facts
 
     row = await actions.pool.fetchrow(
         "SELECT id FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
@@ -286,9 +287,9 @@ async def reissue_office(
                              "the marker by hand, or pass adopt=True if this office "
                              "genuinely predates the compiler"}
 
-    occ = await seat_occupancy(actions.pool, seat_id)
-    holder = occ.get("holder")
-    repos: list[str] = await _lineage_charter(actions.pool, holder) if holder else []
+    # THE CHARTER IS THE SEAT'S (ruling 1db1ff41): `seat_id` is already this call's own
+    # parameter — no occupant lookup needed at all, and no lineage-string walk either.
+    repos: list[str] = await charter_of(actions.pool, seat_id)
     charter_block = (
         "You govern: " + ", ".join(f"`{r}`" for r in repos) + "." if repos else
         "Your charter was never formally declared — it lives only in prose. First "

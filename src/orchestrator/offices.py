@@ -122,35 +122,20 @@ async def _handle_of(pool: asyncpg.Pool, agent_id: str) -> str | None:
         "ORDER BY a.observed_at DESC LIMIT 1", base)
 
 
-async def _lineage_charter(pool: asyncpg.Pool, agent_id: str) -> list[str]:
-    """The lineage's ACTIVE governs links (charter_of is exact-id; a charter declared by an
-    earlier generation still rules — the seat governs, not the session that spoke)."""
-    from src.orchestrator.agents import _generation
-
-    base = _generation(agent_id)[0]
-    rows = await pool.fetch(
-        "SELECT DISTINCT p.canonical FROM links l "
-        "JOIN objects a ON a.id=l.from_id AND a.type='Agent' "
-        "AND (a.canonical=$1 OR a.canonical LIKE $1 || '-%') "
-        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
-        "WHERE l.type='governs' AND (l.valid_until IS NULL OR l.valid_until > now())",
-        base)
-    return sorted(r["canonical"].removeprefix("repo:") for r in rows)
-
-
 async def _establish_pure_seat_office(
     actions: Actions, *, seat_id: str, actor: str | None,
     office_root: Path | None, projects_root: Path | None, claude_json: Path | None,
 ) -> dict[str, Any]:
     """The office ceremony for a seat with NO Agent lineage at all (thread 236d3940) — every
     fact comes off the Seat record alone, since there is no claimed occupant to resolve a
-    handle/house/charter/deed through. `seat_facts` already derives house the same way the
-    agent-lineage path does (`derive_house`, ruling ff6148b0); charter reads through the
-    seat's occupant ONLY if it has ever had one (`seat_occupancy`'s `holder` — usually None
-    for a seat this ceremony is building for); `file_office_deed` is skipped outright — it
+    handle/house/deed through. `seat_facts` already derives house the same way the
+    agent-lineage path does (`derive_house`, ruling ff6148b0); the charter is the SEAT's own
+    (ruling 1db1ff41 — `governs` is keyed on the seat, not any occupant), so it reads
+    straight off `seat_id`, occupied or not; `file_office_deed` is skipped outright — it
     is Agent-only by construction (handshake.py), and there is nothing to deed until an
     actual agent launches and claims this seat."""
-    from src.orchestrator.seats import peer_of_seat, seat_facts, seat_occupancy
+    from src.orchestrator.charter import charter_of
+    from src.orchestrator.seats import peer_of_seat, seat_facts
 
     facts = await seat_facts(actions.pool, seat_id)
     handle = facts["handle"]
@@ -164,9 +149,7 @@ async def _establish_pure_seat_office(
     office = root / handle.lower()
     office.mkdir(parents=True, exist_ok=True)
     seat_line = f" — durable identity `{seat_id}`."
-    occ = await seat_occupancy(actions.pool, seat_id)
-    holder = occ.get("holder")
-    repos = await _lineage_charter(actions.pool, holder) if holder else []
+    repos = await charter_of(actions.pool, seat_id)
     charter_block = (
         "You govern: " + ", ".join(f"`{r}`" for r in repos) + "." if repos else
         "Your charter was never formally declared — it lives only in prose. First act: "
@@ -299,7 +282,12 @@ async def establish_office(
     bound = await held_seat(actions.pool, agent_id)
     seat_line = (f" — durable identity `{bound['seat_id']}`." if bound else
                  " — not yet seated: your next claim binds you (the on-ramp).")
-    repos = await _lineage_charter(actions.pool, agent_id)
+    # THE CHARTER IS THE SEAT'S (ruling 1db1ff41) — not the lineage's: reads through the
+    # SAME `bound` this function already resolved for seat_line, one line up, no second
+    # lookup and no lineage-string walk. An agent not yet seated has no charter to read.
+    from src.orchestrator.charter import charter_of
+
+    repos = await charter_of(actions.pool, bound["seat_id"]) if bound else []
     charter_block = (
         "You govern: " + ", ".join(f"`{r}`" for r in repos) + "." if repos else
         "Your charter was never formally declared — it lives only in prose. First act: "

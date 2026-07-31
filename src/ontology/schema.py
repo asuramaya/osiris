@@ -308,13 +308,15 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "walk it, mistook his live CONTEMPORARY for his own ghost, and asked to be merged "
              "with a stranger; the missing edge is what made that reading possible.",
              ("Agent",), ("Agent",)),
-    LinkType("governs", "THE CHARTER (Phase 1 §4.1, ruling dd47c1da): the repos a SEAT rules — "
-             "'a house is what a seat governs, not where it sits'. Distinct from works_in (the "
-             "durable mount's current home): governs is an explicit, self-declared charter that "
-             "survives a folder move (alfred's charter is six repos; a move to a new cwd does "
-             "not shrink it). Healed by a compensating event (`valid_until`) when a repo drops "
-             "off the charter — never DELETE, so a seat's shrinking rule stays a fact the graph "
-             "remembers.", ("Agent",), ("SoftwareProject",)),
+    LinkType("governs", "THE CHARTER (Phase 1 §4.1, ruling dd47c1da; RE-KEYED onto the Seat by "
+             "the operator's ruling 1db1ff41 — the docstring said 'a SEAT rules' while from_type "
+             "said Agent; declared beats derived, so the schema now says what it always meant): "
+             "the repos a SEAT rules — 'a house is what a seat governs, not where it sits'. "
+             "Distinct from works_in (the durable mount's current home): governs is an explicit, "
+             "self-declared charter that survives a folder move AND a succession (one seat, one "
+             "link, no generations to accumulate across). Healed by a compensating event "
+             "(`valid_until`) when a repo drops off the charter — never DELETE, so a seat's "
+             "shrinking rule stays a fact the graph remembers.", ("Seat",), ("SoftwareProject",)),
     LinkType("holds", "THE BINDING (identity core, ruling 5cef856b): the mind currently "
              "holding a durable Seat. Minted at attach (the ceremony: a one-time token the "
              "spawner exported at birth), RE-LINKED to the heir at every mint so the binding "

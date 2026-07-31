@@ -103,9 +103,17 @@ async def test_establish_office_carries_a_declared_charter(
     actions: Actions, tmp_path: Path,
 ) -> None:
     from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import bind_holder, ensure_seat
 
     agent = await _seat_fixture(actions, tmp_path, handle="Butler")
-    await set_charter(actions, agent, ["repoA", "repoB"])
+    # a charter is the SEAT's (ruling 1db1ff41) — bind a real Seat, same primitive the
+    # daemon's own attach ceremony uses, and pre-mint the repos (set_charter refuses any
+    # name the graph has no independent evidence for)
+    seat = await ensure_seat(actions, house="butlerhouse", handle="Butler", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=agent)
+    for repo in ("repoA", "repoB"):
+        await actions.create_or_find_object("SoftwareProject", f"repo:{repo}", "test")
+    await set_charter(actions, seat["seat_id"], ["repoA", "repoB"], actor=agent)
 
     out = await establish_office(
         actions, seat_or_agent=agent, actor="agent:test",
