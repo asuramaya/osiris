@@ -11,6 +11,7 @@ from src.orchestrator.mounts import save_mount
 from src.orchestrator.projects import (
     assert_project_property,
     correct_project_name,
+    find_case_variant_projects,
     fold_project,
     retire_project,
 )
@@ -647,3 +648,42 @@ async def test_correct_project_name_refuses_unknown_project(actions: Actions) ->
     out = await correct_project_name(actions, project="nope-does-not-exist",
                                      actor="agent:test")
     assert "no such SoftwareProject" in out["error"]
+
+
+# --- find_case_variant_projects (operator ruling 2026-07-31: "the capitalization "
+# --- merging should be automatic not bottlenecked by me") --------------------------------
+
+async def test_find_case_variant_projects_classifies_proven_vs_genuine(
+    actions: Actions,
+) -> None:
+    """The exact split the operator's widened rule depends on: a TRUE case variant is
+    `proven` (correct_project_name can settle it unaided); a bytebye-shaped
+    transposition, or a genuine rename like redmonth/ballgem, is `genuine` and stays
+    the operator's — same proof, same classification, as correct_project_name's own
+    guard, so a caller of this survey never gets a different verdict at settle time."""
+    await _name_history(actions, "repo:surveycase", ["surveyname", "SurveyName"])
+    await _name_history(actions, "repo:surveytrans", ["bytebye", "ByeByte"])
+    await _name_history(actions, "repo:surveyrename", ["redmonth", "ballgem"])
+    await _stub_project(actions, "repo:surveysingle", "onlyone")  # not a variant at all
+
+    out = await find_case_variant_projects(actions.pool)
+
+    proven = {e["project"] for e in out["proven_case_variant"]}
+    genuine = {e["project"] for e in out["genuine_contradiction"]}
+    assert "repo:surveycase" in proven
+    assert "repo:surveytrans" in genuine and "repo:surveyrename" in genuine
+    assert "repo:surveysingle" not in proven and "repo:surveysingle" not in genuine
+
+
+async def test_find_case_variant_projects_ignores_retired_projects(
+    actions: Actions,
+) -> None:
+    await _name_history(actions, "repo:surveydead", ["deadname", "DeadName"])
+    await actions.pool.execute("UPDATE objects SET status='retired' WHERE canonical=$1",
+                               "repo:surveydead")
+
+    out = await find_case_variant_projects(actions.pool)
+
+    all_labels = {e["project"] for e in out["proven_case_variant"]} | \
+        {e["project"] for e in out["genuine_contradiction"]}
+    assert "repo:surveydead" not in all_labels

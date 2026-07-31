@@ -351,6 +351,35 @@ async def fold_project(
 
 # --- correct_project_name (#110, decision 1db1ff41 — the delegated exception) ------------
 
+async def find_case_variant_projects(pool: asyncpg.Pool) -> dict[str, Any]:
+    """SURVEY, never writes: every active SoftwareProject carrying more than one
+    distinct `name` value, classified by the EXACT same proof correct_project_name
+    itself runs before writing — a caller of this function never gets a different
+    verdict from the settle step than this survey promised. `proven` entries reduce to
+    one `strip().casefold()` form (bytebye's OWN 'ByeByte' would NOT qualify — it is a
+    genuine transposition, not a case variant, and belongs in `genuine` beside every
+    other real rename). Built for the operator's own widened rule (2026-07-31: "the
+    capitalization merging should be automatic not bottlenecked by me") — this is the
+    "find every pair first" half; correct_project_name itself is the "settle it" half,
+    called separately, per project, only after a caller has seen this report."""
+    projects = await pool.fetch(
+        "SELECT id, canonical FROM objects WHERE type='SoftwareProject' AND status='active'")
+    proven: list[dict[str, Any]] = []
+    genuine: list[dict[str, Any]] = []
+    for p in projects:
+        rows = await pool.fetch(
+            "SELECT value #>> '{}' AS v FROM current_assertions "
+            "WHERE object_id=$1 AND name='name'", p["id"])
+        distinct_raw = sorted({r["v"] for r in rows if r["v"]})
+        if len(distinct_raw) <= 1:
+            continue
+        entry = {"project": p["canonical"], "distinct_names": distinct_raw}
+        normalized = {v.strip().casefold() for v in distinct_raw}
+        (proven if len(normalized) == 1 else genuine).append(entry)
+    return {"scanned": len(projects), "proven_case_variant": proven,
+           "genuine_contradiction": genuine}
+
+
 async def correct_project_name(
     actions: Actions, *, project: str, actor: str, because: str | None = None,
 ) -> dict[str, Any]:
