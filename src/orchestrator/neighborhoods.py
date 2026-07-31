@@ -184,22 +184,35 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
     a known project gains its path if the graph lacked one. OBSERVATION ONLY — nothing
     here grows the pulse's watch list (that remains a deliberate act, discover_trees'
     doctrine), and remote-only repos stay honestly out of scope (no network read).
-    Idempotent: an unchanged disk costs reads, never writes."""
-    from src.orchestrator.capture import _resolve_repo  # the one active-repo resolver
+    Idempotent: an unchanged disk costs reads, never writes.
+
+    THE MINT GOES THROUGH THE SAME CHOKE POINT AS EVERY OTHER LEGITIMATE MINT (ruling
+    1db1ff41, both halves): `_mint_or_find_repo` runs `_validate_repo_name` before
+    touching the graph — task #107's guard, previously bypassed here entirely (this walk
+    minted straight off `create_or_find_object`, so a directory basename that isn't a
+    well-formed project ref reached the graph unrefused; the two real "/home/.../ballgem"
+    and "/home/.../REPOS/sutra" duplicates, folded separately, are what that gap already
+    cost). A refusal degrades PER ENTRY, never the whole batch — #107's own third-order
+    defect (settle()'s batch-abort gap) is the standing precedent: one hostile directory
+    name costs that one census row, not the walk."""
+    from src.orchestrator.capture import _mint_or_find_repo, _resolve_repo
 
     observed = datetime.now(UTC)
     ec = EvidenceClass.DIRECT_OBSERVATION.value
     minted: list[str] = []
     pathed: list[str] = []
+    refused: list[dict[str, str]] = []
     known = 0
     for repo in _git_dirs(roots):
         name = repo.name
         existing = await _resolve_repo(actions.pool, name)
         if existing is None:
-            obj = await actions.create_or_find_object(
-                "SoftwareProject", f"repo:{name}", "disk-census")
-            await actions.assert_property(obj, "name", name, "disk-census", observed,
-                                          0.9, evidence_class=ec)
+            try:
+                obj = await _mint_or_find_repo(actions, name, observed, source="disk-census",
+                                               evidence_class=ec, confidence=0.9)
+            except ValueError as e:
+                refused.append({"name": name, "path": str(repo), "reason": str(e)})
+                continue
             await actions.assert_property(obj, "discovered", "disk-census", "disk-census",
                                           observed, 0.9, evidence_class=ec)
             await actions.assert_property(obj, "on_disk_path", str(repo), "disk-census",
@@ -214,7 +227,7 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
             await actions.assert_property(existing, "on_disk_path", str(repo),
                                           "disk-census", observed, 0.9, evidence_class=ec)
             pathed.append(name)
-    return {"known": known, "minted": minted, "pathed": pathed}
+    return {"known": known, "minted": minted, "pathed": pathed, "refused": refused}
 
 
 async def neighborhoods_of(

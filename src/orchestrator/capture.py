@@ -233,6 +233,27 @@ async def _resolve_repo(pool: asyncpg.Pool, name: str) -> uuid.UUID | None:
     )
 
 
+async def _mint_or_find_repo(
+    actions: Actions, repo: str, observed: datetime,
+    *, source: str = _SOURCE, evidence_class: str = _EC, confidence: float = _CONF,
+) -> uuid.UUID:
+    """The validated find-or-create at the center of EVERY legitimate SoftwareProject mint
+    (task #107): refuses a path-shaped or otherwise malformed `repo`, BEFORE any object is
+    touched, via `_validate_repo_name` — the single choke point. `link_repo` wraps this
+    with its own `in_repo` edge, for the common case of attaching a captured Decision/
+    Thread to its project. `census_trees` (neighborhoods.py) has no such edge to attach —
+    a disk-discovered repo names only itself — so it calls this directly rather than being
+    forced through `link_repo`'s object-linking contract to reach the same guard."""
+    name = repo.removeprefix("repo:").strip()
+    _validate_repo_name(name, repo)
+    proj = await _resolve_repo(actions.pool, name)
+    if proj is None:  # a stub the eventual gitlog ingest will land on (same repo: canonical)
+        proj = await actions.create_or_find_object("SoftwareProject", f"repo:{name}", source)
+        await actions.assert_property(proj, "name", name, source, observed, confidence,
+                                      evidence_class=evidence_class)
+    return proj
+
+
 async def link_repo(
     actions: Actions, obj_id: uuid.UUID, repo: str, observed: datetime,
     *, source: str = _SOURCE, evidence_class: str = _EC, confidence: float = _CONF,
@@ -248,13 +269,8 @@ async def link_repo(
     string refuses here, BEFORE any object is touched, so a caller can never mint a bogus
     project by accident — this validates first so the failure never depends on transaction
     rollback to stay clean."""
-    name = repo.removeprefix("repo:").strip()
-    _validate_repo_name(name, repo)
-    proj = await _resolve_repo(actions.pool, name)
-    if proj is None:  # a stub the eventual gitlog ingest will land on (same repo: canonical)
-        proj = await actions.create_or_find_object("SoftwareProject", f"repo:{name}", source)
-        await actions.assert_property(proj, "name", name, source, observed, confidence,
-                                      evidence_class=evidence_class)
+    proj = await _mint_or_find_repo(actions, repo, observed, source=source,
+                                    evidence_class=evidence_class, confidence=confidence)
     exists = await actions.pool.fetchval(
         "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='in_repo' LIMIT 1",
         obj_id, proj,

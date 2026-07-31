@@ -113,6 +113,7 @@ async def test_census_trees_mints_the_unmodeled_and_paths_the_known(
     assert out["minted"] == ["ancient-evals"]
     assert out["known"] == 1
     assert out["pathed"] == ["known-tree"]
+    assert out["refused"] == []
     row = await actions.pool.fetchrow(
         "SELECT o.id, o.status, "
         " (SELECT a.value #>> '{}' FROM current_assertions a "
@@ -131,6 +132,35 @@ async def test_census_trees_mints_the_unmodeled_and_paths_the_known(
     again = await census_trees(actions, roots=[str(tmp_path / "code")])
     assert again["minted"] == [] and again["pathed"] == []
     assert again["known"] == 2  # both now known; the unchanged disk writes nothing
+
+
+async def test_census_trees_refuses_a_malformed_name_and_keeps_walking(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Ruling 1db1ff41 half (a): the mint now runs through `_mint_or_find_repo`, the same
+    validated choke point `link_repo` uses (task #107's `_validate_repo_name`) — this walk
+    used to mint straight off `create_or_find_object` with no guard at all, which is
+    exactly how the two real "/home/.../ballgem" and "/home/.../REPOS/sutra" duplicates
+    (folded separately, decision 1db1ff41) reached the graph. A directory basename that
+    isn't a well-formed project ref now REFUSES — and costs only that one census entry, per
+    the operator's degrade-per-item ruling on #107's own batch-abort defect: a legitimate
+    sibling repo in the same walk still mints clean."""
+    from src.orchestrator.neighborhoods import census_trees
+    (tmp_path / "code" / "--hostile" / ".git").mkdir(parents=True)
+    (tmp_path / "code" / "legit-repo" / ".git").mkdir(parents=True)
+
+    out = await census_trees(actions, roots=[str(tmp_path / "code")])
+    assert out["minted"] == ["legit-repo"]
+    assert [r["name"] for r in out["refused"]] == ["--hostile"]
+    assert "well-formed project ref" in out["refused"][0]["reason"]
+    refused_row = await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='SoftwareProject' "
+        "AND canonical LIKE '%hostile%'")
+    assert refused_row is None
+    minted_row = await actions.pool.fetchval(
+        "SELECT o.status FROM objects o WHERE o.type='SoftwareProject' "
+        "AND o.canonical='repo:legit-repo'")
+    assert minted_row == "active"
 
 
 # --- the read-back (thread 2309: "I could not have discovered my own zero") -------------

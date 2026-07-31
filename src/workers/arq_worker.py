@@ -218,6 +218,10 @@ async def backfill_transcripts(ctx: dict[str, Any]) -> int:
     if cs["minted"]:
         _log.info("disk census minted %d unmodeled repos: %s",
                   len(cs["minted"]), ", ".join(cs["minted"]))
+    if cs["refused"]:
+        _log.warning("disk census refused %d malformed director%s: %s",
+                     len(cs["refused"]), "y" if len(cs["refused"]) == 1 else "ies",
+                     ", ".join(r["name"] for r in cs["refused"]))
     return (sum(out.values()) if out else 0) + tel + len(cs["minted"])
 
 
