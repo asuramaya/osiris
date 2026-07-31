@@ -41,6 +41,10 @@ EXISTING verb rather than re-deriving it:
                                      classifier permits an installed entrypoint but refuses
                                      a raw DATABASE_URL script, or when a client's MCP tool
                                      index is stale
+  osiris charter-for <seat>         the same manager/operator-enforced charter.charter_for
+             --repos --because      the charter_for MCP tool wraps (thread 2474) — same
+             --actor                second-door reasoning as fold-project, same guard,
+                                     untouched
 
 CANONICAL ENV RESOLUTION (the actual root-fix, 3e96c10e's cousin): every DB-backed command
 applies src.config.dev_env.apply_dev_fallback() first — a bare invocation must target the
@@ -1037,7 +1041,14 @@ async def cmd_fold_project(
     class of thing as `osiris deploy` (task #69/45b074bf, #63: one installed entrypoint,
     no raw DB, no runes). Never executes on its own initiative — dupe/into/evidence/actor
     are all named explicitly by the caller, every time; this command performs exactly one
-    fold, for the invocation it was given."""
+    fold, for the invocation it was given.
+
+    TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474, Thoth's own
+    miss as much as anyone's — he trusted this command's receipt for two real folds
+    without having read this far): the merge event and same_as link the MCP wrapper
+    queries after the fact are queried here too, the identical SELECT, not a redesign. A
+    weaker second door is worse than no second door — it gets used exactly when the
+    strong one is unavailable, which is precisely when the evidence matters most."""
     from src.actions.core import Actions
     from src.orchestrator.projects import fold_project
 
@@ -1058,6 +1069,18 @@ async def cmd_fold_project(
     try:
         out = await fold_project(Actions(pool), dupe=dupe, into=into, evidence=evidence,
                                  actor=actor)
+        if "error" not in out:
+            witness = await pool.fetchrow(
+                "SELECT oe.id AS merge_event_id, l.id AS same_as_link_id "
+                "FROM objects d JOIN objects i ON i.canonical=$2 "
+                "JOIN object_events oe ON oe.event_type='merge' AND oe.related_id=d.id "
+                "  AND oe.object_id=i.id "
+                "LEFT JOIN links l ON l.type='same_as' AND l.from_id=d.id AND l.to_id=i.id "
+                "WHERE d.canonical=$1 ORDER BY oe.created_at DESC LIMIT 1",
+                out["folded"], out["into"])
+            if witness:
+                out["merge_event_id"] = witness["merge_event_id"]
+                out["same_as_link_id"] = witness["same_as_link_id"]
     finally:
         if owns_pool:
             await pool.close()
@@ -1069,6 +1092,68 @@ async def cmd_fold_project(
         print("edges moved: " + ", ".join(f"{k}={v}" for k, v in out["edges_moved"].items()))
     if out.get("mounts_moved"):
         print(f"mounts moved: {out['mounts_moved']}")
+    if out.get("merge_event_id") is not None:
+        print(f"merge event: {out['merge_event_id']}  same_as link: "
+              f"{out.get('same_as_link_id')}")
+    return 0
+
+
+# --- charter-for -------------------------------------------------------------------------------
+
+async def cmd_charter_for(
+    seat_id: str, repos: list[str], because: str, *, actor: str,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris charter-for <seat> --repos a,b,c --because <text> --actor <who> — the
+    console-script door onto charter.charter_for, the SAME function the charter_for MCP
+    tool wraps (no duplicated guard, no softening: the managed_by/operator-actor check is
+    the whole point of this verb and is exactly charter_for's own, untouched here — the
+    one guard tonight that is genuinely ENFORCED rather than merely documented).
+
+    THE SANCTIONED SECOND DOOR (thread 2474, the third occurrence of the same shape as
+    fold_project/annotate_thread/amend_decision: a verb ships, deploys, and the fleet's
+    live MCP clients cannot see it in their own deferred-tool index — not this module's
+    bug, upstream per ruling 482c3d0f). An installed entrypoint bypasses that index
+    entirely, the same class of thing as `osiris deploy`/`osiris fold-project`.
+
+    TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (the general rule thread
+    2474 names after fold-project's CLI receipt was found silently weaker than its MCP
+    twin): charter_for's own return dict IS the full receipt already — this command
+    prints it whole, nothing dropped, so there is no second copy of the enrichment logic
+    to drift out of sync."""
+    from src.actions.core import Actions
+    from src.orchestrator.charter import charter_for
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris charter-for: could not reach postgres at {settings.database_url} "
+                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await charter_for(Actions(pool), seat_id, repos, because=because, actor=actor)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris charter-for: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"charter for {out['seat']}: {out['charter']}")
+    if out.get("added"):
+        print("added: " + ", ".join(out["added"]))
+    if out.get("removed"):
+        print("removed: " + ", ".join(out["removed"]))
+    if out.get("rejected"):
+        print(f"rejected: {out['rejected']}")
+    print(f"because: {out['because']}  declared by: {out['declared_by']}")
     return 0
 
 
@@ -1119,6 +1204,19 @@ def _build_parser() -> argparse.ArgumentParser:
     p_fold_project.add_argument("--actor", required=True,
                                 help="who is performing this fold")
 
+    p_charter_for = sub.add_parser("charter-for", help="declare a charter on behalf of a "
+                                   "seat — the same manager/operator-enforced charter_for "
+                                   "the MCP tool wraps, exposed as the sanctioned second door")
+    p_charter_for.add_argument("seat", help="the target seat's canonical (seat:<id>)")
+    p_charter_for.add_argument("--repos", required=True,
+                               help="comma-separated repo labels — the whole charter, not "
+                                    "an increment")
+    p_charter_for.add_argument("--because", required=True,
+                               help="why this charter is being declared on the seat's behalf")
+    p_charter_for.add_argument("--actor", required=True,
+                               help="who is declaring this charter (must be the seat's "
+                                    "manager or an operator actor)")
+
     return p
 
 
@@ -1143,6 +1241,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "fold-project":
         return asyncio.run(cmd_fold_project(args.dupe, args.into, args.evidence,
                                             actor=args.actor))
+    if args.command == "charter-for":
+        repos = [r.strip() for r in args.repos.split(",") if r.strip()]
+        return asyncio.run(cmd_charter_for(args.seat, repos, args.because, actor=args.actor))
     return 2  # pragma: no cover - argparse's own `required=True` makes this unreachable
 
 

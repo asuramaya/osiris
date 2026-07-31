@@ -17,6 +17,7 @@ from src.cli import (
     alembic_gap_note,
     cmd_attach,
     cmd_boot_status,
+    cmd_charter_for,
     cmd_deploy,
     cmd_fold_project,
     cmd_launch,
@@ -894,6 +895,21 @@ async def test_cmd_fold_project_folds_and_reports(actions: Actions) -> None:
     row = await actions.pool.fetchrow(
         "SELECT status FROM objects WHERE canonical='repo:clidupe1'")
     assert row["status"] == "merged"
+    # THE RECEIPT DIVERGENCE (thread 2474): two doors onto one function must return the
+    # same evidence — the merge event and same_as link the MCP wrapper surfaces must
+    # print here too, not just live in the graph unreported.
+    dupe_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:clidupe1'")
+    into_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:cliinto1'")
+    event_id = await actions.pool.fetchval(
+        "SELECT id FROM object_events WHERE object_id=$1 AND related_id=$2 "
+        "AND event_type='merge'", into_oid, dupe_oid)
+    link_id = await actions.pool.fetchval(
+        "SELECT id FROM links WHERE from_id=$1 AND to_id=$2 AND type='same_as'",
+        dupe_oid, into_oid)
+    assert f"merge event: {event_id}" in buf.getvalue()
+    assert f"same_as link: {link_id}" in buf.getvalue()
 
 
 async def test_cmd_fold_project_does_not_soften_the_contradiction_gate(
@@ -946,3 +962,97 @@ async def test_cli_parser_accepts_fold_project(actions: Actions) -> None:
         ["fold-project", "a", "b", "--evidence", "e", "--actor", "operator"])
     assert args.command == "fold-project"
     assert (args.dupe, args.into, args.evidence, args.actor) == ("a", "b", "e", "operator")
+
+
+# --- charter-for: the sanctioned second door (thread 2474) — calls the SAME
+# charter.charter_for the MCP wrapper calls, guard untouched -------------------------------
+
+async def _cli_repo(actions: Actions, name: str) -> None:
+    await actions.create_or_find_object("SoftwareProject", f"repo:{name}", "test")
+
+
+async def test_cmd_charter_for_the_manager_declares_and_reports(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator.seats import attach_seat, bind_holder, ensure_seat
+
+    await _cli_repo(actions, "osiris")
+    manager = await ensure_seat(actions, house="clihouse", handle="CliManager1",
+                                source="test")
+    worker = await ensure_seat(actions, house="clihouse", handle="CliWorker1", source="test")
+    await attach_seat(actions, worker["seat_id"], manager["seat_id"], evidence="org chart",
+                      actor="test")
+    await bind_holder(actions, seat_id=manager["seat_id"], agent_id="agent:climanager1")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_charter_for(worker["seat_id"], ["osiris"], "onboarding",
+                                    actor="agent:climanager1", pool=actions.pool)
+    assert out == 0
+    assert f"charter for {worker['seat_id']}" in buf.getvalue() and "osiris" in buf.getvalue()
+    assert "because: onboarding  declared by: agent:climanager1" in buf.getvalue()
+    from src.orchestrator.charter import charter_of
+
+    assert await charter_of(actions.pool, worker["seat_id"]) == ["osiris"]
+
+
+async def test_cmd_charter_for_refuses_a_non_manager(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    from src.orchestrator.seats import attach_seat, bind_holder, ensure_seat
+
+    await _cli_repo(actions, "osiris")
+    manager = await ensure_seat(actions, house="clihouse", handle="CliManager2",
+                                source="test")
+    worker = await ensure_seat(actions, house="clihouse", handle="CliWorker2", source="test")
+    await attach_seat(actions, worker["seat_id"], manager["seat_id"], evidence="org chart",
+                      actor="test")
+    stranger = await ensure_seat(actions, house="clihouse", handle="CliStranger2",
+                                 source="test")
+    await bind_holder(actions, seat_id=stranger["seat_id"], agent_id="agent:clistranger2")
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_charter_for(worker["seat_id"], ["osiris"], "unauthorized try",
+                                    actor="agent:clistranger2", pool=actions.pool)
+    assert out == 1
+    assert "not authorized" in buf.getvalue()
+    from src.orchestrator.charter import charter_of
+
+    assert await charter_of(actions.pool, worker["seat_id"]) == []
+
+
+async def test_cmd_charter_for_operator_actor_bypasses_managed_by(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator.seats import ensure_seat
+
+    await _cli_repo(actions, "osiris")
+    worker = await ensure_seat(actions, house="clihouse", handle="CliWorker3", source="test")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_charter_for(worker["seat_id"], ["osiris"], "operator backfill",
+                                    actor="operator", pool=actions.pool)
+    assert out == 0
+    from src.orchestrator.charter import charter_of
+
+    assert await charter_of(actions.pool, worker["seat_id"]) == ["osiris"]
+
+
+async def test_cli_parser_accepts_charter_for(actions: Actions) -> None:
+    """argparse wiring: seat positional, --repos/--because/--actor required (comma-split
+    happens in main(), not the parser — args.repos stays the raw string here)."""
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["charter-for", "seat:abc12345", "--repos", "a,b,c",
+         "--because", "onboarding", "--actor", "operator"])
+    assert args.command == "charter-for"
+    assert args.seat == "seat:abc12345"
+    assert args.repos == "a,b,c"
+    assert args.because == "onboarding"
+    assert args.actor == "operator"
