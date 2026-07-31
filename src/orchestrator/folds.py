@@ -436,16 +436,23 @@ async def find_agent_fold_candidates(
             if not souls:
                 seatless[r["project"]] = seatless.get(r["project"], 0) + 1
                 continue
-            # the room's RESIDENT (works_in) outranks a supervising charter (governs) —
-            # an Alfred governs coldspot, but coldspot's anons presumptively belong to
-            # the seat that lives there
-            residents = sorted(b for b, via in souls.items() if "works_in" in via)
+            # DECLARED BEATS DERIVED (operator ruling 1db1ff41, verbatim: "declared, all
+            # roads lead to explicit") — REVERSES this tie-break's prior rule, which ranked
+            # the room's RESIDENT (works_in) above a supervising charter (governs) on the
+            # reasoning that "an Alfred governs coldspot, but coldspot's anons presumptively
+            # belong to the seat that lives there." That reasoning is SUPERSEDED, not
+            # forgotten: decision 2655a0a8 found the opposite holds on the two hardest real
+            # cases in the fleet — alfred's DECLARED charter correctly named mudra->vajra and
+            # sutra->tantra when both seats' own derived/resident pins were wrong. A charter
+            # is a deliberate, operator-reviewed declaration; residence is wherever a session
+            # happened to mount. The room's DECLARED governor now outranks its resident.
+            governors = sorted(b for b, via in souls.items() if "governs" in via)
             if len(souls) == 1:
                 base = next(iter(souls))
-            elif len(residents) == 1:
-                base = residents[0]
+            elif len(governors) == 1:
+                base = governors[0]
             else:
-                pick = residents or sorted(souls)
+                pick = governors or sorted(souls)
                 recent = await pool.fetchval(
                     "SELECT agent_id FROM agent_mounts "
                     "WHERE agent_id LIKE ANY($1::text[]) "
@@ -468,8 +475,8 @@ async def find_agent_fold_candidates(
                 score = 0.55
                 signals = [f"anonymous mount in room '{r['project']}' at {cwd} — no "
                            f"named lineage anchors there; the charter names "
-                           f"{len(souls)} souls for this room [{roster}], resident "
-                           f"presumed: {target} — nuanced, verify by hand"]
+                           f"{len(souls)} souls for this room [{roster}], declared "
+                           f"governor presumed: {target} — nuanced, verify by hand"]
         if target is None:
             continue
         trow = await pool.fetchrow(

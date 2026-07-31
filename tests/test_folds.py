@@ -303,13 +303,14 @@ async def test_archaeologist_leaves_a_seatless_room_alone(
     assert out["seatless"].get("orphanage") == 1
 
 
-async def test_archaeologist_charter_match_prefers_the_resident(
+async def test_archaeologist_charter_match_prefers_the_declared_governor(
     actions: Actions, tmp_path,
 ) -> None:
     """When a room's charter names SEVERAL souls (a resident works_in beside a
     supervising governs — the coldspot shape: Aegis lives there, Alfred governs it),
-    the anon is presumed the RESIDENT's, at the multi-seat score: nuanced, verify by
-    hand, both names in the signal."""
+    the anon is presumed the GOVERNOR's (ruling 1db1ff41: declared beats derived — this
+    REVERSES the prior resident-wins tie-break), at the multi-seat score: nuanced,
+    verify by hand, both names in the signal."""
     from src.orchestrator.folds import find_agent_fold_candidates
 
     p = actions.pool
@@ -340,9 +341,9 @@ async def test_archaeologist_charter_match_prefers_the_resident(
     out = await find_agent_fold_candidates(p, projects_root=root, jobs_home=jobs)
 
     mine = [c for c in out["pending"] if c["dupe"] == "agent:e5a12111"]
-    assert mine and mine[0]["into_label"] == "agent:4e51den7"
+    assert mine and mine[0]["into_label"] == "agent:b055a1f4"  # the declared governor wins
     assert abs(float(mine[0]["score"]) - 0.55) < 1e-6  # several souls — hand-verify
-    assert "agent:b055a1f4" in str(mine[0]["signals"])  # the supervisor is named
+    assert "agent:4e51den7" in str(mine[0]["signals"])  # the resident is named
 
 
 async def test_unfold_reverses_a_fold_dry_run_writes_nothing(actions: Actions) -> None:
