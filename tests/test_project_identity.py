@@ -1,13 +1,19 @@
-"""PROJECT IDENTITY EVIDENCE (#110, decision 1db1ff41) — the read-only resolver: gather
-whichever tiers have signal, name each one's answer, mark disagreement, never pick a
-winner. These tests hold that contract, not any downstream rename/fork verb (still to
-come)."""
+"""PROJECT IDENTITY (#110, decision 1db1ff41): project_identity_evidence, the read-only
+resolver that gathers whichever tiers have signal and never picks a winner; rename_project
+and fork_project, the two DECLARED-succession writers a caller invokes once a human has
+read that report. (correct_project_name, the third writer, lives in projects.py/
+test_projects.py beside its lifecycle-verb siblings.)"""
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
 from src.actions.core import Actions
-from src.orchestrator.project_identity import project_identity_evidence
+from src.orchestrator.project_identity import (
+    fork_project,
+    project_identity_evidence,
+    rename_project,
+    unfork_project,
+)
 from src.orchestrator.seats import bind_holder, ensure_seat
 
 
@@ -210,3 +216,174 @@ async def test_self_authored_reports_existence_only_never_content(
     assert out["self_authored"]["charter.md"]["exists"] is False
     # and it never leaked into a candidate — nothing here is structurally readable as one
     assert "spamproj" not in out["candidates"]
+
+
+# --- rename_project (#110, decision 1db1ff41) ---------------------------------------------
+
+async def test_rename_project_keeps_canonical_changes_name_moves_mounts(
+    actions: Actions,
+) -> None:
+    proj = await _mk_project(actions, "xxit")
+    from src.orchestrator.mounts import save_mount
+
+    await save_mount(actions.pool, job_dir="/j/xxit", agent_id="agent:deckard1",
+                     project="xxit", cwd="/w/xxit", model=None, session_key=None)
+
+    out = await rename_project(actions, project="xxit", new_name="handlingtheloop",
+                               because="operator ruling: xxit renamed on its remote",
+                               actor="agent:test")
+
+    assert out["project"] == "repo:xxit"          # canonical id NEVER changes
+    assert out["old_name"] == "xxit" and out["new_name"] == "handlingtheloop"
+    assert out["mounts_moved"] == 1
+    row = await actions.pool.fetchrow("SELECT canonical, status FROM objects WHERE id=$1",
+                                      proj)
+    assert row["canonical"] == "repo:xxit" and row["status"] == "active"
+    current_name = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", proj)
+    assert current_name == "handlingtheloop"
+    old_still_in_history = await actions.pool.fetchval(
+        "SELECT 1 FROM assertions WHERE object_id=$1 AND name='name' "
+        "AND value #>> '{}' = 'xxit'", proj)
+    assert old_still_in_history == 1               # old name never deleted
+    mount_row = await actions.pool.fetchval(
+        "SELECT project FROM agent_mounts WHERE job_dir='/j/xxit'")
+    assert mount_row == "handlingtheloop"
+
+
+async def test_rename_project_refuses_blank_new_name_or_because(actions: Actions) -> None:
+    await _mk_project(actions, "blankcase")
+    out1 = await rename_project(actions, project="blankcase", new_name="",
+                                because="x", actor="agent:test")
+    assert "new_name is required" in out1["error"]
+    out2 = await rename_project(actions, project="blankcase", new_name="newname",
+                                because="  ", actor="agent:test")
+    assert "because is required" in out2["error"]
+
+
+async def test_rename_project_refuses_an_unresolved_project(actions: Actions) -> None:
+    out = await rename_project(actions, project="nope", new_name="x", because="x",
+                               actor="agent:test")
+    assert "no such SoftwareProject" in out["error"]
+
+
+async def test_rename_project_refuses_ambiguity_rather_than_guess(actions: Actions) -> None:
+    await _mk_project(actions, "ambirename")
+    oid2 = await actions.create_or_find_object("SoftwareProject", "repo:ambirename-other",
+                                                "test")
+    await actions.assert_property(oid2, "name", "ambirename", "test", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+
+    out = await rename_project(actions, project="ambirename", new_name="clean",
+                               because="x", actor="agent:test")
+
+    assert "ambiguous" in out["error"]
+
+
+async def test_rename_project_refuses_colliding_with_a_different_active_project(
+    actions: Actions,
+) -> None:
+    await _mk_project(actions, "sourceproj")
+    await _mk_project(actions, "targetproj")
+
+    out = await rename_project(actions, project="sourceproj", new_name="targetproj",
+                               because="x", actor="agent:test")
+
+    assert "already names a DIFFERENT active project" in out["error"]
+    assert "fold_project" in out["error"]
+
+
+# --- fork_project / unfork_project (#110, decision 1db1ff41) ------------------------------
+
+async def test_fork_project_mints_the_edge_and_moves_no_estate(actions: Actions) -> None:
+    redmonth = await _mk_project(actions, "forkredmonth")
+    ballgem = await _mk_project(actions, "forkballgem")
+    t = await actions.create_or_find_object("Thread", "thread:forkkeep1", "test")
+    await actions.create_link(t, redmonth, "in_repo", "agent:john", datetime.now(UTC), 0.9)
+
+    out = await fork_project(actions, project="forkredmonth", fork_into="forkballgem",
+                             because="John's own decision: new sibling, redmonth untouched",
+                             actor="agent:test")
+
+    assert out["forked_from"] == "repo:forkredmonth" and out["into"] == "repo:forkballgem"
+    edge = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='forked_from' "
+        "AND (valid_until IS NULL OR valid_until > now())", ballgem, redmonth)
+    assert edge == 1
+    # the estate never moved — redmonth's own in_repo edge still points at redmonth
+    still_there = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='in_repo' "
+        "AND (valid_until IS NULL OR valid_until > now())", t, redmonth)
+    assert still_there == 1
+
+
+async def test_fork_project_refuses_when_either_side_does_not_exist(actions: Actions) -> None:
+    await _mk_project(actions, "onlyone")
+    out = await fork_project(actions, project="onlyone", fork_into="phantom",
+                             because="x", actor="agent:test")
+    assert "unknown SoftwareProject" in out["error"]
+    assert "onlyone" not in out["error"]  # only the MISSING side is named
+
+
+async def test_fork_project_refuses_the_same_label_twice(actions: Actions) -> None:
+    await _mk_project(actions, "selfsame")
+    out = await fork_project(actions, project="selfsame", fork_into="selfsame",
+                             because="x", actor="agent:test")
+    assert "nothing to fork" in out["error"]
+
+
+async def test_fork_project_is_idempotent_not_a_duplicate_mint(actions: Actions) -> None:
+    await _mk_project(actions, "idemp1")
+    await _mk_project(actions, "idemp2")
+    first = await fork_project(actions, project="idemp1", fork_into="idemp2",
+                               because="x", actor="agent:test")
+    assert "forked_from" in first
+    second = await fork_project(actions, project="idemp1", fork_into="idemp2",
+                                because="x again", actor="agent:test")
+    assert "already carries a live forked_from edge" in second["error"]
+
+
+async def test_fork_project_refuses_a_retired_side(actions: Actions) -> None:
+    from src.orchestrator.projects import retire_project
+
+    await _mk_project(actions, "deadside")
+    await _mk_project(actions, "liveside")
+    await retire_project(actions, project="deadside", actor="agent:test", because="x")
+
+    out = await fork_project(actions, project="deadside", fork_into="liveside",
+                             because="x", actor="agent:test")
+    assert "not active" in out["error"]
+
+
+async def test_unfork_project_reverses_the_edge_reversibility_proven(actions: Actions) -> None:
+    """Thoth's own gate (DM 2427): reversibility PROVEN, not claimed — round-trip fork
+    then unfork and confirm the edge is actually gone, not just unreported."""
+    await _mk_project(actions, "revfrom")
+    await _mk_project(actions, "revinto")
+    await fork_project(actions, project="revfrom", fork_into="revinto",
+                       because="x", actor="agent:test")
+
+    out = await unfork_project(actions, project="revfrom", fork_into="revinto",
+                               because="wrongly forked, reverting", actor="agent:test")
+
+    assert out["unforked"] == "repo:revfrom" and out["was_into"] == "repo:revinto"
+    from_oid = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:revfrom'")
+    into_oid = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:revinto'")
+    live = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='forked_from' "
+        "AND (valid_until IS NULL OR valid_until > now())", into_oid, from_oid)
+    assert live is None
+    # re-forking after an unfork is not blocked by the idempotency check (the old edge
+    # is healed, not still "live")
+    again = await fork_project(actions, project="revfrom", fork_into="revinto",
+                               because="re-declaring it", actor="agent:test")
+    assert "forked_from" in again
+
+
+async def test_unfork_project_refuses_when_nothing_to_unfork(actions: Actions) -> None:
+    await _mk_project(actions, "neverforked1")
+    await _mk_project(actions, "neverforked2")
+    out = await unfork_project(actions, project="neverforked1", fork_into="neverforked2",
+                               because="x", actor="agent:test")
+    assert "nothing to unfork" in out["error"]

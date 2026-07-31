@@ -300,6 +300,15 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "lineage-linked id (agent:<base>-ii…) instead of writing under the dead name — "
              "SUCCESSION, distinct from spawned_by (delegation).",
              ("Agent",), ("Agent",)),
+    LinkType("forked_from", "Successor project → its ancestor project (#110, ruling "
+             "1db1ff41): the DECLARED shape for John's own redmonth/ballgem case (decision "
+             "58597670, verbatim: 'new sibling project, redmonth untouched') — TWO objects, "
+             "each keeping its full independent history, connected by one edge rather than "
+             "merged into one. Mirrors succeeded_from's own heir→ancestor direction at the "
+             "Agent level, but moves NO estate the way a fold does: in_repo/works_in/governs "
+             "edges on both sides stay exactly where they were. Minted only by "
+             "fork_project — a declared act, never inferred from evidence alone.",
+             ("SoftwareProject",), ("SoftwareProject",)),
     LinkType("succeeds_seat", "Holder → the mind that held this SEAT before it (operator's "
              "HOUSE/SEAT/HOLDER ruling, 2026-07-12; asked for by Ra V, a-sibling). DISTINCT "
              "from succeeded_from, which is ANCHOR ancestry — the same conversation minting an "

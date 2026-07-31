@@ -43,17 +43,37 @@ ones:
     the majority in_repo target across every Thread/Decision this seat's lineage has ever
     filed, the ballgem tier by necessity.
 
-Nothing here writes. correct_project_name / rename_project / fork_project (still to come)
-are the verbs a caller invokes once a human has read this report and made the declared
-call — this module's whole job ends at naming the evidence.
+`project_identity_evidence` never writes; `rename_project` and `fork_project` below are
+the two DECLARED-succession verbs a caller invokes once a human has read that report and
+made the call it can't make for them (correct_project_name, the third writer and the one
+delegated exception that IS self-authorizing, lives in projects.py beside retire_project/
+fold_project — the sibling lifecycle verbs it belongs with).
+
+RENAME vs FORK are different acts (ruling 1db1ff41): rename keeps ONE object's stable
+`canonical` id and only ever changes its mutable `name` property (old value stays in
+assertion history, never deleted — the same discipline rename_seat already holds for a
+seat's handle); fork connects TWO objects that already exist with a `forked_from` edge and
+moves no estate at all. THE CALLER DECLARES WHICH BY CALLING THE RIGHT FUNCTION — there is
+no shared `kind=` parameter to get wrong, because the codebase's own idiom (retire_project/
+fold_project/peer_seats/rename_seat/correct_house) is one verb, one act, and Thoth ruled
+that shape over a mode switch for exactly this reason (DM 2435): a declaration hidden
+behind an argument default is not a declaration.
 """
 from __future__ import annotations
 
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import asyncpg
+
+from src.actions.core import Actions
+from src.parsers.base import EvidenceClass
+from src.parsers.evidence import confidence_for
+
+_EC = EvidenceClass.SELF_DECLARED.value
+_CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 
 
 def _remote_basename(url: str | None) -> str | None:
@@ -239,3 +259,223 @@ async def project_identity_evidence(
         "candidates": candidates,
         "agreement": agreement,
     }
+
+
+# --- rename_project / fork_project (#110, decision 1db1ff41, rulings 1-2) -----------------
+
+async def rename_project(
+    actions: Actions, *, project: str, new_name: str, because: str, actor: str,
+) -> dict[str, Any]:
+    """RENAME: ONE object keeps its stable `canonical` id FOREVER — even though
+    SoftwareProject's canonical happens to be name-shaped (`repo:<name>`), it is treated
+    exactly as immutable as Seat's uuid-based `seat:<id>` is everywhere else in this
+    codebase; nothing here, or anywhere, ever rewrites `objects.canonical`. Only the
+    mutable `name` PROPERTY changes — a fresh `assert_property`, old values kept forever
+    in assertion history (never deleted), the same discipline rename_seat already holds
+    for a seat's handle. `_resolve_software_project`'s name-property fallback is what
+    makes the NEW name resolvable afterward; the OLD canonical string keeps resolving
+    too, forever — a rename never orphans either name.
+
+    ZERO graph EDGES move: works_in/governs/in_repo already point at this object's
+    stable `id`, not at its name or canonical, so every existing edge stays correct
+    automatically — unlike fold_project, which re-points an estate because it retires a
+    SECOND object. Only `agent_mounts.project` (a loose string column, never an FK — the
+    same shape fold_project's own estate move already handles) is re-addressed old bare
+    canonical -> new_name, so a fresh mount under the corrected name resolves cleanly.
+
+    OUT OF SCOPE, deliberately, named honestly rather than silently skipped (the same
+    discipline rename_seat holds for the harness window title it cannot reach): a
+    seat's own `.osiris` pin file on disk. This is a graph-only verb.
+
+    THE CALLER DECLARES; THIS FUNCTION NEVER INFERS (ruling 1db1ff41, verbatim:
+    "declared, all roads lead to explicit"). `because` is mandatory — a rename is
+    testimony, same discipline rename_seat/correct_house already hold — this function
+    does no evidence-gathering of its own; that is project_identity_evidence's job,
+    run BEFORE this is called, by a human who read its report.
+
+    Refuses LOUDLY on: a blank `new_name` or `because`; an unresolved or ambiguous
+    `project` ref (AmbiguousProjectRef, named exactly like every other project verb);
+    a non-active project; `new_name` already resolving to a DIFFERENT active
+    SoftwareProject (a real collision, never silently merged — fold_project is the
+    deliberate, evidence-gated verb for that, on purpose, with its own guard)."""
+    from src.orchestrator.projects import AmbiguousProjectRef, _resolve_software_project
+
+    project = (project or "").strip()
+    new_name = (new_name or "").strip()
+    because = (because or "").strip()
+    if not project:
+        return {"error": "project is required"}
+    if not new_name:
+        return {"error": "new_name is required"}
+    if not because:
+        return {"error": "because is required — a rename is testimony; the reason it "
+                         "changed must be on the record"}
+    try:
+        row = await _resolve_software_project(actions.pool, project)
+    except AmbiguousProjectRef as amb:
+        return {"error": f"{amb.ref!r} is ambiguous — {len(amb.candidates)} active "
+                         f"SoftwareProjects answer to it: {', '.join(amb.candidates)}. "
+                         "Name the exact one (canonical or id) — rename_project never "
+                         "guesses which."}
+    if row is None:
+        return {"error": f"no such SoftwareProject: {project!r}"}
+    if row["status"] != "active":
+        return {"error": f"{row['canonical']} is {row['status']}, not active — nothing "
+                         "to rename"}
+    try:
+        collide = await _resolve_software_project(actions.pool, new_name)
+    except AmbiguousProjectRef:
+        collide = None  # an ambiguity already living under new_name is a pre-existing
+                        # problem this rename did not create and is not asked to solve
+    if collide is not None and collide["id"] != row["id"] and collide["status"] == "active":
+        return {"error": f"{new_name!r} already names a DIFFERENT active project "
+                         f"({collide['canonical']}) — rename_project never collides two "
+                         "identities; fold_project is the deliberate, evidence-gated "
+                         "merge verb if these are actually the same project"}
+    old_name = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        row["id"])
+    now = datetime.now(UTC)
+    await actions.assert_property(row["id"], "name", new_name, actor, now, _CONF,
+                                  evidence_class=_EC)
+    bare_old = row["canonical"].removeprefix("repo:")
+    mount_tag = await actions.pool.execute(
+        "UPDATE agent_mounts SET project=$1 WHERE project=$2", new_name, bare_old)
+    mounts_moved = int(mount_tag.rsplit(" ", 1)[-1])
+    return {"project": row["canonical"], "old_name": old_name, "new_name": new_name,
+           "mounts_moved": mounts_moved, "because": because,
+           "note": f"{row['canonical']}'s canonical id never changes; edges already "
+                   "pointing at it are unaffected; its own .osiris pin file on disk "
+                   "is NOT touched by this verb"}
+
+
+async def fork_project(
+    actions: Actions, *, project: str, fork_into: str, because: str, actor: str,
+) -> dict[str, Any]:
+    """FORK: John's own redmonth/ballgem shape (decision 58597670, verbatim: "new
+    sibling project, redmonth untouched"). TWO objects, BOTH already active
+    SoftwareProjects — this verb never mints either side, reusing fold_project's own
+    refusal shape deliberately ("if the target doesn't exist yet, this is a RENAME... a
+    different verb for a different act"). Mints ONE `forked_from` edge, `fork_into` ->
+    `project` (the successor names its ancestor — the same direction convention
+    succeeded_from already holds for an Agent lineage: heir -> ancestor).
+
+    NO ESTATE MOVES — the deliberate opposite of fold_project: every existing
+    in_repo/works_in/governs edge on BOTH objects stays exactly where it is. redmonth's
+    145 in_repo edges were never meant to move; a fork records a NEW relationship
+    between two objects that each keep their own, complete history.
+
+    THE CALLER DECLARES; THIS FUNCTION NEVER INFERS, and it never runs
+    project_identity_evidence itself — that report is read BEFORE this is called, by a
+    human who then names both sides explicitly.
+
+    Refuses LOUDLY on: a blank `because`; `project`==`fork_into`; either ref ambiguous
+    (AmbiguousProjectRef) or unresolved; either not an ACTIVE SoftwareProject; a live
+    `forked_from` edge already connecting this exact pair (idempotent refusal, never a
+    duplicate mint)."""
+    from src.orchestrator.projects import AmbiguousProjectRef, _resolve_software_project
+
+    project = (project or "").strip()
+    fork_into = (fork_into or "").strip()
+    because = (because or "").strip()
+    if not because:
+        return {"error": "because is required — a fork is a declared act on the record"}
+    if not project or not fork_into:
+        return {"error": "fork_project needs both labels: project and fork_into"}
+    if project == fork_into:
+        return {"error": "project and fork_into name the same label — nothing to fork"}
+
+    async def _resolve(ref: str) -> tuple[Any, dict[str, Any] | None]:
+        try:
+            got = await _resolve_software_project(actions.pool, ref)
+        except AmbiguousProjectRef as amb:
+            return None, {"error": f"{amb.ref!r} is ambiguous — {len(amb.candidates)} "
+                                   f"active SoftwareProjects answer to it: "
+                                   f"{', '.join(amb.candidates)}. Name the exact one "
+                                   "(canonical or id) — fork_project never guesses which."}
+        return got, None
+
+    proj_row, err = await _resolve(project)
+    if err:
+        return err
+    into_row, err = await _resolve(fork_into)
+    if err:
+        return err
+    if proj_row is None or into_row is None:
+        missing = [label for label, row in ((project, proj_row), (fork_into, into_row))
+                  if row is None]
+        return {"error": f"unknown SoftwareProject(s): {', '.join(missing)} — "
+                         "fork_project never invents either side; mint the successor as "
+                         "a real project first before recording the succession"}
+    if proj_row["status"] != "active":
+        return {"error": f"{proj_row['canonical']} is {proj_row['status']}, not active"}
+    if into_row["status"] != "active":
+        return {"error": f"{into_row['canonical']} is {into_row['status']}, not active"}
+    exists = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='forked_from' "
+        "AND (valid_until IS NULL OR valid_until > now())", into_row["id"], proj_row["id"])
+    if exists:
+        return {"error": f"{into_row['canonical']} already carries a live forked_from "
+                         f"edge to {proj_row['canonical']} — nothing to do"}
+    now = datetime.now(UTC)
+    await actions.create_link(into_row["id"], proj_row["id"], "forked_from", actor, now,
+                              _CONF, properties={"because": because}, evidence_class=_EC)
+    return {"forked_from": proj_row["canonical"], "into": into_row["canonical"],
+           "because": because,
+           "note": "no estate moved — every existing in_repo/works_in/governs edge on "
+                   "both objects stays exactly where it is"}
+
+
+async def unfork_project(
+    actions: Actions, *, project: str, fork_into: str, because: str, actor: str,
+) -> dict[str, Any]:
+    """Invalidate a live `forked_from` edge — the compensating-event complement to
+    fork_project, same shape as seats.py's unpeer over peer_of. REVERSIBILITY PROVEN,
+    not claimed (Thoth's own gate, DM 2427): since fork_project never moves any estate,
+    there is nothing to move BACK either — the whole reversal is this one healed edge,
+    by design.
+
+    Refuses LOUDLY on: blank `because`; either ref unresolved to a SoftwareProject
+    (ambiguity is refused the same way, though an already-forked pair is by definition
+    unambiguous — both sides were named explicitly to create the edge); or no active
+    `forked_from` edge from `fork_into` to `project`."""
+    from src.orchestrator.projects import AmbiguousProjectRef, _resolve_software_project
+
+    because = (because or "").strip()
+    if not because:
+        return {"error": "because is required — unforking is a deliberate act on the "
+                         "record"}
+
+    async def _resolve(ref: str) -> tuple[Any, dict[str, Any] | None]:
+        try:
+            got = await _resolve_software_project(actions.pool, ref)
+        except AmbiguousProjectRef as amb:
+            return None, {"error": f"{amb.ref!r} is ambiguous — {len(amb.candidates)} "
+                                   f"active SoftwareProjects answer to it: "
+                                   f"{', '.join(amb.candidates)}. Name the exact one "
+                                   "(canonical or id) — unfork_project never guesses "
+                                   "which."}
+        return got, None
+
+    proj_row, err = await _resolve((project or "").strip())
+    if err:
+        return err
+    into_row, err = await _resolve((fork_into or "").strip())
+    if err:
+        return err
+    if proj_row is None or into_row is None:
+        missing = [label for label, row in ((project, proj_row), (fork_into, into_row))
+                  if row is None]
+        return {"error": f"unknown SoftwareProject(s): {', '.join(missing)}"}
+    link = await actions.pool.fetchrow(
+        "SELECT from_id, to_id FROM links WHERE type='forked_from' "
+        "AND from_id=$1 AND to_id=$2 "
+        "AND (valid_until IS NULL OR valid_until > now())", into_row["id"], proj_row["id"])
+    if link is None:
+        return {"error": f"{into_row['canonical']} carries no live forked_from edge to "
+                         f"{proj_row['canonical']} — nothing to unfork"}
+    now = datetime.now(UTC)
+    await actions.invalidate_link(link["from_id"], link["to_id"], "forked_from", actor, now)
+    return {"unforked": proj_row["canonical"], "was_into": into_row["canonical"],
+           "because": because}
