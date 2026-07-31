@@ -415,3 +415,84 @@ async def test_fold_project_is_reversible_via_unmerge(actions: Actions) -> None:
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE from_id=$1 AND to_id=$2 AND type='same_as'",
         dupe_id, into_id) == 1
+
+
+# ═══ the fold_project MCP wrapper (mcp_server.py, decision 5dbd4dce closed) — the gate
+# must survive exposure through the tool layer, and the reversibility witnesses must
+# reach the caller, not just the graph. ═══
+
+
+class _Ctx:
+    class request_context:  # noqa: N801
+        request = None
+        session = object()
+
+
+async def _mounted(actions: Actions, agent_id: str, project: str) -> _Ctx:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    ctx = _Ctx()
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=agent_id, session=agent_id, project=project, model=None, cwd=None)
+    return ctx
+
+
+async def test_fold_project_tool_still_refuses_a_contradiction_through_the_wrapper(
+    actions: Actions,
+) -> None:
+    """The gate must survive exposure — the wrapper is not a second, softer path to the
+    same act."""
+    from src import mcp_server as srv
+
+    await _stub_project(actions, "repo:wcd1", "wcd1")
+    await _stub_project(actions, "repo:wcd2", "wcd2")
+    cd1_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:wcd1'")
+    cd2_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:wcd2'")
+    await actions.assert_property(cd1_id, "language", "python", "agent:alice", NOW, 0.9)
+    await actions.assert_property(cd2_id, "language", "go", "agent:bob", NOW, 0.9)
+
+    saved_pool = srv._pool
+    ctx = await _mounted(actions, "agent:foldtool1", "foldtoolproj")
+    try:
+        out = await srv.fold_project(dupe="wcd1", into="wcd2",
+                                     evidence="looks like a twin", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "contradicting values" in out["error"] and out["contradicted_on"] == ["language"]
+    row = await actions.pool.fetchrow("SELECT status FROM objects WHERE canonical='repo:wcd1'")
+    assert row["status"] == "active"
+
+
+async def test_fold_project_tool_surfaces_the_merge_event_and_same_as_link(
+    actions: Actions,
+) -> None:
+    """Reversibility must reach the CALLER, not stay implicit in the graph — the receipt
+    names the merge event and the same_as link `merge_objects` mints, the two witnesses
+    an `unmerge_objects` reversal needs."""
+    from src import mcp_server as srv
+
+    await _stub_project(actions, "repo:wrev1", "wrev1")
+    await _stub_project(actions, "repo:wrev2", "wrev2")
+    dupe_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:wrev1'")
+    into_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:wrev2'")
+
+    saved_pool = srv._pool
+    ctx = await _mounted(actions, "agent:foldtool2", "foldtoolproj")
+    try:
+        out = await srv.fold_project(dupe="wrev1", into="wrev2",
+                                     evidence="reversibility reaches the caller", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["folded"] == "repo:wrev1" and out["into"] == "repo:wrev2"
+    event_id = await actions.pool.fetchval(
+        "SELECT id FROM object_events WHERE object_id=$1 AND related_id=$2 "
+        "AND event_type='merge'", into_id, dupe_id)
+    link_id = await actions.pool.fetchval(
+        "SELECT id FROM links WHERE from_id=$1 AND to_id=$2 AND type='same_as'",
+        dupe_id, into_id)
+    assert out["merge_event_id"] == event_id
+    assert out["same_as_link_id"] == link_id

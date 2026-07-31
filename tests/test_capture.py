@@ -2123,6 +2123,56 @@ async def test_resolves_is_idempotent(actions: Actions) -> None:
     assert n == 1
 
 
+async def test_resolves_a_valid_but_unrelated_thread_closes_it_silently(actions: Actions) -> None:
+    """REPRODUCTION (Thoth's dispatch, msg 2426): 5 documented instances this house has hit
+    (6f7aace9, a9500ca2, 97a9e335, 5e7eab02, fd237b40) — three of them AFTER the ac3333f7/
+    b0de003 ref-resolution hardening already landed — are NOT a matcher failure. In every
+    one, the caller's `resolves=` value was a syntactically-valid, EXACTLY-resolving 8-char
+    short id... of the wrong thread (a stray id reflexively carried over from unrelated
+    context). `_find_thread`'s exact-match ladder does precisely what it should: it finds
+    the thread that id actually names. There is nothing here for a matcher to refuse — the
+    citation is valid, just not what the caller meant. This test pins today's behavior:
+    closes silently, no signal in the receipt a caller could catch in the same turn."""
+    unrelated = await open_thread(actions, "REBIND_SEAT'S LYING RECEIPT — task #124",
+                                 owner="operator")
+    d = await record_decision(
+        actions, "THE GIT-REMOTE-AUTHORITATIVE RULE FAILS ON BALLGEM — an addendum fact "
+        "about repo-name resolution, unrelated to task #124",
+        kind="decision", resolves=str(unrelated)[:8])
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        unrelated)
+    assert status == "resolved"  # closed — silently, correctly-by-the-letter, wrongly-in-fact
+    answered = await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='answers'", d)
+    assert answered == unrelated
+
+
+async def test_resolves_no_longer_falls_through_to_a_prose_match(actions: Actions) -> None:
+    """THE NARROWING (msg 2426, #117's law — 'the cure is REFUSE, not widen'): a genuinely
+    free-text `resolves=` value — not identifier-shaped at all — used to fall through to
+    `_resolve_ref`'s fuzzy ILIKE leg and could silently close whatever thread's summary
+    happened to contain it. `resolves` is a CLOSING act now REQUIRES an identifier
+    (UUID/canonical/short-id); reverse-apply this fix and this exact call succeeds and
+    closes the thread — this test pins the refusal, not a hypothetical."""
+    import pytest
+
+    t = await open_thread(actions, "the daemon must restart after a kernel change",
+                          owner="operator")
+    with pytest.raises(ValueError, match="resolves matched no thread"):
+        await record_decision(actions, "a ruling recorded in passing",
+                              resolves="daemon must restart")  # a real substring of t's summary
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", t)
+    assert status == "open"  # never touched
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions a WHERE a.name='summary' "
+        "AND a.value #>> '{}' = 'a ruling recorded in passing'")
+    assert n == 0  # same strictness as any other resolves miss — nothing half-recorded
+
+
 # --- batch-resolve (§4.7, Maat's ask): record_decision(resolves=[...]) folds a SET --------
 
 async def test_batch_resolves_closes_each_thread_independently(actions: Actions) -> None:
@@ -2189,8 +2239,11 @@ async def test_record_decision_tool_reports_batch_receipt_per_entry(actions: Act
 async def test_record_decision_tool_single_string_resolves_is_byte_compatible(
     actions: Actions,
 ) -> None:
-    """A single string keeps the ORIGINAL shape — `resolved_thread`, singular, unchanged —
-    so the existing tool-level call sites see no diff."""
+    """A single string keeps the ORIGINAL KEY — `resolved_thread`, singular — so an
+    existing tool-level call site checking for its presence sees no diff. The VALUE now
+    also carries the matched thread's own summary (msg 2426, the same-turn catch: the 5
+    documented mis-citations were all this single-string form, and none were visible in
+    the receipt until a human re-read it later)."""
     from src import mcp_server as srv
 
     t = await open_thread(actions, "the composer needs a live socket for the fleet rail")
@@ -2202,8 +2255,52 @@ async def test_record_decision_tool_single_string_resolves_is_byte_compatible(
             resolves=str(t))
     finally:
         srv._pool = saved_pool
-    assert out["resolved_thread"] == f"{str(t)[:8]} — closed by this decision (answers edge)"
+    assert out["resolved_thread"] == (
+        f"{str(t)[:8]} — closed by this decision (answers edge) — "
+        "the composer needs a live socket for the fleet rail")
     assert "resolved_threads" not in out
+
+
+async def test_record_decision_tool_single_string_resolves_surfaces_a_mis_citation(
+    actions: Actions,
+) -> None:
+    """THE SAME-TURN CATCH, reproduced at the tool layer (msg 2426, the fd237b40 shape):
+    `resolves=` names a VALID thread that has nothing to do with this decision's content —
+    no matcher can refuse that, the id is real — but the receipt's summary now makes the
+    mismatch obvious immediately, where before (test_record_decision_tool_single_string_
+    resolves_is_byte_compatible's OLD assertion, pre-msg-2426) it carried only a bare id."""
+    from src import mcp_server as srv
+
+    unrelated = await open_thread(actions, "REBIND_SEAT'S LYING RECEIPT — task #124",
+                                 owner="operator")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.record_decision(
+            "THE GIT-REMOTE-AUTHORITATIVE RULE FAILS ON BALLGEM — unrelated to task #124",
+            kind="decision", resolves=str(unrelated)[:8])
+    finally:
+        srv._pool = saved_pool
+    assert "REBIND_SEAT'S LYING RECEIPT" in out["resolved_thread"]  # visible, same turn
+
+
+async def test_record_decision_tool_single_string_resolves_refuses_prose(
+    actions: Actions,
+) -> None:
+    """The narrowing reaches the tool layer too — a prose ref that would have fuzzy-
+    matched an unrelated thread's summary refuses instead of guessing."""
+    from src import mcp_server as srv
+
+    await open_thread(actions, "the daemon must restart after a kernel change",
+                      owner="operator")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.record_decision(
+            "a ruling recorded in passing", resolves="daemon must restart")
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out and "resolves matched no thread" in out["error"]
 
 
 async def test_record_decision_tool_single_string_still_errors_on_a_miss(

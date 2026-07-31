@@ -331,6 +331,16 @@ async def record_decision(
     Same strictness as `supersedes`: a ref that matches nothing raises, and NOTHING is
     recorded — a ruling that miscites the question it settles has not settled it.
 
+    UUID, CANONICAL, OR SHORT-ID ONLY (msg 2426 — 5 documented instances of a stray-but-
+    VALID short id closing the wrong thread, e.g. fd237b40; #117's law: "the cure is
+    REFUSE, not widen"): unlike `supersedes`/`implements`/`refutes`, `resolves` no longer
+    falls through to a free-text summary-substring match — an ADDRESSING act that CLOSES
+    a thread must name it exactly, never guess from prose. This does not, and cannot,
+    catch a valid id naming the wrong thread (no matcher can refuse a syntactically
+    correct citation without knowing intent) — see the MCP tool's receipt, which now
+    surfaces the matched thread's own summary for BOTH the single-ref and list forms, so
+    a caller sees what they just closed in the SAME turn instead of a day later.
+
     `resolves` also takes a LIST (§4.7, Maat's ask, ruling dd47c1da): a delegation folds
     the SET of threads it supersedes, not just one — "thread ownership doesn't transfer
     with a delegation" left her hand-closing threads twice, across two sessions, because
@@ -352,14 +362,16 @@ async def record_decision(
     answered: list[uuid.UUID] = []
     if isinstance(resolves, list):
         for thread_ref in resolves:
-            tid = await _find_thread(actions.pool, thread_ref)
+            tid = await _find_thread(actions.pool, thread_ref, require_identifier=True)
             if tid is not None:
                 answered.append(tid)
     elif resolves:
-        single = await _find_thread(actions.pool, resolves)
+        single = await _find_thread(actions.pool, resolves, require_identifier=True)
         if single is None:
             raise ValueError(f"resolves matched no thread: {resolves!r} — quote its UUID, "
-                             "8-char short id, or a summary substring")
+                             "canonical, or 8-char short id (a prose/summary match no "
+                             "longer resolves here — an addressing act refuses rather "
+                             "than guesses)")
         answered.append(single)
     # The near-dup lookup, like `_find_decision`/`_find_thread` just above, reads OUTSIDE the
     # write transaction — a pre-check, not a locked decision. On a hit, `d` below reuses that
@@ -466,6 +478,7 @@ class RefAmbiguous(Exception):
 
 async def _resolve_ref(
     pool: asyncpg.Pool, type_: str, ref: str, *, text_field: str,
+    require_identifier: bool = False,
 ) -> uuid.UUID | None:
     """The shared resolution ladder every `_find_*` helper in this module is built on
     (thread ac3333f7, Khnum IX's own near-miss, msg 1807): a ref that LOOKS like an
@@ -484,7 +497,18 @@ async def _resolve_ref(
     `RefAmbiguous` with the real candidates instead of an arbitrary LIMIT 1 pick. ONLY
     when `ref` matches NEITHER the canonical shape NOR the short-id shape at all does
     this fall through to (4), the pre-existing fuzzy `ILIKE` substring match (shortest
-    match wins) — genuinely free-text queries are exactly as forgiving as before."""
+    match wins) — genuinely free-text queries are exactly as forgiving as before.
+
+    `require_identifier=True` (Thoth's dispatch, msg 2426, #117's law: "a search feature
+    wired into an ADDRESSING path — the cure is REFUSE, not widen") removes step (4)
+    entirely for a call path that CLOSES something rather than merely reading it —
+    record_decision's `resolves=` is the one caller that opts in. This does NOT catch a
+    valid-but-wrong short id (5 documented instances, e.g. fd237b40: a real 8-hex id,
+    naming the wrong thread, resolved exactly as designed — no matcher can refuse a
+    syntactically-correct citation without knowing intent); it closes a DIFFERENT,
+    genuinely live exposure the docstring's own contract still names today: a bare prose
+    phrase silently falling through to ILIKE and closing whatever thread it happens to
+    substring-match."""
     try:
         return uuid.UUID(ref)
     except (ValueError, AttributeError):
@@ -510,6 +534,8 @@ async def _resolve_ref(
             raise RefAmbiguous(ref, type_, [
                 {"id": str(r["id"]), text_field: r["text"]} for r in rows])
         return None  # id-shaped but matched nothing anywhere — refuse, never fall through
+    if require_identifier:
+        return None  # not identifier-shaped at all — refuse rather than free-text match
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT o.id FROM objects o JOIN current_assertions a ON a.object_id=o.id "
         "WHERE o.type=$1 AND o.status='active' AND a.name=$3 "
@@ -900,7 +926,9 @@ async def _current_owner(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | None
     )
 
 
-async def _find_thread(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
+async def _find_thread(
+    pool: asyncpg.Pool, ref: str, *, require_identifier: bool = False,
+) -> uuid.UUID | None:
     """A Thread by UUID, by canonical (`thread:<12hex>`, with or without the prefix), by
     short-id PREFIX, then by summary substring (shortest summary wins — closest to the
     query). The prefix leg runs BEFORE summary text because the fleet quotes threads by
@@ -910,8 +938,12 @@ async def _find_thread(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
     identifier-shaped ref that matches NEITHER the canonical NOR the short-id leg REFUSES
     outright rather than falling through to that same substring text (Khnum IX's own
     near-miss, msg 1807: a bare canonical suffix silently matched a bug-report thread
-    that merely quoted it). See `_resolve_ref` for the full ladder."""
-    return await _resolve_ref(pool, "Thread", ref, text_field="summary")
+    that merely quoted it). `require_identifier=True` (msg 2426) drops the summary-
+    substring leg entirely — record_decision's `resolves=` opts in, since it CLOSES the
+    thread it names rather than merely reading it. See `_resolve_ref` for the full
+    ladder and rationale."""
+    return await _resolve_ref(pool, "Thread", ref, text_field="summary",
+                              require_identifier=require_identifier)
 
 
 # the triage verbs' kinds (ruling 758ded94): adopt = obligation (owed work, testimony),

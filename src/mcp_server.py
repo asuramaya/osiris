@@ -3148,6 +3148,47 @@ async def retire_project(project: str, because: str,
 
 
 @mcp.tool()
+async def fold_project(dupe: str, into: str, evidence: str,
+                       ctx: Context | None = None) -> dict[str, Any]:
+    """Fold SoftwareProject `dupe` into `into` — the deliberate, evidence-gated cure for a
+    TWIN (two SoftwareProject objects that are really one project under two labels). Same
+    shape as fold_seat: refuses LOUDLY, nothing written, on thin evidence; blank/equal
+    labels; either label not resolving to an ACTIVE SoftwareProject (fold_project never
+    invents `into` — a target that doesn't exist yet wants a RENAME, a different verb); or
+    a genuine cross-object contradiction on any non-name/tag property
+    (`_contradicting_properties` — SAME data under different tags is one project and merges
+    clean; SAME tag over contested data is two things, or a disagreement worth keeping, and
+    this refuses rather than destroy it).
+
+    REVERSIBLE, never a delete: `dupe` is stamped merged/merged_into, not removed. On
+    success this receipt also names the two witnesses a reversal (`unmerge_objects`) would
+    need — the merge event and the `same_as` link `merge_objects` mints — surfaced here
+    rather than left for a caller to re-derive by hand."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a fold is a mind's act, and the graph must know whose",
+                "why": _anchorless(ctx)}
+    from src.orchestrator.projects import fold_project as _fold_project
+    pool = await _pool_get()
+    out = await _fold_project(Actions(pool), dupe=dupe, into=into, evidence=evidence,
+                              actor=ident.agent_id)
+    if "error" in out:
+        return out
+    witness = await pool.fetchrow(
+        "SELECT oe.id AS merge_event_id, l.id AS same_as_link_id "
+        "FROM objects d JOIN objects i ON i.canonical=$2 "
+        "JOIN object_events oe ON oe.event_type='merge' AND oe.related_id=d.id "
+        "  AND oe.object_id=i.id "
+        "LEFT JOIN links l ON l.type='same_as' AND l.from_id=d.id AND l.to_id=i.id "
+        "WHERE d.canonical=$1 ORDER BY oe.created_at DESC LIMIT 1",
+        out["folded"], out["into"])
+    if witness:
+        out["merge_event_id"] = witness["merge_event_id"]
+        out["same_as_link_id"] = witness["same_as_link_id"]
+    return out
+
+
+@mcp.tool()
 async def assert_project_property(project: str, name: str, value: str,
                                   ctx: Context | None = None) -> dict[str, Any]:
     """The sanctioned write for a SINGLE project-scoped property (task #74) — closes the
@@ -3621,11 +3662,18 @@ async def record_decision(
     unwindable. Renders in the `decision-log` composition beside mined decisions, graded
     SELF_DECLARED (higher trust). Attributed to you if you mount()ed. Idempotent on the
     summary.
-    `resolves` = the THREAD(s) this decision ANSWERS (UUID, 8-char short id, or a summary
-    substring). It closes them in the same act. USE IT whenever your ruling settles an open
-    question — otherwise the answer lands and the question stays lit, and the next mind (or
-    the operator) is asked something you already decided. Naming the thread in your prose
-    does nothing; the graph does not read prose.
+    `resolves` = the THREAD(s) this decision ANSWERS — UUID, canonical, or 8-char short id
+    ONLY (msg 2426: no longer a free-text summary match — 5 documented instances of a
+    stray-but-VALID id closing the wrong thread means an addressing act must name its
+    target exactly, never guess from prose; #117's law, "the cure is REFUSE, not widen").
+    It closes them in the same act. USE IT whenever your ruling settles an open question —
+    otherwise the answer lands and the question stays lit, and the next mind (or the
+    operator) is asked something you already decided. Naming the thread in your prose does
+    nothing; the graph does not read prose.
+    THE SAME-TURN CATCH: no matcher can refuse a valid id that simply names the WRONG
+    thread — the receipt (`resolved_thread`, or per-entry in `resolved_threads` for the
+    list form) always carries the matched thread's own summary, so a mis-citation is
+    visible in the SAME turn instead of found by a human re-reading it later.
     A LIST folds the whole SET a delegation supersedes in one act (§4.7, Maat's ask —
     "thread ownership doesn't transfer with a delegation" left her hand-closing threads
     twice, by hand, across two sessions, because the single form could only ever name one).
@@ -3695,26 +3743,31 @@ async def record_decision(
     # resolve BEFORE recording, same discipline as supersedes — a single string keeps the
     # original all-or-nothing strictness; a list resolves each entry independently and
     # reports (never raises) on a miss, so one typo can't veto the rest of the set.
+    # require_identifier=True (msg 2426): resolves is a CLOSING act, so a bare prose ref
+    # refuses here rather than falling through to a fuzzy summary-substring match.
     answered: list[uuid.UUID] = []
     receipt: list[dict[str, str]] = []
+    single_summary: str | None = None
     if isinstance(resolves, list):
         for ref in resolves:
-            tid = await capture._find_thread(pool, ref)
+            tid = await capture._find_thread(pool, ref, require_identifier=True)
             if tid is None:
                 receipt.append({"ref": ref, "matched": "false",
-                                "note": "matched no thread — quote its UUID, 8-char short "
-                                        "id, or a summary substring"})
+                                "note": "matched no thread — quote its UUID, canonical, "
+                                        "or 8-char short id (no longer a prose match)"})
                 continue
             answered.append(tid)
             summ = await capture._thread_summary(pool, tid)
             receipt.append({"ref": ref, "matched": "true", "id": str(tid)[:8],
                             "summary": summ or ""})
     elif resolves:  # same strictness: a ruling that miscites its question has not settled it
-        single = await capture._find_thread(pool, resolves)
+        single = await capture._find_thread(pool, resolves, require_identifier=True)
         if single is None:
             return {"error": f"resolves matched no thread: {resolves!r} — quote its UUID, "
-                             "8-char short id, or a summary substring"}
+                             "canonical, or 8-char short id (no longer a prose match — "
+                             "an addressing act refuses rather than guesses)"}
         answered.append(single)
+        single_summary = await capture._thread_summary(pool, single)
     # confirms resolves the same best-effort way as resolves's list form — one bad ref
     # must not veto the practices that DID match
     confirm_ids: list[uuid.UUID] = []
@@ -3862,7 +3915,14 @@ async def record_decision(
     if isinstance(resolves, list):
         out["resolved_threads"] = receipt
     elif answered:
-        out["resolved_thread"] = f"{str(answered[0])[:8]} — closed by this decision (answers edge)"
+        # THE SAME-TURN CATCH (msg 2426 — 5 documented instances, e.g. fd237b40, all
+        # caught only later by a human re-reading a receipt that never showed the
+        # summary): a valid id naming the wrong thread cannot be refused by any matcher,
+        # but the mismatch is obvious the instant the closed thread's own words are
+        # right here — so they are, every time, not just for the list form.
+        out["resolved_thread"] = (
+            f"{str(answered[0])[:8]} — closed by this decision (answers edge) — "
+            f"{single_summary or '(no summary on record)'}")
     if old is not None:
         out["superseded"] = (
             "self (identical summary re-recorded) — nothing buried" if old == d else
