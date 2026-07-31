@@ -216,7 +216,17 @@ async def send_message(
     function ever silently redirecting the address (an explicit id remains an act of intent,
     same as resolve_seat's grave rule). `require_seat=True` refuses to send at all when the
     resolved target carries no claimed handle — no message row is written; the ValueError
-    names what was tried and what it resolved to."""
+    names what was tried and what it resolved to.
+
+    THE ADDRESSING REFUSAL (rulings 1a64ae9a/aee67e6d, DM 2360 — John XV/XVI, resolved
+    live): a DM addressed by NAME whose unique Seat exists but whose only active holder is
+    marked retired/false_mint used to fall through resolve_seat's own un-seated-lineage
+    fallback and land on a DIFFERENT Agent object's stale `handle` assertion — a dead
+    generation, addressed with the same confidence as a real resolution (both `dm_to` and
+    `lineage_head` agreed, wrongly, since both came from the same broken walk — no
+    receipt-side check catches this). `seat_holder_ineligible` (seats.py) is checked BEFORE
+    resolve_seat runs and refuses outright when it fires — no message row is written, same
+    as `require_seat`'s refusal above."""
     if desk_kind is not None and desk_kind not in DESK_KINDS:
         raise ValueError(f"desk_kind must be one of {DESK_KINDS}")
     if grade is not None and grade not in MAIL_GRADES:
@@ -244,6 +254,22 @@ async def send_message(
         # (the old snapshot semantics' documented in-flight edge, now closed for bound
         # seats). An unbound name keeps the snapshot: the live holder's id, exactly as
         # before (ruling 1e02e069).
+        from src.orchestrator.seats import seat_holder_ineligible
+        ineligible = await seat_holder_ineligible(pool, to_agent)
+        if ineligible is not None:
+            # THE REFUSAL BELONGS HERE, IN THE RESOLUTION (rulings 1a64ae9a/aee67e6d, DM
+            # 2360): resolve_seat's own un-seated-lineage fallback cannot tell "no seat at
+            # all" apart from "a seat exists but its only holder is marked" — it treats both
+            # as license to search EVERY Agent object's raw handle assertion instead, which
+            # can and did find a dead generation (John XV) and address it with the same
+            # confidence as a real resolution. Checking BEFORE calling resolve_seat, not
+            # after, is the only place a fix here can land: both dm_to and lineage_head are
+            # computed from that same fallback walk once it has run, so they agree with each
+            # other while being wrong together — no post-hoc receipt check can catch this.
+            raise ValueError(f"undeliverable: {ineligible} — refusing rather than guessing; "
+                             "check fleet() for who actually holds the seat now, or address "
+                             "the seat directly (to_agent='seat:<id>') once a new holder "
+                             "claims it.")
         from src.actions.core import Actions
         from src.orchestrator.agents import resolve_seat
         resolved = await resolve_seat(Actions(pool), to_agent)

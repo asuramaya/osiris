@@ -371,6 +371,106 @@ async def test_a_vacant_seat_never_blocks_resolution(actions: Actions) -> None:
     assert out["agent"] is None                   # nobody anywhere — honest empty
 
 
+# --- THE ADDRESSING REFUSAL (rulings 1a64ae9a/aee67e6d, DM 2360 — John XV/XVI) ---
+# binding_of_handle collapses "no seat" / "ambiguous" / "genuinely vacant" / "a seat WITH a
+# marked-ineligible holder" into one bare None — resolve_seat then treats all four alike as
+# license to fall back to the assertion path, which found John's DEAD PREDECESSOR the one
+# time it mattered. seat_holder_ineligible names the fourth shape distinctly so a caller
+# (send_message) can refuse BEFORE that fallback ever runs.
+
+
+async def test_seat_holder_ineligible_none_for_no_such_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import seat_holder_ineligible
+
+    assert await seat_holder_ineligible(actions.pool, "NoSuchHandleAtAll") is None
+
+
+async def test_seat_holder_ineligible_none_for_an_ambiguous_handle(actions: Actions) -> None:
+    from src.orchestrator.seats import seat_holder_ineligible
+
+    await ensure_seat(actions, house="alpha", handle="AmbigTwin", source="test")
+    await ensure_seat(actions, house="beta", handle="AmbigTwin", source="test")
+    assert await seat_holder_ineligible(actions.pool, "AmbigTwin") is None
+
+
+async def test_seat_holder_ineligible_none_for_a_genuinely_vacant_seat(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import seat_holder_ineligible
+
+    await ensure_seat(actions, house="osiris", handle="VacantIneligible", source="test")
+    assert await seat_holder_ineligible(actions.pool, "VacantIneligible") is None
+
+
+async def test_seat_holder_ineligible_none_for_an_eligible_holder(actions: Actions) -> None:
+    from src.orchestrator.seats import bind_holder, seat_holder_ineligible
+
+    seat = await ensure_seat(actions, house="osiris", handle="Eligible", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:elig0001")
+    assert await seat_holder_ineligible(actions.pool, "Eligible") is None
+
+
+async def test_seat_holder_ineligible_names_the_seat_when_the_holder_is_false_mint(
+    actions: Actions,
+) -> None:
+    """John's exact live shape: a unique seat, ONE active holder, and that holder is a
+    healed phantom mint. binding_of_handle's own NOT EXISTS guard excludes it silently;
+    this function is the only thing that says why."""
+    from src.orchestrator.seats import bind_holder, seat_holder_ineligible
+
+    seat = await ensure_seat(actions, house="osiris", handle="Ghost", source="test")
+    now = datetime.now(UTC)
+    old = await actions.create_or_find_object("Agent", "agent:ghost-old", "agent:ghost-old")
+    await actions.assert_property(old, "handle", "Ghost", "agent:ghost-old", now, 0.9,
+                                  evidence_class="self_declared")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:ghost-old")
+    new = await actions.create_or_find_object("Agent", "agent:ghost-new", "agent:ghost-new")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:ghost-new")  # succession
+    await actions.assert_property(new, "false_mint", "true", "agent:ghost-new", now, 0.9,
+                                  evidence_class="self_declared")
+
+    reason = await seat_holder_ineligible(actions.pool, "Ghost")
+
+    assert reason is not None
+    assert seat["seat_id"] in reason
+    assert "agent:ghost-new" in reason
+
+
+async def test_seat_holder_ineligible_names_the_seat_when_the_holder_is_retired(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import bind_holder, seat_holder_ineligible
+
+    seat = await ensure_seat(actions, house="osiris", handle="Retiree", source="test")
+    now = datetime.now(UTC)
+    holder = await actions.create_or_find_object("Agent", "agent:ret0001", "agent:ret0001")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:ret0001")
+    await actions.assert_property(holder, "retired", "true", "agent:ret0001", now, 0.9,
+                                  evidence_class="self_declared")
+
+    reason = await seat_holder_ineligible(actions.pool, "Retiree")
+    assert reason is not None and "agent:ret0001" in reason
+
+
+async def test_seat_holder_ineligible_ignores_a_superseded_holders_own_marks(
+    actions: Actions,
+) -> None:
+    """A mark on a PRIOR holder whose `holds` edge has already healed (bind_holder's own
+    succession, valid_until in the past) must never surface — only the CURRENT active
+    holder's marks matter, same predicate binding_of_handle itself runs."""
+    from src.orchestrator.seats import bind_holder, seat_holder_ineligible
+
+    seat = await ensure_seat(actions, house="osiris", handle="Healed", source="test")
+    now = datetime.now(UTC)
+    old = await actions.create_or_find_object("Agent", "agent:heal-old", "agent:heal-old")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:heal-old")
+    await actions.assert_property(old, "false_mint", "true", "agent:heal-old", now, 0.9,
+                                  evidence_class="self_declared")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:heal-new")  # supersedes
+
+    assert await seat_holder_ineligible(actions.pool, "Healed") is None
+
+
 # --- Phase B4: the hand-resume follows the seat ---
 
 

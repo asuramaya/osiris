@@ -8,6 +8,8 @@ per-reader lease cycle, the group visibility (two agents both see a broadcast), 
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from src.actions.core import Actions
 from src.orchestrator.mailbox import (
@@ -385,6 +387,119 @@ async def test_a_raw_id_send_reveals_a_stale_generation_via_lineage_head(
     assert dm["seat"] == "Ptah I"              # the ancestor still carries its own old handle
     assert dm["lineage_head"] == heir          # ...but the echo reveals it is NOT current
     assert dm["lineage_head"] != dm["to_agent"]
+
+
+# --- THE ADDRESSING REFUSAL (rulings 1a64ae9a/aee67e6d, DM 2360 — John XV/XVI, resolved
+# live): a DM by NAME whose unique seat's only holder is marked used to fall through to a
+# raw handle-assertion search and land on a DEAD PREDECESSOR, reported with the confidence
+# of a real resolution. seat_holder_ineligible is checked before resolve_seat ever runs. ---
+
+
+async def test_send_refuses_a_name_whose_only_seat_holder_is_a_healed_phantom(
+    actions: Actions,
+) -> None:
+    """THE NEGATIVE CONTROL (mandatory per DM 2360): John's exact live shape, reproduced —
+    a unique seat, one active holder, that holder false_mint='true', and an OLDER generation
+    still carrying the same `handle` assertion (the ancestor the old fallback silently
+    delivered to). send() must refuse loudly, naming why, and write NOTHING — never address
+    the ancestor."""
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="John", source="test")
+    now = datetime.now(UTC)
+    ancestor = await actions.create_or_find_object("Agent", "agent:john-xiv", "agent:john-xiv")
+    await actions.assert_property(ancestor, "handle", "John", "agent:john-xiv", now, 0.9,
+                                  evidence_class="self_declared")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:john-xiv")
+    heir = await actions.create_or_find_object("Agent", "agent:john-xvi", "agent:john-xvi")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:john-xvi")
+    await actions.assert_property(heir, "false_mint", "true", "agent:john-xvi", now, 0.9,
+                                  evidence_class="self_declared")
+
+    with pytest.raises(ValueError, match="undeliverable"):
+        await send_message(actions.pool, from_agent="agent:boss", from_project="osiris",
+                           to_agent="John", body="the retraction unblocks you")
+
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM fleet_messages WHERE to_agent IN "
+        "('agent:john-xiv', 'agent:john-xvi')") == 0
+
+
+async def test_send_refuses_a_name_whose_only_seat_holder_is_retired(
+    actions: Actions,
+) -> None:
+    """The OR half of the guard (retired, not just false_mint) — same refusal shape."""
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="Retired1", source="test")
+    now = datetime.now(UTC)
+    holder = await actions.create_or_find_object("Agent", "agent:ret-send1", "agent:ret-send1")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:ret-send1")
+    await actions.assert_property(holder, "retired", "true", "agent:ret-send1", now, 0.9,
+                                  evidence_class="self_declared")
+
+    with pytest.raises(ValueError, match="undeliverable"):
+        await send_message(actions.pool, from_agent="agent:boss", from_project="osiris",
+                           to_agent="Retired1", body="ship it")
+
+
+async def test_send_still_delivers_to_a_name_with_an_eligible_seat_holder(
+    actions: Actions,
+) -> None:
+    """REGRESSION PROOF: the ordinary, working case — a seat with one clean, live holder —
+    must be completely unaffected by the new check."""
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="Clean", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:clean0001")
+
+    dm = await send_message(actions.pool, from_agent="agent:boss", from_project="osiris",
+                            to_agent="Clean", body="ship it")
+    assert dm["to_agent"] == seat["seat_id"]
+    assert dm["seat"] == "Clean"
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM fleet_messages WHERE to_agent=$1", seat["seat_id"]) == 1
+
+
+async def test_send_to_a_raw_seat_id_is_unaffected_by_the_new_check(
+    actions: Actions,
+) -> None:
+    """REGRESSION PROOF: the working seat-addressed path (to_agent='seat:<id>') is an
+    entirely separate branch above the name-resolution one this change touches — shown
+    working here, not merely asserted unchanged."""
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="DirectSeat", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:direct0001")
+
+    dm = await send_message(actions.pool, from_agent="agent:boss", from_project="osiris",
+                            to_agent=seat["seat_id"], body="ship it, addressed by seat id")
+    assert dm["to_agent"] == seat["seat_id"]
+    assert dm["seat"] == "DirectSeat"
+
+
+async def test_send_still_refuses_a_genuinely_unknown_name(actions: Actions) -> None:
+    """No seat, no agent, nothing — seat_holder_ineligible must stand aside (None) and the
+    ORIGINAL "no agent named" refusal must still fire, unchanged wording."""
+    with pytest.raises(ValueError, match="no agent named"):
+        await send_message(actions.pool, from_agent="agent:boss", from_project="osiris",
+                           to_agent="TotallyUnknownName", body="hello?")
+
+
+async def test_send_still_uses_the_assertion_fallback_for_an_unseated_name(
+    actions: Actions,
+) -> None:
+    """REGRESSION PROOF: an un-seated lineage (no Seat object at all) must keep resolving
+    through the old assertion path exactly as before — seat_holder_ineligible returns None
+    for 'no such seat' and must never block it."""
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:unseated01", "agent:unseated01")
+    await actions.assert_property(a, "handle", "Unseated", "agent:unseated01", now, 0.9,
+                                  evidence_class="self_declared")
+
+    dm = await send_message(actions.pool, from_agent="agent:boss", from_project="osiris",
+                            to_agent="Unseated", body="ship it")
+    assert dm["to_agent"] == "agent:unseated01"
 
 
 async def test_inbox_is_scoped_and_normalized(actions: Actions) -> None:

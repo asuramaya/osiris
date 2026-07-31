@@ -795,6 +795,56 @@ async def binding_of_handle(pool: asyncpg.Pool, name: str) -> dict[str, Any] | N
     return {"seat_id": seats[0], "holder": str(holder)}
 
 
+async def seat_holder_ineligible(pool: asyncpg.Pool, name: str) -> str | None:
+    """THE MISSING DISTINCTION `binding_of_handle` cannot make on its own (Thoth's dispatch,
+    DM 2360; rulings 1a64ae9a/aee67e6d — John XV/XVI, resolved live). `binding_of_handle`
+    collapses FOUR distinct failure shapes into one bare `None`: no such seat, an ambiguous
+    handle, a genuinely vacant seat (no active `holds` edge at all), and — THE CASE THAT
+    MATTERS HERE — a unique seat WITH an active holder who is marked retired/false_mint (or
+    a spawn wearing the handle, Phase C). `resolve_seat` (agents.py, FROZEN tonight — this
+    function never touches it) treats that bare None as "try the un-seated-lineage fallback
+    instead" for ALL FOUR shapes alike, and the fallback's own assertion-based search finds
+    whatever OTHER Agent object still carries a stale `handle` assertion for this name — a
+    dead generation, addressed with the confidence of a real resolution (send(to_agent=
+    'John') delivered to agent:d5c671c1-xiv, his DEAD PREDECESSOR, while -xv/-xvi were the
+    living lineage).
+
+    Returns None for the other three shapes (no seat / ambiguous / genuinely vacant) — the
+    fallback is the CORRECT answer for an un-seated or truly-empty lineage, and this
+    function must never block it. Returns a REASON STRING, naming the seat and the marked
+    holder, ONLY for the fourth shape: a seat exists, uniquely, and DOES have an active
+    holder, but that holder is exactly what binding_of_handle's own NOT EXISTS guard (this
+    function's holder query mirrors it) excludes. A caller (send_message) that sees this
+    string must REFUSE before ever calling resolve_seat — the refusal belongs in the
+    resolution, not a post-hoc check on the receipt (both `dm_to` and `lineage_head` agree
+    on the SAME wrong answer once the fallback has already run, so no receipt-side check can
+    catch this after the fact)."""
+    seats = [r["canonical"] for r in await pool.fetch(
+        "SELECT o.canonical FROM objects o WHERE o.type='Seat' AND o.status='active' "
+        "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='handle' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1)", name)]
+    if len(seats) != 1:
+        return None  # no seat, or an ambiguous handle — not this function's shape to name
+    row = await pool.fetchrow(
+        "SELECT f.canonical, "
+        " EXISTS(SELECT 1 FROM current_assertions r WHERE r.object_id=f.id "
+        "   AND r.name IN ('retired','false_mint') AND r.value #>> '{}' = 'true') AS marked, "
+        " EXISTS(SELECT 1 FROM links sl WHERE sl.from_id=f.id "
+        "   AND sl.type='spawned_by') AS visitor "
+        "FROM links l JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND l.type='holds' AND f.type='Agent' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "ORDER BY l.first_seen DESC LIMIT 1", seats[0])
+    if row is None:
+        return None  # a genuinely vacant seat — the un-seated fallback is the right answer
+    if not row["marked"] and not row["visitor"]:
+        return None  # an eligible holder — binding_of_handle would already have found it
+    why = "marked retired/false_mint" if row["marked"] else "a visitor spawn wearing the handle"
+    return (f"{seats[0]} is the unique living seat for {name!r}, but its only active holder "
+            f"({row['canonical']}) is {why} — no eligible holder exists")
+
+
 async def _seat_display(pool: asyncpg.Pool, seat_id: str) -> dict[str, Any]:
     row = await pool.fetchrow(
         "SELECT "
