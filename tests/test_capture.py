@@ -724,6 +724,75 @@ async def test_resolve_thread_tool_receipt_omits_resolved_by_without_an_artifact
     assert "artifact" not in out
 
 
+async def test_annotate_thread_tool_appends_without_touching_status(actions: Actions) -> None:
+    """#116, closed at the MCP surface: annotate_thread landed at capture.py (28a1585) but
+    the fleet had no wrapper to reach it — this is the fix. Status stays exactly as it was
+    before the call, open or resolved; the note is additive testimony, never a revision."""
+    from src import mcp_server as srv
+
+    t = await open_thread(actions, "a thread that will get a note after it closes")
+    await resolve_thread(actions, str(t), because="shipped")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.annotate_thread(str(t), "the fix regressed once, then held")
+    finally:
+        srv._pool = saved_pool
+    assert out == {"id": str(t), "note": "the fix regressed once, then held",
+                   "status": "annotated"}
+    notes = await thread_notes(actions.pool, t)
+    assert [n["note"] for n in notes] == ["the fix regressed once, then held"]
+    assert (await _props(actions.pool, t))["status"] == "resolved"  # untouched by the note
+
+
+async def test_annotate_thread_tool_reports_a_miss_without_erroring(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.annotate_thread("no-such-thread-anywhere-in-this-graph", "a note")
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out and "no-such-thread-anywhere" in out["error"]
+
+
+async def test_amend_decision_tool_appends_without_touching_summary(actions: Actions) -> None:
+    """The third door for a live decision's own reasoning — `summary` is the addressable
+    handle callers dedup/short-id-match against and is never touched here."""
+    from src import mcp_server as srv
+
+    d = await record_decision(actions, "the widget ships wired", kind="decision")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.amend_decision(str(d), "confirmed live, three days later")
+    finally:
+        srv._pool = saved_pool
+    assert out == {"id": str(d), "addendum": "confirmed live, three days later",
+                   "status": "amended"}
+    addenda = await decision_addenda(actions.pool, d)
+    assert [a["addendum"] for a in addenda] == ["confirmed live, three days later"]
+    assert (await _props(actions.pool, d))["summary"] == "the widget ships wired"
+
+
+async def test_amend_decision_tool_refuses_a_superseded_decision(actions: Actions) -> None:
+    """A dead ruling does not grow new reasoning — amend the successor, or correct via
+    record_decision(supersedes=...); this verb only ever adds to a ruling still standing."""
+    from src import mcp_server as srv
+
+    old = await record_decision(actions, "the widget ships wireless", kind="decision")
+    await record_decision(actions, "correction: the widget ships wired after all",
+                          kind="reset", supersedes=str(old))
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.amend_decision(str(old), "too late, this one is dead")
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out and "already superseded" in out["error"]
+
+
 def test_measurement_smell_nags_only_the_measurements() -> None:
     """Thread 022bd24a: the protocol nag must fire on verification recipes (Ferryman's exact
     words + the N/N shape) and stay QUIET on ordinary rulings — a nag that fires on every

@@ -21,6 +21,7 @@ from typing import Any, Protocol
 
 class _Fetchable(Protocol):
     async def fetchval(self, query: str, *args: Any) -> Any: ...
+    async def fetch(self, query: str, *args: Any) -> Any: ...
 
 
 async def settle_boxes(
@@ -71,6 +72,52 @@ async def settle_boxes(
         except Exception:  # noqa: BLE001
             boxes["a live succession/handoff note (this lineage was minted)"] = None
     return boxes
+
+
+async def filed_under_check(
+    conn_or_pool: _Fetchable, *, agent_id: str, mounted_at: datetime, project: str | None,
+) -> dict[str, Any] | None:
+    """SETTLE VERIFIES WHAT YOU WROTE, NEVER WHO CAN READ IT (Thoth's Lane 4 finding,
+    2026-07-31): John XVI settled complete:true — every box green — while his own writes
+    filed under a DIFFERENT project than the one his successor's orient() scopes to. Every
+    box above asks "did this session write?"; none of them ask "did it write WHERE its own
+    successor will look?" This closes that gap: does the project this session is FILED
+    UNDER (`project` — the mounted identity's own project, what a fresh heir inherits and
+    what orient() scopes a SCOPED briefing to) agree with the project(s) this session's own
+    Decision/Thread writes actually landed `in_repo`?
+
+    REPORT-ONLY, NEVER A GATE (ruling 577988ed's closing lesson, reasserted by Thoth
+    tonight: "a fleet-wide single-point-of-failure must never refuse-to-serve on a check
+    that can false-positive — surface loudly instead"): this function has no notion of
+    'missing' or 'complete' and is never folded into `missing_boxes`. A caller surfaces its
+    `coherent` field informationally; it must never gate a settle, however wrong it looks —
+    an agent at 95% context refused a settle by a check that itself might be wrong is a
+    strictly worse outcome than the incoherence it would have caught.
+
+    None (fails open) when `project` is unknown or this session wrote nothing this session
+    (no signal either way — silence is not evidence of a mismatch). `writes_went_to` is
+    every DISTINCT project canonical (bare name) a Decision or Thread this session authored
+    is `in_repo` of; a write with NO `in_repo` link at all (an unfiled thread, Alfred V's
+    own shape) is invisible to this specific check by construction — it names WHERE writes
+    went, not whether every write went somewhere."""
+    if not project:
+        return None
+    try:
+        rows = await conn_or_pool.fetch(
+            "SELECT DISTINCT p.canonical AS project FROM objects o "
+            "JOIN links l ON l.from_id = o.id AND l.type = 'in_repo' "
+            "JOIN objects p ON p.id = l.to_id AND p.type = 'SoftwareProject' "
+            "WHERE o.type IN ('Decision', 'Thread') AND EXISTS ("
+            "  SELECT 1 FROM assertions a WHERE a.object_id = o.id "
+            "  AND a.source_id = $1 AND a.observed_at >= $2)",
+            agent_id, mounted_at)
+    except Exception:  # noqa: BLE001 — fail open, same law as every box above
+        return None
+    went_to = sorted({str(r["project"]).removeprefix("repo:") for r in rows})
+    if not went_to:
+        return None
+    mismatched = [p for p in went_to if p != project]
+    return {"filed_under": project, "writes_went_to": went_to, "coherent": not mismatched}
 
 
 def charter_touched(cwd: str | None, mounted_at: datetime) -> bool | None:

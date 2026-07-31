@@ -4083,6 +4083,59 @@ async def resolve_thread(
 
 
 @mcp.tool()
+async def annotate_thread(
+    ref: str, note: str,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    session_anchor: str | None = None, ctx: Context | None = None,
+) -> dict[str, str]:
+    """Add to a THREAD's record WITHOUT closing it — the fifth door (#116: `resolve_thread`
+    closes; `assign_thread` hands off; `defer_thread` snoozes; this one just adds). `ref` is
+    a Thread UUID, canonical, short-id prefix, or summary substring, matched regardless of
+    the thread's own status — an annotated thread stays exactly as open, resolved, or
+    deferred as it was before the call. Each call appends independently (never supersedes an
+    earlier note, never touches `summary`/`status`); nothing here revises anything. A caller
+    who means "the earlier understanding was wrong" wants a different verb (open a fresh
+    thread, or fold the correction into whatever answers this one)."""
+    pool = await _pool_get()
+    try:
+        tid = await capture.annotate_thread(
+            Actions(pool), ref, note,
+            source=await _actor_for(ctx, subagent_id, subagent_type))
+    except ValueError as e:
+        return {"error": str(e)}
+    if tid is None:
+        return {"error": f"no thread matches {ref!r}"}
+    return {"id": str(tid), "note": note.strip(), "status": "annotated"}
+
+
+@mcp.tool()
+async def amend_decision(
+    ref: str, addendum: str,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    session_anchor: str | None = None, ctx: Context | None = None,
+) -> dict[str, str]:
+    """Append reasoning to a LIVE decision as understanding develops, WITHOUT superseding it.
+    `record_decision` is write-once-plus-supersede — mint fresh, or bury under a correction —
+    this is the third door: more of the same ruling's own reasoning, added later. `ref` is a
+    Decision UUID, canonical, short-id prefix, or summary substring. `summary`/`rationale`/
+    `kind` are never touched here.
+    Returns {"error": ...} (never raises past this wrapper) when `ref` matches nothing, or
+    when it resolves to a decision already superseded — amend the successor instead, or use
+    record_decision(supersedes=...) if you mean a correction; this verb only ever adds to a
+    ruling still standing."""
+    pool = await _pool_get()
+    try:
+        did = await capture.amend_decision(
+            Actions(pool), ref, addendum,
+            source=await _actor_for(ctx, subagent_id, subagent_type))
+    except ValueError as e:
+        return {"error": str(e)}
+    if did is None:
+        return {"error": f"no decision matches {ref!r}"}
+    return {"id": str(did), "addendum": addendum.strip(), "status": "amended"}
+
+
+@mcp.tool()
 async def acquire_lease(
     resource_id: str, holder: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
@@ -4291,14 +4344,28 @@ async def settle(
 
     # CONFIRM: re-check against the now-updated graph — a no-op re-derivation when nothing
     # was accepted above, which is exactly the pure-SURFACE call shape.
-    from src.orchestrator.settle import missing_boxes, settle_boxes, uncommitted_git_work
+    from src.orchestrator.settle import (
+        filed_under_check,
+        missing_boxes,
+        settle_boxes,
+        uncommitted_git_work,
+    )
     mounted = await mounts.find_session_row(pool, ident.session)
     boxes: dict[str, bool | None] = {}
     missing: list[str] = []
+    identity_coherence: dict[str, Any] | None = None
     if mounted is not None and mounted["mounted_at"]:
         boxes = await settle_boxes(pool, agent_id=ident.agent_id,
                                    mounted_at=mounted["mounted_at"], cwd=ident.cwd)
         missing = missing_boxes(boxes)
+        # REPORT-ONLY, NEVER A GATE (Thoth's Lane 4 finding — settle verified WHAT John
+        # wrote, never WHETHER his own successor could read it from where orient() looks):
+        # `identity_coherence` never touches `missing`/`complete` below, however wrong it
+        # looks — a false-positive here refusing a settle is a strictly worse outcome than
+        # the incoherence it would have caught (ruling 577988ed).
+        identity_coherence = await filed_under_check(
+            pool, agent_id=ident.agent_id, mounted_at=mounted["mounted_at"],
+            project=ident.project)
     # OBLIGATIONS ARE CARRIED, NOT UNWRITTEN (thread f0511eed, found on Thoth's first live
     # dogfood): `complete` used to read false whenever ANY open obligation named this
     # agent's lineage as owner — even ancient backlog this session never touched (a
@@ -4327,7 +4394,7 @@ async def settle(
     carried_note = (f" ({len(obligations)} open obligation(s) carried forward — "
                     "informational, already durably recorded, never blocks this)"
                     if obligations else "")
-    return {
+    out: dict[str, Any] = {
         "complete": complete,
         "boxes": boxes,
         "missing_boxes": missing,
@@ -4340,6 +4407,16 @@ async def settle(
                  f"still unsettled ({', '.join(reasons)}) — settle again once they're "
                  "closed, or accept them in your next call"),
     }
+    if identity_coherence is not None:
+        out["identity_coherence"] = identity_coherence
+        if not identity_coherence["coherent"]:
+            out["note"] += (
+                f" — LOUD, NEVER BLOCKING: this session is filed under "
+                f"{identity_coherence['filed_under']!r} but its own writes went to "
+                f"{identity_coherence['writes_went_to']!r}; a successor mounting under "
+                f"{identity_coherence['filed_under']!r} will not see them (John XVI's shape)"
+            )
+    return out
 
 
 @mcp.tool()

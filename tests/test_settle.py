@@ -10,6 +10,7 @@ from src.actions.core import Actions
 from src.orchestrator.capture import open_thread, record_decision
 from src.orchestrator.settle import (
     charter_touched,
+    filed_under_check,
     missing_boxes,
     settle_boxes,
     uncommitted_git_work,
@@ -114,6 +115,69 @@ async def test_settle_boxes_a_non_minted_agent_carries_no_succession_box(
     boxes = await settle_boxes(actions.pool, agent_id=agent, mounted_at=datetime.now(UTC),
                                cwd=str(tmp_path))
     assert "a live succession/handoff note (this lineage was minted)" not in boxes
+
+
+# ═══ filed_under_check — settle verifies WHAT you wrote, never WHO can read it ═══
+# (Thoth's Lane 4 finding, 2026-07-31): report-only, never folded into missing_boxes.
+
+
+async def test_filed_under_check_none_when_project_unknown() -> None:
+    assert await filed_under_check(
+        None, agent_id="agent:fu01", mounted_at=datetime.now(UTC), project=None) is None
+
+
+async def test_filed_under_check_none_when_nothing_written_this_session(
+    actions: Actions,
+) -> None:
+    """No signal either way — silence is not evidence of a mismatch."""
+    agent = "agent:fu02"
+    await actions.create_or_find_object("Agent", agent, agent)
+    out = await filed_under_check(actions.pool, agent_id=agent, mounted_at=datetime.now(UTC),
+                                  project="someproj")
+    assert out is None
+
+
+async def test_filed_under_check_coherent_when_writes_match_filed_under_project(
+    actions: Actions,
+) -> None:
+    agent = "agent:fu03"
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await record_decision(actions, "fu03's ruling filed under its own project",
+                          repo="matchproj", source=agent)
+    await open_thread(actions, "fu03's thread filed under its own project",
+                      repo="matchproj", source=agent)
+    out = await filed_under_check(actions.pool, agent_id=agent, mounted_at=mounted_at,
+                                  project="matchproj")
+    assert out == {"filed_under": "matchproj", "writes_went_to": ["matchproj"],
+                   "coherent": True}
+
+
+async def test_filed_under_check_flags_a_mismatch_without_erroring(actions: Actions) -> None:
+    """John XVI's exact shape: writes land under a DIFFERENT project than the one this
+    session is filed under. Report-only — the function itself has no notion of failure,
+    just names both sides plainly."""
+    agent = "agent:fu04"
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await record_decision(actions, "fu04's ruling, written while mounted elsewhere",
+                          repo="ballgem", source=agent)
+    out = await filed_under_check(actions.pool, agent_id=agent, mounted_at=mounted_at,
+                                  project="redmonth")
+    assert out == {"filed_under": "redmonth", "writes_went_to": ["ballgem"],
+                   "coherent": False}
+
+
+async def test_filed_under_check_names_every_distinct_project_written_to(
+    actions: Actions,
+) -> None:
+    agent = "agent:fu05"
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await record_decision(actions, "fu05's first ruling", repo="projA", source=agent)
+    await open_thread(actions, "fu05's thread", repo="projB", source=agent)
+    out = await filed_under_check(actions.pool, agent_id=agent, mounted_at=mounted_at,
+                                  project="projA")
+    assert out is not None
+    assert out["writes_went_to"] == ["projA", "projB"]
+    assert out["coherent"] is False  # projB alone breaks coherence
 
 
 # ═══════════ THE settle() MCP TOOL — ruling c5b184cd ═══════════
@@ -554,3 +618,86 @@ async def test_settle_tool_carries_open_obligations_without_blocking_complete(
     assert any("obligation settleob1 owes" in o["summary"] for o in out["open_obligations"])
     assert "carried forward" in out["note"]
     assert out["accepted"] == {"decisions": [], "threads_opened": [], "threads_resolved": []}
+
+
+async def test_settle_tool_surfaces_identity_coherence_without_blocking_complete(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thoth's Lane 4 finding: settle verified WHAT John XVI wrote, never WHETHER his own
+    successor could read it from where orient() looks — his writes landed in a different
+    project than the one he was filed under. A mismatch surfaces LOUDLY in the receipt and
+    its note but never gates `complete` (ruling 577988ed: a fleet-wide single point of
+    failure must never refuse-to-serve on a check that can itself false-positive)."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.mounts import save_mount
+
+    agent = "agent:settleic1"
+    job_dir = str(tmp_path / "jobs" / "settleic")  # EXACTLY 8 chars
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="redmonth",
+                     cwd=str(tmp_path), model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET mounted_at=$1 WHERE job_dir=$2", mounted_at, job_dir)
+    (tmp_path / "charter.md").write_text("# notes\n")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=agent, session="settleic1", project="redmonth", model=None,
+        cwd=str(tmp_path))
+    try:
+        out = await srv.settle(
+            decisions=[{"summary": "settleic1's ruling, filed under a different project",
+                       "repo": "ballgem"}],
+            threads_open=[{"summary": "settleic1's thread, written by the dump"}],
+            ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["complete"] is True, out          # never gated by the coherence check
+    assert out["identity_coherence"] == {
+        "filed_under": "redmonth", "writes_went_to": ["ballgem"], "coherent": False}
+    assert "John XVI" in out["note"]
+
+
+async def test_settle_tool_omits_identity_coherence_when_nothing_written(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """No writes this session — no signal, so the field stays absent rather than asserting
+    a false 'coherent'."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.mounts import save_mount
+
+    agent = "agent:settleic2"
+    job_dir = str(tmp_path / "jobs" / "settleic")  # EXACTLY 8 chars — matches session[:8]
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="redmonth",
+                     cwd=str(tmp_path), model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET mounted_at=$1 WHERE job_dir=$2", mounted_at, job_dir)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=agent, session="settleic3", project="redmonth", model=None,
+        cwd=str(tmp_path))
+    try:
+        out = await srv.settle(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "identity_coherence" not in out
