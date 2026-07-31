@@ -1751,6 +1751,84 @@ async def test_dispatch_dm_resumes_the_halcyon_shaped_unsigned_tail(
     assert calls and calls[0][1].get("resume_session") == FULL_SID
 
 
+async def test_a_dm_wakes_the_live_body_even_when_its_declared_successor_never_mounted(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE PAYOFF (thread 28842543): reproduces Imhotep's exact shape — his seat's recorded
+    holder was a newer generation that had never mounted, while the bare id was the one
+    actually live, mounted, and explicitly addressed. Before this fix, dispatch_dm reused
+    living_head's DELIVERY answer (the declared successor) for wake eligibility too, and
+    reported 'has never mounted' beside a receipt naming that same live body's fresh
+    last_seen. Now the wake path resolves through wakeable_identity and reaches it."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    a = await actions.create_or_find_object("Agent", "agent:abcd1234", "agent:abcd1234")
+    # the successor is MINTED (a real Agent object, exactly what mint_heir does) — just
+    # never mounted an OS session; lineage_head only advances past a succeeded_by pointer
+    # that resolves to a real, active Agent object, so this is Imhotep's actual shape
+    await actions.create_or_find_object("Agent", "agent:abcd1234-ii", "agent:abcd1234")
+    await actions.assert_property(a, "succeeded_by", "agent:abcd1234-ii", "agent:abcd1234",
+                                  NOW, 0.9, evidence_class="self_declared")
+    msg_id = await _dm_to_owner(actions)          # addressed to the raw live id, explicitly
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append((repo, kw))
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("no daemon job was found — nudge must never be reached")
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_spawn, windows=_no_windows, jobs=_no_job, nudge=_boom)
+    assert d["mode"] == "resumed"                  # not 'pull-only' beside a live mount
+    assert calls and calls[0][1].get("resume_session") == FULL_SID
+
+
+async def test_a_dm_still_wakes_the_true_successor_after_a_real_completed_succession(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Negative control at the dispatch_dm level: a NORMAL, healthy succession — the
+    declared successor has itself also mounted, with its own resumable session — must
+    still resolve and resume THAT successor, unchanged from before this fix. This guards
+    against an overcorrection that always prefers the original body."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    a = await actions.create_or_find_object("Agent", "agent:abcd1234", "agent:abcd1234")
+    await actions.create_or_find_object("Agent", "agent:abcd1234-ii", "agent:abcd1234")
+    await actions.assert_property(a, "succeeded_by", "agent:abcd1234-ii", "agent:abcd1234",
+                                  NOW, 0.9, evidence_class="self_declared")
+    from src.orchestrator import mounts
+
+    succ_sid = "eeee2222-0000-4000-8000-000000000000"
+    succ_dir = sense / "-repo-demo"
+    succ_t = succ_dir / f"{succ_sid}.jsonl"
+    signed = ('{"type":"user","toolUseResult":'
+              '"{\\"sent\\":1,\\"from\\":\\"agent:abcd1234-ii\\"}"}\n')
+    succ_t.write_bytes(signed.encode() + b"x" * 16)
+    import os
+    import time as _time
+    old = _time.time() - 1800  # newer than the original's -1h staleness, still not mid-turn
+    os.utime(succ_t, (old, old))
+    await mounts.save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "eeee2222"),
+                            agent_id="agent:abcd1234-ii", project="demo", cwd="/repo/demo",
+                            model=None, session_key=None)
+    msg_id = await _dm_to_owner(actions)
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append((repo, kw))
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("no daemon job was found — nudge must never be reached")
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_spawn, windows=_no_windows, jobs=_no_job, nudge=_boom)
+    assert d["mode"] == "resumed"
+    assert calls and calls[0][1].get("resume_session") == succ_sid  # the SUCCESSOR's session
+
+
 async def test_dispatch_dm_still_refuses_when_deep_history_is_a_different_mind(
     actions: Actions, tmp_path: Path,
 ) -> None:

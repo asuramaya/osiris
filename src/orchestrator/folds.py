@@ -57,6 +57,29 @@ async def living_head(pool: asyncpg.Pool, agent_id: str) -> str:
     return canon
 
 
+async def wakeable_identity(pool: asyncpg.Pool, agent_id: str) -> str | None:
+    """WAKE's own question — 'which OS session can be resumed' — answered independently of
+    `living_head`'s DELIVERY question ('whose mailbox owns this name'). A succession is a
+    DECLARED act (mint_heir) and living_head trusts it unconditionally, exactly as delivery
+    should (ruling 1db1ff41: declared beats derived) — but a successor that was declared and
+    never actually mounted has no OS session behind it, and a wake path that walks
+    living_head's own answer strands mail in a live body's own inbox (thread 28842543: the
+    mailbox honored an explicit live id, the wake still resolved through a never-mounted
+    lineage head, and reported "has never mounted" beside a receipt naming that SAME live
+    body's fresh last_seen). The most recently mounted id anywhere in `agent_id`'s lineage —
+    the same auto-heal query `living_head` itself falls back to for an unsucceeded base
+    (below), generalized here to fire even when a succession WAS declared, because wake cares
+    which body can answer, not which name is now correct. None only when nothing in the
+    whole lineage has ever mounted."""
+    from src.orchestrator.agents import _generation
+
+    base = _generation(agent_id)[0]
+    row = await pool.fetchval(
+        "SELECT agent_id FROM agent_mounts WHERE agent_id=$1 OR agent_id LIKE $1 || '-%' "
+        "ORDER BY last_seen DESC NULLS LAST LIMIT 1", base)
+    return str(row) if row else None
+
+
 async def canonical_agent(pool: asyncpg.Pool, agent_id: str) -> str:
     """Resolve an agent LABEL through the merged_into chain to its living label — the
     read-time half of a fold. A never-folded (or unknown) label returns itself."""

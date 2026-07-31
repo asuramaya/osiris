@@ -10,7 +10,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from src.actions.core import Actions
-from src.orchestrator.folds import canonical_agent, fold_agent, living_head, unfold_agent
+from src.orchestrator.folds import (
+    canonical_agent,
+    fold_agent,
+    living_head,
+    unfold_agent,
+    wakeable_identity,
+)
 from src.orchestrator.mailbox import send_message, unread_count
 from src.orchestrator.mounts import save_mount
 
@@ -589,3 +595,55 @@ async def test_living_head_follows_a_cross_base_succession(actions: Actions) -> 
                      project="p", cwd="/w/p", model=None, session_key=None)
     assert await living_head(actions.pool, "agent:4ebaaaaa-ii") == "agent:4ebaaaaa-ii"
     assert nb2 is not None
+
+
+# --- wakeable_identity (thread 28842543): wake's own question, distinct from delivery ---
+
+async def test_wakeable_identity_finds_the_live_body_past_a_phantom_successor(
+    actions: Actions,
+) -> None:
+    """Reproduces thread 28842543 at the resolver level: a declared successor that never
+    mounted must not hide the live body behind it. living_head is right to trust the
+    declared succession for DELIVERY (ruling 1db1ff41: declared beats derived) —
+    wakeable_identity answers a DIFFERENT question ('which OS session can be resumed') and
+    must disagree here, on purpose."""
+    await save_mount(actions.pool, job_dir="/jobs/e08c3850", agent_id="agent:e08c3850",
+                     project="imhotep", cwd="/w/imhotep", model=None, session_key=None)
+    base = await actions.create_or_find_object("Agent", "agent:e08c3850", "agent:e08c3850")
+    # the successor is MINTED (a real Agent object, exactly what mint_heir does) — just
+    # never mounted an OS session; lineage_head only advances past a succeeded_by pointer
+    # that resolves to a real, active Agent object, so this is the shape that matters
+    await actions.create_or_find_object("Agent", "agent:e08c3850-xi", "agent:e08c3850")
+    await actions.assert_property(base, "succeeded_by", "agent:e08c3850-xi",
+                                  "agent:test", datetime.now(UTC), 0.95,
+                                  evidence_class="direct_observation")
+    # living_head trusts the declaration (correct for delivery) — the successor never mounted
+    assert await living_head(actions.pool, "agent:e08c3850") == "agent:e08c3850-xi"
+    # wakeable_identity answers wake's own question and finds the body that actually can
+    assert await wakeable_identity(actions.pool, "agent:e08c3850") == "agent:e08c3850"
+    assert await wakeable_identity(actions.pool, "agent:e08c3850-xi") == "agent:e08c3850"
+
+
+async def test_wakeable_identity_follows_a_real_completed_succession(actions: Actions) -> None:
+    """Negative control: when the declared successor has ALSO mounted, more recently than
+    the original, wakeable_identity follows it exactly like living_head does — a healthy
+    succession is unaffected by this fix, only a phantom one is."""
+    await save_mount(actions.pool, job_dir="/jobs/aaaa0000", agent_id="agent:aaaa0000",
+                     project="p", cwd="/w/p", model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '1 hour' "
+        "WHERE agent_id='agent:aaaa0000'")
+    base = await actions.create_or_find_object("Agent", "agent:aaaa0000", "agent:aaaa0000")
+    await actions.assert_property(base, "succeeded_by", "agent:aaaa0000-ii",
+                                  "agent:test", datetime.now(UTC), 0.95,
+                                  evidence_class="direct_observation")
+    await save_mount(actions.pool, job_dir="/jobs/aaaa0000ii", agent_id="agent:aaaa0000-ii",
+                     project="p", cwd="/w/p", model=None, session_key=None)
+    assert await living_head(actions.pool, "agent:aaaa0000") == "agent:aaaa0000-ii"
+    assert await wakeable_identity(actions.pool, "agent:aaaa0000") == "agent:aaaa0000-ii"
+
+
+async def test_wakeable_identity_is_none_when_the_lineage_never_mounted(
+    actions: Actions,
+) -> None:
+    assert await wakeable_identity(actions.pool, "agent:never5een") is None

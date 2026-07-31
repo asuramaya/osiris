@@ -915,7 +915,7 @@ async def dispatch_dm(
     # THE SEAT GAP this closes: name-addressed mail stores the SEAT id (B2), and the old DM
     # lane matched it against agent_mounts verbatim — so every seat-bound addressee (the
     # whole charter pattern) was silently pull-only.
-    from src.orchestrator.folds import canonical_agent, living_head
+    from src.orchestrator.folds import canonical_agent, living_head, wakeable_identity
     from src.orchestrator.seats import held_seat, seat_receipt
     target = addressee
     seat_id: str | None = None
@@ -996,13 +996,20 @@ async def dispatch_dm(
                 "detail": f"the per-seat rate brake: {cap} wakes/h already landed on this "
                           "addressee — the backstop sweep runs every ~60s and retries once "
                           "the hourly window clears"}
-    row = await pool.fetchrow(
-        "SELECT project FROM agent_mounts WHERE agent_id=$1 "
-        "ORDER BY last_seen DESC LIMIT 1", target)
-    if row is None:
+    # WAKE'S OWN QUESTION (thread 28842543): `target` above is DELIVERY's answer — the
+    # declared lineage head, trusted even past a successor that never actually mounted.
+    # A bare mount lookup on `target` alone reproduces the exact defect (a live agent
+    # under an earlier generation reported "has never mounted" beside its own fresh
+    # last_seen, in the SAME receipt). wake_target is the most recently mounted id
+    # anywhere in `target`'s lineage — None only when NOTHING there has ever mounted, in
+    # which case `target` (the declared name) is still the honest thing to name below.
+    wake_target = await wakeable_identity(pool, target)
+    if wake_target is None:
         return {"mode": "pull-only",
                 "detail": f"{target} has never mounted — no session to resume"}
-    project = str(row["project"])
+    project = str(await pool.fetchval(
+        "SELECT project FROM agent_mounts WHERE agent_id=$1 "
+        "ORDER BY last_seen DESC LIMIT 1", wake_target))
     hourly = await pool.fetchval(
         "SELECT count(*) FROM agent_wakes WHERE woke_at > now() - interval '1 hour'")
     # THE RATE CAP'S UNIT (msg 984, 2026-07-21): the ping-pong hazard this brake bounds is a
@@ -1048,7 +1055,7 @@ async def dispatch_dm(
     # to run jobs is one thing, waiting for them to awake is another'.) mtime is only the
     # cheap pre-filter; the WITNESS is the newest timestamped line — a TURN writes those,
     # a toucher cannot.
-    resume = await _agent_resumable(pool, target, st)
+    resume = await _agent_resumable(pool, wake_target, st)
     if resume is not None and time.time() - resume[2] < st.osiris_dm_active_secs:
         root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
             else Path.home() / ".claude" / "projects"
@@ -1140,8 +1147,10 @@ async def dispatch_dm(
         return {"mode": "held",
                 "detail": "the DM resume arm is dark (osiris_dm_resume=0) — pull-only"}
     if resume is None:
+        who = target if wake_target == target else (
+            f"{target} (its own live mount, {wake_target}, checked too)")
         return {"mode": "pull-only",
-                "detail": f"{target} has no resumable session (no anchored transcript, or "
+                "detail": f"{who} has no resumable session (no anchored transcript, or "
                           "at the context ceiling) — a private message is never handed to "
                           "a fresh twin"}
     session_id, repo = resume[0], resume[1]
