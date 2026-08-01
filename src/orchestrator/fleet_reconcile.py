@@ -89,6 +89,60 @@ _BUCKET_BY_CLASS = {
 }
 
 
+_LIVE_WINDOW_SECS = 900  # the same 15-minute decay every liveness read in the fleet uses
+                         # (mounts.py's own _DOOR_WINDOW_SECS, fleet()'s "live" cutoff)
+
+
+async def _ghost_flagged_agents(
+    pool: asyncpg.Pool, *, live_bodies_by_cwd: Any = None,
+) -> tuple[dict[str, dict[str, Any]], bool]:
+    """THE FIFTH CLASS (thread 04ad4bb8): a mount row the GRAPH calls live (last_seen
+    within the fleet's own 15-minute window) with no real OS process backing its cwd — a
+    phantom liveness signal the four buckets above were never built to see, and the one
+    Imhotep's #117 shape-1 taxonomy names precisely: a presence check (four buckets cover
+    everything the sweep looks AT) mistaken for a coverage check (a row this sweep never
+    looks at is invisible, not absent). fleet() already computes this exact signal
+    (os_bodies/ghost_gap, mcp_server.py) at PROJECT grain; here it is row-scoped by cwd —
+    `census.live_bodies_by_cwd`'s own doctrine, shared with the door sweep: 'a door may
+    only be released on the word of the exact directory it opens into,' the same
+    granularity a per-row bucket decision needs.
+
+    Returns ({agent_id: ghost row}, blind). `blind=True` means the OS census itself could
+    not run (pgrep unavailable) — THE CALLER OWNS THE BLINDNESS CHECK (sweep_ghost_doors'
+    own law): a blind census must never read as 'no ghosts', only as 'could not look', and
+    reconcile_dry_run refuses to bucket anything into an auto-act class while blind rather
+    than silently trusting an empty ghost set.
+
+    NEVER auto-acted on — every ghost-flagged row lands in `ghost_gap`, even one that would
+    otherwise have cleared an auto-act bucket's own bar (a phantom's OTHER signals cannot
+    be trusted either, since the one signal we can independently verify — is anything
+    actually there — already failed)."""
+    from src.orchestrator import census
+
+    lookup = live_bodies_by_cwd or census.live_bodies_by_cwd
+    by_cwd = lookup()
+    if by_cwd is None:
+        return {}, True
+    rows = await pool.fetch(
+        "SELECT agent_id, project, cwd, job_dir, last_seen FROM agent_mounts "
+        "WHERE last_seen IS NOT NULL "
+        "AND now() - last_seen < make_interval(secs => $1)", float(_LIVE_WINDOW_SECS))
+    ghosts: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        if r["cwd"] in by_cwd:
+            continue
+        ghosts[str(r["agent_id"])] = {
+            "agent_id": r["agent_id"], "project": r["project"], "cwd": r["cwd"],
+            "job_dir": r["job_dir"],
+            "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None,
+            "bucket": "ghost_gap",
+            "rule": f"agent_mounts reads this row GRAPH-LIVE (last_seen within "
+                    f"{_LIVE_WINDOW_SECS}s) but no OS body backs cwd={r['cwd']!r} — thread "
+                    "04ad4bb8's own class; never auto-acted on, always a human's judgment",
+        }
+    return ghosts, False
+
+
 async def _dead_project_mounts(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     """Mount rows whose project is a SoftwareProject that is no longer active — the
     residue class retire_project's own refusal (mounts seen in the last 15 minutes block
@@ -122,33 +176,69 @@ async def _dead_project_mounts(pool: asyncpg.Pool) -> list[dict[str, Any]]:
 
 async def reconcile_dry_run(
     pool: asyncpg.Pool, *, projects_root: Path | None = None, jobs_home: Path | None = None,
+    live_bodies_by_cwd: Any = None,
 ) -> dict[str, Any]:
     """THE REPORT Thoth asked to see before anything acts. Buckets every row currently
     reachable — the fold-candidate tray (refreshed by calling find_agent_fold_candidates,
-    itself proposal-only and idempotent) plus the dead-project residue class the tray was
-    never built to see — and names the rule that placed each one. Writes nothing except
-    what find_agent_fold_candidates itself already writes (merge_candidates PROPOSAL rows
-    — review-gated, never executed here). `projects_root`/`jobs_home` pass straight through
-    to the sweep — the same injection seam its own tests already use, not a new one."""
+    itself proposal-only and idempotent), the dead-project residue class the tray was
+    never built to see, AND the ghost_gap class (thread 04ad4bb8: a mount the graph calls
+    live with no OS body backing it) — and names the rule that placed each one. Writes
+    nothing except what find_agent_fold_candidates itself already writes (merge_candidates
+    PROPOSAL rows — review-gated, never executed here). `projects_root`/`jobs_home` pass
+    straight through to the sweep — the same injection seam its own tests already use, not
+    a new one. `live_bodies_by_cwd` is the ghost-check's own injection seam (tests drive it
+    with a fake; production defaults to the real OS census).
+
+    A GHOST OVERRIDES EVERY OTHER VERDICT: a row whose agent_id the ghost check flags lands
+    in `ghost_gap` regardless of what bucket its OTHER signals would have earned — a
+    phantom's other signals cannot be trusted either, once the one signal independently
+    checkable against the OS has already failed.
+
+    A BLIND CENSUS REFUSES TO BUCKET ANYTHING INTO AN AUTO-ACT CLASS (sweep_ghost_doors'
+    own law: 'could not look' must never read as 'no ghosts'): when the OS census itself
+    fails, every row that would have landed in bulk_fold_swarm/rollup_office_remount/
+    drop_ephemeral_test_cwd is held in `leave_for_human` instead, named as blind-held —
+    `reconcile_execute` reads buckets from here, so this alone keeps the acting half safe
+    without touching it. `census_blind: true` at the top level names the reason plainly."""
     swept = await find_agent_fold_candidates(
         pool, projects_root=projects_root, jobs_home=jobs_home)
+    ghosts, blind = await _ghost_flagged_agents(pool, live_bodies_by_cwd=live_bodies_by_cwd)
     buckets: dict[str, list[dict[str, Any]]] = {
         "bulk_fold_swarm": [], "rollup_office_remount": [],
-        "drop_ephemeral_test_cwd": [], "leave_for_human": [],
+        "drop_ephemeral_test_cwd": [], "ghost_gap": [], "leave_for_human": [],
     }
+    seen_ghosts: set[str] = set()
+
+    def _held(row: dict[str, Any], rule: str) -> None:
+        """A row that WOULD auto-act, held back for the stated reason instead — the rule
+        text itself names which bucket it would have earned."""
+        row["bucket"] = "leave_for_human"
+        row["rule"] = rule
+        buckets["leave_for_human"].append(row)
+
     for c in swept["pending"]:
         cls = str(c.get("class") or "")
         score = float(c.get("score") or 0.0)
         target = _BUCKET_BY_CLASS.get(cls)
+        dupe = str(c.get("dupe") or "")
         row = {
             "candidate_id": c["id"], "dupe": c.get("dupe"), "into": c.get("into_label"),
             "class": cls, "score": score, "signals": c.get("signals"),
         }
-        if target and score >= _HIGH_CONFIDENCE:
-            row["bucket"] = target
-            row["rule"] = f"{cls} score {score} >= {_HIGH_CONFIDENCE} — the sweep's own " \
-                           "single-seat/no-body confidence bar"
-            buckets[target].append(row)
+        if dupe in ghosts:
+            seen_ghosts.add(dupe)
+            row.update(bucket="ghost_gap", rule=ghosts[dupe]["rule"])
+            buckets["ghost_gap"].append(row)
+        elif target and score >= _HIGH_CONFIDENCE:
+            rule = f"{cls} score {score} >= {_HIGH_CONFIDENCE} — the sweep's own " \
+                   "single-seat/no-body confidence bar"
+            if blind:
+                _held(row, f"[would be {target}] " + rule + " — HELD: OS census is blind "
+                      "this tick, an auto-act bucket cannot be trusted without a ghost "
+                      "check")
+            else:
+                row["bucket"], row["rule"] = target, rule
+                buckets[target].append(row)
         else:
             row["bucket"] = "leave_for_human"
             row["rule"] = (
@@ -160,8 +250,18 @@ async def reconcile_dry_run(
 
     dead_projects: set[str] = set()
     for row in await _dead_project_mounts(pool):
-        buckets["drop_ephemeral_test_cwd"].append(row)
+        agent_id = str(row.get("agent_id") or "")
         dead_projects.add(str(row["project"]))
+        if agent_id in ghosts:
+            seen_ghosts.add(agent_id)
+            row.update(bucket="ghost_gap", rule=ghosts[agent_id]["rule"])
+            buckets["ghost_gap"].append(row)
+        elif blind:
+            _held(row, "[would be drop_ephemeral_test_cwd] " + row["rule"] + " — HELD: OS "
+                  "census is blind this tick, an auto-act bucket cannot be trusted "
+                  "without a ghost check")
+        else:
+            buckets["drop_ephemeral_test_cwd"].append(row)
 
     for project, n in (swept.get("seatless") or {}).items():
         # a project already caught above (its own SoftwareProject is retired) gets ONE
@@ -176,18 +276,30 @@ async def reconcile_dry_run(
                     "folds.py's own visitor-gate territory, never this module's call",
         })
 
+    # GHOSTS NEVER OTHERWISE SWEPT: a ghost row that matched no fold candidate and no dead
+    # project is STILL a real anomaly (thread 04ad4bb8's own point — invisible, not safe)
+    # and must still appear, or "buckets every row" is false for exactly the class this
+    # fix exists to close.
+    for agent_id, ghost_row in ghosts.items():
+        if agent_id not in seen_ghosts:
+            buckets["ghost_gap"].append(ghost_row)
+
     counts = {k: len(v) for k, v in buckets.items()}
     return {
         "buckets": buckets, "counts": counts, "total": sum(counts.values()),
         "examined": swept.get("examined", 0),
-        "note": "REPORT ONLY — nothing folded, dropped, or retired. Every row above names "
-                "its own bucket and the rule that put it there.",
+        "census_blind": blind,
+        "note": ("REPORT ONLY — nothing folded, dropped, or retired. Every row above names "
+                 "its own bucket and the rule that put it there." +
+                 (" OS CENSUS WAS BLIND THIS TICK — every row that would have auto-acted "
+                  "is held in leave_for_human instead; re-run once the census can see."
+                  if blind else "")),
     }
 
 
 async def reconcile_execute(
     actions: Actions, *, actor: str, projects_root: Path | None = None,
-    jobs_home: Path | None = None, execute: bool = False,
+    jobs_home: Path | None = None, execute: bool = False, live_bodies_by_cwd: Any = None,
 ) -> dict[str, Any]:
     """THE ACTING HALF (task #59 phase 2, Thoth's gate DM 2042). DRY RUN IS THE DEFAULT
     (`execute=False`, `unfold_agent`'s own convention, folds.py): returns the exact plan —
@@ -222,7 +334,8 @@ async def reconcile_execute(
     from src.orchestrator.mounts import drop_dead_project_mount
 
     report = await reconcile_dry_run(actions.pool, projects_root=projects_root,
-                                     jobs_home=jobs_home)
+                                     jobs_home=jobs_home,
+                                     live_bodies_by_cwd=live_bodies_by_cwd)
     would_fold = [
         {"candidate_id": row["candidate_id"], "dupe": row["dupe"], "into": row["into"],
          "bucket": bucket}
@@ -260,7 +373,8 @@ async def reconcile_execute(
         drops.append({**item, "rows_deleted": out["dropped"], "audit_id": out["audit_id"]})
 
     after = await reconcile_dry_run(actions.pool, projects_root=projects_root,
-                                    jobs_home=jobs_home)
+                                    jobs_home=jobs_home,
+                                    live_bodies_by_cwd=live_bodies_by_cwd)
     plan.update({
         "folded": folded, "dropped": drops,
         "before_counts": report["counts"], "after_counts": after["counts"],
@@ -273,6 +387,7 @@ async def reconcile_execute(
 async def reconcile_scheduled_tick(
     actions: Actions, *, settings: Settings | None = None,
     projects_root: Path | None = None, jobs_home: Path | None = None,
+    live_bodies_by_cwd: Any = None,
 ) -> dict[str, Any]:
     """THE SCHEDULED LEG's own tick — `arq_worker.fleet_reconcile_heartbeat` calls this
     unconditionally, the same thin-shim shape `trigger_mail`/`pit_watch_heartbeat` already
@@ -295,5 +410,5 @@ async def reconcile_scheduled_tick(
                         "(osiris_fleet_reconcile_enabled=0)"}
     out = await reconcile_execute(actions, actor="cron:fleet_reconcile_heartbeat",
                                   execute=True, projects_root=projects_root,
-                                  jobs_home=jobs_home)
+                                  jobs_home=jobs_home, live_bodies_by_cwd=live_bodies_by_cwd)
     return {"enabled": True, **out}
