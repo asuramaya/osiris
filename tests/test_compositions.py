@@ -17,7 +17,9 @@ from src.orchestrator.compositions import (
     _fn_desk_project,
     _fn_echoes,
     _fn_lint,
+    _fn_project,
     _fn_triage,
+    _fn_wall,
     create_room,
     list_compositions,
     run_composition,
@@ -1940,3 +1942,95 @@ async def test_lint_edgeless_closure_growth_flags_past_the_ceiling(
     assert finding["severity"] == "error"
     assert finding["count"] >= 1
     assert "bypass" in finding["detail"]
+
+
+async def test_lint_rot_candidate_unscoped_clean_on_a_fresh_tree(actions: Actions) -> None:
+    """No repo-less open threads yet — the boundary check has nothing to declare."""
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["rot-candidate-unscoped"] == 0
+    assert "rot-candidate-unscoped" in result["clean"]
+
+
+async def test_lint_rot_candidate_unscoped_counts_a_repo_less_open_thread(
+    actions: Actions,
+) -> None:
+    """Thoth DM 2704, finding 2: rot-candidate INNER JOINs in_repo by structural necessity
+    (no repo means no commit corpus to compare against) — the fix is declaring how many
+    open threads it structurally cannot evaluate, not pretending to evaluate them."""
+    from src.orchestrator.capture import open_thread
+
+    await open_thread(actions, "a thread nobody ever filed under a repo", source="agent:me")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["rot-candidate-unscoped"] == 1
+    assert "rot-candidate-unscoped" not in result["clean"]
+    finding = next(f for f in result["findings"] if f["check"] == "rot-candidate-unscoped")
+    assert finding["severity"] == "info"
+    assert finding["count"] == 1
+    assert "cannot evaluate" in finding["detail"]
+
+
+# --- _fn_project: a Decision's own in_repo edge, not just its cited commit's -------------
+
+async def test_fn_project_decisions_includes_an_uncited_ruling(actions: Actions) -> None:
+    """Thoth DM 2704, finding 1: record_decision(repo=...) already mints a direct in_repo
+    edge on the Decision itself (link_repo, at birth) — the old query only ever found
+    decisions via decided_in -> Commit -> in_repo, so a ruling filed under a repo but
+    citing no commit sha (the common case) was invisible in its own project's browser."""
+    from src.orchestrator.capture import record_decision
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:proj1", "session")
+    await actions.assert_property(proj, "name", "proj1", "session", NOW, 0.9)
+
+    await record_decision(actions, "an uncited ruling nobody ever cited a commit for",
+                          repo="proj1")
+
+    out = await _fn_project(actions.pool, None, {"repo": "proj1"})
+    decisions = out["proj1 — decisions"]
+    assert any("uncited ruling" in (d["decision"] or "") for d in decisions)
+
+
+async def test_fn_project_decisions_still_finds_one_reachable_only_via_its_commit(
+    actions: Actions,
+) -> None:
+    """UNION, not replace — a decision reachable ONLY through decided_in -> Commit ->
+    in_repo (no direct edge of its own) must keep working exactly as before."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:proj2", "session")
+    await actions.assert_property(proj, "name", "proj2", "session", NOW, 0.9)
+    commit = await actions.create_or_find_object("Commit", "commit:cited123", "git")
+    await actions.create_link(commit, proj, "in_repo", "git", NOW, 0.9)
+
+    decision = await actions.create_or_find_object("Decision", "decision:standalone", "session")
+    await actions.assert_property(decision, "summary", "cited via its commit only",
+                                  "session", NOW, 0.9, evidence_class="self_declared")
+    await actions.create_link(decision, commit, "decided_in", "session", NOW, 0.9)
+
+    out = await _fn_project(actions.pool, None, {"repo": "proj2"})
+    decisions = out["proj2 — decisions"]
+    assert any("cited via its commit only" in (d["decision"] or "") for d in decisions)
+
+
+# --- _fn_wall: totals.unfiled (Thoth DM 2704, finding 2) --------------------------------
+
+async def test_fn_wall_totals_declares_unfiled_repo_less_threads(actions: Actions) -> None:
+    """`projects[]` structurally can't file a repo-less thread (no project to group it
+    under); `totals.open` already counted it correctly. What was missing was saying so —
+    this is the root cause of a number quoted at the operator without anyone knowing why
+    ('N open for osiris out of M active')."""
+    from src.orchestrator.capture import open_thread
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:wallproj", "session")
+    await actions.assert_property(proj, "name", "wallproj", "session", NOW, 0.9)
+    filed = await actions.create_or_find_object("Thread", "thread:filed", "session")
+    await actions.assert_property(filed, "summary", "a filed thread", "session", NOW, 0.9)
+    await actions.assert_property(filed, "status", "open", "session", NOW, 0.9)
+    await actions.create_link(filed, proj, "in_repo", "session", NOW, 0.9)
+
+    await open_thread(actions, "a thread nobody ever filed under a repo", source="agent:me")
+
+    out = await _fn_wall(actions.pool, None, {})
+    assert out["totals"]["unfiled"] == 1
+    assert out["totals"]["open"] == 2                      # both threads counted
+    project_row = next(p for p in out["projects"] if p["project"] == "repo:wallproj")
+    assert project_row["open"] == 1                        # only the filed one, by construction
+    assert "unfiled" in out["totals"]["reads"]

@@ -833,17 +833,34 @@ async def _fn_project(
         "        ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS date "
         "FROM links l JOIN objects c ON c.id=l.from_id AND c.type='Commit' "
         "WHERE l.to_id=$1 AND l.type='in_repo' ORDER BY date DESC NULLS LAST LIMIT 15", repo)
+    # THE UNCITED RULING (Thoth DM 2704, finding 1 of the in_repo audit): a Decision's OWN
+    # in_repo edge (record_decision(repo=...) mints one via link_repo, at birth) used to
+    # count for nothing here — only a decided_in citation to a commit that is itself
+    # in_repo did. A ruling filed under a repo but naming no commit sha (the common case —
+    # most of a session's own rulings, including several that named THIS gap) was invisible
+    # in its own project's decision browser. UNION, not replace: the commit-derived path
+    # still finds decisions whose OWN in_repo edge is missing but whose cited commit's
+    # isn't (a real, if rarer, shape); the direct path now also finds decisions with no
+    # commit citation at all.
     decisions = await pool.fetch(
-        "SELECT DISTINCT ON (d.id) "
-        " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=d.id "
+        "WITH qualifying AS ("
+        "  SELECT DISTINCT d.id FROM objects d "
+        "  JOIN links dl ON dl.from_id=d.id AND dl.type='decided_in' "
+        "  JOIN links rl ON rl.from_id=dl.to_id AND rl.type='in_repo' AND rl.to_id=$1 "
+        "  WHERE d.type='Decision' "
+        "  UNION "
+        "  SELECT DISTINCT d.id FROM objects d "
+        "  JOIN links l ON l.from_id=d.id AND l.type='in_repo' AND l.to_id=$1 "
+        "  WHERE d.type='Decision'"
+        ") "
+        "SELECT "
+        " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=q.id "
         "  AND a.name='summary' "
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
-        " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=d.id "
+        " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=q.id "
         "  AND a.name='kind' "
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind "
-        "FROM objects d JOIN links dl ON dl.from_id=d.id AND dl.type='decided_in' "
-        "JOIN links rl ON rl.from_id=dl.to_id AND rl.type='in_repo' AND rl.to_id=$1 "
-        "WHERE d.type='Decision' LIMIT 20", repo)
+        "FROM qualifying q LIMIT 20", repo)
     roles = await pool.fetch(
         "SELECT DISTINCT (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=f.id "
         "        AND a.name='role' "
@@ -1301,6 +1318,8 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     STALE-OBLIGATION (open duties older than `stale_days` — duties rot silently),
     ROT-CANDIDATE (info: open threads whose repo's later commits share their vocabulary —
     'probably resolved, confirm?' dealt to a mind's triage verbs, never auto-resolved),
+    ROT-CANDIDATE-UNSCOPED (info: how many open threads have no in_repo edge at all and so
+    cannot be evaluated by the check above — a declared boundary, not a defect),
     EDGELESS-CLOSURE-GROWTH (error: fleet-wide resolved-with-no-closure-edge past
     EDGELESS_CLOSURE_CEILING — the cb38d922 ratchet; every sanctioned closing path mints an
     edge unconditionally now, so growth here can only mean a bypass),
@@ -1618,6 +1637,26 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                               "because — your judgment is the testimony"})
                 break
     land("rot-candidate", "info", rot)
+
+    # ROT-CANDIDATE-UNSCOPED (info, Thoth DM 2704, finding 2 of the in_repo audit): the check
+    # above INNER JOINs in_repo — structurally, not by oversight: a thread's "did a later
+    # commit do this" verdict needs THAT repo's commits to compare against, and a repo-less
+    # thread has no commit corpus to be compared to. There is no signal to compensate with
+    # (open_thread_wall's union-by-owner doesn't apply here — owner names a MIND, not a
+    # commit history). So the fix is declaring the boundary, not compensating for it: a
+    # single fleet-wide count of open threads this check structurally cannot evaluate,
+    # the same shape close_by_commits.unreachable_no_repo and dispose.orphans() already use.
+    unscoped = await pool.fetchval(
+        "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "
+        "AND (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
+        "  AND name='status' ORDER BY confidence DESC, observed_at DESC LIMIT 1) = 'open' "
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo')")
+    land("rot-candidate-unscoped", "info", [
+        {"subject": "fleet", "count": int(unscoped),
+         "detail": f"{unscoped} open thread(s) have no in_repo edge at all — the "
+                   "rot-candidate check above cannot evaluate them (no repo, no commit "
+                   "corpus to compare against); not a defect, a structural blind spot "
+                   "this check is now honest about"}] if unscoped else [])
 
     # EDGELESS-CLOSURE-GROWTH (the ratchet, Thoth DM 2581/2603, decision cb38d922): resolved-
     # with-no-closure-edge (resolved_by/answers/closed_by, valid_until open) must never grow
@@ -2070,6 +2109,19 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "   WHERE a.object_id=o.id AND a.name='status' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
         "  AND NOT " + _NOT_HALTED)
+    # UNFILED (Thoth DM 2704, finding 2 of the in_repo audit): `projects` above INNER JOINs
+    # in_repo — structurally, a per-project GROUP BY has nowhere to file a thread with no
+    # project at all. `totals.open` already counts it correctly (the comment at the top of
+    # this block always has); what was missing was saying so IN THE RECEIPT. This is the
+    # root cause of a number quoted at the operator more than once without anyone knowing
+    # why: summing `projects[].open` will always undercount `totals.open` by exactly this.
+    unfiled = await pool.fetchval(
+        "SELECT count(*) FROM objects o "
+        "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
+        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "   WHERE a.object_id=o.id AND a.name='status' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "  AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo')")
     totals = {
         "open": trow["open"],
         "wall": trow["open"] - trow["pile"],   # a mind touched it — open = wall + pile, exactly
@@ -2077,10 +2129,15 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "obligations": trow["obligations"],    # DECLARED duties, a subset of `wall`
         "guessed_obligations": trow["guessed_obligations"],  # the miner's, sitting in the pile
         "halted": halted,   # real yield on programs the operator killed BY NAME — not debt
+        "unfiled": unfiled,  # counted in `open`, absent from every `projects[]` row — no
+                              # in_repo edge to file it under; not garbage, just homeless
         "reads": "open = wall + pile, over LIVE projects only. `obligations` are DECLARED duties "
                  "and are a subset of `wall` — never add them to anything. `halted` is work on "
                  "programs the operator stopped: not garbage (never swept), not debt (never "
-                 "counted); resume the project and it returns.",
+                 "counted); resume the project and it returns. `unfiled` is threads with no "
+                 "in_repo edge at all — counted in `open`, but structurally absent from every "
+                 "`projects[]` row, so summing that list will always undercount `open` by "
+                 "exactly this many.",
     }
     return {"totals": totals, "projects": projects,
             "top_of_wall": shown, "more_on_wall": more,
