@@ -1271,6 +1271,19 @@ _LINT_CAP = 50  # findings LISTED per check; totals are always reported — no s
 _ROMAN_HEIR = re.compile(r"-[ivxlcdm]+$")
 _SEVERITY_RANK = {"error": 0, "warn": 1, "info": 2}
 
+# THE RATCHET (Thoth DM 2581/2603, decision fc5b6c5f/5713e1fc, cb38d922): resolved-with-no-
+# closure-edge must never increase. Armable now, not just measurable, because all three
+# sanctioned closing paths mint an edge unconditionally — capture.py's resolve_thread/
+# record_decision (Phase 1a, commit 23c5991), close_by_commits' strong verdict (commit
+# 0a629f6), and _resolve_own_threads no longer writes status at all (same commit). Growth
+# past this ceiling can only mean a bypass — raw SQL, a new writer nobody gated, or a
+# healed/invalidated closure edge with the property left resolved. Fleet-wide baseline
+# measured live 2026-08-01 (read-only query, DSN port 5601): 949. Lower this constant the
+# moment a deliberate historical backfill lands and reduces the real count — never raise it
+# to chase a violation; a ratchet that moves to match the pile it was built to catch is not
+# a ratchet.
+EDGELESS_CLOSURE_CEILING = 949
+
 
 async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
     """rung 2 — GRAPH LINT (campaign 5c57f54d): the knowledge layer's immune system. Audits
@@ -1288,6 +1301,9 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     STALE-OBLIGATION (open duties older than `stale_days` — duties rot silently),
     ROT-CANDIDATE (info: open threads whose repo's later commits share their vocabulary —
     'probably resolved, confirm?' dealt to a mind's triage verbs, never auto-resolved),
+    EDGELESS-CLOSURE-GROWTH (error: fleet-wide resolved-with-no-closure-edge past
+    EDGELESS_CLOSURE_CEILING — the cb38d922 ratchet; every sanctioned closing path mints an
+    edge unconditionally now, so growth here can only mean a bypass),
     ATTRIBUTION (writes from agent ids the graph never registered — the impersonation
     class, made a standing tripwire), PHANTOM-TWIN (an anonymous un-spawned agent mounted
     at a Seat's office beside a different holder lineage — a resumed soul wearing a second
@@ -1602,6 +1618,32 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                               "because — your judgment is the testimony"})
                 break
     land("rot-candidate", "info", rot)
+
+    # EDGELESS-CLOSURE-GROWTH (the ratchet, Thoth DM 2581/2603, decision cb38d922): resolved-
+    # with-no-closure-edge (resolved_by/answers/closed_by, valid_until open) must never grow
+    # past EDGELESS_CLOSURE_CEILING — every sanctioned closing path now mints an edge
+    # unconditionally, so growth can only mean a bypass. Fleet-wide by design (unlike most
+    # checks here this ignores `subject`/project scope on purpose — a bypass in one repo is
+    # exactly as much a defect as one in another, and the ceiling itself was measured
+    # fleet-wide). One finding, never a per-thread list — that's enumerate_threads' job, not
+    # lint's; this check answers "did the leak reopen," nothing more granular.
+    edgeless = await pool.fetchval(
+        "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "
+        "AND o.merged_into IS NULL AND COALESCE((SELECT a.value #>> '{}' FROM "
+        "current_assertions a WHERE a.object_id=o.id AND a.name='status' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), 'open') = 'resolved' "
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id "
+        "  AND l.type IN ('resolved_by', 'closed_by') AND l.valid_until IS NULL) "
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.to_id=o.id "
+        "  AND l.type='answers' AND l.valid_until IS NULL)")
+    land("edgeless-closure-growth", "error", [
+        {"subject": "fleet", "count": int(edgeless), "ceiling": EDGELESS_CLOSURE_CEILING,
+         "detail": f"resolved-with-no-closure-edge grew to {edgeless}, past the ceiling of "
+                   f"{EDGELESS_CLOSURE_CEILING} — every sanctioned closing path mints an "
+                   "edge unconditionally now, so this can only mean a bypass: raw SQL, an "
+                   "unguarded new writer, or a closure edge healed while status stayed "
+                   "resolved"}
+    ] if edgeless > EDGELESS_CLOSURE_CEILING else [])
 
     # ATTRIBUTION — writes stamped from an agent id that was never registered as an Agent:
     # the impersonation class (thread 33838160) as a standing tripwire, not a one-off hunt.

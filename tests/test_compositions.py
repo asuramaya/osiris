@@ -16,6 +16,7 @@ from src.orchestrator.compositions import (
     _fn_desk_overview,
     _fn_desk_project,
     _fn_echoes,
+    _fn_lint,
     _fn_triage,
     create_room,
     list_compositions,
@@ -1906,3 +1907,36 @@ async def test_type_census_composition_end_to_end(actions: Actions) -> None:
               if r["type"] == "SoftwareProject" and r["status"] == "active")
     assert row["n"] == 1
     assert row["orphans"] == 1
+
+
+# --- EDGELESS-CLOSURE-GROWTH: the cb38d922 ratchet (Thoth DM 2581/2603) -----------------
+
+async def test_lint_edgeless_closure_growth_clean_on_a_fresh_tree(actions: Actions) -> None:
+    """A fresh tree has zero resolved-with-no-edge threads, trivially under the real
+    (measured-against-production) ceiling — no finding, the check reports clean."""
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["edgeless-closure-growth"] == 0
+    assert "edgeless-closure-growth" in result["clean"]
+
+
+async def test_lint_edgeless_closure_growth_flags_past_the_ceiling(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ceiling constant is measured against production (949 fleet-wide) so a real test
+    fixture can't organically exceed it — monkeypatch it down instead of minting 950
+    threads. One thread, status='resolved', no closure edge of any kind (simulating the
+    pre-Phase-1a case thread_closure.py's own tests already cover) must trip it."""
+    import src.orchestrator.compositions as compositions_mod
+    monkeypatch.setattr(compositions_mod, "EDGELESS_CLOSURE_CEILING", 0)
+
+    t = await actions.create_or_find_object("Thread", "thread:edgeless-ratchet-test", "test")
+    await actions.assert_property(t, "summary", "no closure edge at all", "test", NOW, 0.9)
+    await actions.assert_property(t, "status", "resolved", "test", NOW, 0.9)
+
+    result = await compositions_mod._fn_lint(actions.pool, None, {})
+    assert result["counts"]["edgeless-closure-growth"] == 1
+    assert "edgeless-closure-growth" not in result["clean"]
+    finding = next(f for f in result["findings"] if f["check"] == "edgeless-closure-growth")
+    assert finding["severity"] == "error"
+    assert finding["count"] >= 1
+    assert "bypass" in finding["detail"]
