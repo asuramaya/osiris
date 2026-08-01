@@ -11,12 +11,25 @@ since it is about WHEN to enforce, not WHAT to check.
 `conn_or_pool` accepts either an asyncpg.Pool (the MCP server) or a raw asyncpg.Connection
 (the hook script, which cannot hold a pool across its ~1s budget) — both implement the same
 fetch/fetchval surface, so one implementation genuinely serves both callers.
+
+`closure_edge_coverage` (Phase 1b, decision cb38d922) joins `filed_under_check` as a
+second REPORT-ONLY confirm-time check: not a box the Stop hook shares, only the /settle
+MCP tool's own confirm step — same reasoning as `uncommitted_git_work` for why it isn't
+shared (a query against the live graph has no place racing the hook's ~1s budget). It reads
+edge coverage through `thread_closure_status` (Phase 2, Seshat, decision cb38d922) rather
+than re-deriving which edge types count as a closure trace — the exact "two copies
+drifting" bug class this module's own opening paragraph names: Phase 2's `strength` tiers
+are a live UNION ALL away from widening (Khnum's Phase 1a `closed_by` fallback is not
+wired into the view yet), and a hand-rolled duplicate here would silently fall behind the
+moment that lands.
 """
 from __future__ import annotations
 
 import asyncio
 from datetime import datetime
 from typing import Any, Protocol
+
+import asyncpg
 
 
 class _Fetchable(Protocol):
@@ -118,6 +131,59 @@ async def filed_under_check(
         return None
     mismatched = [p for p in went_to if p != project]
     return {"filed_under": project, "writes_went_to": went_to, "coherent": not mismatched}
+
+
+async def closure_edge_coverage(
+    pool: asyncpg.Pool, *, agent_id: str, mounted_at: datetime,
+) -> dict[str, Any] | None:
+    """PHASE 1b (decision cb38d922, Thoth's measurement, 2026-08-01): "78% OF CLOSURES
+    LEAVE NO TRAVERSABLE TRACE" — the closure verb (record_decision's resolves=,
+    resolve_thread's artifact=) is used constantly (527 of 737 osiris Threads are
+    resolved), but the EDGE it CAN mint (`answers`, `resolved_by`) is an optional kwarg
+    most callers never pass, so the graph cannot answer "is this done?" by topology alone
+    for four closures in five.
+
+    Same discipline as `filed_under_check` right above: REPORT-ONLY, computed at CONFIRM
+    time against the now-updated graph, NEVER folded into `missing_boxes` or `complete`
+    (ruling 577988ed — a fleet-wide single point of failure must never refuse-to-serve on
+    a check that can itself false-positive). "This session resolved N threads; M of them
+    now carry a closure edge" — the feedback loop that lets a settling session SEE its own
+    contribution to the graph's traversability, instead of the coverage decaying because
+    nobody happens to be watching.
+
+    `resolved_this_session` reads the graph's own WINNING status assertion
+    (`current_assertions`), not raw event history — the same winning-status read the
+    measurement itself used, and the whole reason topology beats a property here: an edge
+    exists or it does not, while a status property can be asserted by more than one source
+    and miscounted (cb38d922's own '1,858-vs-345' near-miss). `with_closure_edge` is READ,
+    not re-derived: `thread_closure_status` (Phase 2, src/orchestrator/thread_closure.py)
+    is the one place this graph decides which edge types count as a traversable closure —
+    composing it here (instead of a second hand-rolled `links` query) means this count
+    tracks whatever that module currently recognizes, automatically, the moment it widens
+    (a `closed_by` UNION ALL arm is the named next step, not yet wired in).
+
+    None (fails open) when this session resolved nothing — no signal either way, the same
+    convention `filed_under_check` uses; a session that closed zero threads has nothing to
+    report and is never punished for the silence. Also None if `thread_closure_status`
+    itself fails (fresh migration, a test DB missing the view) — the same fail-open law
+    every box above follows."""
+    from src.orchestrator.thread_closure import thread_closure_status
+
+    try:
+        rows = await pool.fetch(
+            "SELECT o.id FROM objects o JOIN current_assertions ca "
+            "  ON ca.object_id = o.id AND ca.name = 'status' "
+            "WHERE o.type = 'Thread' AND ca.value #>> '{}' = 'resolved' "
+            "AND ca.source_id = $1 AND ca.observed_at >= $2",
+            agent_id, mounted_at)
+        if not rows:
+            return None
+        thread_ids = [r["id"] for r in rows]
+        statuses = await thread_closure_status(pool, thread_ids=thread_ids)
+    except Exception:  # noqa: BLE001 — fail open, same law as every box above
+        return None
+    edged = sum(1 for s in statuses if s["closed_by_topology"])
+    return {"resolved_this_session": len(thread_ids), "with_closure_edge": edged}
 
 
 def charter_touched(cwd: str | None, mounted_at: datetime) -> bool | None:

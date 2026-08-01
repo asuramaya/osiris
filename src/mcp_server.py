@@ -4392,7 +4392,28 @@ async def settle(
     box in the first place (Thoth, msg 1381). The receipt's `git_checked_path` names
     whichever directory was actually used, so you can tell at a glance whether it's the
     right one. None on `uncommitted_git_files` means unevaluable there (no repo at that
-    path) and never blocks `complete`; a non-empty list does."""
+    path) and never blocks `complete`; a non-empty list does.
+
+    PHASE 1b (decision cb38d922, DM 2506): "78% OF CLOSURES LEAVE NO TRAVERSABLE TRACE" —
+    the closure verb (resolves=/artifact=) is used constantly but the EDGE it can mint is
+    an optional kwarg most callers never pass. settle already holds `decisions` and
+    `threads_resolve` in the SAME payload — BOTH halves of a relationship — so it wires the
+    edge itself instead of dropping it: when a decision in THIS call answers a thread (its
+    own `resolves=`) that a `threads_resolve` item in THIS SAME call also names, and that
+    item did not already carry its own `artifact`, settle fills it in — record_decision's
+    `resolves=` already mints the `answers` edge (Decision->Thread); this makes
+    `resolve_thread` also mint the reverse `resolved_by` edge (Thread->Decision), so the
+    pair carries BOTH. CONSERVATIVE BY DESIGN: no summary/prose matching, no cross-product
+    of every decision against every resolution — only a pair the payload itself already
+    establishes gets wired; anything else mints nothing, silently, exactly as before. Each
+    wired `threads_resolved` receipt entry carries `closure_edge_wired_to_decision`; the
+    top-level `closure_edges_wired` count says so even when it's zero.
+
+    `closure_coverage` (report-only, same discipline as `identity_coherence`, never gates
+    `complete`) surfaces this SESSION's own running total, not just this one call: how many
+    threads this session has resolved (winning status, not raw event history) and how many
+    of those now carry ANY closure edge — the feedback loop that lets a settling session
+    see its own contribution to the graph's traversability grow, call over call."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — settle is a mind's own ritual, the graph must "
@@ -4410,10 +4431,17 @@ async def settle(
     # set" a few hundred lines above. `rejected` NAMES every dropped item and why (never a
     # silent partial accept — see `complete` below, which now reads False on any rejection).
     rejected: list[dict[str, str]] = []
+    # PHASE 1b (decision cb38d922, DM 2506): settle holds BOTH halves of a decision/thread
+    # relationship in one payload — record which thread(s) each accepted decision answered
+    # via its OWN resolves=, so the threads_resolve loop below can wire the reverse edge
+    # for a pair THIS batch itself already establishes. thread_id -> decision_id, first
+    # match wins (never a guess — a real match, just possibly not the only one).
+    answered_in_batch: dict[uuid.UUID, uuid.UUID] = {}
     for item in decisions or []:
         item = dict(item)
         is_handoff = bool(item.pop("is_handoff", False))
         summary = item.pop("summary")
+        resolves_arg = item.get("resolves")
         try:
             did = await capture.record_decision(
                 Actions(pool), summary, kind=item.pop("kind", "ruling"),
@@ -4426,6 +4454,11 @@ async def settle(
             await Actions(pool).assert_property(did, "is_handoff", "true", actor, now, 0.9,
                                                 evidence_class="self_declared")
         accepted["decisions"].append({"id": str(did)[:8], "is_handoff": is_handoff})
+        for ref in (resolves_arg if isinstance(resolves_arg, list) else
+                    [resolves_arg] if resolves_arg else []):
+            tid = await capture._find_thread(pool, ref, require_identifier=True)
+            if tid is not None and tid not in answered_in_batch:
+                answered_in_batch[tid] = did
     for item in threads_open or []:
         item = dict(item)
         is_handoff = bool(item.pop("is_handoff", False))
@@ -4441,19 +4474,36 @@ async def settle(
             await Actions(pool).assert_property(tid, "is_handoff", "true", actor, now, 0.9,
                                                 evidence_class="self_declared")
         accepted["threads_opened"].append({"id": str(tid)[:8], "is_handoff": is_handoff})
+    cross_wired = 0
     for item in threads_resolve or []:
         item = dict(item)
         resolved_ref = item.get("ref")
+        artifact = item.pop("artifact", None)
+        wired_to: uuid.UUID | None = None
+        if artifact is None and resolved_ref:
+            # the CONSERVATIVE join: only wire when THIS batch's own decisions already
+            # established the pair via their OWN resolves= — no summary/prose matching,
+            # no cross-product against every decision in the call. A miss here changes
+            # nothing; resolve_thread runs exactly as it always has.
+            tid = await capture._find_thread(pool, resolved_ref)
+            if tid is not None and tid in answered_in_batch:
+                wired_to = answered_in_batch[tid]
+                artifact = str(wired_to)[:8]
         rid = await capture.resolve_thread(
             Actions(pool), item.pop("ref"), because=item.pop("because", None),
-            artifact=item.pop("artifact", None), source=actor)
-        accepted["threads_resolved"].append(
+            artifact=artifact, source=actor)
+        entry: dict[str, str] = (
             {"id": str(rid)[:8]} if rid is not None else
             {"error": f"no open thread matches {resolved_ref!r}"})
+        if rid is not None and wired_to is not None:
+            entry["closure_edge_wired_to_decision"] = str(wired_to)[:8]
+            cross_wired += 1
+        accepted["threads_resolved"].append(entry)
 
     # CONFIRM: re-check against the now-updated graph — a no-op re-derivation when nothing
     # was accepted above, which is exactly the pure-SURFACE call shape.
     from src.orchestrator.settle import (
+        closure_edge_coverage,
         filed_under_check,
         missing_boxes,
         settle_boxes,
@@ -4463,6 +4513,7 @@ async def settle(
     boxes: dict[str, bool | None] = {}
     missing: list[str] = []
     identity_coherence: dict[str, Any] | None = None
+    closure_coverage: dict[str, Any] | None = None
     if mounted is not None and mounted["mounted_at"]:
         boxes = await settle_boxes(pool, agent_id=ident.agent_id,
                                    mounted_at=mounted["mounted_at"], cwd=ident.cwd)
@@ -4475,6 +4526,10 @@ async def settle(
         identity_coherence = await filed_under_check(
             pool, agent_id=ident.agent_id, mounted_at=mounted["mounted_at"],
             project=ident.project)
+        # PHASE 1b (decision cb38d922): same report-only discipline, computed AFTER the
+        # dispatch above so it reflects any edges THIS call itself just wired.
+        closure_coverage = await closure_edge_coverage(
+            pool, agent_id=ident.agent_id, mounted_at=mounted["mounted_at"])
     # OBLIGATIONS ARE CARRIED, NOT UNWRITTEN (thread f0511eed, found on Thoth's first live
     # dogfood): `complete` used to read false whenever ANY open obligation named this
     # agent's lineage as owner — even ancient backlog this session never touched (a
@@ -4512,6 +4567,7 @@ async def settle(
         "git_checked_path": git_dir,
         "accepted": accepted,
         "rejected": rejected,
+        "closure_edges_wired": cross_wired,
         "note": (f"compaction-safe by construction{carried_note}" if complete else
                  f"still unsettled ({', '.join(reasons)}) — settle again once they're "
                  "closed, or accept them in your next call"),
@@ -4525,6 +4581,8 @@ async def settle(
                 f"{identity_coherence['writes_went_to']!r}; a successor mounting under "
                 f"{identity_coherence['filed_under']!r} will not see them (John XVI's shape)"
             )
+    if closure_coverage is not None:
+        out["closure_coverage"] = closure_coverage
     return out
 
 

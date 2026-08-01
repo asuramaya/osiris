@@ -7,9 +7,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from src.actions.core import Actions
-from src.orchestrator.capture import open_thread, record_decision
+from src.orchestrator.capture import open_thread, record_decision, resolve_thread
 from src.orchestrator.settle import (
     charter_touched,
+    closure_edge_coverage,
     filed_under_check,
     missing_boxes,
     settle_boxes,
@@ -178,6 +179,41 @@ async def test_filed_under_check_names_every_distinct_project_written_to(
     assert out is not None
     assert out["writes_went_to"] == ["projA", "projB"]
     assert out["coherent"] is False  # projB alone breaks coherence
+
+
+# ═══ closure_edge_coverage — Phase 1b (decision cb38d922): "78% OF CLOSURES LEAVE NO
+# TRAVERSABLE TRACE" — report-only, same discipline as filed_under_check above.
+
+
+async def test_closure_edge_coverage_none_when_nothing_resolved_this_session(
+    actions: Actions,
+) -> None:
+    """No signal either way — a session that closed zero threads is never punished for
+    the silence, the same convention filed_under_check uses."""
+    agent = "agent:cec01"
+    await actions.create_or_find_object("Agent", agent, agent)
+    out = await closure_edge_coverage(actions.pool, agent_id=agent,
+                                      mounted_at=datetime.now(UTC))
+    assert out is None
+
+
+async def test_closure_edge_coverage_counts_resolved_threads_and_their_edges(
+    actions: Actions,
+) -> None:
+    """One thread closed WITH a traversable edge (record_decision's own resolves=), one
+    closed WITHOUT one (a bare resolve_thread, no artifact) — coverage counts both as
+    resolved this session but only the first as edged, the exact asymmetry cb38d922
+    measured (527 resolved osiris-wide, only 119 edged)."""
+    agent = "agent:cec02"
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    edged_thread = await open_thread(actions, "cec02's thread that gets an edge", source=agent)
+    bare_thread = await open_thread(actions, "cec02's thread that stays bare", source=agent)
+    await record_decision(actions, "cec02's ruling that answers the first thread",
+                          resolves=str(edged_thread)[:8], source=agent)
+    await resolve_thread(actions, str(bare_thread)[:8], source=agent)
+
+    out = await closure_edge_coverage(actions.pool, agent_id=agent, mounted_at=mounted_at)
+    assert out == {"resolved_this_session": 2, "with_closure_edge": 1}
 
 
 # ═══════════ THE settle() MCP TOOL — ruling c5b184cd ═══════════
@@ -377,6 +413,292 @@ async def test_settle_tool_resolve_thread_item_reports_a_miss_without_erroring(
         srv._agents.pop(srv._conn_key(ctx), None)
     (result,) = out["accepted"]["threads_resolved"]
     assert "error" in result and "no-such-thread-anywhere" in result["error"]
+
+
+# ═══ PHASE 1b — settle wires the closure edge a decision+threads_resolve pair in the SAME
+# call already establishes (decision cb38d922, DM 2506) ═══
+
+
+async def test_settle_tool_wires_the_reverse_edge_for_a_pair_the_batch_establishes(
+    actions: Actions,
+) -> None:
+    """settle already holds BOTH halves in one payload — a decision that resolves= a
+    thread, and a threads_resolve item naming the SAME thread, with no artifact= of its
+    own. record_decision's resolves= already mints the `answers` edge (Decision->Thread);
+    this proves settle ALSO wires the reverse `resolved_by` edge (Thread->Decision), for
+    free, straight from what the caller already told it in this one call."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    agent = "agent:settlewire1"
+    thread_id = await open_thread(actions, "settlewire1's thread, resolved two ways at once",
+                                  source=agent)
+    thread_ref = str(thread_id)[:8]
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=agent, session="settlewire1", project="settleproj", model=None, cwd=None)
+    try:
+        out = await srv.settle(
+            decisions=[{"summary": "settlewire1's ruling that answers the thread",
+                       "resolves": thread_ref}],
+            threads_resolve=[{"ref": thread_ref}],
+            ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    did = out["accepted"]["decisions"][0]["id"]
+    (tres,) = out["accepted"]["threads_resolved"]
+    assert out["closure_edges_wired"] == 1
+    assert tres["closure_edge_wired_to_decision"] == did
+
+    # prove it against the graph, not just the receipt: BOTH edge directions now exist
+    row = await actions.pool.fetchrow(
+        "SELECT "
+        "  EXISTS(SELECT 1 FROM links WHERE from_id=d.id AND to_id=$1 AND type='answers') "
+        "    AS answers, "
+        "  EXISTS(SELECT 1 FROM links WHERE from_id=$1 AND to_id=d.id AND type='resolved_by') "
+        "    AS resolved_by "
+        "FROM objects d WHERE d.type='Decision' AND d.id::text LIKE $2 || '%'",
+        thread_id, did)
+    assert row is not None
+    assert row["answers"] is True
+    assert row["resolved_by"] is True
+
+
+async def test_settle_tool_conservative_join_mints_nothing_when_the_batch_does_not_pair_them(
+    actions: Actions,
+) -> None:
+    """A decision with no resolves= at all, and an UNRELATED thread in threads_resolve —
+    the payload never establishes a pair, so settle wires nothing (Thoth's ask: 'a wrong
+    edge is worse than a missing one'). Plain resolution still proceeds unaffected."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    agent = "agent:settlewire2"
+    unrelated_thread = await open_thread(actions, "settlewire2's unrelated thread",
+                                         source=agent)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=agent, session="settlewire2", project="settleproj", model=None, cwd=None)
+    try:
+        out = await srv.settle(
+            decisions=[{"summary": "settlewire2's ruling, no resolves= at all"}],
+            threads_resolve=[{"ref": str(unrelated_thread)[:8]}],
+            ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert out["closure_edges_wired"] == 0
+    (tres,) = out["accepted"]["threads_resolved"]
+    assert "closure_edge_wired_to_decision" not in tres
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE (from_id=$1 OR to_id=$1) "
+        "AND type IN ('answers', 'resolved_by')", unrelated_thread) == 0
+
+
+async def test_settle_tool_negative_control_decisions_without_resolutions(
+    actions: Actions,
+) -> None:
+    """decisions present, threads_resolve absent — mints nothing, and does not error."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    agent = "agent:settlewire3"
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=agent, session="settlewire3", project="settleproj", model=None, cwd=None)
+    try:
+        out = await srv.settle(decisions=[{"summary": "settlewire3's lone ruling"}], ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["closure_edges_wired"] == 0
+    assert out["accepted"]["threads_resolved"] == []
+
+
+async def test_settle_tool_negative_control_resolutions_without_decisions(
+    actions: Actions,
+) -> None:
+    """threads_resolve present, decisions absent — mints nothing, and does not error."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    agent = "agent:settlewire4"
+    thread_id = await open_thread(actions, "settlewire4's lone thread", source=agent)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=agent, session="settlewire4", project="settleproj", model=None, cwd=None)
+    try:
+        out = await srv.settle(threads_resolve=[{"ref": str(thread_id)[:8]}], ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["closure_edges_wired"] == 0
+    assert out["accepted"]["decisions"] == []
+    (tres,) = out["accepted"]["threads_resolved"]
+    assert "closure_edge_wired_to_decision" not in tres
+
+
+async def test_settle_tool_never_overrides_a_caller_supplied_artifact(actions: Actions) -> None:
+    """The caller's own explicit artifact= wins outright, even when a batch decision would
+    otherwise match by the conservative join — settle's wiring only fills a GAP, it never
+    second-guesses an explicit choice."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    agent = "agent:settlewire5"
+    thread_id = await open_thread(actions, "settlewire5's thread, closed pointing "
+                                  "elsewhere on purpose", source=agent)
+    other_decision = await record_decision(
+        actions, "settlewire5's OTHER decision, cited explicitly as the artifact",
+        source=agent)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=agent, session="settlewire5", project="settleproj", model=None, cwd=None)
+    try:
+        out = await srv.settle(
+            decisions=[{"summary": "settlewire5's NEW ruling that ALSO resolves the thread",
+                       "resolves": str(thread_id)[:8]}],
+            threads_resolve=[{"ref": str(thread_id)[:8],
+                             "artifact": str(other_decision)[:8]}],
+            ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert out["closure_edges_wired"] == 0
+    (tres,) = out["accepted"]["threads_resolved"]
+    assert "closure_edge_wired_to_decision" not in tres
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND to_id=$2 AND type='resolved_by'",
+        thread_id, other_decision) == 1
+
+
+async def test_settle_tool_surfaces_closure_coverage_without_blocking_complete(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Report-only, same discipline as identity_coherence: 'this session resolved N
+    threads; M of them now carry a closure edge' — computed AFTER the batch dispatch so it
+    reflects edges wired by this very call too. Deliberately PARTIAL coverage here (one
+    bare thread from earlier this session, one freshly edged by this call) proves the
+    field never gates `complete`, however incomplete the coverage looks."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.mounts import save_mount
+
+    agent = "agent:settlecc1"
+    job_dir = str(tmp_path / "jobs" / "settlecc")  # EXACTLY 8 chars — matches session[:8]
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="settleproj",
+                     cwd=str(tmp_path), model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET mounted_at=$1 WHERE job_dir=$2", mounted_at, job_dir)
+    (tmp_path / "charter.md").write_text("# notes\n")
+    bare_thread = await open_thread(actions, "settlecc1's thread resolved bare, earlier "
+                                    "this same session", source=agent)
+    await resolve_thread(actions, str(bare_thread)[:8], source=agent)
+    thread_id = await open_thread(actions, "settlecc1's thread, resolved WITH an edge "
+                                  "by this call", source=agent)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=agent, session="settlecc1", project="settleproj", model=None,
+        cwd=str(tmp_path))
+    try:
+        out = await srv.settle(
+            decisions=[{"summary": "settlecc1's ruling that answers the second thread",
+                       "resolves": str(thread_id)[:8]}],
+            threads_open=[{"summary": "settlecc1's own thread, opened by the dump"}],
+            ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["complete"] is True, out  # never gated by coverage, however partial
+    assert out["closure_coverage"] == {"resolved_this_session": 2, "with_closure_edge": 1}
+
+
+async def test_settle_tool_omits_closure_coverage_when_nothing_resolved_this_session(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """No signal either way — the field stays absent rather than asserting a false zero."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.mounts import save_mount
+
+    agent = "agent:settlecc3"
+    job_dir = str(tmp_path / "jobs" / "settlecc")  # EXACTLY 8 chars — matches session[:8]
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="settleproj",
+                     cwd=str(tmp_path), model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET mounted_at=$1 WHERE job_dir=$2", mounted_at, job_dir)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=agent, session="settlecc3", project="settleproj", model=None,
+        cwd=str(tmp_path))
+    try:
+        out = await srv.settle(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "closure_coverage" not in out
 
 
 async def test_settle_tool_handoff_marker_is_found_by_orient_via_structured_property(
