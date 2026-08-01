@@ -1,0 +1,150 @@
+"""Thread closure derived from TOPOLOGY, not the `status` property (Phase 2, Thoth DM 2508,
+decision cb38d922) — the read side of migration 0043's `thread_closure_edges` view.
+
+THE ARGUMENT (measured, not assumed, cb38d922): a thread's `status` assertion can be written
+by more than one source (an agent opens, another resolves) and `assert_property` only
+supersedes WITHIN a source, so both rows stay live — three different queries against the
+same 737 threads gave three different open-counts the same night. `resolved_by`/`answers`
+edges either exist or they don't; they cannot disagree with themselves the way a multi-source
+property can. This module is the query-time home for that asymmetry: it reads the raw
+`thread_closure_edges` view (kept deliberately unopinionated — see 0043's own docstring) and
+turns it into the two judgment calls a caller actually needs, WITHOUT switching any existing
+read path over to it. Nothing here is wired into orient(), compile_handoff, or any MCP tool
+yet — that is Phase 2b, and it needs the closure-edge coverage this migration starts to widen
+first (see CALLERS TO MOVE below).
+
+`closed_by_topology=True` IS A GROUND-TRUTH POSITIVE — an edge exists, full stop.
+`closed_by_topology=False` IS NOT "CONFIRMED OPEN" — read this twice before wiring anything
+to it. Every thread closed before 2026-08-01 that never named a citable artifact (the
+majority of resolve_thread() calls, per cb38d922's 408-of-527 measurement) has NO closure
+edge at all, so this reads it identically to a thread nobody has ever touched. Until a
+historical backfill mints edges retroactively (a separate, not-yet-proposed piece), the only
+safe reading of a False row is "no closure edge found yet" — a caller that needs a real
+open/closed verdict today should still fall back to the `status` property for the False
+case, not treat this view as authoritative on its own for absence.
+
+THE TRANSITION-PERIOD DISAGREEMENT (Thoth's own framing, the interesting case): a thread can
+carry BOTH a closure edge AND a current status='open' assertion — a decision named it in
+`resolves=` (or resolve_thread(artifact=...) ran) while a separate source's 'open' write is
+still the freshest thing THAT source ever said. This module does not pick a winner — same
+law `_fn_lint`'s `land("contradiction", "warn", ...)` and fold_project's
+"refuse rather than destroy the disagreement" already follow (#102's standing machinery,
+cited by Thoth directly). `topology_property_disagreement=True` surfaces it; resolving it is
+a mind's job, same as every other contradiction this kernel already knows how to flag rather
+than silently arbitrate. The much more common inverse — an edge is absent but status says
+'resolved' — is NOT flagged: that is the well-understood, expected 408-shaped gap, not a
+live dispute, and flagging all of it would drown the one signal that's actually new.
+
+STRENGTH TIERS: `resolved_by` and `answers` are both `strong` today (artifact- or
+ruling-backed — the closing act named something a mind can go read). A `weak`,
+self-attested, agent-only edge is coming out of Khnum's Phase 1a work for the artifact-less
+resolve_thread() case; it is deliberately NOT wired into 0043's view yet (its exact type name
+and direction aren't landed — guessing would mint a phantom reference into a kernel view).
+Wiring it in later is exactly one more UNION ALL arm in the view plus reading its `strength`
+here unchanged — that one-line-extension shape is the reason the view stays this granular
+instead of collapsing straight to a boolean.
+
+CALLERS TO MOVE (Phase 2b, not this piece — named so the switch-over is cheap and obvious,
+per Thoth's explicit ask; grep `name='status'` + `type='Thread'` to re-verify this list
+against a later HEAD before acting on it):
+  - src/orchestrator/compositions.py: `open_thread_wall` (1779, THE central read — feeds
+    orient(), compile_handoff's `open` lens, and the chrome wall via `_fn_wall`),
+    `rank_open_threads` (1722, ranks whatever `open_thread_wall` hands it — no status read of
+    its own, but its INPUT changes if `open_thread_wall` moves), `_fn_echoes` (~1184),
+    `_fn_lint`'s status-regression + contradiction checks (~1389/1536/1567 — may become
+    partially redundant with `topology_property_disagreement` above), `_fn_roadmap_open`
+    (~2051).
+  - src/mcp_server.py: `_owned_open_threads` (1817, an agent's own-open-threads for mount/
+    orient receipts), `orient` (2170, two separate winning-status reads).
+  - src/orchestrator/capture.py: `find_near_duplicate_open_thread` (720, scopes its dedup
+    check to status='open' threads only).
+  - src/orchestrator/mailbox.py: `_operator_queue` (769).
+  - src/orchestrator/{handshake,vitals,neighborhoods,dispose,pulse}.py and
+    src/ingest/{closure,sessions,threads}.py: one hand-rolled winning-status read each
+    (`automount`, `operator_debts`, `_neighborhoods`, the `candidates`/`dispose`/`orphans`
+    shared WHERE clause, `_snapshot`, `_open_untouched_threads`, `_resolve_own_threads`/
+    `_resolved_summaries`, `resolve_threads`).
+None of these are touched by this piece — this module only adds a new, unused-by-default
+read path alongside them.
+"""
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+import asyncpg
+
+
+async def thread_closure_status(
+    pool: asyncpg.Pool, *, repo: uuid.UUID | None = None,
+    thread_ids: list[uuid.UUID] | None = None,
+) -> list[dict[str, Any]]:
+    """One row per active Thread in scope: `thread_id`, `closed_by_topology` (bool — True is
+    ground truth, False is NOT "confirmed open", see module docstring), `strength`
+    ('strong'|'weak'|None — the highest-strength closure edge found, None if none),
+    `closure_edges` (every edge found, raw), `property_status` (the winning `status`
+    assertion today, exactly as every existing hand-rolled reader computes it — kept
+    alongside so a caller can cross-check without a second query), and
+    `topology_property_disagreement` (bool — an edge says closed while `property_status`
+    says 'open'; never resolved here, only flagged).
+
+    Scope is `repo` (an already-resolved SoftwareProject id, same shape
+    `open_thread_wall(pool, proj)` takes), `thread_ids` (an explicit set), both together
+    (intersection), or neither (every active Thread fleet-wide — the same unscoped
+    posture `current_assertions` itself has; scope it at the call site for anything
+    latency-sensitive)."""
+    where = ["o.type = 'Thread'", "o.status = 'active'", "o.merged_into IS NULL"]
+    args: list[Any] = []
+    if repo is not None:
+        args.append(repo)
+        where.append(
+            f"EXISTS (SELECT 1 FROM links l WHERE l.from_id = o.id "
+            f"AND l.type = 'in_repo' AND l.to_id = ${len(args)})"
+        )
+    if thread_ids is not None:
+        args.append(thread_ids)
+        where.append(f"o.id = ANY(${len(args)}::uuid[])")
+    scope_rows = await pool.fetch(
+        f"SELECT o.id FROM objects o WHERE {' AND '.join(where)}", *args
+    )
+    ids = [r["id"] for r in scope_rows]
+    if not ids:
+        return []
+
+    edge_rows = await pool.fetch(
+        "SELECT thread_id, edge_type, strength, closer_id, source_id, created_at "
+        "FROM thread_closure_edges WHERE thread_id = ANY($1::uuid[])",
+        ids,
+    )
+    edges_by_thread: dict[uuid.UUID, list[dict[str, Any]]] = {}
+    for r in edge_rows:
+        edges_by_thread.setdefault(r["thread_id"], []).append(
+            {"type": r["edge_type"], "strength": r["strength"], "closer_id": r["closer_id"],
+             "source_id": r["source_id"], "created_at": r["created_at"]}
+        )
+
+    status_rows = await pool.fetch(
+        "SELECT DISTINCT ON (object_id) object_id, value #>> '{}' AS status "
+        "FROM current_assertions WHERE name = 'status' AND object_id = ANY($1::uuid[]) "
+        "ORDER BY object_id, confidence DESC, observed_at DESC",
+        ids,
+    )
+    status_by_thread = {r["object_id"]: r["status"] for r in status_rows}
+
+    _STRENGTH_RANK = {"strong": 2, "weak": 1}
+    out = []
+    for tid in ids:
+        edges = edges_by_thread.get(tid, [])
+        strength = max(
+            (e["strength"] for e in edges), key=lambda s: _STRENGTH_RANK[s], default=None)
+        closed = bool(edges)
+        prop_status = status_by_thread.get(tid)
+        out.append({
+            "thread_id": tid,
+            "closed_by_topology": closed,
+            "strength": strength,
+            "closure_edges": edges,
+            "property_status": prop_status,
+            "topology_property_disagreement": closed and prop_status == "open",
+        })
+    return out
