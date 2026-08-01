@@ -28,6 +28,28 @@ yet" — a caller that needs a real open/closed verdict today should still fall 
 `status` property for the False case, not treat this view as authoritative on its own for
 absence.
 
+A SECOND, SHARPER REASON False IS NOT "OPEN" (Thoth's catch via Sekhmet's finding cf3dcd79,
+thread 6212d9f5, 2026-08-01): `_resolve_ref`'s short-id branch (`_find_thread` ->
+`_resolve_ref` in capture.py) LEFT JOINs `current_assertions` with NO source filter — and
+`current_assertions` legitimately yields one row PER SOURCE. A thread whose `summary` was
+touched by two different sources therefore produces two joined rows for the SAME object,
+`len(rows) > 1` fires, and `RefAmbiguous` refuses a resolve_thread/record_decision(resolves=)
+call against a real, UNIQUE short id — a miscount, not a genuine collision (verified by
+reading the exact SQL, not just taking the finding on trust). The refusal itself is safe (no
+partial write, confirmed by test_resolve_thread_refuses_on_a_colliding_short_id_ref_and_
+mints_nothing) — but the TRIGGER is two agents having touched one thread's text, which is
+what active collaboration looks like here. Bites SHORT-ID resolution specifically (a full
+UUID ref short-circuits before ever reaching this branch); short ids are this fleet's
+dominant citation convention in resolves=/artifact=, so this is not a rare corner. Whether it
+becomes a PERMANENT gap depends on whether the caller retries with a full UUID after seeing
+the (self-revealing — both candidates share one id) RefAmbiguous, so this is a bias in
+closure LATENCY/likelihood, not an absolute guarantee — but it points the wrong way: the more
+agent attention a thread got, the likelier its next short-id close attempt gets refused, the
+likelier it still reads `closed_by_topology=False` here. Not this module's bug to fix
+(capture.py's `_resolve_ref` is a different file, different owner) — recorded here because a
+reader of this view is exactly who needs to know their "unclosed" count skews toward the
+threads the fleet worked on together, not away from them.
+
 THE TRANSITION-PERIOD DISAGREEMENT (Thoth's own framing, the interesting case): a thread can
 carry BOTH a closure edge AND a current status='open' assertion — a decision named it in
 `resolves=` (or resolve_thread(artifact=...) ran) while a separate source's 'open' write is
