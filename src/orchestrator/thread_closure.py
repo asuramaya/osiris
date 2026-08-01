@@ -1,5 +1,6 @@
 """Thread closure derived from TOPOLOGY, not the `status` property (Phase 2, Thoth DM 2508,
-decision cb38d922) — the read side of migration 0043's `thread_closure_edges` view.
+decision cb38d922) — the read side of the `thread_closure_edges` view (migration 0043,
+widened to its weak tier by 0044).
 
 THE ARGUMENT (measured, not assumed, cb38d922): a thread's `status` assertion can be written
 by more than one source (an agent opens, another resolves) and `assert_property` only
@@ -15,13 +16,17 @@ first (see CALLERS TO MOVE below).
 
 `closed_by_topology=True` IS A GROUND-TRUTH POSITIVE — an edge exists, full stop.
 `closed_by_topology=False` IS NOT "CONFIRMED OPEN" — read this twice before wiring anything
-to it. Every thread closed before 2026-08-01 that never named a citable artifact (the
-majority of resolve_thread() calls, per cb38d922's 408-of-527 measurement) has NO closure
-edge at all, so this reads it identically to a thread nobody has ever touched. Until a
-historical backfill mints edges retroactively (a separate, not-yet-proposed piece), the only
-safe reading of a False row is "no closure edge found yet" — a caller that needs a real
-open/closed verdict today should still fall back to the `status` property for the False
-case, not treat this view as authoritative on its own for absence.
+to it. Khnum's Phase 1a (commit 23c5991) made resolve_thread() mint a closure edge
+UNCONDITIONALLY going forward — `resolved_by` (strong) when `artifact` resolves, else
+`closed_by` (weak) to the resolving agent — so the artifact-less gap cb38d922 measured (the
+majority of resolve_thread() calls, 408-of-527) no longer widens. It does NOT retroactively
+heal it: every thread closed BEFORE that commit landed, by resolve_thread() with no
+artifact, still has NO closure edge at all — indistinguishable here from a thread nobody has
+ever touched. Until a historical backfill mints edges retroactively for those (a separate,
+not-yet-proposed piece), the only safe reading of a False row is "no closure edge found
+yet" — a caller that needs a real open/closed verdict today should still fall back to the
+`status` property for the False case, not treat this view as authoritative on its own for
+absence.
 
 THE TRANSITION-PERIOD DISAGREEMENT (Thoth's own framing, the interesting case): a thread can
 carry BOTH a closure edge AND a current status='open' assertion — a decision named it in
@@ -35,14 +40,14 @@ than silently arbitrate. The much more common inverse — an edge is absent but 
 'resolved' — is NOT flagged: that is the well-understood, expected 408-shaped gap, not a
 live dispute, and flagging all of it would drown the one signal that's actually new.
 
-STRENGTH TIERS: `resolved_by` and `answers` are both `strong` today (artifact- or
-ruling-backed — the closing act named something a mind can go read). A `weak`,
-self-attested, agent-only edge is coming out of Khnum's Phase 1a work for the artifact-less
-resolve_thread() case; it is deliberately NOT wired into 0043's view yet (its exact type name
-and direction aren't landed — guessing would mint a phantom reference into a kernel view).
-Wiring it in later is exactly one more UNION ALL arm in the view plus reading its `strength`
-here unchanged — that one-line-extension shape is the reason the view stays this granular
-instead of collapsing straight to a boolean.
+STRENGTH TIERS: `resolved_by` and `answers` are `strong` (artifact- or ruling-backed — the
+closing act named something a mind can go read). `closed_by` (Thread -> Agent, Khnum's
+Phase 1a, wired in by 0044) is `weak` — self-attested, WHO closed it rather than WHAT closed
+it, minted only when `resolved_by` does not land for that same closure (capture.py's
+resolve_thread mints exactly one closure edge per close, never both). Reading this module
+required NO code change to add the weak tier — the `strength` ranking below already carried
+a 'weak' entry, put there when the view could not yet produce one; extending the view was
+the whole one-line-UNION-ALL-arm point of building it this way.
 
 CALLERS TO MOVE (Phase 2b, not this piece — named so the switch-over is cheap and obvious,
 per Thoth's explicit ask; grep `name='status'` + `type='Thread'` to re-verify this list

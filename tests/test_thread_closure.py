@@ -64,14 +64,45 @@ async def test_record_decision_resolves_mints_a_strong_answers_edge(actions: Act
     assert row["property_status"] == "resolved"
 
 
-async def test_resolved_without_artifact_leaves_no_closure_edge(actions: Actions) -> None:
-    """The exact gap cb38d922 measured (408 of 527): the status property flips to
-    'resolved' but nothing traversable records it — closed_by_topology must stay False,
-    and False here must NOT be read as "confirmed open" (it's the untraced-closure case,
-    not a live dispute)."""
+async def test_resolve_thread_without_artifact_now_mints_a_weak_closed_by_edge(
+    actions: Actions,
+) -> None:
+    """Khnum's Phase 1a fix (commit 23c5991): resolve_thread() with no artifact at all no
+    longer leaves the thread edgeless — it mints `closed_by` (weak) to the resolving agent
+    instead. This is the forward-looking half of cb38d922's fix; the residual gap is only
+    threads closed BEFORE that commit (see the next test)."""
     await _repo(actions, "tc4")
     tid = await open_thread(actions, "closed with no artifact", repo="tc4", source="agent:me")
-    await resolve_thread(actions, str(tid), because="just done, nothing to cite")
+    await resolve_thread(actions, str(tid), because="just done, nothing to cite",
+                         source="agent:closer")
+
+    rows = await thread_closure_status(actions.pool, thread_ids=[tid])
+    row = rows[0]
+    assert row["property_status"] == "resolved"
+    assert row["closed_by_topology"] is True
+    assert row["strength"] == "weak"
+    assert len(row["closure_edges"]) == 1
+    assert row["closure_edges"][0]["type"] == "closed_by"
+
+
+async def test_pre_cutover_closure_with_no_edge_at_all_still_reads_false(
+    actions: Actions,
+) -> None:
+    """The residual gap this migration does NOT heal: a thread closed before Khnum's
+    Phase 1a landed has status='resolved' but never went through resolve_thread()'s new
+    unconditional-edge path, so no edge of any kind exists. Simulated here by writing the
+    status assertion directly (bypassing resolve_thread entirely) rather than via the verb,
+    since the verb itself no longer produces an edgeless closure. closed_by_topology must
+    stay False, and False here must NOT be read as "confirmed open" (it's the untraced-
+    historical-closure case, not a live dispute)."""
+    await _repo(actions, "tc4b")
+    tid = await open_thread(actions, "closed before the fix existed", repo="tc4b",
+                            source="agent:me")
+    # confidence must match (or beat) open_thread's own 0.9 write — the winning-status read
+    # orders by confidence DESC first, observed_at DESC only as the tie-break.
+    later = datetime.now(UTC) + timedelta(seconds=1)
+    await actions.assert_property(tid, "status", "resolved", "session-miner", later, 0.9,
+                                  evidence_class="derived")
 
     rows = await thread_closure_status(actions.pool, thread_ids=[tid])
     row = rows[0]
