@@ -56,6 +56,30 @@ async def test_smoke_chrome_names_a_real_failure(client: httpx.AsyncClient) -> N
     assert out["/not-a-real-route-at-all"] == "http 404"
 
 
+async def test_smoke_chrome_names_a_timeout_distinctly_from_a_refusal() -> None:
+    """Live finding (Thoth DM 2823): httpx's own ReadTimeout/ConnectTimeout carry an EMPTY
+    str() when raised with no message, so the generic error branch used to render an
+    unreachable route and a merely-slow one identically as `"error: "`. A refused connection
+    keeps its own real message and was never actually ambiguous."""
+    def _timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("")
+
+    def _refused(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("Connection refused")
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return _timeout(request) if request.url.path == "/slow" else _refused(request)
+
+    transport = httpx.MockTransport(_handler)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", timeout=5.0,
+    ) as c:
+        out = await smoke_chrome(c, routes=("/slow", "/dead"))
+    assert out["/slow"] == "timeout (no response within 5s)"
+    assert out["/dead"] == "error: Connection refused"
+    assert out["/slow"] != out["/dead"]
+
+
 # --- smoke_pool: one real query, honest on failure ------------------------------------------
 
 async def test_smoke_pool_is_ok_on_a_real_pool(actions: Actions) -> None:

@@ -32,12 +32,21 @@ async def smoke_chrome(
 ) -> dict[str, str]:
     """One GET per route — "ok" or exactly what went wrong, never silently dropped. `client`
     is caller-supplied so a real deploy points it at a live base_url and a test points it at
-    an ASGI transport — the walk logic doesn't know or care which."""
+    an ASGI transport — the walk logic doesn't know or care which.
+
+    A timed-out route is named explicitly (Thoth DM 2823, live measured: `/` at 7.13s past a
+    5s client timeout) rather than falling into the generic error branch below — httpx's own
+    timeout exceptions (ReadTimeout/ConnectTimeout) carry an EMPTY str() when raised with no
+    message, which the generic branch would have rendered as the indistinguishable `"error: "`,
+    identical in shape to a genuinely dead route. A refused connection keeps its own real
+    message (e.g. "Connection refused") and needs no special case."""
     out: dict[str, str] = {}
     for route in routes:
         try:
             r = await client.get(route)
             out[route] = "ok" if r.status_code < 400 else f"http {r.status_code}"
+        except httpx.TimeoutException:
+            out[route] = f"timeout (no response within {client.timeout.read:.0f}s)"
         except Exception as e:  # noqa: BLE001 - report the surface as down, never crash the walk
             out[route] = f"error: {e}"
     return out

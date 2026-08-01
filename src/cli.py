@@ -183,6 +183,48 @@ async def _run_smoke_probes() -> list[str]:
     return summarize_failures(chrome, mcp_result)
 
 
+async def _health_probe() -> bool:
+    """One GET at /health — cheap (no chrome render, no MCP round-trip) and only answers
+    after the console app's own lifespan finishes standing up its pool (src/api/app.py), so
+    it's an honest readiness signal, not just "uvicorn is listening". False on ANY failure
+    (refused, timed out, non-200) — not up yet is not a smoke failure."""
+    import httpx
+
+    from src.config.settings import get_settings
+
+    try:
+        async with httpx.AsyncClient(
+            base_url=get_settings().osiris_console_base_url, timeout=2.0,
+        ) as client:
+            r = await client.get("/health")
+            return r.status_code == 200
+    except Exception:  # noqa: BLE001 - not up yet, not a smoke failure
+        return False
+
+
+async def _wait_for_health(
+    probe: Callable[[], Awaitable[bool]] = _health_probe, *,
+    ceiling_secs: float = 120.0, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> tuple[bool, float]:
+    """A BOUNDED poll of /health (never indefinite), run BEFORE smoke so a still-starting
+    console reads as "still starting", not a smoke false-alarm. Measured, same box same day
+    (Thoth DM 2823): console cold-start ranged 47s-94s — a fixed sleep sized to one sample
+    is a lie waiting for a slower boot, so this reports the REAL elapsed wait instead of
+    asserting one. Retries with backoff (1s, 2s, 4s, 8s, 8s, ...) capped at `ceiling_secs`
+    (120s: comfortable margin over the measured 94s, still bounded). Returns (ready,
+    elapsed) — ready=False past elapsed>=ceiling_secs is a REAL finding (the console did not
+    come up), not a timing race."""
+    elapsed = 0.0
+    delay = 1.0
+    ready = await probe()
+    while not ready and elapsed < ceiling_secs:
+        await sleep(delay)
+        elapsed += delay
+        delay = min(delay * 2, 8.0)
+        ready = await probe()
+    return ready, elapsed
+
+
 async def _wait_for_smoke(
     probe: Callable[[], Awaitable[list[str]]] = _run_smoke_probes, *,
     ceiling_secs: float = 30.0, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -984,6 +1026,15 @@ async def cmd_deploy(
         deployed_head = await record_deploy(pool, root)
         print(f"deploy ledger: recorded {deployed_head}" if deployed_head else
               "deploy ledger: HEAD unknown — not recorded (repo_root isn't a git checkout)")
+
+        health_ready, health_waited = await _wait_for_health()
+        if health_ready:
+            print(f"health: up after {health_waited:.0f}s" if health_waited
+                  else "health: up immediately")
+        else:
+            print(f"health: NOT UP after waiting {health_waited:.0f}s (ceiling) — the "
+                  "console did not come up; this is a real startup failure, not a "
+                  "smoke-timing false-alarm")
 
         fails, waited = await _wait_for_smoke()
         if fails:

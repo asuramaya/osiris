@@ -13,6 +13,7 @@ from src.actions.core import Actions
 from src.cli import (
     DEPLOY_UNITS,
     _find_repo_root,
+    _wait_for_health,
     _wait_for_smoke,
     alembic_gap_note,
     cmd_attach,
@@ -542,6 +543,73 @@ async def test_wait_for_smoke_backoff_is_capped() -> None:
 
     await _wait_for_smoke(_always_fails, ceiling_secs=30.0, sleep=_fake_sleep)
     assert slept == [2.0, 4.0, 8.0, 8.0, 8.0]  # doubles until 8, never exceeds it
+    assert max(slept) == 8.0
+
+
+# --- _wait_for_health: same bounded-retry shape, run BEFORE smoke (Thoth DM 2823) -------------
+
+async def test_wait_for_health_ready_on_first_try_never_sleeps() -> None:
+    calls = []
+
+    async def _probe() -> bool:
+        calls.append(1)
+        return True
+
+    async def _no_sleep(_delay: float) -> None:
+        raise AssertionError("must never sleep when the first probe is already ready")
+
+    ready, waited = await _wait_for_health(_probe, sleep=_no_sleep)
+    assert ready is True
+    assert waited == 0.0
+    assert len(calls) == 1
+
+
+async def test_wait_for_health_recovers_after_startup() -> None:
+    """The exact measured shape (Thoth DM 2823): not-ready immediately, ready once the
+    console finishes its own cold start — reported as a real elapsed wait, never a guess."""
+    attempts = [False, False, True]
+    slept: list[float] = []
+
+    async def _probe() -> bool:
+        return attempts.pop(0)
+
+    async def _fake_sleep(delay: float) -> None:
+        slept.append(delay)
+
+    ready, waited = await _wait_for_health(_probe, sleep=_fake_sleep)
+    assert ready is True
+    assert slept == [1.0, 2.0]
+    assert waited == 3.0
+
+
+async def test_wait_for_health_gives_up_at_the_ceiling_and_reports_honestly() -> None:
+    """A console that never comes up is still reported truthfully — the bound protects
+    against false alarms on a slow boot, it must never hide a real, sustained failure."""
+    async def _never_ready() -> bool:
+        return False
+
+    slept: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        slept.append(delay)
+
+    ready, waited = await _wait_for_health(_never_ready, ceiling_secs=10.0, sleep=_fake_sleep)
+    assert ready is False
+    assert waited >= 10.0
+    assert slept == [1.0, 2.0, 4.0, 8.0]  # 1+2+4=7 (<10, keep going), +8=15 (>=10, stop)
+
+
+async def test_wait_for_health_backoff_is_capped() -> None:
+    async def _never_ready() -> bool:
+        return False
+
+    slept: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        slept.append(delay)
+
+    await _wait_for_health(_never_ready, ceiling_secs=31.0, sleep=_fake_sleep)
+    assert slept == [1.0, 2.0, 4.0, 8.0, 8.0, 8.0]  # doubles until 8, never exceeds it
     assert max(slept) == 8.0
 
 
