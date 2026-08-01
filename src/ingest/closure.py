@@ -45,6 +45,7 @@ import asyncpg
 
 from src.actions.core import Actions
 from src.ingest.mined import distinctive_terms
+from src.orchestrator.monitor import get_cursor, set_cursor
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -143,8 +144,17 @@ async def _open_untouched_threads(
         "  AND a.name='rot_candidate')", repo)]
 
 
-async def _commits(pool: asyncpg.Pool, repo: str | None) -> list[dict[str, Any]]:
-    """Every ingested commit in the tree, with the text a thread could match against."""
+async def _commits(
+    pool: asyncpg.Pool, repo: str | None, *, since: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Every ingested commit in the tree, with the text a thread could match against.
+
+    `since` (the watermark, Thoth DM 2635) filters on `o.created_at` — GRAPH INGESTION
+    time, deliberately not `authored_date` (the `at` column, read separately below): a
+    commit's author date can be backdated or ingested late relative to when it was
+    authored, so ordering the watermark by anything but "when THIS graph first saw it"
+    risks silently skipping a commit that lands out of author-date order. Ingestion time
+    is monotonic by construction (a bigserial-backed `created_at`, never revised)."""
     return [dict(r) for r in await pool.fetch(
         "SELECT o.id, o.canonical, o.created_at, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -159,7 +169,11 @@ async def _commits(pool: asyncpg.Pool, repo: str | None) -> list[dict[str, Any]]
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
         "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
         "WHERE o.type='Commit' AND o.status='active' "
-        "AND ($1::text IS NULL OR p.canonical = 'repo:' || $1)", repo)]
+        "AND ($1::text IS NULL OR p.canonical = 'repo:' || $1) "
+        "AND ($2::timestamptz IS NULL OR o.created_at > $2)", repo, since)]
+
+
+_WATERMARK_PREFIX = "closure-miner"
 
 
 async def close_by_commits(
@@ -174,11 +188,34 @@ async def close_by_commits(
     `strong`/`weak` are the rarity bars. They are tuned to a real tree's corpus; a small corpus
     yields small IDF values, so they are parameters rather than constants — the bar belongs to
     the caller who can see the distribution, not to this module.
+
+    THE WATERMARK (Thoth DM 2635, decision ff20869a): this was O(threads × ALL commits)
+    EVERY call, forever — no watermark, so a scheduled sweep would re-derive work it had
+    already fully derived last time, unboundedly, as both corpora grow. `threads` stays
+    unscoped by design (it's already a small, slow-changing set — open AND untouched, which
+    shrinks the moment a mind or this sweep itself acts on a row); `commits` is now scoped
+    to `since` the last successful (non-dry-run) pass's watermark, stored under key
+    `f"{_WATERMARK_PREFIX}:{repo or '*'}"` in the generic `watermarks` table
+    (monitor.get_cursor/set_cursor — the same primitive session-sensing's transcript cursor
+    already uses, not a new mechanism). CORRECTNESS: narrowing only the commit axis is
+    sound because any commit older than the watermark was already graded against every
+    thread that was ALREADY open-and-untouched at the time it was ingested — the one
+    residual gap is a commit whose OWN ingestion lands out of order relative to a thread
+    opened in between two runs, which `since` filtering on `created_at` (ingestion time,
+    not `authored_date`) already closes; see `_commits`'s own docstring. The watermark
+    never advances on a dry run (a read must stay a read) and never moves backward (a
+    partial/failed pass leaves it exactly where the last SUCCESSFUL one left it, so a
+    retry after a crash re-examines the same commits rather than silently skipping them).
     """
+    since_raw = None if dry_run else await get_cursor(
+        actions.pool, f"{_WATERMARK_PREFIX}:{repo or '*'}")
+    since = datetime.fromisoformat(since_raw) if since_raw else None
+
     threads = await _open_untouched_threads(actions.pool, repo)
-    commits = await _commits(actions.pool, repo)
+    commits = await _commits(actions.pool, repo, since=since)
     if not threads or not commits:
         return {"repo": repo, "threads": len(threads), "commits": len(commits),
+                "since": since.isoformat() if since else None,
                 "resolved": 0, "candidates": 0,
                 "note": "nothing to witness — this tree's work is not in the graph"}
 
@@ -248,9 +285,34 @@ async def close_by_commits(
                     t["id"], "rot_candidate",
                     f"a later commit may have done this — {cite} ({why})"[:300],
                     _SOURCE, observed, _CONF, evidence_class=_EC, actor=_SOURCE)
+    new_watermark = max(c["created_at"] for c in commits)
+    if not dry_run:
+        # advance only past what was actually fetched THIS run -- never ahead of it, so a
+        # crash between here and the caller seeing the report re-examines these same
+        # commits next time rather than silently skipping them
+        await set_cursor(actions.pool, f"{_WATERMARK_PREFIX}:{repo or '*'}",
+                         new_watermark.isoformat())
+
+    # THE SCAN-BOUNDARY LINE (Thoth DM 2635/2629, decision 04ad4bb8/975ec1eb — presence
+    # read as coverage): a thread with NO in_repo edge at all is structurally excluded
+    # from `_open_untouched_threads`'s own INNER JOIN, permanently, on any cadence. Cheap
+    # (one COUNT(*), no join against this sweep's own O(threads) work) and only meaningful
+    # fleet-wide -- a single-repo scope has no "unreachable" concept, a thread not in THAT
+    # repo is simply out of scope, not invisible.
+    unreachable_no_repo = None
+    if repo is None:
+        unreachable_no_repo = await actions.pool.fetchval(
+            "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "
+            "AND o.merged_into IS NULL "
+            "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id "
+            "  AND l.type='in_repo')")
+
     return {
         "repo": repo, "dry_run": dry_run,
+        "since": since.isoformat() if since else None,
+        "until": new_watermark.isoformat(),
         "threads": len(threads), "commits": len(commits),
+        "unreachable_no_repo": unreachable_no_repo,
         "resolved": len(resolved), "candidates": len(candidates),
         "annotated": sum(1 for c in candidates if c["score"] >= strong),
         "resolved_rows": resolved[:20], "candidate_rows": candidates[:20],

@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from src.actions.core import Actions
 from src.ingest.closure import close_by_commits
 from src.orchestrator.capture import open_thread
+from src.orchestrator.monitor import get_cursor
 
 BORN = datetime(2026, 7, 1, tzinfo=UTC)
 LATER = datetime(2026, 7, 5, tzinfo=UTC)
@@ -170,6 +171,75 @@ async def test_only_a_later_commit_can_witness_a_promise(actions: Actions) -> No
     assert not any("precompact hook" in s for s in reported)
     # thread:weak still predates the commit, so it is still legitimately asked about
     assert any("compaction sweep latency" in s for s in reported)
+
+
+EARLY = datetime(2026, 6, 20, tzinfo=UTC)
+
+
+async def test_watermark_narrows_a_second_run_to_only_new_commits(actions: Actions) -> None:
+    """Thoth DM 2635: the second run over the SAME commit corpus must be cheap. Proven by
+    scope, not a clock — the report's own `commits` count must show the narrowed set, not
+    the full corpus, on run 2, and pick up exactly the one new commit on run 3."""
+    await _tree(actions)
+    cid = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='commit:aaa'")
+    await actions.pool.execute("UPDATE objects SET created_at=$2 WHERE id=$1", cid, EARLY)
+
+    first = await close_by_commits(actions, repo="cl", dry_run=False, strong=2.0, weak=0.4)
+    assert first["commits"] == 1
+    assert first["since"] is None
+    assert first["until"] == EARLY.isoformat()
+    stored = await get_cursor(actions.pool, "closure-miner:cl")
+    assert stored == EARLY.isoformat()
+
+    # run 2: no new commits since the watermark -- cheap early return, ZERO commits fetched
+    second = await close_by_commits(actions, repo="cl", dry_run=False, strong=2.0, weak=0.4)
+    assert second["commits"] == 0
+    assert second["since"] == EARLY.isoformat()
+    assert "nothing to witness" in second["note"]
+
+    # a genuinely new commit lands, ingested after the watermark
+    proj = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:cl'")
+    later_commit = await actions.create_or_find_object("Commit", "commit:bbb", "git")
+    await actions.assert_property(later_commit, "subject", "an unrelated later fix", "git",
+                                  LATER, 0.9)
+    await actions.assert_property(later_commit, "authored_date", LATER.isoformat(), "git",
+                                  LATER, 0.9)
+    await actions.create_link(later_commit, proj, "in_repo", "git", LATER, 0.9)
+    new_ingest = EARLY + timedelta(days=1)
+    await actions.pool.execute("UPDATE objects SET created_at=$2 WHERE id=$1",
+                              later_commit, new_ingest)
+
+    third = await close_by_commits(actions, repo="cl", dry_run=False, strong=2.0, weak=0.4)
+    assert third["commits"] == 1  # only commit:bbb -- commit:aaa is NOT re-fetched
+    assert third["since"] == EARLY.isoformat()
+    assert third["until"] == new_ingest.isoformat()
+
+
+async def test_dry_run_never_advances_the_watermark(actions: Actions) -> None:
+    """A read must stay a read: repeated dry runs must never narrow what a later LIVE run
+    considers, or a human reviewing candidates could blind the actual sweep without ever
+    writing anything themselves."""
+    await _tree(actions)
+    await close_by_commits(actions, repo="cl", dry_run=True, strong=2.0, weak=0.4)
+    await close_by_commits(actions, repo="cl", dry_run=True, strong=2.0, weak=0.4)
+    assert await get_cursor(actions.pool, "closure-miner:cl") is None
+
+    live = await close_by_commits(actions, repo="cl", dry_run=False, strong=2.0, weak=0.4)
+    assert live["commits"] == 1  # both dry runs left the full corpus untouched
+
+
+async def test_unreachable_no_repo_reported_fleet_wide_only(actions: Actions) -> None:
+    """The scan-boundary line (Thoth DM 2635, decision 04ad4bb8/975ec1eb): a thread with no
+    in_repo edge at all is structurally invisible to this sweep on any cadence — a
+    fleet-wide report must say so; a single-repo report has no such concept."""
+    await _tree(actions)
+    await open_thread(actions, "a thread nobody ever filed under a repo", source="agent:me")
+
+    scoped = await close_by_commits(actions, repo="cl", dry_run=True, strong=2.0, weak=0.4)
+    assert scoped["unreachable_no_repo"] is None
+
+    fleet = await close_by_commits(actions, repo=None, dry_run=True, strong=2.0, weak=0.4)
+    assert fleet["unreachable_no_repo"] >= 1
 
 
 def test_rarity_outranks_volume_which_is_the_whole_point() -> None:
