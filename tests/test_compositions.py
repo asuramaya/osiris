@@ -1941,11 +1941,55 @@ async def test_closure_health_classifies_five_mutually_exclusive_buckets(
 
     out = await _fn_closure_health(actions.pool, None, {})
     assert out["total"] == 6
-    assert out["closed_by_topology"] == 1
+    assert out["closed_by_topology"]["total"] == 1
+    assert out["closed_by_topology"]["strong"] == 1   # a resolved_by edge, not closed_by
+    assert out["closed_by_topology"]["weak"] == 0
     assert out["resolved_edgeless"]["total"] == 1
     assert out["disagree"] == [str(disagree)[:8]]
     assert out["open_both"] == 1
     assert out["retracted_or_no_status"] == 2
+
+
+async def test_closure_health_closed_by_topology_splits_strong_vs_weak(
+    actions: Actions,
+) -> None:
+    """The category Thoth named after living it (DM 2937): a `closed_by` fallback edge is
+    still a real, findable closure (`closed_by_topology`), but it names WHO closed the
+    thread, not WHAT closed it — `weak`, distinct from a `resolved_by`/`answers` edge that
+    points at a specific commit or decision (`strong`)."""
+    strong = await actions.create_or_find_object("Thread", "thread:strong-close", "test")
+    await actions.assert_property(strong, "status", "resolved", "test", NOW, 0.9)
+    d = await actions.create_or_find_object("Decision", "decision:strong-witness", "test")
+    await actions.create_link(strong, d, "resolved_by", "test", NOW, 0.9)
+
+    weak = await actions.create_or_find_object("Thread", "thread:weak-close", "test")
+    await actions.assert_property(weak, "status", "resolved", "test", NOW, 0.9)
+    agent = await actions.create_or_find_object("Agent", "agent:closer", "test")
+    await actions.create_link(weak, agent, "closed_by", "test", NOW, 0.9)
+
+    out = await _fn_closure_health(actions.pool, None, {})
+    assert out["closed_by_topology"] == {"total": 2, "strong": 1, "weak": 1}
+
+
+async def test_closure_health_resolved_edgeless_splits_pre_and_post_fix(
+    actions: Actions,
+) -> None:
+    """Thoth DM 2937: a mechanical watch on Phase 1a's own fix, not a report card on the
+    past — post_fix_regression must read zero on ordinary data and only counts a thread
+    whose status was observed AT OR AFTER the fix landed."""
+    old = await actions.create_or_find_object("Thread", "thread:old-sediment", "test")
+    # NOW (2026-06-27) predates _PHASE_1A_FIX_AT (2026-08-01T03:41:38Z) — old sediment
+    await actions.assert_property(old, "status", "resolved", "test", NOW, 0.9)
+
+    fresh = await actions.create_or_find_object("Thread", "thread:new-regression", "test")
+    after_fix = datetime(2026, 8, 2, tzinfo=UTC)
+    await actions.assert_property(fresh, "status", "resolved", "test", after_fix, 0.9)
+
+    out = await _fn_closure_health(actions.pool, None, {})
+    edgeless = out["resolved_edgeless"]
+    assert edgeless["total"] == 2
+    assert edgeless["pre_fix_sediment"] == 1
+    assert edgeless["post_fix_regression"] == 1
 
 
 async def test_closure_health_resolved_edgeless_splits_commit_closeable_vs_needs_human(

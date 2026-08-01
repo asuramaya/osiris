@@ -2969,6 +2969,13 @@ async def _triage_type_gaps(
     return listed or [{"note": f"no {status} Type objects"}]
 
 
+# Khnum's commit 23c5991 (authored 2026-08-01T03:41:38Z) — the moment resolve_thread()
+# started minting `closed_by` unconditionally. A resolved_edgeless thread's status observed
+# before this is old debt (`pre_fix_sediment`); at or after it, the fallback should have
+# fired and didn't — `post_fix_regression`, a live alarm, not history (Thoth DM 2937).
+_PHASE_1A_FIX_AT = datetime(2026, 8, 1, 3, 41, 38, tzinfo=UTC)
+
+
 async def _fn_closure_health(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
@@ -2994,7 +3001,14 @@ async def _fn_closure_health(
          refuse-rather-than-destroy already follow), and collapsing it to a count would throw
          away the one piece of information a reader can actually act on.
       3. `closed_by_topology` — an edge exists and there's no disagreement. Ground truth
-         positive (thread_closure_status's own law).
+         positive (thread_closure_status's own law). Broken down by `strength` (from
+         `thread_closure_status` itself, not re-derived): `strong` (`resolved_by`/`answers`
+         — artifact- or ruling-backed) vs `weak` (`closed_by` — self-attested, WHO closed it
+         rather than WHAT). This is the category Thoth named after living it (DM 2937): a
+         citation that DOES resolve gets `strong`; a citation that does NOT resolve still
+         lands here, `weak`, via the unconditional Phase 1a fallback — a real, findable
+         closure that nonetheless names no specific commit or decision. Distinct from BOTH
+         `resolved_edgeless` axes below, and it is the one that bit this very report.
       4. `resolved_edgeless` — no edge, `property_status='resolved'`. THE ROT METRIC: a
          closure that depends on a citation happening to resolve into a graph object is
          remembered, not structural (ruling 4ef68cfe). See below for its own sub-split.
@@ -3017,6 +3031,16 @@ async def _fn_closure_health(
       pure prose, `because` only, nothing to even attempt resolving). `commit_closeable` is
       always a subset of `cited`; `needs_human` = `uncited` + the `cited` rows whose artifact
       still doesn't resolve to anything.
+
+    A THIRD, ORTHOGONAL SUB-SPLIT on `resolved_edgeless` (Thoth DM 2937, the same night this
+    was proposed): `pre_fix_sediment` (the thread's `status` assertion was observed before
+    `_PHASE_1A_FIX_AT` — Khnum's commit 23c5991, the moment resolve_thread started minting
+    `closed_by` unconditionally) vs `post_fix_regression` (observed at or after it). Measured
+    live at build time: `pre_fix_sediment` was 100% of the osiris-scoped 383, `post_fix_
+    regression` was 0 — the fix is holding. This is now a MECHANICAL WATCH on that fact
+    rather than a claim someone has to re-verify by hand: `post_fix_regression` should read
+    zero forever, and any nonzero reading is a live alarm that something new is bypassing the
+    fallback, not a report card on the past.
 
     `repo` (a project name, string) scopes the read; the subject, if focused, wins over
     `args.repo`; neither given = fleet-wide, matching `enumerate_threads`'s own convention.
@@ -3075,18 +3099,38 @@ async def _fn_closure_health(
             cited_but_unresolved += 1
     uncited = len(edgeless_ids) - commit_closeable - cited_but_unresolved
 
+    status_at_rows = await pool.fetch(
+        "SELECT DISTINCT ON (object_id) object_id, observed_at FROM current_assertions "
+        "WHERE object_id = ANY($1::uuid[]) AND name = 'status' "
+        "ORDER BY object_id, confidence DESC, observed_at DESC",
+        edgeless_ids) if edgeless_ids else []
+    status_at_by_id = {r["object_id"]: r["observed_at"] for r in status_at_rows}
+    post_fix_regression = sum(
+        1 for tid in edgeless_ids
+        if status_at_by_id.get(tid) and status_at_by_id[tid] >= _PHASE_1A_FIX_AT)
+    pre_fix_sediment = len(edgeless_ids) - post_fix_regression
+
+    closed_strong = sum(1 for r in closed_by_topology if r["strength"] == "strong")
+    closed_weak = sum(1 for r in closed_by_topology if r["strength"] == "weak")
+
     return {
         "repo": args.get("repo") or None,
         "total": len(rows),
         "retracted_or_no_status": len(retracted_or_no_status),
         "disagree": [str(r["thread_id"])[:8] for r in disagree],
-        "closed_by_topology": len(closed_by_topology),
+        "closed_by_topology": {
+            "total": len(closed_by_topology),
+            "strong": closed_strong,
+            "weak": closed_weak,
+        },
         "resolved_edgeless": {
             "total": len(resolved_edgeless),
             "commit_closeable": commit_closeable,
             "needs_human": len(edgeless_ids) - commit_closeable,
             "cited": commit_closeable + cited_but_unresolved,
             "uncited": uncited,
+            "pre_fix_sediment": pre_fix_sediment,
+            "post_fix_regression": post_fix_regression,
         },
         "open_both": len(open_both),
     }
