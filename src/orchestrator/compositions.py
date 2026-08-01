@@ -2969,6 +2969,129 @@ async def _triage_type_gaps(
     return listed or [{"note": f"no {status} Type objects"}]
 
 
+async def _fn_closure_health(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """rung 2 — THE FOUR NUMBERS AS A STANDING SURFACE (Thoth DM 2835/2917, decision 6b67210d,
+    correction 699fa821). Answers, per project or fleet-wide, ONE question this house could
+    previously only get by commissioning an archaeology dig by hand, twice, 16 hours apart:
+    is thread closure held together by STRUCTURE (a traversable edge) or by MEMORY (a
+    property nobody re-checks)? Composes `thread_closure_status` (thread_closure.py) rather
+    than re-deriving its UNION — the exact staleness gap this report tripped over TWICE
+    already (once because migration 0044 wasn't deployed yet when the number was first hand-
+    run, once because a hand-rolled query drifted from the real view) closes at the source
+    by never hand-rolling it a third time.
+
+    FIVE BUCKETS, MUTUALLY EXCLUSIVE AND EXHAUSTIVE BY CONSTRUCTION — every active Thread in
+    scope lands in exactly one, checked in this order:
+      1. `retracted_or_no_status` — `property_status` is anything other than 'open'/
+         'resolved' (including NULL). Kept STRUCTURALLY SEPARATE from `open_both`, never
+         folded in: 93% of this graph's task population under this bucket is absence, not
+         conflict — a different disease with a different cure (Thoth's own framing, DM 2917).
+      2. `disagree` — a closure edge exists AND `property_status='open'`. Returned as a LIST
+         OF IDS, never auto-resolved: its whole value is that it FLAGS a genuine conflict for
+         a mind to look at (same law `_fn_lint`'s contradiction check and fold_project's
+         refuse-rather-than-destroy already follow), and collapsing it to a count would throw
+         away the one piece of information a reader can actually act on.
+      3. `closed_by_topology` — an edge exists and there's no disagreement. Ground truth
+         positive (thread_closure_status's own law).
+      4. `resolved_edgeless` — no edge, `property_status='resolved'`. THE ROT METRIC: a
+         closure that depends on a citation happening to resolve into a graph object is
+         remembered, not structural (ruling 4ef68cfe). See below for its own sub-split.
+      5. `open_both` — no edge, `property_status='open'`. Genuinely, unambiguously open.
+
+    `resolved_edgeless` SUB-SPLIT — the enforcement-possibility map Thoth asked for, turning
+    one number into a work order with two piles: for each edgeless-resolved thread, re-run
+    the EXACT resolution capture.resolve_thread's own artifact path uses
+    (`capture._find_artifact`, imported rather than re-implemented) against its
+    `resolved_artifact` property, if it has one.
+      - `commit_closeable` — a `resolved_artifact` exists AND it resolves to a real graph
+        object RIGHT NOW (it may not have when the thread was originally closed — the graph
+        keeps growing). A backfill pass could mint the missing edge mechanically, no human
+        needed.
+      - `needs_human` — everything else: no instrument, mechanical or otherwise, can close
+        this without a person supplying or confirming evidence.
+      Named separately within that, because Thoth asked for the distinction by name and it
+      is NOT the same axis: `cited` (a `resolved_artifact` property exists — someone DID
+      point at evidence when they closed it) vs `uncited` (no such property — the close was
+      pure prose, `because` only, nothing to even attempt resolving). `commit_closeable` is
+      always a subset of `cited`; `needs_human` = `uncited` + the `cited` rows whose artifact
+      still doesn't resolve to anything.
+
+    `repo` (a project name, string) scopes the read; the subject, if focused, wins over
+    `args.repo`; neither given = fleet-wide, matching `enumerate_threads`'s own convention.
+    Deliberately NOT folded into `_fn_lint`'s EDGELESS-CLOSURE-GROWTH ratchet — that stays a
+    narrow, fast, fleet-wide ceiling check (a single aggregate number, tripwire-shaped); this
+    is a separate, richer, per-project, addressable surface the ratchet could eventually read
+    from instead of duplicating. Read-only, no writes, same as every other rung-2 Function
+    here."""
+    from src.orchestrator.capture import _find_artifact
+    from src.orchestrator.thread_closure import thread_closure_status
+
+    repo = subject
+    if repo is None and args.get("repo"):
+        repo_name = str(args["repo"]).strip()
+        repo = await pool.fetchval(
+            "SELECT o.id FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+            "WHERE o.type='SoftwareProject' AND a.name='name' AND a.value #>> '{}'=$1 LIMIT 1",
+            repo_name)
+        if repo is None:
+            return {"note": f"no SoftwareProject named {repo_name!r}"}
+
+    rows = await thread_closure_status(pool, repo=repo)
+    retracted_or_no_status: list[dict[str, Any]] = []
+    disagree: list[dict[str, Any]] = []
+    closed_by_topology: list[dict[str, Any]] = []
+    resolved_edgeless: list[dict[str, Any]] = []
+    open_both: list[dict[str, Any]] = []
+    for r in rows:
+        ps = r["property_status"]
+        if ps not in ("open", "resolved"):
+            retracted_or_no_status.append(r)
+        elif r["closed_by_topology"] and ps == "open":
+            disagree.append(r)
+        elif r["closed_by_topology"]:
+            closed_by_topology.append(r)
+        elif ps == "resolved":
+            resolved_edgeless.append(r)
+        else:
+            open_both.append(r)
+
+    edgeless_ids = [r["thread_id"] for r in resolved_edgeless]
+    artifact_rows = await pool.fetch(
+        "SELECT object_id, value #>> '{}' AS resolved_artifact FROM current_assertions "
+        "WHERE object_id = ANY($1::uuid[]) AND name = 'resolved_artifact'",
+        edgeless_ids) if edgeless_ids else []
+    artifact_by_id = {r["object_id"]: r["resolved_artifact"] for r in artifact_rows}
+    commit_closeable = 0
+    cited_but_unresolved = 0
+    for tid in edgeless_ids:
+        artifact = artifact_by_id.get(tid)
+        if artifact is None:
+            continue
+        if await _find_artifact(pool, artifact) is not None:
+            commit_closeable += 1
+        else:
+            cited_but_unresolved += 1
+    uncited = len(edgeless_ids) - commit_closeable - cited_but_unresolved
+
+    return {
+        "repo": args.get("repo") or None,
+        "total": len(rows),
+        "retracted_or_no_status": len(retracted_or_no_status),
+        "disagree": [str(r["thread_id"])[:8] for r in disagree],
+        "closed_by_topology": len(closed_by_topology),
+        "resolved_edgeless": {
+            "total": len(resolved_edgeless),
+            "commit_closeable": commit_closeable,
+            "needs_human": len(edgeless_ids) - commit_closeable,
+            "cited": commit_closeable + cited_but_unresolved,
+            "uncited": uncited,
+        },
+        "open_both": len(open_both),
+    }
+
+
 _FUNCTIONS: dict[str, Function] = {
     "coinvest": _fn_coinvest,
     "subject_report": _fn_subject_report,
@@ -2996,6 +3119,7 @@ _FUNCTIONS: dict[str, Function] = {
     "desk_overview": _fn_desk_overview,
     "desk_project": _fn_desk_project,
     "triage": _fn_triage,
+    "closure_health": _fn_closure_health,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
@@ -3009,7 +3133,8 @@ _FUNCTIONS: dict[str, Function] = {
 _SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "pulse", "project",
                  "lap", "lint", "echoes", "wall", "desk_decisions", "practices",
                  "fleet_live_agents", "fleet_pulse_line", "fleet_live", "mail_overview",
-                 "mail_threads", "overhead", "desk_overview", "desk_project", "triage"}
+                 "mail_threads", "overhead", "desk_overview", "desk_project", "triage",
+                 "closure_health"}
 
 
 def list_functions() -> list[str]:
@@ -4327,6 +4452,11 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     # run-spec/{"op":"function","name":"triage","args":{"mode":"buckets","object_type":...}}
     # or the `triage` MCP tool directly, the same ephemeral path mail_threads/desk_project use.
     "type-census": {"op": "function", "name": "triage"},
+    # rung 2 (Thoth DM 2835/2917): the four numbers as a standing surface, fleet-wide by
+    # default — how much of thread closure is held by structure vs memory. Per-project scope
+    # is args.repo (no static saved composition for that, same reason `triage` buckets mode
+    # has none — reach it via run-spec or the `closure_health` MCP tool directly).
+    "closure-health": {"op": "function", "name": "closure_health"},
     "echoes": {"op": "function", "name": "echoes"},
     # THE ONE WALL LAW (ruling 923c380f): the graded unresolved view — orient's law as a lens.
     "the-wall": {"op": "function", "name": "wall", "args": {"me": ["operator"]}},
@@ -4367,6 +4497,8 @@ _COMP_META: dict[str, tuple[str, str]] = {
     "roadmap": ("fleet", "a project's work map — open/resolved/retracted, arc then owner"),
     "graph-lint": ("engine", "the graph auditing itself — findings, not verdicts"),
     "type-census": ("engine", "every type's health — counts, orphans, thin, median links"),
+    "closure-health": ("engine", "the four numbers: how much of thread closure is held by "
+                                 "structure vs memory, fleet-wide"),
     "family-consistency": ("engine", "config families that should agree but don't"),
     "family-drift": ("engine", "how config families drift over time"),
     "lap": ("engine", "one object's provenance timeline — how belief formed"),

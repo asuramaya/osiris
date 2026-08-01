@@ -13,6 +13,7 @@ from src.ontology.catalog import ensure_type
 from src.orchestrator.compositions import (
     DEFAULT_COMPOSITIONS,
     _eval,
+    _fn_closure_health,
     _fn_desk_overview,
     _fn_desk_project,
     _fn_echoes,
@@ -1909,6 +1910,87 @@ async def test_type_census_composition_end_to_end(actions: Actions) -> None:
               if r["type"] == "SoftwareProject" and r["status"] == "active")
     assert row["n"] == 1
     assert row["orphans"] == 1
+
+
+# --- closure_health: the four numbers as a standing surface (Thoth DM 2835/2917) -------
+
+async def test_closure_health_classifies_five_mutually_exclusive_buckets(
+    actions: Actions,
+) -> None:
+    closed = await actions.create_or_find_object("Thread", "thread:closed", "test")
+    await actions.assert_property(closed, "status", "resolved", "test", NOW, 0.9)
+    d = await actions.create_or_find_object("Decision", "decision:witness", "test")
+    await actions.create_link(closed, d, "resolved_by", "test", NOW, 0.9)
+
+    edgeless = await actions.create_or_find_object("Thread", "thread:edgeless", "test")
+    await actions.assert_property(edgeless, "status", "resolved", "test", NOW, 0.9)
+
+    disagree = await actions.create_or_find_object("Thread", "thread:disagree", "test")
+    await actions.assert_property(disagree, "status", "open", "test", NOW, 0.9)
+    d2 = await actions.create_or_find_object("Decision", "decision:witness2", "test")
+    await actions.create_link(disagree, d2, "resolved_by", "test", NOW, 0.9)
+
+    open_thread = await actions.create_or_find_object("Thread", "thread:open", "test")
+    await actions.assert_property(open_thread, "status", "open", "test", NOW, 0.9)
+
+    retracted = await actions.create_or_find_object("Thread", "thread:retracted", "test")
+    await actions.assert_property(retracted, "status", "retracted", "test", NOW, 0.9)
+
+    no_status = await actions.create_or_find_object("Thread", "thread:no-status", "test")
+    del no_status  # exists only to be counted — no status assertion at all
+
+    out = await _fn_closure_health(actions.pool, None, {})
+    assert out["total"] == 6
+    assert out["closed_by_topology"] == 1
+    assert out["resolved_edgeless"]["total"] == 1
+    assert out["disagree"] == [str(disagree)[:8]]
+    assert out["open_both"] == 1
+    assert out["retracted_or_no_status"] == 2
+
+
+async def test_closure_health_resolved_edgeless_splits_commit_closeable_vs_needs_human(
+    actions: Actions,
+) -> None:
+    target = await actions.create_or_find_object("Decision", "decision:real-target", "test")
+
+    closeable = await actions.create_or_find_object("Thread", "thread:closeable", "test")
+    await actions.assert_property(closeable, "status", "resolved", "test", NOW, 0.9)
+    await actions.assert_property(
+        closeable, "resolved_artifact", str(target)[:8], "test", NOW, 0.9)
+
+    dud = await actions.create_or_find_object("Thread", "thread:dud-citation", "test")
+    await actions.assert_property(dud, "status", "resolved", "test", NOW, 0.9)
+    await actions.assert_property(
+        dud, "resolved_artifact", "src/nowhere/nothing.py:1", "test", NOW, 0.9)
+
+    bare = await actions.create_or_find_object("Thread", "thread:bare-close", "test")
+    await actions.assert_property(bare, "status", "resolved", "test", NOW, 0.9)
+
+    out = await _fn_closure_health(actions.pool, None, {})
+    edgeless = out["resolved_edgeless"]
+    assert edgeless["total"] == 3
+    assert edgeless["commit_closeable"] == 1
+    assert edgeless["needs_human"] == 2
+    assert edgeless["cited"] == 2          # closeable + dud both gave a citation
+    assert edgeless["uncited"] == 1        # bare gave none at all
+
+
+async def test_closure_health_scopes_by_repo_arg(actions: Actions) -> None:
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:scoped-health", "test")
+    await actions.assert_property(proj, "name", "scoped-health", "test", NOW, 0.9)
+    inside = await actions.create_or_find_object("Thread", "thread:inside-repo", "test")
+    await actions.assert_property(inside, "status", "open", "test", NOW, 0.9)
+    await actions.create_link(inside, proj, "in_repo", "test", NOW, 0.9)
+
+    outside = await actions.create_or_find_object("Thread", "thread:outside-repo", "test")
+    await actions.assert_property(outside, "status", "open", "test", NOW, 0.9)
+
+    scoped = await _fn_closure_health(actions.pool, None, {"repo": "scoped-health"})
+    assert scoped["total"] == 1
+    assert scoped["repo"] == "scoped-health"
+
+    unknown = await _fn_closure_health(actions.pool, None, {"repo": "no-such-project"})
+    assert "no SoftwareProject named" in unknown["note"]
 
 
 # --- EDGELESS-CLOSURE-GROWTH: the cb38d922 ratchet (Thoth DM 2581/2603) -----------------

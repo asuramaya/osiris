@@ -76,6 +76,9 @@ ROOM_COMPOSITIONS: dict[str, tuple[str, ...]] = {
         # triage-as-a-primitive's census half (task #98) — the left-pane type browser the
         # operator sketched. BUCKETS (the middle pane) is args-driven per call, not roomed.
         "type-census",
+        # the four numbers as a standing surface (Thoth DM 2835/2917) — how much of thread
+        # closure is held by structure vs memory, fleet-wide by default.
+        "closure-health",
     ),
     "analyst": (
         "who-is-this", "operational-vs-disclosed-geography", "co-investment-ties",
