@@ -3044,6 +3044,15 @@ async def _fn_closure_health(
 
     `repo` (a project name, string) scopes the read; the subject, if focused, wins over
     `args.repo`; neither given = fleet-wide, matching `enumerate_threads`'s own convention.
+    The echoed `"repo"` field in the return value NAMES WHAT ACTUALLY RAN — re-read from the
+    resolved `repo` id itself, not from `args.get("repo")` alone (Thoth's own catch, DM
+    2951: `run_composition('closure-health', subject='osiris')` resolves `subject` to a real
+    id BEFORE this Function ever sees it, so echoing raw `args` reported `null` on a call
+    that had in fact scoped correctly — the same shape as the resolve_thread receipt bug two
+    commits earlier in this same night, a third specimen of an honest act with a dishonest
+    account). Genuinely fleet-wide (neither subject nor args.repo given) echoes the literal
+    string `"*fleet*"`, never `null` — a dropped argument and a deliberate fleet-wide scope
+    are different facts and must not render identically.
     Deliberately NOT folded into `_fn_lint`'s EDGELESS-CLOSURE-GROWTH ratchet — that stays a
     narrow, fast, fleet-wide ceiling check (a single aggregate number, tripwire-shaped); this
     is a separate, richer, per-project, addressable surface the ratchet could eventually read
@@ -3061,6 +3070,12 @@ async def _fn_closure_health(
             repo_name)
         if repo is None:
             return {"note": f"no SoftwareProject named {repo_name!r}"}
+
+    repo_label: str = "*fleet*"
+    if repo is not None:
+        repo_label = await pool.fetchval(
+            "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='name' "
+            "ORDER BY confidence DESC, observed_at DESC LIMIT 1", repo) or str(repo)
 
     rows = await thread_closure_status(pool, repo=repo)
     retracted_or_no_status: list[dict[str, Any]] = []
@@ -3114,7 +3129,7 @@ async def _fn_closure_health(
     closed_weak = sum(1 for r in closed_by_topology if r["strength"] == "weak")
 
     return {
-        "repo": args.get("repo") or None,
+        "repo": repo_label,
         "total": len(rows),
         "retracted_or_no_status": len(retracted_or_no_status),
         "disagree": [str(r["thread_id"])[:8] for r in disagree],

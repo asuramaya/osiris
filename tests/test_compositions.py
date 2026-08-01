@@ -2037,6 +2037,32 @@ async def test_closure_health_scopes_by_repo_arg(actions: Actions) -> None:
     assert "no SoftwareProject named" in unknown["note"]
 
 
+async def test_closure_health_repo_echo_names_the_subject_not_just_args(
+    actions: Actions,
+) -> None:
+    """Thoth DM 2951: run_composition resolves `subject='osiris'` to a real object id
+    BEFORE this Function ever sees it — echoing `args.get('repo')` alone reported null on a
+    call that had, in fact, scoped correctly. The echo must reflect what actually ran."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:via-subject", "test")
+    await actions.assert_property(proj, "name", "via-subject", "test", NOW, 0.9)
+    t = await actions.create_or_find_object("Thread", "thread:via-subject-1", "test")
+    await actions.assert_property(t, "status", "open", "test", NOW, 0.9)
+    await actions.create_link(t, proj, "in_repo", "test", NOW, 0.9)
+
+    out = await _fn_closure_health(actions.pool, proj, {})  # subject set, args EMPTY
+    assert out["total"] == 1
+    assert out["repo"] == "via-subject"  # not null, even though args never named it
+
+
+async def test_closure_health_repo_echo_is_starred_fleet_not_null_when_unscoped(
+    actions: Actions,
+) -> None:
+    """A dropped argument and a deliberate fleet-wide scope are different facts and must
+    not render identically (Thoth DM 2951)."""
+    out = await _fn_closure_health(actions.pool, None, {})
+    assert out["repo"] == "*fleet*"
+
+
 # --- EDGELESS-CLOSURE-GROWTH: the cb38d922 ratchet (Thoth DM 2581/2603) -----------------
 
 async def test_lint_edgeless_closure_growth_clean_on_a_fresh_tree(actions: Actions) -> None:
