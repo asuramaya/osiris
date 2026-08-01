@@ -30,23 +30,28 @@ FastMCP/pydantic version bump reordering fields, a default's repr changing) — 
 across 97 tools is the wrong place to chase byte-exact reproducibility. The margin above is
 small and round on purpose; it catches real regrowth, not serialization noise.
 
-FIRST TRANCHE LANDED (task #129 piece 1 of Thoth's ordering, this commit): record_decision
-5,371 -> 3,671 chars (-32%), settle 4,824 -> 3,687 chars (-24%), combined -2,837 chars.
-Every remaining "heavy verb" (launch, send, open_thread, wake, rebind_seat, triage, dispose,
-acquire_lease, save_composition, graph_lint, handoff_briefing, fleet, record_practice,
-retire, vacate_seat, lift, mount — the rest of Thoth's named 23) is DELIBERATELY NOT CUT
-YET — Thoth's own ordering ("I review the first tranche and the delta before you touch the
-tail") holds this ratchet at TODAY's real, measured total, not tomorrow's projected one; it
-will move down again with each further tranche, same as chrome.py's 26 -> 21.
+ALL 23 OF THOTH'S NAMED HEAVY VERBS NOW CUT (task #129, two tranches): tranche 1 landed
+record_decision 5,371 -> 3,671 (-32%) and settle 4,824 -> 3,687 (-24%). Tranche 2 (this
+commit) landed the remaining 21 — launch, send, open_thread, wake, rebind_seat, triage,
+dispose, acquire_lease, save_composition, graph_lint, handoff_briefing, fleet,
+record_practice, retire, vacate_seat, lift, mount, pause_seat, charter_for, fold_project,
+orient. Whole-surface total: 119,227 -> 114,216 chars (-5,011, -4.2%) — a SMALLER cut than
+tranche 1's own ~28% per-verb rate, honestly reported rather than smoothed over: the first
+two verbs carried unusually heavy citation/war-story prose; most of these 21 are already
+lean, argument-dense reference material (spec grammars, refusal-status enums) with less fat
+to trim without crossing the hard reject line (task #129: never cut a refusal). Confirmed
+with Thoth (msg 2570) BEFORE this tranche that the headline token number was never going to
+match the "transformation" a 30k-token boot cost implies — the ratchet existing at all, and
+holding, is the point; the char count is a side effect of doing that properly.
 """
 from __future__ import annotations
 
 import json
 
-# Measured post-first-tranche total (this commit): 116,390 chars exactly. ~600 chars of
+# Measured post-tranche-2 total (this commit): 114,216 chars exactly. ~600 chars of
 # headroom above that, not the tighter exact-match chrome.py uses for its per-file counts
 # — see the module docstring's "A CEILING, NOT EXACT EQUALITY" paragraph for why.
-TOOL_CONTRACT_CEILING_CHARS = 117_000
+TOOL_CONTRACT_CEILING_CHARS = 114_800
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:

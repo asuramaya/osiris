@@ -731,27 +731,23 @@ async def lap(ref: str, limit: int = 200, ctx: Context | None = None) -> dict[st
 @mcp.tool()
 async def graph_lint(stale_days: int = 14, check: str | None = None, limit: int | None = None,
                      offset: int = 0) -> dict[str, Any]:
-    """The graph audits ITSELF — report-only, never writes. The checks, each a lived bug
-    made a standing tripwire: contradiction (near-tie multi-source winners — the resolver
-    is coin-flipping a fact), laundering (an agent carrying a fact above its origin grade),
-    lineage integrity (succession cycles, dangling heir pointers, heirs without ancestry,
-    retired-yet-live agents, healed false mints), orphan links (live links into merged/
-    retired objects), stale obligations (open duties older than `stale_days`), attribution
-    anomalies (writes from agent ids the graph never registered — the impersonation class),
-    phantom twins (an anonymous un-spawned agent mounted at a Seat's office beside a
-    different holder lineage — a resumed soul wearing a second row), parallel lives (a
-    generation minted while a different door of its own lineage still pulsed — the
-    predecessor was not dead).
+    """The graph audits ITSELF — report-only, never writes. THE CHECKS: contradiction
+    (near-tie multi-source winners — the resolver is coin-flipping a fact), laundering (an
+    agent carrying a fact above its origin grade), lineage integrity (succession cycles,
+    dangling heir pointers, heirs without ancestry, retired-yet-live agents, healed false
+    mints), orphan links (live links into merged/retired objects), stale obligations (open
+    duties older than `stale_days`), attribution anomalies (writes from agent ids the graph
+    never registered — the impersonation class), phantom twins (an anonymous un-spawned
+    agent mounted at a Seat's office beside a different holder lineage), parallel lives (a
+    generation minted while a different door of its own lineage still pulsed).
     Findings are TESTIMONY for a mind to judge, not verdicts to auto-apply; heal with
     compensating events, never DELETE (constitution 3).
 
-    `check`/`limit`/`offset` (task #74, thread 12a210ab): every check normally lists only
-    its first 50 findings (`counts` still holds the true total for all of them). Pass
-    `check` (a value from `counts` or a finding's own `check` field, e.g. 'false-mint') to
-    list ONLY that check's findings, paginated by `limit`/`offset` across its FULL row set
-    instead of the 50-cap — the reap needed the full 19 contradiction rows and full 24
-    false-mint rows and had no way to ask for them short of hand-writing this tool's own
-    SQL. Omitting `check` is a complete no-op, byte-identical to before this existed."""
+    `check`/`limit`/`offset`: every check normally lists only its first 50 findings
+    (`counts` still holds the true total for all of them). Pass `check` (a value from
+    `counts` or a finding's own `check` field, e.g. 'false-mint') to list ONLY that check's
+    findings, paginated by `limit`/`offset` across its FULL row set instead of the 50-cap.
+    Omitting `check` is a complete no-op, byte-identical to before this existed."""
     pool = await _pool_get()
     args: dict[str, Any] = {"stale_days": stale_days}
     if check is not None:
@@ -770,8 +766,8 @@ async def graph_lint(stale_days: int = 14, check: str | None = None, limit: int 
 async def triage(mode: str = "census", object_type: str | None = None, status: str = "active",
                  stale_days: int = 30, cohort_min: int = 3, limit: int | None = None,
                  offset: int = 0) -> list[dict[str, Any]]:
-    """Judge the object set itself — the reusable primitive behind eight ad-hoc SQL scripts
-    a manager once ran through a shell by hand (task #98). TWO MODES, `mode`:
+    """Judge the object set itself — the reusable primitive that replaced hand-run,
+    ad-hoc SQL scripts. TWO MODES, `mode`:
 
     'census' (the default) — one row per (type, status): `n`, `orphans` (zero live links),
     `thin` (1-2 live links), `median_links`/`max_links`, `born` (earliest member),
@@ -790,8 +786,8 @@ async def triage(mode: str = "census", object_type: str | None = None, status: s
     doubles as a plain browse. `limit`/`offset` (default 200/0, capped 2000) page it;
     `census` already carries the true count per type, so this never needs to.
 
-    `object_type='Type'` — THE CATALOG'S OWN GAP SURFACE (task #97 workstream 2): a
-    different bucket set, since a Type row doesn't participate in `links` the way an
+    `object_type='Type'` — THE CATALOG'S OWN GAP SURFACE: a different bucket set, since a
+    Type row doesn't participate in `links` the way an
     ordinary object does (every one would trivially bucket 'orphan' otherwise, saying
     nothing real). `undescribed` (blank/missing `description` — exactly what a bare
     accretion mints) > `no_label_rule` (kind='object' only; blank/missing `label_field`)
@@ -1049,27 +1045,24 @@ async def handoff_briefing(
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """A SUCCESSION BRIEFING COMPILED FROM THE GRAPH (Thoth's dispatch, DM 2338) — not
-    hand-written from memory. Reads back, for `repo`: what SHIPPED (Decisions minted since
-    the boundary, each showing its `decided_in` commit(s) and whether that commit is an
-    ancestor of the project's own deploy cursor — deployed / landed-not-deployed / unknown),
-    what's OPEN and whose move it is (`compositions.open_thread_wall`, the one wall law),
-    what's OPERATOR-GATED (named explicitly, never silently inherited as someone's task),
-    what was CORRECTED (`supersedes` chains, both sides' summaries), and a best-effort,
-    explicitly-labeled HEURISTIC flag for text that self-declares unconfirmed ("UNVERIFIED",
-    "FALSIFIABLE PREDICTION", ...) — no structured marker exists for that yet, unlike
-    `is_handoff`.
+    """A SUCCESSION BRIEFING COMPILED FROM THE GRAPH — not hand-written from memory. Reads
+    back, for `repo`: what SHIPPED (Decisions minted since the boundary, each showing its
+    `decided_in` commit(s) and whether that commit is an ancestor of the project's own
+    deploy cursor — deployed / landed-not-deployed / unknown), what's OPEN and whose move it
+    is (`compositions.open_thread_wall`, the one wall law), what's OPERATOR-GATED (named
+    explicitly, never silently inherited as someone's task), what was CORRECTED (`supersedes`
+    chains, both sides' summaries), and a best-effort, explicitly-labeled HEURISTIC flag for
+    text that self-declares unconfirmed ("UNVERIFIED", "FALSIFIABLE PREDICTION", ...) — no
+    structured marker exists for that yet, unlike `is_handoff`.
 
     `since` defaults to the boundary `since_last_handoff` finds by walking YOUR OWN mounted
-    lineage (or `agent_ref`'s, to preview another agent's — an operator or a manager
-    checking before asking for one) back through `succeeded_from` for the freshest
-    `is_handoff` marker; pass an explicit ISO-8601 `since` to override. Returns both the
-    structured data AND a rendered `markdown` string ending in an empty JUDGMENT section —
-    the compiled facts are the 90% win, the departing seat's own prose on top (why any of
-    this mattered) is the irreducible rest; this tool never writes that prose, or anything
-    else — READ-ONLY, renders on demand, never automatic, never mints a Decision or Thread
-    itself. Pair it with your own `record_decision(..., is_handoff=True)` / `settle()` once
-    you've read and judged it."""
+    lineage (or `agent_ref`'s, to preview another agent's) back through `succeeded_from` for
+    the freshest `is_handoff` marker; pass an explicit ISO-8601 `since` to override. Returns
+    both the structured data AND a rendered `markdown` string ending in an empty JUDGMENT
+    section: the compiled facts are the win, the departing seat's own prose on top is the
+    irreducible rest — this tool never writes that prose, or anything else. READ-ONLY,
+    renders on demand, never automatic, never mints a Decision or Thread itself. Pair it
+    with your own `record_decision(..., is_handoff=True)` / `settle()` once you've judged it."""
     pool = await _pool_get()
     if agent_ref:
         oid = await _resolve(pool, agent_ref)
@@ -1128,10 +1121,9 @@ async def list_rooms() -> list[dict[str, Any]]:
 async def save_composition(
     name: str, spec: dict[str, Any], kind: str = "lens", room: str | None = None
 ) -> dict[str, str]:
-    """Save a COMPOSITION — a reusable, forkable query/lens over the graph (the
-    composer's primitive). This is how a question becomes a first-class object instead
-    of throwaway tool calls. The spec is a small CLOSED op-tree (anything else is a named
-    transform, never a new op):
+    """Save a COMPOSITION — a reusable, forkable query/lens over the graph (the composer's
+    primitive), so a question becomes a first-class object instead of a throwaway tool call.
+    The spec is a small CLOSED op-tree (anything else is a named transform, never a new op):
       {"op":"subject"}                                  the object in focus
       {"op":"select","object_type":?,"where":[{property,op,value}]}  matching objects
         (where op ∈ eq|contains|matches_all|lt|gt|present|absent; matches_all = every
@@ -1530,11 +1522,11 @@ async def mount(
     (works_in your project, acts_for the principal) and attributes every decision/thread you
     record to `agent:<you>` instead of the shared `session` bucket. Then call orient().
     ALREADY MOUNTED (the whisper said so)? Skip this — orient() for bearings and proceed;
-    re-mounting is only for after an MCP bounce, with your anchor (network msg 317).
+    re-mounting is only for after an MCP bounce, with your anchor.
 
     `verbose=True` restores the guidance prose (co-agent etiquette, the 'call orient()
     next' reminder) that terse mode (the default) drops — every structured fact survives
-    either way; verbose only adds explanation of facts already present (task #55)."""
+    either way; verbose only adds explanation of facts already present."""
     pool = await _pool_get()
     settings = get_settings()
     lease = settings.osiris_mail_lease_secs
@@ -1844,18 +1836,17 @@ async def _owned_open_threads(pool: asyncpg.Pool, agent_id: str) -> list[dict[st
 async def retire(reason: str = "", acknowledge_leftovers: bool = False,
                  ctx: Context | None = None) -> dict[str, Any]:
     """Mark THIS mounted session RETIRED — a deliberate close the trigger must never
-    reanimate (resume-not-mint dispatch, thread 9f2ddb44). Call it at a real farewell: the
-    operator closing you out, or a context-ceiling handoff after your succession thread is
-    written. Stamps retired=true on your Agent (SELF_DECLARED — your own act, on the record)
-    and RELEASES YOUR SEAT — hot mount and durable row both (thread b47b3814: a retired
-    agent must not haunt the fleet chrome as a live mount). Call it LAST: any osiris call
-    after retiring requires a fresh mount(), which lands on the loud reanimation path.
-    Future mail for your project resumes a LIVING session or mints a stamped successor —
-    never you.
+    reanimate. Call it at a real farewell: the operator closing you out, or a context-ceiling
+    handoff after your succession thread is written. Stamps retired=true on your Agent
+    (SELF_DECLARED — your own act, on the record) and RELEASES YOUR SEAT — hot mount and
+    durable row both, so a retired agent never haunts the fleet chrome as a live mount. Call
+    it LAST: any osiris call after retiring requires a fresh mount(), which lands on the
+    loud reanimation path. Future mail for your project resumes a LIVING session or mints a
+    stamped successor — never you.
 
-    THE PREFLIGHT (task #48): duties you still OWN speak BEFORE the death, not after —
-    the old shape stamped the certificate first and listed the leftovers in the receipt,
-    when the one mind with standing to hand them off had already lost its seat. If open
+    THE PREFLIGHT: duties you still OWN speak BEFORE the death, not after — the old shape
+    stamped the certificate first and listed the leftovers in the receipt, when the one mind
+    with standing to hand them off had already lost its seat. If open
     threads name you (or your lineage) as owner, the first call REFUSES with the list and
     stamps nothing: resolve them, re-own them (open_thread names a new owner), or call
     retire(acknowledge_leftovers=True) to die anyway — a deliberate bequest to your
@@ -1935,15 +1926,15 @@ async def retire(reason: str = "", acknowledge_leftovers: bool = False,
 async def pause_seat(paused: bool = True, target: str | None = None, reason: str = "",
                      session_anchor: str | None = None,
                      ctx: Context | None = None) -> dict[str, Any]:
-    """The explicit per-seat PAUSE control (the background-session adapter, ruling 6c4d0b62
-    wall #2). While a seat is paused the DM push lane will NOT resume it — its mail QUEUES in
-    the box (nothing is lost, at-least-once holds) until pause_seat(paused=False) releases it;
-    the very next dispatch (a fresh send, or the worker sweep) drains the queue. Pull is
-    untouched: a paused seat that takes a turn still reads its own inbox normally.
+    """The explicit per-seat PAUSE control. While a seat is paused the DM push lane will NOT
+    resume it — its mail QUEUES in the box (nothing is lost, at-least-once holds) until
+    pause_seat(paused=False) releases it; the very next dispatch (a fresh send, or the
+    worker sweep) drains the queue. Pull is untouched: a paused seat that takes a turn still
+    reads its own inbox normally.
 
     `target` = None pauses YOURSELF (the commonest use: going quiet on purpose). A seat id
     ('seat:…'), agent id ('agent:…'), or plain seat name pauses THAT seat — allowed for any
-    mounted caller BY DESIGN (flat mechanism, wall #3: hierarchy is convention, not substrate
+    mounted caller BY DESIGN (a flat mechanism: hierarchy is convention, not substrate
     privilege), but the act is LOUD: stamped in your name, visible in the graph and in every
     queued sender's receipt, and reversible by anyone the same way. Pausing another seat
     without its knowledge is the kind of act the record exists to make expensive.
@@ -2040,10 +2031,10 @@ async def dispose(admit: list[dict[str, Any]] | None = None,
     Naming the class is what turns a dismissal into a DIAGNOSIS: the drop rate per class tells us
     which rule the extractor is still breaking.
 
-    `ask`: [{"id", "because"?, "owner"?}] — the guess is a real OPEN QUESTION, not a duty
-    (thread 4d01b076: admitting a question makes it read as a promise; dropping it buries
-    something real). Kept open, reclassified kind='question' in your name — on the wall AS
-    a question, ranked out of the work lanes.
+    `ask`: [{"id", "because"?, "owner"?}] — the guess is a real OPEN QUESTION, not a duty:
+    admitting it would make it read as a promise; dropping it would bury something real.
+    Kept open, reclassified kind='question' in your name — on the wall AS a question, ranked
+    out of the work lanes.
 
     NOTHING IS DELETED. A drop is a compensating event carrying your name and your reason — the
     row stays readable and unwinds with one re-assert. THE RUG IS TRANSPARENT: you may shove
@@ -2178,11 +2169,10 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
 
     `verbose=True` restores what terse mode (the default) trims — echo/blind-spot/dead-
     superstition/co-agent explanations, the ancestor-letter pointer, the 'N more not shown'
-    sentence (task #55), AND full-length open_threads/recent_decisions summaries, capped to
-    160 chars in terse mode (task #60 — measured as 96-98% of the payload's bytes; every
-    decision now also carries `id` so a capped summary stays addressable). Every structured
-    fact (counts, ids, the swap/reanimation confession) survives either way; verbose only
-    adds length and explanation back."""
+    sentence, AND full-length open_threads/recent_decisions summaries, capped to 160 chars
+    in terse mode (measured as 96-98% of the payload's bytes; every decision also carries
+    `id` so a capped summary stays addressable). Every structured fact (counts, ids, the
+    swap/reanimation confession) survives either way; verbose only adds length back."""
     pool = await _pool_get()
     lease = get_settings().osiris_mail_lease_secs
     ident = await _ident_for(ctx, session_anchor)
@@ -2473,11 +2463,11 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     `registered` the flat rows — LIVE agents only, because the fleet's whole history is 1000+
     rows and shipping it cost more context than it could ever be worth. `full=True` gives you
     all of them; the counts (`count`/`live`/`swarm`) are always the whole truth. `seat` (e.g.
-    "Soundwave XI") rides beside a canonical id wherever one is CLAIMED (dd47c1da: "fleet()
-    must print claimed names") — an anonymous agent renders exactly as before, id only.
+    "Soundwave XI") rides beside a canonical id wherever one is CLAIMED — an anonymous agent
+    renders exactly as before, id only.
 
-    `os_bodies` (heinrich's ghost-seat filing, thread 1fe6811c) is a per-project count of REAL
-    OS processes (`pgrep -x claude` + `/proc`) backing that project RIGHT NOW — ADDITIVE, and
+    `os_bodies` is a per-project count of REAL OS processes (`pgrep -x claude` + `/proc`)
+    backing that project RIGHT NOW — ADDITIVE, and
     it changes nothing about what `live` means (still the mount registry's belief, exactly as
     before). `ghost_gap` is where the graph's `live` count exceeds it: a closed tab mid-decay,
     or a phantom mount that registered identity but never backed an actual session — either way
@@ -2637,9 +2627,9 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     'ask' (needs a reply or an act from them) | 'fyi' (a notice; an ack settles it). Graded
     asks are NAMED in the recipient's mount/orient unread count, so a seat can see "1 asks
     something of you" without paying to read everything. Ungraded mail is never guessed.
-    A DM's receipt ECHOES the resolution (dd47c1da: "a build order resolved silently to an
-    id, unverified") — `dm_to` is the id it actually reached, `seat` its claimed handle (or
-    null, anonymous), `lineage_head` where that id's OWN succession chain currently ends;
+    A DM's receipt ECHOES the resolution — `dm_to` is the id it actually reached, `seat` its
+    claimed handle (or null, anonymous), `lineage_head` where that id's OWN succession chain
+    currently ends;
     compare it against `dm_to` to catch a stale address before trusting the "sent". Pass
     `require_seat=True` to refuse outright when the target holds no claimed seat — nothing
     is sent, loudly, instead of dispatching into the blind.
@@ -2737,32 +2727,31 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
 async def wake(target: str, message: str, subagent_id: str | None = None,
                subagent_type: str | None = None, session_anchor: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
-    """Knock on the OTHER HALF of your own managed_by pair — never a peer (thread 9f566244
-    piece D, ruling 16722273). Gated on the seat graph alone: an active managed_by edge must
-    exist between your held seat and the target's, in EITHER direction (you manage them, or
-    they manage you) — compaction stays strictly downward because it can end a mind, but a
-    wake is only a request for attention, and refusing it upward would leave a blocked
-    worker holding the freshest information with no way to make its manager look. Peers and
-    cross-house calls refuse; that traffic routes through a manager or the operator's desk.
-    THE OPERATOR NEVER CALLS THIS, ON PURPOSE: there is no operator parameter — an override a
-    caller can assert in an argument is an override that can be forged, so the operator's
-    real override stays entirely out-of-band, their own hand in the window.
+    """Knock on the OTHER HALF of your own managed_by pair — never a peer. Gated on the seat
+    graph alone: an active managed_by edge must exist between your held seat and the
+    target's, in EITHER direction (you manage them, or they manage you) — compaction stays
+    strictly downward because it can end a mind, but a wake is only a request for attention,
+    and refusing it upward would leave a blocked worker holding the freshest information
+    with no way to make its manager look. Peers and cross-house calls refuse; that traffic
+    routes through a manager or the operator's desk. THE OPERATOR NEVER CALLS THIS, ON
+    PURPOSE: there is no operator parameter — an override a caller can assert in an argument
+    is an override that can be forged, so the operator's real override stays entirely
+    out-of-band, their own hand in the window.
 
     `target` accepts anything send()'s to_agent does — a claimed handle, `seat:<id>`, or
     `agent:<id>`. The message is prefixed with a self-identifying provenance marker (naming
     you and your seat) before it posts as a graded ask — the harness stamps every injected
     turn origin.kind='human' regardless of who actually wrote it, so this refuses to hide
-    behind that label — and dispatches immediately through the SAME resolution/delivery
-    path send() uses for every DM; this verb adds only the authority gate in front of it and
-    an honest receipt behind it. `status` is one of: `delivered` (the marker was CONFIRMED
-    landed as a submitted turn in their transcript — `observed: true` — never claimed on a
-    bare queue success), `mid-turn` (their transcript is genuinely moving; your ask waits
-    for their turn's end — never called "delivered", that would be the lying receipt a
-    prior finding named), `no-live-body` (nobody has ever mounted there; the mail waits),
-    `refused-not-your-worker` (no managed_by edge either direction — nothing was sent),
-    `refused-budget` (the daily spend ceiling), or `queued` (a rate brake, a pause, an
-    in-flight wake, OR an injection that was queued but not yet confirmed submitted — see
-    `detail` and `raw_mode` for which)."""
+    behind that label — and dispatches through the SAME resolution/delivery path send() uses
+    for every DM; this verb adds only the authority gate in front of it and an honest
+    receipt behind it. `status` is one of: `delivered` (the marker was CONFIRMED landed as a
+    submitted turn in their transcript — `observed: true` — never claimed on a bare queue
+    success), `mid-turn` (their transcript is genuinely moving; your ask waits for their
+    turn's end — never called "delivered"), `no-live-body` (nobody has ever mounted there;
+    the mail waits), `refused-not-your-worker` (no managed_by edge either direction —
+    nothing was sent), `refused-budget` (the daily spend ceiling), or `queued` (a rate
+    brake, a pause, an in-flight wake, OR an injection queued but not yet confirmed
+    submitted — see `detail` and `raw_mode` for which)."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a wake must say who "
@@ -2778,23 +2767,22 @@ async def launch(target: str, message: str = "", model: str | None = None,
                  subagent_id: str | None = None, subagent_type: str | None = None,
                  session_anchor: str | None = None,
                  ctx: Context | None = None) -> dict[str, Any]:
-    """Give a seat a BODY — the create-verb wake() is the speak-verb of (thread 9f566244 piece
-    D, ruling 43b84c5e). wake() knocks on a body that already exists; launch() summons a fresh
-    `claude` into the target seat's own office. DISTINCT from wake in two ways that matter: it
-    is DOWNWARD-ONLY (you may only body a seat you MANAGE — a worker can wake its manager but
-    never spawn it a body, 78e3734e), and it is CREATE not inject — a new session, never a turn
-    forged into an existing one, so it is not the frozen reply lane.
+    """Give a seat a BODY — the create-verb where wake() is the speak-verb. wake() knocks on
+    a body that already exists; launch() summons a fresh `claude` into the target seat's own
+    office. DISTINCT from wake in two ways that matter: it is DOWNWARD-ONLY (you may only
+    body a seat you MANAGE — a worker can wake its manager but never spawn it a body), and
+    it is CREATE not inject — a new session, never a turn forged into an existing one, so it
+    is not the frozen reply lane.
 
-    THE DEFAULT SUBSTRATE IS HARNESS-NATIVE (task #68 default flip, rulings 0fe36e59 +
-    33d6a2eb clause 3): a `claude --bg` background session, visible in the operator's own
-    `claude agents` list BY CONSTRUCTION — no daemon, no PTY. It self-binds via its own FIRST
-    TURN (a boot prompt telling it to mount() then claim_name(<handle>) — the same adoption
-    path a human follows into a fresh office), not env-stamped credentials: a real spawn
-    proved `--bg` claims a pre-forked spare whose environment is fixed before this call ever
-    runs, so nothing this call sets (CLAUDE_JOB_DIR included) reaches it. The old osiris
+    THE DEFAULT SUBSTRATE IS HARNESS-NATIVE: a `claude --bg` background session, visible in
+    the operator's own `claude agents` list BY CONSTRUCTION — no daemon, no PTY. It self-binds
+    via its own FIRST TURN (a boot prompt telling it to mount() then claim_name(<handle>) —
+    the same adoption path a human follows into a fresh office), not env-stamped credentials:
+    `--bg` claims a pre-forked spare whose environment is fixed before this call ever runs,
+    so nothing this call sets (CLAUDE_JOB_DIR included) reaches it. The old osiris
     PTY-broker lane (identity minted into the child before its first breath via the manager
-    daemon's pty_spawn, §4.2) survives as an explicit fallback (`osiris_launch_substrate`),
-    never the default again.
+    daemon's pty_spawn) survives as an explicit fallback (`osiris_launch_substrate`), never
+    the default again.
 
     Idempotent: a live body already holding the seat is RETURNED, never twinned. `message`, if
     given, is delivered as the body's opening brief over the ordinary mail lane — never a
@@ -2802,9 +2790,9 @@ async def launch(target: str, message: str = "", model: str | None = None,
 
     THE OPERATOR NEVER CALLS THIS, ON PURPOSE: there is no operator parameter — an override a
     caller can assert is an override that can be forged; the operator's real hand stays
-    out-of-band. The receipt is HONEST (Ra's requirement, 53ae1a87): `body_exists` (the window
-    was created) and `can_receive` (an independent read confirms it is live) are SEPARATE — a
-    freshly-spawned claude takes seconds to boot, so a launch usually returns body_exists=true,
+    out-of-band. The receipt is HONEST: `body_exists` (the window was created) and
+    `can_receive` (an independent read confirms it is live) are SEPARATE — a freshly-spawned
+    claude takes seconds to boot, so a launch usually returns body_exists=true,
     can_receive=false, and `detail` says to confirm via `claude agents --json` (or pty_list /
     occupancy on the PTY fallback). `status` is one of: `launched`, `already-live` (idempotent
     hit), `manager-cold` (the PTY fallback's daemon is down — ask the operator to start
@@ -2971,21 +2959,19 @@ async def charter(repos: list[str] | None = None, ctx: Context | None = None) ->
 @mcp.tool()
 async def charter_for(seat_id: str, repos: list[str], because: str,
                       ctx: Context | None = None) -> dict[str, Any]:
-    """Declare a charter ON BEHALF OF `seat_id` — the manager-invoked sibling of `charter()`
-    (thread 2446), never a widening of it: `charter()` stays self-declaration only, which is
-    what makes the STRANGER case work with no operator in the loop at all (ruling 1db1ff41's
-    own acceptance bar). This is for a seat that cannot yet speak for itself (ruling 5's 24
-    undeclared seats) — the operator's own model, 2026-07-31: a seat may declare its own
-    charter, its manager may declare for it, and the operator is every seat's ultimate
-    manager, so no seat is ever authority-less.
+    """Declare a charter ON BEHALF OF `seat_id` — the manager-invoked sibling of `charter()`,
+    never a widening of it: `charter()` stays self-declaration only, which is what makes the
+    STRANGER case work with no operator in the loop at all. This is for a seat that cannot
+    yet speak for itself — the operator's own model: a seat may declare its own charter, its
+    manager may declare for it, and the operator is every seat's ultimate manager, so no
+    seat is ever authority-less.
 
     ENFORCED, not just documented: the caller must be `seat_id`'s manager (the live
     `managed_by` edge) or an operator actor — refuses loudly otherwise, naming both who the
     caller resolved to and who the seat's actual manager is. `because` is required
-    (testimony, same discipline `rename_seat` runs). Blind to any pre-existing Agent-origin
-    `governs` edges the target seat may still carry from before ruling 1db1ff41's re-key —
-    see `charter_for`'s own docstring (src/orchestrator/charter.py) for exactly what that
-    does and does not make safe."""
+    (testimony). Blind to any pre-existing Agent-origin `governs` edges the target seat may
+    still carry from before charter's Seat-keyed re-key — see charter.py's own docstring for
+    exactly what that does and does not make safe."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a charter declared for another seat is a mind's "
@@ -2998,26 +2984,25 @@ async def charter_for(seat_id: str, repos: list[str], because: str,
 @mcp.tool()
 async def rebind_seat(seat: str, new_cwd: str, extract: bool = False,
                       ctx: Context | None = None) -> dict[str, Any]:
-    """Move a seat's ANCHOR cwd, preserving identity, lineage, attribution, and mail (Phase 1
-    §4.1, ruling `dd47c1da` — the operator's own folder move orphaned alfred; this is the cure).
-    `seat` accepts a claimed name, a raw agent id, OR (thread 3ae57d36) an unclaimed seat's
-    own handle/canonical directly — a seat nobody has ever claim_name'd resolves to NO agent
-    at all, so this now succeeds off the Seat record alone: only `.osiris` + the seat's own
-    `anchor_cwd` get written (no mount rows to repoint, no lineage to stamp — there isn't one
-    yet). Otherwise: writes/refreshes `.osiris` in `new_cwd` pinning the seat's DURABLE
-    project label (unchanged by this call — mail and attribution key on it), re-points the
-    WHOLE LINEAGE's durable mount rows at the new path, stamps the move on the Agent's own
-    record, and carries the HARNESS metadata (transcripts, project state) so resume and
-    history survive the move. Mints nothing: no new Agent, no handle/lineage edge is touched.
-    Refuses loudly on a name that resolves to neither an agent nor a seat.
+    """Move a seat's ANCHOR cwd, preserving identity, lineage, attribution, and mail. `seat`
+    accepts a claimed name, a raw agent id, OR an unclaimed seat's own handle/canonical
+    directly — a seat nobody has ever claim_name'd resolves to NO agent at all, so this now
+    succeeds off the Seat record alone: only `.osiris` + the seat's own `anchor_cwd` get
+    written (no mount rows to repoint, no lineage to stamp — there isn't one yet). Otherwise:
+    writes/refreshes `.osiris` in `new_cwd` pinning the seat's DURABLE project label
+    (unchanged by this call — mail and attribution key on it), re-points the WHOLE LINEAGE's
+    durable mount rows at the new path, stamps the move on the Agent's own record, and
+    carries the HARNESS metadata (transcripts, project state) so resume and history survive
+    the move. Mints nothing: no new Agent, no handle/lineage edge is touched. Refuses loudly
+    on a name that resolves to neither an agent nor a seat.
 
-    `extract=True` is the SEAT-OFFICES move (ruling ed5f5ce2): the seat leaves a SHARED cwd
-    (e.g. into its ~/.osiris/seats/<handle>/ office) taking ONLY its own lineage's
-    transcripts — co-resident sessions' history stays; the old path remains a living
-    project. Use it whenever other minds also work at the old path.
+    `extract=True` is the SEAT-OFFICES move: the seat leaves a SHARED cwd (e.g. into its
+    ~/.osiris/seats/<handle>/ office) taking ONLY its own lineage's transcripts —
+    co-resident sessions' history stays; the old path remains a living project. Use it
+    whenever other minds also work at the old path.
 
-    THE STALE-BANNER BUG (thread d8535bff, cross-house corroborated): the durable DB rows
-    (agent_mounts.cwd, the Seat's anchor_cwd) move immediately, but any LIVE connection's
+    THE STALE-BANNER TRAP: the durable DB rows (agent_mounts.cwd, the Seat's anchor_cwd)
+    move immediately, but any LIVE connection's
     cached AgentIdentity (`_agents`, populated once at mount()/re-attach and read straight
     off by orient() and everything else) does not — so a session that rebinds itself and
     then calls orient() moments later still measures the swap banner's intended_model
@@ -3135,23 +3120,23 @@ async def retire_seat(seat_id: str, reason: str = "",
 
 @mcp.tool()
 async def vacate_seat(seat_id: str, because: str, ctx: Context | None = None) -> dict[str, Any]:
-    """Release a seat's holder WITHOUT retiring the seat itself (thread 445a7356) — for
-    the one case retire_seat correctly can't resolve on its own: a holder whose PROCESS
-    actually died without ever calling retire() on itself (a `claude stop`ped or killed
-    body leaves its `holds` link stale forever, and retire_seat rightly refuses a seat
-    with an active holder). This is that refusal's complement, never its bypass.
+    """Release a seat's holder WITHOUT retiring the seat itself — for the one case
+    retire_seat correctly can't resolve on its own: a holder whose PROCESS actually died
+    without ever calling retire() on itself (a `claude stop`ped or killed body leaves its
+    `holds` link stale forever, and retire_seat rightly refuses a seat with an active
+    holder). This is that refusal's complement, never its bypass.
 
     GATED ON REAL LIVENESS EVIDENCE, checked here, not assumed: the harness roster
     (`claude agents --json`) must show no live session at the seat's own office, AND the
-    holder's own transcript's newest TIMESTAMPED line must be stale (never mtime alone —
-    the Aegis phantom lied with a fresh one on a 13h-dead session). Either signal alone
+    holder's own transcript's newest TIMESTAMPED line must be stale — never mtime alone, a
+    process can touch a file's mtime long after its last real turn. Either signal alone
     showing life is refused loudly as `refused-live`; an unreadable roster refuses as
     `refused-ambiguous` rather than guessing. `status` is one of: `vacated`,
     `refused-vacant` (nothing to release), `refused-no-office`, `refused-live`,
     `refused-ambiguous`, or `refused` (seats.vacate_holder's own graph-level refusal —
     see `detail`).
 
-    AUTO-INVOCATION IS OUT OF SCOPE (reaper #59 stays operator-gated) — this is for a
+    AUTO-INVOCATION IS OUT OF SCOPE (the reaper stays operator-gated) — this is for a
     deliberate hand, on one named seat, never a sweep."""
     ident = await _ident_for(ctx)
     if ident is None:
@@ -3583,7 +3568,7 @@ async def lift(ref: str, handle: str, subagent_id: str | None = None,
                subagent_type: str | None = None, session_anchor: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
     """Pull a NAMED, QUIET rogue out of its ad hoc cwd and into a clean osiris office — the
-    P2V move (thread 67f11cbd): import a running-but-unmanaged instance, preserve its state,
+    P2V move: import a running-but-unmanaged instance, preserve its state,
     give it a clean managed identity. Composes `doors(ref)` to resolve the target (refuses on
     0 matches, on >1 — an ambiguous multi-tenant cwd, name a specific `agent:` id instead —
     and on a LIVE match: moving a live seat splits its running session's history between two
@@ -3960,11 +3945,10 @@ async def record_practice(
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Write back a TRANSFERABLE TECHNIQUE — Superstition's positive twin (THE THAW,
-    operator ruling 1e6d7367: the graph could hold what to STOP believing but nothing held
-    engineering technique that outlives any single repo or date, so two houses re-derived
-    the same install-order lesson independently in the same hour). `statement` is the
-    imperative one-liner (e.g. 'arm before you seal — one ceremony, not two') — quote it as
+    """Write back a TRANSFERABLE TECHNIQUE — Superstition's positive twin: the graph could
+    hold what to STOP believing but nothing held engineering technique that outlives any
+    single repo or date. `statement` is the imperative one-liner (e.g. 'arm before you seal
+    — one ceremony, not two') — quote it as
     you'd want a future mind to inherit it, not as narration. `failure_prevented` is the
     concrete symptom that makes it findable MID-FAILURE, not just on reflection.
     `surface` reuses BlindSpot's domain vocabulary (a rough area: 'deploy', 'succession',
@@ -4078,20 +4062,19 @@ async def open_thread(
     """Open a THREAD — an unresolved question or next-step you want the next session to pick
     up. Surfaces in run_composition('briefing') under open threads, beside mined ones. `repo`
     files it under a SoftwareProject. Idempotent on the summary — and, with `repo`, ALSO on a
-    near-duplicate of it: two field witnesses (Aegis, Maat) minted the same fact twice across
-    a lineage restart because the second telling reworded the summary slightly. A near-hit on
-    that project's own open threads returns the EXISTING id (`deduped: "true"`) instead of
-    minting a twin — conservative on purpose, so a genuinely new thread is never swallowed.
-    This is how a session hands off its loose ends instead of losing them (or doubling them).
+    near-duplicate of it: a near-hit on that project's own open threads returns the EXISTING
+    id (`deduped: "true"`) instead of minting a twin — conservative on purpose, so a
+    genuinely new thread is never swallowed. This is how a session hands off its loose ends
+    instead of losing them (or doubling them).
     `kind='obligation'` marks a DUTY minted by an action ('kernel changed → daemons need
     restart') — record those the moment they're minted; they are neither rulings nor commits
     and otherwise die with the context window. `owner` says WHOSE MOVE it is: 'operator' =
     blocked on the human, 'agent:<id>' = a specific mind, a project name = any hand there;
     unowned = anyone who reads it may act. orient sorts your wall by it — yours-to-act above
     waiting-on-the-human.
-    `assignee` (alfred's ask 5, ruling dd47c1da §4.3 — "single-assignee leased
-    obligations") is the seat/agent THIS BUILD belongs to — one build, one assignee. It
-    stamps the SAME `owner` property (not a parallel field: `owner` already IS "whose move
+    `assignee` (single-assignee leased obligations) is the seat/agent THIS BUILD belongs to
+    — one build, one assignee. It stamps the SAME `owner` property (not a parallel field:
+    `owner` already IS "whose move
     it is"; orient's ranking needs no change). What's new is the LEASE: with `assignee` set,
     a near-duplicate hit SURFACES THE EXISTING LEASE instead of just deduping silently —
     `leased_to` names who already holds it. Asking again as the SAME assignee finds your own
@@ -4240,12 +4223,10 @@ async def acquire_lease(
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Claim ANY resource by an EXACT id — a file path, `docker-daemon`, `compose-merge`,
-    `tree` — the mechanical half of tonight's hand-maintained file-ownership map. Task
-    #103's Q7 found `open_thread(assignee=)`'s `leased_to` only LOOKED like this primitive:
-    its conflict check is fuzzy prose similarity over a thread summary (threshold 0.60,
-    never tuned), read-then-write, repo-scoped only — two agents naming the same file in
-    differently-worded summaries would get no lease at all. This is the fix: `resource_id`
-    matched by EQUALITY, backed by a real DB-level uniqueness guarantee
+    `tree`. UNLIKE `open_thread(assignee=)`'s `leased_to` (fuzzy prose similarity over a
+    thread summary, read-then-write, repo-scoped only — two agents naming the same file in
+    differently-worded summaries could get no lease at all), `resource_id` here is matched
+    by EQUALITY, backed by a real DB-level uniqueness guarantee
     (`resource_leases_active_claim`), never a race.
 
     `resource_id` is CONVENTION, not a closed vocabulary — nothing here validates,
@@ -4257,8 +4238,7 @@ async def acquire_lease(
     reserving a lane before its worker starts, say).
 
     A REFUSAL names WHO holds it and SINCE WHEN (`holder`/`held_since`) — enough for the
-    caller to decide wait-or-escalate instead of guessing, never a silent duplicate mint
-    (Alfred's #4.3 UX, kept; only the matcher underneath it changed).
+    caller to decide wait-or-escalate instead of guessing, never a silent duplicate mint.
 
     EXPIRY is deliberately NOT a renewed TTL: our holders are agent sessions doing
     variable-length turns, not daemons with a background heartbeat loop — a short TTL would
