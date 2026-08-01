@@ -2614,6 +2614,9 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     """Message the fleet. TWO channels: `to`=<project> is a BROADCAST — the group chat, seen by
     every agent working that project (`to='operator'` reaches the HUMAN's desk); `to_agent`=
     <agent:id> is a DM — a private message to one specific agent (find ids in orient()/fleet).
+    `to` REFUSES a project nobody has ever mounted under — naming the string tried, with a
+    "did you mean to_agent=?" hint if it matches a live seat/agent name, never auto-
+    substituting — instead of silently filing mail where no inbox() call would ever see it.
     `reply_to=<message id>` answers a message: it routes by channel (a reply to a DM goes back to
     that sender privately; a reply to a broadcast returns to the thread's project), joins the
     thread, and SETTLES the message you're answering. You must be mounted; stamped from YOU.
@@ -2629,10 +2632,9 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     something of you" without paying to read everything. Ungraded mail is never guessed.
     A DM's receipt ECHOES the resolution — `dm_to` is the id it actually reached, `seat` its
     claimed handle (or null, anonymous), `lineage_head` where that id's OWN succession chain
-    currently ends;
-    compare it against `dm_to` to catch a stale address before trusting the "sent". Pass
-    `require_seat=True` to refuse outright when the target holds no claimed seat — nothing
-    is sent, loudly, instead of dispatching into the blind.
+    currently ends; compare it against `dm_to` to catch a stale address before trusting the
+    "sent". Pass `require_seat=True` to refuse outright when the target holds no claimed
+    seat — nothing is sent, loudly, instead of dispatching into the blind.
     `threads` TRANSFERS ownership of EXISTING Thread(s) (uuid / `thread:<12hex>` / short-id
     prefix) to this DM's addressee, in the same act — re-pointing each Thread's `owner`,
     the exact mechanism `reclassify_thread` already exposes for the human-triaged case.

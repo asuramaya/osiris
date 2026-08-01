@@ -195,7 +195,15 @@ async def send_message(
     desk_kind: str | None = None, grade: str | None = None,
     require_seat: bool = False, threads: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Post a BROADCAST (to_project) or a DM (to_agent). With `reply_to` and no explicit address,
+    """Post a BROADCAST (to_project) or a DM (to_agent). An EXPLICIT `to_project` must name a
+    project SOMEONE HAS ACTUALLY MOUNTED UNDER (`agent_mounts.project`) or the reserved
+    `OPERATOR_ADDR` — refuses otherwise, naming the string tried, with a courtesy hint if it
+    happens to match a live seat/agent name ("did you mean to_agent=?"), never auto-
+    substituting the parameter. Without this, any string reached `to_project` unchecked —
+    including a seat handle typed into `to=` by mistake — and filed mail into a "project" no
+    inbox() call would ever scope to, silently, reported as sent (shape 3 of #117; obligation
+    45e52530).
+    With `reply_to` and no explicit address,
     it routes by channel: a reply to a DM goes back to that sender as a DM; a reply to a broadcast
     routes to the referenced message's project (replying to YOUR OWN broadcast routes ONWARD to
     its recipient — the desk supersession lane), joining the thread and settling the referenced
@@ -295,6 +303,29 @@ async def send_message(
     if to_agent or to_project:  # explicit addressing wins
         to_a = to_agent
         to_p = _norm(to_project) if to_project else None
+        if to_p and to_a is None and to_p != OPERATOR_ADDR:
+            # THE PHANTOM BROADCAST (obligation 45e52530, shape 3 of #117 — Thoth's own
+            # three dispatches vanished 15 minutes this way): to_project reached here with
+            # NO existence check at all, so ANY string could be written — including a seat
+            # handle typed into `to=` by mistake — filing mail into a "project" no inbox()
+            # call will ever scope to. `agent_mounts.project` is the operational truth of
+            # "someone has actually been here" (the same surface fleet() reads); the Agent
+            # object's own `project` property is a different question (a claim about
+            # identity, not operational history) and can drift from it — using that instead
+            # would let mail land where no inbox() scopes to, today's bug with a longer fuse.
+            known = await pool.fetchval(
+                "SELECT 1 FROM agent_mounts WHERE project = $1 LIMIT 1", to_p)
+            if not known:
+                assert to_project is not None  # to_p is truthy only when to_project was
+                hint = ""
+                from src.actions.core import Actions
+                from src.orchestrator.agents import resolve_seat
+                maybe = await resolve_seat(Actions(pool), to_project)
+                if maybe["agent"] is not None:
+                    hint = f" — did you mean to_agent={to_project!r} instead of to=?"
+                raise ValueError(
+                    f"no such project: {to_project!r} — nobody has ever mounted there, so "
+                    f"no inbox() call would ever see this broadcast{hint}")
     elif ref is not None and await _addressed_to_me(pool, ref["to_agent"], from_agent):
         to_a, to_p = ref["from_agent"], ref["from_project"]  # a DM to me → DM back to its sender
     elif ref is not None:  # a broadcast/own message → project routing (supersession lane)

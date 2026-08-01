@@ -25,8 +25,20 @@ from src.orchestrator.mailbox import (
 R = "agent:reader"  # a representative reader for single-agent-project tests
 
 
+async def _seed(pool, project: str) -> None:
+    """Register a throwaway mount for `project` — send_message now refuses an explicit
+    `to=` naming a project nobody has ever mounted under (shape 3 of #117, obligation
+    45e52530), so a fixture broadcasting to a synthetic project name needs to look like a
+    real one first. `save_mount` upserts on job_dir, so calling this twice for the same
+    project (even across tests, if the DB isn't isolated) is harmless."""
+    from src.orchestrator import mounts
+    await mounts.save_mount(pool, job_dir=f"/test/seed/{project}", agent_id=f"agent:seed-{project}",
+                            project=project, cwd="/test", model=None, session_key=None)
+
+
 async def test_reading_leases_rather_than_consumes(actions: Actions) -> None:
     p = actions.pool
+    await _seed(p, "sibling-one")
     res = await send_message(p, from_agent="agent:aaa", from_project="sibling-two",
                              to_project="sibling-one", body="the Toeplitz counterfactual holds")
     assert res["id"] > 0 and res["dedup"] is False
@@ -44,6 +56,7 @@ async def test_reading_leases_rather_than_consumes(actions: Actions) -> None:
 
 async def test_ack_settles_for_good(actions: Actions) -> None:
     p = actions.pool
+    await _seed(p, "b")
     res = await send_message(p, from_agent="agent:x", from_project="a", to_project="b",
                              body="handle me")
     (msg,) = await read_inbox(p, "b", reader_agent=R)
@@ -56,6 +69,7 @@ async def test_ack_settles_for_good(actions: Actions) -> None:
 
 async def test_ack_is_scoped_to_the_recipient(actions: Actions) -> None:
     p = actions.pool
+    await _seed(p, "b")
     res = await send_message(p, from_agent="agent:x", from_project="a", to_project="b",
                              body="b's mail")
     # a reader in another project can't settle b's broadcast (it isn't addressed to them)
@@ -92,6 +106,7 @@ async def test_a_broadcast_is_a_group_chat_both_agents_see_it(actions: Actions) 
     """The crux: two co-located agents (ux + engine, one project) BOTH see a broadcast and
     settle it INDEPENDENTLY — the old single-reader lease hid it from the second."""
     p = actions.pool
+    await _seed(p, "handlingtheloop")
     await send_message(p, from_agent="agent:x", from_project="a", to_project="handlingtheloop",
                        body="standup: who owns the socket layer?")
     ux, engine = "agent:ux", "agent:engine"
@@ -133,6 +148,7 @@ async def test_a_dm_reaches_only_its_addressee_and_reply_routes_back(actions: Ac
 
 async def test_peek_neither_leases_nor_settles(actions: Actions) -> None:
     p = actions.pool
+    await _seed(p, "b")
     await send_message(p, from_agent="agent:x", from_project="a", to_project="b", body="hi")
     peeked = await read_inbox(p, "b", reader_agent=R, mark_read=False)
     assert len(peeked) == 1
@@ -141,6 +157,7 @@ async def test_peek_neither_leases_nor_settles(actions: Actions) -> None:
 
 async def test_send_dedups_a_client_retry(actions: Actions) -> None:
     p = actions.pool
+    await _seed(p, "b")
     first = await send_message(p, from_agent="agent:x", from_project="a", to_project="b",
                                body="exactly once")
     retry = await send_message(p, from_agent="agent:x", from_project="a", to_project="b",
@@ -154,6 +171,7 @@ async def test_send_dedups_a_client_retry(actions: Actions) -> None:
 
 async def test_reply_routes_back_threads_and_acks(actions: Actions) -> None:
     p = actions.pool
+    await _seed(p, "sibling-one")
     ask = await send_message(p, from_agent="agent:asker", from_project="sibling-two",
                              to_project="sibling-one", body="what does your witness say?")
     (q,) = await read_inbox(p, "sibling-one", reader_agent="agent:h")
@@ -170,6 +188,7 @@ async def test_reply_routes_back_threads_and_acks(actions: Actions) -> None:
 
 async def test_reply_does_not_ack_someone_elses_mail(actions: Actions) -> None:
     p = actions.pool
+    await _seed(p, "b")
     await send_message(p, from_agent="agent:x", from_project="a", to_project="b", body="for b")
     (m,) = await read_inbox(p, "b", reader_agent=R, mark_read=False)
     await send_message(p, from_agent="agent:c", from_project="c",
@@ -187,6 +206,7 @@ async def test_live_holder_lease_extends_and_a_dead_holder_redelivers(
 
     p = actions.pool
     holder = "agent:gridworker"
+    await _seed(p, "grid")
     await send_message(p, from_agent="agent:x", from_project="a", to_project="grid",
                        body="compute the discrimination grid")
     (m,) = await read_inbox(p, "grid", reader_agent=holder)  # leases it
@@ -223,6 +243,8 @@ async def test_send_warns_when_the_thread_peer_already_wrote(actions: Actions) -
 
     ctx = _Ctx()
     peer = "agent:soundwave-vi"
+    await _seed(actions.pool, "alpha")
+    await _seed(actions.pool, "gamma")
     # the peer opens a thread to alpha, then follows up in the SAME thread before alpha reads
     m1 = await send_message(actions.pool, from_agent=peer, from_project="beta",
                             to_project="alpha", body="first question")
@@ -533,6 +555,7 @@ async def test_send_still_uses_the_assertion_fallback_for_an_unseated_name(
 
 async def test_inbox_is_scoped_and_normalized(actions: Actions) -> None:
     p = actions.pool
+    await _seed(p, "sibling-one")
     await send_message(p, from_agent="agent:x", from_project="a", to_project="sibling-one",
                        body="yo")
     assert await unread_count(p, "sibling-two", reader_agent="agent:d") == 0
@@ -554,6 +577,7 @@ async def test_lease_is_visible_to_the_group(actions: Actions) -> None:
     """A sibling holding a live lease on shared broadcast mail is VISIBLE (in_flight names it) —
     'mail 0' must never hide 'the other agent is answering the group thread right now'."""
     p = actions.pool
+    await _seed(p, "handlingtheloop")
     await send_message(p, from_agent="agent:x", from_project="sibling-two",
                        to_project="handlingtheloop", body="who takes this?")
     await read_inbox(p, "handlingtheloop", reader_agent="agent:ux")  # ux leases it
@@ -669,6 +693,7 @@ async def test_dim_annotates_never_settles(actions: Actions) -> None:
     # unsettled: the operator's count still includes it
     assert await unread_count(p, OPERATOR_ADDR, reader_agent=OPERATOR_ADDR) == 1
     # ...and only desk mail can be dimmed
+    await _seed(p, "osiris")
     other = await send_message(p, from_agent="agent:w", from_project="neo",
                                to_project="osiris", body="hello project")
     with pytest.raises(ValueError, match="not an operator-desk brief"):
@@ -704,6 +729,7 @@ async def test_an_agents_OWN_broadcast_is_not_its_mail(actions: Actions) -> None
     the DM, no echo; msg 445 the broadcast reply, echoed)."""
     p = actions.pool
     author, peer = "agent:metron", "agent:deckard"
+    await _seed(p, "xxit")
     res = await send_message(p, from_agent=author, from_project="xxit", to_project="xxit",
                              body="thread 413: the aligner acts only when it beats doing nothing")
     # the author never sees its own words as mail; the peer does
@@ -724,6 +750,7 @@ async def test_mail_grade_names_the_asks(actions: Actions) -> None:
     the reader's count can lead with what is actionable, and ungraded mail is never guessed
     into a band — a wrong "needs nothing" on a duty-bearing letter would silence it."""
     p = actions.pool
+    await _seed(p, "b")
     await send_message(p, from_agent="agent:x", from_project="a", to_project="b",
                        body="please review the seam plan", grade="ask")
     await send_message(p, from_agent="agent:x", from_project="a", to_project="b",
@@ -767,6 +794,7 @@ async def test_cross_project_reply_returns_to_the_askers_seat_not_the_room(
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
     await claim_name(actions, asker, "Commissioner", source=asker)
 
+    await _seed(p, "farhouse")
     ask = await send_message(p, from_agent=asker, from_project="askhouse",
                              to_project="farhouse", body="audit the family")
     rep = await send_message(p, from_agent="agent:fa40b001", from_project="farhouse",
@@ -787,6 +815,7 @@ async def test_cross_project_reply_to_an_unbound_asker_keeps_the_room(
     to the asker's project room — a DM to an id the graph never registered would strand
     the mail; the room at least reaches the house."""
     p = actions.pool
+    await _seed(p, "farhouse")
     ask = await send_message(p, from_agent="agent:0abe4003", from_project="oldhouse",
                              to_project="farhouse", body="anyone: check the gauge")
     rep = await send_message(p, from_agent="agent:fa40b001", from_project="farhouse",
@@ -805,6 +834,7 @@ async def test_cross_project_reply_follows_the_mind_not_the_room(
     p = actions.pool
     traveler = "agent:a5ce9901"
     await actions.create_or_find_object("Agent", traveler, traveler)
+    await _seed(p, "farhouse")
     ask = await send_message(p, from_agent=traveler, from_project="visitedroom",
                              to_project="farhouse", body="handing off the store build")
     rep = await send_message(p, from_agent="agent:fa40b001", from_project="farhouse",
@@ -824,6 +854,7 @@ async def test_reply_to_a_retired_mind_keeps_the_room(actions: Actions) -> None:
     o = await actions.create_or_find_object("Agent", gone, gone)
     await actions.assert_property(o, "retired", True, gone, datetime.now(UTC), 0.9,
                                   evidence_class="self_declared")
+    await _seed(p, "farhouse")
     ask = await send_message(p, from_agent=gone, from_project="oldroom",
                              to_project="farhouse", body="one last ask")
     rep = await send_message(p, from_agent="agent:fa40b001", from_project="farhouse",
@@ -942,6 +973,7 @@ async def test_a_genuinely_new_lineage_in_an_old_project_still_sees_standing_bro
     before this fix, because the new NOT EXISTS check is scoped to MY OWN lineage's
     rows, and a fresh lineage has none."""
     p = actions.pool
+    await _seed(p, "oldhouse")
     await send_message(p, from_agent="agent:veteran001", from_project="oldhouse",
                        to_project="oldhouse", body="standing, never-settled project ask")
     # a completely unrelated fresh lineage — no generation of it has ever touched this
@@ -983,6 +1015,7 @@ async def test_unread_split_sums_to_unread_count(actions: Actions) -> None:
     split by lane, never a second formula (the copy-drift that made mail disagree)."""
     p = actions.pool
     me = "agent:ab12aa77"
+    await _seed(p, "myroom")
     await send_message(p, from_agent="agent:aaa", from_project="elsewhere",
                        to_project="myroom", body="a broadcast for the room")
     await send_message(p, from_agent="agent:aaa", from_project="elsewhere",
@@ -1133,6 +1166,7 @@ async def test_threads_param_requires_a_single_resolved_addressee(actions: Actio
     from src.orchestrator.capture import open_thread
 
     tid = await open_thread(actions, "needs an owner", kind="obligation")
+    await _seed(actions.pool, "osiris")
     with pytest.raises(ValueError, match="single resolved"):
         await send_message(actions.pool, from_agent="agent:thoth", from_project="osiris",
                            to_project="osiris", body="whoever picks this up",
@@ -1203,3 +1237,70 @@ async def test_send_tool_forwards_threads_and_echoes_threads_stamped(actions: Ac
         srv._agents.pop(srv._conn_key(ctx), None)
     assert out["threads_stamped"] == [str(tid)]
     assert await _owner(actions, tid) == "agent:worker"
+
+
+# ═══ THE PHANTOM BROADCAST — shape 3 of #117 (obligation 45e52530): to_project used to
+# write with NO existence check at all, so send(to=<seat handle>) silently filed mail into
+# a project nobody would ever read from, reported as sent. ═══
+
+
+async def test_send_refuses_a_to_project_nobody_has_ever_mounted_under(
+    actions: Actions,
+) -> None:
+    with pytest.raises(ValueError, match="no such project: 'neverland'"):
+        await send_message(actions.pool, from_agent="agent:x", from_project="osiris",
+                           to_project="neverland", body="does anyone hear this?")
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM fleet_messages WHERE to_project='neverland'") == 0
+
+
+async def test_send_still_broadcasts_to_a_project_someone_has_mounted_under(
+    actions: Actions,
+) -> None:
+    """REGRESSION PROOF: the ordinary, working case — a project a real agent has actually
+    mounted under — must be completely unaffected by the new check."""
+    await _seed(actions.pool, "realproject")
+    res = await send_message(actions.pool, from_agent="agent:x", from_project="osiris",
+                             to_project="realproject", body="a legitimate broadcast")
+    assert res["to"] == "realproject"
+    assert await unread_count(actions.pool, "realproject", reader_agent=R) == 1
+
+
+async def test_send_to_operator_is_unaffected_by_the_project_existence_check(
+    actions: Actions,
+) -> None:
+    """OPERATOR_ADDR is the one carved-out sentinel — the human's desk is never a project
+    anyone mounts under, and must never be refused as one."""
+    res = await send_message(actions.pool, from_agent="agent:x", from_project="osiris",
+                             to_project=OPERATOR_ADDR, body="a brief for the desk")
+    assert res["to"] == OPERATOR_ADDR
+
+
+async def test_send_refusal_hints_to_agent_when_the_string_is_a_live_seat_name(
+    actions: Actions,
+) -> None:
+    """THE COURTESY, NEVER THE SUBSTITUTION: a `to=` string that happens to match a live
+    seat/agent name gets a "did you mean to_agent=?" hint appended — but the message is
+    STILL refused, never silently redirected. Explicit addressing, never guess, the same
+    law resolve_thread/charter_for already run on."""
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="Sekhmet", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:sekhmet0001")
+
+    with pytest.raises(ValueError, match=r"did you mean to_agent='Sekhmet' instead of to=\?"):
+        await send_message(actions.pool, from_agent="agent:x", from_project="osiris",
+                           to_project="Sekhmet", body="meant this as a DM")
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM fleet_messages WHERE to_project ILIKE 'sekhmet'") == 0
+
+
+async def test_send_refusal_carries_no_hint_when_the_string_matches_nothing_at_all(
+    actions: Actions,
+) -> None:
+    """The hint is additive, never assumed: a string that is neither a known project NOR a
+    resolvable seat/agent name refuses with the plain message, no dangling suggestion."""
+    with pytest.raises(ValueError) as exc_info:
+        await send_message(actions.pool, from_agent="agent:x", from_project="osiris",
+                           to_project="totally-unrecognizable-string", body="hello?")
+    assert "did you mean" not in str(exc_info.value)
