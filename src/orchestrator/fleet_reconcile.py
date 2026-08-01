@@ -41,7 +41,13 @@ to every row — never a bucket that just says "trust me":
                             never this module's business to guess at).
 
 ZERO FALSE DROPS is the bar (Thoth's own words: "a false drop here deletes a real agent's
-registration and there is no undo in the UI"). `reconcile_dry_run()` never drops, folds, or
+registration and there is no undo in the UI"). That line was true when written and is
+STALE now, corrected in place rather than left to mislead: it read as a missing button,
+but the truth then was no undo ANYWHERE and no witness either — `drop_dead_project_mount`
+was a bare `pool.execute`, unwitnessed, worse than irreversible (Thoth DM 2677). It is now
+reversible and audited (`mounts.undrop_dead_project_mount`, keyed off the `audit_log` row
+the drop itself leaves) — the bar this module holds itself to is unchanged; what changed
+is that a false drop is no longer permanent. `reconcile_dry_run()` never drops, folds, or
 retires anything — it is a REPORT, full stop.
 
 PHASE 2 — `reconcile_execute()` (task #59 phase 2, Thoth's gate DM 2042) — is the acting
@@ -246,12 +252,12 @@ async def reconcile_execute(
         folded.append({**item, "result": out})
     for item in would_drop:
         try:
-            n = await drop_dead_project_mount(
-                actions.pool, job_dir=item["job_dir"], project=item["project"])
+            out = await drop_dead_project_mount(
+                actions, job_dir=item["job_dir"], project=item["project"], actor=actor)
         except Exception as exc:
             drops.append({**item, "error": f"{type(exc).__name__}: {exc}"})
             continue
-        drops.append({**item, "rows_deleted": n})
+        drops.append({**item, "rows_deleted": out["dropped"], "audit_id": out["audit_id"]})
 
     after = await reconcile_dry_run(actions.pool, projects_root=projects_root,
                                     jobs_home=jobs_home)

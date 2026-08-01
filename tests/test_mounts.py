@@ -827,9 +827,9 @@ async def test_drop_dead_project_mount_releases_the_matched_row(actions: Actions
     await mounts.save_mount(p, job_dir="/x/jobs/deadstub1", agent_id="agent:deadstub1",
                             project="deadstub", cwd="/tmp/deadstub", model=None,
                             session_key="whisper:deadstub1")
-    n = await mounts.drop_dead_project_mount(p, job_dir="/x/jobs/deadstub1",
-                                             project="deadstub")
-    assert n == 1
+    out = await mounts.drop_dead_project_mount(
+        actions, job_dir="/x/jobs/deadstub1", project="deadstub", actor="agent:test")
+    assert out["dropped"] == 1 and out["audit_id"] is not None
     assert await p.fetchval(
         "SELECT count(*) FROM agent_mounts WHERE job_dir='/x/jobs/deadstub1'") == 0
 
@@ -844,9 +844,9 @@ async def test_drop_dead_project_mount_never_touches_a_sibling_row(actions: Acti
     await mounts.save_mount(p, job_dir="/x/jobs/split0002", agent_id="agent:split0001",
                             project="livehouse", cwd="/repo/live", model=None,
                             session_key="whisper:split0002")
-    n = await mounts.drop_dead_project_mount(p, job_dir="/x/jobs/split0001",
-                                             project="deadstub")
-    assert n == 1
+    out = await mounts.drop_dead_project_mount(
+        actions, job_dir="/x/jobs/split0001", project="deadstub", actor="agent:test")
+    assert out["dropped"] == 1
     left = {r["job_dir"] for r in await p.fetch("SELECT job_dir FROM agent_mounts")}
     assert left == {"/x/jobs/split0002"}
 
@@ -859,8 +859,127 @@ async def test_drop_dead_project_mount_refuses_a_project_mismatch(actions: Actio
     await mounts.save_mount(p, job_dir="/x/jobs/moved0001", agent_id="agent:moved0001",
                             project="livehouse", cwd="/repo/live", model=None,
                             session_key="whisper:moved0001")
-    n = await mounts.drop_dead_project_mount(p, job_dir="/x/jobs/moved0001",
-                                             project="deadstub")
-    assert n == 0
+    out = await mounts.drop_dead_project_mount(
+        actions, job_dir="/x/jobs/moved0001", project="deadstub", actor="agent:test")
+    assert out == {"dropped": 0, "audit_id": None}
     assert await p.fetchval(
         "SELECT count(*) FROM agent_mounts WHERE job_dir='/x/jobs/moved0001'") == 1
+    # a false-match drop writes NOTHING — a witness for a delete that didn't happen would
+    # itself be a false record (Thoth DM 2677)
+    assert await p.fetchval(
+        "SELECT count(*) FROM audit_log WHERE action='drop_dead_project_mount'") == 0
+
+
+async def test_drop_dead_project_mount_mints_no_agent_object(actions: Actions) -> None:
+    """THE INVARIANT reconcile_execute's own test enforces (test_fleet_reconcile.py: "a
+    drop releases the RESIDUE ROW only — no Agent object was ever minted here") — the
+    reversibility fix must not violate it. This is exactly why the witness lives in
+    audit_log (no object_id) and not object_events (object_id NOT NULL)."""
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/noagent1", agent_id="agent:noagent1",
+                            project="deadstub", cwd="/tmp/deadstub", model=None,
+                            session_key="whisper:noagent1")
+    out = await mounts.drop_dead_project_mount(
+        actions, job_dir="/x/jobs/noagent1", project="deadstub", actor="agent:test")
+    assert out["dropped"] == 1
+    st = await p.fetchval(
+        "SELECT status FROM objects WHERE canonical='agent:noagent1'")
+    assert st is None
+
+
+async def test_drop_then_undrop_round_trips_the_exact_row(actions: Actions) -> None:
+    """THE BAR (Thoth DM 2677): drop a row, restore it, read it back, show the restored
+    row is equivalent to the original — and show the drop itself left a findable witness.
+    Populates every column (including the ones save_mount doesn't set) so the proof
+    exercises the FULL snapshot round-trip, not just the fields that happen to be set."""
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/revive001", agent_id="agent:revive001",
+                            project="deadstub", cwd="/tmp/deadstub", model="claude-fable-5",
+                            session_key="whisper:revive001")
+    await p.execute(
+        "UPDATE agent_mounts SET model_raw=$1, context_window_size=$2, seat_id=$3 "
+        "WHERE job_dir=$4",
+        "claude-fable-5[1m]", 1_000_000, "seat:revive0001", "/x/jobs/revive001")
+    original = await p.fetchrow(
+        f"SELECT {', '.join(mounts._MOUNT_COLS)} FROM agent_mounts "
+        "WHERE job_dir='/x/jobs/revive001'")
+    original_snapshot = mounts._mount_snapshot(original)
+
+    out = await mounts.drop_dead_project_mount(
+        actions, job_dir="/x/jobs/revive001", project="deadstub", actor="agent:test")
+    assert out["dropped"] == 1
+    audit_id = out["audit_id"]
+    assert audit_id is not None
+    assert await p.fetchval("SELECT count(*) FROM agent_mounts") == 0
+
+    # THE DROP LEFT A FINDABLE WITNESS
+    wit = await p.fetchrow(
+        "SELECT action, actor, payload FROM audit_log WHERE id=$1", audit_id)
+    assert wit is not None
+    assert wit["action"] == "drop_dead_project_mount"
+    assert wit["actor"] == "agent:test"
+    assert wit["payload"] == original_snapshot
+
+    restore = await mounts.undrop_dead_project_mount(
+        actions, audit_id=audit_id, actor="agent:test")
+    assert restore == {
+        "restored": 1, "job_dir": "/x/jobs/revive001",
+        "undrop_audit_id": restore["undrop_audit_id"],
+    }
+    restored_row = await p.fetchrow(
+        f"SELECT {', '.join(mounts._MOUNT_COLS)} FROM agent_mounts "
+        "WHERE job_dir='/x/jobs/revive001'")
+    assert restored_row is not None
+    # THE RESTORED ROW IS EQUIVALENT TO THE ORIGINAL — literal equality, not eyeballed
+    assert mounts._mount_snapshot(restored_row) == original_snapshot
+    # the undrop leaves its OWN witness too
+    undo_wit = await p.fetchrow(
+        "SELECT action, payload FROM audit_log WHERE id=$1", restore["undrop_audit_id"])
+    assert undo_wit is not None and undo_wit["action"] == "undrop_dead_project_mount"
+    assert undo_wit["payload"]["restored_from_audit_id"] == audit_id
+
+
+async def test_undrop_dead_project_mount_refuses_an_unknown_audit_row(
+    actions: Actions,
+) -> None:
+    out = await mounts.undrop_dead_project_mount(
+        actions, audit_id=999_999_999, actor="agent:test")
+    assert "error" in out
+    assert await actions.pool.fetchval("SELECT count(*) FROM agent_mounts") == 0
+
+
+async def test_undrop_dead_project_mount_refuses_an_unrelated_audit_row(
+    actions: Actions,
+) -> None:
+    """An undrop never invents a snapshot from an audit_log row some OTHER action wrote —
+    action must be exactly 'drop_dead_project_mount'."""
+    audit_id = await actions.pool.fetchval(
+        "INSERT INTO audit_log (action, actor, payload) VALUES ($1,$2,$3) RETURNING id",
+        "some_other_action", "agent:test", {"job_dir": "/x/jobs/decoy"})
+    out = await mounts.undrop_dead_project_mount(
+        actions, audit_id=audit_id, actor="agent:test")
+    assert "error" in out
+    assert await actions.pool.fetchval("SELECT count(*) FROM agent_mounts") == 0
+
+
+async def test_undrop_dead_project_mount_refuses_to_overwrite_a_live_remount(
+    actions: Actions,
+) -> None:
+    """The job_dir was dropped, then genuinely re-mounted by a NEW session before anyone
+    tried to undo the drop — the newer row is the truth; undrop must never fork identity
+    by reviving the stale row underneath it."""
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/reuse0001", agent_id="agent:reuse0001",
+                            project="deadstub", cwd="/tmp/deadstub", model=None,
+                            session_key="whisper:reuse0001")
+    out = await mounts.drop_dead_project_mount(
+        actions, job_dir="/x/jobs/reuse0001", project="deadstub", actor="agent:test")
+    audit_id = out["audit_id"]
+    await mounts.save_mount(p, job_dir="/x/jobs/reuse0001", agent_id="agent:brandnew",
+                            project="livehouse", cwd="/repo/live", model=None,
+                            session_key="whisper:brandnew")
+    result = await mounts.undrop_dead_project_mount(
+        actions, audit_id=audit_id, actor="agent:test")
+    assert "error" in result
+    live = await mounts.find_mount(p, job_dir="/x/jobs/reuse0001")
+    assert live is not None and live.agent_id == "agent:brandnew"

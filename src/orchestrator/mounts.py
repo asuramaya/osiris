@@ -148,7 +148,27 @@ async def release_session_mounts(
     return int(n or 0)
 
 
-async def drop_dead_project_mount(pool: asyncpg.Pool, *, job_dir: str, project: str) -> int:
+_MOUNT_COLS = (
+    "job_dir", "agent_id", "project", "cwd", "model", "model_raw", "session_key",
+    "mounted_at", "last_seen", "context_window_size", "seat_id",
+)
+
+
+def _mount_snapshot(row: asyncpg.Record) -> dict[str, Any]:
+    """An `agent_mounts` row -> a JSON-safe snapshot. `audit_log.payload` is jsonb and the
+    pool's codec is plain `json.dumps` with no datetime default (src/db/pool.py) — the two
+    timestamptz columns must be stringified before they ever reach it, or the INSERT below
+    raises. The inverse of `undrop_dead_project_mount`'s own restore-from-snapshot read."""
+    out: dict[str, Any] = {}
+    for k in _MOUNT_COLS:
+        v = row[k]
+        out[k] = v.isoformat() if isinstance(v, datetime) else v
+    return out
+
+
+async def drop_dead_project_mount(
+    actions: Actions, *, job_dir: str, project: str, actor: str,
+) -> dict[str, Any]:
     """Release ONE mount row that is residue against an already-retired project (task #59
     phase 2, fleet_reconcile.py's drop_ephemeral_test_cwd bucket). Row-scoped by `job_dir`
     — the durable per-row key (`agent_mounts.job_dir` is the table's own ON CONFLICT target)
@@ -157,14 +177,85 @@ async def drop_dead_project_mount(pool: asyncpg.Pool, *, job_dir: str, project: 
     doctrine `release_session_mounts` already keeps: a row is an ADDRESS, and only the
     addressed door's own death may release it.
 
+    REVERSIBLE AND AUDITED (Thoth's gate, DM 2677 — this was a bare `pool.execute`, no
+    audit_log, no object_events; not merely irreversible but UNWITNESSED, worse than "no
+    undo" because after it ran there was nothing to reconstruct from, by anyone). The row
+    is snapshotted whole into an `audit_log` row (action='drop_dead_project_mount') BEFORE
+    the delete, in the same transaction. `audit_log`, not `object_events`, deliberately:
+    `object_events.object_id` is NOT NULL, and attaching the witness to a freshly-minted
+    Agent object would violate an existing, deliberate invariant this same reaper's own
+    test enforces (test_fleet_reconcile.py: "a drop releases the RESIDUE ROW only — no
+    Agent object was ever minted here") — a drop must promote nothing, including its own
+    witness. Pass the returned `audit_id` to `undrop_dead_project_mount` to replay the row
+    back exactly.
+
     Re-checks `project` at delete time rather than trusting the caller's earlier read — a
     row whose project changed between a sweep's report and this call (re-mounted into a
-    live project in the interim) no longer matches and is left untouched; the WHERE clause
-    is the safety, not a prior belief about what the row held. Returns rows released (0 or
-    1 — job_dir is unique)."""
-    tag = await pool.execute(
-        "DELETE FROM agent_mounts WHERE job_dir=$1 AND project=$2", job_dir, project)
-    return int(tag.rsplit(" ", 1)[-1])
+    live project in the interim) no longer matches and is left untouched, and NOTHING is
+    written, audit row included: a witness for a delete that didn't happen would itself be
+    a false record. Returns {"dropped": 0|1, "audit_id": int|None} (job_dir is unique, so
+    at most one row can ever match)."""
+    async with actions.pool.acquire() as conn, conn.transaction():
+        row = await conn.fetchrow(
+            f"SELECT {', '.join(_MOUNT_COLS)} FROM agent_mounts "
+            "WHERE job_dir=$1 AND project=$2 FOR UPDATE", job_dir, project)
+        if row is None:
+            return {"dropped": 0, "audit_id": None}
+        snapshot = _mount_snapshot(row)
+        audit_id = await conn.fetchval(
+            "INSERT INTO audit_log (action, actor, payload) VALUES ($1,$2,$3) "
+            "RETURNING id", "drop_dead_project_mount", actor, snapshot)
+        await conn.execute(
+            "DELETE FROM agent_mounts WHERE job_dir=$1 AND project=$2", job_dir, project)
+        return {"dropped": 1, "audit_id": audit_id}
+
+
+async def undrop_dead_project_mount(
+    actions: Actions, *, audit_id: int, actor: str,
+) -> dict[str, Any]:
+    """The compensating inverse (task #59's gate, Thoth DM 2677): replays the exact row a
+    `drop_dead_project_mount` audit_log row witnessed, back into `agent_mounts` unchanged.
+    `audit_id` — not `job_dir` — pins exactly WHICH drop to undo: the same job_dir can be
+    dropped, re-mounted, and dropped again, and a replay must never reach for the wrong
+    generation of that history.
+
+    Refuses LOUDLY (an error dict, nothing written) when: no such audit_log row, or its
+    `action` isn't 'drop_dead_project_mount' (an undrop never invents a snapshot from an
+    unrelated audit entry); the job_dir is already occupied — a live session re-mounted
+    there since the drop, so the newer row is the truth and reviving the old one underneath
+    it would fork identity, never overwrite.
+
+    PROOF, NOT ASSERTION: the restored row round-trips through the SAME `_mount_snapshot`
+    the drop used, so `undrop(...); read; _mount_snapshot(...) == original_snapshot` is a
+    literal equality a caller (or test) can check, not an eyeballed match."""
+    row = await actions.pool.fetchrow(
+        "SELECT action, payload FROM audit_log WHERE id=$1", audit_id)
+    if row is None:
+        return {"error": f"no audit_log row #{audit_id} — an undrop never invents one"}
+    if row["action"] != "drop_dead_project_mount":
+        return {"error": f"audit_log #{audit_id} is a {row['action']!r} record, not "
+                         "'drop_dead_project_mount' — nothing to undrop"}
+    snap = row["payload"]
+    async with actions.pool.acquire() as conn, conn.transaction():
+        occupied = await conn.fetchval(
+            "SELECT 1 FROM agent_mounts WHERE job_dir=$1", snap["job_dir"])
+        if occupied:
+            return {"error": f"{snap['job_dir']} is already occupied by a live mount — "
+                             "undrop refuses to overwrite it; the newer row is the truth"}
+        cols = ", ".join(_MOUNT_COLS)
+        placeholders = ", ".join(f"${i + 1}" for i in range(len(_MOUNT_COLS)))
+        values = [
+            datetime.fromisoformat(snap[k])
+            if k in ("mounted_at", "last_seen") and snap[k] else snap[k]
+            for k in _MOUNT_COLS
+        ]
+        await conn.execute(
+            f"INSERT INTO agent_mounts ({cols}) VALUES ({placeholders})", *values)
+        undrop_audit_id = await conn.fetchval(
+            "INSERT INTO audit_log (action, actor, payload) VALUES ($1,$2,$3) "
+            "RETURNING id", "undrop_dead_project_mount", actor,
+            {"job_dir": snap["job_dir"], "restored_from_audit_id": audit_id})
+    return {"restored": 1, "job_dir": snap["job_dir"], "undrop_audit_id": undrop_audit_id}
 
 
 async def find_session_row(
