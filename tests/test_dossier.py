@@ -71,6 +71,62 @@ async def test_dossier_missing_object_is_empty(actions: Actions) -> None:
     assert await entity_dossier(actions.pool, uuid.uuid4()) == {}
 
 
+async def test_dossier_splits_lifecycle_status_from_semantic_status(
+    actions: Actions,
+) -> None:
+    """THE FIX (thread 6212d9f5, Thoth DM 2746, "the graph knows and the display lies"):
+    the object's own LIFECYCLE (objects.status: active/merged/archived) and a Thread's
+    semantic status ASSERTION (open/resolved/retracted) are two different concepts that
+    used to share one top-level "status" key — the lifecycle value always won, silently.
+    They must now render as two distinctly-named fields."""
+    from datetime import UTC, datetime
+
+    obj = await actions.create_or_find_object("Thread", "thread:dosssplit", "test")
+    await actions.assert_property(obj, "status", "resolved", "agent:alice",
+                                  datetime.now(UTC), 0.9)
+    d = await entity_dossier(actions.pool, obj)
+    assert d["object_status"] == "active"   # the objects-table lifecycle, unambiguous now
+    assert d["status"] == "resolved"        # the semantic status, no longer shadowed by it
+
+
+async def test_dossier_status_resolves_the_winner_not_the_first_or_last_write(
+    actions: Actions,
+) -> None:
+    """THE ACCEPTANCE SHAPE (b318a9d3's own live specimen): THREE sources, none
+    superseding another — open (oldest), resolved (middle), resolved (newest, highest
+    confidence tied with the others) — winning_props' own ordering (confidence DESC, then
+    observed_at DESC) must pick the newest 'resolved', not whichever row the DB happened
+    to return first."""
+    from datetime import UTC, datetime, timedelta
+
+    obj = await actions.create_or_find_object("Thread", "thread:dosswinner", "test")
+    t0 = datetime.now(UTC)
+    await actions.assert_property(obj, "status", "open", "agent:first", t0, 0.9)
+    await actions.assert_property(obj, "status", "resolved", "agent:second",
+                                  t0 + timedelta(days=1), 0.9)
+    await actions.assert_property(obj, "status", "resolved", "agent:third",
+                                  t0 + timedelta(days=2), 0.9)
+    d = await entity_dossier(actions.pool, obj)
+    assert d["status"] == "resolved"
+    # the full disagreement is STILL visible in properties (#102: mark, never resolve away)
+    status_prop = next(p for p in d["properties"] if p["name"] == "status")
+    assert status_prop["agreement"] == "contradicting"
+    assert {v["value"] for v in status_prop["values"]} == {"open", "resolved"}
+
+
+async def test_dossier_status_is_none_for_a_type_with_no_status_assertion(
+    actions: Actions,
+) -> None:
+    """Most object types (Person, Company, ...) never carry a `status` PROPERTY at all —
+    the new top-level `status` must stay honestly None rather than inventing one, while
+    `object_status` still answers the lifecycle question it always did."""
+    await ingest_ftm(actions, _FTM)
+    p1 = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='P1'")
+    d = await entity_dossier(actions.pool, p1)
+    assert d["status"] is None
+    assert d["object_status"] == "active"
+
+
 async def test_dossier_resolves_own_name_and_neighbor_name_via_the_full_chain(
     actions: Actions,
 ) -> None:

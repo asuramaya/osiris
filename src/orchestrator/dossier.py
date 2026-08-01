@@ -56,7 +56,31 @@ async def entity_dossier(pool: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, 
     property entry now carries `agreement`: "single"
     (one source), "agreeing" (multiple sources, same value), or "contradicting" (multiple
     sources, different values) — the three epistemic states a reader could not tell apart
-    before. MARK, never resolve: no value is dropped, ranked, or picked as a winner."""
+    before. MARK, never resolve: no value is dropped, ranked, or picked as a winner.
+
+    "THE GRAPH KNOWS AND THE DISPLAY LIES" (thread 6212d9f5's 5th sighting, Thoth DM 2746,
+    Imhotep's finding on b318a9d3): the OLD top-level `"status"` key here was `obj["status"]`
+    — the `objects` table's own LIFECYCLE projection (active/merged/archived/draft, set by
+    `Actions.set_status`/`merge_objects`) — a completely different axis from a Thread's
+    (or Decision's) semantic `status` PROPERTY (open/resolved/retracted, set by
+    `resolve_thread`). Both happen to be named "status", so a caller reading the prominent
+    top-level field for "is this open or resolved" got the WRONG, unrelated answer — always
+    "active" for any non-merged Thread, regardless of what resolve_thread had actually
+    recorded — while the correct, resolvable answer sat one level down in `properties`,
+    unresolved, as a multi-source set the caller had to collapse by hand. Not a query bug:
+    every other read site in this codebase (winning_props, migration 0015; grounds
+    e68d8b46) already resolves this correctly — this was a field NAME collision between two
+    genuinely different concepts, not a resolution bug in this function's own SQL.
+
+    Fixed by SPLITTING the collision, not by repurposing the ambiguous key silently: the
+    object's own lifecycle now renders as `"object_status"` (unambiguous), and a NEW
+    `"status"` key carries the WINNING status-property value — same ordering `winning_props`
+    itself uses (confidence DESC, then observed_at DESC) — or `None` when this object type
+    carries no `status` assertion at all (most types besides Thread/Decision never do).
+    `properties` is UNCHANGED: the full multi-source "contradicting"/"agreeing"/"single" view
+    from #102 still shows every source's own word, never collapsed — `status` is a
+    COMPLEMENT to that list for a reader who wants the graph's own resolved answer at a
+    glance, not a replacement for the epistemic detail."""
     obj = await pool.fetchrow(
         "SELECT id, type, canonical, status FROM objects WHERE id=$1", object_id
     )
@@ -67,16 +91,21 @@ async def entity_dossier(pool: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, 
     name = resolve_label(obj["type"], own_props, obj["canonical"]).label
 
     # properties as the multi-source set: one entry per property name, carrying each
-    # source's value + how it was obtained (evidence_class) + confidence.
+    # source's value + how it was obtained (evidence_class) + confidence. Ordered by
+    # confidence DESC, THEN observed_at DESC (winning_props' own tiebreaker, migration
+    # 0015) — the FIRST row per name under this exact order is that property's WINNER,
+    # captured below into `winners` as we go, with no second query.
     prop_rows = await pool.fetch(
         "SELECT name, value #>> '{}' AS value, source_id, evidence_class, confidence "
         "FROM current_assertions "
         "WHERE object_id=$1 AND name NOT IN ('name','tag') "
-        "ORDER BY name, confidence DESC NULLS LAST",
+        "ORDER BY name, confidence DESC NULLS LAST, observed_at DESC",
         object_id,
     )
     properties: dict[str, dict[str, Any]] = {}
+    winners: dict[str, str] = {}
     for r in prop_rows:
+        winners.setdefault(r["name"], r["value"])
         entry = properties.setdefault(r["name"], {"name": r["name"], "values": []})
         entry["values"].append({
             "value": r["value"],
@@ -139,7 +168,8 @@ async def entity_dossier(pool: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, 
         "id": str(object_id),
         "type": obj["type"],
         "canonical": obj["canonical"],
-        "status": obj["status"],
+        "object_status": obj["status"],
+        "status": winners.get("status"),
         "name": name,
         "properties": list(properties.values()),
         "relationships": rels,
