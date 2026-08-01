@@ -356,6 +356,17 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "later commit the closure-miner finds, or the commit/decision a session names "
              "via resolve_thread(artifact=…): the strong closure witness (022bd24a).",
              ("Thread",), ("Commit", "Decision")),
+    LinkType("closed_by", "WHO closed this thread — minted unconditionally by resolve_thread "
+             "(Phase 1a, decision cb38d922: 78% of closures left no traversable trace because "
+             "resolved_by only fires when `artifact` names a Commit/Decision). Distinct from "
+             "resolved_by (WHAT closed it, the strong artifact witness): this is the weak edge "
+             "that always exists — minted only when resolved_by does NOT land for this closure "
+             "(a free-text/unresolvable artifact, or none at all), never both, so a closure "
+             "mints exactly one closure edge. Points at the Agent object resolved from "
+             "resolve_thread's own `source` (mint-or-find, so a non-Agent source string like "
+             "the module default 'session' or the REST route's 'analyst:operator' still "
+             "resolves to SOMETHING rather than leaving the thread edgeless).",
+             ("Thread",), ("Agent",)),
     LinkType("cites", "This document cites / draws from that reference.",
              ("Reference",), ("Reference",)),
     LinkType("informs", "This reference grounds / informs that artifact.",

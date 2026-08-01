@@ -665,6 +665,138 @@ async def test_resolve_thread_artifact_points_at_the_closer(actions: Actions) ->
         "SELECT 1 FROM links WHERE from_id=$1 AND type='resolved_by'", t2) is None
 
 
+async def test_resolve_thread_mints_closed_by_when_no_artifact(actions: Actions) -> None:
+    """Phase 1a (decision cb38d922): no artifact at all still mints exactly one closure
+    edge — closed_by, to the closing agent's own Agent object — never leaving the thread
+    with the ZERO traversable edges 78% of real closures had before this fix."""
+    t = await open_thread(actions, "a thread closed with no artifact, Phase 1a case")
+    await resolve_thread(actions, str(t), because="moot", source="agent:closer-a")
+    closer = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical=$1",
+                                         "agent:closer-a")
+    assert closer is not None
+    assert await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='closed_by'", t) == closer
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND type='resolved_by'", t) is None
+
+
+async def test_resolve_thread_mints_closed_by_when_artifact_is_free_text(
+    actions: Actions,
+) -> None:
+    """A free-text/unresolvable artifact (a file:line) still keeps resolved_artifact as
+    text (unchanged) AND now also mints closed_by — Phase 1a's second case: the resolved_by
+    edge never lands here (nothing to point at), but the thread is never edgeless."""
+    t = await open_thread(actions, "a thread closed with a file:line, Phase 1a case")
+    await resolve_thread(actions, str(t), artifact="src/widget/voice.py:42",
+                         source="agent:closer-b")
+    assert (await _props(actions.pool, t))["resolved_artifact"] == "src/widget/voice.py:42"
+    closer = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical=$1",
+                                         "agent:closer-b")
+    assert await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='closed_by'", t) == closer
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND type='resolved_by'", t) is None
+
+
+async def test_resolve_thread_mints_only_resolved_by_when_artifact_resolves(
+    actions: Actions,
+) -> None:
+    """When artifact DOES name a graph object, resolved_by lands exactly as before Phase
+    1a and closed_by does NOT also land — one closure, one edge, never two."""
+    t = await open_thread(actions, "a thread closed with a real decision, Phase 1a case")
+    d = await record_decision(actions, "the Phase 1a closer target", kind="decision")
+    await resolve_thread(actions, str(t), artifact=str(d)[:8], source="agent:closer-c")
+    assert await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='resolved_by'", t) == d
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND type='closed_by'", t) is None
+
+
+async def test_resolve_thread_closed_by_is_idempotent_on_a_repeat_close(
+    actions: Actions,
+) -> None:
+    """Negative control (DM 2505): closing an already-closed thread again, by the same
+    agent, must not mint a second closed_by edge — the same check-then-create shape
+    resolved_by already used, applied to the new edge."""
+    t = await open_thread(actions, "a thread closed twice by the same agent")
+    await resolve_thread(actions, str(t), because="first close", source="agent:closer-d")
+    await resolve_thread(actions, str(t), because="closed again", source="agent:closer-d")
+    count = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='closed_by'", t)
+    assert count == 1
+
+
+async def test_resolve_thread_closed_by_reuses_an_already_mounted_agent(
+    actions: Actions,
+) -> None:
+    """The common real-world case: `source` already names a live Agent object (mount()
+    minted it). closed_by must FIND that object, never mint a duplicate Agent under the
+    same canonical (create_or_find_object's own (type, canonical) uniqueness)."""
+    existing = await actions.create_or_find_object("Agent", "agent:already-mounted", "test")
+    t = await open_thread(actions, "closed by an already-mounted agent")
+    await resolve_thread(actions, str(t), source="agent:already-mounted")
+    assert await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='closed_by'", t) == existing
+    total = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE canonical='agent:already-mounted'")
+    assert total == 1
+
+
+async def test_resolve_thread_refuses_on_a_colliding_short_id_ref_and_mints_nothing(
+    actions: Actions,
+) -> None:
+    """Thoth's mid-build addendum (DM 2516, Sekhmet's live specimen: `resolves="28842543"`
+    matched two threads in production): making the closure edge unconditional means an
+    ambiguous ref that ever slipped through would now ALSO mint a wrong edge, not just a
+    wrong status flip. It cannot slip through — `_find_thread`'s existing ladder (thread
+    ac3333f7, #117's law: refuse, not widen) already raises RefAmbiguous BEFORE
+    resolve_thread's first write, so no partial close and no closed_by/resolved_by edge
+    ever lands on EITHER candidate. This proves that end-to-end through resolve_thread
+    itself, not just the lower-level _find_thread the pre-existing unit test covers."""
+    from src.orchestrator.capture import RefAmbiguous
+
+    shared = "cafebabe"
+    id_a = uuid.UUID(f"{shared}-0000-4000-8000-000000000001")
+    id_b = uuid.UUID(f"{shared}-0000-4000-8000-000000000002")
+    for oid, summary in ((id_a, "collision candidate A, Phase 1a"),
+                        (id_b, "collision candidate B, Phase 1a")):
+        await actions.pool.execute(
+            "INSERT INTO objects (id, type, canonical, status) VALUES ($1, 'Thread', $2, "
+            "'active')", oid, f"thread:manual-{oid}")
+        await actions.assert_property(oid, "summary", summary, "test", datetime.now(UTC), 0.9,
+                                      evidence_class="self_declared")
+    try:
+        await resolve_thread(actions, shared, because="should never land")
+        raise AssertionError("expected RefAmbiguous")
+    except RefAmbiguous as exc:
+        assert {c["id"] for c in exc.candidates} == {str(id_a), str(id_b)}
+    for oid in (id_a, id_b):
+        assert await actions.pool.fetchval(
+            "SELECT 1 FROM assertions WHERE object_id=$1 AND name='status'", oid) is None
+        assert await actions.pool.fetchval(
+            "SELECT 1 FROM links WHERE from_id=$1", oid) is None
+
+
+async def test_closure_edge_ratio_converges_to_one_to_one(actions: Actions) -> None:
+    """The measurement Phase 1a exists to fix (decision cb38d922: 119 closure edges over
+    527 resolved threads, 22.6%). Re-run the same ratio against a small live-shaped
+    fixture mixing all three artifact cases and prove it lands at 1:1 — every resolved
+    thread carries exactly one closure edge (resolved_by or closed_by), never zero."""
+    d = await record_decision(actions, "the ratio fixture's own closer", kind="decision")
+    threads = [await open_thread(actions, f"ratio fixture thread {i}") for i in range(5)]
+    await resolve_thread(actions, str(threads[0]), artifact=str(d)[:8])
+    await resolve_thread(actions, str(threads[1]), artifact="src/ratio/fixture.py:1")
+    for t in threads[2:]:
+        await resolve_thread(actions, str(t), because="moot")
+    resolved = await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE object_id = ANY($1) "
+        "AND name='status' AND value #>> '{}' = 'resolved'", threads)
+    edges = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id = ANY($1) "
+        "AND type IN ('resolved_by', 'closed_by')", threads)
+    assert resolved == len(threads) == edges  # 1:1, not 119/527
+
+
 async def test_resolve_thread_tool_receipt_confirms_the_edge_when_it_lands(
     actions: Actions,
 ) -> None:

@@ -1022,7 +1022,15 @@ async def resolve_thread(
     to the thing that closed the thread — a commit hash, a decision id, a file:line. It is
     always kept as the resolved_artifact property, and when it names a graph object
     (Decision, Commit, or any exact canonical) a resolved_by edge is minted too — the
-    strong closure witness the closure-miner almost never finds (e27f7c3)."""
+    strong closure witness the closure-miner almost never finds (e27f7c3).
+
+    Phase 1a (decision cb38d922: 78% of closures left no traversable trace, because
+    resolved_by only fires when `artifact` names a graph object): every closure now mints
+    EXACTLY ONE closure edge — resolved_by when the artifact resolves to a Commit/Decision
+    (unchanged), else closed_by to the resolving agent (`source`), whether `artifact` was
+    unresolvable free text or absent entirely. A weak edge that always exists beats a
+    strong one that exists a fifth of the time — the READ path can traverse the weak one
+    and cannot traverse absence."""
     tid = await _find_thread(actions.pool, ref)
     if tid is None:
         return None
@@ -1034,6 +1042,7 @@ async def resolve_thread(
     if because:
         await actions.assert_property(tid, "resolved_because", because, source, observed,
                                       _CONF, evidence_class=_EC)
+    target = None
     if artifact:
         await actions.assert_property(tid, "resolved_artifact", artifact.strip(), source,
                                       observed, _CONF, evidence_class=_EC)
@@ -1043,7 +1052,30 @@ async def resolve_thread(
                 "AND type='resolved_by' LIMIT 1", tid, target):
             await actions.create_link(tid, target, "resolved_by", source, observed, _CONF,
                                       evidence_class=_EC)
+    if target is None:
+        await _mint_closed_by(actions, tid, source, observed)
     return tid
+
+
+async def _mint_closed_by(
+    actions: Actions, tid: uuid.UUID, source: str, observed: datetime
+) -> None:
+    """The Phase 1a fallback edge (decision cb38d922) — WHO closed a thread, minted whenever
+    resolved_by did not land for this closure. `source` is resolved to its Agent object via
+    the same mint-or-find primitive mount() uses to register an agent in the first place
+    (`create_or_find_object`, idempotent on (type, canonical)): the common case (a mounted
+    caller's `agent:<session>` string) FINDS the object mount() already created; a non-Agent
+    source (the module default 'session', the REST route's hardcoded 'analyst:operator')
+    CREATES a placeholder on first use and finds it on every closure after — a taxonomic
+    stretch (schema.py calls Agent 'a Claude instance'; 'session' and 'analyst:operator' are
+    neither) accepted deliberately so no closer is ever left with nothing to point at.
+    Idempotent per (thread, closer) pair, same check-then-create shape as resolved_by."""
+    closer = await actions.create_or_find_object("Agent", source, source)
+    if not await actions.pool.fetchval(
+            "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 "
+            "AND type='closed_by' LIMIT 1", tid, closer):
+        await actions.create_link(tid, closer, "closed_by", source, observed, _CONF,
+                                  evidence_class=_EC)
 
 
 async def assign_thread(
