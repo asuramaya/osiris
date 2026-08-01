@@ -599,6 +599,26 @@ async def fleet_reconcile_heartbeat(ctx: dict[str, Any]) -> int:
     return acted
 
 
+async def closure_miner_heartbeat(ctx: dict[str, Any]) -> int:
+    """The closure miner's scheduled leg (Thoth DM 2679, following the deploy that made
+    this defensible) — same thin-shim shape as fleet_reconcile_heartbeat: the flag gate
+    (osiris_closure_miner_enabled) and the acting logic both live in
+    closure.close_by_commits_scheduled_tick, never here. A DB hiccup logs, never sinks
+    the cron."""
+    from src.ingest.closure import close_by_commits_scheduled_tick
+
+    actions: Actions = ctx["cascade"].actions
+    try:
+        report = await close_by_commits_scheduled_tick(actions)
+    except Exception as exc:  # a DB hiccup must not kill the cron
+        _log.warning("closure miner heartbeat failed: %r", exc)
+        return 0
+    acted = int(report.get("resolved", 0)) + int(report.get("candidates", 0))
+    if acted:
+        _log.info("closure miner heartbeat: %s", report)
+    return acted
+
+
 async def backfill_decided_in_heartbeat(ctx: dict[str, Any]) -> int:
     """Task #101's own periodic retry (Thoth's grant, DM 2271, riding behind the one-off
     sweep in decisions c6d1598c/e73c1453): the live path (record_decision) only ever
@@ -768,6 +788,13 @@ class WorkerSettings:
         # switch), same cadence class as reap_orphans (every 15 min, not urgent cleanup).
         cron(watched(fleet_reconcile_heartbeat, every=900), minute={4, 19, 34, 49},
              second={0}, timeout=600, run_at_startup=True),
+        # the closure miner's scheduled leg (Thoth DM 2679): find the commit that witnesses
+        # each untouched open thread, on a 15-min cadence — a no-op unless
+        # osiris_closure_miner_enabled (the kill switch). Same cadence class as reap_orphans/
+        # fleet_reconcile_heartbeat; offset from both (and from embed_pass's :05/:15/... grid)
+        # so none of them contend for CPU at the same wall-clock second.
+        cron(watched(closure_miner_heartbeat, every=900), minute={10, 25, 40, 55},
+             second={5}, timeout=600, run_at_startup=True),
         # task #101's backfill, on a schedule (Thoth's grant DM 2271): closes the RACE
         # where a decision cites a commit before gitlog has ingested it — a cheap,
         # SQL-only scan (no LLM/embedding cost), offset from the other 10-minute jobs

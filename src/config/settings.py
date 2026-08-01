@@ -271,6 +271,15 @@ class Settings(BaseSettings):
     # touched, by construction. Flipping this flag is a SECOND signature on top of a reviewed
     # diff — the code ships inert; a human decides separately when it may actually act.
     osiris_fleet_reconcile_enabled: bool = False
+    # THE CLOSURE MINER'S CADENCE (Thoth DM 2679, following the deploy that made this
+    # defensible) — OFF by default, the same law as osiris_fleet_reconcile_enabled: a
+    # mechanism that WRITES to the graph on a schedule earns its own kill switch, never
+    # inherits one. When on, a tick runs close_by_commits(dry_run=False) fleet-wide — the
+    # exact same acting verb reachable by hand. Its blast radius is narrower than the
+    # reaper's (only a commit LITERALLY naming a thread's own short id auto-closes;
+    # everything else stays a rot_candidate for a human to confirm) but it still writes
+    # unattended, so it gets the same second signature before it may act.
+    osiris_closure_miner_enabled: bool = False
     # THE FROZEN LANE (wake(), thread 9f566244 / handoff 8f005905) — OFF by default, and this
     # QUARANTINE LIFTED (ruling 85fba696, operator 2026-07-29, superseding 482c3d0f). This was
     # dark because the house read the Claude daemon reply lane as a harness-level RCE (decisions

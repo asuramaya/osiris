@@ -44,6 +44,7 @@ from typing import Any
 import asyncpg
 
 from src.actions.core import Actions
+from src.config.settings import Settings, get_settings
 from src.ingest.mined import distinctive_terms
 from src.orchestrator.monitor import get_cursor, set_cursor
 from src.parsers.base import EvidenceClass
@@ -319,3 +320,33 @@ async def close_by_commits(
         "note": ("DRY RUN — nothing written" if dry_run else
                  f"{len(resolved)} closed citing a commit; {len(candidates)} await your word"),
     }
+
+
+async def close_by_commits_scheduled_tick(
+    actions: Actions, *, settings: Settings | None = None,
+) -> dict[str, Any]:
+    """THE SCHEDULED LEG's own tick — `arq_worker.closure_miner_heartbeat` calls this
+    unconditionally, the same thin-shim shape trigger_mail/pit_watch_heartbeat/
+    fleet_reconcile_heartbeat already use: the flag gate and the acting logic both live
+    here, never in the cron wrapper, so a test can exercise the real gate without
+    touching arq.
+
+    OFF unless `osiris_closure_miner_enabled` — the kill switch (Thoth DM 2679, the same
+    law fleet_reconcile_heartbeat already stands on: a mechanism that WRITES to the graph
+    on a schedule earns its own kill switch, never inherits one). The code ships inert;
+    flipping the flag is a second signature separate from approving the diff. When on,
+    composes `close_by_commits(dry_run=False)` fleet-wide — the exact same acting verb
+    reachable by hand, so the schedule and a human's own manual call are provably the
+    same path, never two implementations that could drift.
+
+    `settings` is the injected test seam (`reconcile_scheduled_tick`'s own convention:
+    `st = settings or get_settings()`) so a test can flip the flag without touching the
+    real environment or monkeypatching `get_settings`.
+    """
+    st = settings or get_settings()
+    if not st.osiris_closure_miner_enabled:
+        return {"enabled": False, "resolved": 0, "candidates": 0,
+                "note": "the closure miner's scheduled leg is dark "
+                        "(osiris_closure_miner_enabled=0)"}
+    out = await close_by_commits(actions, repo=None, dry_run=False)
+    return {"enabled": True, **out}

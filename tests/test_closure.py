@@ -7,7 +7,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from src.actions.core import Actions
-from src.ingest.closure import close_by_commits
+from src.config.settings import Settings
+from src.ingest.closure import close_by_commits, close_by_commits_scheduled_tick
 from src.orchestrator.capture import open_thread
 from src.orchestrator.monitor import get_cursor
 
@@ -240,6 +241,42 @@ async def test_unreachable_no_repo_reported_fleet_wide_only(actions: Actions) ->
 
     fleet = await close_by_commits(actions, repo=None, dry_run=True, strong=2.0, weak=0.4)
     assert fleet["unreachable_no_repo"] >= 1
+
+
+async def test_scheduled_tick_is_dark_by_default_and_writes_nothing(actions: Actions) -> None:
+    """osiris_closure_miner_enabled defaults False (Settings()'s own default, matching the
+    field declared in settings.py) — the scheduled leg is inert out of the box, no override
+    needed to prove it, the same law fleet_reconcile_heartbeat's own kill switch stands on."""
+    await _tree(actions)
+
+    out = await close_by_commits_scheduled_tick(actions, settings=Settings())
+
+    assert out["enabled"] is False
+    assert out["resolved"] == 0 and out["candidates"] == 0
+    assert await get_cursor(actions.pool, "closure-miner:*") is None
+
+
+async def test_scheduled_tick_acts_once_the_flag_is_flipped_on(actions: Actions) -> None:
+    """Flipping osiris_closure_miner_enabled composes the exact same close_by_commits(
+    dry_run=False) a human would call by hand — same acting verb, same watermark, no
+    second implementation that could drift from it."""
+    await _tree(actions)
+    tid = str(await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='thread:strong'"))
+    c = await actions.create_or_find_object("Commit", "commit:cited", "git")
+    await actions.assert_property(c, "subject", f"fix: close {tid[:8]} at last", "git",
+                                  LATER, 0.9)
+    await actions.assert_property(c, "authored_date", LATER.isoformat(), "git", LATER, 0.9)
+    await actions.create_link(
+        c, await actions.create_or_find_object("SoftwareProject", "repo:cl", "session"),
+        "in_repo", "git", LATER, 0.9)
+
+    out = await close_by_commits_scheduled_tick(
+        actions, settings=Settings(osiris_closure_miner_enabled=True))
+
+    assert out["enabled"] is True
+    assert out["resolved"] == 1
+    assert await get_cursor(actions.pool, "closure-miner:*") is not None
 
 
 def test_rarity_outranks_volume_which_is_the_whole_point() -> None:
