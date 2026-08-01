@@ -18,6 +18,7 @@ import pytest
 from src.actions.core import Actions
 from src.orchestrator import trigger as trigger_module
 from src.orchestrator.mailbox import OPERATOR_ADDR, read_inbox, send_message
+from src.orchestrator.mounts import save_mount
 from src.orchestrator.seats import bind_holder, ensure_seat, set_seat_attended
 from src.orchestrator.trigger import (
     _WAKE_PROMPT,
@@ -150,6 +151,13 @@ async def _agent_with_mail(actions: Actions) -> None:
     a = await actions.create_or_find_object("Agent", "agent:demo", "session")
     await actions.assert_property(a, "project", "demo", "session", NOW, 0.9)
     await actions.assert_property(a, "cwd", "/repo/demo", "session", NOW, 0.9)
+    # send_message now refuses a to_project nobody has ever mounted under (shape 3 of
+    # #117, obligation 45e52530) — alive=False so this registers 'demo' as existing
+    # without stamping a live last_seen, which would trip _owner_live() and make the
+    # trigger deliver instead of mint/resume/poke (the file's own idiom — see the
+    # alive=False seeds elsewhere in this file, e.g. "pulseless: not owner_live").
+    await save_mount(actions.pool, job_dir="/test/seed/demo", agent_id="agent:seed-demo",
+                     project="demo", cwd="/test", model=None, session_key=None, alive=False)
     await send_message(actions.pool, from_agent="agent:other", from_project="other",
                        to_project="demo", body="please look at X")
 
