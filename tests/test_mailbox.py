@@ -1170,3 +1170,36 @@ async def test_threads_param_is_idempotent_across_a_dedup_retry(actions: Actions
     assert first["id"] == second["id"]
     assert second["threads_stamped"] == [str(tid)]
     assert await _owner(actions, tid) == "agent:worker"
+
+
+async def test_send_tool_forwards_threads_and_echoes_threads_stamped(actions: Actions) -> None:
+    """The MCP surface for Phase 1c (Thoth's follow-up, msg 2536): send_message owns the
+    ownership-transfer semantics (tested above); mcp_server.send() just has to pass
+    `threads` through and not swallow `threads_stamped` on the way out — same discipline
+    as the seat/lineage_head echo test above this one."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.capture import open_thread
+
+    tid = await open_thread(actions, "P129 prep: dispatched via the MCP tool, not the "
+                            "orchestrator function directly", kind="obligation",
+                            owner="agent:thoth", source="agent:thoth")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:thoth", session="thoth0001", project="osiris", model=None, cwd=None)
+    try:
+        out = await srv.send("yours now, via the tool", to_agent="agent:worker",
+                             threads=[str(tid)[:8]], ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["threads_stamped"] == [str(tid)]
+    assert await _owner(actions, tid) == "agent:worker"

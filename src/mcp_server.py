@@ -2617,6 +2617,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
 async def send(body: str, to: str | None = None, to_agent: str | None = None,
                reply_to: int | None = None, desk: str | None = None,
                grade: str | None = None, require_seat: bool = False,
+               threads: list[str] | None = None,
                subagent_id: str | None = None, subagent_type: str | None = None,
                session_anchor: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
@@ -2641,7 +2642,14 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     null, anonymous), `lineage_head` where that id's OWN succession chain currently ends;
     compare it against `dm_to` to catch a stale address before trusting the "sent". Pass
     `require_seat=True` to refuse outright when the target holds no claimed seat — nothing
-    is sent, loudly, instead of dispatching into the blind."""
+    is sent, loudly, instead of dispatching into the blind.
+    `threads` TRANSFERS ownership of EXISTING Thread(s) (uuid / `thread:<12hex>` / short-id
+    prefix) to this DM's addressee, in the same act — re-pointing each Thread's `owner`,
+    the exact mechanism `reclassify_thread` already exposes for the human-triaged case.
+    NEVER prose inference from `body` — only a ref named HERE is touched. Each ref must
+    resolve to EXACTLY ONE Thread or the whole send refuses (ValueError, nothing written);
+    requires a resolved single addressee — ownership has nowhere to land on a broadcast.
+    The receipt's `threads_stamped` names what actually transferred."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a message must say who "
@@ -2655,7 +2663,8 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     try:
         res = await send_message(pool, from_agent=actor, from_project=ident.project,
                                  to_project=to, to_agent=to_agent, body=body, reply_to=reply_to,
-                                 desk_kind=desk, grade=grade, require_seat=require_seat)
+                                 desk_kind=desk, grade=grade, require_seat=require_seat,
+                                 threads=threads)
     except ValueError as e:
         return {"error": str(e)}
     out: dict[str, Any] = {
@@ -2663,6 +2672,7 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
         **({"thread": res["thread_id"]} if res["thread_id"] is not None else {}),
         **({"dedup": "identical recent message already queued — not re-posted"}
            if res["dedup"] else {}),
+        **({"threads_stamped": res["threads_stamped"]} if res.get("threads_stamped") else {}),
     }
     if res["to_agent"]:  # a DM — report the addressee, its seat + lineage head, and its liveness
         out["dm_to"] = res["to_agent"]
