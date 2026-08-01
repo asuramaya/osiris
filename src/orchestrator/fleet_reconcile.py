@@ -75,13 +75,39 @@ CAP (`_BATCH_CAP`, 5) — a tick whose actionable rows exceed it holds the WHOLE
 because an anomalous batch is the signature of a classifier bug, not a thing to bulk-act on
 unwitnessed; (3) a CONSECUTIVE-BLIND ALARM — no counter, no state row, `open_thread`'s own
 idempotency on the alarm's fixed summary text does the dedup, so the thread's own age IS the
-darkness duration, auto-resolved the tick the census recovers. The resulting state machine —
-DARK -> BLIND -> OVER_CAP -> ACTS, every non-ACTS state a STRUCTURAL hold — is named
-explicitly in `reconcile_scheduled_tick`'s own return value (`state`) and docstring, per
-ruling 2889's acceptance test: "what refuses," not "the agent will know to." Flipping
+darkness duration, auto-resolved the tick the census recovers. Flipping
 `osiris_fleet_reconcile_enabled` stays the operator's own hand, held until this watch shipped
 — arming the schedule before its watch exists would have been the birth-defect version of
 the exact bug this task exists to close.
+
+THE STATE MACHINE, NAMED HERE RATHER THAN LEFT FOR A FUTURE READER TO INFER (Thoth's own
+follow-up on ruling 2889, msg 2939: "the laws are also documents nobody reads though" — so
+this lives where a reader HITS it, not in a dispatch or a decision):
+
+  DARK     — `osiris_fleet_reconcile_enabled` is off. Evaluated ONCE, at the very top of
+             `reconcile_scheduled_tick`, before `reconcile_execute`/`reconcile_dry_run` are
+             ever called. A DARK tick never reaches any of the other three — not merely
+             unused alongside them, STRUCTURALLY UNREACHABLE, since the code path that
+             would compute BLIND/OVER_CAP/ACTS is never entered this tick.
+  BLIND    — the OS census failed. Set inside `reconcile_dry_run`, per row, before any row
+             is ever assigned to an actionable bucket.
+  OVER_CAP — the census succeeded but this tick's actionable rows (bulk_fold_swarm +
+             rollup_office_remount + drop_ephemeral_test_cwd) exceeded `_BATCH_CAP`. Set
+             by a POST-loop pass inside `reconcile_dry_run`, after every row already has a
+             bucket.
+  ACTS     — neither hold fired. `folded`/`dropped` may be nonzero, or the tray may
+             genuinely be empty — ACTS names "the acting code path ran," not "something was
+             acted on."
+
+BLIND AND OVER_CAP CAN NEVER BOTH BE TRUE IN THE SAME TICK — not by convention, by
+construction: when the census is blind, every row that would have landed in an actionable
+bucket is redirected to `leave_for_human` by the PER-ROW blind check inside the main sweep
+loop, before the actionable buckets are ever populated — so by the time the OVER_CAP
+post-pass runs and sums those buckets, their combined size is already ~0, far under
+`_BATCH_CAP`. `reconcile_scheduled_tick`'s own `if out.get("census_blind"): state = "BLIND"
+else: state = "OVER_CAP" if ... else "ACTS"` encodes this as an if/elif, but the deeper
+guarantee is upstream of that branch, in `reconcile_dry_run` itself — the two holds are
+mutually exclusive because one empties the exact buckets the other measures.
 """
 from __future__ import annotations
 
