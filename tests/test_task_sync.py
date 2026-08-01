@@ -142,6 +142,33 @@ async def test_reconcile_flags_a_disagreement_never_silently_resolving_it(
     assert d["task_status"] == "completed" and d["thread_property_status"] == "open"
 
 
+async def test_reconcile_disagreement_is_scoped_by_store_not_bare_task_id(
+    actions: Actions,
+) -> None:
+    """The exact collision this module's own docstring names as its reason to exist: task
+    id "1" in TWO different stores, each bound to its OWN thread. Store A's task genuinely
+    agrees with its thread (both open); store B's genuinely disagrees (task says done,
+    thread says open). Keying the status lookup by bare task_id (the bug found in the
+    Phase-1 dry run, decision pending) would let store B's "completed" leak onto store A's
+    row too, fabricating a disagreement that never happened."""
+    thread_a = await open_thread(actions, "store A's thread, task genuinely pending",
+                                  source="agent:me")
+    thread_b = await open_thread(actions, "store B's thread, task genuinely completed",
+                                  source="agent:me")
+    tasks = [
+        {"id": "1", "subject": "x", "description": f"thread {str(thread_a)[:8]}",
+         "status": "pending", "_store": "storeA"},
+        {"id": "1", "subject": "x", "description": f"thread {str(thread_b)[:8]}",
+         "status": "completed", "_store": "storeB"},
+    ]
+    out = await reconcile(actions.pool, tasks)
+    assert out["counts"]["disagreement"] == 1
+    d = out["disagreement"][0]
+    assert d["store"] == "storeB"
+    assert d["thread_id"] == str(thread_b)
+    assert d["task_status"] == "completed" and d["thread_property_status"] == "open"
+
+
 async def test_reconcile_finds_thread_side_orphans_kind_task_with_no_binding(
     actions: Actions,
 ) -> None:

@@ -155,6 +155,10 @@ async def reconcile(
     universe for its `property_status`, to compute the fifth bucket (disagreement) and the
     sixth, reverse-direction one (thread_side_orphans: Threads already carrying
     kind=`thread_kind_field` — 'task' by default — that no task in `tasks` bound to).
+    Each disagreement row's own `task_status` is looked up by (task_id, store), not task_id
+    alone — the SAME collision hazard the binding step already refuses (a bare id repeats
+    across stores; keying by id alone would let one store's status silently stand in for
+    another's). A disagreement row carries `store` whenever its task did.
 
     Returns the five-buckets-plus-one report, THE BUCKETS NEVER COLLAPSED TO A BARE COUNT:
     {"bound": [...], "bound_partial": [...], "cited_unresolvable": [...], "uncited": [...],
@@ -162,7 +166,13 @@ async def reconcile(
      "counts": {each bucket name: len(...)}}."""
     from src.orchestrator.thread_closure import enumerate_threads
 
-    status_by_task_id = {t["id"]: str(t.get("status") or "") for t in tasks}
+    # Keyed by (task_id, store), NEVER task_id alone — a bare id collides across stores
+    # (this module's own law, Practice 3262cdc9). Keying by id alone here would silently
+    # let one store's task overwrite another's status for disagreement-checking, exactly
+    # the hazard the binding step above already refuses to repeat.
+    status_by_task_key = {
+        (t["id"], t.get("_store")): str(t.get("status") or "") for t in tasks
+    }
 
     buckets: dict[str, list[dict[str, Any]]] = {
         "bound": [], "bound_partial": [], "cited_unresolvable": [], "uncited": [],
@@ -202,14 +212,17 @@ async def reconcile(
 
     disagreement: list[dict[str, Any]] = []
     for row in buckets["bound"] + buckets["bound_partial"]:
-        task_status = status_by_task_id.get(row["task_id"], "")
+        task_status = status_by_task_key.get((row["task_id"], row.get("store")), "")
         for tid in row["thread_ids"]:
             if _status_disagrees(task_status, thread_status.get(tid)):
-                disagreement.append({
+                entry = {
                     "task_id": row["task_id"], "thread_id": tid,
                     "task_status": task_status,
                     "thread_property_status": thread_status.get(tid),
-                })
+                }
+                if "store" in row:
+                    entry["store"] = row["store"]
+                disagreement.append(entry)
 
     thread_side_orphans = [
         {"thread_id": tid} for tid, k in thread_kind.items()
