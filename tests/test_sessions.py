@@ -831,6 +831,25 @@ def test_the_miner_never_mines_osiris_own_wake_spawns(tmp_path: Path) -> None:
     assert listed == {"real.jsonl", "about.jsonl"}   # the wake is not mined at all
 
 
+def test_prune_wake_verdict_drops_the_oldest_inserted() -> None:
+    from src.ingest import sessions
+
+    saved = dict(sessions._wake_verdict)
+    try:
+        sessions._wake_verdict.clear()
+        for i in range(10):
+            sessions._wake_verdict[f"/t/{i}.jsonl"] = bool(i % 2)
+        sessions._prune_wake_verdict(cap=8)  # over cap → drop down to cap//2, oldest first
+        assert len(sessions._wake_verdict) == 4
+        assert set(sessions._wake_verdict) == {"/t/6.jsonl", "/t/7.jsonl",
+                                                "/t/8.jsonl", "/t/9.jsonl"}
+        sessions._prune_wake_verdict(cap=8)  # under cap → untouched
+        assert len(sessions._wake_verdict) == 4
+    finally:
+        sessions._wake_verdict.clear()
+        sessions._wake_verdict.update(saved)
+
+
 async def test_the_miner_stops_plagiarising_its_most_diligent_authors(actions: Actions) -> None:
     """THE BIGGEST NOISE PUMP OF ALL, and it hid behind a working-looking guard.
 

@@ -158,6 +158,36 @@ async def _nudge_tool_list_refresh(ctx: Context | None) -> None:
 _SEAM_ROW_TTL = 600.0  # how long a mount-row hint (job/model/window) may serve the whisper
 _seam_rows: dict[str, tuple[float, str | None, str | None, int | None]] = {}
 _seam_pcts: dict[str, tuple[float, int | None]] = {}
+# BOUNDED, same shape as _prune_agents (mcp_server.py's own proven pattern, "the slow leak
+# that fed the 1G OOM"): every agent_id/job that ever calls a mounted tool leaves a row here
+# forever unless capped. Safe to cap AT ALL because both are self-healing on a miss — _seam_rows
+# already re-fetches from agent_mounts past its own TTL (line below), _seam_pcts already
+# recomputes on an mtime mismatch — so an evicted entry costs one extra query/stat, never a
+# wrong answer. Each tuple's own first element (a monotonic write-time or the file's mtime) IS
+# a workable recency signal, so no companion "touched" dict is needed to prune by it.
+_SEAM_CACHE_CAP = 256
+
+
+def _prune_seam_rows(cap: int = _SEAM_CACHE_CAP) -> None:
+    """Mirrors _prune_agents exactly: past the cap, drop the least-recently-written down to
+    half. Safe because _seam_field re-fetches past _SEAM_ROW_TTL regardless — an evicted
+    entry just loses its TTL grace early, never returns a wrong answer."""
+    if len(_seam_rows) <= cap:
+        return
+    cut = len(_seam_rows) - cap // 2
+    for k in sorted(_seam_rows, key=_seam_rows.__getitem__)[:cut]:
+        _seam_rows.pop(k, None)
+
+
+def _prune_seam_pcts(cap: int = _SEAM_CACHE_CAP) -> None:
+    """Mirrors _prune_agents exactly, keyed by mtime (the closest thing this cache has to a
+    write-recency clock) rather than a monotonic touch-time. Safe because _seam_pct_sync
+    recomputes on any mtime mismatch — an evicted entry costs one stat, never a stale answer."""
+    if len(_seam_pcts) <= cap:
+        return
+    cut = len(_seam_pcts) - cap // 2
+    for k in sorted(_seam_pcts, key=_seam_pcts.__getitem__)[:cut]:
+        _seam_pcts.pop(k, None)
 
 
 def _seam_locate(job: str) -> Path | None:
@@ -193,6 +223,7 @@ def _seam_pct_sync(job: str, model_raw: str | None, window_hint: int | None) -> 
             window, assumed = context_lens.window_for(model_raw, used)
             pct = None if assumed else round(100 * used / window)
     _seam_pcts[job] = (mtime, pct)
+    _prune_seam_pcts()  # opportunistic: this write is where churn shows up
     return pct
 
 
@@ -230,6 +261,7 @@ async def _seam_field(ctx: Context | None) -> str | None:
             row = (now, r["job_dir"] if r else None, r["model_raw"] if r else None,
                    r["context_window_size"] if r else None)
             _seam_rows[ident.agent_id] = row
+            _prune_seam_rows()  # opportunistic: this write is where churn shows up
         _, job, model_raw, window_hint = row
         if not job:
             return None

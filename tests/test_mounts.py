@@ -409,6 +409,42 @@ def test_prune_agents_drops_the_least_recently_used() -> None:
         srv._agents_touched.update(saved_touch)
 
 
+def test_prune_seam_rows_drops_the_least_recently_written() -> None:
+    from src import mcp_server as srv
+
+    saved = dict(srv._seam_rows)
+    try:
+        srv._seam_rows.clear()
+        for i in range(10):
+            srv._seam_rows[f"agent:{i}"] = (float(i), f"/job/{i}", None, None)
+        srv._prune_seam_rows(cap=8)  # over cap → drop down to cap//2, oldest first
+        assert len(srv._seam_rows) == 4
+        assert set(srv._seam_rows) == {"agent:6", "agent:7", "agent:8", "agent:9"}
+        srv._prune_seam_rows(cap=8)  # under cap → untouched
+        assert len(srv._seam_rows) == 4
+    finally:
+        srv._seam_rows.clear()
+        srv._seam_rows.update(saved)
+
+
+def test_prune_seam_pcts_drops_the_stalest_mtime() -> None:
+    from src import mcp_server as srv
+
+    saved = dict(srv._seam_pcts)
+    try:
+        srv._seam_pcts.clear()
+        for i in range(10):
+            srv._seam_pcts[f"/job/{i}"] = (float(i), i * 10)
+        srv._prune_seam_pcts(cap=8)  # over cap → drop down to cap//2, stalest mtime first
+        assert len(srv._seam_pcts) == 4
+        assert set(srv._seam_pcts) == {"/job/6", "/job/7", "/job/8", "/job/9"}
+        srv._prune_seam_pcts(cap=8)  # under cap → untouched
+        assert len(srv._seam_pcts) == 4
+    finally:
+        srv._seam_pcts.clear()
+        srv._seam_pcts.update(saved)
+
+
 async def test_save_mount_returns_the_previous_last_seen(actions: Actions) -> None:
     """The while-you-were-away anchor: first mount has no past (None); a re-mount returns the
     lineage's prior sign of life."""

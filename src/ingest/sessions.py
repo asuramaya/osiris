@@ -429,6 +429,27 @@ def _file_size(path: Path) -> int:
 
 _WAKE_FIRST_TURN = "You have unread Osiris mail"
 _wake_verdict: dict[str, bool] = {}  # path → is-a-wake-spawn. The first turn never changes.
+# BOUNDED, same shape as mcp_server.py's _prune_agents ("the slow leak that fed the 1G OOM") —
+# this dict is process-local and never pruned would grow one entry per transcript path ever
+# seen, forever. Safe to cap: a miss just re-reads the file's first ~40 lines and recomputes
+# the SAME answer (the docstring's own claim — a transcript's opening turn cannot change), so
+# eviction never produces a wrong verdict, only an occasional extra read. Capped well above the
+# corpus this exists to serve (~1300 files, per _is_wake_spawn's own docstring) so a single full
+# mining sweep never evicts its own earlier entries and thrashes against itself.
+_WAKE_VERDICT_CAP = 4096
+
+
+def _prune_wake_verdict(cap: int = _WAKE_VERDICT_CAP) -> None:
+    """Mirrors mcp_server.py's _prune_agents in shape, not in recency source: the value here
+    is a bare bool, so there is no per-entry timestamp to sort by. Insertion order (Python
+    dict's own free property) stands in for it — a mining sweep walks transcripts forward
+    through time, so the earliest-inserted paths are the least likely to be asked about again
+    soon. Past the cap, drop the oldest-inserted down to half."""
+    if len(_wake_verdict) <= cap:
+        return
+    cut = len(_wake_verdict) - cap // 2
+    for k in list(_wake_verdict)[:cut]:
+        _wake_verdict.pop(k, None)
 
 
 def _is_wake_spawn(path: Path) -> bool:
@@ -472,6 +493,7 @@ def _is_wake_spawn(path: Path) -> bool:
     except OSError:
         verdict = False
     _wake_verdict[key] = verdict
+    _prune_wake_verdict()  # opportunistic: this write is where churn shows up
     return verdict
 
 
