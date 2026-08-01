@@ -1809,14 +1809,15 @@ async def test_seat_facts_returns_all_four_keys_with_derived_house(actions: Acti
 
     facts = await seat_facts(actions.pool, "seat:sf1wrk00")
     assert facts == {"handle": "Vajra", "house": "alfred", "intended_model": None,
-                     "anchor_cwd": "/home/vajra"}
+                     "anchor_cwd": "/home/vajra", "tree_cwd": None}
 
 
 async def test_seat_facts_all_none_for_an_unknown_seat(actions: Actions) -> None:
     from src.orchestrator.seats import seat_facts
 
     assert await seat_facts(actions.pool, "seat:sf2ghost") == {
-        "handle": None, "house": None, "intended_model": None, "anchor_cwd": None}
+        "handle": None, "house": None, "intended_model": None, "anchor_cwd": None,
+        "tree_cwd": None}
 
 
 async def test_the_window_tag_renders_an_anchored_seat_s_true_house(actions: Actions) -> None:
@@ -1998,6 +1999,70 @@ async def test_rename_seat_refuses_an_unknown_seat(actions: Actions) -> None:
     out = await rename_seat(actions, seat_id="seat:nosuchsea", new_handle="Anyone",
                             actor="test", because="no such seat exists")
     assert out == {"error": "no such seat: 'seat:nosuchsea'"}
+
+
+# ═══ bind_seat_tree (task #103's re-scope, ff3bdc37, Thoth DM 2794 sign-off) ═══
+
+async def test_bind_seat_tree_records_a_distinct_property_from_anchor_cwd(
+    actions: Actions,
+) -> None:
+    """The office (identity) and the tree (code) are TWO properties, not one — binding a
+    tree must never touch anchor_cwd."""
+    from src.orchestrator.seats import bind_seat_tree, seat_facts
+
+    seat = await actions.create_or_find_object("Seat", "seat:bt1work0", "test")
+    await actions.assert_property(seat, "handle", "Treebind", "test", datetime.now(UTC), 0.9)
+    await actions.assert_property(seat, "anchor_cwd", "/home/treebind", "test",
+                                  datetime.now(UTC), 0.9)
+
+    out = await bind_seat_tree(actions, seat_id="seat:bt1work0", tree_cwd="/repo/treebind",
+                               actor="test", because="test: new checkout for a task")
+    assert out == {"seat": "seat:bt1work0", "old_tree_cwd": None, "tree_cwd": "/repo/treebind",
+                   "because": "test: new checkout for a task",
+                   "note": out["note"]}
+    facts = await seat_facts(actions.pool, "seat:bt1work0")
+    assert facts["tree_cwd"] == "/repo/treebind"
+    assert facts["anchor_cwd"] == "/home/treebind"       # untouched
+
+
+async def test_bind_seat_tree_rebinding_reports_the_old_value(actions: Actions) -> None:
+    from src.orchestrator.seats import bind_seat_tree
+
+    seat = await actions.create_or_find_object("Seat", "seat:bt2work0", "test")
+    await actions.assert_property(seat, "handle", "Rebound", "test", datetime.now(UTC), 0.9)
+    await bind_seat_tree(actions, seat_id="seat:bt2work0", tree_cwd="/repo/first",
+                         actor="test", because="test: first tree")
+    out = await bind_seat_tree(actions, seat_id="seat:bt2work0", tree_cwd="/repo/second",
+                               actor="test", because="test: re-pointed for a new task")
+    assert out["old_tree_cwd"] == "/repo/first" and out["tree_cwd"] == "/repo/second"
+
+
+async def test_bind_seat_tree_refuses_a_blank_tree_cwd(actions: Actions) -> None:
+    from src.orchestrator.seats import bind_seat_tree
+
+    seat = await actions.create_or_find_object("Seat", "seat:bt3work0", "test")
+    await actions.assert_property(seat, "handle", "Blanktree", "test", datetime.now(UTC), 0.9)
+    out = await bind_seat_tree(actions, seat_id="seat:bt3work0", tree_cwd="  ",
+                               actor="test", because="test: blank")
+    assert out == {"error": "bind_seat_tree needs a tree_cwd"}
+
+
+async def test_bind_seat_tree_refuses_a_blank_because(actions: Actions) -> None:
+    from src.orchestrator.seats import bind_seat_tree
+
+    seat = await actions.create_or_find_object("Seat", "seat:bt4work0", "test")
+    await actions.assert_property(seat, "handle", "Blankwhy", "test", datetime.now(UTC), 0.9)
+    out = await bind_seat_tree(actions, seat_id="seat:bt4work0", tree_cwd="/repo/x",
+                               actor="test", because="  ")
+    assert "testimony" in out["error"]
+
+
+async def test_bind_seat_tree_refuses_an_unknown_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import bind_seat_tree
+
+    out = await bind_seat_tree(actions, seat_id="seat:nosuchtre", tree_cwd="/repo/x",
+                               actor="test", because="test: no such seat")
+    assert out == {"error": "no such seat: 'seat:nosuchtre'"}
 
 
 # ═══ SEAT LIFECYCLE (ruling ff6148b0's completion, decision 87953278, thread cb374585) ═══

@@ -2814,6 +2814,110 @@ async def test_launch_harness_lane_delivers_the_opening_brief_over_the_mail_lane
     assert row is not None and "mount and orient" in row["body"]
 
 
+# ═══ tree_cwd (task #103's re-scope, ff3bdc37, Thoth DM 2794) — the office/code split. ═══
+
+async def test_launch_refuses_a_tree_cwd_that_does_not_exist_on_disk(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """OSIRIS NEVER PROVISIONS THE TREE (ff3bdc37: harness owns isolation) — a seat naming a
+    tree_cwd the harness never actually created is refused, cleanly, before anything spawns."""
+    from src.orchestrator.seats import bind_seat_tree
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:tw01", manager_agent="agent:tm01",
+        worker_handle="Notree", house="osiris")
+    await _office(actions, worker_seat, str(tmp_path / "office"))
+    ghost_tree = str(tmp_path / "never-created")
+    bind = await bind_seat_tree(actions, seat_id=worker_seat, tree_cwd=ghost_tree,
+                                actor="test", because="test: refusal proof")
+    assert bind.get("error") is None
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:tm01", target=worker_seat,
+        spawn=_fake_spawn([]), agents_json=_fake_agents_json([[]]))
+    assert d["status"] == "refused-no-tree"
+    assert ghost_tree in d["detail"] and "never provisions" in d["detail"]
+
+
+async def test_launch_spawns_into_tree_cwd_not_office_pty_lane(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The office (identity) and the tree (code) are DISTINCT — a bound, real tree_cwd is
+    where the body actually spawns; office stays only the identity anchor in the receipt."""
+    from src.orchestrator.seats import bind_seat_tree
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:tw02", manager_agent="agent:tm02",
+        worker_handle="Treewalker", house="osiris")
+    office = tmp_path / "office"
+    office.mkdir()
+    tree = tmp_path / "worktree"
+    tree.mkdir()
+    await _office(actions, worker_seat, str(office))
+    await bind_seat_tree(actions, seat_id=worker_seat, tree_cwd=str(tree), actor="test",
+                         because="test: spawn location proof")
+    record: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:tm02", target=worker_seat, substrate="pty",
+        manager=_fake_manager(record), windows=_fake_windows([]))
+    assert d["status"] == "launched"
+    assert record[0]["cwd"] == str(tree)               # spawned INTO the tree, not the office
+    assert d["attach"]["office"] == str(office)          # identity anchor unchanged
+    assert d["attach"]["tree_cwd"] == str(tree)          # and named in the receipt
+
+
+async def test_launch_spawns_into_tree_cwd_not_office_harness_lane(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.seats import bind_seat_tree
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:tw03", manager_agent="agent:tm03",
+        worker_handle="Treewalker2", house="osiris")
+    office = tmp_path / "office2"
+    office.mkdir()
+    tree = tmp_path / "worktree2"
+    tree.mkdir()
+    await _office(actions, worker_seat, str(office))
+    await bind_seat_tree(actions, seat_id=worker_seat, tree_cwd=str(tree), actor="test",
+                         because="test: harness spawn location proof")
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:tm03", target=worker_seat,
+        spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[]]))
+    assert d["status"] == "launched"
+    assert spawned[0]["repo"] == str(tree)
+    # the boot prompt still anchors mount() AT THE OFFICE — identity never follows the tree
+    assert str(office) in spawned[0]["prompt"]
+    assert str(tree) not in spawned[0]["prompt"]
+
+
+async def test_launch_harness_lane_idempotency_matches_on_tree_cwd_not_office(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE CORRECTNESS PROOF: a tree-bound seat's live process sits at tree_cwd. Matching
+    idempotency on `office` alone (the pre-fix shape) would never find it and would twin on
+    every relaunch — this proves the fix reads the actual launch location, not the office."""
+    from src.orchestrator.seats import bind_seat_tree
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:tw04", manager_agent="agent:tm04",
+        worker_handle="Treewalker3", house="osiris")
+    office = tmp_path / "office3"
+    office.mkdir()
+    tree = tmp_path / "worktree3"
+    tree.mkdir()
+    await _office(actions, worker_seat, str(office))
+    await bind_seat_tree(actions, seat_id=worker_seat, tree_cwd=str(tree), actor="test",
+                         because="test: idempotency proof")
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:tm04", target=worker_seat,
+        spawn=_fake_spawn(spawned),
+        agents_json=_fake_agents_json([[{"cwd": str(tree), "name": "[OS] Treewalker3"}]]))
+    assert d["status"] == "already-live"
+    assert spawned == []                                # no twin
+
+
 # ═══ vacate_dead_seat (thread 445a7356, Thoth's ruling msg 1611) — the evidence-gathering
 # complement to seats.vacate_holder / seats.retire_seat's stale-holder refusal, never its
 # bypass. `agents_json`/`transcript_activity` are injected so tests assert the DECISION

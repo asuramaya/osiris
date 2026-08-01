@@ -43,15 +43,24 @@ to trim without crossing the hard reject line (task #129: never cut a refusal). 
 with Thoth (msg 2570) BEFORE this tranche that the headline token number was never going to
 match the "transformation" a 30k-token boot cost implies — the ratchet existing at all, and
 holding, is the point; the char count is a side effect of doing that properly.
+
+RAISED DELIBERATELY, task #103's tree_cwd build (Thoth DM 2794 sign-off): +1 tool
+(bind_seat_tree, 3 string params -- seat_id/tree_cwd/because), 114,216 -> 115,146 chars
+exactly. Trimmed the new tool's own docstring under the category rule first (provenance/
+ticket citations moved to the seats.py implementation, which this ratchet does not measure,
+never duplicated into the MCP-facing description); the remaining growth is the new
+capability itself, a real verb rather than prose creep on an existing one, so the ceiling
+moves rather than the tool disappearing. 97 -> 98 tools.
 """
 from __future__ import annotations
 
 import json
 
-# Measured post-tranche-2 total (this commit): 114,216 chars exactly. ~600 chars of
-# headroom above that, not the tighter exact-match chrome.py uses for its per-file counts
-# — see the module docstring's "A CEILING, NOT EXACT EQUALITY" paragraph for why.
-TOOL_CONTRACT_CEILING_CHARS = 114_800
+# Measured after task #103's tree_cwd build (this commit): 115,146 chars exactly (was
+# 114,216). ~200 chars of headroom above that, not the tighter exact-match chrome.py uses
+# for its per-file counts — see the module docstring's "A CEILING, NOT EXACT EQUALITY"
+# paragraph for why.
+TOOL_CONTRACT_CEILING_CHARS = 115_350
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -86,4 +95,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     what this ratchet polices, but worth knowing at a glance when the char total also
     moves, to tell 'one tool's prose grew' from 'the surface itself changed shape'."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 97
+    assert len(per_tool) == 98

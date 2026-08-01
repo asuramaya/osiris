@@ -1490,6 +1490,13 @@ def _house_tag(house: str | None) -> str:
     return h[:2].upper() if h else "OS"
 
 
+def _tree_exists(tree_cwd: str) -> bool:
+    """A plain sync helper (ASYNC240: file I/O stays out of async function bodies, same
+    convention src/ingest/reference.py documents) — launch_seat's one filesystem check that
+    a bound tree_cwd is actually there, never provisioned by osiris itself (ff3bdc37)."""
+    return Path(tree_cwd).is_dir()
+
+
 def _launch_anchor(seat_id: str) -> str:
     """A STABLE durable anchor per SEAT (not per launch) — a re-launched seat re-wears its own
     anchor, the same 'one ghost, re-worn' discipline _wake_job_dir uses per project. The seat
@@ -1558,6 +1565,26 @@ async def launch_seat(
                 "detail": f"{handle} ({target_seat}) has no anchor_cwd — establish_office first; "
                           "a body needs a room to be born in"}
 
+    # TREE_CWD (task #103's re-scope, ff3bdc37, Thoth DM 2794): the seat's OFFICE (identity —
+    # unchanged above, `office`) and its CODE CHECKOUT are distinct properties on purpose;
+    # collapsing them is John's own catastrophe (#128) repeated. OSIRIS NEVER PROVISIONS a
+    # tree (harness owns isolation) — a bound-but-missing tree_cwd is refused, mirroring the
+    # refused-no-office shape exactly, one line up; an UNSET tree_cwd falls back to `office`
+    # silently, the unchanged behavior every seat not doing isolated tree work keeps getting.
+    # `launch_cwd` — never `office` alone — is what the body actually spawns into and what
+    # idempotency below matches against, or a tree-bound seat would twin on every relaunch
+    # (its live process sits at tree_cwd; a check still reading `office` would never find it).
+    tree_cwd = facts["tree_cwd"]
+    launch_cwd = office
+    if tree_cwd:
+        if not _tree_exists(tree_cwd):
+            return {"status": "refused-no-tree",
+                    "detail": f"{handle} ({target_seat}) names tree_cwd={tree_cwd!r} but it "
+                              "does not exist on disk — osiris expects the harness (or a "
+                              "human, via EnterWorktree) to have created it before launch; "
+                              "it never provisions one itself"}
+        launch_cwd = tree_cwd
+
     # THE ATTACH LINE (ruling 0fe36e59, thread c171a3de finding #6): spawn location must never
     # matter, so REACHING the body can never depend on which harness project slug its cwd
     # happened to register under — every receipt below hands the operator everything needed
@@ -1565,7 +1592,7 @@ async def launch_seat(
     # live today (src/manager/attach.py); `osiris attach <handle>` is the same door once that
     # CLI build (thread 16a0c76b) lands.
     anchor = _launch_anchor(target_seat)
-    attach = {"office": office, "session_anchor": anchor,
+    attach = {"office": office, "tree_cwd": tree_cwd, "session_anchor": anchor,
              "command": f'python -m src.manager.attach "[{_house_tag(house)}] {handle}"'}
 
     st = settings or get_settings()
@@ -1612,7 +1639,7 @@ async def launch_seat(
 
         try:
             res = await manager({
-                "op": "pty_spawn", "name": name, "argv": argv, "cwd": office,
+                "op": "pty_spawn", "name": name, "argv": argv, "cwd": launch_cwd,
                 "seat": {"handle": handle, "house": house}, "job_dir": anchor,
                 "env": child_env})
         except (OSError, TimeoutError, ValueError) as exc:
@@ -1656,19 +1683,21 @@ async def launch_seat(
         # CONSTRUCTION (clause 3, "front end wide open", made mechanical instead of patched
         # around) — see the spike verdict f2dc98549521 and _spawn_claude_bg's own docstring.
         #
-        # IDEMPOTENCY MATCHES ON THE SEAT'S OWN OFFICE CWD, NOT A SESSION ID (live finding,
+        # IDEMPOTENCY MATCHES ON THE SEAT'S OWN LAUNCH CWD, NOT A SESSION ID (live finding,
         # 2026-07-27, replacing the original design): `claude --bg` MANAGES ITS OWN SESSION ID
         # and silently ignores an explicit `--session-id` ("warning: --bg manages the session
         # id; ignoring --session-id" on stderr, which a fire-and-forget spawn never reads) —
-        # confirmed against a real spawn, not assumed. A seat's office is 1:1 with the seat by
-        # construction (establish_office/mint_seat), so any live process already sitting there
-        # IS its body, whatever session id the harness gave it.
+        # confirmed against a real spawn, not assumed. A seat's launch location (office, or
+        # tree_cwd when bound — #103) is 1:1 with the seat by construction, so any live
+        # process already sitting there IS its body, whatever session id the harness gave it.
+        # MUST be `launch_cwd`, never bare `office`: a tree-bound seat's live process sits at
+        # tree_cwd, and matching on `office` alone would never find it, twinning on relaunch.
         try:
-            roster = await agents_json(cwd=office)
+            roster = await agents_json(cwd=launch_cwd)
         except (OSError, TimeoutError, ValueError):
             roster = []
         live = next((r for r in roster
-                    if isinstance(r, dict) and r.get("cwd") == office), None)
+                    if isinstance(r, dict) and r.get("cwd") == launch_cwd), None)
         if live is not None:
             return {"status": "already-live", "window": live.get("name"), "seat": target_seat,
                     "body_exists": True, "can_receive": True, "attach": attach,
@@ -1687,9 +1716,14 @@ async def launch_seat(
         # follows into a fresh office (claim_name: a name matching an already-vacant seat is
         # ADOPTED, never twinned — see mint_seat's own receipt: '...or start a session in
         # the office and have it claim_name itself').
+        # THE BOOT PROMPT ANCHORS mount() AT THE OFFICE, ALWAYS — never `launch_cwd`. Identity
+        # lives at the office regardless of where the process's own cwd happens to sit (#103's
+        # whole point); a tree-bound seat's session boots WITH its shell cwd at tree_cwd (the
+        # `spawn(launch_cwd, ...)` below) but is told to mount(cwd=office) all the same, the
+        # identical pattern every seat in this house already follows by hand.
         boot_prompt = _bg_boot_prompt(office=office, anchor=anchor, handle=handle)
         try:
-            await spawn(office, name=name, model=argv_model, prompt=boot_prompt)
+            await spawn(launch_cwd, name=name, model=argv_model, prompt=boot_prompt)
         except OSError as exc:
             return {"status": "refused-spawn", "seat": target_seat,
                     "detail": f"claude --bg failed to start ({exc}); NOTHING was spawned"}
@@ -1700,8 +1734,8 @@ async def launch_seat(
         # seconds before it necessarily shows up in `claude agents --json`.
         alive_row: dict[str, Any] | None = None
         try:
-            alive_row = next((r for r in await agents_json(cwd=office)
-                              if isinstance(r, dict) and r.get("cwd") == office), None)
+            alive_row = next((r for r in await agents_json(cwd=launch_cwd)
+                              if isinstance(r, dict) and r.get("cwd") == launch_cwd), None)
         except (OSError, TimeoutError, ValueError):
             pass
         out = {
@@ -1728,7 +1762,7 @@ async def launch_seat(
         real_session_id = (alive_row or {}).get("sessionId")
         if real_session_id:
             try:
-                priced = await cost_reader(str(real_session_id), cwd=office)
+                priced = await cost_reader(str(real_session_id), cwd=launch_cwd)
                 from src.ingest.providers import Usage
                 from src.ingest.usage import record_usage
                 await record_usage(

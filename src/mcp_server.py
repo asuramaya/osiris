@@ -3497,6 +3497,23 @@ async def rename_seat(seat_id: str, new_handle: str, because: str,
 
 
 @mcp.tool()
+async def bind_seat_tree(seat_id: str, tree_cwd: str, because: str,
+                         ctx: Context | None = None) -> dict[str, Any]:
+    """Point a seat's CODE checkout at `tree_cwd` — distinct from its office (identity home,
+    untouched here). `launch_seat` reuses whatever is recorded until this is called again;
+    osiris never provisions the directory — `launch_seat` checks it exists on disk before
+    trusting it, this only records the location. Refuses on a blank `tree_cwd`/`because` or
+    an unknown seat."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a tree binding is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.seats import bind_seat_tree as _bind_seat_tree
+    return await _bind_seat_tree(Actions(await _pool_get()), seat_id=seat_id,
+                                 tree_cwd=tree_cwd, because=because, actor=ident.agent_id)
+
+
+@mcp.tool()
 async def reissue_office(
     seat_id: str, because: str, adopt: bool = False, ctx: Context | None = None,
 ) -> dict[str, Any]:

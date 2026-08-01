@@ -510,14 +510,19 @@ async def derive_house(pool: asyncpg.Pool, seat_id: str, *, max_hops: int = _MAX
 
 
 async def seat_facts(pool: asyncpg.Pool, seat_id: str) -> dict[str, Any]:
-    """A Seat's own handle/house/intended_model/anchor_cwd, one read — the shared resolver
-    mintseat.py and trigger.py each independently hand-rolled as a private `_seat_facts`
-    (identical name, near-identical shape, the exact 'two resolvers disagree' class this
-    house keeps re-learning). `house` is DERIVED (ruling ff6148b0, decision 4c9e4bd7), the
-    other three are the seat's own stored assertions — always all four keys present (None
-    when absent or the seat doesn't exist), matching trigger.py's stricter contract so a
-    caller can index `facts["handle"]` directly rather than every caller re-deriving its
-    own tolerant `.get()`."""
+    """A Seat's own handle/house/intended_model/anchor_cwd/tree_cwd, one read — the shared
+    resolver mintseat.py and trigger.py each independently hand-rolled as a private
+    `_seat_facts` (identical name, near-identical shape, the exact 'two resolvers disagree'
+    class this house keeps re-learning). `house` is DERIVED (ruling ff6148b0, decision
+    4c9e4bd7), the other four are the seat's own stored assertions — always all five keys
+    present (None when absent or the seat doesn't exist), matching trigger.py's stricter
+    contract so a caller can index `facts["handle"]` directly rather than every caller
+    re-deriving its own tolerant `.get()`.
+
+    `tree_cwd` (task #103's re-scope, ff3bdc37) is DISTINCT from `anchor_cwd` on purpose:
+    the office is where identity lives, the tree is where code lives — see `bind_seat_tree`.
+    None here means "this seat has no distinct tree" (the common case), never a fallback
+    guess; `launch_seat` is the one that decides what None means for a launch."""
     row = await pool.fetchrow(
         "SELECT "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -528,13 +533,18 @@ async def seat_facts(pool: asyncpg.Pool, seat_id: str) -> dict[str, Any]:
         "   LIMIT 1) AS intended_model, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='anchor_cwd' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS anchor_cwd "
+        "   AS anchor_cwd, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='tree_cwd' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS tree_cwd "
         "FROM objects o WHERE o.canonical=$1 AND o.type='Seat' AND o.status='active'", seat_id)
     house = await derive_house(pool, seat_id)
     if row is None:
-        return {"handle": None, "house": house, "intended_model": None, "anchor_cwd": None}
+        return {"handle": None, "house": house, "intended_model": None, "anchor_cwd": None,
+                "tree_cwd": None}
     return {"handle": row["handle"], "house": house,
-            "intended_model": row["intended_model"], "anchor_cwd": row["anchor_cwd"]}
+            "intended_model": row["intended_model"], "anchor_cwd": row["anchor_cwd"],
+            "tree_cwd": row["tree_cwd"]}
 
 
 _ATTENDED_VALUES = {"human", "worker"}
@@ -646,6 +656,49 @@ async def rename_seat(
             "holder_stamped": holder_stamped, "because": because,
             "note": "graph renamed; the harness window/session display name follows at "
                     "next spawn, not retroactively"}
+
+
+async def bind_seat_tree(
+    actions: Actions, *, seat_id: str, tree_cwd: str, actor: str, because: str,
+) -> dict[str, Any]:
+    """Point a seat's CODE checkout at `tree_cwd` — deliberately, distinct from `anchor_cwd`
+    (the seat's identity home, untouched by this). Task #103's re-scope (ff3bdc37, accepted
+    whole via Thoth DM 2794): "the office is where identity lives, the tree is where code
+    lives", and collapsing the two is John's own catastrophe (#128) repeated at seat scope.
+    `launch_seat`'s own idempotency reuses whatever is recorded here across every relaunch
+    until this is called again — never a launch's own side effect (ff3bdc37's own law: which
+    tree a seat is on stays an auditable graph write, same discipline `rename_seat` holds
+    for a handle change).
+
+    OSIRIS NEVER PROVISIONS THE TREE (harness owns isolation, ff3bdc37) — this call RECORDS
+    a location, it does not create one. `launch_seat` is the one that checks the directory
+    actually exists on disk before trusting it; this verb writes unconditionally on a valid
+    call, exactly as `ensure_seat`'s own `anchor_cwd` write does.
+
+    Refuses LOUDLY on: a blank `tree_cwd`; a blank `because` (a location change is
+    testimony — the same discipline `rename_seat`/`set_seat_attended` hold); an unknown
+    seat."""
+    tree_cwd = (tree_cwd or "").strip()
+    if not tree_cwd:
+        return {"error": "bind_seat_tree needs a tree_cwd"}
+    if not because.strip():
+        return {"error": "because is required — a tree binding is testimony; the reason "
+                         "it changed must be on the record"}
+    row = await actions.pool.fetchrow(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
+        seat_id)
+    if row is None:
+        return {"error": f"no such seat: {seat_id!r}"}
+    old_tree = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='tree_cwd' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        row["id"])
+    await actions.assert_property(row["id"], "tree_cwd", tree_cwd, actor, datetime.now(UTC),
+                                  _CONF, evidence_class=_EC)
+    return {"seat": seat_id, "old_tree_cwd": old_tree, "tree_cwd": tree_cwd,
+           "because": because,
+           "note": "recorded — osiris never provisions the directory itself; launch_seat "
+                   "checks it exists before trusting it"}
 
 
 async def bind_holder(
