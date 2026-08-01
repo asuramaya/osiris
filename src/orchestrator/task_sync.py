@@ -262,8 +262,12 @@ async def reconcile(
 # TIER 2 — visibility only, via open_thread (fully reversible: resolve_thread later).
 # NEVER touches either side's status. Split into a PURE summary-generator (tier2_mints)
 # and a side-effecting executor (mint_tier2_threads) on purpose: Thoth's gate is on SCALE,
-# not distrust — 40 disagreement + 13 orphan rows is 53 new threads onto a board already
-# hard to read, so the summaries must be reviewed before they are minted, not after.
+# not distrust — the summaries must be reviewed before they are minted, not after.
+# Disagreement mints are GROUPED BY THREAD, not by citation (Thoth's ruling, DM 2744,
+# after the first live dry run measured 40 disagreement rows landing on only 28 distinct
+# Threads): the obligation names the disputed THING, and the disputed thing is the Thread,
+# not each task that cites it — per-citation mints would have made resolving one real
+# disagreement take as many resolve_thread calls as it has citing tasks.
 #
 # TIER 3 (never auto-write: no status sync either direction, no auto-closing orphans, no
 # inventing bindings for uncited/cited_unresolvable, nothing written to ~/.claude/tasks, no
@@ -321,31 +325,63 @@ async def write_tier1_correlations(
 
 
 def tier2_mints(report: dict[str, Any]) -> list[dict[str, Any]]:
-    """Pure. The visibility-thread {"kind", "summary", "row"} TIER 2 WOULD mint for every
-    disagreement + thread_side_orphans row — one per row, summary built deterministically
-    from (task_id, store, thread_id, statuses) so a rerun dedupes through open_thread's own
-    idempotent-on-summary matching instead of spamming the board on every dry run. Executes
+    """Pure. The visibility-thread {"kind", "summary", "rows"} TIER 2 WOULD mint. Executes
     nothing — see `mint_tier2_threads` for the side-effecting half, deliberately separate
     (Thoth, DM 2722: dry-run and show the actual summaries before executing; the gate is
-    scale — 53 new threads onto a board the operator already called unreadable — not
-    distrust of the design)."""
+    scale — 53 candidate threads onto a board the operator already called unreadable — not
+    distrust of the design).
+
+    Disagreement rows are GROUPED BY thread_id, one mint per DISPUTED THREAD rather than
+    per citing task (Thoth's ruling, DM 2744, after the first dry run measured 40 rows
+    landing on only 28 distinct Threads): the obligation should name the disputed thing,
+    and the disputed thing is the Thread, not each citation of it — per-citation would
+    have meant resolving one real disagreement (e.g. thread 73fd4eda, cited by 4 different
+    tasks) took 4 separate resolve_thread calls for one truth. Safe to group this way
+    because `reconcile` reads a thread's `property_status` exactly once per thread_id (one
+    shared dict entry), so every disagreement row for the same thread_id already carries
+    the identical thread_property_status — grouping loses no information, only repetition.
+    Every citing (task_id, store, task_status) is enumerated inside the one summary.
+    Thread_side_orphans stay 1:1 — no repetition exists there to collapse (each row is
+    already one distinct Thread by construction).
+
+    Rerun note: because a disagreement summary now depends on the FULL current set of
+    citing tasks for that Thread, a citing set that changes between runs (a new task
+    starts citing it, one stops, or any citation's status flips) changes the summary text
+    and therefore mints a NEW Thread on the next run rather than updating the old one —
+    the same "idempotent on exact text" limitation every open_thread caller already has,
+    just newly reachable here because the text is now a function of more than one row.
+    Not solved here; flagged rather than silently accepted."""
     mints: list[dict[str, Any]] = []
+    by_thread: dict[str, list[dict[str, Any]]] = {}
+    order: list[str] = []
     for d in report["disagreement"]:
-        store_label = d.get("store") if d.get("store") is not None else "?"
+        tid = d["thread_id"]
+        if tid not in by_thread:
+            by_thread[tid] = []
+            order.append(tid)
+        by_thread[tid].append(d)
+    for tid in order:
+        citations = by_thread[tid]
+        thread_property_status = citations[0]["thread_property_status"]
+        citing_desc = "; ".join(
+            f"task {c['task_id']} (store {c.get('store') if c.get('store') is not None else '?'}) "
+            f"says status={c['task_status']!r}"
+            for c in citations
+        )
         summary = (
-            f"TASK/THREAD DISAGREEMENT: harness task {d['task_id']} (store {store_label}) "
-            f"says status={d['task_status']!r}; Thread {d['thread_id'][:8]} carries "
-            f"property_status={d['thread_property_status']!r}. task_sync never resolves "
+            f"TASK/THREAD DISAGREEMENT: Thread {tid[:8]} carries "
+            f"property_status={thread_property_status!r}, disputed by "
+            f"{len(citations)} citing task(s): {citing_desc}. task_sync never resolves "
             f"this automatically (Tier 3) — needs a human/agent look."
         )
-        mints.append({"kind": "obligation", "summary": summary, "row": d})
+        mints.append({"kind": "obligation", "summary": summary, "rows": citations})
     for o in report["thread_side_orphans"]:
         summary = (
             f"THREAD SIDE ORPHAN: Thread {o['thread_id'][:8]} carries kind=task but no "
             f"harness task cites it (task_sync dry run). Stale, or the harness lost track "
             f"of it — task_sync never auto-closes an orphan, needs a human/agent look."
         )
-        mints.append({"kind": "obligation", "summary": summary, "row": o})
+        mints.append({"kind": "obligation", "summary": summary, "rows": [o]})
     return mints
 
 
@@ -355,9 +391,11 @@ async def mint_tier2_threads(
     """Execute TIER 2: one open_thread(kind='obligation', arc='Fleet-Hygiene') per mint
     from `tier2_mints`. DO NOT CALL against production data without the summaries having
     been reviewed first — see this module's own write-half note and Thoth DM 2722. A rerun
-    is safe: open_thread is idempotent on the exact summary string, so an unchanged
-    disagreement/orphan collapses onto the same Thread instead of duplicating. Returns one
-    {"summary", "thread_id"} receipt per mint."""
+    with an UNCHANGED citing set is safe: open_thread is idempotent on the exact summary
+    string, so it collapses onto the same Thread instead of duplicating — see
+    `tier2_mints`'s own rerun note for the one case (a citing set that changes between
+    runs) where that idempotency doesn't hold. Returns one {"summary", "thread_id"}
+    receipt per mint."""
     from src.orchestrator.capture import open_thread
 
     out: list[dict[str, Any]] = []

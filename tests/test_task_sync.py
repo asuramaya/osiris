@@ -276,6 +276,32 @@ def test_tier2_mints_is_pure_and_deterministic() -> None:
     assert "ORPHAN" in first[1]["summary"] and "bbbbbbbb" in first[1]["summary"]
 
 
+def test_tier2_mints_groups_disagreement_by_thread_not_by_citation() -> None:
+    """Thoth's ruling, DM 2744: the first live dry run measured 40 disagreement rows
+    landing on only 28 distinct Threads (one Thread, up to 4 citing tasks). One mint per
+    Thread, every citing task enumerated inside — not one mint per citation, which would
+    make resolving a single real disagreement take as many closes as it has citations."""
+    shared = "cccccccc-0000-0000-0000-000000000000"
+    report = {
+        "disagreement": [
+            {"task_id": "11", "store": "storeA", "thread_id": shared,
+             "task_status": "completed", "thread_property_status": "open"},
+            {"task_id": "61", "store": "storeB", "thread_id": shared,
+             "task_status": "completed", "thread_property_status": "open"},
+            {"task_id": "9", "store": "storeC", "thread_id": "dddddddd-0-0-0-0",
+             "task_status": "pending", "thread_property_status": "resolved"},
+        ],
+        "thread_side_orphans": [],
+    }
+    mints = tier2_mints(report)
+    assert len(mints) == 2  # 3 citations, 2 distinct threads -> 2 mints, not 3
+    shared_mint = next(m for m in mints if "cccccccc" in m["summary"])
+    assert "task 11" in shared_mint["summary"] and "task 61" in shared_mint["summary"]
+    assert "storeA" in shared_mint["summary"] and "storeB" in shared_mint["summary"]
+    assert "2 citing task(s)" in shared_mint["summary"]
+    assert len(shared_mint["rows"]) == 2
+
+
 async def test_mint_tier2_threads_creates_review_threads_never_touching_status(
     actions: Actions,
 ) -> None:
@@ -295,6 +321,25 @@ async def test_mint_tier2_threads_creates_review_threads_never_touching_status(
     # the disputed thread's own status is untouched by minting a review of it
     disputed_status = await _property_rows(actions, disputed, "status")
     assert disputed_status[0]["value"] == "open"
+
+
+async def test_mint_tier2_threads_mints_one_thread_for_multiple_citations(
+    actions: Actions,
+) -> None:
+    """End-to-end proof of the consolidation, through the real DB: a Thread disputed by
+    TWO citing tasks mints exactly ONE review thread, not two."""
+    disputed = await open_thread(actions, "disputed by two tasks", source="agent:me")
+    report = {
+        "disagreement": [
+            {"task_id": "11", "store": "storeA", "thread_id": str(disputed),
+             "task_status": "completed", "thread_property_status": "open"},
+            {"task_id": "61", "store": "storeB", "thread_id": str(disputed),
+             "task_status": "completed", "thread_property_status": "open"},
+        ],
+        "thread_side_orphans": [],
+    }
+    out = await mint_tier2_threads(actions, tier2_mints(report))
+    assert len(out) == 1
 
 
 async def test_mint_tier2_threads_is_idempotent_on_rerun(actions: Actions) -> None:
