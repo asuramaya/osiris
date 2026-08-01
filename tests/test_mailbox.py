@@ -1050,3 +1050,123 @@ async def test_pause_seat_tool_stamps_the_lever_the_dispatch_reads(
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
+
+
+async def _owner(actions: Actions, tid: object) -> str | None:
+    return await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", tid)
+
+
+async def test_threads_param_transfers_ownership_to_the_dm_recipient(
+    actions: Actions,
+) -> None:
+    """Phase 1c (decision 79533336): the ownership fact is created at the moment of
+    send(), not remembered/inferred afterward. An explicit `threads=` re-points the named
+    Thread's `owner` to the resolved addressee — a TRANSFER on the same mechanism
+    reclassify_thread already exposes, not a new concept."""
+    from src.orchestrator.capture import open_thread
+
+    tid = await open_thread(actions, "P3 piece 1: deploy smoke races the service",
+                            kind="obligation", owner="agent:thoth", source="agent:thoth")
+    assert await _owner(actions, tid) == "agent:thoth"
+    res = await send_message(actions.pool, from_agent="agent:thoth", from_project="osiris",
+                             to_agent="agent:worker", body="yours now", grade="ask",
+                             threads=[str(tid)])
+    assert res["threads_stamped"] == [str(tid)]
+    assert await _owner(actions, tid) == "agent:worker"
+
+
+async def test_threads_param_accepts_a_short_id(actions: Actions) -> None:
+    """The common case: a sender types the 8-char short id orient()/dossier() already hand
+    out, not the full uuid."""
+    from src.orchestrator.capture import open_thread
+
+    tid = await open_thread(actions, "P3 piece 2: ingest registration phase 2",
+                            kind="obligation", source="agent:thoth")
+    res = await send_message(actions.pool, from_agent="agent:thoth", from_project="osiris",
+                             to_agent="agent:worker", body="yours now",
+                             threads=[str(tid)[:8]])
+    assert res["threads_stamped"] == [str(tid)]
+    assert await _owner(actions, tid) == "agent:worker"
+
+
+async def test_threads_param_refuses_an_ambiguous_short_id_no_message_written(
+    actions: Actions,
+) -> None:
+    """#117's law, with the live specimen that surfaced it (resolves="28842543" matched 2
+    live Threads, DM 2510/2513): named-enough-to-identify is not named-enough-to-auto-
+    stamp. Refusing must be loud AND must not leave a message row behind — same guarantee
+    require_seat already gives (THE ECHO + THE GATE, resolved before any write)."""
+    import uuid
+    from datetime import UTC
+    from datetime import datetime as dt
+
+    shared = "deadbeef"
+    id_a = uuid.UUID(f"{shared}-0000-4000-8000-000000000001")
+    id_b = uuid.UUID(f"{shared}-0000-4000-8000-000000000002")
+    for oid, summary in ((id_a, "collision candidate A"), (id_b, "collision candidate B")):
+        await actions.pool.execute(
+            "INSERT INTO objects (id, type, canonical, status) VALUES ($1, 'Thread', $2, "
+            "'active')", oid, f"thread:manual-{oid}")
+        await actions.assert_property(oid, "summary", summary, "test", dt.now(UTC), 0.9,
+                                      evidence_class="self_declared")
+    before = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    with pytest.raises(ValueError, match="matches 2 Thread"):
+        await send_message(actions.pool, from_agent="agent:thoth", from_project="osiris",
+                           to_agent="agent:worker", body="ambiguous dispatch",
+                           threads=[shared])
+    after = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    assert after == before
+
+
+async def test_threads_param_refuses_an_unknown_ref(actions: Actions) -> None:
+    with pytest.raises(ValueError, match="no Thread matches"):
+        await send_message(actions.pool, from_agent="agent:thoth", from_project="osiris",
+                           to_agent="agent:worker", body="ghost thread",
+                           threads=["ffffffff"])
+
+
+async def test_threads_param_requires_a_single_resolved_addressee(actions: Actions) -> None:
+    """Ownership transfer has nowhere to land on a broadcast — a project room is not an
+    addressee."""
+    from src.orchestrator.capture import open_thread
+
+    tid = await open_thread(actions, "needs an owner", kind="obligation")
+    with pytest.raises(ValueError, match="single resolved"):
+        await send_message(actions.pool, from_agent="agent:thoth", from_project="osiris",
+                           to_project="osiris", body="whoever picks this up",
+                           threads=[str(tid)])
+    assert await _owner(actions, tid) is None
+
+
+async def test_send_never_infers_thread_ownership_from_body_prose(actions: Actions) -> None:
+    """NO PROSE INFERENCE, EVER (Thoth's ruling on DM 2513, citing cb38d922's own 232-
+    mentions/25-edged finding): a thread's short id sitting in the message BODY must never
+    move ownership on its own — only an explicit `threads=` ref does."""
+    from src.orchestrator.capture import open_thread
+
+    tid = await open_thread(actions, "mentioned but not assigned", kind="obligation",
+                            owner="agent:thoth", source="agent:thoth")
+    res = await send_message(
+        actions.pool, from_agent="agent:thoth", from_project="osiris", to_agent="agent:worker",
+        body=f"fyi, related to thread {str(tid)[:8]}, but not yours to own")
+    assert "threads_stamped" not in res
+    assert await _owner(actions, tid) == "agent:thoth"
+
+
+async def test_threads_param_is_idempotent_across_a_dedup_retry(actions: Actions) -> None:
+    from src.orchestrator.capture import open_thread
+
+    tid = await open_thread(actions, "retry-safe dispatch", kind="obligation",
+                            owner="agent:thoth", source="agent:thoth")
+    first = await send_message(actions.pool, from_agent="agent:thoth", from_project="osiris",
+                               to_agent="agent:worker", body="same body twice",
+                               threads=[str(tid)])
+    second = await send_message(actions.pool, from_agent="agent:thoth", from_project="osiris",
+                                to_agent="agent:worker", body="same body twice",
+                                threads=[str(tid)])
+    assert first["dedup"] is False and second["dedup"] is True
+    assert first["id"] == second["id"]
+    assert second["threads_stamped"] == [str(tid)]
+    assert await _owner(actions, tid) == "agent:worker"

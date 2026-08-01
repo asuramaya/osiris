@@ -193,7 +193,7 @@ async def send_message(
     to_project: str | None = None, to_agent: str | None = None, body: str,
     reply_to: int | None = None, dedup_window_secs: int = 600,
     desk_kind: str | None = None, grade: str | None = None,
-    require_seat: bool = False,
+    require_seat: bool = False, threads: list[str] | None = None,
 ) -> dict[str, Any]:
     """Post a BROADCAST (to_project) or a DM (to_agent). With `reply_to` and no explicit address,
     it routes by channel: a reply to a DM goes back to that sender as a DM; a reply to a broadcast
@@ -226,7 +226,23 @@ async def send_message(
     `lineage_head` agreed, wrongly, since both came from the same broken walk — no
     receipt-side check catches this). `seat_holder_ineligible` (seats.py) is checked BEFORE
     resolve_seat runs and refuses outright when it fires — no message row is written, same
-    as `require_seat`'s refusal above."""
+    as `require_seat`'s refusal above.
+
+    OWNERSHIP STAMPED AT DISPATCH, NOT REMEMBERED (Phase 1c, decision 79533336): `threads`
+    names EXISTING Thread objects (uuid / `thread:<12hex>` / short-id prefix) this DM
+    ASSIGNS to its addressee — a TRANSFER, re-pointing each Thread's `owner` assertion to
+    the resolved `to_agent`, using the exact mechanism `reclassify_thread` already exposes
+    for the human-triaged case. NO PROSE INFERENCE, EVER (cb38d922 already measured that
+    channel and found it unreliable: 232 decision-prose thread mentions, 25 edged, a
+    three-way ambiguity no query can separate) — only a ref named HERE, explicitly, by the
+    sender, is ever touched; nothing is scraped from `body`. Each ref must resolve to
+    EXACTLY ONE Thread or this call refuses outright (RefAmbiguous propagates as a
+    ValueError) — named-enough-to-identify and named-enough-to-auto-stamp are different
+    bars (the live specimen: `resolves="28842543"` matched 2 Thread objects by short-id
+    prefix the same night this shipped). Requires a resolved single addressee (`to_agent`
+    or a name that resolves to one) — ownership transfer has nowhere to land on a
+    broadcast. New work with no prior thread needs nothing here: open_thread(assignee=...)
+    already covers dispatch-time minting on the RECIPIENT's own end."""
     if desk_kind is not None and desk_kind not in DESK_KINDS:
         raise ValueError(f"desk_kind must be one of {DESK_KINDS}")
     if grade is not None and grade not in MAIL_GRADES:
@@ -379,6 +395,26 @@ async def send_message(
                 "CLAIMED seat (no handle asserted) — refusing to dispatch blind. Check "
                 "fleet() for who actually holds a seat, or pass require_seat=False to send "
                 "anyway.")
+    # OWNERSHIP STAMPED AT DISPATCH (Phase 1c): resolved BEFORE any write, same law as the
+    # require_seat gate just above — an ambiguous or unknown thread ref must refuse loudly,
+    # never park a message whose ownership claim silently didn't land.
+    resolved_threads: list[Any] = []
+    if threads:
+        if not to_a:
+            raise ValueError("threads=…: ownership transfer needs a single resolved "
+                             "addressee (to_agent=…) — a broadcast has no one to hand it to")
+        from src.orchestrator.capture import RefAmbiguous, _find_thread
+        for tref in threads:
+            try:
+                tid = await _find_thread(pool, tref, require_identifier=True)
+            except RefAmbiguous as exc:
+                raise ValueError(
+                    f"threads=…: {exc} — refusing to guess which Thread {tref!r} means "
+                    "(named-enough-to-identify is not named-enough-to-auto-stamp)") from exc
+            if tid is None:
+                raise ValueError(f"threads=…: no Thread matches {tref!r} — check the short "
+                                 "id, or open it first")
+            resolved_threads.append(tid)
     thread = (ref["thread_id"] or ref["id"]) if ref is not None else None
     # the reply IS the ack — settle the referenced message for the replier, if it was addressed
     # to them (a DM to me, or a broadcast to my project)
@@ -391,26 +427,49 @@ async def send_message(
             "INSERT INTO message_recipients (message_id, agent_id, read_at) VALUES ($1,$2,now()) "
             "ON CONFLICT (message_id, agent_id) DO UPDATE SET read_at=COALESCE("
             "message_recipients.read_at, now())", ref["id"], from_agent)
+    async def _stamp_threads() -> list[str]:
+        """The transfer itself — re-point each resolved Thread's `owner` to the resolved
+        addressee, same mechanism `reclassify_thread` uses (assert_property, self-declared,
+        the sender's own act). Idempotent by construction (within-source supersession), so
+        a dedup'd retry re-stamping the same value is harmless, never a second fact."""
+        if not resolved_threads:
+            return []
+        from src.actions.core import Actions
+        from src.parsers.base import EvidenceClass
+        from src.parsers.evidence import confidence_for
+
+        a = Actions(pool)
+        observed = datetime.now(UTC)
+        conf = confidence_for(EvidenceClass.SELF_DECLARED)
+        for tid in resolved_threads:
+            await a.assert_property(tid, "owner", to_a, from_agent, observed, conf,
+                                    evidence_class=EvidenceClass.SELF_DECLARED.value)
+        return [str(t) for t in resolved_threads]
+
     dup = await pool.fetchrow(
         "SELECT id, thread_id FROM fleet_messages WHERE from_agent=$1 "
         "AND to_project IS NOT DISTINCT FROM $2 AND to_agent IS NOT DISTINCT FROM $3 "
         "AND md5(body)=md5($4) AND created_at > now() - make_interval(secs => $5) "
         "ORDER BY id DESC LIMIT 1", from_agent, to_p, to_a, body, dedup_window_secs)
     if dup is not None:
+        stamped = await _stamp_threads()
         return {"id": dup["id"], "to": to_p, "to_agent": to_a,
                 "thread_id": dup["thread_id"], "dedup": True,
                 **({"seat": seat, "lineage_head": lineage} if to_a else {}),
                 **({"holder": holder} if to_a and to_a.startswith("seat:") else {}),
-                **({"folded_from": folded_from} if folded_from else {})}
+                **({"folded_from": folded_from} if folded_from else {}),
+                **({"threads_stamped": stamped} if stamped else {})}
     mid = await pool.fetchval(
         "INSERT INTO fleet_messages (from_agent, from_project, to_project, to_agent, body, "
         "reply_to, thread_id, desk_kind, grade) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) "
         "RETURNING id",
         from_agent, from_project, to_p, to_a, body, reply_to, thread, desk_kind, grade)
+    stamped = await _stamp_threads()
     return {"id": mid, "to": to_p, "to_agent": to_a, "thread_id": thread, "dedup": False,
             **({"seat": seat, "lineage_head": lineage} if to_a else {}),
             **({"holder": holder} if to_a and to_a.startswith("seat:") else {}),
-            **({"folded_from": folded_from} if folded_from else {})}
+            **({"folded_from": folded_from} if folded_from else {}),
+            **({"threads_stamped": stamped} if stamped else {})}
 
 
 async def unread_count(
