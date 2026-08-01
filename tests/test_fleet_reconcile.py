@@ -11,6 +11,8 @@ from typing import Any
 from src.actions.core import Actions
 from src.config.settings import Settings
 from src.orchestrator.fleet_reconcile import (
+    _BATCH_CAP,
+    _BLIND_ALARM_SUMMARY,
     reconcile_dry_run,
     reconcile_execute,
     reconcile_scheduled_tick,
@@ -581,6 +583,146 @@ async def test_scheduled_tick_acts_once_the_flag_is_flipped_on(actions: Actions)
         live_bodies_by_cwd=_bodies("/tmp/deadstub"))
 
     assert out["enabled"] is True
+    assert out["state"] == "ACTS"
     assert len(out["dropped"]) == 1
     assert await p.fetchval(
         "SELECT count(*) FROM agent_mounts WHERE agent_id='agent:ghost0001'") == 0
+
+
+# ── task #108: the desk receipt, the batch cap, the consecutive-blind alarm ────────────
+
+
+async def test_scheduled_tick_is_dark_names_its_own_state(actions: Actions) -> None:
+    """`state` is returned even when the flag is off — DARK, not inferred from `enabled`
+    alone (task #108, ruling 2889's own acceptance test)."""
+    out = await reconcile_scheduled_tick(actions, settings=Settings())
+    assert out["enabled"] is False
+    assert out["state"] == "DARK"
+
+
+async def test_desk_receipt_fires_with_before_after_counts_when_a_tick_acts(
+    actions: Actions, tmp_path,
+) -> None:
+    """task #108 piece 1: the only prior watch on a real execute was a log line nobody is
+    paged by. A tick that actually folds or drops something now also fires a durable,
+    addressable operator-desk brief carrying the exact before/after counts."""
+    p = actions.pool
+    root = tmp_path / "projects"
+    jobs = tmp_path / "jobs"
+    slug = root / "-w-swarm-repo"
+    slug.mkdir(parents=True)
+    (slug / "rea1baaa-full-session.jsonl").write_text("{}\n")
+    await _mk_agent(actions, "agent:a11a5000")
+    await _mk_agent(actions, "agent:rea1baaa")
+    await save_mount(p, job_dir=str(jobs / "a11a5000"), agent_id="agent:a11a5000",
+                     project="reconhouse", cwd="/w/swarm-repo", model=None,
+                     session_key="whisper:a11a5000")
+    await save_mount(p, job_dir=str(jobs / "rea1baaa"), agent_id="agent:rea1baaa",
+                     project="reconhouse", cwd="/w/swarm-repo", model=None,
+                     session_key="sid:conn")
+
+    out = await reconcile_execute(actions, actor="agent:test-actor", execute=True,
+                                  projects_root=root, jobs_home=jobs,
+                                  live_bodies_by_cwd=_bodies("/w/swarm-repo"))
+
+    assert out["desk_brief_id"] is not None
+    brief = await p.fetchval(
+        "SELECT body FROM fleet_messages WHERE to_project='operator' "
+        "ORDER BY id DESC LIMIT 1")
+    assert brief and brief.startswith("FLEET-RECONCILE ACTED")
+    assert "folded 1, dropped 0" in brief
+    assert "before=" in brief and "after=" in brief
+
+
+async def test_batch_cap_holds_the_whole_tick_and_fires_a_decision_brief(
+    actions: Actions,
+) -> None:
+    """task #108 piece 2: a tick whose actionable rows exceed `_BATCH_CAP` refuses to act
+    on ANY of them — not a partial drain — and holds the whole batch to leave_for_human
+    through the SAME `_held()` every other reason routes through, firing a
+    `desk_kind='decision'` brief instead of the plain FYI: an anomalous batch is the
+    signature of a bug in the classifier, not a thing to bulk-act on unwitnessed."""
+    p = actions.pool
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:deadbatch",
+                                                "repo:deadbatch")
+    await actions.set_status(proj, "retired", "test: stub cull", "agent:test-actor")
+    cwds = []
+    for i in range(_BATCH_CAP + 1):
+        cwd = f"/tmp/deadbatch{i}"
+        cwds.append(cwd)
+        await save_mount(p, job_dir=f"/tmp/jobs/deadbatch{i}",
+                         agent_id=f"agent:deadbatch{i}", project="deadbatch", cwd=cwd,
+                         model=None, session_key=f"whisper:deadbatch{i}")
+
+    out = await reconcile_execute(actions, actor="agent:test-actor", execute=True,
+                                  live_bodies_by_cwd=_bodies(*cwds))
+
+    assert out["over_cap"] is True
+    assert out["would_drop"] == []  # already re-held before the acting layer ever read it
+    assert out["folded"] == [] and out["dropped"] == []
+    assert out["desk_brief_id"] is not None
+    for i in range(_BATCH_CAP + 1):
+        assert await p.fetchval(
+            "SELECT count(*) FROM agent_mounts WHERE agent_id=$1",
+            f"agent:deadbatch{i}") == 1  # every row is untouched, held not dropped
+    brief = await p.fetchval(
+        "SELECT body FROM fleet_messages WHERE to_project='operator' "
+        "ORDER BY id DESC LIMIT 1")
+    assert brief and brief.startswith("FLEET-RECONCILE OVER CAP")
+
+
+async def test_scheduled_tick_over_cap_state_never_drops_a_row(actions: Actions) -> None:
+    p = actions.pool
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:deadbatch2",
+                                                "repo:deadbatch2")
+    await actions.set_status(proj, "retired", "test: stub cull", "agent:test-actor")
+    cwds = []
+    for i in range(_BATCH_CAP + 1):
+        cwd = f"/tmp/deadbatch2-{i}"
+        cwds.append(cwd)
+        await save_mount(p, job_dir=f"/tmp/jobs/deadbatch2-{i}",
+                         agent_id=f"agent:deadbatch2-{i}", project="deadbatch2", cwd=cwd,
+                         model=None, session_key=f"whisper:deadbatch2-{i}")
+
+    out = await reconcile_scheduled_tick(
+        actions, settings=Settings(osiris_fleet_reconcile_enabled=True),
+        live_bodies_by_cwd=_bodies(*cwds))
+
+    assert out["state"] == "OVER_CAP"
+    assert out["dropped"] == []
+    for i in range(_BATCH_CAP + 1):
+        assert await p.fetchval(
+            "SELECT count(*) FROM agent_mounts WHERE agent_id=$1",
+            f"agent:deadbatch2-{i}") == 1
+
+
+async def test_consecutive_blind_alarm_opens_on_first_blind_tick_and_resolves_on_recovery(
+    actions: Actions,
+) -> None:
+    """task #108 piece 3: no counter, no state row — `open_thread`'s own idempotency on
+    the alarm's fixed summary text does the dedup, and the thread's own age is the
+    darkness duration. The next tick the census recovers resolves the SAME thread —
+    deliberately unlike `alarm_schema_drift`, which never auto-resolves."""
+    out1 = await reconcile_scheduled_tick(
+        actions, settings=Settings(osiris_fleet_reconcile_enabled=True),
+        live_bodies_by_cwd=_blind())
+    assert out1["state"] == "BLIND"
+
+    status = await actions.pool.fetchval(
+        "SELECT ca2.value #>> '{}' FROM current_assertions ca1 "
+        "JOIN current_assertions ca2 ON ca2.object_id = ca1.object_id "
+        "AND ca2.name = 'status' "
+        "WHERE ca1.name = 'summary' AND ca1.value #>> '{}' = $1", _BLIND_ALARM_SUMMARY)
+    assert status == "open"
+
+    out2 = await reconcile_scheduled_tick(
+        actions, settings=Settings(osiris_fleet_reconcile_enabled=True),
+        live_bodies_by_cwd=_bodies())
+    assert out2["state"] == "ACTS"
+
+    status_after = await actions.pool.fetchval(
+        "SELECT ca2.value #>> '{}' FROM current_assertions ca1 "
+        "JOIN current_assertions ca2 ON ca2.object_id = ca1.object_id "
+        "AND ca2.name = 'status' "
+        "WHERE ca1.name = 'summary' AND ca1.value #>> '{}' = $1", _BLIND_ALARM_SUMMARY)
+    assert status_after == "resolved"

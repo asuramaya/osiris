@@ -61,6 +61,27 @@ writing anything unless called with `execute=True`. And even once merged and dep
 SCHEDULED leg (arq_worker.fleet_reconcile_heartbeat) stays inert behind its own kill switch
 (`osiris_fleet_reconcile_enabled`, default False) — flipping that flag is a second signature
 a human gives separately from approving the diff, never a side effect of a deploy.
+
+TASK #108 (Thoth DM 2881/2889/2916) found the cadence itself already built — same session
+lineage, 2026-07-30 — and closed the one real gap instead: WHAT WATCHES IT. Before this,
+the only signal on a scheduled tick was `record_job`'s liveness telemetry (did it run) plus
+a `_log.info` line nobody is paged by — the exact document-nobody-reads shape that let
+sweep_ghost_doors run unwitnessed for months. Three additions, all composing existing
+precedented primitives, nothing new invented: (1) any tick that actually acts fires a
+durable operator-desk brief with the exact before/after counts and row ids
+(`mailbox.send_message`, same shape as `greatfold.py`/`pit_watch.py`); (2) a per-tick BATCH
+CAP (`_BATCH_CAP`, 5) — a tick whose actionable rows exceed it holds the WHOLE batch to
+`leave_for_human` through the shared `_held()` and fires a `desk_kind='decision'` brief,
+because an anomalous batch is the signature of a classifier bug, not a thing to bulk-act on
+unwitnessed; (3) a CONSECUTIVE-BLIND ALARM — no counter, no state row, `open_thread`'s own
+idempotency on the alarm's fixed summary text does the dedup, so the thread's own age IS the
+darkness duration, auto-resolved the tick the census recovers. The resulting state machine —
+DARK -> BLIND -> OVER_CAP -> ACTS, every non-ACTS state a STRUCTURAL hold — is named
+explicitly in `reconcile_scheduled_tick`'s own return value (`state`) and docstring, per
+ruling 2889's acceptance test: "what refuses," not "the agent will know to." Flipping
+`osiris_fleet_reconcile_enabled` stays the operator's own hand, held until this watch shipped
+— arming the schedule before its watch exists would have been the birth-defect version of
+the exact bug this task exists to close.
 """
 from __future__ import annotations
 
@@ -91,6 +112,31 @@ _BUCKET_BY_CLASS = {
 
 _LIVE_WINDOW_SECS = 900  # the same 15-minute decay every liveness read in the fleet uses
                          # (mounts.py's own _DOOR_WINDOW_SECS, fleet()'s "live" cutoff)
+
+# task #108 (Thoth DM 2889/2916): a single tick's actionable rows (bulk_fold_swarm +
+# rollup_office_remount + drop_ephemeral_test_cwd combined) above this count refuse to
+# act at all THIS TICK — an anomalous batch is exactly the signature of a bug in the
+# classifier upstream, not a thing to bulk-act on unwitnessed. Measured against real
+# history before picking a number (merge_candidates creation over 14 days: 12, 34, 1, and
+# ZERO on the other 11 — bursty and sparse, never a steady drip; 2 real drops ever
+# executed via audit_log, both a human-directed demonstration, none organic): 5 sits above
+# any plausible single-tick slice of even the 34-in-a-day peak while still catching a
+# genuine anomaly before it bulk-acts.
+_ACTIONABLE_BUCKETS = ("bulk_fold_swarm", "rollup_office_remount", "drop_ephemeral_test_cwd")
+_BATCH_CAP = 5
+
+
+def _held(
+    buckets: dict[str, list[dict[str, Any]]], row: dict[str, Any], rule: str,
+) -> None:
+    """A row that WOULD auto-act, held back for the stated reason instead — the rule text
+    itself names which bucket it would have earned. Module-level (task #108) rather than a
+    closure so the OVER-CAP pass (a post-loop re-bucketing, not a per-row decision) reuses
+    the exact same hold every other reason routes through — ONE hold mechanism, several
+    reasons, never a second implementation that could drift from the first."""
+    row["bucket"] = "leave_for_human"
+    row["rule"] = rule
+    buckets["leave_for_human"].append(row)
 
 
 async def _ghost_flagged_agents(
@@ -213,7 +259,25 @@ async def reconcile_dry_run(
     fails, every row that would have landed in bulk_fold_swarm/rollup_office_remount/
     drop_ephemeral_test_cwd is held in `leave_for_human` instead, named as blind-held —
     `reconcile_execute` reads buckets from here, so this alone keeps the acting half safe
-    without touching it. `census_blind: true` at the top level names the reason plainly."""
+    without touching it. `census_blind: true` at the top level names the reason plainly.
+
+    AN OVER-CAP TICK ALSO REFUSES TO BUCKET ANYTHING INTO AN AUTO-ACT CLASS (task #108,
+    Thoth DM 2889/2916): once every row has found its bucket, if the combined size of
+    bulk_fold_swarm/rollup_office_remount/drop_ephemeral_test_cwd exceeds `_BATCH_CAP`
+    (5), the WHOLE actionable set is re-held in `leave_for_human` through the same
+    `_held()` every other hold reason uses — an anomalous batch is exactly the signature
+    of a bug in the upstream classifier, not a thing to bulk-act on unwitnessed.
+    `over_cap: true` at the top level names the reason plainly, same shape as
+    `census_blind`.
+
+    THE STATE MACHINE THIS MODULE IMPLEMENTS, NAMED RATHER THAN LEFT TO INFER FROM
+    BRANCHES (ruling 2889's own acceptance test — "what refuses"): DARK (the scheduled
+    leg's kill switch is off — `reconcile_scheduled_tick`'s own concern, not this
+    function's) -> BLIND (census failed this tick, everything held) -> OVER_CAP (census
+    fine, batch too large, everything held) -> ACTS (neither hold fired, the plan's
+    would_fold/would_drop rows are real). Every non-ACTS state is a STRUCTURAL hold —
+    rows are never assembled into the acting lists in the first place, not filtered out
+    by a check a future edit could forget."""
     swept = await find_agent_fold_candidates(
         pool, projects_root=projects_root, jobs_home=jobs_home)
     ghosts, blind = await _ghost_flagged_agents(pool, live_bodies_by_cwd=live_bodies_by_cwd)
@@ -222,13 +286,6 @@ async def reconcile_dry_run(
         "drop_ephemeral_test_cwd": [], "ghost_gap": [], "leave_for_human": [],
     }
     seen_ghosts: set[str] = set()
-
-    def _held(row: dict[str, Any], rule: str) -> None:
-        """A row that WOULD auto-act, held back for the stated reason instead — the rule
-        text itself names which bucket it would have earned."""
-        row["bucket"] = "leave_for_human"
-        row["rule"] = rule
-        buckets["leave_for_human"].append(row)
 
     for c in swept["pending"]:
         cls = str(c.get("class") or "")
@@ -247,9 +304,9 @@ async def reconcile_dry_run(
             rule = f"{cls} score {score} >= {_HIGH_CONFIDENCE} — the sweep's own " \
                    "single-seat/no-body confidence bar"
             if blind:
-                _held(row, f"[would be {target}] " + rule + " — HELD: OS census is blind "
-                      "this tick, an auto-act bucket cannot be trusted without a ghost "
-                      "check")
+                _held(buckets, row, f"[would be {target}] " + rule + " — HELD: OS census "
+                      "is blind this tick, an auto-act bucket cannot be trusted without a "
+                      "ghost check")
             else:
                 row["bucket"], row["rule"] = target, rule
                 buckets[target].append(row)
@@ -271,9 +328,9 @@ async def reconcile_dry_run(
             row.update(bucket="ghost_gap", rule=ghosts[agent_id]["rule"])
             buckets["ghost_gap"].append(row)
         elif blind:
-            _held(row, "[would be drop_ephemeral_test_cwd] " + row["rule"] + " — HELD: OS "
-                  "census is blind this tick, an auto-act bucket cannot be trusted "
-                  "without a ghost check")
+            _held(buckets, row, "[would be drop_ephemeral_test_cwd] " + row["rule"] +
+                  " — HELD: OS census is blind this tick, an auto-act bucket cannot be "
+                  "trusted without a ghost check")
         else:
             buckets["drop_ephemeral_test_cwd"].append(row)
 
@@ -298,16 +355,36 @@ async def reconcile_dry_run(
         if agent_id not in seen_ghosts:
             buckets["ghost_gap"].append(ghost_row)
 
+    # OVER-CAP (task #108): a POST-pass, not a per-row check, because the cap is a
+    # judgment about the TICK's total actionable volume, only knowable once every row has
+    # already found its bucket. Re-bucket the whole actionable set through the same
+    # `_held()` every other hold reason uses — the guard cannot be half-applied, since a
+    # row either keeps its earned bucket or is held, never a mix within one tick.
+    actionable_total = sum(len(buckets[b]) for b in _ACTIONABLE_BUCKETS)
+    over_cap = actionable_total > _BATCH_CAP
+    if over_cap:
+        for name in _ACTIONABLE_BUCKETS:
+            rows, buckets[name] = buckets[name], []
+            for row in rows:
+                _held(buckets, row, f"[would be {row['bucket']}] {row['rule']} — HELD: "
+                      f"tick batch size {actionable_total} exceeds cap {_BATCH_CAP}, one "
+                      "human look before bulk action")
+
     counts = {k: len(v) for k, v in buckets.items()}
     return {
         "buckets": buckets, "counts": counts, "total": sum(counts.values()),
         "examined": swept.get("examined", 0),
         "census_blind": blind,
+        "over_cap": over_cap,
         "note": ("REPORT ONLY — nothing folded, dropped, or retired. Every row above names "
                  "its own bucket and the rule that put it there." +
                  (" OS CENSUS WAS BLIND THIS TICK — every row that would have auto-acted "
                   "is held in leave_for_human instead; re-run once the census can see."
-                  if blind else "")),
+                  if blind else "") +
+                 (f" BATCH CAP EXCEEDED THIS TICK ({actionable_total} > {_BATCH_CAP}) — "
+                  "every row that would have auto-acted is held in leave_for_human "
+                  "instead; an anomalous batch needs a human's eyes before bulk action."
+                  if over_cap else "")),
     }
 
 
@@ -343,8 +420,21 @@ async def reconcile_execute(
 
     POST-ACT VERIFICATION (`execute=True` only): re-reads the tray a SECOND time after
     acting and reports before/after counts — proof the acted rows actually left the tray,
-    never a trusted return value from the fold/drop calls alone."""
+    never a trusted return value from the fold/drop calls alone.
+
+    THE DESK RECEIPT (task #108, Thoth DM 2889/2916 — "what watches it"): the only prior
+    watch on this function was `record_job`'s own liveness telemetry (did the tick run),
+    never whether what it DID was right — the one content signal was a log line nobody is
+    paged by, the exact document-nobody-reads shape that let sweep_ghost_doors run
+    unwitnessed for months. So a REAL execute (folded or dropped nonzero) now also fires a
+    durable, addressable operator-desk brief (`mailbox.send_message`, same shape as
+    `greatfold.py`'s after-review brief and `pit_watch.py`'s sighting brief) carrying the
+    exact before/after counts and row ids — never a summary a human has to trust. An
+    OVER-CAP tick (below) fires its own brief at `desk_kind='decision'` instead: that one
+    genuinely needs a human call, not just an FYI. Both are try/excepted — a mail hiccup
+    must never unwind a landed action, same discipline `greatfold.py` already proves."""
     from src.orchestrator.folds import resolve_fold_candidate
+    from src.orchestrator.mailbox import send_message
     from src.orchestrator.mounts import drop_dead_project_mount
 
     report = await reconcile_dry_run(actions.pool, projects_root=projects_root,
@@ -363,10 +453,38 @@ async def reconcile_execute(
     plan: dict[str, Any] = {
         "would_fold": would_fold, "would_drop": would_drop,
         "left_for_human": len(report["buckets"]["leave_for_human"]),
+        "census_blind": report["census_blind"], "over_cap": report["over_cap"],
         "execute": execute,
     }
     if not execute:
         plan["note"] = "PLAN ONLY — call with execute=True to write. Nothing touched."
+        return plan
+
+    # OVER-CAP: `would_fold`/`would_drop` are already empty here (reconcile_dry_run held
+    # the whole actionable set to leave_for_human before this function ever read its
+    # buckets) — this is the DECISION brief, not the FYI one, because an anomalous batch
+    # needs a human call (raise the cap? investigate the classifier?), not a status note.
+    if report["over_cap"]:
+        body = (f"FLEET-RECONCILE OVER CAP — a tick's actionable rows "
+                f"(bulk_fold_swarm+rollup_office_remount+drop_ephemeral_test_cwd) totaled "
+                f"more than the cap of {_BATCH_CAP}; the whole tick was held in "
+                f"leave_for_human rather than bulk-acting on an unreviewed anomaly. "
+                f"counts: {report['counts']}. actor={actor!r}.")
+        try:
+            sent = await send_message(actions.pool, from_agent=actor, from_project="osiris",
+                                      to_project="operator", body=body, desk_kind="decision")
+            plan["desk_brief_id"] = sent.get("id")
+        except Exception:  # noqa: BLE001 — a mail hiccup must not mask the hold that landed
+            plan["desk_brief_id"] = None
+        # same shape as an ACTS tick's plan (folded/dropped/before_counts/after_counts
+        # present, not just implied by their absence) — nothing moved, so before == after,
+        # reusing `report["counts"]` rather than a second, pointless dry-run read.
+        plan.update({
+            "folded": [], "dropped": [],
+            "before_counts": report["counts"], "after_counts": report["counts"],
+            "note": ("OVER CAP — nothing acted this tick, everything held in "
+                     "leave_for_human, an operator decision brief was sent."),
+        })
         return plan
 
     folded, drops = [], []
@@ -374,7 +492,7 @@ async def reconcile_execute(
         try:
             out = await resolve_fold_candidate(
                 actions, candidate_id=item["candidate_id"], decision="merged", actor=actor)
-        except Exception as exc:  # one bad row must not abort a correct plan
+        except Exception as exc:  # one bad row must not abort a correct batch
             out = {"error": f"{type(exc).__name__}: {exc}"}
         folded.append({**item, "result": out})
     for item in would_drop:
@@ -395,7 +513,35 @@ async def reconcile_execute(
         "note": "EXECUTED — before/after counts prove the acted rows left the tray; "
                 "leave_for_human rows were never touched.",
     })
+
+    acted_folds = sum(1 for f in folded if "error" not in f.get("result", {}))
+    acted_drops = sum(1 for d in drops if "error" not in d)
+    if acted_folds or acted_drops:
+        body = (f"FLEET-RECONCILE ACTED — folded {acted_folds}, dropped {acted_drops} "
+                f"(of {len(folded)} attempted folds, {len(drops)} attempted drops). "
+                f"before={report['counts']} after={after['counts']}. actor={actor!r}. "
+                f"folded rows: {folded}. dropped rows: {drops}.")
+        try:
+            sent = await send_message(actions.pool, from_agent=actor, from_project="osiris",
+                                      to_project="operator", body=body, desk_kind="fyi")
+            plan["desk_brief_id"] = sent.get("id")
+        except Exception:  # noqa: BLE001 — a fold/drop that landed must not unwind on a
+            plan["desk_brief_id"] = None  # mail hiccup, same discipline as greatfold.py
     return plan
+
+
+# task #108's consecutive-blind alarm (Thoth DM 2889/2916): NO COUNTER, NO STATE ROW —
+# open_thread's own idempotency-on-summary-text does the dedup, and the thread's own age
+# IS the darkness duration. The text must stay byte-for-byte stable across calls (the
+# canonical hash is derived FROM it, `capture._canon`) or every tick would mint a new
+# thread instead of finding the one already open.
+_BLIND_ALARM_SUMMARY = (
+    "FLEET-RECONCILE'S SCHEDULED TICK WENT CENSUS-BLIND — the OS census failed this tick, "
+    "every auto-act row was held in leave_for_human instead of trusted; if this persists "
+    "across many ticks the auto-act path is silently dark and nothing is being ghost-"
+    "checked. This thread's own age is the duration — no separate counter exists. "
+    "Auto-resolved the next tick the census succeeds again."
+)
 
 
 async def reconcile_scheduled_tick(
@@ -416,13 +562,53 @@ async def reconcile_scheduled_tick(
 
     `settings` is the injected test seam (`trigger_mail_tick`'s own convention, `st =
     settings or get_settings()`) so a test can flip the flag without touching the real
-    environment or monkeypatching `get_settings`."""
+    environment or monkeypatching `get_settings`.
+
+    `state` NAMES THE MACHINE THIS MODULE IMPLEMENTS (task #108, ruling 2889's own
+    acceptance test — "what refuses"), in the return value rather than left for a future
+    reader to infer from branches: DARK (flag off, nothing read or written) -> BLIND (OS
+    census failed this tick, `reconcile_dry_run` held every auto-act row) -> OVER_CAP
+    (census fine, this tick's actionable batch exceeded `_BATCH_CAP`, every row held) ->
+    ACTS (neither hold fired; `folded`/`dropped` may be nonzero). Every non-ACTS state is
+    a structural hold upstream, not a check this function performs itself.
+
+    THE CONSECUTIVE-BLIND ALARM (task #108's third piece): a BLIND tick opens
+    `_BLIND_ALARM_SUMMARY` as a `severity='alarm'` obligation Thread — idempotent on the
+    summary text, so ticks 2..N against an already-blind census are free, no counter or
+    state row needed; the thread's own age IS how long the auto-act path has been dark,
+    and `severity='alarm'` rides the same `drift_alarms` live-desk filter
+    `deploy_guard.alarm_schema_drift` already proves, for free. The next NON-blind tick
+    resolves it — DELIBERATELY UNLIKE `alarm_schema_drift` (which never auto-resolves,
+    because a schema drift needs a human's deploy to fix): a blind census can genuinely
+    self-heal tick to tick as OS state changes, so auto-resolving here reports reality
+    instead of requiring a human to notice recovery and close it by hand. Both calls are
+    try/excepted — a graph hiccup must never fail the tick that already decided whether
+    to act."""
     st = settings or get_settings()
     if not st.osiris_fleet_reconcile_enabled:
-        return {"enabled": False, "folded": [], "dropped": [],
+        return {"enabled": False, "state": "DARK", "folded": [], "dropped": [],
                 "note": "the reaper's scheduled leg is dark "
                         "(osiris_fleet_reconcile_enabled=0)"}
     out = await reconcile_execute(actions, actor="cron:fleet_reconcile_heartbeat",
                                   execute=True, projects_root=projects_root,
                                   jobs_home=jobs_home, live_bodies_by_cwd=live_bodies_by_cwd)
-    return {"enabled": True, **out}
+
+    from src.orchestrator.capture import open_thread, resolve_thread
+
+    if out.get("census_blind"):
+        state = "BLIND"
+        try:
+            await open_thread(actions, summary=_BLIND_ALARM_SUMMARY, kind="obligation",
+                              severity="alarm", source="cron:fleet_reconcile_heartbeat")
+        except Exception:  # noqa: BLE001 — a mint hiccup must not fail the tick's verdict
+            pass
+    else:
+        state = "OVER_CAP" if out.get("over_cap") else "ACTS"
+        try:
+            await resolve_thread(
+                actions, _BLIND_ALARM_SUMMARY,
+                because="census recovered — this tick's OS body check succeeded again",
+                source="cron:fleet_reconcile_heartbeat")
+        except Exception:  # noqa: BLE001 — same discipline: never fail the tick over this
+            pass
+    return {"enabled": True, "state": state, **out}
