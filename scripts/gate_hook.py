@@ -30,8 +30,14 @@ TOUCHED-FILES-ONLY BY CONSTRUCTION, not an afterthought (Sekhmet's own #112 find
 suite measured 209s under real 4-agent concurrency, and a per-commit gate demanding that is
 unshippable — everyone disables it within a day). `resolve_test_files` is the base
 resolution: exact basename match first (`src/x/y.py` <-> `tests/test_y.py`, ~59% of this
-repo's modules), then a cheap static grep across `tests/` for the module's own import path to
-catch the rest — never a full-suite fallback. `classify_test_files` then splits that set into
+repo's modules), then `_file_references_module` walks the AST of every other `tests/` file
+for a REAL import of the module (`from mod import ...`, bare `import mod`, or the
+package-level `from <parent> import <leaf>` form) to catch the rest — never a text/regex
+match against the file body, and never a full-suite fallback. Was a substring-plus-
+word-boundary regex until Thoth DM 2948's own audit caught it producing a false match (a
+module name that happened to appear as a bare word inside an unrelated prose string, not an
+import — the same defect class as #104's "stop" matching the filename osiris_stophook.py).
+`classify_test_files` then splits that set into
 DIRECT (exercises the touched module's own logic — always runs, no cap) and FIXTURE-ONLY
 (imports the module purely to seed a row for some OTHER module's test — subject to
 `_PYTEST_FANOUT_CAP`), self-calibrated per touched module by which imported names are a
@@ -60,7 +66,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -100,10 +105,40 @@ def _module_path(src_file: str) -> str | None:
     return src_file[:-3].replace("/", ".")
 
 
+def _file_references_module(test_file: Path, mod: str) -> bool:
+    """True iff this test file has a REAL import of `mod` — `from mod import ...`, bare
+    `import mod` (aliased or not), or the package-level form `from <parent of mod> import
+    <leaf of mod>`. AST-based, never a text/regex match against the whole file body: a bare
+    word inside a string literal or comment is not an import (Thoth DM 2948 — the
+    test_mailbox.py false match: it imported an unrelated name from the SAME PACKAGE and
+    separately contained the bare word "smoke" only in a prose string, and the old
+    substring-plus-word-boundary heuristic conflated the two into a false signal — the same
+    defect class as #104's "stop" matching the filename osiris_stophook.py). Walks the WHOLE
+    file, not just top-level statements, matching `_module_imports`'s own reach."""
+    try:
+        tree = ast.parse(test_file.read_text())
+    except (OSError, SyntaxError):
+        return False
+    parent_mod, _, leaf = mod.rpartition(".")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == mod:
+                return True
+            if parent_mod and node.module == parent_mod and any(
+                alias.name == leaf for alias in node.names
+            ):
+                return True
+        elif isinstance(node, ast.Import) and any(
+            alias.name == mod for alias in node.names
+        ):
+            return True
+    return False
+
+
 def resolve_test_files(changed_files: list[str], repo_root: Path = REPO_ROOT) -> set[str]:
     """Changed repo-relative paths -> the test files worth running for them. See the module
     docstring's "TOUCHED-FILES-ONLY" paragraph for the two-tier resolution and its named
-    blind spot. Pure except for the grep tier's read of the tests/ tree — no git, no
+    blind spot. Pure except for the AST tier's read of the tests/ tree — no git, no
     subprocess with a nonzero-exit surface, fully unit-testable with a tmp_path tree."""
     tests_dir = repo_root / "tests"
     all_test_files = sorted(
@@ -122,22 +157,10 @@ def resolve_test_files(changed_files: list[str], repo_root: Path = REPO_ROOT) ->
         by_basename = f"tests/test_{stem}.py"
         if by_basename in all_test_files:
             out.add(by_basename)
-        needle_from = f"from {mod} import"
-        needle_import = f"import {mod}"
-        parent_mod, _, leaf = mod.rpartition(".")
-        needle_from_parent = f"from {parent_mod} import" if parent_mod else None
         for tf in all_test_files:
             if tf in out:
                 continue
-            try:
-                text = (repo_root / tf).read_text()
-            except OSError:
-                continue
-            if needle_from in text or needle_import in text:
-                out.add(tf)
-            elif needle_from_parent and needle_from_parent in text and re.search(
-                rf"\b{re.escape(leaf)}\b", text,
-            ):
+            if _file_references_module(repo_root / tf, mod):
                 out.add(tf)
     return out
 
@@ -259,10 +282,26 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
             out = ((proc.stdout or "") + (proc.stderr or "")).strip()
             results["pytest"] = (ok, f"[{' '.join(test_files)}]{skip_note}\n{out}")
         except subprocess.TimeoutExpired:
+            # A DISTINCT WORD FROM "FAILED" (Thoth DM 2948, same discipline as smoke_chrome's
+            # timeout-vs-refusal split): a hang past _PYTEST_TIMEOUT_SECS is not proven to be
+            # the code's fault -- the negative control run twice this session (identical
+            # timeout on ec01c42 before and after adding -n 4 parallelism) points at DB
+            # contention from every worktree sharing the same live dev Postgres, not CPU-bound
+            # test time. `_status_word` below renders this as TIMEOUT, never FAILED.
             results["pytest"] = (
                 False,
-                f"TIMED OUT after {_PYTEST_TIMEOUT_SECS}s [{' '.join(test_files)}]{skip_note}")
+                f"TIMED OUT after {_PYTEST_TIMEOUT_SECS}s under real ambient fleet load "
+                f"(not a proven code failure -- see the DB-contention negative control) "
+                f"[{' '.join(test_files)}]{skip_note}")
     return results
+
+
+def _status_word(ok: bool, detail: str) -> str:
+    """"ok" / "TIMEOUT" / "FAILED" — never collapses a hang into the same word as a real
+    assertion failure (Thoth DM 2948)."""
+    if ok:
+        return "ok"
+    return "TIMEOUT" if detail.startswith("TIMED OUT") else "FAILED"
 
 
 def changed_files_staged(repo_root: Path = REPO_ROOT) -> list[str]:
@@ -282,7 +321,7 @@ def _report(label: str, results: dict[str, tuple[bool, str]]) -> bool:
     verdict = "PASS" if all_ok else "FAIL"
     print(f"gate_hook[{label}]: {verdict}")
     for name, (ok, out) in results.items():
-        print(f"  {name}: {'ok' if ok else 'FAILED'}")
+        print(f"  {name}: {_status_word(ok, out)}")
         if not ok:
             for line in out.splitlines()[-15:]:
                 print(f"    {line}")
@@ -329,6 +368,7 @@ def cmd_audit(rev_range: str) -> int:
           "using right now) — sequential, never parallel, to avoid compounding Sekhmet's "
           "own measured cross-process contention (#112).")
     fails: list[str] = []
+    timeouts: list[str] = []
     with tempfile.TemporaryDirectory(prefix="gate-audit-") as tmp:
         tmp_path = Path(tmp)
         for i, sha in enumerate(shas, 1):
@@ -345,24 +385,33 @@ def cmd_audit(rev_range: str) -> int:
             all_ok = all(v[0] for v in results.values())
             print(f"[{i}/{len(shas)}] {short}: "
                   f"{'PASS' if all_ok else 'FAIL'} "
-                  f"(ruff={'ok' if results['ruff'][0] else 'FAIL'}, "
-                  f"mypy={'ok' if results['mypy'][0] else 'FAIL'}, "
-                  f"pytest={'ok' if results['pytest'][0] else 'FAIL'})")
+                  f"(ruff={_status_word(*results['ruff'])}, "
+                  f"mypy={_status_word(*results['mypy'])}, "
+                  f"pytest={_status_word(*results['pytest'])})")
             if not all_ok:
-                fails.append(short)
+                if _status_word(*results["pytest"]) == "TIMEOUT" and all(
+                    ok for name, (ok, _) in results.items() if name != "pytest"
+                ):
+                    timeouts.append(short)
+                else:
+                    fails.append(short)
                 for name, (ok2, out2) in results.items():
                     if not ok2:
                         print(f"    {name} tail:")
                         for line in out2.splitlines()[-10:]:
                             print(f"      {line}")
             _run(["git", "worktree", "remove", "--force", str(wt)], REPO_ROOT)
-    print(f"gate_hook audit: {len(shas) - len(fails)}/{len(shas)} would have passed")
+    settled = len(shas) - len(fails) - len(timeouts)
+    print(f"gate_hook audit: {settled}/{len(shas)} would have passed cleanly")
     if fails:
-        print(f"WOULD HAVE BEEN REFUSED: {', '.join(fails)}")
-    else:
+        print(f"WOULD HAVE BEEN REFUSED (real gate failure): {', '.join(fails)}")
+    if timeouts:
+        print(f"TIMED OUT, NOT PROVEN A REAL FAILURE (ruff/mypy clean, pytest alone hung — "
+              f"see the DB-contention negative control): {', '.join(timeouts)}")
+    if not fails and not timeouts:
         print("NONE would have been refused — no false positives against real, "
               "genuinely-gated history")
-    return 1 if fails else 0
+    return 1 if fails or timeouts else 0
 
 
 def main(argv: list[str] | None = None) -> int:

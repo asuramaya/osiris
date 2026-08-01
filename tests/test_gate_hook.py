@@ -9,6 +9,7 @@ from typing import Any
 import scripts.gate_hook as gate_hook
 from scripts.gate_hook import (
     _module_imports,
+    _status_word,
     classify_test_files,
     cmd_precommit,
     resolve_test_files,
@@ -36,13 +37,44 @@ def test_a_touched_test_file_runs_itself(tmp_path: Path) -> None:
 
 
 def test_finds_a_cross_referencing_test_with_no_matching_basename(tmp_path: Path) -> None:
-    """The grep tier's whole reason to exist: a module with no `test_<name>.py` twin, but
+    """The AST tier's whole reason to exist: a module with no `test_<name>.py` twin, but
     imported by name into an unrelated test file, must still be found."""
     _write(tmp_path, "src/orchestrator/widget.py")
     _write(tmp_path, "tests/test_something_else.py",
            "from src.orchestrator.widget import build_widget\n")
     out = resolve_test_files(["src/orchestrator/widget.py"], tmp_path)
     assert out == {"tests/test_something_else.py"}
+
+
+def test_finds_a_package_level_import_of_the_leaf_name(tmp_path: Path) -> None:
+    _write(tmp_path, "src/orchestrator/widget.py")
+    _write(tmp_path, "tests/test_pkg_import.py",
+           "from src.orchestrator import widget\n")
+    out = resolve_test_files(["src/orchestrator/widget.py"], tmp_path)
+    assert out == {"tests/test_pkg_import.py"}
+
+
+def test_a_bare_word_in_a_string_literal_is_not_an_import(tmp_path: Path) -> None:
+    """Thoth DM 2948's live catch: test_mailbox.py imported an UNRELATED name from the same
+    package (mounts, not smoke) and separately contained the bare word "smoke" only inside a
+    prose string — the old substring-plus-word-boundary heuristic conflated the two into a
+    false match. Same shape reproduced here, must NOT resolve."""
+    _write(tmp_path, "src/orchestrator/smoke.py")
+    _write(tmp_path, "src/orchestrator/mounts.py")
+    _write(tmp_path, "tests/test_mailbox.py",
+           'from src.orchestrator import mounts\n\n'
+           'def test_x():\n'
+           '    open_thread(summary="deploy smoke races the service")\n')
+    out = resolve_test_files(["src/orchestrator/smoke.py"], tmp_path)
+    assert out == set()
+
+
+def test_a_comment_mentioning_the_module_name_is_not_an_import(tmp_path: Path) -> None:
+    _write(tmp_path, "src/orchestrator/smoke.py")
+    _write(tmp_path, "tests/test_unrelated.py",
+           "# TODO: no smoke without fire, fix this later\nimport os\n")
+    out = resolve_test_files(["src/orchestrator/smoke.py"], tmp_path)
+    assert out == set()
 
 
 def test_a_file_with_no_resolvable_test_returns_empty(tmp_path: Path) -> None:
@@ -257,3 +289,29 @@ def test_precommit_nothing_staged_is_a_clean_noop(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(gate_hook, "run_gates", _unreachable)
     assert cmd_precommit(enforce=True) == 0
+
+
+# --- _status_word / timeout-vs-failure (Thoth DM 2948) ----------------------------------------
+
+def test_status_word_distinguishes_timeout_from_failure() -> None:
+    assert _status_word(True, "") == "ok"
+    assert _status_word(False, "TIMED OUT after 180s under real ambient fleet load") == "TIMEOUT"
+    assert _status_word(False, "1 failed, 3 passed") == "FAILED"
+
+
+def test_run_gates_pytest_timeout_is_reported_distinctly_from_a_failure(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
+    _write(tmp_path, "tests/test_a.py")
+
+    def _raise_timeout(cmd: list[str], **kwargs: Any) -> None:
+        raise gate_hook.subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 0))
+
+    monkeypatch.setattr(gate_hook.subprocess, "run", _raise_timeout)
+    results = run_gates(tmp_path, ["tests/test_a.py"])
+    ok, msg = results["pytest"]
+    assert ok is False
+    assert msg.startswith("TIMED OUT")
+    assert "not a proven code failure" in msg
+    assert _status_word(ok, msg) == "TIMEOUT"
