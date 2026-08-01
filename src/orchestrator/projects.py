@@ -320,7 +320,26 @@ async def fold_project(
                          "refuses rather than destroy the disagreement",
                 "contradicted_on": conflicts}
     now = datetime.now(UTC)
-    dupe_oid, into_oid = dupe_row["id"], into_row["id"]
+    moved, mounts_moved = await _move_project_estate(
+        actions, dupe_row["id"], into_row["id"], dupe_row["canonical"],
+        into_row["canonical"], actor, now)
+    await actions.merge_objects(into_row["id"], dupe_row["id"], justification=evidence,
+                                actor=actor)
+    return {"folded": dupe_row["canonical"], "into": into_row["canonical"],
+           "edges_moved": moved, "mounts_moved": mounts_moved}
+
+
+async def _move_project_estate(
+    actions: Actions, dupe_oid: uuid.UUID, into_oid: uuid.UUID, dupe_canonical: str,
+    into_canonical: str, actor: str, now: datetime,
+) -> tuple[dict[str, int], int]:
+    """The estate-move itself, factored out of fold_project so reconcile_project_fold
+    (#127) can run the EXACT same repair on an already-merged pair rather than a second
+    implementation that could drift from what a normal fold already does. Every live
+    _PROJECT_ESTATE_LINK_TYPES edge on `dupe_oid` re-points to `into_oid` (idempotent —
+    a link already live to `into_oid` is never duplicated); `agent_mounts.project` is
+    re-addressed the same way. Never calls merge_objects — that stays each caller's own
+    decision about whether a merge should happen at all."""
     moved: dict[str, int] = {}
     for link_type in _PROJECT_ESTATE_LINK_TYPES:
         rows = await actions.pool.fetch(
@@ -339,13 +358,89 @@ async def fold_project(
             n += 1
         if n:
             moved[link_type] = n
-    bare_dupe = dupe_row["canonical"].removeprefix("repo:")
-    bare_into = into_row["canonical"].removeprefix("repo:")
+    bare_dupe = dupe_canonical.removeprefix("repo:")
+    bare_into = into_canonical.removeprefix("repo:")
     mount_tag = await actions.pool.execute(
         "UPDATE agent_mounts SET project=$1 WHERE project=$2", bare_into, bare_dupe)
-    mounts_moved = int(mount_tag.rsplit(" ", 1)[-1])
-    await actions.merge_objects(into_oid, dupe_oid, justification=evidence, actor=actor)
-    return {"folded": dupe_row["canonical"], "into": into_row["canonical"],
+    return moved, int(mount_tag.rsplit(" ", 1)[-1])
+
+
+# --- reconcile_project_fold (#127, P0 — the repair path fold_project never had) ----------
+
+async def reconcile_project_fold(
+    actions: Actions, *, dupe: str, into: str, actor: str,
+) -> dict[str, Any]:
+    """THE REPAIR PATH fold_project never had (Thoth's own framing, DM 2487): folds are
+    idempotent-by-REFUSAL when they need to be idempotent-by-REPAIR — the refusal that
+    makes a SECOND fold safe (`dupe.status=='merged'` -> "already folded, nothing to
+    do") is exactly what makes a PARTIAL first fold permanent, because nothing can ever
+    revisit it. This is that revisit: re-points any live _PROJECT_ESTATE_LINK_TYPES
+    edge still aimed at an ALREADY-merged dupe, using the SAME `_move_project_estate`
+    fold_project itself calls — not a second implementation that could drift from what
+    a normal fold already does.
+
+    THE INVERSE PRECONDITION of fold_project, on purpose, so the two verbs' refusal
+    conditions never overlap and a caller can never reach the merge event through this
+    door: fold_project REQUIRES status=='active' on both sides and refuses a merged
+    dupe; reconcile REQUIRES dupe.status=='merged' AND dupe's own `merged_into`
+    pointing at exactly `into` (refuses to redirect a dupe merged into some OTHER
+    object — never guesses which pair a caller means).
+
+    NEVER re-performs the merge: no `merge_objects` call, no `_contradicting_properties`
+    gate (that gate decides whether a merge SHOULD happen; this object already IS
+    merged, so the question this asks is only "was the estate-move complete").
+
+    NEGATIVE CONTROL BY CONSTRUCTION: a dupe whose estate was already fully re-pointed
+    (a clean prior fold, or a reconcile that already ran) has nothing live left to find
+    — reports every count as zero and writes nothing. Safe to run on a healthy fold;
+    safe to run twice.
+
+    Refuses LOUDLY on: blank dupe/into; dupe==into; dupe not resolving to a
+    SoftwareProject (ambiguity refused the same way as every other project verb);
+    dupe.status != 'merged' (fold_project's job, not this one's); dupe's own
+    `merged_into` not equal to `into`'s id; into not resolving, ambiguous, or not
+    ACTIVE."""
+    dupe, into = (dupe or "").strip(), (into or "").strip()
+    if not dupe or not into:
+        return {"error": "reconcile_project_fold needs both labels: dupe and into"}
+    if dupe == into:
+        return {"error": "dupe and into name the same project — nothing to reconcile"}
+    try:
+        dupe_row = await _resolve_software_project(actions.pool, dupe)
+    except AmbiguousProjectRef as amb:
+        return {"error": f"{amb.ref!r} is ambiguous — {len(amb.candidates)} active "
+                         f"SoftwareProjects answer to it: {', '.join(amb.candidates)}. "
+                         "Name the exact one (canonical or id) — reconcile_project_fold "
+                         "never guesses which."}
+    if dupe_row is None:
+        return {"error": f"no such SoftwareProject: {dupe!r}"}
+    if dupe_row["status"] != "merged":
+        return {"error": f"{dupe_row['canonical']} is {dupe_row['status']}, not merged — "
+                         "reconcile_project_fold only repairs an ALREADY-completed fold; "
+                         "use fold_project to merge it in the first place"}
+    into_row, err = await _resolve_project_ref(actions.pool, into,
+                                               verb="reconcile_project_fold")
+    if err:
+        return err
+    if into_row is None:
+        return {"error": f"no such SoftwareProject: {into!r}"}
+    if into_row["status"] != "active":
+        return {"error": f"{into_row['canonical']} is {into_row['status']}, not active"}
+    actual_target = await actions.pool.fetchval(
+        "SELECT merged_into FROM objects WHERE id=$1", dupe_row["id"])
+    if actual_target != into_row["id"]:
+        target_canon = (await actions.pool.fetchval(
+            "SELECT canonical FROM objects WHERE id=$1", actual_target)
+            if actual_target else None)
+        return {"error": f"{dupe_row['canonical']} is merged into "
+                         f"{target_canon or '(unknown)'}, not {into_row['canonical']} — "
+                         "reconcile_project_fold never redirects a merge; name the "
+                         "ACTUAL survivor"}
+    now = datetime.now(UTC)
+    moved, mounts_moved = await _move_project_estate(
+        actions, dupe_row["id"], into_row["id"], dupe_row["canonical"],
+        into_row["canonical"], actor, now)
+    return {"reconciled": dupe_row["canonical"], "into": into_row["canonical"],
            "edges_moved": moved, "mounts_moved": mounts_moved}
 
 

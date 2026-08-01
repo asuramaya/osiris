@@ -13,6 +13,7 @@ from src.orchestrator.projects import (
     correct_project_name,
     find_case_variant_projects,
     fold_project,
+    reconcile_project_fold,
     retire_project,
 )
 from src.orchestrator.seats import ensure_seat
@@ -687,3 +688,117 @@ async def test_find_case_variant_projects_ignores_retired_projects(
     all_labels = {e["project"] for e in out["proven_case_variant"]} | \
         {e["project"] for e in out["genuine_contradiction"]}
     assert "repo:surveydead" not in all_labels
+
+
+# --- reconcile_project_fold (#127, P0 — the fold repair path) ----------------------------
+
+async def test_reconcile_repairs_an_orphaned_edge_from_a_partial_fold(
+    actions: Actions,
+) -> None:
+    """The exact bytebye/ByeByte shape: an OLD-style merge (a raw merge_objects call
+    with no estate-move at all — the pre-fold_project shape) leaves a live governs edge
+    stranded on the now-merged dupe. reconcile repairs it without re-performing the
+    merge."""
+    await _stub_project(actions, "repo:orphandupe", "orphandupe")
+    await _stub_project(actions, "repo:orphaninto", "orphaninto")
+    dupe_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:orphandupe'")
+    into_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:orphaninto'")
+    holder = await actions.create_or_find_object("Agent", "agent:0rpha001", "test")
+    await actions.create_link(holder, dupe_oid, "governs", "test", NOW, 0.9)
+    # simulate the OLD, estate-blind merge path directly — no fold_project involved
+    await actions.merge_objects(into_oid, dupe_oid, justification="old-style merge",
+                                actor="agent:test")
+    events_before = await actions.pool.fetchval(
+        "SELECT count(*) FROM object_events WHERE event_type='merge'")
+
+    out = await reconcile_project_fold(actions, dupe="orphandupe", into="orphaninto",
+                                       actor="agent:reconciler")
+
+    assert out["reconciled"] == "repo:orphandupe" and out["into"] == "repo:orphaninto"
+    assert out["edges_moved"] == {"governs": 1}
+    live = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='governs' "
+        "AND (valid_until IS NULL OR valid_until > now())", holder, into_oid)
+    assert live == 1
+    dangling = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='governs' "
+        "AND (valid_until IS NULL OR valid_until > now())", holder, dupe_oid)
+    assert dangling is None
+    # never re-performed the merge
+    events_after = await actions.pool.fetchval(
+        "SELECT count(*) FROM object_events WHERE event_type='merge'")
+    assert events_after == events_before
+    status = await actions.pool.fetchval("SELECT status FROM objects WHERE id=$1", dupe_oid)
+    assert status == "merged"  # unchanged — still exactly one merge, ever
+
+
+async def test_reconcile_is_a_true_noop_on_a_healthy_fold(actions: Actions) -> None:
+    """NEGATIVE CONTROL, by construction: a fold_project run that already moved
+    everything must come out UNCHANGED when reconcile runs on it — a repair that
+    touches a clean fold is worse than the bug it exists to fix."""
+    await _stub_project(actions, "repo:cleandupe", "cleandupe")
+    await _stub_project(actions, "repo:cleaninto", "cleaninto")
+    holder = await actions.create_or_find_object("Agent", "agent:c1ean001", "test")
+    dupe_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:cleandupe'")
+    await actions.create_link(holder, dupe_oid, "governs", "test", NOW, 0.9)
+    fold_out = await fold_project(actions, dupe="cleandupe", into="cleaninto",
+                                  evidence="same project", actor="agent:test")
+    assert fold_out["edges_moved"] == {"governs": 1}
+
+    out = await reconcile_project_fold(actions, dupe="cleandupe", into="cleaninto",
+                                       actor="agent:reconciler")
+
+    assert out["edges_moved"] == {}
+    assert out["mounts_moved"] == 0
+
+
+async def test_reconcile_refuses_a_still_active_dupe(actions: Actions) -> None:
+    """REFUSAL CONTROL: reconcile must never become a side door into performing a
+    merge — an active (never-folded) dupe is fold_project's job, not this one's."""
+    await _stub_project(actions, "repo:stillactive", "stillactive")
+    await _stub_project(actions, "repo:activeinto", "activeinto")
+
+    out = await reconcile_project_fold(actions, dupe="stillactive", into="activeinto",
+                                       actor="agent:test")
+
+    assert "not merged" in out["error"] and "fold_project" in out["error"]
+    status = await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE canonical='repo:stillactive'")
+    assert status == "active"
+
+
+async def test_reconcile_refuses_to_redirect_a_merge(actions: Actions) -> None:
+    """A dupe already merged into A is not this pair's business if the caller names B —
+    reconcile never guesses or redirects which merge a repair applies to."""
+    await _stub_project(actions, "repo:redirdupe", "redirdupe")
+    await _stub_project(actions, "repo:realtarget", "realtarget")
+    await _stub_project(actions, "repo:wrongtarget", "wrongtarget")
+    await fold_project(actions, dupe="redirdupe", into="realtarget",
+                       evidence="x", actor="agent:test")
+
+    out = await reconcile_project_fold(actions, dupe="redirdupe", into="wrongtarget",
+                                       actor="agent:test")
+
+    assert "not" in out["error"] and "repo:realtarget" in out["error"]
+
+
+async def test_reconcile_refuses_unknown_and_ambiguous_refs(actions: Actions) -> None:
+    await _stub_project(actions, "repo:realdupe2", "realdupe2")
+    await _stub_project(actions, "repo:realinto2", "realinto2")
+    await fold_project(actions, dupe="realdupe2", into="realinto2",
+                       evidence="x", actor="agent:test")
+
+    missing = await reconcile_project_fold(actions, dupe="realdupe2", into="nope-at-all",
+                                           actor="agent:test")
+    assert "no such SoftwareProject" in missing["error"]
+
+    oid2 = await actions.create_or_find_object("SoftwareProject", "repo:realinto2-twin",
+                                                "test")
+    await actions.assert_property(oid2, "name", "realinto2", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    ambiguous = await reconcile_project_fold(actions, dupe="realdupe2", into="realinto2",
+                                             actor="agent:test")
+    assert "ambiguous" in ambiguous["error"]
