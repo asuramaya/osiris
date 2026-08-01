@@ -1096,6 +1096,27 @@ async def test_unmounted_orient_is_a_bounded_map_never_the_firehose(
     assert "BOUNDED" in out["note"] and "mount(" in out["note"]
 
 
+async def test_unmounted_orient_declares_unfiled_repo_less_threads(actions: Actions) -> None:
+    """Thoth DM 2704, finding 3 of the in_repo audit: fleet_map's per-project GROUP BY
+    structurally can't file a thread with no project at all — a fresh agent's first fleet
+    view used to drop them with zero disclosure. Now declared, not compensated (there is
+    no project to attribute it to)."""
+    from src import mcp_server as srv
+    from src.orchestrator.capture import open_thread
+
+    await open_thread(actions, "an open line in some project", repo="mapproj2")
+    await open_thread(actions, "a thread nobody ever filed under a repo")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.orient(ctx=None)
+    finally:
+        srv._pool = saved_pool
+    assert out["fleet_map_unfiled"] == 1
+    assert not any(m["project"] is None for m in out["fleet_map"])   # never a phantom row
+    assert "fleet_map_unfiled" in out["note"]
+
+
 async def test_swap_banner_stands_down_before_a_recorded_repo_choice(
         actions: Actions) -> None:
     """Metron IV's re-litigation (wave-2 fa918939): sibling-seven runs opus by RECORDED operator

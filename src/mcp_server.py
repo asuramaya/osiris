@@ -2391,6 +2391,16 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         "  AND s.name='status' ORDER BY s.confidence DESC, s.observed_at DESC LIMIT 1)"
         "  = 'open' "
         "GROUP BY p.canonical ORDER BY count(*) DESC LIMIT 20")]
+    # UNFILED (Thoth DM 2704, finding 3 of the in_repo audit): the per-project GROUP BY
+    # above INNER JOINs in_repo, so it structurally cannot file a thread with no project at
+    # all — a fresh agent's very FIRST fleet view used to drop them with zero disclosure.
+    # Declared, not compensated: there is no "project" to attribute an unfiled thread to.
+    fleet_map_unfiled = await pool.fetchval(
+        "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "
+        "AND (SELECT s.value #>> '{}' FROM current_assertions s WHERE s.object_id=o.id "
+        "  AND s.name='status' ORDER BY s.confidence DESC, s.observed_at DESC LIMIT 1)"
+        "  = 'open' "
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo')")
     recent = [r["summary"][:160] for r in await pool.fetch(
         "SELECT (SELECT s.value #>> '{}' FROM current_assertions s WHERE s.object_id=o.id "
         "  AND s.name='summary' ORDER BY s.confidence DESC, s.observed_at DESC LIMIT 1) "
@@ -2417,11 +2427,14 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         **seam,
         **dead,
         "fleet_map": fleet_map,
+        "fleet_map_unfiled": fleet_map_unfiled,
         "recent_decisions": recent,
         "note": "un-mounted → the BOUNDED fleet map, never the firehose. mount(cwd, "
                 "job_dir=…) then orient() for your project's briefing; orient(project=…) "
                 "peeks at another's; run_composition('briefing') if you truly want the "
-                "whole graph.",
+                "whole graph. fleet_map_unfiled: open threads with no in_repo edge at all — "
+                "counted nowhere in fleet_map above, because there is no project to file "
+                "them under.",
     }
     # CORRECTION (Thoth's review, DM 1238, thread 1233): this branch's top-level note is
     # asserted unconditionally by a pre-existing test (test_unmounted_orient_is_a_
