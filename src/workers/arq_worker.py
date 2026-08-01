@@ -236,15 +236,19 @@ async def sweep_doors(ctx: dict[str, Any]) -> int:
     look' must never read as 'nobody is home'. THE PILE RULE second — stale rows collapse to
     one last-known address per active agent, none for the demoted or the objectless. Pure
     reconciliation of hot state against OS truth; the graph's record of who lived is
-    elsewhere and untouched."""
-    pool = ctx["pool"]
+    elsewhere and untouched.
+
+    Both rules are reversible and audited (mounts.py, thread 45dd4f3c, Thoth DM 2835) — every
+    row either releases writes an `audit_log` snapshot first, undoable via
+    `mounts.undrop_dead_project_mount`, the same mechanism #59's own drop already uses."""
+    actions = Actions(ctx["pool"])
     released = 0
     by_cwd = live_bodies_by_cwd()
     if by_cwd is not None:
         released += await sweep_ghost_doors(
-            pool, body_cwds=set(by_cwd),
-            body_projects=set(live_bodies()))
-    released += await sweep_stale_doors(pool)
+            actions, body_cwds=set(by_cwd),
+            body_projects=set(live_bodies()), actor="cron:sweep_doors")
+    released += await sweep_stale_doors(actions, actor="cron:sweep_doors")
     return released
 
 

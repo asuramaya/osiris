@@ -210,17 +210,24 @@ async def drop_dead_project_mount(
         return {"dropped": 1, "audit_id": audit_id}
 
 
+_MOUNT_DROP_ACTIONS = frozenset({
+    "drop_dead_project_mount", "sweep_ghost_doors", "sweep_stale_doors",
+})  # every action that snapshots a row via `_mount_snapshot` before deleting it — same
+    # payload shape regardless of which one wrote it, so one inverse undoes all three
+    # (Thoth DM 2835: "do not invent a second shape for the same problem")
+
+
 async def undrop_dead_project_mount(
     actions: Actions, *, audit_id: int, actor: str,
 ) -> dict[str, Any]:
-    """The compensating inverse (task #59's gate, Thoth DM 2677): replays the exact row a
-    `drop_dead_project_mount` audit_log row witnessed, back into `agent_mounts` unchanged.
-    `audit_id` — not `job_dir` — pins exactly WHICH drop to undo: the same job_dir can be
-    dropped, re-mounted, and dropped again, and a replay must never reach for the wrong
-    generation of that history.
+    """The compensating inverse (task #59's gate, Thoth DM 2677; widened to cover the door
+    sweeps per Thoth DM 2835): replays the exact row a `_MOUNT_DROP_ACTIONS` audit_log row
+    witnessed, back into `agent_mounts` unchanged. `audit_id` — not `job_dir` — pins exactly
+    WHICH drop to undo: the same job_dir can be dropped, re-mounted, and dropped again, and
+    a replay must never reach for the wrong generation of that history.
 
     Refuses LOUDLY (an error dict, nothing written) when: no such audit_log row, or its
-    `action` isn't 'drop_dead_project_mount' (an undrop never invents a snapshot from an
+    `action` isn't one of `_MOUNT_DROP_ACTIONS` (an undrop never invents a snapshot from an
     unrelated audit entry); the job_dir is already occupied — a live session re-mounted
     there since the drop, so the newer row is the truth and reviving the old one underneath
     it would fork identity, never overwrite.
@@ -232,9 +239,9 @@ async def undrop_dead_project_mount(
         "SELECT action, payload FROM audit_log WHERE id=$1", audit_id)
     if row is None:
         return {"error": f"no audit_log row #{audit_id} — an undrop never invents one"}
-    if row["action"] != "drop_dead_project_mount":
-        return {"error": f"audit_log #{audit_id} is a {row['action']!r} record, not "
-                         "'drop_dead_project_mount' — nothing to undrop"}
+    if row["action"] not in _MOUNT_DROP_ACTIONS:
+        return {"error": f"audit_log #{audit_id} is a {row['action']!r} record, not one of "
+                         f"{sorted(_MOUNT_DROP_ACTIONS)} — nothing to undrop"}
     snap = row["payload"]
     async with actions.pool.acquire() as conn, conn.transaction():
         occupied = await conn.fetchval(
@@ -314,7 +321,7 @@ def _normed(cwd: str | None) -> str:
     return os.path.normpath(cwd) if cwd else ""
 
 
-async def sweep_stale_doors(pool: asyncpg.Pool) -> int:
+async def sweep_stale_doors(actions: Actions, *, actor: str) -> int:
     """THE PILE RULE (operator ruling, 2026-07-17: 'the 20+ doors on some i also consider a
     bug'): a row is an ADDRESS, and an agent has ONE last-known address — not a pile of
     corpses back to the first week. SessionEnd deletes a door when it fires; every kill,
@@ -323,9 +330,21 @@ async def sweep_stale_doors(pool: asyncpg.Pool) -> int:
     exactly the freshest per agent as its last-known address — and keep even that only for an
     agent the graph still calls active (a fresh row elsewhere already IS the address; a
     demoted claimant, a retired seat, or an objectless stranger holds no address at all).
-    Pure SQL, no OS read — the ghost rule (`sweep_ghost_doors`) is the one that needs eyes.
+    Pure SQL to FIND the doomed rows, no OS read — the ghost rule (`sweep_ghost_doors`) is
+    the one that needs eyes.
+
+    REVERSIBLE AND AUDITED (thread 45dd4f3c, Thoth DM 2835 — this was a bare bulk DELETE,
+    the same unwitnessed-irreversible defect class `drop_dead_project_mount` had before
+    e7b30db; higher volume here since this fires every 60s in production). Each doomed row
+    is re-fetched `FOR UPDATE` inside its own transaction immediately before it is deleted —
+    that lock is what makes the audit_log snapshot and the delete see the identical row, not
+    two reads racing a third writer — and snapshotted into `audit_log`
+    (action='sweep_stale_doors') via the SAME `_mount_snapshot`/`_MOUNT_COLS` shape
+    `drop_dead_project_mount` uses, undoable through the same `undrop_dead_project_mount`.
+    A row gone by the time its lock is taken (already released some other way) is simply
+    skipped — never counted, never witnessed, since nothing was actually done to it here.
     Returns rows released."""
-    n = await pool.fetchval(
+    doomed = await actions.pool.fetch(
         "WITH aged AS ("
         "  SELECT job_dir, agent_id, row_number() OVER ("
         "    PARTITION BY agent_id ORDER BY COALESCE(last_seen, mounted_at) DESC) AS rn"
@@ -337,15 +356,26 @@ async def sweep_stale_doors(pool: asyncpg.Pool) -> int:
         "     OR EXISTS (SELECT 1 FROM agent_mounts f WHERE f.agent_id = a.agent_id"
         "          AND COALESCE(f.last_seen, f.mounted_at) >= now() - make_interval(secs => $1))"
         "     OR NOT EXISTS (SELECT 1 FROM objects o WHERE o.canonical = a.agent_id"
-        "          AND o.status = 'active')), "
-        "gone AS (DELETE FROM agent_mounts m USING doomed d WHERE m.job_dir = d.job_dir"
-        "  RETURNING 1) "
-        "SELECT count(*) FROM gone", float(_DOOR_WINDOW_SECS))
-    return int(n or 0)
+        "          AND o.status = 'active')) "
+        "SELECT job_dir FROM doomed", float(_DOOR_WINDOW_SECS))
+    released = 0
+    for d in doomed:
+        async with actions.pool.acquire() as conn, conn.transaction():
+            row = await conn.fetchrow(
+                f"SELECT {', '.join(_MOUNT_COLS)} FROM agent_mounts "
+                "WHERE job_dir=$1 FOR UPDATE", d["job_dir"])
+            if row is None:
+                continue  # already gone since the scan — nothing here to witness or delete
+            await conn.execute(
+                "INSERT INTO audit_log (action, actor, payload) VALUES ($1,$2,$3)",
+                "sweep_stale_doors", actor, _mount_snapshot(row))
+            await conn.execute("DELETE FROM agent_mounts WHERE job_dir=$1", d["job_dir"])
+            released += 1
+    return released
 
 
 async def sweep_ghost_doors(
-    pool: asyncpg.Pool, *, body_cwds: set[str], body_projects: set[str],
+    actions: Actions, *, body_cwds: set[str], body_projects: set[str], actor: str,
 ) -> int:
     """THE GHOST RULE — the late SessionEnd, automated (queue item 5, ruled a bug by the
     operator 2026-07-17: 'fleet 5 but there are only 3 agents up'): a terminal kill skips the
@@ -360,10 +390,17 @@ async def sweep_ghost_doors(
     a GRACE floor (rows pulsed within the last two minutes are too new to judge — a session
     born after the /proc scan must never be read as bodyless), and the delete re-checks
     `last_seen` unchanged, so a row re-pulsed after the fetch survives untouched. A killed
-    tab's door thus releases in ~2 minutes instead of decaying for 15. Returns rows
-    released."""
-    rows = await pool.fetch(
-        "SELECT job_dir, cwd, project, last_seen FROM agent_mounts "
+    tab's door thus releases in ~2 minutes instead of decaying for 15.
+
+    REVERSIBLE AND AUDITED (thread 45dd4f3c, Thoth DM 2835 — same defect class
+    `drop_dead_project_mount` had before e7b30db, unfixed here until now). The `last_seen`
+    re-check now runs as a `FOR UPDATE` fetch inside the same transaction as the snapshot
+    and the delete — one lock, one witness, one write, so what `audit_log`
+    (action='sweep_ghost_doors') records is provably the row that was actually removed, not
+    a belief about it from a moment earlier. Undoable through `undrop_dead_project_mount`.
+    Returns rows released."""
+    rows = await actions.pool.fetch(
+        f"SELECT {', '.join(_MOUNT_COLS)} FROM agent_mounts "
         "WHERE COALESCE(last_seen, mounted_at) >= now() - make_interval(secs => $1) "
         "  AND COALESCE(last_seen, mounted_at) < now() - make_interval(secs => $2)",
         float(_DOOR_WINDOW_SECS), float(_GHOST_GRACE_SECS))
@@ -373,11 +410,18 @@ async def sweep_ghost_doors(
         project = r["project"] or (Path(cwd).name if cwd else "")
         if cwd in body_cwds or (project and project in body_projects):
             continue
-        n = await pool.fetchval(
-            "WITH gone AS (DELETE FROM agent_mounts WHERE job_dir = $1"
-            "  AND last_seen IS NOT DISTINCT FROM $2 RETURNING 1) "
-            "SELECT count(*) FROM gone", r["job_dir"], r["last_seen"])
-        released += int(n or 0)
+        async with actions.pool.acquire() as conn, conn.transaction():
+            row = await conn.fetchrow(
+                f"SELECT {', '.join(_MOUNT_COLS)} FROM agent_mounts "
+                "WHERE job_dir=$1 AND last_seen IS NOT DISTINCT FROM $2 FOR UPDATE",
+                r["job_dir"], r["last_seen"])
+            if row is None:
+                continue  # re-pulsed (or already gone) since the scan — leave it untouched
+            await conn.execute(
+                "INSERT INTO audit_log (action, actor, payload) VALUES ($1,$2,$3)",
+                "sweep_ghost_doors", actor, _mount_snapshot(row))
+            await conn.execute("DELETE FROM agent_mounts WHERE job_dir=$1", r["job_dir"])
+            released += 1
     return released
 
 

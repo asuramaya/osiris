@@ -845,7 +845,7 @@ async def test_sweep_stale_doors_keeps_one_last_known_address(actions: Actions) 
         await p.execute(
             "UPDATE agent_mounts SET last_seen = now() - make_interval(mins => $2) "
             "WHERE job_dir=$1", jd, mins)
-    released = await mounts.sweep_stale_doors(p)
+    released = await mounts.sweep_stale_doors(actions, actor="test")
     assert released == 2
     left = [r["job_dir"] for r in await p.fetch("SELECT job_dir FROM agent_mounts")]
     assert left == ["/x/jobs/deadbee1"]  # the freshest stale door survives as the address
@@ -869,7 +869,7 @@ async def test_sweep_stale_doors_keeps_nothing_for_strangers_or_the_shadowed(
     await p.execute(
         "UPDATE agent_mounts SET last_seen = now() - interval '1 hour' "
         "WHERE job_dir IN ('/x/jobs/aaaa0001', '/x/jobs/bbbb0002')")
-    released = await mounts.sweep_stale_doors(p)
+    released = await mounts.sweep_stale_doors(actions, actor="test")
     assert released == 2
     left = {r["job_dir"] for r in await p.fetch("SELECT job_dir FROM agent_mounts")}
     assert left == {"/x/jobs/bbbb0001"}
@@ -896,7 +896,7 @@ async def test_sweep_ghost_doors_releases_the_killed_tab_never_a_backed_door(
     await p.execute(  # inside the window, past the newborn grace
         "UPDATE agent_mounts SET last_seen = now() - interval '5 minutes'")
     released = await mounts.sweep_ghost_doors(
-        p, body_cwds={str(alive.resolve())}, body_projects={"alive"})
+        actions, body_cwds={str(alive.resolve())}, body_projects={"alive"}, actor="test")
     assert released == 1
     left = {r["job_dir"] for r in await p.fetch("SELECT job_dir FROM agent_mounts")}
     assert left == {"/x/jobs/cafe0001", "/x/jobs/cafe0002"}
@@ -908,9 +908,101 @@ async def test_sweep_ghost_doors_grace_shields_the_newborn(actions: Actions) -> 
     p = actions.pool
     await mounts.save_mount(p, job_dir="/x/jobs/feed0001", agent_id="agent:feed0001",
                             project="new", cwd="/r/new", model=None, session_key=None)
-    released = await mounts.sweep_ghost_doors(p, body_cwds=set(), body_projects=set())
+    released = await mounts.sweep_ghost_doors(
+        actions, body_cwds=set(), body_projects=set(), actor="test")
     assert released == 0
     assert await p.fetchval("SELECT count(*) FROM agent_mounts") == 1
+
+
+async def test_sweep_stale_doors_leaves_an_undoable_witness(actions: Actions) -> None:
+    """Thread 45dd4f3c (Thoth DM 2835): the pile rule used to be a bare bulk DELETE — no
+    audit_log, no way to reconstruct a wrongly-swept row. Same bar as
+    test_drop_then_undrop_round_trips_the_exact_row: snapshot before delete, restore after,
+    literal equality."""
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/stalewit1", agent_id="agent:stalewit1",
+                            project="pile", cwd="/repo/pile", model=None, session_key=None)
+    await p.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '1 hour' "
+        "WHERE job_dir='/x/jobs/stalewit1'")
+    original = await p.fetchrow(
+        f"SELECT {', '.join(mounts._MOUNT_COLS)} FROM agent_mounts "
+        "WHERE job_dir='/x/jobs/stalewit1'")
+    original_snapshot = mounts._mount_snapshot(original)
+
+    released = await mounts.sweep_stale_doors(actions, actor="cron:test")
+    assert released == 1
+    assert await p.fetchval("SELECT count(*) FROM agent_mounts") == 0
+
+    wit = await p.fetchrow(
+        "SELECT id, action, actor, payload FROM audit_log "
+        "WHERE action='sweep_stale_doors' ORDER BY id DESC LIMIT 1")
+    assert wit is not None
+    assert wit["actor"] == "cron:test"
+    assert wit["payload"] == original_snapshot
+
+    restore = await mounts.undrop_dead_project_mount(
+        actions, audit_id=wit["id"], actor="test")
+    assert restore["restored"] == 1
+    restored_row = await p.fetchrow(
+        f"SELECT {', '.join(mounts._MOUNT_COLS)} FROM agent_mounts "
+        "WHERE job_dir='/x/jobs/stalewit1'")
+    assert restored_row is not None
+    assert mounts._mount_snapshot(restored_row) == original_snapshot
+
+
+async def test_sweep_ghost_doors_leaves_an_undoable_witness(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Same bar as the stale-door sweep above, for the ghost rule."""
+    p = actions.pool
+    dead = tmp_path / "dead"
+    dead.mkdir()
+    await mounts.save_mount(p, job_dir="/x/jobs/ghostwit1", agent_id="agent:ghostwit1",
+                            project="dead", cwd=str(dead), model=None, session_key=None)
+    await p.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '5 minutes' "
+        "WHERE job_dir='/x/jobs/ghostwit1'")
+    original = await p.fetchrow(
+        f"SELECT {', '.join(mounts._MOUNT_COLS)} FROM agent_mounts "
+        "WHERE job_dir='/x/jobs/ghostwit1'")
+    original_snapshot = mounts._mount_snapshot(original)
+
+    released = await mounts.sweep_ghost_doors(
+        actions, body_cwds=set(), body_projects=set(), actor="cron:test")
+    assert released == 1
+    assert await p.fetchval("SELECT count(*) FROM agent_mounts") == 0
+
+    wit = await p.fetchrow(
+        "SELECT id, action, actor, payload FROM audit_log "
+        "WHERE action='sweep_ghost_doors' ORDER BY id DESC LIMIT 1")
+    assert wit is not None
+    assert wit["actor"] == "cron:test"
+    assert wit["payload"] == original_snapshot
+
+    restore = await mounts.undrop_dead_project_mount(
+        actions, audit_id=wit["id"], actor="test")
+    assert restore["restored"] == 1
+    restored_row = await p.fetchrow(
+        f"SELECT {', '.join(mounts._MOUNT_COLS)} FROM agent_mounts "
+        "WHERE job_dir='/x/jobs/ghostwit1'")
+    assert restored_row is not None
+    assert mounts._mount_snapshot(restored_row) == original_snapshot
+
+
+async def test_sweep_stale_doors_writes_no_witness_when_nothing_is_doomed(
+    actions: Actions,
+) -> None:
+    """A no-op sweep must leave audit_log untouched — a witness for a delete that didn't
+    happen would itself be a false record (the same law drop_dead_project_mount's mismatch
+    refusal already proves)."""
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/freshdoor1", agent_id="agent:freshdoor1",
+                            project="live", cwd="/repo/live", model=None, session_key=None)
+    released = await mounts.sweep_stale_doors(actions, actor="cron:test")
+    assert released == 0
+    assert await p.fetchval(
+        "SELECT count(*) FROM audit_log WHERE action='sweep_stale_doors'") == 0
 
 
 async def test_drop_dead_project_mount_releases_the_matched_row(actions: Actions) -> None:
