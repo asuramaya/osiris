@@ -3,11 +3,12 @@
 `status` property alone."""
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from src.actions.core import Actions
 from src.orchestrator.capture import open_thread, record_decision, resolve_thread
-from src.orchestrator.thread_closure import thread_closure_status
+from src.orchestrator.thread_closure import enumerate_threads, thread_closure_status
 
 NOW = datetime(2026, 8, 1, tzinfo=UTC)
 
@@ -190,3 +191,78 @@ async def test_two_strong_edges_still_report_strong(actions: Actions) -> None:
     assert types == {"answers", "resolved_by"}
     closers = {e["closer_id"] for e in row["closure_edges"]}
     assert closers == {decision_id, commit_decision}
+
+
+async def test_enumerate_threads_single_page_no_projection(actions: Actions) -> None:
+    await _repo(actions, "en1")
+    ids = {await open_thread(actions, f"en1 thread {i}", repo="en1", source="agent:me")
+           for i in range(3)}
+
+    out = await enumerate_threads(actions.pool, limit=100)
+    got = {r["thread_id"] for r in out["rows"] if r["thread_id"] in ids}
+    assert got == ids
+    assert out["next_after"] is None
+    assert "_projected" not in out
+
+
+async def test_enumerate_threads_pagination_covers_every_row_exactly_once(
+    actions: Actions,
+) -> None:
+    """The property Thoth cares about most: no reshuffling, no duplicates, no drops —
+    paging by cursor over o.id must reconstruct the exact scope, one row each."""
+    await _repo(actions, "en2")
+    ids = {await open_thread(actions, f"en2 thread {i}", repo="en2", source="agent:me")
+           for i in range(5)}
+    proj = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:en2'")
+
+    seen: list[uuid.UUID] = []
+    after = None
+    pages = 0
+    while True:
+        out = await enumerate_threads(actions.pool, repo=proj, limit=2, after=after)
+        pages += 1
+        assert out["returned"] <= 2
+        seen.extend(r["thread_id"] for r in out["rows"])
+        if out["next_after"] is None:
+            assert "_projected" not in out
+            break
+        assert "_projected" in out
+        assert out["_projected"]["dropped"]["threads"]["of"] == 5
+        after = uuid.UUID(out["next_after"])
+
+    assert pages == 3  # 2 + 2 + 1
+    assert set(seen) == ids
+    assert len(seen) == len(ids)  # no duplicates across pages
+    assert seen == sorted(seen, key=str)  # ascending by id, matches ORDER BY o.id
+
+
+async def test_enumerate_threads_row_shape_and_has_in_repo(actions: Actions) -> None:
+    await _repo(actions, "en3")
+    tid_a = await open_thread(actions, "en3 closed thread", repo="en3", source="agent:me")
+    await resolve_thread(actions, str(tid_a), because="done", source="agent:closer")
+    tid_b = await open_thread(actions, "en3 repo-less thread", source="agent:me")
+
+    out = await enumerate_threads(actions.pool, limit=5000)
+    by_id = {r["thread_id"]: r for r in out["rows"]}
+    row_a, row_b = by_id[tid_a], by_id[tid_b]
+
+    assert row_a["summary"] == "en3 closed thread"
+    assert row_a["property_status"] == "resolved"
+    assert row_a["closed_by_topology"] is True
+    assert row_a["strength"] == "weak"
+    assert row_a["has_in_repo"] is True
+
+    assert row_b["property_status"] == "open"
+    assert row_b["closed_by_topology"] is False
+    assert row_b["has_in_repo"] is False
+
+
+async def test_enumerate_threads_repo_scoping(actions: Actions) -> None:
+    await _repo(actions, "en4a")
+    await _repo(actions, "en4b")
+    tid_a = await open_thread(actions, "en4a thread", repo="en4a", source="agent:me")
+    await open_thread(actions, "en4b thread", repo="en4b", source="agent:me")
+    proj_a = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:en4a'")
+
+    out = await enumerate_threads(actions.pool, repo=proj_a, limit=100)
+    assert {r["thread_id"] for r in out["rows"]} == {tid_a}

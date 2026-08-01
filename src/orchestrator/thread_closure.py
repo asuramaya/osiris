@@ -175,3 +175,125 @@ async def thread_closure_status(
             "topology_property_disagreement": closed and prop_status == "open",
         })
     return out
+
+
+async def enumerate_threads(
+    pool: asyncpg.Pool, *, repo: uuid.UUID | None = None,
+    limit: int = 500, after: uuid.UUID | None = None,
+) -> dict[str, Any]:
+    """THE DOOR (Thoth DM 2566, Piece 1): a complete, paginated enumeration of active
+    threads with closure signals attached — the thing that does not exist anywhere in this
+    house today. orient() caps at ORIENT_OPEN_THREADS=25 and reports a bare count of what's
+    hidden; the roadmap composition renders 5 and confesses "N more not shown (ranked
+    lower)"; neither can produce the full set, so nobody has been ABLE to audit it even
+    wanting to. This has no ranking and no silent cap: every row in scope is reachable by
+    paging, `limit` is the caller's own choice (not a fixed constant), and the receipt
+    always says exactly what's on this page versus the total — the `_projected` convention
+    already used by run_composition/`_bound_items` (compositions.py), copied rather than
+    reinvented.
+
+    STABLE SORT, ON PURPOSE: pages are cursor-paginated by `o.id` (`after`, exclusive),
+    never by `last_touched`/`created_at`/an offset — a thread being touched between two
+    page fetches must not reshuffle which rows page 2 shows, and offset pagination breaks
+    exactly that way under concurrent writes (this fleet's normal operating condition, per
+    every co-agent note in this reign). `id` is immutable and total order over a UUID
+    column is arbitrary but FIXED, which is the only property pagination needs.
+
+    Each row: `thread_id`, `summary`, `property_status` (today's winning `status` read),
+    `closed_by_topology`/`strength` (from `thread_closure_status`, composed rather than
+    re-derived — same reuse Imhotep's tranche-1 report already validated: extending this
+    module needed zero changes on his side), `last_touched`, `owner`, and `has_in_repo` —
+    the field Thoth asked for by name: whether ANY `in_repo` edge exists on this thread AT
+    ALL, independent of which project (if any) `repo` scoped this call to. That is the
+    signal the roadmap composition cannot see (it only ever reads threads that already
+    carry an in_repo edge to begin with) — when `repo` is omitted (fleet-wide scope),
+    `has_in_repo=False` rows are exactly the threads invisible to every repo-scoped lens in
+    the house, roadmap included. When `repo` IS given, every row trivially has
+    `has_in_repo=True` (scope required it) — the field only does new work unscoped.
+
+    Return shape: `{"rows": [...], "returned": len(rows), "next_after": <uuid or None>}`,
+    plus `_projected` (only present when there IS a next page) naming `shown` (this page)
+    against `of` (the FULL scope's total, recomputed fresh each call, not cursor-limited —
+    so every page reports against the same denominator rather than a shrinking one a reader
+    would have to reconstruct by hand)."""
+    scope_where = ["o.type = 'Thread'", "o.status = 'active'", "o.merged_into IS NULL"]
+    scope_args: list[Any] = []
+    if repo is not None:
+        scope_args.append(repo)
+        scope_where.append(
+            f"EXISTS (SELECT 1 FROM links l WHERE l.from_id = o.id "
+            f"AND l.type = 'in_repo' AND l.to_id = ${len(scope_args)})"
+        )
+    scope_sql = " AND ".join(scope_where)
+
+    total = await pool.fetchval(
+        f"SELECT count(*) FROM objects o WHERE {scope_sql}", *scope_args
+    )
+
+    page_where = [*scope_where]
+    page_args = [*scope_args]
+    if after is not None:
+        page_args.append(after)
+        page_where.append(f"o.id > ${len(page_args)}")
+    page_args.append(limit + 1)
+    page_rows = await pool.fetch(
+        f"SELECT o.id FROM objects o WHERE {' AND '.join(page_where)} "
+        f"ORDER BY o.id LIMIT ${len(page_args)}",
+        *page_args,
+    )
+    ids = [r["id"] for r in page_rows[:limit]]
+    # next_after is the LAST id actually returned on this page, never the peeked
+    # (limit+1)-th row itself -- using the peek row's own id as the cursor would exclude
+    # it from every subsequent page too (`o.id > cursor` where cursor == that row's own
+    # id), silently dropping exactly one thread at every page boundary.
+    next_after = ids[-1] if len(page_rows) > limit else None
+
+    if not ids:
+        return {"rows": [], "returned": 0, "next_after": None}
+
+    closure_by_id = {r["thread_id"]: r for r in await thread_closure_status(
+        pool, thread_ids=ids)}
+    meta_rows = await pool.fetch(
+        "SELECT o.id, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='summary' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='owner' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS owner, "
+        " (SELECT max(sa.observed_at) FROM assertions sa WHERE sa.object_id=o.id "
+        "   AND sa.evidence_class='self_declared') AS last_touched, "
+        " EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id "
+        "   AND l.type='in_repo') AS has_in_repo "
+        "FROM objects o WHERE o.id = ANY($1::uuid[])",
+        ids,
+    )
+    meta_by_id = {r["id"]: r for r in meta_rows}
+
+    rows = []
+    for tid in ids:
+        c = closure_by_id.get(tid, {})
+        m = meta_by_id.get(tid, {})
+        rows.append({
+            "thread_id": tid,
+            "summary": m.get("summary"),
+            "property_status": c.get("property_status"),
+            "closed_by_topology": c.get("closed_by_topology", False),
+            "strength": c.get("strength"),
+            "last_touched": m.get("last_touched"),
+            "owner": m.get("owner"),
+            "has_in_repo": m.get("has_in_repo", False),
+        })
+
+    out: dict[str, Any] = {
+        "rows": rows, "returned": len(rows),
+        "next_after": str(next_after) if next_after is not None else None,
+    }
+    if next_after is not None:
+        out["_projected"] = {
+            "tool": "enumerate_threads",
+            "note": "you asked for a bounded page -- this names exactly what's not shown, "
+                    "same as an unrequested trim would.",
+            "dropped": {"threads": {"shown": len(rows), "of": total}},
+        }
+    return out
