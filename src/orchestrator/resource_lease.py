@@ -23,6 +23,14 @@ this needs.
 
 Scope (Thoth's dispatch, ruling 4e4fa6cd/83421412b9cc): core + storage only. The MCP verb
 that exposes this to the fleet lands separately, once src/mcp_server.py is free.
+
+NARROWED after #103's re-scope (ruling ff3bdc37, "TREAT THE AGENTS LIKE PEOPLE WORKING ON A
+REPO"): the working tree was this module's original motivating case (tonight's git races),
+but per-seat worktrees dissolve tree contention structurally rather than coordinating it —
+once every agent has its own checkout, there is nothing left for a tree lease to arbitrate.
+The durable purpose is genuinely SHARED, non-isolable resources instead: the deploy
+pipeline, the database, a running service. The MCP-facing docstrings (mcp_server.py)
+deliberately no longer name `tree`/`compose-merge` as example resource_ids for this reason.
 """
 from __future__ import annotations
 

@@ -4314,12 +4314,13 @@ async def acquire_lease(
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Claim ANY resource by an EXACT id — a file path, `docker-daemon`, `compose-merge`,
-    `tree`. UNLIKE `open_thread(assignee=)`'s `leased_to` (fuzzy prose similarity over a
-    thread summary, read-then-write, repo-scoped only — two agents naming the same file in
-    differently-worded summaries could get no lease at all), `resource_id` here is matched
-    by EQUALITY, backed by a real DB-level uniqueness guarantee
-    (`resource_leases_active_claim`), never a race.
+    """Claim ANY resource by an EXACT id — `deploy`, `docker-daemon`, a migration name, the
+    live server itself: genuinely SHARED, non-isolable resources, NOT the working tree (a
+    per-seat tree has no contention left to coordinate). UNLIKE `open_thread(assignee=)`'s
+    `leased_to` (fuzzy prose similarity over a thread summary, read-then-write, repo-scoped
+    only — two agents naming the same file in differently-worded summaries could get no
+    lease at all), `resource_id` here is matched by EQUALITY, backed by a real DB-level
+    uniqueness guarantee (`resource_leases_active_claim`), never a race.
 
     `resource_id` is CONVENTION, not a closed vocabulary — nothing here validates,
     enumerates, or pre-decides what strings mean. Same string in, same claim, whatever the
