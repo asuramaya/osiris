@@ -280,6 +280,14 @@ class Settings(BaseSettings):
     # everything else stays a rot_candidate for a human to confirm) but it still writes
     # unattended, so it gets the same second signature before it may act.
     osiris_closure_miner_enabled: bool = False
+    # THE GATES-ARE-LAW ENFORCEMENT SWITCH (task #131 follow-up, Thoth DM 2890, operator
+    # ruling 4ef68cfe) — OFF by default, same law as osiris_closure_miner_enabled, but the
+    # ACTION here is a REFUSAL not a write: scripts/gate_hook.py always RUNS ruff/mypy/scoped-
+    # pytest against a commit and always PRINTS what it found, whether this is on or off — the
+    # switch controls only whether a failing gate can actually abort a `git commit` in this
+    # shared, 4-agent-concurrent tree. Proven retroactively (decision pending, DM 2890's own
+    # acceptance test) against db8e3e9..HEAD before this flips to True.
+    osiris_gate_hook_enforce: bool = False
     # THE FROZEN LANE (wake(), thread 9f566244 / handoff 8f005905) — OFF by default, and this
     # QUARANTINE LIFTED (ruling 85fba696, operator 2026-07-29, superseding 482c3d0f). This was
     # dark because the house read the Claude daemon reply lane as a harness-level RCE (decisions
