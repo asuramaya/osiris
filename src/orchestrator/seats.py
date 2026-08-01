@@ -1096,13 +1096,17 @@ async def fold_seat(
         await actions.invalidate_link(row["fid"], dupe_oid, "managed_by", actor, now)
         await actions.create_link(row["fid"], into_obj, "managed_by", actor, now, _CONF,
                                   evidence_class=_EC)
-    # the kernel merge: event, projection, resolve-on-read — the same primitive fold_agent
-    # itself calls, type-agnostic, no Agent-only check inside it
-    await actions.merge_objects(into_oid, dupe_oid, justification=evidence, actor=actor)
+    # mail, moved BEFORE the kernel merge (#59's own precondition fix, mirroring
+    # fold_project/fold_agent's now-shared pattern): a crash between here and the merge
+    # below leaves dupe.status=='active', so a retry continues rather than hitting the
+    # merge's own "already folded" refusal with mail stranded on dupe forever.
     mail_tag = await actions.pool.execute(
         "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
         into, dupe)
     mail_moved = int(mail_tag.rsplit(" ", 1)[-1])
+    # the kernel merge: event, projection, resolve-on-read — the same primitive fold_agent
+    # itself calls, type-agnostic, no Agent-only check inside it
+    await actions.merge_objects(into_oid, dupe_oid, justification=evidence, actor=actor)
     return {"folded": dupe, "into": into, "holders_moved": [r["holder"] for r in holders],
            "managed_by_moved": len(managing) + len(managed), "mail_moved": mail_moved}
 

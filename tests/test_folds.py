@@ -69,6 +69,50 @@ async def test_fold_moves_the_estate_and_deflates_the_census(actions: Actions) -
     assert src == "agent:f01dbeef"
 
 
+async def test_fold_survives_a_crash_between_estate_move_and_merge(actions: Actions) -> None:
+    """Task #59's own precondition fix: the estate now moves BEFORE Actions.merge_objects,
+    so a process death in that window leaves dupe.status=='active' — a retry re-enters
+    fold_agent and simply CONTINUES rather than hitting the "already folded — nothing to
+    do" refusal with the estate stranded forever (the old order's failure, the exact #127
+    class of bug). Simulated by performing the estate move by hand (mirroring fold_agent's
+    own first half) and then calling the real verb — proving both that it does not refuse
+    and that re-moving already-moved estate is a true no-op, not a duplicate."""
+    p = actions.pool
+    await _mk_agent(actions, "agent:crash001")
+    await _mk_agent(actions, "agent:crash002")
+    await save_mount(p, job_dir="/jobs/crash001", agent_id="agent:crash001",
+                     project="foldhouse", cwd="/w/foldhouse", model=None, session_key=None)
+    await send_message(p, from_agent="agent:sender", from_project="osiris",
+                       to_agent="agent:crash001", body="mail sent before the crash")
+    tid = await actions.create_or_find_object("Thread", "thread:crash0001", "agent:crash001")
+    now = datetime.now(UTC)
+    await actions.assert_property(tid, "owner", "agent:crash001", "agent:crash001",
+                                  now, 0.9, evidence_class="self_declared")
+
+    # THE SIMULATED CRASH: exactly fold_agent's own estate-move half, run by hand, with
+    # merge_objects never called — the state a real crash in that window would leave.
+    await p.execute("UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 "
+                    "AND read_at IS NULL", "agent:crash002", "agent:crash001")
+    await p.execute("UPDATE agent_mounts SET agent_id=$1 WHERE agent_id=$2",
+                    "agent:crash002", "agent:crash001")
+    await actions.assert_property(tid, "owner", "agent:crash002", "agent:crash001",
+                                  now, 0.9, evidence_class="self_declared")
+    still_active = await p.fetchval(
+        "SELECT status FROM objects WHERE canonical='agent:crash001'")
+    assert still_active == "active"          # confirms the crash left it retryable, not refused
+
+    out = await fold_agent(actions, dupe="agent:crash001", into="agent:crash002",
+                           evidence="retry after a simulated mid-fold crash",
+                           actor="agent:test")
+
+    assert "error" not in out                 # the retry completed, it did not refuse
+    assert out["mail_readdressed"] == 0        # already moved by the "crash" — a true no-op
+    assert out["mount_rows_repointed"] == 0
+    assert out["threads_reowned"] == 0
+    assert await canonical_agent(p, "agent:crash001") == "agent:crash002"
+    assert await unread_count(p, "foldhouse", reader_agent="agent:crash002") >= 1
+
+
 async def test_send_forwards_a_folded_address_and_confesses(actions: Actions) -> None:
     p = actions.pool
     await _mk_agent(actions, "agent:dead1111")

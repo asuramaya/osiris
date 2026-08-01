@@ -142,10 +142,18 @@ async def fold_agent(
         return {"error": f"{dupe} actively holds {held} — a seat transfer is a deliberate "
                          "act, never a fold's side effect; release or transfer the seat "
                          "first"}
-    # the kernel merge: event, projection, same_as, case union, audit — resolve-on-read
-    await actions.merge_objects(by_label[into]["id"], by_label[dupe]["id"],
-                                justification=evidence, actor=actor)
-    # THE ESTATE — the same three surfaces succession transfers, landing on the living head
+    # THE ESTATE MOVES FIRST (#59's own precondition fix, mirroring fold_project's
+    # already-safe pattern): a crash between here and the kernel merge below leaves
+    # dupe.status=='active', so a retry re-enters this same function and simply
+    # continues — every estate move here is idempotent (a mail row already re-addressed
+    # no longer matches `to_agent=dupe`; a mount row the same; a thread already re-owned
+    # no longer matches `owner=dupe`). The OLD order (merge first, estate after) made a
+    # crash mid-fold PERMANENT: the merge's own "already folded — nothing to do" guard
+    # refused every retry, stranding the estate forever — exactly the #127 class of bug,
+    # now closed here before the reaper (task #59) could pour bulk, unattended volume
+    # through it. `living_head(into)` is independent of dupe's own merge status (into is
+    # already guaranteed unmerged by the guard above), so computing it before the merge
+    # changes nothing about what it resolves to.
     head = await living_head(actions.pool, into)
     tag = await actions.pool.execute(
         "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
@@ -163,7 +171,13 @@ async def fold_agent(
     for t in threads:
         await actions.assert_property(t["id"], "owner", head, actor, now, 0.9,
                                       evidence_class="self_declared")
-    # a standing proposal for this pair (either order) is answered by the act itself
+    # the kernel merge: event, projection, same_as, case union, audit — resolve-on-read
+    await actions.merge_objects(by_label[into]["id"], by_label[dupe]["id"],
+                                justification=evidence, actor=actor)
+    # a standing proposal for this pair (either order) is answered by the act itself —
+    # AFTER the merge, deliberately: this is not estate (nothing is stranded if a crash
+    # lands between the merge and here, only a tray row stays open a beat longer, and
+    # resolve_fold_candidate's own re-check would just find the pair already merged)
     await actions.pool.execute(
         "UPDATE merge_candidates SET resolved='merged', resolved_by=$3, resolved_at=now() "
         "WHERE resolved IS NULL AND (a_id, b_id) IN (($1,$2),($2,$1))",

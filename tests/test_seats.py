@@ -2086,6 +2086,39 @@ async def test_fold_seat_moves_active_holders_and_estate_the_vajra_shape(
     assert await manager_of_seat(actions.pool, "seat:fs1real0") == "seat:fs1alfrd"
 
 
+async def test_fold_seat_survives_a_crash_between_mail_move_and_merge(
+    actions: Actions,
+) -> None:
+    """Task #59's own precondition fix: fold_seat's mail leg now moves BEFORE
+    Actions.merge_objects (holders/managed_by already did) — a process death in that
+    window leaves dupe.status=='active', so a retry continues rather than hitting
+    fold_seat's own "already folded — nothing to do" refusal with mail stranded on the
+    dupe seat forever. Simulated by hand (mirroring fold_seat's own mail-move query) with
+    merge_objects never called, then the real verb — proving it does not refuse and that
+    re-moving already-moved mail is a true no-op."""
+    from src.orchestrator.seats import fold_seat
+
+    a = await actions.create_or_find_object("Seat", "seat:fs5crsh0", "test")
+    b = await actions.create_or_find_object("Seat", "seat:fs5real0", "test")
+    assert a and b
+    await mailbox_send(actions, to_agent="seat:fs5crsh0")
+
+    # THE SIMULATED CRASH: fold_seat's own mail-move query, run by hand, with
+    # merge_objects never called — the state a real crash in that window would leave.
+    await actions.pool.execute(
+        "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
+        "seat:fs5real0", "seat:fs5crsh0")
+    still_active = await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE canonical='seat:fs5crsh0'")
+    assert still_active == "active"          # confirms the crash left it retryable
+
+    out = await fold_seat(actions, dupe="seat:fs5crsh0", into="seat:fs5real0",
+                          evidence="retry after a simulated mid-fold crash", actor="test")
+
+    assert "error" not in out                # the retry completed, it did not refuse
+    assert out["mail_moved"] == 0             # already moved by the "crash" — a true no-op
+
+
 async def mailbox_send(actions: Actions, *, to_agent: str) -> None:
     from src.orchestrator.mailbox import send_message
     await send_message(actions.pool, from_agent="agent:someone", from_project="test",
