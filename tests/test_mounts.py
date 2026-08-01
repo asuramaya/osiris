@@ -189,6 +189,61 @@ async def test_mount_tool_welcomes_an_unbound_fresh_session(
         srv._pool = saved_pool
 
 
+async def test_mount_confesses_a_broken_osiris_pin(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE COULD-NOT-READ BANNER (Sekhmet's design, e3f4f159; Thoth DM 2677 item 2): a
+    `.osiris` file that exists but fails to parse must surface a loud, actionable
+    confession — not silently look identical to a directory that was never pinned at
+    all. `project` still resolves (basename fallback, unbroken); orient() gets the SAME
+    confession from the SAME AgentIdentity, proven here on the same mounted session."""
+    from src import mcp_server as srv
+
+    repo = tmp_path / "redmonth"
+    repo.mkdir()
+    (repo / ".osiris").write_text('project: "redmonth"\n')  # the real colon malformation
+    job_dir = str(tmp_path / "jobs" / "brokenpin01")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(repo), job_dir=job_dir)
+        assert out["project"] == "redmonth"                  # basename fallback, unbroken
+        warn = out.get("project_pin_error")
+        assert warn is not None, f"mount() never confessed the broken pin: {out}"
+        assert str(repo / ".osiris") in warn and "TOMLDecodeError" in warn
+
+        # orient() carries the SAME confession off the SAME mounted identity — re-attached
+        # by job_dir (ctx=None in a test has no connection key of its own to cache under,
+        # exactly like a bounced server; session_anchor is the durable re-attach hint)
+        oriented = await srv.orient(session_anchor=job_dir)
+        owarn = oriented.get("project_pin_error")
+        assert owarn is not None, f"orient() never confessed the broken pin: {oriented}"
+        assert str(repo / ".osiris") in owarn
+    finally:
+        srv._pool = saved_pool
+
+
+async def test_mount_stays_silent_on_a_valid_pin_that_never_sets_project(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The heinrich boundary case (Sekhmet's design, e3f4f159), exercised through the real
+    mount() tool: a VALID .osiris file that simply never declares `project` is a NO
+    DECLARATION, never a couldn't-read — no banner, even though the file is real."""
+    from src import mcp_server as srv
+
+    heinrich = tmp_path / "heinrich"
+    heinrich.mkdir()
+    (heinrich / ".osiris").write_text('model = "claude-fable-5"\n')
+    job_dir = str(tmp_path / "jobs" / "heinrich01")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(heinrich), job_dir=job_dir)
+        assert "project_pin_error" not in out
+    finally:
+        srv._pool = saved_pool
+
+
 async def test_retire_releases_the_seat(actions: Actions, tmp_path: Path) -> None:
     """The seat release (thread b47b3814): Anubis VII kept a live durable mount after its
     farewell — the fleet chrome and liveness counts read a retired agent as a live seat.

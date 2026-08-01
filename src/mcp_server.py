@@ -52,6 +52,7 @@ from src.orchestrator.agents import (
     AgentIdentity,
     _generation,
     nearest_handoff_ancestor,
+    project_pin_banner,
     read_project_model,
     register_agent,
     resolve_identity,
@@ -1726,6 +1727,7 @@ async def mount(
         expected=await _expected_model(pool, cwd, ident.project),  # repo intent wins
         anchored=ident.model_method == "job_dir",   # only a true anchor confesses a swap
         deliberate=ident.model_deliberate))         # a /model on the record is never a sin
+    pin_warn = project_pin_banner(ident)  # a broken .osiris pin — see agents.py, e3f4f159
     seat = await handshake._seat_of(Actions(pool), ident.agent_id)
     # co-agent awareness at ARRIVAL (Deckard XXVI, msg 258): a live sibling in your own
     # repo is the one blindness that costs unrecoverable work (a stomped commit)
@@ -1743,6 +1745,7 @@ async def mount(
                     "you) — call inbox()" if asks else
                     f"{unread} unread — call inbox()") if unread else "none",
            **({"cwd_corrected": cwd_note} if cwd_note else {}),
+           **({"project_pin_error": pin_warn} if pin_warn else {}),
            "note": "linked — writes now attributed to you; call orient() next"}
     if op_unread:  # the fleet plays secretary: any session the human drives can relay this
         out["operator_mail"] = (f"{op_unread} of your briefs await the operator's eye — "
@@ -2221,6 +2224,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         deliberate=ident.model_deliberate)) if ident else None
     if spawn is not None:
         swap = None  # the seat's swap history is the PARENT's confession duty, not the child's
+    pin_warn = project_pin_banner(ident) if ident else None  # broken .osiris pin, e3f4f159
     if swap and ident:  # a triage wake on the economy model is policy, not a rug-pull
         swap = await _wake_economy_standdown(pool, proj, ident.model) or swap
     away = await mounts.while_away(
@@ -2345,6 +2349,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             **op_mail,
             **({"charter": charter} if charter else {}),
             **({"swap": swap} if swap else {}),
+            **({"project_pin_error": pin_warn} if pin_warn else {}),
             **sweep_receipt,
             **({"succession_note": inheritance} if inheritance else {}),
             **({"co_agents": co_agents} if co_agents else {}),
@@ -2403,6 +2408,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         **op_mail,
         **({"charter": charter} if charter else {}),
         **({"swap": swap} if swap else {}),
+        **({"project_pin_error": pin_warn} if pin_warn else {}),
         **({"succession_note": inheritance} if inheritance else {}),
         **({"co_agents": co_agents} if co_agents else {}),
         **({"peer": peer} if peer else {}),

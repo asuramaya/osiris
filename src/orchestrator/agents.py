@@ -99,6 +99,14 @@ class AgentIdentity:
     # lineage-linked id (agent:<base>-ii…) because it arrived across a detected seam or wore a
     # retired face. Holds the ANCESTOR's canonical; mount() confesses the minting to the heir.
     succeeded_from: str | None = None
+    # COULD NOT READ A `.osiris` DECLARATION THAT EXISTS (Sekhmet's design, e3f4f159; Thoth
+    # DM 2677 item 2) — the file was found but failed to parse/read, a DIFFERENT real thing
+    # from "no declaration" (which stays the legitimate unpinned None, unchanged). Set only
+    # when `_read_osiris_key`'s climb actually hit a broken file for the `project` key;
+    # `project` above still falls back to the basename guess exactly as before. None/None
+    # when nothing broke — the common case, never populated speculatively.
+    project_pin_error: str | None = None
+    project_pin_path: str | None = None
 
 
 # Roman generations for successor ids (a sibling's grammar: agent:a8c15486-ii). The alphabet
@@ -605,10 +613,38 @@ async def agent_seat(pool: asyncpg.Pool, agent_id: str) -> str | None:
     return seat_label(agent_id, row["handle"], int(row["gen"]) if row["gen"] else None)
 
 
-def _read_osiris_key(cwd: str | None, key: str) -> str | None:
-    """One key from the repo's `.osiris` file (TOML), walking up to the repo root."""
+@dataclass(frozen=True)
+class OsirisKeyRead:
+    """One key's lookup result in a `.osiris` file (Sekhmet's design, e3f4f159): the
+    tell-apart-able pair is NO DECLARATION vs COULD NOT READ A DECLARATION THAT EXISTS —
+    collapsing them into one bare `None` (the pre-fix shape) hid a real bug behind a
+    legitimate, common signal.
+
+    NO DECLARATION — no `.osiris` anywhere in the climb to the repo root, OR a
+    syntactically valid file that simply never sets this key (e.g. REPOS/heinrich: a valid
+    TOML file that never declares `project` — this is state (2), NOT a couldn't-read, even
+    though it LOOKS incomplete) — both are the SAME real thing, "this directory has never
+    declared X", and stay collapsed: `value=None, error=None, path=None`. This is the
+    legitimate "unpinned" signal the whole 28-directory survey and the warn-then-refuse
+    migration are staged around; nothing about its shape changes here.
+
+    COULD NOT READ — the file exists but `tomllib.loads`/`Path.read_text` raised
+    (TOMLDecodeError/OSError/ValueError) — a DIFFERENT real thing: someone WROTE a pin and
+    it doesn't work. `value=None`, `error`=the exception's own text, `path`=the exact
+    `.osiris` file that failed — enough for a human or a banner to act on without
+    re-deriving anything, never just a swallowed exception."""
+
+    value: str | None
+    error: str | None = None
+    path: str | None = None
+
+
+def _read_osiris_key(cwd: str | None, key: str) -> OsirisKeyRead:
+    """One key from the repo's `.osiris` file (TOML), walking up to the repo root. See
+    `OsirisKeyRead` for the no-declaration-vs-could-not-read distinction this must keep
+    tell-apart-able (Sekhmet's design, e3f4f159)."""
     if not cwd:
-        return None
+        return OsirisKeyRead(value=None)
     import tomllib
     p = Path(cwd)
     for d in (p, *p.parents):
@@ -616,20 +652,22 @@ def _read_osiris_key(cwd: str | None, key: str) -> str | None:
         try:
             if f.is_file():
                 value = tomllib.loads(f.read_text()).get(key)
-                return str(value).strip() if value else None
-        except (OSError, tomllib.TOMLDecodeError, ValueError):
-            return None
+                return OsirisKeyRead(value=str(value).strip() if value else None)
+        except (OSError, tomllib.TOMLDecodeError, ValueError) as exc:
+            return OsirisKeyRead(value=None, error=f"{type(exc).__name__}: {exc}",
+                                 path=str(f))
         if (d / ".git").exists():  # the repo root — stop climbing
             break
-    return None
+    return OsirisKeyRead(value=None)
 
 
 def read_project_label(cwd: str | None) -> str | None:
     """A project's DECLARED name, from a `.osiris` file (TOML: project = "..."), walking up to
     the repo root. Decouples the project identity from the FOLDER name (the operator may rename
     the dir; the label is a stable property of the repo — ruling 1e02e069). None → fall back to
-    the cwd basename."""
-    return _read_osiris_key(cwd, "project")
+    the cwd basename (silently, on EITHER no-declaration or could-not-read — callers that need
+    to tell those apart and confess a broken pin use `read_project_pin`, e.g. resolve_identity)."""
+    return _read_osiris_key(cwd, "project").value
 
 
 def read_project_model(cwd: str | None) -> str | None:
@@ -637,7 +675,36 @@ def read_project_model(cwd: str | None) -> str | None:
     operator's PER-PROJECT standing choice. A fleet of onboarded repos does not all run the
     box default: a deliberately-haiku repo confessing 'not fable' every turn framed the
     operator's own choice as a sin (complaint, 2026-07-10). None → the box-wide default."""
-    return _read_osiris_key(cwd, "model")
+    return _read_osiris_key(cwd, "model").value
+
+
+def read_project_pin(cwd: str | None) -> OsirisKeyRead:
+    """The FULL `project`-key read behind `read_project_label` — value plus, when a
+    `.osiris` file exists but failed to parse/read, the path and error a banner can act on
+    (Sekhmet's design, e3f4f159; Thoth DM 2677 item 2). `resolve_identity` uses this one,
+    because it's the seam that carries the couldn't-read signal into `AgentIdentity` for
+    mount()/orient() to confess. Everything else that only wants the plain fallback-to-
+    basename value keeps using `read_project_label` — unchanged, still a bare `str | None`."""
+    return _read_osiris_key(cwd, "project")
+
+
+def project_pin_banner(ident: AgentIdentity) -> str | None:
+    """ONE banner for a broken `.osiris` pin — the same SHAPE as the model-swap confession
+    (`swaps.swap_banner`): loud, second-person, names exactly what broke and where. Fires
+    ONLY on COULD NOT READ (`ident.project_pin_error` set). NO DECLARATION (no file, or a
+    valid file that never sets `project`) stays silent here, deliberately — that is the
+    legitimate unpinned signal the 28-directory warn-then-refuse migration is staged
+    around (wave 2, gated on those 28 being pinned first — not built here, per Thoth DM
+    2677: 'DO NOT ARM THE REFUSAL')."""
+    if not ident.project_pin_error:
+        return None
+    return (
+        f"⚠ .osiris AT {ident.project_pin_path} COULD NOT BE READ "
+        f"({ident.project_pin_error}) — this directory HAS a project pin, but it's broken, "
+        f"so your project fell back to a BASENAME GUESS ({ident.project!r}) instead of "
+        "reading it. Fix the file (the error above names exactly what's wrong); until then "
+        "this session's project label may not be what you expect."
+    )
 
 
 def resolve_identity(
@@ -672,7 +739,11 @@ def resolve_identity(
     # basename ("seats") would be a phantom, not a guess, so it stays unresolved from cwd —
     # a location-independent identity finds its project through its SEAT instead (mount()'s
     # seat-first resolution), never by inventing one from where it happens to be sitting.
-    pinned = project_label or read_project_label(cwd)
+    # an explicit project_label override short-circuits the cwd read entirely (unchanged
+    # behavior) — the couldn't-read signal only ever comes from an ACTUAL climb of cwd's
+    # own .osiris file, never fabricated for an override that never touched one.
+    pin_read = OsirisKeyRead(value=project_label) if project_label else read_project_pin(cwd)
+    pinned = pin_read.value
     bare_root = cwd and Path(cwd) == _DEFAULT_OFFICE_ROOT
     project = None if (pinned is None and bare_root) else (pinned or
              (Path(cwd).name if cwd else None))
@@ -744,7 +815,8 @@ def resolve_identity(
                          cwd=cwd, model_method=method, model_declared=declared,
                          model_divergent=divergent, model_history=tuple(history),
                          model_deliberate=deliberate, model_observed_at=observed_at,
-                         resolved=resolved)
+                         resolved=resolved, project_pin_error=pin_read.error,
+                         project_pin_path=pin_read.path)
 
 
 async def _link_once(

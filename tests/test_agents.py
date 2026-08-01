@@ -226,6 +226,122 @@ def test_read_project_model_declares_the_repo_intent(tmp_path: Path) -> None:
     assert read_project_model(str(tmp_path)) is None                    # undeclared → default
 
 
+def test_read_project_pin_distinguishes_no_declaration_from_could_not_read(
+    tmp_path: Path,
+) -> None:
+    """THE TELL-APART-ABLE PAIR (Sekhmet's design, e3f4f159): NO DECLARATION (no file, or a
+    valid file that simply never sets `project` — the heinrich boundary case) collapses to
+    one shape; COULD NOT READ (a file exists but fails to parse) is a DIFFERENT shape and
+    must carry the path + the actual error, never a bare None."""
+    from src.orchestrator.agents import read_project_pin
+
+    no_file = tmp_path / "no-osiris"
+    no_file.mkdir()
+    out = read_project_pin(str(no_file))
+    assert out.value is None and out.error is None and out.path is None
+
+    # heinrich: valid TOML, never sets `project` — a NO DECLARATION, not a couldn't-read,
+    # even though the file itself is real and non-empty
+    heinrich = tmp_path / "heinrich"
+    heinrich.mkdir()
+    (heinrich / ".osiris").write_text('model = "claude-fable-5"\n')
+    out = read_project_pin(str(heinrich))
+    assert out.value is None and out.error is None and out.path is None
+
+    # redmonth/sutra's own malformation: colon syntax is not valid TOML
+    malformed = tmp_path / "redmonth"
+    malformed.mkdir()
+    (malformed / ".osiris").write_text('project: "redmonth"\n')
+    out = read_project_pin(str(malformed))
+    assert out.value is None
+    assert out.error is not None and "TOMLDecodeError" in out.error  # the actual parse error
+    assert out.path == str(malformed / ".osiris")
+
+
+def test_read_project_label_and_model_still_collapse_both_no_declaration_causes(
+    tmp_path: Path,
+) -> None:
+    """Backward compatibility for the 6 existing plain-string callers (seats.py,
+    mcp_server.py, project_identity.py, census.py): a couldn't-read file must still return
+    a bare None here — the richer signal is additive, reached only through
+    `read_project_pin`, never a behavior change for callers that don't ask for it."""
+    from src.orchestrator.agents import read_project_label, read_project_model
+
+    malformed = tmp_path / "sutra"
+    malformed.mkdir()
+    (malformed / ".osiris").write_text('project: "sutra"\n')
+    assert read_project_label(str(malformed)) is None
+    assert read_project_model(str(malformed)) is None
+
+
+def test_resolve_identity_carries_the_could_not_read_signal_but_still_falls_back(
+    tmp_path: Path,
+) -> None:
+    """A broken pin must not break resolution — `project` still falls back to the
+    basename exactly as a no-declaration would — but the identity now carries ENOUGH to
+    confess it (path + error), where before it silently looked identical to "never
+    pinned"."""
+    repo = tmp_path / "redmonth"
+    repo.mkdir()
+    (repo / ".osiris").write_text('project: "redmonth"\n')
+    ident = resolve_identity(cwd=str(repo), job_dir="/j/jobs/brokenpin1")
+    assert ident.project == "redmonth"                    # basename fallback, unbroken
+    assert ident.project_pin_error is not None
+    assert ident.project_pin_path == str(repo / ".osiris")
+
+
+def test_resolve_identity_stays_silent_on_no_declaration(tmp_path: Path) -> None:
+    repo = tmp_path / "undeclared"
+    repo.mkdir()
+    ident = resolve_identity(cwd=str(repo), job_dir="/j/jobs/undeclared1")
+    assert ident.project_pin_error is None and ident.project_pin_path is None
+
+
+def test_resolve_identity_stays_silent_on_a_valid_pin_that_never_sets_project(
+    tmp_path: Path,
+) -> None:
+    """The heinrich boundary case, exercised through the real resolution path — a valid
+    but incomplete .osiris file must never masquerade as a broken one."""
+    heinrich = tmp_path / "heinrich"
+    heinrich.mkdir()
+    (heinrich / ".osiris").write_text('model = "claude-fable-5"\n')
+    ident = resolve_identity(cwd=str(heinrich), job_dir="/j/jobs/heinrich1")
+    assert ident.project_pin_error is None and ident.project_pin_path is None
+
+
+def test_resolve_identity_never_confesses_an_explicit_project_label_override(
+    tmp_path: Path,
+) -> None:
+    """An explicit `project_label=` (the env-override lane) short-circuits the cwd read
+    entirely — even a malformed .osiris underfoot must never surface a confession for a
+    file the resolution never actually touched."""
+    repo = tmp_path / "redmonth"
+    repo.mkdir()
+    (repo / ".osiris").write_text('project: "redmonth"\n')
+    ident = resolve_identity(cwd=str(repo), job_dir="/j/jobs/override1",
+                             project_label="explicit-override")
+    assert ident.project == "explicit-override"
+    assert ident.project_pin_error is None and ident.project_pin_path is None
+
+
+def test_project_pin_banner_fires_only_on_could_not_read() -> None:
+    from src.orchestrator.agents import project_pin_banner
+
+    clean = AgentIdentity(agent_id="agent:clean1", session="clean1", project="fine",
+                          model=None, cwd="/x")
+    assert project_pin_banner(clean) is None
+
+    broken = AgentIdentity(agent_id="agent:broken1", session="broken1", project="redmonth",
+                           model=None, cwd="/x/redmonth",
+                           project_pin_error="TOMLDecodeError: expected '='",
+                           project_pin_path="/x/redmonth/.osiris")
+    banner = project_pin_banner(broken)
+    assert banner is not None
+    assert "/x/redmonth/.osiris" in banner
+    assert "TOMLDecodeError" in banner
+    assert "redmonth" in banner  # the basename-fallback value it landed on, named
+
+
 async def test_register_stamps_intent_and_the_swap(actions: Actions, tmp_path: Path) -> None:
     """With expected_model set, register_agent stamps the INTENT and, on a divergence (the fable
     harness's silent demotion), the swap as a first-class OBSERVED event on the Agent."""
