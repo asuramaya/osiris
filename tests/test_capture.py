@@ -839,6 +839,31 @@ async def test_resolve_thread_tool_receipt_admits_when_the_edge_does_NOT_land(
     assert "did not resolve to a graph object" in out["resolved_by"]
 
 
+async def test_resolve_thread_tool_receipt_names_the_closed_by_fallback_honestly(
+    actions: Actions,
+) -> None:
+    """Found live (Thoth DM 2835/2917, Seshat XIX): the old text said 'the closure-miner
+    will not find this close' whenever the artifact didn't resolve — false. capture.
+    resolve_thread ALWAYS mints closed_by as a fallback when resolved_by doesn't land
+    (Phase 1a, decision cb38d922), and thread_closure_edges' own UNION includes closed_by
+    — so this close WAS findable the whole time. The receipt must say so, not claim the
+    opposite of what the write path actually guarantees."""
+    from src import mcp_server as srv
+
+    t = await open_thread(actions, "a thread closed with a dud artifact")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.resolve_thread(str(t), artifact="not-a-real-commit-or-decision")
+    finally:
+        srv._pool = saved_pool
+    assert "closed_by edge" in out["resolved_by"]
+    assert "still traversable" in out["resolved_by"]
+    has_closed_by = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND type='closed_by' LIMIT 1", t)
+    assert has_closed_by == 1
+
+
 async def test_resolve_thread_tool_receipt_omits_resolved_by_without_an_artifact(
     actions: Actions,
 ) -> None:

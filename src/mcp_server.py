@@ -4249,8 +4249,9 @@ async def resolve_thread(
             f"{target['type']} {target['canonical']} — the strong closure witness"
             if target is not None else
             "none — the artifact did not resolve to a graph object (a file:line or an "
-            "unmatched pointer); resolved_artifact still carries it as text, but the "
-            "closure-miner will not find this close"
+            "unmatched pointer); resolved_artifact still carries it as text, and a "
+            "closed_by edge to the resolving agent was minted instead — the weak "
+            "witness, still traversable, just not naming a specific commit/decision"
         )
     return out
 
