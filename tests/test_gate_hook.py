@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import Any
 
 import scripts.gate_hook as gate_hook
-from scripts.gate_hook import cmd_precommit, resolve_test_files, run_gates
+from scripts.gate_hook import (
+    _module_imports,
+    classify_test_files,
+    cmd_precommit,
+    resolve_test_files,
+    run_gates,
+)
 
 
 def _write(root: Path, rel: str, content: str = "") -> None:
@@ -72,12 +78,99 @@ def test_missing_tests_dir_returns_empty_not_a_crash(tmp_path: Path) -> None:
     assert out == set()
 
 
-# --- run_gates: the fanout cap, a hub module measured live (mounts.py: 37 files) -------------
+# --- _module_imports: what a test file actually imports from one specific module -------------
 
-def test_run_gates_skips_pytest_past_the_fanout_cap(
+def test_module_imports_finds_names_inside_function_bodies(tmp_path: Path) -> None:
+    """Real example, msg 2941: `from src import mcp_server as srv` lives inside a test
+    function body, not at module level — the ORIGINAL name is what's collected, not `srv`."""
+    f = tmp_path / "t.py"
+    f.write_text("def test_x():\n    from src.orchestrator.mounts import save_mount as sm\n"
+                  "    sm()\n")
+    assert _module_imports(f, "src.orchestrator.mounts") == {"save_mount"}
+
+
+def test_module_imports_ignores_other_modules(tmp_path: Path) -> None:
+    f = tmp_path / "t.py"
+    f.write_text("from src.other import thing\n")
+    assert _module_imports(f, "src.orchestrator.mounts") == set()
+
+
+def test_module_imports_unparseable_file_returns_empty_not_a_crash(tmp_path: Path) -> None:
+    f = tmp_path / "t.py"
+    f.write_text("def broken(:\n")
+    assert _module_imports(f, "src.orchestrator.mounts") == set()
+
+
+# --- classify_test_files: direct vs fixture-only, Khnum's mounts.py refinement (msg 2941) -----
+
+def test_classify_reproduces_khnums_mounts_split(tmp_path: Path) -> None:
+    """3 files import ONLY `save_mount` (fixture-only, per his own empirical finding); 1 file
+    also imports `rebind_seat` (a real function under test) and must be DIRECT."""
+    _write(tmp_path, "src/orchestrator/mounts.py")
+    for name in ("x1", "x2", "x3"):
+        _write(tmp_path, f"tests/test_{name}.py",
+               "from src.orchestrator.mounts import save_mount\n")
+    _write(tmp_path, "tests/test_mounts.py",
+           "from src.orchestrator.mounts import save_mount, rebind_seat\n")
+    direct, fixture_only = classify_test_files(["src/orchestrator/mounts.py"], tmp_path)
+    assert direct == {"tests/test_mounts.py"}
+    assert fixture_only == {"tests/test_x1.py", "tests/test_x2.py", "tests/test_x3.py"}
+
+
+def test_classify_a_touched_test_file_is_always_direct(tmp_path: Path) -> None:
+    out_direct, out_fixture = classify_test_files(["tests/test_cli.py"], tmp_path)
+    assert out_direct == {"tests/test_cli.py"}
+    assert out_fixture == set()
+
+
+def test_classify_with_no_split_needed_everything_is_direct(tmp_path: Path) -> None:
+    """No hub-module effect at all (every candidate imports something unique) — nothing
+    should land in fixture_only just because a split MECHANISM exists."""
+    _write(tmp_path, "src/orchestrator/widget.py")
+    _write(tmp_path, "tests/test_widget.py",
+           "from src.orchestrator.widget import build_widget\n")
+    direct, fixture_only = classify_test_files(["src/orchestrator/widget.py"], tmp_path)
+    assert direct == {"tests/test_widget.py"}
+    assert fixture_only == set()
+
+
+# --- run_gates: the fanout cap applies ONLY to the fixture-only tier (msg 2941) ----------------
+
+def test_run_gates_caps_only_the_fixture_only_tier(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr(gate_hook, "_PYTEST_FANOUT_CAP", 2)
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
+    _write(tmp_path, "src/pkg/hub.py")
+    for name in ("f1", "f2", "f3"):
+        _write(tmp_path, f"tests/test_{name}.py", "from src.pkg.hub import common\n")
+    _write(tmp_path, "tests/test_direct.py",
+           "from src.pkg.hub import common, real_logic\n")
+    captured: dict[str, Any] = {}
+
+    class _FakeProc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
+        captured["cmd"] = cmd
+        return _FakeProc()
+
+    monkeypatch.setattr(gate_hook.subprocess, "run", _fake_subprocess_run)
+    results = run_gates(tmp_path, ["src/pkg/hub.py"])
+    ok, msg = results["pytest"]
+    assert ok is True
+    assert "SKIPPED 3 fixture-only files" in msg
+    cmd = captured["cmd"]
+    assert "tests/test_direct.py" in cmd
+    assert "tests/test_f1.py" not in cmd
+    assert "tests/test_f2.py" not in cmd
+    assert "tests/test_f3.py" not in cmd
+
+
+def test_run_gates_all_fixture_only_and_over_cap_skips_pytest_entirely(
     tmp_path: Path, monkeypatch: Any,
 ) -> None:
-    monkeypatch.setattr(gate_hook, "_PYTEST_FANOUT_CAP", 2)
+    monkeypatch.setattr(gate_hook, "_PYTEST_FANOUT_CAP", 1)
     calls: list[list[str]] = []
 
     def _fake_run(cmd: list[str], cwd: Path) -> tuple[bool, str]:
@@ -85,16 +178,14 @@ def test_run_gates_skips_pytest_past_the_fanout_cap(
         return True, ""
 
     monkeypatch.setattr(gate_hook, "_run", _fake_run)
-    tests_dir = tmp_path / "tests"
-    tests_dir.mkdir()
-    for name in ("a", "b", "c"):
-        (tests_dir / f"test_{name}.py").write_text("")
-    changed = [f"tests/test_{n}.py" for n in ("a", "b", "c")]
-    results = run_gates(tmp_path, changed)
+    _write(tmp_path, "src/pkg/hub.py")
+    for name in ("f1", "f2"):
+        _write(tmp_path, f"tests/test_{name}.py", "from src.pkg.hub import common\n")
+    results = run_gates(tmp_path, ["src/pkg/hub.py"])
     ok, msg = results["pytest"]
     assert ok is True
-    assert "SKIPPED" in msg and "3 test files resolved" in msg
-    assert not any("pytest" in c[0] for c in calls if c)  # never actually invoked
+    assert "no resolvable test files touched" in msg
+    assert not any("pytest" in c[0] for c in calls if c)
 
 
 def test_run_gates_reports_no_resolvable_tests_distinctly(tmp_path: Path, monkeypatch: Any) -> None:

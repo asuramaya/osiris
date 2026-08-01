@@ -28,29 +28,38 @@ single live commit in a shared tree.
 
 TOUCHED-FILES-ONLY BY CONSTRUCTION, not an afterthought (Sekhmet's own #112 finding: the full
 suite measured 209s under real 4-agent concurrency, and a per-commit gate demanding that is
-unshippable — everyone disables it within a day). `resolve_test_files` is the one thing that
-makes this safe to run on every commit: exact basename match first (`src/x/y.py` <->
-`tests/test_y.py`, ~59% of this repo's modules), then a cheap static grep across `tests/` for
-the module's own import path (`from src.x import y` / `from src.x.y import`) to catch the
-rest — never a full-suite fallback, which would silently reintroduce the cost this exists to
-avoid. A touched file with truly no resolvable test (scripts/, `__init__.py`, deploy config)
-correctly runs no pytest at all; ruff/mypy still gate it, whole-project, because both are
-already fast enough (single-digit seconds) to not need scoping. Every scoped pytest run
-passes `-n 4` explicitly (`_PYTEST_XDIST_CAP`, msg 2919) rather than inheriting whatever
-`-n auto` default lands in pyproject.toml — this gate can fire from multiple concurrent
-agents' commits at once, and a fixed small cap here bounds worst-case total worker count on
-a host Sekhmet measured with swap already fully exhausted.
+unshippable — everyone disables it within a day). `resolve_test_files` is the base
+resolution: exact basename match first (`src/x/y.py` <-> `tests/test_y.py`, ~59% of this
+repo's modules), then a cheap static grep across `tests/` for the module's own import path to
+catch the rest — never a full-suite fallback. `classify_test_files` then splits that set into
+DIRECT (exercises the touched module's own logic — always runs, no cap) and FIXTURE-ONLY
+(imports the module purely to seed a row for some OTHER module's test — subject to
+`_PYTEST_FANOUT_CAP`), self-calibrated per touched module by which imported names are a
+strict majority of the candidate set (Khnum's own empirical mounts.py split, msg 2941: 27 of
+34 resolved files import ONLY `save_mount` and never call it as the function under test; 7
+import something else and do). A hub-module touch is no longer zero coverage — only the
+files that were never testing that module's own logic get skipped past the cap. A touched
+file with truly no resolvable test (scripts/, `__init__.py`, deploy config) correctly runs no
+pytest at all; ruff/mypy still gate it, whole-project, because both are already fast enough
+(single-digit seconds) to not need scoping. Every scoped pytest run passes `-n 4` explicitly
+(`_PYTEST_XDIST_CAP`, msg 2919) rather than inheriting whatever `-n auto` default lands in
+pyproject.toml — this gate can fire from multiple concurrent agents' commits at once, and a
+fixed small cap here bounds worst-case total worker count on a host Sekhmet measured with
+swap already fully exhausted.
 
 WHAT THIS CANNOT CATCH, named plainly (Thoth's own ask, "including what it CANNOT catch"):
 a test file that exercises a touched module WITHOUT importing it by that exact dotted path
 (re-exported through an unrelated module, exercised only via an integration test that never
-names the module directly) is invisible to the grep tier and will not be selected — the same
-class of gap `resolve_test_files`'s own docstring names. This is a real, bounded blind spot,
-not a hidden one; `--audit`'s own report names it as a caveat, never as zero.
+names the module directly) is invisible to both the grep tier and the DIRECT/FIXTURE-ONLY
+split built on top of it — the same class of gap `resolve_test_files`'s own docstring names,
+inherited rather than solved by `classify_test_files` (Khnum's own honest caveat, msg 2941:
+"N direct" is a verified FLOOR, never a ceiling). This is a real, bounded blind spot, not a
+hidden one; `--audit`'s own report names it as a caveat, never as zero.
 """
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import subprocess
 import sys
@@ -59,13 +68,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 VENV_BIN = REPO_ROOT / ".venv" / "bin"
 
-# A hub module (mounts.py: 37 test files resolved, measured live during this build) makes
-# the grep tier degrade toward the exact 209s full-suite cost this mechanism exists to
-# avoid. Capped rather than silently run wide -- SKIPPED is reported distinctly from PASSED,
-# never treated as a failure (an untestable-by-this-mechanism scope is not the commit's
-# fault), but it is a real, load-bearing question left open for whoever arms this: hub-module
-# changes may need a different rule (always full suite, always human review) rather than this
-# gate's default scoping. Not solved here -- named, per this house's "no silent caps" rule.
+# A hub module (mounts.py: 34-37 test files resolved, measured live -- the exact count shifts
+# a little commit to commit) makes the grep tier degrade toward the exact 209s full-suite
+# cost this mechanism exists to avoid. Applies ONLY to the FIXTURE-ONLY tier that
+# `classify_test_files` splits out (Khnum's msg 2941 refinement) -- the DIRECT tier (files
+# that actually exercise the touched module, 7 of mounts.py's 34) always runs regardless of
+# this cap, so a hub-module touch no longer means zero coverage, only that files merely
+# seeding a row for some OTHER module's test get skipped. SKIPPED is reported distinctly from
+# PASSED, never treated as a failure.
 _PYTEST_FANOUT_CAP = 12
 _PYTEST_TIMEOUT_SECS = 180
 
@@ -132,6 +142,75 @@ def resolve_test_files(changed_files: list[str], repo_root: Path = REPO_ROOT) ->
     return out
 
 
+def _module_imports(test_file: Path, mod: str) -> set[str]:
+    """Every name this test file imports FROM `mod` specifically (`from mod import a, b as
+    c` -> `{"a", "b"}`, the ORIGINAL name not the local alias) — walks the WHOLE file, not
+    just top-level statements, since real examples import inside function bodies (`from src
+    import mcp_server as srv` inside a test function, Khnum's own msg 2941 grep). Empty set
+    if the file doesn't import from `mod` at all, or can't be parsed."""
+    try:
+        tree = ast.parse(test_file.read_text())
+    except (OSError, SyntaxError):
+        return set()
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == mod:
+            names.update(alias.name for alias in node.names)
+    return names
+
+
+def classify_test_files(
+    changed_files: list[str], repo_root: Path = REPO_ROOT,
+) -> tuple[set[str], set[str]]:
+    """(direct, fixture_only) — DIRECT files exercise a touched module's own logic and must
+    always run regardless of the fan-out cap; FIXTURE-ONLY files import that module purely to
+    seed test data for something else (Khnum's empirical finding on mounts.py, msg 2941:
+    27 of 34 resolved files import ONLY `save_mount`, never call it as the function under
+    test — 7 import something else and DO exercise real logic). SELF-CALIBRATING per touched
+    module, no hardcoded per-module allow-list: a name imported by a STRICT MAJORITY of a
+    module's own candidate files is treated as a common/fixture name; a file importing
+    anything outside that common set is DIRECT. Reproduces Khnum's manual mounts.py split
+    without a table anyone has to maintain by hand.
+
+    SAME BLIND SPOT AS `resolve_test_files`, inherited rather than solved (Khnum's own honest
+    caveat, msg 2941): a file that exercises the touched module only INDIRECTLY (calls a
+    function that itself calls the touched module, never imports it by name) reads as
+    fixture-only or invisible here exactly as it does there — "N direct" is a verified FLOOR,
+    never a ceiling."""
+    direct: set[str] = set()
+    fixture_only: set[str] = set()
+    for f in changed_files:
+        if f.startswith("tests/") and f.endswith(".py"):
+            direct.add(f)
+            continue
+        mod = _module_path(f)
+        if mod is None:
+            continue
+        candidates = resolve_test_files([f], repo_root)
+        if not candidates:
+            continue
+        per_file_names = {tf: _module_imports(repo_root / tf, mod) for tf in candidates}
+        if len(per_file_names) <= 1:
+            # "common" is meaningless with nothing to be common RELATIVE TO -- a lone
+            # candidate trivially satisfies any majority threshold against itself, which
+            # would wrongly label the only test touching this module as fixture-only.
+            direct.update(per_file_names)
+            continue
+        counts: dict[str, int] = {}
+        for names in per_file_names.values():
+            for n in names:
+                counts[n] = counts.get(n, 0) + 1
+        n_files = len(per_file_names)
+        common = {n for n, c in counts.items() if c * 2 > n_files}
+        for tf, names in per_file_names.items():
+            if names and names <= common:
+                fixture_only.add(tf)
+            else:
+                direct.add(tf)
+    fixture_only -= direct
+    return direct, fixture_only
+
+
 def _run(cmd: list[str], cwd: Path) -> tuple[bool, str]:
     proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
     ok = proc.returncode == 0
@@ -142,26 +221,32 @@ def _run(cmd: list[str], cwd: Path) -> tuple[bool, str]:
 def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool, str]]:
     """ruff/mypy stay whole-project (already single-digit seconds, no scoping needed);
     pytest is the one gate that must be scoped, or it re-imports the 209s full-suite cost
-    this mechanism exists to avoid. No test files resolved -> pytest is skipped outright
-    (reported as `(True, "no resolvable test files touched")`), never silently treated as a
-    full-suite run and never treated as a failure — untested touched files are ruff/mypy's
-    job to catch what they can, not a reason to block an otherwise-clean commit."""
+    this mechanism exists to avoid. `classify_test_files` splits the resolved set into DIRECT
+    (always run, no cap) and FIXTURE-ONLY (subject to `_PYTEST_FANOUT_CAP`) — a hub-module
+    touch no longer means zero coverage, only that the files merely seeding a row for some
+    OTHER module's test get skipped past the cap. Neither tier resolving anything -> pytest
+    is skipped outright (`(True, "no resolvable test files touched")`), never silently
+    treated as a full-suite run and never treated as a failure."""
     results: dict[str, tuple[bool, str]] = {}
     results["ruff"] = _run(
         [str(VENV_BIN / "ruff"), "check", "src", "tests", "scripts"], repo_root)
     results["mypy"] = _run([str(VENV_BIN / "mypy"), "src"], repo_root)
-    test_files = sorted(resolve_test_files(changed_files, repo_root))
-    if not test_files:
-        results["pytest"] = (True, "no resolvable test files touched")
-    elif len(test_files) > _PYTEST_FANOUT_CAP:
+    direct, fixture_only = classify_test_files(changed_files, repo_root)
+    selected = set(direct)
+    skip_note = ""
+    if len(fixture_only) > _PYTEST_FANOUT_CAP:
+        skip_note = (f" SKIPPED {len(fixture_only)} fixture-only files (hub-module fan-out, "
+                     f"over cap {_PYTEST_FANOUT_CAP}): [{' '.join(sorted(fixture_only))}]")
+    else:
+        selected |= fixture_only
+    if not selected:
         results["pytest"] = (
-            True,
-            f"SKIPPED: {len(test_files)} test files resolved (hub-module fan-out), over "
-            f"cap {_PYTEST_FANOUT_CAP} — ruff/mypy still gate this commit. "
-            f"[{' '.join(test_files)}]")
+            True, f"no resolvable test files touched.{skip_note}" if skip_note
+            else "no resolvable test files touched")
     else:
         import os
 
+        test_files = sorted(selected)
         env = dict(**{"TMPDIR": "/var/tmp/osiris-scratch"})
         try:
             proc = subprocess.run(
@@ -172,10 +257,11 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
             )
             ok = proc.returncode == 0
             out = ((proc.stdout or "") + (proc.stderr or "")).strip()
-            results["pytest"] = (ok, f"[{' '.join(test_files)}]\n{out}")
+            results["pytest"] = (ok, f"[{' '.join(test_files)}]{skip_note}\n{out}")
         except subprocess.TimeoutExpired:
             results["pytest"] = (
-                False, f"TIMED OUT after {_PYTEST_TIMEOUT_SECS}s [{' '.join(test_files)}]")
+                False,
+                f"TIMED OUT after {_PYTEST_TIMEOUT_SECS}s [{' '.join(test_files)}]{skip_note}")
     return results
 
 
