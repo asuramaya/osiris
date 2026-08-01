@@ -161,6 +161,38 @@ async def test_mount_against_a_retired_project_lands_in_drop_ephemeral_test_cwd(
     assert still_there == 1
 
 
+async def test_mount_against_a_merged_project_never_lands_in_drop_ephemeral_test_cwd(
+    actions: Actions,
+) -> None:
+    """THE LIVE FALSE-DROP CATCH (found running this exact dry run against production
+    before trusting it, #59's first firing): a project consolidated via a MERGE, not a
+    retirement, still has an ACTIVE successor — repo:ByeByte merged into repo:bytebye, the
+    live specimen. A mount whose own works_in/governs edges already migrated to the
+    successor must never be judged dead off its plain-text agent_mounts.project column,
+    which nothing updates on a rename. A merge is not a death."""
+    p = actions.pool
+    survivor = await actions.create_or_find_object("SoftwareProject", "repo:bytebye",
+                                                    "repo:bytebye")
+    renamed = await actions.create_or_find_object("SoftwareProject", "repo:ByeByte",
+                                                   "repo:ByeByte")
+    await actions.merge_objects(survivor, renamed, "test: consolidated under one name",
+                               "agent:test-actor")
+    await save_mount(p, job_dir="/tmp/jobs/werner01", agent_id="agent:werner01",
+                     project="ByeByte", cwd="/home/asuramaya/.osiris/seats/werner",
+                     model=None, session_key="whisper:werner01")
+
+    out = await reconcile_dry_run(
+        p, live_bodies_by_cwd=_bodies("/home/asuramaya/.osiris/seats/werner"))
+
+    assert not any(r.get("agent_id") == "agent:werner01"
+                  for r in out["buckets"]["drop_ephemeral_test_cwd"])
+    assert not any(r.get("agent_id") == "agent:werner01"
+                  for r in out["buckets"]["ghost_gap"])
+    still_there = await p.fetchval(
+        "SELECT count(*) FROM agent_mounts WHERE agent_id='agent:werner01'")
+    assert still_there == 1
+
+
 async def test_seatless_anon_in_a_dead_project_gets_one_verdict_not_two(
     actions: Actions, tmp_path,
 ) -> None:

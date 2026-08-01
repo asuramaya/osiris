@@ -144,19 +144,33 @@ async def _ghost_flagged_agents(
 
 
 async def _dead_project_mounts(pool: asyncpg.Pool) -> list[dict[str, Any]]:
-    """Mount rows whose project is a SoftwareProject that is no longer active — the
-    residue class retire_project's own refusal (mounts seen in the last 15 minutes block
-    a retirement) cannot itself clean up after the fact: a project retired cleanly can
-    still have STALE rows from before the 15-minute window, or a new anon mount can land
-    against it after retirement (nothing stops a claude session from launching into a
-    stub's old cwd). Read-only join against objects.status, which retire_project already
-    set — this reuses that verdict rather than inventing a second one."""
+    """Mount rows whose project is a SoftwareProject that is RETIRED — the residue class
+    retire_project's own refusal (mounts seen in the last 15 minutes block a retirement)
+    cannot itself clean up after the fact: a project retired cleanly can still have STALE
+    rows from before the 15-minute window, or a new anon mount can land against it after
+    retirement (nothing stops a claude session from launching into a stub's old cwd).
+    Read-only join against objects.status, which retire_project already set — this reuses
+    that verdict rather than inventing a second one.
+
+    status <> 'active' AND <> 'merged', DELIBERATELY NOT just <> 'active' (found live, this
+    session, running this exact query against production before trusting it: agent:c1b99f6e-
+    vii/seat Werner, last_seen 2 SECONDS old — an actively mounted session, not residue —
+    matched here because its project 'ByeByte' was renamed/consolidated into 'bytebye' via a
+    MERGE, not retired; Werner's own works_in/governs edges had already migrated to
+    repo:bytebye (ACTIVE), but agent_mounts.project is a plain string nothing updates on a
+    rename, so the STALE label still joined to the now-merged object and read as dead. A
+    merge is not a death — the label moved, the project didn't — and the mount's own current
+    graph edges may already know it even when its stale text column doesn't. This is the
+    "rename-carrying-presence-forward primitive is not built" gap (decision d1775472,
+    greenday->redmonth->ballgem) surfacing here as a would-be FALSE DROP; the fix this reaper
+    owns is narrow — never treat a merge as a retirement — the broader primitive stays
+    unbuilt and is not this module's job to invent."""
     rows = await pool.fetch(
         "SELECT m.agent_id, m.project, m.cwd, m.job_dir, m.last_seen, "
         "       p.status AS project_status "
         "FROM agent_mounts m "
         "JOIN objects p ON p.type='SoftwareProject' AND p.canonical = 'repo:' || m.project "
-        "WHERE p.status <> 'active' "
+        "WHERE p.status NOT IN ('active', 'merged') "
         "ORDER BY m.last_seen DESC NULLS LAST"
     )
     return [
