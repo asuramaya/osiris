@@ -1,6 +1,10 @@
-"""The harness tasklist reconciled against the graph, Phase 1 report-only (Thoth DM 2636,
-decisions ab27af61/42f63782). No writes anywhere in this module or these tests — every
-assertion here is about what gets REPORTED, never about a graph mutation."""
+"""The harness tasklist reconciled against the graph. Phase 1 (Thoth DM 2636, decisions
+ab27af61/42f63782) is report-only — reconcile()/resolve_task_citations()/
+parse_thread_citations() never write. The write half (Thoth DM 2722, authorizing the
+three-tier design of DM 2687) is additive/visibility-only by construction: Tier 1 asserts
+correlation facts, never a status; Tier 2 mints review threads, never resolves anything.
+Tier 3 (no status sync, no auto-close, no invented bindings, no touching ~/.claude/tasks)
+needs no test — it is the shape of what Tier 1/2 deliberately do not do."""
 from __future__ import annotations
 
 import uuid
@@ -9,9 +13,13 @@ from datetime import UTC, datetime
 from src.actions.core import Actions
 from src.orchestrator.capture import open_thread
 from src.orchestrator.task_sync import (
+    mint_tier2_threads,
     parse_thread_citations,
     reconcile,
     resolve_task_citations,
+    tier1_targets,
+    tier2_mints,
+    write_tier1_correlations,
 )
 
 NOW = datetime(2026, 8, 1, tzinfo=UTC)
@@ -190,3 +198,109 @@ async def test_reconcile_sees_threads_with_no_in_repo_edge_the_trap_named_in_the
     out = await reconcile(actions.pool, tasks)
     assert [r["task_id"] for r in out["bound"]] == ["1"]
     assert out["bound"][0]["thread_ids"] == [str(tid)]
+
+
+# ── THE WRITE HALF (Thoth DM 2722) ─────────────────────────────────────────────────────
+
+async def _property_rows(actions: Actions, thread_id: uuid.UUID, name: str) -> list[dict]:
+    rows = await actions.pool.fetch(
+        "SELECT source_id, value FROM current_assertions "
+        "WHERE object_id=$1 AND name=$2 ORDER BY source_id", thread_id, name,
+    )
+    return [{"source_id": r["source_id"], "value": r["value"]} for r in rows]
+
+
+def test_tier1_targets_is_bound_plus_bound_partial_resolved_only() -> None:
+    report = {
+        "bound": [{"task_id": "1", "store": "s1", "thread_ids": ["aaa"]}],
+        "bound_partial": [{"task_id": "2", "store": "s2", "thread_ids": ["bbb"],
+                            "failed": [{"citation": "zzz", "why": "no Thread matches"}]}],
+    }
+    assert tier1_targets(report) == [
+        {"task_id": "1", "store": "s1", "thread_id": "aaa"},
+        {"task_id": "2", "store": "s2", "thread_id": "bbb"},
+    ]
+
+
+async def test_write_tier1_correlations_asserts_a_fact_never_a_status(
+    actions: Actions,
+) -> None:
+    tid = await open_thread(actions, "cited cleanly", kind="task", source="agent:me")
+    tasks = [_task("1", f"thread {str(tid)[:8]}", status="completed")]
+    report = await reconcile(actions.pool, tasks)
+    written = await write_tier1_correlations(actions, report, observed_at=NOW)
+    assert written == [{"task_id": "1", "store": None, "thread_id": str(tid),
+                         "source_id": "harness:1"}]
+    rows = await _property_rows(actions, tid, "harness_task_citation")
+    assert len(rows) == 1
+    assert rows[0]["source_id"] == "harness:1"
+    assert rows[0]["value"] == {"task_id": "1", "store": None}
+    # never touches status — the thread's own status property is untouched
+    status_rows = await _property_rows(actions, tid, "status")
+    assert len(status_rows) == 1  # the single row open_thread itself wrote, nothing added
+
+
+async def test_write_tier1_correlations_per_citing_task_source_lets_citations_coexist(
+    actions: Actions,
+) -> None:
+    """The part of the design Thoth said he'd defend hardest: two different (task, store)
+    pairs citing the SAME thread must both survive as distinct current rows, never one
+    silently overwriting the other the way a shared source would (current_assertions
+    resolves one winner per object+name+SOURCE)."""
+    tid = await open_thread(actions, "cited by two different tasks", source="agent:me")
+    tasks = [
+        {"id": "1", "subject": "x", "description": f"thread {str(tid)[:8]}",
+         "status": "pending", "_store": "storeA"},
+        {"id": "9", "subject": "x", "description": f"thread {str(tid)[:8]}",
+         "status": "pending", "_store": "storeB"},
+    ]
+    report = await reconcile(actions.pool, tasks)
+    await write_tier1_correlations(actions, report, observed_at=NOW)
+    rows = await _property_rows(actions, tid, "harness_task_citation")
+    assert {r["source_id"] for r in rows} == {"harness:storeA:1", "harness:storeB:9"}
+
+
+def test_tier2_mints_is_pure_and_deterministic() -> None:
+    report = {
+        "disagreement": [{"task_id": "1", "store": "s1",
+                           "thread_id": "aaaaaaaa-0000-0000-0000-000000000000",
+                           "task_status": "completed", "thread_property_status": "open"}],
+        "thread_side_orphans": [{"thread_id": "bbbbbbbb-0000-0000-0000-000000000000"}],
+    }
+    first = tier2_mints(report)
+    second = tier2_mints(report)
+    assert first == second  # same input -> byte-identical summaries, every time
+    assert len(first) == 2
+    assert first[0]["kind"] == "obligation"
+    assert "DISAGREEMENT" in first[0]["summary"] and "aaaaaaaa" in first[0]["summary"]
+    assert "ORPHAN" in first[1]["summary"] and "bbbbbbbb" in first[1]["summary"]
+
+
+async def test_mint_tier2_threads_creates_review_threads_never_touching_status(
+    actions: Actions,
+) -> None:
+    disputed = await open_thread(actions, "the disputed thread", source="agent:me")
+    report = {
+        "disagreement": [{"task_id": "1", "store": "s1", "thread_id": str(disputed),
+                           "task_status": "completed", "thread_property_status": "open"}],
+        "thread_side_orphans": [],
+    }
+    mints = tier2_mints(report)
+    out = await mint_tier2_threads(actions, mints)
+    assert len(out) == 1
+    review_id = uuid.UUID(out[0]["thread_id"])
+    assert review_id != disputed  # a NEW thread, not a rewrite of the disputed one
+    kind_rows = await _property_rows(actions, review_id, "kind")
+    assert kind_rows[0]["value"] == "obligation"
+    # the disputed thread's own status is untouched by minting a review of it
+    disputed_status = await _property_rows(actions, disputed, "status")
+    assert disputed_status[0]["value"] == "open"
+
+
+async def test_mint_tier2_threads_is_idempotent_on_rerun(actions: Actions) -> None:
+    orphan = await open_thread(actions, "an orphan", kind="task", source="agent:me")
+    report = {"disagreement": [], "thread_side_orphans": [{"thread_id": str(orphan)}]}
+    mints = tier2_mints(report)
+    first = await mint_tier2_threads(actions, mints)
+    second = await mint_tier2_threads(actions, mints)
+    assert first[0]["thread_id"] == second[0]["thread_id"]  # collapses, never duplicates

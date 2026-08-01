@@ -51,9 +51,14 @@ from __future__ import annotations
 
 import re
 import uuid
+from datetime import datetime
 from typing import Any
 
 import asyncpg
+
+from src.actions.core import Actions
+from src.parsers.base import EvidenceClass
+from src.parsers.evidence import confidence_for
 
 # A citation is an 8-hex-char token named near the word "thread"/"threads" in free text —
 # the dominant real shape found in this house's own task descriptions ("Graph thread
@@ -242,3 +247,123 @@ async def reconcile(
             "thread_side_orphans": len(thread_side_orphans),
         },
     }
+
+
+# ── THE WRITE HALF (Thoth DM 2722, authorizing the three-tier design of DM 2687) ─────────
+#
+# TIER 1 — additive-only correlation facts, never a status. Safe to auto-execute: being
+# wrong here is inert (nothing consumes this property yet) and self-correcting (a later
+# assertion supersedes it). Property, not a link type (Thoth's ruling, DM 2722: a property
+# is reversible with no schema change; a LinkType is a permanent vocabulary commitment,
+# and the operator's pending `claim`/`supported_by` reshape (22d47acb) may make this a link
+# BY CONSTRUCTION later — promoting a property to a link is cheap, demoting a LinkType is
+# not).
+#
+# TIER 2 — visibility only, via open_thread (fully reversible: resolve_thread later).
+# NEVER touches either side's status. Split into a PURE summary-generator (tier2_mints)
+# and a side-effecting executor (mint_tier2_threads) on purpose: Thoth's gate is on SCALE,
+# not distrust — 40 disagreement + 13 orphan rows is 53 new threads onto a board already
+# hard to read, so the summaries must be reviewed before they are minted, not after.
+#
+# TIER 3 (never auto-write: no status sync either direction, no auto-closing orphans, no
+# inventing bindings for uncited/cited_unresolvable, nothing written to ~/.claude/tasks, no
+# repo-scoped thread enumeration) needs no code — it is the shape of what these two
+# functions deliberately do NOT do.
+
+_SOURCE = "task_sync"
+_CORRELATION_PROPERTY = "harness_task_citation"
+
+
+def _correlation_source_id(task_id: str, store: str | None) -> str:
+    """Deterministic, per CITING TASK (not shared) — current_assertions resolves one
+    winner per (object, name, SOURCE), so a shared source would let a second task citing
+    the same Thread silently overwrite the first task's citation. Per-citation sourcing
+    lets N simultaneous citations of one Thread coexist by the graph's own multi-source
+    mechanic instead of fighting it (Thoth, DM 2722: "the part of this design I would
+    defend hardest")."""
+    return f"harness:{store}:{task_id}" if store is not None else f"harness:{task_id}"
+
+
+def tier1_targets(report: dict[str, Any]) -> list[dict[str, Any]]:
+    """Pure. Every (task_id, store, thread_id) TIER 1 may bind: `bound` rows in full,
+    `bound_partial` rows' RESOLVED half only — their failed citations stay refused, never
+    invented (Tier 3). No writes."""
+    targets: list[dict[str, Any]] = []
+    for row in report["bound"] + report["bound_partial"]:
+        for tid in row["thread_ids"]:
+            targets.append(
+                {"task_id": row["task_id"], "store": row.get("store"), "thread_id": tid}
+            )
+    return targets
+
+
+async def write_tier1_correlations(
+    actions: Actions, report: dict[str, Any], *, observed_at: datetime,
+) -> list[dict[str, Any]]:
+    """Execute TIER 1: one `harness_task_citation` property assertion per target from
+    `tier1_targets`, value {"task_id", "store"}, evidence_class=SELF_DECLARED — the
+    citation was declared by the task's own author in its own free text; this only
+    captures it durably, it does not infer or guess it (an ambiguous or unmatched citation
+    already refused upstream, in resolve_task_citations, never reaches this function).
+    Never writes a status. Never touches ~/.claude/tasks. Returns one receipt per write."""
+    conf = confidence_for(EvidenceClass.SELF_DECLARED)
+    written: list[dict[str, Any]] = []
+    for target in tier1_targets(report):
+        source_id = _correlation_source_id(target["task_id"], target["store"])
+        await actions.assert_property(
+            uuid.UUID(target["thread_id"]), _CORRELATION_PROPERTY,
+            {"task_id": target["task_id"], "store": target["store"]},
+            source_id, observed_at, conf,
+            evidence_class=EvidenceClass.SELF_DECLARED.value,
+        )
+        written.append({**target, "source_id": source_id})
+    return written
+
+
+def tier2_mints(report: dict[str, Any]) -> list[dict[str, Any]]:
+    """Pure. The visibility-thread {"kind", "summary", "row"} TIER 2 WOULD mint for every
+    disagreement + thread_side_orphans row — one per row, summary built deterministically
+    from (task_id, store, thread_id, statuses) so a rerun dedupes through open_thread's own
+    idempotent-on-summary matching instead of spamming the board on every dry run. Executes
+    nothing — see `mint_tier2_threads` for the side-effecting half, deliberately separate
+    (Thoth, DM 2722: dry-run and show the actual summaries before executing; the gate is
+    scale — 53 new threads onto a board the operator already called unreadable — not
+    distrust of the design)."""
+    mints: list[dict[str, Any]] = []
+    for d in report["disagreement"]:
+        store_label = d.get("store") if d.get("store") is not None else "?"
+        summary = (
+            f"TASK/THREAD DISAGREEMENT: harness task {d['task_id']} (store {store_label}) "
+            f"says status={d['task_status']!r}; Thread {d['thread_id'][:8]} carries "
+            f"property_status={d['thread_property_status']!r}. task_sync never resolves "
+            f"this automatically (Tier 3) — needs a human/agent look."
+        )
+        mints.append({"kind": "obligation", "summary": summary, "row": d})
+    for o in report["thread_side_orphans"]:
+        summary = (
+            f"THREAD SIDE ORPHAN: Thread {o['thread_id'][:8]} carries kind=task but no "
+            f"harness task cites it (task_sync dry run). Stale, or the harness lost track "
+            f"of it — task_sync never auto-closes an orphan, needs a human/agent look."
+        )
+        mints.append({"kind": "obligation", "summary": summary, "row": o})
+    return mints
+
+
+async def mint_tier2_threads(
+    actions: Actions, mints: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Execute TIER 2: one open_thread(kind='obligation', arc='Fleet-Hygiene') per mint
+    from `tier2_mints`. DO NOT CALL against production data without the summaries having
+    been reviewed first — see this module's own write-half note and Thoth DM 2722. A rerun
+    is safe: open_thread is idempotent on the exact summary string, so an unchanged
+    disagreement/orphan collapses onto the same Thread instead of duplicating. Returns one
+    {"summary", "thread_id"} receipt per mint."""
+    from src.orchestrator.capture import open_thread
+
+    out: list[dict[str, Any]] = []
+    for m in mints:
+        tid = await open_thread(
+            actions, m["summary"], kind=m["kind"], arc="Fleet-Hygiene", source=_SOURCE,
+        )
+        out.append({"summary": m["summary"], "thread_id": str(tid)})
+    return out
