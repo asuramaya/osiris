@@ -337,6 +337,28 @@ _agents_touched: dict[str, float] = {}  # last use per key — feeds the bounce-
 # mount/reattach (captured from save_mount's RETURNING). mount() and orient() fold what
 # happened in the agent's name since — twins, wakes, thread movement — so a returning tab
 # never has to guess where it stands ("the agents have to know, or it falls apart").
+#
+# DELIBERATELY UNBOUNDED (Thoth DM 2795, OOM follow-up, 2026-08-01) — its three siblings
+# below (_seam_rows/_seam_pcts/sessions._wake_verdict) got a cap=256/4096 LRU prune; this one
+# did not, on purpose. It fails a different way than they do:
+#   (a) NO SELF-HEALING RE-FETCH ON A MISS. The other three recompute the correct answer from
+#       an authoritative source when evicted — a cache miss costs one query, never a wrong
+#       result. This one cannot: while_away()'s own contract treats a missing anchor as
+#       IDENTICAL to "nothing happened while you were away" (its own docstring's words), so a
+#       pruned entry doesn't error or degrade visibly — it silently reports the wrong thing as
+#       if it were the right thing. Tonight's whole thesis is instruments that report success
+#       while actually failing; a churn-based cap here would trade a bounded, loud failure
+#       (the process grows and eventually dies visibly) for an unbounded, silent one.
+#   (b) READ ACROSS A SESSION'S WHOLE LIFETIME, not just near mount. orient() reads it on
+#       every call, for as long as the mounted session lives — so its real required lifetime
+#       is "as long as the session lives," which a count-based LRU cap has no way to guarantee
+#       (a busy fleet could evict a still-live session's own anchor before that session's next
+#       orient() call).
+# If this ever needs bounding, the correct shape is a TTL long enough to outlive any real
+# session (hours-to-days, not a churn cap sized to entry count) — never the _prune_agents
+# pattern used on its neighbors. It is also the smallest and least frequently written of the
+# four (setdefault, not overwrite), so the cost of leaving it unbounded is the lowest of the
+# four to begin with.
 _prev_seen: dict[str, datetime | None] = {}
 
 
