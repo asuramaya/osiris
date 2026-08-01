@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from src.actions.core import Actions
-from src.orchestrator.capture import open_thread, record_decision, resolve_thread
+from src.orchestrator.capture import open_thread, record_decision
 from src.orchestrator.settle import (
     charter_touched,
     closure_edge_coverage,
@@ -201,16 +201,22 @@ async def test_closure_edge_coverage_counts_resolved_threads_and_their_edges(
     actions: Actions,
 ) -> None:
     """One thread closed WITH a traversable edge (record_decision's own resolves=), one
-    closed WITHOUT one (a bare resolve_thread, no artifact) — coverage counts both as
-    resolved this session but only the first as edged, the exact asymmetry cb38d922
-    measured (527 resolved osiris-wide, only 119 edged)."""
+    resolved WITHOUT any closing verb at all (a raw status property write, the shape a
+    pre-Phase-1a/legacy or miner-inferred closure still takes) — coverage counts both as
+    resolved this session but only the first as edged. Since Phase 1a (23c5991) + Phase 2b
+    (closed_by wired into thread_closure_edges, migration 0044), resolve_thread() itself
+    ALWAYS mints some edge, so it can no longer produce the unedged case on its own — the
+    asymmetry cb38d922 measured now lives in closures that bypass the sanctioned verbs
+    entirely, not in resolve_thread's artifact-less path."""
     agent = "agent:cec02"
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
     edged_thread = await open_thread(actions, "cec02's thread that gets an edge", source=agent)
-    bare_thread = await open_thread(actions, "cec02's thread that stays bare", source=agent)
+    bare_thread = await open_thread(actions, "cec02's thread resolved by raw property, "
+                                    "no closing verb", source=agent)
     await record_decision(actions, "cec02's ruling that answers the first thread",
                           resolves=str(edged_thread)[:8], source=agent)
-    await resolve_thread(actions, str(bare_thread)[:8], source=agent)
+    await actions.assert_property(bare_thread, "status", "resolved", agent,
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
 
     out = await closure_edge_coverage(actions.pool, agent_id=agent, mounted_at=mounted_at)
     assert out == {"resolved_this_session": 2, "with_closure_edge": 1}
@@ -622,8 +628,11 @@ async def test_settle_tool_surfaces_closure_coverage_without_blocking_complete(
     """Report-only, same discipline as identity_coherence: 'this session resolved N
     threads; M of them now carry a closure edge' — computed AFTER the batch dispatch so it
     reflects edges wired by this very call too. Deliberately PARTIAL coverage here (one
-    bare thread from earlier this session, one freshly edged by this call) proves the
-    field never gates `complete`, however incomplete the coverage looks."""
+    thread resolved by a raw status write, no closing verb, earlier this same session; one
+    freshly edged by this call) proves the field never gates `complete`, however incomplete
+    the coverage looks. resolve_thread() itself can no longer produce the unedged case
+    since Phase 1a's closed_by fallback + Phase 2b's view wiring (migration 0044) — see
+    test_closure_edge_coverage_counts_resolved_threads_and_their_edges above."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
     from src.orchestrator.mounts import save_mount
@@ -638,7 +647,8 @@ async def test_settle_tool_surfaces_closure_coverage_without_blocking_complete(
     (tmp_path / "charter.md").write_text("# notes\n")
     bare_thread = await open_thread(actions, "settlecc1's thread resolved bare, earlier "
                                     "this same session", source=agent)
-    await resolve_thread(actions, str(bare_thread)[:8], source=agent)
+    await actions.assert_property(bare_thread, "status", "resolved", agent,
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
     thread_id = await open_thread(actions, "settlecc1's thread, resolved WITH an edge "
                                   "by this call", source=agent)
 

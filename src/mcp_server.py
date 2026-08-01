@@ -3684,70 +3684,49 @@ async def record_decision(
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Write back a DECISION you made this session — a ruling, an architecture pivot, a
-    deliberate rejection — so the WHY becomes durable graph memory the next session inherits
-    (don't leave it to be regex-mined out of some future commit; the epochal ones never land
-    in a commit at all). `kind`: ruling|reset|override|rejection|choice|decision. `rationale`
-    = the reasoning; `repo` = a SoftwareProject name to file it under. `grounds` cites the
-    References the decision rests on (ids, ref:<slug> canonicals, or titles — ingest them
-    first with ingest_reference): grounded_by edges minted at birth, so the WHY carries its
-    citations. `protocol` = the INVOCATION that produced the finding — the exact command
-    line, seeds, thresholds, bucket edges — so a successor RERUNS instead of re-deriving
-    (a ruling that only states the conclusion is a sibling project's biggest re-derivation class).
+    deliberate rejection — so the WHY becomes durable graph memory the next session inherits.
+    `kind`: ruling|reset|override|rejection|choice|decision. `rationale` = the reasoning;
+    `repo` = a SoftwareProject name to file it under. `grounds` cites the References the
+    decision rests on (ids, ref:<slug> canonicals, or titles — ingest them first with
+    ingest_reference): grounded_by edges minted at birth. `protocol` = the INVOCATION that
+    produced the finding — the exact command line, seeds, thresholds, bucket edges — so a
+    successor RERUNS instead of re-deriving; a ruling that states only the conclusion invites
+    exactly that re-derivation.
     `supersedes` = an earlier decision this one CORRECTS (UUID, 8-char short id, or a
-    summary substring): the old entry is buried under this one — it leaves orient's
-    recent list and the decision-log grays it with its successor; never deleted, always
-    unwindable. Renders in the `decision-log` composition beside mined decisions, graded
-    SELF_DECLARED (higher trust). Attributed to you if you mount()ed. Idempotent on the
-    summary.
+    summary substring): the old entry is buried under this one — it leaves orient's recent
+    list and the decision-log grays it with its successor; never deleted, always unwindable.
+    Idempotent on the summary.
     `resolves` = the THREAD(s) this decision ANSWERS — UUID, canonical, or 8-char short id
-    ONLY (msg 2426: no longer a free-text summary match — 5 documented instances of a
-    stray-but-VALID id closing the wrong thread means an addressing act must name its
-    target exactly, never guess from prose; #117's law, "the cure is REFUSE, not widen").
-    It closes them in the same act. USE IT whenever your ruling settles an open question —
-    otherwise the answer lands and the question stays lit, and the next mind (or the
-    operator) is asked something you already decided. Naming the thread in your prose does
-    nothing; the graph does not read prose.
-    THE SAME-TURN CATCH: no matcher can refuse a valid id that simply names the WRONG
-    thread — the receipt (`resolved_thread`, or per-entry in `resolved_threads` for the
-    list form) always carries the matched thread's own summary, so a mis-citation is
-    visible in the SAME turn instead of found by a human re-reading it later.
-    A LIST folds the whole SET a delegation supersedes in one act (§4.7, Maat's ask —
-    "thread ownership doesn't transfer with a delegation" left her hand-closing threads
-    twice, by hand, across two sessions, because the single form could only ever name one).
-    Each entry resolves INDEPENDENTLY: the response's `resolved_threads` names, per entry,
-    exactly what closed (id + summary) or that it matched NOTHING — a pattern that closes
-    zero threads is reported, never silently swallowed. Unlike a single string, an unmatched
-    entry inside a list does NOT abort the whole ruling (one typo must not veto the other
-    nine); a single STRING keeps the original strictness byte-for-byte — matches nothing →
-    the call errors and NOTHING is recorded.
-    `obsoletes` = the WORKAROUND(s) this fix kills (thread a9be40c9: the half-life of a
-    workaround outlives its bug — it propagates through letters, succession notes and agent
-    memory as inherited law long after the fix lands). Quote each as it PROPAGATES (the
-    words agents actually inherit, e.g. 'NEVER DM BY NAME'); each is minted a dead
-    Superstition, searchable forever, and orient announces recent kills FLEET-WIDE so any
-    mind whose memory carries the practice strikes it. USE IT whenever your fix makes a
-    known workaround unnecessary — a fix that kills a practice silently leaves every heir
-    paying a bug tax that no longer exists.
-    `confirms` = the Practice(s) this decision RE-DERIVES (THE THAW, ruling 1e6d7367): a
-    `witnesses` link is minted to each — NEVER automatic on a mere topical match, the same
-    discipline grounds/obsoletes/supersedes already follow. Resolves like `resolves`'s
-    list form: each entry independent, a miss reported not fatal. `confirmed` (the
-    composition's count) is this link count, read at query time — nothing else increments it.
+    ONLY, never a free-text/prose match: an addressing act must name its target exactly, or
+    it refuses. It closes the thread(s) in the same act. USE IT whenever your ruling settles
+    an open question — otherwise the answer lands and the question stays lit. Naming the
+    thread in your prose does nothing; the graph does not read prose. No matcher can refuse
+    a valid id that simply names the WRONG thread — the receipt (`resolved_thread`, or
+    per-entry `resolved_threads` for the list form) always carries the matched thread's own
+    summary, so a mis-citation is visible in the SAME turn.
+    A LIST folds a whole SET in one act. Each entry resolves INDEPENDENTLY: `resolved_threads`
+    names, per entry, exactly what closed (id + summary) or that it matched NOTHING — reported,
+    never silently swallowed. An unmatched entry inside a list does NOT abort the rest (one
+    typo must not veto the other nine); a single STRING keeps the original all-or-nothing
+    strictness — matches nothing → the call errors and NOTHING is recorded.
+    `obsoletes` = the WORKAROUND(s) this fix kills. Quote each as it PROPAGATES (the words
+    agents actually inherit, e.g. 'NEVER DM BY NAME'); each is minted a dead Superstition,
+    searchable forever, and orient announces recent kills FLEET-WIDE so any mind carrying the
+    practice strikes it. USE IT whenever your fix makes a known workaround unnecessary.
+    `confirms` = the Practice(s) this decision RE-DERIVES: a `witnesses` link is minted to
+    each — NEVER automatic on a mere topical match. Resolves like `resolves`'s list form:
+    each entry independent, a miss reported not fatal. `confirmed` (the composition's count)
+    is this link count, read at query time.
     `refutes` = a Practice this decision DISPROVES (UUID, 8-char short id, or a statement
-    substring): converts it to a dead Superstition, same kill-verb `obsoletes` uses,
-    reusing the Practice's own statement. The Practice itself stays ACTIVE carrying
-    `refuted_by` — never retired, because a half-remembered refuted lesson is exactly what
-    must stay findable. Same strictness as `supersedes`: a target that matches nothing
-    errors and NOTHING is recorded.
-    `implements` = a standing Decision (a ruling) this one is a SPECIFIC EXECUTION of —
-    the parent stays alive, unlike `supersedes` (thread 169398d6's third path: the
-    commonest true relation to a matched standing law is neither supersede nor cite, and
-    `grounds` can't express it since it takes References, not Decisions). Same strictness
-    as `supersedes`.
+    substring): converts it to a dead Superstition, reusing the Practice's own statement. The
+    Practice stays ACTIVE carrying `refuted_by` — never retired, so a half-remembered refuted
+    lesson stays findable. Same strictness as `supersedes`: a target matching nothing errors
+    and NOTHING is recorded.
+    `implements` = a standing Decision this one is a SPECIFIC EXECUTION of — the parent stays
+    alive, unlike `supersedes`. Same strictness as `supersedes`.
     `ack_prior_art` = when this call's own `prior_art_flag` fires and none of supersedes/
-    implements/confirms/grounds already answers it, pass True to record the dismissal
-    ('related standing law, reviewed, no action needed') as a graph event instead of a
-    shrug that leaves no trace."""
+    implements/confirms/grounds already answers it, pass True to record the dismissal as a
+    graph event instead of a shrug that leaves no trace."""
     pool = await _pool_get()
     gids: list[uuid.UUID] = []
     grounded: list[dict[str, str]] = []
@@ -4367,7 +4346,7 @@ async def settle(
     session calls at every seam before compaction, so nothing it knows lives only in a
     context about to be destroyed. COMPOSES record_decision/open_thread/resolve_thread —
     never reimplements their writes — plus the same completeness boxes the Stop hook's
-    offload ritual checks (now one shared implementation, src.orchestrator.settle).
+    offload ritual checks (one shared implementation, src.orchestrator.settle).
 
     Call with NO arguments to just SURFACE status (safe, read-only — the boxes, and your
     own open obligations fleet-wide). Call WITH `decisions`/`threads_open`/`threads_resolve`
@@ -4377,53 +4356,41 @@ async def settle(
     verb, unchanged, then CONFIRMS by re-checking the boxes and your obligations against the
     now-updated graph. `complete` is only true when nothing is left explicitly unwritten.
 
-    A bad `decisions`/`threads_open` item (task #107's fork, e.g. a path-shaped `repo`)
-    NEVER sinks the rest of the dump — settle is the end-of-context ritual; a whole-batch
-    abort here would lose everything ELSE in the same call, exactly the failure this verb
-    exists to prevent. Each dropped item lands in `rejected` (kind/summary/error — the same
-    "name what was wrong" shape record_decision/open_thread already raise), and `complete`
-    reads False whenever `rejected` is non-empty: a dropped item is unwritten state, same
-    class as a missing box, never a silent partial accept.
+    A bad `decisions`/`threads_open` item (e.g. a path-shaped `repo`) NEVER sinks the rest
+    of the dump — a whole-batch abort would lose everything ELSE in the same call, exactly
+    the failure this verb exists to prevent. Each dropped item lands in `rejected` (kind/
+    summary/error), and `complete` reads False whenever `rejected` is non-empty: a dropped
+    item is unwritten state, same class as a missing box, never a silent partial accept.
 
-    `is_handoff: true` on a decision or thread item MINTS A STRUCTURED HANDOFF MARKER on
-    that object (a typed property, not a summary text the reader greps for — the ROOT
-    fragility behind every 'Thoth II'-style mislabel this house has hit): your successor's
-    orient() finds it directly, no ILIKE guess on the word 'handoff' required. Idempotent
-    and safe to call repeatedly through a session — later calls only add to what's already
-    written, never duplicate it (same discipline as record_decision/open_thread).
+    `is_handoff: true` on a decision or thread item MINTS A STRUCTURED HANDOFF MARKER (a
+    typed property, not a summary text the reader greps for) on that object: your
+    successor's orient() finds it directly. Idempotent and safe to call repeatedly through
+    a session — later calls only add to what's already written, never duplicate it.
 
     SURFACE also runs `git status --porcelain` (`uncommitted_git_files` in the receipt) —
-    the one box that isn't in the graph (operator ruling, 2026-07-26: an agent asked 'safe
-    to compact?' had to check this by hand). PASS `repo_path` NAMING YOUR CODE REPO — your
+    the one box that isn't in the graph. PASS `repo_path` NAMING YOUR CODE REPO — your
     mounted cwd is checked ONLY as a fallback, and for a seat-office agent (most of this
-    fleet) that cwd is the OFFICE, never the repo it governs (CLAUDE.md: 'code lives
-    elsewhere'), so an office-mounted call with no `repo_path` reads None here even with a
-    dirty tree sitting uncommitted in your actual repo — the exact gap that motivated this
-    box in the first place (Thoth, msg 1381). The receipt's `git_checked_path` names
-    whichever directory was actually used, so you can tell at a glance whether it's the
-    right one. None on `uncommitted_git_files` means unevaluable there (no repo at that
-    path) and never blocks `complete`; a non-empty list does.
+    fleet) that cwd is the OFFICE, never the repo it governs, so an office-mounted call
+    with no `repo_path` reads None here even with a dirty tree sitting uncommitted in your
+    actual repo. The receipt's `git_checked_path` names whichever directory was actually
+    used. None on `uncommitted_git_files` means unevaluable there (no repo at that path)
+    and never blocks `complete`; a non-empty list does.
 
-    PHASE 1b (decision cb38d922, DM 2506): "78% OF CLOSURES LEAVE NO TRAVERSABLE TRACE" —
-    the closure verb (resolves=/artifact=) is used constantly but the EDGE it can mint is
-    an optional kwarg most callers never pass. settle already holds `decisions` and
-    `threads_resolve` in the SAME payload — BOTH halves of a relationship — so it wires the
-    edge itself instead of dropping it: when a decision in THIS call answers a thread (its
-    own `resolves=`) that a `threads_resolve` item in THIS SAME call also names, and that
-    item did not already carry its own `artifact`, settle fills it in — record_decision's
-    `resolves=` already mints the `answers` edge (Decision->Thread); this makes
-    `resolve_thread` also mint the reverse `resolved_by` edge (Thread->Decision), so the
-    pair carries BOTH. CONSERVATIVE BY DESIGN: no summary/prose matching, no cross-product
-    of every decision against every resolution — only a pair the payload itself already
-    establishes gets wired; anything else mints nothing, silently, exactly as before. Each
-    wired `threads_resolved` receipt entry carries `closure_edge_wired_to_decision`; the
-    top-level `closure_edges_wired` count says so even when it's zero.
+    PHASE 1b (decision cb38d922): settle already holds `decisions` and `threads_resolve` in
+    the SAME payload — both halves of a relationship — so it wires the closure edge itself
+    instead of dropping it: when a decision in THIS call answers a thread (its own
+    `resolves=`) that a `threads_resolve` item in THIS SAME call also names, and that item
+    carries no `artifact` of its own, settle fills it in. record_decision's `resolves=`
+    already mints `answers` (Decision->Thread); this makes `resolve_thread` also mint
+    `resolved_by` (Thread->Decision), so the pair carries BOTH. CONSERVATIVE BY DESIGN: no
+    prose matching, no cross-product — only a pair the payload itself establishes gets
+    wired; anything else mints nothing. Each wired `threads_resolved` entry carries
+    `closure_edge_wired_to_decision`; the top-level `closure_edges_wired` count says so even
+    at zero.
 
     `closure_coverage` (report-only, same discipline as `identity_coherence`, never gates
-    `complete`) surfaces this SESSION's own running total, not just this one call: how many
-    threads this session has resolved (winning status, not raw event history) and how many
-    of those now carry ANY closure edge — the feedback loop that lets a settling session
-    see its own contribution to the graph's traversability grow, call over call."""
+    `complete`) surfaces this SESSION's running total: how many threads this session has
+    resolved and how many of those now carry a closure edge."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — settle is a mind's own ritual, the graph must "
