@@ -313,8 +313,13 @@ async def test_miner_never_writes_onto_capture_owned_objects(actions: Actions) -
 
 
 async def test_resolution_touches_only_threads_the_miner_opened(actions: Actions) -> None:
+    """Phase 1a/2 follow-up (Thoth DM 2581, decision cb38d922/fc5b6c5f): this miner no
+    longer CLOSES anything — its evidence (an LLM's extraction of a transcript, matched by
+    raw token overlap) is too weak to write a definitive status, so it flags a rot_candidate
+    instead, the same discipline close_by_commits' own weak tier already uses. The ownership
+    boundary (never touching a session-owned thread) still holds regardless."""
     session_summary = "prune the internal-URL spread in url_fetch to profile-shaped only"
-    await open_thread(actions, session_summary)  # session-owned: not the miner's to close
+    await open_thread(actions, session_summary)  # session-owned: not the miner's to touch
     y = SessionYield(threads_opened=["repair the searxng container settings mount"])
     await emit_yield(actions, y, repo=None)
 
@@ -323,31 +328,37 @@ async def test_resolution_touches_only_threads_the_miner_opened(actions: Actions
         "pruned the internal-URL spread in url_fetch to profile-shaped only",
     ])
     counts = await emit_yield(actions, done, repo=None)
-    assert counts["resolved"] == 1  # its own thread only
+    assert counts["resolve_candidates"] == 1  # its own thread only
 
     status = await actions.pool.fetch(
         "SELECT o.canonical, "
         " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "  AND a.name='status') AS status, "
         " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='summary') AS summary "
+        "  AND a.name='summary') AS summary, "
+        " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='rot_candidate') AS rot_candidate "
         "FROM objects o WHERE o.type='Thread'"
     )
-    by_summary = {r["summary"]: r["status"] for r in status}
-    assert by_summary[session_summary] == "open"  # the boundary held
-    assert by_summary["repair the searxng container settings mount"] == "resolved"
+    by_summary = {r["summary"]: r for r in status}
+    assert by_summary[session_summary]["status"] == "open"  # the boundary held
+    # the miner's own thread never gets a definitive status either -- only a candidate flag
+    assert by_summary["repair the searxng container settings mount"]["status"] == "open"
+    assert by_summary["repair the searxng container settings mount"]["rot_candidate"]
 
 
 async def test_same_excerpt_open_and_resolve_does_not_close(actions: Actions) -> None:
     """Live receipt: the model opened a PLANNED task and resolved it in the same breath
-    (a plan discussed is not work completed). A thread must survive its own excerpt."""
+    (a plan discussed is not work completed). A thread must survive its own excerpt.
+    "Close" here means flag-as-candidate (this miner never writes status, see decision
+    fc5b6c5f) — the survival law is unchanged, only what happens once it survives is."""
     y = SessionYield(threads_opened=["ingest the design essays as canon nodes"],
                      threads_resolved=["ingested the design essays as canon nodes"])
     counts = await emit_yield(actions, y, repo=None)
-    assert counts["threads"] == 1 and counts["resolved"] == 0
-    # the NEXT excerpt showing completion may close it
+    assert counts["threads"] == 1 and counts["resolve_candidates"] == 0
+    # the NEXT excerpt showing completion may flag it
     later = SessionYield(threads_resolved=["ingested the design essays as canon nodes"])
-    assert (await emit_yield(actions, later, repo=None))["resolved"] == 1
+    assert (await emit_yield(actions, later, repo=None))["resolve_candidates"] == 1
 
 
 async def test_resolve_own_threads_skips_a_thread_with_a_resolved_winner(
@@ -373,11 +384,11 @@ async def test_resolve_own_threads_skips_a_thread_with_a_resolved_winner(
                                   confidence_for(EvidenceClass.SELF_DECLARED),
                                   evidence_class=EvidenceClass.SELF_DECLARED.value)
 
-    # the miner senses a later excerpt reporting the same work done — it must NOT re-resolve
+    # the miner senses a later excerpt reporting the same work done — it must NOT re-flag it
     done = SessionYield(threads_resolved=[
         "pruned the internal-URL spread in url_fetch to profile-shaped only"])
     counts = await emit_yield(actions, done, repo=None)
-    assert counts["resolved"] == 0
+    assert counts["resolve_candidates"] == 0
 
 
 async def test_multi_source_properties_do_not_kill_the_tick(actions: Actions) -> None:

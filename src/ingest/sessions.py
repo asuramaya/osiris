@@ -920,7 +920,22 @@ async def _resolve_own_threads(
     actions: Actions, resolved: list[str], observed: datetime,
     *, exclude: set[Any] | None = None, writer: str = _SOURCE,
 ) -> int:
-    """Close open threads the miner ITSELF opened when the yield says they finished.
+    """FLAG open threads the miner ITSELF opened when the yield says they finished — NEVER
+    close them (Thoth DM 2581, decision cb38d922/fc5b6c5f, the second live edgeless-closure
+    gap Phase 1a didn't cover). This used to write status='resolved' directly, unconditionally,
+    on every match, exactly the pattern cb38d922 measured as 78% untraceable — and on
+    reflection this source's evidence is the WEAKEST of everything discussed that reign: an
+    LLM's own extraction of "what a transcript accomplished" (already DERIVED, never
+    testimony — see `_EC` above), matched to a thread by a raw ≥2-shared-token count, is two
+    layers of inference removed from a mind deliberately closing something. Even
+    close_by_commits' OWN weak tier (ingest/closure.py) is a single inference layer with an
+    IDF-weighted score; this was writing a DEFINITIVE property from a cruder signal than that
+    miner refuses to persist without a human's confirmation. Demoted to the same discipline:
+    a `rot_candidate` property, never `status`, so a mind confirms it via the real
+    resolve_thread() before it counts as closed — and, structurally, this source can now
+    NEVER contribute to cb38d922's ratchet metric (resolved-with-no-edge) again, since it no
+    longer writes `resolved` at all.
+
     Owned-only (defining-assertion ownership) — a session's or the git miner's thread is
     never this miner's to close — and conservative: ≥2 shared distinctive tokens, best
     overlap wins (the same bar `threads.resolve_threads` uses, behind the same boundary).
@@ -928,8 +943,8 @@ async def _resolve_own_threads(
     thread ONLY this session's DERIVED echo authored — never a deliberate (SELF_DECLARED)
     thread, even the same agent's, and never another source's (the negation of _foreign_owned).
     `exclude` = threads opened in THIS SAME emit: a thread must survive its own excerpt
-    before it can be resolved (live run: the model opened a *planned* task and resolved
-    it in the same breath — a plan discussed is not work completed)."""
+    before it is even a candidate (live run: the model opened a *planned* task and reported
+    it finished in the same breath — a plan discussed is not work completed)."""
     # "Open" is the WINNING status (winning_props, migration 0015: grade DESC, then recency),
     # not a bare EXISTS(status='open') — a thread already resolved at a higher grade, still
     # carrying this miner's stale DERIVED 'open', must read as resolved and be left alone.
@@ -957,14 +972,14 @@ async def _resolve_own_threads(
         if best is None:
             continue
         tid = best[1]["id"]
-        # source = the originating agent (the closure is a mined reading of ITS session);
-        # value 'session-miner' records the MINER as the resolver; actor keeps the audit honest.
-        await actions.assert_property(tid, "status", "resolved", writer, observed, _CONF,
-                                      evidence_class=_EC, actor=_SOURCE)
-        await actions.assert_property(tid, "resolved_in", "session-miner", writer,
-                                      observed, _CONF, evidence_class=_EC, actor=_SOURCE)
-        await actions.assert_property(tid, "resolved_because", text[:300], writer,
-                                      observed, _CONF, evidence_class=_EC, actor=_SOURCE)
+        # NEVER status — a candidate, same shape close_by_commits' own weak tier already
+        # uses (rot_candidate), so a mind confirms it via resolve_thread() before it counts.
+        # source = the originating agent (the candidate is a mined reading of ITS session);
+        # value 'session-miner' records the MINER as the flagger; actor keeps the audit honest.
+        await actions.assert_property(
+            tid, "rot_candidate",
+            f"session yield claims this was resolved — \"{text[:250]}\"",
+            writer, observed, _CONF, evidence_class=_EC, actor=_SOURCE)
         count += 1
     return count
 
@@ -1129,7 +1144,7 @@ async def emit_yield(
     # for them; this is the belt to that braces, because a model that drifts back to an old habit
     # must not be able to land it.
     y.decisions = []
-    counts = {"decisions": 0, "threads": 0, "obligations": 0, "resolved": 0,
+    counts = {"decisions": 0, "threads": 0, "obligations": 0, "resolve_candidates": 0,
               "skipped_foreign": 0, "skipped_dup": 0}
     # this session's OWN deliberate captures — a fresh extraction must not re-mint a reworded
     # copy of what the agent already recorded at SELF_DECLARED (the miner over-read, f34c572c).
@@ -1196,8 +1211,8 @@ async def emit_yield(
             await _stamp_subject(actions, tid, origin, observed)
         else:
             counts["skipped_foreign"] += 1
-    counts["resolved"] = await _resolve_own_threads(actions, y.threads_resolved, observed,
-                                                    exclude=opened_now, writer=writer)
+    counts["resolve_candidates"] = await _resolve_own_threads(
+        actions, y.threads_resolved, observed, exclude=opened_now, writer=writer)
     return counts
 
 
@@ -1261,7 +1276,7 @@ async def adversary_pass(
     # return a number cannot tell you why it shut. mypy caught this the moment the ceiling's
     # honestly-typed `str` met a report the old licence branch had been smuggling `Any` into.
     report: dict[str, Any] = {
-        "proposed": 0, "resolved": 0, "skipped_dup": 0, "skipped_foreign": 0}
+        "proposed": 0, "resolve_candidates": 0, "skipped_dup": 0, "skipped_foreign": 0}
 
     # THE CEILING, CHECKED FIRST, BECAUSE IT ANSWERS THE QUESTION NOBODY HAD ASKED. The licence
     # below asks "IS THIS PRODUCER ANY GOOD?" (its measured rate of use). The ceiling asks "CAN
@@ -1315,7 +1330,7 @@ async def adversary_pass(
     counts = await emit_yield(actions, y, repo=repo, origin=agent_source,
                               source_model=chunk_models[-1] if chunk_models else None)
     report["proposed"] = counts["threads"] + counts["obligations"]
-    report["resolved"] = counts["resolved"]
+    report["resolve_candidates"] = counts["resolve_candidates"]
     report["skipped_dup"] = counts["skipped_dup"]
     report["skipped_foreign"] = counts["skipped_foreign"]
     return report
@@ -1353,7 +1368,8 @@ async def sense_sessions_tick(
         scopes = sense_scopes(get_settings().osiris_sense_projects)
     pool = actions.pool
     report = {"files": 0, "chunks": 0, "decisions": 0, "threads": 0, "obligations": 0,
-              "resolved": 0, "skipped_foreign": 0, "skipped_dup": 0, "planted": 0, "swaps": 0}
+              "resolve_candidates": 0, "skipped_foreign": 0, "skipped_dup": 0, "planted": 0,
+              "swaps": 0}
 
     if only is not None and not scope_match(only.parent.name, scopes):
         report["skipped_scope"] = 1  # the licence is armed for other projects tonight

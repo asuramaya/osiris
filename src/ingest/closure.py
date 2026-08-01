@@ -19,7 +19,12 @@ gets its own SOURCE (`closure-miner`), never smuggled in under the session-miner
 boundary that is crossed deliberately must be legible in the provenance.
 
 SPLIT BY CONFIDENCE (the operator's ruling, over auto-close-everything):
-  · STRONG  → resolve, DERIVED, citing the commit. Reversible, provenanced, never a DELETE.
+  · STRONG  → resolve, DERIVED, citing the commit — AND, since Thoth DM 2581/decision
+              cb38d922/fc5b6c5f, a real `resolved_by` edge to that commit, not just the
+              property: this was the second live gap still widening the topology-derived
+              closure pile after Phase 1a fixed capture.py's own resolve_thread. Retrofit,
+              not a new design — the SAME commit id this module already selected as the
+              witness. Reversible, provenanced, never a DELETE.
   · WEAK    → NEVER closes. It becomes a `rot_candidate` carrying its evidence, for the human
               to confirm. The membrane holds where the evidence is thin (constitution #6: the
               loop may close, but never silently and never irreversibly).
@@ -214,6 +219,19 @@ async def close_by_commits(
                     t["id"], "resolved_because",
                     f"witnessed by a later commit — {cite} ({why})"[:300],
                     _SOURCE, observed, _CONF, evidence_class=_EC, actor=_SOURCE)
+                # THE MISSING EDGE (Thoth DM 2581, decision cb38d922/fc5b6c5f): "strong" here
+                # is the commit literally naming the thread's short id (_evidence's ONLY
+                # strong path) -- exactly resolved_by's own contract (the strong closure
+                # witness), so this closure deserves the same traversable edge
+                # resolve_thread(artifact=...) mints, not just the property. Idempotent
+                # check-then-create, same shape capture.py's own resolved_by minting uses,
+                # so a re-run of this sweep over an already-closed thread is a no-op here too.
+                if not await actions.pool.fetchval(
+                        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 "
+                        "AND type='resolved_by' LIMIT 1", t["id"], c["id"]):
+                    await actions.create_link(t["id"], c["id"], "resolved_by", _SOURCE,
+                                              observed, _CONF, evidence_class=_EC,
+                                              actor=_SOURCE)
         else:
             candidates.append(row)
             # DON'T WRITE WHAT YOU WOULDN'T ACT ON (measured on the second tree, 2026-07-12).

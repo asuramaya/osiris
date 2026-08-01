@@ -88,6 +88,15 @@ async def test_only_a_commit_that_NAMES_the_thread_may_close_it(actions: Actions
         "SELECT a.source_id FROM assertions a WHERE a.object_id=$1 AND a.name='status' "
         "AND a.value #>> '{}' = 'resolved' ORDER BY a.created_at DESC LIMIT 1", tid)
     assert src == "closure-miner"
+    # THE MISSING EDGE, FIXED (Thoth DM 2581, decision cb38d922/fc5b6c5f): this is the ONLY
+    # strong verdict path (a commit literally citing the thread's short id), so it now mints
+    # the same traversable resolved_by witness resolve_thread(artifact=...) mints — this
+    # closure must no longer be invisible to topology-derived reads.
+    edge = await actions.pool.fetchrow(
+        "SELECT to_id, source_id FROM links WHERE from_id=$1 AND type='resolved_by'", tid)
+    assert edge is not None
+    assert str(edge["to_id"]) == str(c)
+    assert edge["source_id"] == "closure-miner"
 
 
 async def test_even_a_word_for_word_match_only_asks(actions: Actions) -> None:
