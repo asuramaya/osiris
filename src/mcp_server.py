@@ -4359,6 +4359,37 @@ async def amend_decision(
 
 
 @mcp.tool()
+async def amend_practice(
+    ref: str, amendment: str,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    session_anchor: str | None = None, ctx: Context | None = None,
+) -> dict[str, str]:
+    """Narrow or correct a LIVE practice's guidance as understanding develops, WITHOUT
+    changing its id, its `statement`, or its witness/confirmed count — the third door for
+    a Practice, same shape as `amend_decision` for a Decision. `statement` is record_
+    practice's own idempotency key and is never touched here; use this when a mechanism
+    now covers part of what a practice warns about, so the next reader inherits "this half
+    is mechanical now, this half is still yours to watch" instead of a blanket warning
+    that's gone partly stale. Unlike a Decision's addenda, amendments here are folded
+    directly into `practices()`'s own listing — the live surface every caller already
+    reads — not left write-only.
+    Returns {"error": ...} (never raises past this wrapper) when `ref` matches nothing, or
+    when it names a Practice already REFUTED (carries `refuted_by`) — a dead lesson does
+    not grow new guidance; use `record_decision(refutes=...)` if you mean to kill it, this
+    verb only ever adds to a practice still standing."""
+    pool = await _pool_get()
+    try:
+        pid = await capture.amend_practice(
+            Actions(pool), ref, amendment,
+            source=await _actor_for(ctx, subagent_id, subagent_type))
+    except ValueError as e:
+        return {"error": str(e)}
+    if pid is None:
+        return {"error": f"no practice matches {ref!r}"}
+    return {"id": str(pid), "amendment": amendment.strip(), "status": "amended"}
+
+
+@mcp.tool()
 async def acquire_lease(
     resource_id: str, holder: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,

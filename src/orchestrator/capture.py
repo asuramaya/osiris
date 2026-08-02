@@ -1386,6 +1386,74 @@ async def refute_practice(
     return {"practice": pid, "superstition": sid}
 
 
+async def amend_practice(
+    actions: Actions, ref: str, amendment: str, *, source: str = _SOURCE,
+) -> uuid.UUID | None:
+    """Narrow or correct a LIVE practice's guidance as understanding develops, WITHOUT
+    changing its id, its `statement`, or its witness/confirmed count — the third door for
+    a Practice, same shape as `amend_decision` for a Decision (Thoth's own instruction, DM
+    3071: "follow it rather than re-deciding it"). `statement` is record_practice's OWN
+    idempotency key (its normalized text is what "the same lesson" means to every future
+    caller); mutating it here would silently redefine that key out from under anyone who
+    re-encounters the ORIGINAL wording and expects record_practice to find, not twin, it —
+    the exact risk amend_decision's own design already avoids for `summary`. So this can
+    only ADD a new, independently-current property, never touch `statement`/`witnesses`/
+    anything already on the object — same mechanism as `annotate_thread`/`amend_decision`
+    (`_append_property_name`).
+
+    UNLIKE A DECISION'S ADDENDA, WHICH ARE WRITE-ONLY TODAY (decision_addenda has no MCP
+    tool and recall() never reads it back — a real, separate gap, named not fixed here): a
+    Practice already HAS a live read surface every caller actually uses (`practices()`), so
+    this verb's amendments are wired into that composition directly (`_fn_practices`), not
+    left to rot the same way. That is the whole point of narrowing a practice's text in
+    place — a reader who calls `practices()` must see it, not go hunting through `lap()`'s
+    raw provenance timeline for an `amendment:` assertion.
+
+    Refuses (raises ValueError, naming `refute_practice` by name) when `ref` names a
+    Practice already REFUTED (carries `refuted_by`) — a dead lesson does not grow new
+    guidance; a practice that needs killing is `refute_practice`'s job, not this one's.
+
+    Returns the practice id, or None if `ref` matched nothing (same convention as
+    `amend_decision`/`resolve_thread`). Raises ValueError on a blank amendment."""
+    amendment = amendment.strip()
+    if not amendment:
+        raise ValueError("amendment must not be blank — an empty addition is not testimony")
+    pid = await _find_practice(actions.pool, ref)
+    if pid is None:
+        return None
+    refuted_by = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='refuted_by' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        pid,
+    )
+    if refuted_by:
+        raise ValueError(
+            f"practice {ref!r} is already refuted (killed_by {str(refuted_by)[:8]}) — a "
+            "dead lesson does not grow new guidance; amend_practice only ever adds to a "
+            "practice still standing")
+    observed = datetime.now(UTC)
+    await actions.assert_property(pid, _append_property_name("amendment"), amendment, source,
+                                  observed, _CONF, evidence_class=_EC)
+    return pid
+
+
+async def practice_amendments(
+    pool: asyncpg.Pool, practice_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    """Every amendment `amend_practice` has added to this practice, oldest first — see
+    `thread_notes`/`decision_addenda` for why each one is independently current.
+    `practices()` reads these too (folded into its own composition); this is the
+    standalone form for direct lookup/testing."""
+    rows = await pool.fetch(
+        "SELECT a.value #>> '{}' AS amendment, a.source_id AS source, a.observed_at, "
+        "a.confidence FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name LIKE 'amendment:%' ORDER BY a.observed_at ASC",
+        practice_id,
+    )
+    return [{"amendment": r["amendment"], "source": r["source"], "observed_at": r["observed_at"],
+             "confidence": float(r["confidence"])} for r in rows]
+
+
 async def recent_dead_superstitions(
     pool: asyncpg.Pool, *, days: int = 14, limit: int = 5,
 ) -> list[dict[str, str]]:

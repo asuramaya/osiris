@@ -988,6 +988,44 @@ async def test_amend_decision_tool_refuses_a_superseded_decision(actions: Action
     assert "error" in out and "already superseded" in out["error"]
 
 
+async def test_amend_practice_tool_appends_without_touching_statement(actions: Actions) -> None:
+    """The third door for a Practice, same shape as amend_decision — `statement` is
+    record_practice's own idempotency key and is never touched here."""
+    from src import mcp_server as srv
+    from src.orchestrator.capture import practice_amendments, record_practice
+
+    p = await record_practice(actions, "the release ships signed before it ships tagged")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.amend_practice(str(p), "confirmed live on gestalt, 2026-08-02")
+    finally:
+        srv._pool = saved_pool
+    assert out == {"id": str(p), "amendment": "confirmed live on gestalt, 2026-08-02",
+                   "status": "amended"}
+    amendments = await practice_amendments(actions.pool, p)
+    assert [a["amendment"] for a in amendments] == ["confirmed live on gestalt, 2026-08-02"]
+    assert (await _props(actions.pool, p))["statement"] == (
+        "the release ships signed before it ships tagged")
+
+
+async def test_amend_practice_tool_refuses_a_refuted_practice(actions: Actions) -> None:
+    """A dead lesson does not grow new guidance — the refusal must name the correct live
+    tool (record_decision(refutes=...)), not the internal capture-layer function name."""
+    from src import mcp_server as srv
+    from src.orchestrator.capture import record_practice, refute_practice
+
+    p = await record_practice(actions, "always retry once on a flaky upload")
+    await refute_practice(actions, str(p), killed_by="decision:fix789")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.amend_practice(str(p), "too late, this one is dead")
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out and "already refuted" in out["error"]
+
+
 def test_measurement_smell_nags_only_the_measurements() -> None:
     """Thread 022bd24a: the protocol nag must fire on verification recipes (Ferryman's exact
     words + the N/N shape) and stay QUIET on ordinary rulings — a nag that fires on every
@@ -2813,6 +2851,73 @@ async def test_refute_practice_converts_to_superstition_but_stays_active(
     assert await refute_practice(actions, "no-such-practice-ever", killed_by="x") is None
 
 
+async def test_amend_practice_adds_an_amendment_without_touching_statement(
+    actions: Actions,
+) -> None:
+    """The third door for a Practice, same shape as amend_decision for a Decision —
+    `statement` is record_practice's own idempotency key and must survive untouched."""
+    from src.orchestrator.capture import amend_practice, practice_amendments, record_practice
+
+    p = await record_practice(actions, "a verify-then-commit check is a snapshot, not a "
+                              "guarantee, on a shared git index")
+    got = await amend_practice(
+        actions, str(p), "mechanized for the window while gates run (commit 14dedae) — "
+                         "the residual window is now narrower, before git commit is invoked")
+    assert got == p
+    props = await _props(actions.pool, p)
+    assert props["statement"] == ("a verify-then-commit check is a snapshot, not a "
+                                  "guarantee, on a shared git index")
+    amendments = await practice_amendments(actions.pool, p)
+    assert [a["amendment"] for a in amendments] == [
+        "mechanized for the window while gates run (commit 14dedae) — the residual window "
+        "is now narrower, before git commit is invoked"]
+
+
+async def test_amend_practice_appends_multiple_amendments_in_order(actions: Actions) -> None:
+    from src.orchestrator.capture import amend_practice, practice_amendments, record_practice
+
+    p = await record_practice(actions, "always vendor the lockfile before a release")
+    await amend_practice(actions, str(p), "first: confirmed on ByeByte")
+    await amend_practice(actions, str(p), "second: confirmed again on mudra")
+    amendments = await practice_amendments(actions.pool, p)
+    assert [a["amendment"] for a in amendments] == [
+        "first: confirmed on ByeByte", "second: confirmed again on mudra"]
+
+
+async def test_amend_practice_returns_none_when_nothing_matches(actions: Actions) -> None:
+    from src.orchestrator.capture import amend_practice
+
+    assert await amend_practice(actions, "no such practice anywhere", "an amendment") is None
+
+
+async def test_amend_practice_refuses_a_blank_amendment(actions: Actions) -> None:
+    import pytest
+    from src.orchestrator.capture import amend_practice, practice_amendments, record_practice
+
+    p = await record_practice(actions, "a practice that will receive a rejected blank amend")
+    with pytest.raises(ValueError, match="blank"):
+        await amend_practice(actions, str(p), "   ")
+    assert await practice_amendments(actions.pool, p) == []
+
+
+async def test_amend_practice_refuses_a_refuted_practice(actions: Actions) -> None:
+    """A dead lesson does not grow new guidance — the refusal must name the correct live
+    tool (record_decision(refutes=...)), not the internal capture-layer function name."""
+    import pytest
+    from src.orchestrator.capture import (
+        amend_practice,
+        practice_amendments,
+        record_practice,
+        refute_practice,
+    )
+
+    p = await record_practice(actions, "always retry twice on any timeout")
+    await refute_practice(actions, str(p), killed_by="decision:fix456")
+    with pytest.raises(ValueError, match="refuted"):
+        await amend_practice(actions, str(p), "one more thought on the old lesson")
+    assert await practice_amendments(actions.pool, p) == []
+
+
 async def test_prior_art_from_hits_widens_to_unified_kinds_and_excludes_dead_testimony() -> None:
     """kinds= is the plug Imhotep's own decision 5640f234 flagged as deliberately left
     open — default stays Decision-only (existing callers unchanged); UNIFIED_PRIOR_ART_
@@ -3123,6 +3228,28 @@ async def test_practices_composition_filters_by_surface_and_shows_confirmed_coun
         actions.pool, {"op": "function", "name": "practices", "args": {}})
     assert {r["statement"] for r in everything["items"]} >= {
         "deploy surface lesson one", "search surface lesson two"}
+
+
+async def test_practices_composition_surfaces_amendments_in_order(actions: Actions) -> None:
+    """Thoth DM 3071: unlike a Decision's own addenda (write-only today, no MCP read path),
+    a Practice's amendments must be visible on the ONE live surface every caller actually
+    reads — practices() itself, not a separate lookup the caller has to know to make.
+    A practice with no amendment at all must not carry the key (matches refuted_by's own
+    conditional-inclusion shape)."""
+    from src.orchestrator.capture import amend_practice, record_practice
+    from src.orchestrator.compositions import run_spec
+
+    amended = await record_practice(actions, "a practice that will be narrowed")
+    await amend_practice(actions, str(amended), "first narrowing")
+    await amend_practice(actions, str(amended), "second narrowing")
+    untouched = await record_practice(actions, "a practice nobody has amended")
+
+    items = (await run_spec(
+        actions.pool, {"op": "function", "name": "practices", "args": {}}))["items"]
+    amended_row = next(r for r in items if r["id"] == str(amended))
+    assert amended_row["amendments"] == ["first narrowing", "second narrowing"]
+    untouched_row = next(r for r in items if r["id"] == str(untouched))
+    assert "amendments" not in untouched_row
 
 
 async def test_search_indexes_the_statement_field_and_flags_a_refuted_practice(

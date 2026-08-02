@@ -2224,7 +2224,12 @@ async def _fn_practices(
     every active Practice. `confirmed` is the live `witnesses` link count — DERIVED, never a
     stored scalar (the same race class thread dc9d1eed found live in bridged_seat/
     record_bridge_anchor would apply to an incremented counter; a link COUNT cannot desync
-    from the links it counts). A refuted Practice still lists — flagged, never hidden."""
+    from the links it counts). A refuted Practice still lists — flagged, never hidden.
+    `amendments` (Thoth DM 3071, capture.amend_practice) — every narrowing `amend_practice`
+    has added, oldest first, folded in HERE rather than left to rot the way a Decision's own
+    addenda currently do (decision_addenda has no MCP read path at all): this is the ONE
+    live surface every caller already uses to read a practice's current guidance, so an
+    amendment that isn't visible here isn't visible anywhere a reader would think to look."""
     surface = str(args.get("surface") or "").strip() or None
     limit = max(1, min(int(args.get("limit") or 50), 200))
     rows = await pool.fetch(
@@ -2243,7 +2248,10 @@ async def _fn_practices(
         "    AND a.name='refuted_by' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
         "     AS refuted_by, "
         "   (SELECT count(*) FROM links l WHERE l.from_id=o.id AND l.type='witnesses') "
-        "     AS confirmed "
+        "     AS confirmed, "
+        "   (SELECT array_agg(a.value #>> '{}' ORDER BY a.observed_at ASC) "
+        "    FROM current_assertions a WHERE a.object_id=o.id AND a.name LIKE 'amendment:%') "
+        "     AS amendments "
         "  FROM objects o WHERE o.type='Practice' AND o.status='active') "
         "SELECT * FROM p WHERE $1::text IS NULL OR surface = $1 "
         "ORDER BY confirmed DESC, statement ASC LIMIT $2",
@@ -2252,7 +2260,8 @@ async def _fn_practices(
         {"id": str(r["id"]), "statement": r["statement"],
          "failure_prevented": r["failure_prevented"], "surface": r["surface"],
          "confirmed": r["confirmed"],
-         **({"refuted_by": r["refuted_by"]} if r["refuted_by"] else {})}
+         **({"refuted_by": r["refuted_by"]} if r["refuted_by"] else {}),
+         **({"amendments": list(r["amendments"])} if r["amendments"] else {})}
         for r in rows
     ]
 
