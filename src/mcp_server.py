@@ -3308,8 +3308,9 @@ async def assert_project_property(project: str, name: str, value: str,
     """The sanctioned write for a SINGLE project-scoped property (task #74) — closes the
     gap that forced in-process scripts for anything beyond a status flip during the reap.
     `project` resolves the same way retire_project does (UUID, 8-char short id, canonical
-    `repo:<name>`, or its `name` property) — SoftwareProject ONLY. NOT self-scoped: any
-    authorized caller may stamp any named project.
+    `repo:<name>`, or its `name` property) — SoftwareProject ONLY. NOT self-scoped, and
+    OPEN BY DESIGN: any mounted caller may stamp any named project's property, no
+    authority gate.
 
     Refuses LOUDLY on: blank project/name/value; an unresolved project; `name=='status'`
     (status has its own compensating-event path — retire_project, not a bare assertion)."""
@@ -3430,12 +3431,12 @@ async def correct_agent_house(agent_id: str, project: str | None = None,
 @mcp.tool()
 async def retire_agent(agent_id: str, because: str,
                        ctx: Context | None = None) -> dict[str, Any]:
-    """Third-party retirement for an agent (task #74) — the manager-scoped complement
-    to the self-scoped retire() (which derives the CALLER's own id, no target param at
-    all). Stamps retired/retired_by/retired_because AND flips objects.status via a
-    compensating event, same pattern as retire_seat/retire_project. NOT self-scoped —
-    the target need not be the caller; `actor` is attribution, never a same-caller
-    requirement.
+    """Third-party retirement for an agent (task #74) — the third-party-scoped
+    complement to the self-scoped retire() (which derives the CALLER's own id, no target
+    param at all). Stamps retired/retired_by/retired_because AND flips objects.status via
+    a compensating event, same pattern as retire_seat/retire_project. NOT self-scoped, NOT
+    manager-gated — any mounted caller may name any target, matching retire_seat/
+    retire_project; `actor` is attribution, never an authority gate.
 
     Refuses LOUDLY on: blank `because`; an unknown or already-non-active agent."""
     ident = await _ident_for(ctx)
