@@ -4474,19 +4474,19 @@ async def acquire_lease(
 
 @mcp.tool()
 async def release_lease(
-    resource_id: str, holder: str | None = None,
+    resource_id: str,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Release a resource YOU hold — only the ACTUAL holder's own release call frees it,
-    never a different agent's, even by name (the same asymmetry `resolve_thread` has no
-    equivalent of, deliberately: a lease's whole point is that holding it means something).
-    `released: false` for BOTH an unheld resource and a wrong-holder attempt — both are
-    refusals to report, never errors to raise; check `check_lease` first if you need to
-    tell the two apart."""
+    never a different agent's, even by name, ENFORCED: unlike `acquire_lease`'s deliberate
+    `holder` latitude ("claim on another's behalf"), this verb takes no `holder` param —
+    the identity checked is always the caller's own resolved `actor`. `released: false`
+    for BOTH an unheld resource and a wrong-holder attempt — both are refusals to report,
+    never errors to raise; check `check_lease` first if you need to tell the two apart."""
     pool = await _pool_get()
     actor = await _actor_for(ctx, subagent_id, subagent_type)
-    released = await resource_lease.release(pool, resource_id, holder or actor)
+    released = await resource_lease.release(pool, resource_id, actor)
     return {"resource_id": resource_id, "released": released}
 
 

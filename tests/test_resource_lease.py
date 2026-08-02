@@ -211,17 +211,54 @@ async def test_acquire_lease_wrapper_refusal_names_holder_and_since(
     assert "agent:khnum" in second["note"] and second["held_since"] in second["note"]
 
 
-async def test_release_lease_wrapper_only_the_holder_can_release(actions: Actions) -> None:
-    from src import mcp_server as srv
+class _Ctx:
+    """Unlike test_charter.py's `_Ctx` (a single shared class-level `session`, fine when a
+    test only ever holds one context alive at a time), this test needs TWO distinct
+    connections live at once — so each instance gets its OWN session object, or
+    `_conn_key`'s `id(ctx.request_context.session)` fallback would collide both onto the
+    same key and silently merge two different callers into one."""
 
+    class request_context:  # noqa: N801
+        request = None
+
+        def __init__(self) -> None:
+            self.session = object()
+
+    def __init__(self) -> None:
+        self.request_context = _Ctx.request_context()
+
+
+async def test_release_lease_wrapper_refuses_a_non_holder_actor(actions: Actions) -> None:
+    """NEGATIVE CONTROL, fixed 2026-08-02: release_lease used to take a caller-supplied
+    `holder` override and match THAT string against the row, so any caller who knew the
+    real holder's id could free a lease it never held — one call, `holder=<real holder>`,
+    contradicting this tool's own absolute claim. Confirmed against pre-fix code: the OLD
+    version of this exact test acquired as agent:imhotep then released by PASSING
+    holder="agent:imhotep" from an unrelated caller and asserted that succeeded — it was
+    validating the vulnerability, not the property. Now `holder` does not exist as a
+    parameter; only the caller's own resolved `actor` is ever checked, established here
+    via TWO REAL, DISTINCT mounted identities on the SAME (fake) connection object, never
+    a string either side supplies."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    ctx_imhotep, ctx_thoth = _Ctx(), _Ctx()
     saved_pool = srv._pool
     srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx_imhotep)] = AgentIdentity(
+        agent_id="agent:imhotep", session="imhotep", project="releasetest", model=None,
+        cwd=None)
+    srv._agents[srv._conn_key(ctx_thoth)] = AgentIdentity(
+        agent_id="agent:thoth", session="thoth", project="releasetest", model=None,
+        cwd=None)
     try:
-        await srv.acquire_lease("compose-merge", holder="agent:imhotep")
-        wrong = await srv.release_lease("compose-merge", holder="agent:thoth")
-        right = await srv.release_lease("compose-merge", holder="agent:imhotep")
+        await srv.acquire_lease("compose-merge", ctx=ctx_imhotep)
+        wrong = await srv.release_lease("compose-merge", ctx=ctx_thoth)
+        right = await srv.release_lease("compose-merge", ctx=ctx_imhotep)
     finally:
         srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx_imhotep), None)
+        srv._agents.pop(srv._conn_key(ctx_thoth), None)
     assert wrong["released"] is False
     assert right["released"] is True
 
