@@ -14,6 +14,7 @@ from src.api.chrome import (
     render_mail_overview,
 )
 from src.orchestrator.capture import open_thread
+from src.orchestrator.mounts import save_mount
 from src.parsers.base import EvidenceClass
 
 NOW = datetime.now(UTC)
@@ -208,6 +209,11 @@ async def test_desk_and_fleet_data_round_trip_the_live_graph(actions: Actions) -
     from src.orchestrator.mailbox import read_desk, send_message
 
     p = actions.pool
+    # send_message refuses a to_project nobody has ever mounted under (f6f3e43e, shape 3 of
+    # #117) -- alive=False registers 'neo' as existing without a live pulse, matching
+    # test_mailbox.py's/test_trigger.py's own already-fixed seed idiom.
+    await save_mount(p, job_dir="/test/seed/neo", agent_id="agent:seed-neo",
+                     project="neo", cwd="/test", model=None, session_key=None, alive=False)
     await send_message(p, from_agent="agent:a", from_project="osiris",
                        to_project="operator", body="🚨 CRITICAL: decide something")
     await send_message(p, from_agent="agent:a", from_project="osiris",

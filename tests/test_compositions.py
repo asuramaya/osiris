@@ -719,6 +719,16 @@ async def _save(actions: Actions, name: str, spec: dict) -> str:
     return name
 
 
+async def _seed_project(pool: object, project: str) -> None:
+    """send_message refuses a to_project nobody has ever mounted under (f6f3e43e, shape 3 of
+    #117) — alive=False registers `project` as existing without a live pulse, matching
+    test_mailbox.py's own `_seed()` idiom."""
+    from src.orchestrator.mounts import save_mount
+
+    await save_mount(pool, job_dir=f"/test/seed/{project}", agent_id=f"agent:seed-{project}",
+                     project=project, cwd="/test", model=None, session_key=None, alive=False)
+
+
 async def test_object_items_resolves_props_by_grade_not_recency(actions: Actions) -> None:
     """Resolver-unify regression: object_items (the composer's object-list / Table renderer)
     resolved each property by RECENCY ONLY — a fresh DERIVED re-assertion buried an older
@@ -1140,6 +1150,7 @@ async def test_fleet_live_composition_is_registered_and_runs_end_to_end(
 async def test_mail_overview_function_lists_boxes_with_traffic(actions: Actions) -> None:
     from src.orchestrator.mailbox import send_message
 
+    await _seed_project(actions.pool, "neo")
     await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
                        to_project="neo", body="a project lane message")
 
@@ -1170,6 +1181,8 @@ async def test_mail_threads_function_lists_one_boxs_threads_via_args_box(
 ) -> None:
     from src.orchestrator.mailbox import send_message
 
+    await _seed_project(actions.pool, "neo")
+    await _seed_project(actions.pool, "other")
     await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
                        to_project="neo", body="hello neo")
     await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
@@ -1207,6 +1220,7 @@ async def test_mail_composition_end_to_end(actions: Actions) -> None:
     from src.orchestrator.compositions import MAIL_OVERVIEW
     from src.orchestrator.mailbox import send_message
 
+    await _seed_project(actions.pool, "neo")
     await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
                        to_project="neo", body="a project lane message")
 
@@ -1222,6 +1236,7 @@ async def test_mail_composition_rows_carry_the_drill_in_run_action(actions: Acti
     from src.orchestrator.compositions import MAIL_OVERVIEW
     from src.orchestrator.mailbox import send_message
 
+    await _seed_project(actions.pool, "neo")
     await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
                        to_project="neo", body="a project lane message")
 
@@ -1428,6 +1443,7 @@ async def test_function_row_action_resolves_args_from_the_rows_own_keys(
 ) -> None:
     from src.orchestrator.mailbox import send_message
 
+    await _seed_project(actions.pool, "neo")
     await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
                        to_project="neo", body="a project lane message")
 
@@ -1446,6 +1462,7 @@ async def test_function_row_action_is_absent_without_a_declared_row_action(
     inferred) — the same opt-in discipline `table`'s own row_action already follows."""
     from src.orchestrator.mailbox import send_message
 
+    await _seed_project(actions.pool, "neo")
     await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
                        to_project="neo", body="a project lane message")
 
@@ -1481,6 +1498,7 @@ async def test_function_row_actions_produces_a_labeled_action_list_per_row(
 ) -> None:
     from src.orchestrator.mailbox import send_message
 
+    await _seed_project(actions.pool, "neo")
     await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
                        to_project="neo", body="a project lane message")
 
@@ -1505,6 +1523,7 @@ async def test_function_row_actions_label_falls_back_to_the_action_name(
 ) -> None:
     from src.orchestrator.mailbox import send_message
 
+    await _seed_project(actions.pool, "neo")
     await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
                        to_project="neo", body="a project lane message")
 
@@ -1520,6 +1539,7 @@ async def test_function_row_actions_is_absent_without_a_declared_row_actions(
 ) -> None:
     from src.orchestrator.mailbox import send_message
 
+    await _seed_project(actions.pool, "neo")
     await send_message(actions.pool, from_agent="agent:a", from_project="osiris",
                        to_project="neo", body="a project lane message")
 

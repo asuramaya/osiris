@@ -472,6 +472,11 @@ async def test_while_away_names_the_face_wearers(actions: Actions) -> None:
     # face, and the counterparty's ask got leased+settled
     await p.execute("INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
                     "VALUES ('sibling-one','agent:deceptor',NULL,'resume')")
+    # send_message refuses a to_project nobody has ever mounted under (f6f3e43e, shape 3 of
+    # #117) -- alive=False registers 'sibling-one' as existing without a live pulse.
+    await mounts.save_mount(p, job_dir="/test/seed/sibling-one",
+                            agent_id="agent:seed-sibling-one", project="sibling-one",
+                            cwd="/test", model=None, session_key=None, alive=False)
     ask = await send_message(p, from_agent="agent:deceptor", from_project="sibling-two",
                              to_project="sibling-one", body="image the 50k pair?")
     await read_inbox(p, "sibling-one", reader_agent="agent:twin")  # the twin leased it…

@@ -392,6 +392,11 @@ async def test_deliverable_no_longer_blind_to_broadcast_mail_from_the_container_
     job_dir = str(tmp_path / "jobs" / "dlv20001")
     await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="seats",
                      cwd=str(fake_root), model=None, session_key=None)
+    # send_message refuses a to_project nobody has ever mounted under (f6f3e43e, shape 3 of
+    # #117) -- the "seats" mount above is a DIFFERENT project than the broadcast's own
+    # to_project="osiris" below, so 'osiris' needs its own throwaway, alive=False seed.
+    await save_mount(actions.pool, job_dir="/test/seed/osiris", agent_id="agent:seed-osiris",
+                     project="osiris", cwd="/test", model=None, session_key=None, alive=False)
     sid = "dlv20001-0000-4000-8000-000000000000"
     await send_message(actions.pool, from_agent="agent:someoneelse", from_project="osiris",
                        to_project="osiris", body="a real broadcast for the house", grade="fyi")
@@ -649,6 +654,10 @@ async def test_sent_a_real_ask_true_only_for_a_recent_ask_from_this_agent(
     actions: Actions,
 ) -> None:
     agent = "agent:asktest1"
+    # send_message refuses a to_project nobody has ever mounted under (f6f3e43e, shape 3 of
+    # #117) -- alive=False registers 'osiris' as existing without a live pulse.
+    await save_mount(actions.pool, job_dir="/test/seed/osiris", agent_id="agent:seed-osiris",
+                     project="osiris", cwd="/test", model=None, session_key=None, alive=False)
     await send_message(actions.pool, from_agent=agent, from_project="osiris",
                        to_project="osiris", body="a real question", grade="ask")
     assert await stophook._sent_a_real_ask(actions.pool, agent) is True
@@ -659,6 +668,8 @@ async def test_sent_a_real_ask_ignores_an_old_ask_outside_the_window(
     actions: Actions,
 ) -> None:
     agent = "agent:askstale1"
+    await save_mount(actions.pool, job_dir="/test/seed/osiris", agent_id="agent:seed-osiris",
+                     project="osiris", cwd="/test", model=None, session_key=None, alive=False)
     r = await send_message(actions.pool, from_agent=agent, from_project="osiris",
                            to_project="osiris", body="an old question", grade="ask")
     await actions.pool.execute(
@@ -958,6 +969,10 @@ async def test_already_flagged_today_true_only_for_the_same_agent_practice_pair_
     actions: Actions,
 ) -> None:
     agent = "agent:dedupflag1"
+    # send_message refuses a to_project nobody has ever mounted under (f6f3e43e, shape 3 of
+    # #117) -- alive=False registers 'osiris' as existing without a live pulse.
+    await save_mount(actions.pool, job_dir="/test/seed/osiris", agent_id="agent:seed-osiris",
+                     project="osiris", cwd="/test", model=None, session_key=None, alive=False)
     await send_message(
         actions.pool, from_agent=agent, from_project="osiris", to_project="osiris",
         body="stopping; this turn may have violated standing Practice abc12345 "
@@ -976,6 +991,8 @@ async def test_already_flagged_today_ignores_a_flag_from_a_prior_day(
     actions: Actions,
 ) -> None:
     agent = "agent:dedupflag2"
+    await save_mount(actions.pool, job_dir="/test/seed/osiris", agent_id="agent:seed-osiris",
+                     project="osiris", cwd="/test", model=None, session_key=None, alive=False)
     r = await send_message(
         actions.pool, from_agent=agent, from_project="osiris", to_project="osiris",
         body="stopping; this turn may have violated standing Practice def67890 "

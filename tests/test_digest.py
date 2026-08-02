@@ -12,6 +12,7 @@ import pytest
 from src.actions.core import Actions
 from src.orchestrator.digest import fleet_digest
 from src.orchestrator.mailbox import OPERATOR_ADDR, send_message, unread_count
+from src.orchestrator.mounts import save_mount
 from src.parsers.base import EvidenceClass
 
 NOW = datetime(2026, 7, 7, tzinfo=UTC)
@@ -21,6 +22,14 @@ SD = EvidenceClass.SELF_DECLARED.value
 
 async def _prop(actions, oid, name, value, source, ec, conf=0.9, when=NOW):
     await actions.assert_property(oid, name, value, source, when, conf, evidence_class=ec)
+
+
+async def _seed_project(pool, project: str) -> None:
+    """send_message refuses a to_project nobody has ever mounted under (f6f3e43e, shape 3 of
+    #117) — alive=False registers `project` as existing without a live pulse, matching
+    test_mailbox.py's own `_seed()` idiom."""
+    await save_mount(pool, job_dir=f"/test/seed/{project}", agent_id=f"agent:seed-{project}",
+                     project=project, cwd="/test", model=None, session_key=None, alive=False)
 
 
 async def test_fleet_digest_surfaces_the_four_streams(actions: Actions) -> None:
@@ -90,6 +99,7 @@ async def test_digest_surfaces_conversations_and_the_operator_desk(actions: Acti
     read straight off fleet_messages — an agent that shirks its report-up duty is still seen."""
     p = actions.pool
     since = NOW - timedelta(hours=24)
+    await _seed_project(p, "sibling-one")
     # a lateral request→reply thread between two projects
     ask = await send_message(p, from_agent="agent:aaa", from_project="sibling-two",
                              to_project="sibling-one", body="run the ablation?")
@@ -258,6 +268,7 @@ async def test_replying_to_your_own_lateral_message_routes_onward(actions: Actio
     """The route fix behind the fold: reply_to your OWN message goes to its RECIPIENT (thread
     continuation), never back to yourself."""
     p = actions.pool
+    await _seed_project(p, "sibling-one")
     ask = await send_message(p, from_agent="agent:a", from_project="sibling-two",
                              to_project="sibling-one", body="first volley")
     follow = await send_message(p, from_agent="agent:a", from_project="sibling-two",

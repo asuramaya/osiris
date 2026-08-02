@@ -98,6 +98,12 @@ async def test_counts_maps_the_shared_segments_into_its_own_tuple_shape(
     p = actions.pool
     reader = "agent:1eadde01"
 
+    # send_message refuses a to_project nobody has ever mounted under (f6f3e43e, shape 3 of
+    # #117) -- alive=False registers 'proj' as existing without a live pulse, ahead of the
+    # reader's OWN heartbeat mount seeded below (that one is deliberately alive=True, the
+    # live=1 fact this test is pinning — a different row, a different purpose).
+    await save_mount(p, job_dir="/test/seed/proj", agent_id="agent:seed-proj", project="proj",
+                     cwd="/test", model=None, session_key=None, alive=False)
     # briefs_mine=1 (from the reader's own lineage), briefs_total=2 (one from elsewhere too)
     await send_message(p, from_agent=reader, from_project="proj",
                        to_project="operator", body="a brief from the reader")

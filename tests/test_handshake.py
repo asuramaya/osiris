@@ -47,6 +47,12 @@ def _transcript(root: Path, cwd: str, model: str = "claude-fable-5") -> None:
 async def test_automount_is_a_durable_anchored_mount(actions: Actions, tmp_path: Path) -> None:
     root = tmp_path / "projects"
     _transcript(root, "/w/sibling-eight")
+    # send_message refuses a to_project nobody has ever mounted under (f6f3e43e, shape 3 of
+    # #117) -- a throwaway, differently-named seed row (never agent:39fb22a2, the identity
+    # this test's own automount() call mints below) registers existence without a live pulse.
+    await mounts_mod.save_mount(
+        actions.pool, job_dir="/test/seed/sibling-eight", agent_id="agent:seed-sibling-eight",
+        project="sibling-eight", cwd="/test", model=None, session_key=None, alive=False)
     await send_message(actions.pool, from_agent="agent:x", from_project="osiris",
                        to_project="sibling-eight", body="mail waiting at birth")
 

@@ -47,6 +47,12 @@ async def test_audit_log_moves_on_any_graph_write_through_actions(actions: Actio
 async def test_fleet_messages_moves_on_new_mail_only(actions: Actions) -> None:
     from src.orchestrator.mailbox import send_message
 
+    # send_message refuses a to_project nobody has ever mounted under (f6f3e43e, shape 3 of
+    # #117) -- seeded BEFORE the `before` snapshot, or the seed's own mount row would move
+    # agent_mounts' watermark between before/after and break this test's own assertion that
+    # only fleet_messages moves.
+    await save_mount(actions.pool, job_dir="/test/seed/osiris", agent_id="agent:seed-osiris",
+                     project="osiris", cwd="/test", model=None, session_key=None, alive=False)
     before = await graph_watermark(actions.pool)
     await send_message(actions.pool, from_agent="agent:wm1", from_project="osiris",
                        to_project="osiris", body="a real broadcast")
