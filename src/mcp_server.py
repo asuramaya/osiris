@@ -4029,8 +4029,16 @@ async def record_decision(
         if prior and strong:
             await capture.acknowledge_prior_art(Actions(pool), d, prior[0]["id"], actor)
             out["prior_art_acknowledged"] = f"noted — {prior[0]['id']} reviewed, no action needed"
+        elif prior:
+            # #117's own vocabulary-collapse shape, caught live (Thoth msg 3185, ruling
+            # b44ddb6d): `out["prior_art"]` above already lists these same hits — saying
+            # "none found" here when `prior` is non-empty would contradict the SAME receipt.
+            out["prior_art_acknowledged"] = (
+                f"{len(prior)} prior-art hit(s) found but none strong enough to flag — "
+                "nothing rises to acknowledge")
         else:
-            out["prior_art_acknowledged"] = "no strong prior-art hit was found to acknowledge"
+            out["prior_art_acknowledged"] = (
+                "no prior-art hit was found at all — nothing to acknowledge")
     if impl_id is not None:
         await capture.mint_implements(Actions(pool), d, impl_id, actor)
         out["implements"] = f"{str(impl_id)[:8]} — this decision is a specific execution of it"

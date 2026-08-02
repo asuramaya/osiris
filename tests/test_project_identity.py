@@ -318,6 +318,27 @@ async def test_rename_project_keeps_canonical_changes_name_moves_mounts(
     assert mount_row == "handlingtheloop"
 
 
+async def test_rename_project_surfaces_prior_art_never_refuses_on_it(
+    actions: Actions, monkeypatch,
+) -> None:
+    """obligation e4612853's sibling (Thoth DM 3169/3185): a standing Decision covering
+    this exact rename is surfaced in the receipt, never blocks the write."""
+    await _mk_project(actions, "bytebye")
+
+    async def _fake_prior_art(pool, *, subject_canonical, field, new_value, because, actor):
+        return {"prior_art": [{"id": "1db87191", "type": "Decision"}],
+               "prior_art_flag": f"a standing ruling (1db87191) may already cover "
+                                  f"{subject_canonical}'s {field!r}"}
+
+    monkeypatch.setattr(
+        "src.orchestrator.capture.property_prior_art", _fake_prior_art)
+    out = await rename_project(actions, project="bytebye", new_name="ByeByte",
+                               because="tidying casing", actor="agent:test")
+    assert out["new_name"] == "ByeByte"  # the write still happened
+    assert out["prior_art_flag"] == (
+        "a standing ruling (1db87191) may already cover repo:bytebye's 'name'")
+
+
 async def test_rename_project_refuses_blank_new_name_or_because(actions: Actions) -> None:
     await _mk_project(actions, "blankcase")
     out1 = await rename_project(actions, project="blankcase", new_name="",

@@ -2085,6 +2085,30 @@ async def test_correct_house_lets_a_head_fix_its_own_anchor(actions: Actions) ->
     assert await derive_house(actions.pool, claimed["seat_id"]) == "alfred"
 
 
+async def test_correct_house_surfaces_prior_art_never_refuses_on_it(
+    actions: Actions, monkeypatch,
+) -> None:
+    """obligation e4612853's sibling (Thoth DM 3169/3185) — same guard as rename_project,
+    generalized: never blocks the write, just makes sure it isn't silently unread."""
+    from src.orchestrator.agents import claim_name
+    from src.orchestrator.seats import correct_house
+
+    await actions.create_or_find_object("Agent", "agent:ch2alfrd", "test")
+    claimed = await claim_name(actions, "agent:ch2alfrd", "Alfred2", source="test")
+    assert claimed.get("error") is None
+
+    async def _fake_prior_art(pool, *, subject_canonical, field, new_value, actor, because=""):
+        return {"prior_art": [{"id": "abcdef01", "type": "Decision"}],
+               "prior_art_flag": f"a standing ruling (abcdef01) may already cover "
+                                  f"{subject_canonical}'s {field!r}"}
+
+    monkeypatch.setattr("src.orchestrator.capture.property_prior_art", _fake_prior_art)
+    out = await correct_house(actions, "agent:ch2alfrd", "somewhere-else", source="test")
+    assert out["house"] == "somewhere-else"  # the write still happened
+    assert out["prior_art_flag"] == (
+        f"a standing ruling (abcdef01) may already cover {claimed['seat_id']}'s 'house'")
+
+
 async def test_correct_house_refuses_a_non_head(actions: Actions) -> None:
     from src.orchestrator.seats import correct_house
 

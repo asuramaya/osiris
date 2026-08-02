@@ -256,7 +256,14 @@ async def correct_agent_house(
     this kernel: asserts a new current value, never touches the superseded row.
 
     Refuses LOUDLY on: no correction named at all; an empty project string; a
-    non-positive generation; an unknown or inactive Agent."""
+    non-positive generation; an unknown or inactive Agent.
+
+    PRIOR-ART SURFACED, NEVER REFUSED (obligation e4612853's sibling, ruling 38c71544's
+    family): the receipt's own `prior_art`/`prior_art_flag` keys, when present, name a
+    standing Decision that may already cover this agent's project/generation — the same
+    search()-based guard record_decision runs on itself, generalized here. Cannot
+    distinguish a deliberate correction from an uninformed overwrite; only ensures the
+    write does not land silently unread."""
     if project is None and seat_generation is None:
         return {"error": "nothing to correct — pass project and/or seat_generation"}
     if project is not None and not project.strip():
@@ -272,12 +279,18 @@ async def correct_agent_house(
     now = datetime.now(UTC)
     was: dict[str, Any] = {}
     corrected: dict[str, Any] = {}
+    from src.orchestrator.capture import property_prior_art
+
+    prior_art_bits: dict[str, Any] = {}
     if project is not None:
         project = project.strip()
         was["project"] = await house_of(actions.pool, agent_id)
         await actions.assert_property(row["id"], "project", project, actor, now, _CONF,
                                       evidence_class=_EC)
         corrected["project"] = project
+        prior_art_bits = await property_prior_art(
+            actions.pool, subject_canonical=agent_id, field="project",
+            new_value=project, actor=actor)
     if seat_generation is not None:
         was["seat_generation"] = await actions.pool.fetchval(
             "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
@@ -286,7 +299,12 @@ async def correct_agent_house(
         await actions.assert_property(row["id"], "seat_generation", str(seat_generation),
                                       actor, now, _CONF, evidence_class=_EC)
         corrected["seat_generation"] = seat_generation
-    return {"agent_id": agent_id, "corrected": corrected, "was": was}
+        if not prior_art_bits:  # project's own hit (if any) already covers this agent;
+            # never overwrite a real flag with a weaker/absent seat_generation-only search
+            prior_art_bits = await property_prior_art(
+                actions.pool, subject_canonical=agent_id, field="seat_generation",
+                new_value=str(seat_generation), actor=actor)
+    return {"agent_id": agent_id, "corrected": corrected, "was": was, **prior_art_bits}
 
 
 async def retire_agent(

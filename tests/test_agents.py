@@ -1104,6 +1104,28 @@ async def test_correct_agent_house_heals_a_polluted_stamp_on_someone_else(
     assert gen == "58"
 
 
+async def test_correct_agent_house_surfaces_prior_art_never_refuses_on_it(
+    actions: Actions, monkeypatch,
+) -> None:
+    """obligation e4612853's sibling (Thoth DM 3169/3185) — same guard as rename_project/
+    correct_house, generalized here: never blocks the write."""
+    from src.orchestrator.agents import correct_agent_house
+
+    await actions.create_or_find_object("Agent", "agent:cah3prior", "test")
+
+    async def _fake_prior_art(pool, *, subject_canonical, field, new_value, actor, because=""):
+        return {"prior_art": [{"id": "abcdef01", "type": "Decision"}],
+               "prior_art_flag": f"a standing ruling (abcdef01) may already cover "
+                                  f"{subject_canonical}'s {field!r}"}
+
+    monkeypatch.setattr("src.orchestrator.capture.property_prior_art", _fake_prior_art)
+    out = await correct_agent_house(actions, agent_id="agent:cah3prior", project="somewhere",
+                                    actor="agent:witness")
+    assert out["corrected"] == {"project": "somewhere"}  # the write still happened
+    assert out["prior_art_flag"] == (
+        "a standing ruling (abcdef01) may already cover agent:cah3prior's 'project'")
+
+
 async def test_correct_agent_house_can_correct_just_one_field(actions: Actions) -> None:
     """Thoth's own predecessor case: seat_generation STAYS correct (57), only project
     needs healing — passing just one field leaves the other untouched."""

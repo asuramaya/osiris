@@ -615,6 +615,55 @@ def prior_art_is_strong(prior_art: list[dict[str, Any]]) -> bool:
     return bool(prior_art) and prior_art[0].get("via") in _PRIOR_ART_STRONG_VIA
 
 
+async def property_prior_art(
+    pool: asyncpg.Pool, *, subject_canonical: str, field: str, new_value: str,
+    because: str = "", actor: str,
+) -> dict[str, Any]:
+    """Generalizes record_decision's own prior-art guard (search()-based, LOUD, NEVER
+    REFUSES — the SPOF principle) from a DECISION write to a PROPERTY write (obligation
+    e4612853's sibling investigation, Thoth DM 3185: ruling 38c71544's family — "two
+    records of one truth with no reconciler" — one instance being a standing Decision
+    versus a later property write that silently contradicts it).
+
+    THIS DOES NOT SOLVE THE HARD PROBLEM (proven live: an operator-authorized write and an
+    ordinary agent's own judgment call are bit-for-bit identical at the assertion layer —
+    same evidence_class, same confidence, source_id is just the calling agent, no
+    structural edge to any authorizing Decision). It cannot know WHICH property writes are
+    operator-set, so it does not try to refuse a contradiction — it only ensures the
+    WRITER SEES whatever standing Decision already discusses this exact ground before the
+    write lands. That is the whole fix: both bytebye writers and Thoth's own predecessor
+    acted in good faith on missing information, not bad faith on visible information.
+
+    Decision-kind hits only (the default `prior_art_from_hits` kind set) — a standing
+    RULING is the thing worth surfacing here, not a Practice or Superstition. Fail-open:
+    a search hiccup must never block the write it is advising on, same discipline
+    record_decision's own guard already holds. Returns `{}` when nothing rises to a
+    STRONG hit (weak/coincidental matches are not worth the noise on every property
+    write) — merge the result into the caller's own receipt dict; a real hit adds
+    `prior_art` + `prior_art_flag`, the SAME keys record_decision's own receipt uses, so
+    a caller already familiar with that shape reads this one identically."""
+    from src.orchestrator import compositions as comp
+
+    query = f"{subject_canonical} {field} {new_value} {because}".strip()[:300]
+    try:
+        search_out = await comp.run_spec(
+            pool, {"op": "function", "name": "search",
+                   "args": {"q": query, "limit": 15, "caller": actor}},
+            None, name="search", caller=actor)
+        prior = prior_art_from_hits(search_out["items"]["hits"])
+    except Exception:  # noqa: BLE001 — never block the write on a search-side failure
+        prior = []
+    if not prior or not prior_art_is_strong(prior):
+        return {}
+    top = prior[0]
+    return {
+        "prior_art": prior,
+        "prior_art_flag": (
+            f"a standing ruling ({top['id']}) may already cover {subject_canonical}'s "
+            f"{field!r} — read it before this value stands as the final word"),
+    }
+
+
 # CONTRADICT vs RE-DERIVE (PRACTICE v2 layer 1, Thoth LXII's DM 1785; grounds c54e8176 +
 # thread 54a5c842): a strong hit against a standing Practice gets the SAME "looks like a
 # re-derivation" nudge today whether the new decision merely restates the Practice or

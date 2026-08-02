@@ -1057,7 +1057,14 @@ async def correct_house(actions: Actions, agent_id: str, new_house: str, *, sour
     Refuses LOUDLY on: an empty house; a caller holding no seat; a caller whose seat is
     NOT a head (an active managed_by edge out means this seat derives its house through
     its manager now — stamping its own house property would be inert data nobody reads,
-    the exact 'legacy write stays inert' shape derive_house already documents)."""
+    the exact 'legacy write stays inert' shape derive_house already documents).
+
+    PRIOR-ART SURFACED, NEVER REFUSED (obligation e4612853's sibling, ruling 38c71544's
+    family): the receipt's own `prior_art`/`prior_art_flag` keys, when present, name a
+    standing Decision that may already cover this seat's house — the same search()-based
+    guard record_decision runs on itself, generalized here. Cannot distinguish a
+    deliberate correction from an uninformed overwrite; only ensures the write does not
+    land silently unread."""
     new_house = (new_house or "").strip()
     if not new_house:
         return {"error": "a house needs a name"}
@@ -1076,7 +1083,12 @@ async def correct_house(actions: Actions, agent_id: str, new_house: str, *, sour
     seat_obj = await actions.create_or_find_object("Seat", seat_id, source)
     await actions.assert_property(seat_obj, "house", new_house, source, datetime.now(UTC),
                                   _CONF, evidence_class=_EC)
-    return {"seat_id": seat_id, "house": new_house, "was": was}
+    from src.orchestrator.capture import property_prior_art
+
+    prior_art_bits = await property_prior_art(
+        actions.pool, subject_canonical=seat_id, field="house", new_value=new_house,
+        actor=source)
+    return {"seat_id": seat_id, "house": new_house, "was": was, **prior_art_bits}
 
 
 async def fold_seat(

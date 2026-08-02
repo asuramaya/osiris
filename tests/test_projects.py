@@ -609,6 +609,27 @@ async def test_correct_project_name_settles_a_genuine_case_only_flip_flop(
     assert winner == "byteclub"
 
 
+async def test_correct_project_name_surfaces_prior_art_never_refuses_on_it(
+    actions: Actions, monkeypatch,
+) -> None:
+    """obligation e4612853's sibling (Thoth DM 3169/3185): this verb's own majority-vote
+    can legitimately re-settle onto a casing a standing operator ruling specifically
+    rejected — the receipt must surface that ruling, never block the settle."""
+    await _name_history(
+        actions, "repo:byebyte", ["byebyte", "ByeByte", "byebyte", "ByeByte", "byebyte"])
+
+    async def _fake_prior_art(pool, *, subject_canonical, field, new_value, actor, because=""):
+        return {"prior_art": [{"id": "1db87191", "type": "Decision"}],
+               "prior_art_flag": f"a standing ruling (1db87191) may already cover "
+                                  f"{subject_canonical}'s {field!r}"}
+
+    monkeypatch.setattr("src.orchestrator.capture.property_prior_art", _fake_prior_art)
+    out = await correct_project_name(actions, project="byebyte", actor="agent:test")
+    assert out["corrected"] is True  # the settle still happened
+    assert out["prior_art_flag"] == (
+        "a standing ruling (1db87191) may already cover repo:byebyte's 'name'")
+
+
 async def test_correct_project_name_refuses_a_genuine_rename(actions: Actions) -> None:
     """THE NEGATIVE CONTROL (ruling 1db1ff41's own bar): redmonth vs ballgem is not
     case/whitespace drift, it is two different names — correct_project_name must refuse

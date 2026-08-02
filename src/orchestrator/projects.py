@@ -501,7 +501,17 @@ async def correct_project_name(
     among the raw historical assertions picks whichever casing this object's own history
     actually favors, using that casing's own most-recent instance to break nothing extra.
     A TIE refuses rather than guess; the caller settles it by hand
-    (assert_project_property) with a stated reason on the record."""
+    (assert_project_property) with a stated reason on the record.
+
+    PRIOR-ART SURFACED, NEVER REFUSED (obligation e4612853's sibling, ruling 38c71544's
+    family — the bytebye/byebyte incident: this verb's own majority-vote CAN legitimately
+    re-settle onto a casing a standing operator ruling specifically rejected, since
+    "provably identity-unchanged" says nothing about WHICH equivalent form was ordered).
+    The receipt's own `prior_art`/`prior_art_flag` keys, when present, name a standing
+    Decision that may already cover this exact name — the same search()-based guard
+    record_decision runs on itself, generalized here. Cannot distinguish a deliberate
+    correction from an uninformed one; only ensures the write does not land silently
+    unread."""
     row, err = await _resolve_project_ref(actions.pool, project, verb="correct_project_name")
     if err:
         return err
@@ -545,6 +555,12 @@ async def correct_project_name(
     now = datetime.now(UTC)
     await actions.assert_property(row["id"], "name", settled, actor, now, _CONF,
                                   evidence_class=_EC)
+    from src.orchestrator.capture import property_prior_art
+
+    prior_art_bits = await property_prior_art(
+        actions.pool, subject_canonical=row["canonical"], field="name",
+        new_value=settled, because=because or "", actor=actor)
     return {"project": row["canonical"], "corrected": True, "settled_to": settled,
            "was": distinct_raw, "vote": dict(counts),
-           "because": because or "case/whitespace-only correction, self-proved"}
+           "because": because or "case/whitespace-only correction, self-proved",
+           **prior_art_bits}

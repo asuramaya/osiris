@@ -321,6 +321,15 @@ async def rename_project(
     does no evidence-gathering of its own; that is project_identity_evidence's job,
     run BEFORE this is called, by a human who read its report.
 
+    PRIOR-ART SURFACED, NEVER REFUSED (obligation e4612853's sibling, ruling 38c71544's
+    family — the bytebye/byebyte incident, decision 1db87191's own ruling silently
+    overturned by a later, uninformed agent's re-assertion): the receipt's own
+    `prior_art`/`prior_art_flag` keys, when present, name a standing Decision that may
+    already cover this exact rename — the same search()-based guard record_decision
+    already runs on itself, generalized here. This CANNOT tell a deliberate correction
+    of an earlier decision from an uninformed overwrite of one — it does not try to;
+    it only ensures the write does not land silently unread.
+
     Refuses LOUDLY on: a blank `new_name` or `because`; an unresolved or ambiguous
     `project` ref (AmbiguousProjectRef, named exactly like every other project verb);
     a non-active project; `new_name` already resolving to a DIFFERENT active
@@ -371,11 +380,17 @@ async def rename_project(
     mount_tag = await actions.pool.execute(
         "UPDATE agent_mounts SET project=$1 WHERE project=$2", new_name, bare_old)
     mounts_moved = int(mount_tag.rsplit(" ", 1)[-1])
+    from src.orchestrator.capture import property_prior_art
+
+    prior_art_bits = await property_prior_art(
+        actions.pool, subject_canonical=row["canonical"], field="name",
+        new_value=new_name, because=because, actor=actor)
     return {"project": row["canonical"], "old_name": old_name, "new_name": new_name,
            "mounts_moved": mounts_moved, "because": because,
            "note": f"{row['canonical']}'s canonical id never changes; edges already "
                    "pointing at it are unaffected; its own .osiris pin file on disk "
-                   "is NOT touched by this verb"}
+                   "is NOT touched by this verb",
+           **prior_art_bits}
 
 
 async def fork_project(

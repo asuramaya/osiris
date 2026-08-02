@@ -26,6 +26,7 @@ from src.orchestrator.capture import (
     open_thread,
     prior_art_from_hits,
     prior_art_is_strong,
+    property_prior_art,
     reclassify_thread,
     record_blind_spot,
     record_decision,
@@ -3033,15 +3034,126 @@ async def test_record_decision_implements_and_ack_prior_art(actions: Actions) ->
         assert "error" in bad
         assert "implements matched no decision" in bad["error"]
 
-        # ack_prior_art with no strong hit: honest no-op, never fabricates an acknowledgment
+        # ack_prior_art with no hit AT ALL: honest no-op, never fabricates an acknowledgment
         lonely = await rd_tool(
             "a totally unrelated one-off decision about lonely widgets", kind="decision",
             ack_prior_art=True, ctx=ctx)
         assert lonely["prior_art_acknowledged"] == (
-            "no strong prior-art hit was found to acknowledge")
+            "no prior-art hit was found at all — nothing to acknowledge")
+        assert "prior_art" not in lonely
     finally:
         srv._pool = saved_pool
         _agents.pop(_conn_key(ctx), None)
+
+
+async def test_ack_prior_art_distinguishes_weak_hits_from_no_hits(
+    actions: Actions, monkeypatch,
+) -> None:
+    """Live bug, caught by Thoth on ruling b44ddb6d (msg 3185): `out["prior_art"]` listed
+    FIVE real hits while `prior_art_acknowledged` said "no strong prior-art hit was found" —
+    #117's own vocabulary-collapse shape (a receipt says "nothing" while the same response
+    carries something). A weak hit (found, just not STRONG enough to flag) must read
+    differently from truly finding nothing."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import record_decision as rd_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:thaw3", session="thaw3", project="thaw-land-3", model=None, cwd=None)
+    weak_hit = [{"id": "deadbeef", "type": "Decision", "summary": "a weakly-related hit",
+                "grade": "self_declared", "via": "lexical"}]  # "lexical" alone is NOT strong
+    monkeypatch.setattr(
+        "src.orchestrator.capture.prior_art_from_hits", lambda *a, **k: weak_hit)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await rd_tool("a decision with a weak prior-art hit", kind="decision",
+                            ack_prior_art=True, ctx=ctx)
+        assert out["prior_art"] == weak_hit  # the hit IS in the receipt
+        assert "prior_art_flag" not in out   # but not strong enough to flag
+        assert out["prior_art_acknowledged"] == (
+            "1 prior-art hit(s) found but none strong enough to flag — "
+            "nothing rises to acknowledge")
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
+# --- property_prior_art: record_decision's own guard, generalized to a PROPERTY write ---------
+# (obligation e4612853's sibling, Thoth DM 3169/3185, ruling 38c71544's family: a standing
+# Decision silently overturned by a later, uninformed property write — the bytebye/byebyte
+# incident, decision 1db87191)
+
+async def test_property_prior_art_empty_when_search_returns_nothing(
+    actions: Actions, monkeypatch,
+) -> None:
+    async def _empty_run_spec(pool, spec, subject, **k):
+        return {"items": {"hits": []}}
+
+    monkeypatch.setattr("src.orchestrator.compositions.run_spec", _empty_run_spec)
+    out = await property_prior_art(
+        actions.pool, subject_canonical="repo:nothing-to-see", field="name",
+        new_value="whatever", actor="agent:test")
+    assert out == {}
+
+
+async def test_property_prior_art_empty_when_hit_is_weak(
+    actions: Actions, monkeypatch,
+) -> None:
+    async def _weak_run_spec(pool, spec, subject, **k):
+        return {"items": {"hits": [
+            {"id": "deadbeef-dead-beef-dead-beefdeadbeef", "type": "Decision",
+             "snippet": "a loosely related decision", "grade": "self_declared",
+             "via": "semantic"},  # semantic alone is not strong (needs "id" or "both")
+        ]}}
+
+    monkeypatch.setattr("src.orchestrator.compositions.run_spec", _weak_run_spec)
+    out = await property_prior_art(
+        actions.pool, subject_canonical="repo:bytebye", field="name",
+        new_value="ByeByte", actor="agent:test")
+    assert out == {}
+
+
+async def test_property_prior_art_surfaces_a_strong_hit(
+    actions: Actions, monkeypatch,
+) -> None:
+    """The flagship shape: a standing ruling exists (repo:bytebye's own operator rename,
+    decision 1db87191 in spirit) and a later write to the SAME object+field must see it."""
+    async def _strong_run_spec(pool, spec, subject, **k):
+        return {"items": {"hits": [
+            {"id": "1db87191-0000-0000-0000-000000000000", "type": "Decision",
+             "snippet": "bytebye renamed to byebyte per explicit operator declaration",
+             "grade": "self_declared", "via": "both"},
+        ]}}
+
+    monkeypatch.setattr("src.orchestrator.compositions.run_spec", _strong_run_spec)
+    out = await property_prior_art(
+        actions.pool, subject_canonical="repo:bytebye", field="name",
+        new_value="ByeByte", because="tidying up casing", actor="agent:c1b99f6e-vii")
+    assert out["prior_art"][0]["id"] == "1db87191"
+    assert "repo:bytebye" in out["prior_art_flag"] and "'name'" in out["prior_art_flag"]
+    assert "1db87191" in out["prior_art_flag"]
+
+
+async def test_property_prior_art_fails_open_on_a_search_error(
+    actions: Actions, monkeypatch,
+) -> None:
+    """Fail-open, same discipline record_decision's own guard already holds — a search-side
+    hiccup must never block the write it is only advising on."""
+    async def _boom(pool, spec, subject, **k):
+        raise RuntimeError("search index unavailable")
+
+    monkeypatch.setattr("src.orchestrator.compositions.run_spec", _boom)
+    out = await property_prior_art(
+        actions.pool, subject_canonical="repo:whatever", field="name",
+        new_value="x", actor="agent:test")
+    assert out == {}
 
 
 async def test_unified_prior_art_check_surfaces_a_practice_via_the_statement_field(
