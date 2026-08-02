@@ -4,13 +4,19 @@ CONFIDENCE, and never over a mind's own declaration.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from src.actions.core import Actions
 from src.config.settings import Settings
-from src.ingest.closure import close_by_commits, close_by_commits_scheduled_tick
+from src.ingest.closure import (
+    close_by_commits,
+    close_by_commits_scheduled_tick,
+    close_by_prose_backfill,
+)
 from src.orchestrator.capture import open_thread
 from src.orchestrator.monitor import get_cursor
+from src.orchestrator.thread_closure import thread_closure_status
 
 BORN = datetime(2026, 7, 1, tzinfo=UTC)
 LATER = datetime(2026, 7, 5, tzinfo=UTC)
@@ -295,3 +301,135 @@ def test_rarity_outranks_volume_which_is_the_whole_point() -> None:
     rare = sum(idf[t] for t in ("quokka", "organ"))
     assert common < 0.3               # five ubiquitous words carry almost no information at all
     assert rare > common * 15         # two fingerprints outweigh all five, by a mile
+
+
+# --- close_by_prose_backfill (Thoth DM 2958/2975, thread 13725dbb) ---------------------
+
+async def _edgeless_resolved(
+    actions: Actions, canon: str, resolved_because: str, *, repo: str | None = "pb",
+) -> str:
+    """A resolved-edgeless thread, the pre-Phase-1a shape: writes the 'resolved' status +
+    resolved_because directly rather than through resolve_thread (which, since Phase 1a,
+    always mints SOME edge) — this is exactly how the real historical sediment
+    (closure_health's own pre_fix_sediment count) looks today."""
+    t = await actions.create_or_find_object("Thread", canon, "session")
+    await actions.assert_property(t, "summary", canon, "session", BORN, 0.9)
+    await actions.assert_property(t, "status", "resolved", "session", BORN, 0.9)
+    await actions.assert_property(t, "resolved_because", resolved_because, "session", BORN, 0.9)
+    if repo:
+        proj = await actions.create_or_find_object("SoftwareProject", f"repo:{repo}", "session")
+        await actions.assert_property(proj, "name", repo, "session", BORN, 0.9)
+        await actions.create_link(t, proj, "in_repo", "session", BORN, 0.9)
+    return str(t)
+
+
+async def test_prose_backfill_dry_run_finds_and_reports_without_writing(
+    actions: Actions,
+) -> None:
+    c = await actions.create_or_find_object("Commit", "commit:abcdef1", "git")
+    await actions.assert_property(c, "subject", "the real fix", "git", LATER, 0.9)
+    tid = await _edgeless_resolved(actions, "thread:cited-loose",
+                                   "Fixed. SHIPPED in abcdef1, all green.")
+
+    out = await close_by_prose_backfill(actions, repo="pb", dry_run=True)
+    assert out["dry_run"] is True
+    assert out["resolved"] == 1
+    assert out["resolved_rows"][0]["thread"] == tid[:8]
+    assert await actions.pool.fetchval(  # nothing written — the in_repo link is the fixture's
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='resolved_by'", tid) == 0
+
+
+async def test_prose_backfill_live_mints_a_weak_resolved_by_edge(actions: Actions) -> None:
+    """The migration is the point: a closure-backfill-sourced resolved_by edge reads
+    strength='weak' downstream, never silently equal to a hand-typed citation."""
+    c = await actions.create_or_find_object("Commit", "commit:1113c8b", "git")
+    await actions.assert_property(c, "subject", "fleet roster", "git", LATER, 0.9)
+    tid = await _edgeless_resolved(actions, "thread:cited-live",
+                                   "Fleet roster implementation committed (1113c8b)")
+
+    out = await close_by_prose_backfill(actions, repo="pb", dry_run=False)
+    assert out["resolved"] == 1
+    linked = await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='resolved_by'",
+        uuid.UUID(tid))
+    assert linked == c
+
+    rows = await thread_closure_status(actions.pool, thread_ids=[uuid.UUID(tid)])
+    assert rows[0]["closed_by_topology"] is True
+    assert rows[0]["strength"] == "weak"       # NOT strong, despite being a resolved_by edge
+    assert rows[0]["closure_edges"][0]["source_id"] == "closure-backfill"
+
+
+async def test_prose_backfill_reports_unresolvable_separately_from_no_candidate(
+    actions: Actions,
+) -> None:
+    """A hash-shaped candidate that resolves to nothing is a MISS, its own number — never
+    folded into the same bucket as prose with nothing hash-shaped in it at all."""
+    await _edgeless_resolved(actions, "thread:phantom-hash",
+                             "Fixed in commit deadbeefcafe, verified working")  # no such commit
+    await _edgeless_resolved(actions, "thread:no-hash-at-all",
+                             "Answered directly; no further action needed")
+
+    out = await close_by_prose_backfill(actions, repo="pb", dry_run=True)
+    assert out["resolved"] == 0
+    assert out["unresolvable"] == 1
+    assert out["no_candidate"] == 1
+
+
+async def test_prose_backfill_excludes_the_wake_permission_storm_cluster(
+    actions: Actions,
+) -> None:
+    """Constraint 4: near-duplicate mined echoes of one incident are a dedup problem, not
+    a missing-evidence problem — skipped entirely, even though this specimen's text
+    happens to also carry a resolvable-looking hash."""
+    c = await actions.create_or_find_object("Commit", "commit:9c255ce", "git")
+    await actions.assert_property(c, "subject", "fix", "git", LATER, 0.9)
+    await _edgeless_resolved(
+        actions, "thread:wake-storm-echo",
+        "wake permission storm echo (root cause thread ba73c0c8, fixed 9c255ce, witnessed)")
+
+    out = await close_by_prose_backfill(actions, repo="pb", dry_run=True)
+    assert out["candidates"] == 1
+    assert out["resolved"] == 0 and out["unresolvable"] == 0 and out["no_candidate"] == 0
+
+
+async def test_prose_backfill_resolves_a_sibling_thread_citation(actions: Actions) -> None:
+    """Proves piece 1 (the widened _find_artifact) composes end to end through this miner
+    too — a fold/merge into another Thread is a match, not just a Decision or Commit."""
+    canonical = await _edgeless_resolved(actions, "thread:canonical-ask", "the real answer")
+    dup_short = canonical[:8]
+    dup = await _edgeless_resolved(actions, "thread:dup-ask", f"folded into {dup_short}")
+
+    out = await close_by_prose_backfill(actions, repo="pb", dry_run=True)
+    row = next(r for r in out["resolved_rows"] if r["thread"] == dup[:8])
+    assert row["target"] == dup_short
+
+
+async def test_prose_backfill_skips_a_thread_that_is_already_commit_closeable(
+    actions: Actions,
+) -> None:
+    """Not this miner's job — closure_health's own commit_closeable bucket already covers
+    a resolved_artifact that resolves; the backfill only ever targets needs_human."""
+    c = await actions.create_or_find_object("Commit", "commit:already", "git")
+    await actions.assert_property(c, "subject", "x", "git", LATER, 0.9)
+    t = await actions.create_or_find_object("Thread", "thread:already-cited", "session")
+    await actions.assert_property(t, "status", "resolved", "session", BORN, 0.9)
+    await actions.assert_property(t, "resolved_artifact", str(c)[:8], "session", BORN, 0.9)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:pb", "session")
+    await actions.assert_property(proj, "name", "pb", "session", BORN, 0.9)
+    await actions.create_link(t, proj, "in_repo", "session", BORN, 0.9)
+
+    out = await close_by_prose_backfill(actions, repo="pb", dry_run=True)
+    assert out["candidates"] == 0
+
+
+async def test_prose_backfill_scopes_by_repo(actions: Actions) -> None:
+    await _edgeless_resolved(actions, "thread:in-scope", "shipped in 1113c8b", repo="pb")
+    await _edgeless_resolved(actions, "thread:out-of-scope", "shipped in 1113c8b",
+                             repo="elsewhere")
+
+    scoped = await close_by_prose_backfill(actions, repo="pb", dry_run=True)
+    assert scoped["candidates"] == 1
+
+    unknown = await close_by_prose_backfill(actions, repo="no-such-project", dry_run=True)
+    assert "no SoftwareProject named" in unknown["note"]

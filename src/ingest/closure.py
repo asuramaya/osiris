@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import math
 import re
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -46,7 +47,9 @@ import asyncpg
 from src.actions.core import Actions
 from src.config.settings import Settings, get_settings
 from src.ingest.mined import distinctive_terms
+from src.orchestrator.capture import _find_artifact
 from src.orchestrator.monitor import get_cursor, set_cursor
+from src.orchestrator.thread_closure import thread_closure_status
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -350,3 +353,155 @@ async def close_by_commits_scheduled_tick(
                         "(osiris_closure_miner_enabled=0)"}
     out = await close_by_commits(actions, repo=None, dry_run=False)
     return {"enabled": True, **out}
+
+
+# --- THE PROSE BACKFILL (Thoth DM 2958/2975, thread 13725dbb) --------------------------
+#
+# THE FINDING THAT MOTIVATES THIS: closure_health's own needs_human split (commit af20ad9)
+# proved most of the fleet-wide resolved-edgeless pile is not missing evidence at all —
+# it's evidence sitting in `resolved_because` PROSE ("SHIPPED in 9a12b71", "Fixed in
+# adaptive.js: ...") that a mind wrote on purpose and _find_artifact structurally could
+# never see, because it only ever looked at `resolved_artifact`. A 110-thread hand-read
+# sample found this is the DOMINANT pattern, not a rare one — a crude keyword floor alone
+# caught 429 of 929 (46%), and reading the residual by hand suggested the true recoverable
+# share is far higher, just phrased differently than any keyword list would catch.
+#
+# WHAT THIS DOES NOT DO: guess. It extracts hash-shaped TOKENS (git's own convention, 7-40
+# hex chars, reusing the exact same shape `_find_artifact`'s own bare-hash branch already
+# validates) and a thread-graph's own 8-hex short-id convention (`_SHORT_ID`, the exact
+# regex `_evidence` above already uses to detect a commit NAMING a thread) — then asks the
+# SAME resolver every citation goes through, `_find_artifact`, whether that token names a
+# real object. A coincidental hex-shaped word finding nothing real is reported as a MISS,
+# never guessed into a mint (Thoth's constraint 2) — see `unresolvable` below.
+_HASH_TOKEN = re.compile(r"\b[0-9a-f]{7,40}\b", re.I)
+# The wake-permission-storm mined-echo cluster's own boilerplate (Thoth's constraint 4):
+# near-duplicate Thread objects for ONE incident, all citing "root cause thread ba73c0c8"
+# verbatim. A dedup problem, not a missing-evidence problem — excluded here, named as its
+# own smaller, separate task, never entangled with this backfill.
+_WAKE_STORM_MARKER = "root cause thread"
+_BACKFILL_SOURCE = "closure-backfill"
+
+
+async def _needs_human_threads(
+    pool: asyncpg.Pool, repo_id: uuid.UUID | None,
+) -> list[dict[str, Any]]:
+    """The population this backfill targets: resolved, no closure edge, and whatever
+    `resolved_artifact` it already carries (if any) does not resolve to a graph object
+    right now — closure_health's own `needs_human` bucket (compositions.py, commit
+    af20ad9), independently re-derived here from the same primitives
+    (`thread_closure_status`, `_find_artifact`) rather than imported, since this ingest-
+    layer module never reaches into the orchestrator's read-composition layer. Recomputed
+    fresh every call, never trusted from a prior report — the graph keeps growing, so an
+    artifact that failed to resolve yesterday may resolve today."""
+    rows = await thread_closure_status(pool, repo=repo_id)
+    resolved_edgeless = [r for r in rows if not r["closed_by_topology"]
+                         and r["property_status"] == "resolved"]
+    ids = [r["thread_id"] for r in resolved_edgeless]
+    if not ids:
+        return []
+    detail = await pool.fetch(
+        "SELECT o.id, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='resolved_because' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "  LIMIT 1) AS resolved_because, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='resolved_artifact' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "  LIMIT 1) AS resolved_artifact "
+        "FROM objects o WHERE o.id = ANY($1::uuid[])", ids)
+    out = []
+    for r in detail:
+        if r["resolved_artifact"] and await _find_artifact(pool, r["resolved_artifact"]):
+            continue  # already commit_closeable via the direct field — not this miner's job
+        out.append(dict(r))
+    return out
+
+
+async def close_by_prose_backfill(
+    actions: Actions, *, repo: str | None = None, dry_run: bool = True,
+) -> dict[str, Any]:
+    """Mine `resolved_because` PROSE for hash-shaped evidence a mind already wrote but
+    `_find_artifact` could never see, because that resolver only ever reads
+    `resolved_artifact` (Thoth DM 2958/2975, piece 2 of the closure-backfill work — piece 1
+    widened `_find_artifact` itself to match Thread, commit 8710ede). `repo` (a project
+    name) scopes the read; `None` (the default) is fleet-wide, on purpose — closure_health's
+    own scope finding (Thoth DM 2958) showed only 40% of the needs_human pile is even
+    osiris's own; a backfill that only served osiris would leave the other 60% untouched in
+    houses with nobody awake to run it.
+
+    `dry_run=True` (the default, matching `close_by_commits`' own convention) writes
+    NOTHING and reports exactly what it would do.
+
+    THE THREE-WAY REPORT IS THE DELIVERABLE (Thoth's own framing), not the mints:
+      - `resolved` — a hash-shaped token in the thread's prose resolved to a real graph
+        object (Decision, Commit, or — since piece 1 — a sibling Thread). Mintable.
+      - `unresolvable` — hash-shaped text WAS found, but nothing in the graph matches it.
+        Never silently dropped or folded into a generic failure count: this is the
+        commit-ingestion gap, measured here for the first time, worth its own number.
+      - `no_candidate` — nothing hash-shaped in the prose at all. No change from today;
+        still genuinely needs a human.
+
+    NEVER MINTS resolved_by AT THE SAME TRUST LEVEL A DIRECT CITATION CARRIES (constraint
+    1): every mint here uses the SAME resolved_by edge shape (correct — it IS what closed
+    the thread, structurally), but from a DISTINCT source (`closure-backfill`, not a
+    mind's own `session`/agent id) at `EvidenceClass.DERIVED` — this module's own existing
+    `_EC`/`_CONF` constants, the same ones `close_by_commits` already uses, deliberately
+    never `SELF_DECLARED`. Migration 0045 reads `thread_closure_edges`' strength from
+    `source_id` for exactly this reason: a `closure-backfill`-sourced resolved_by edge
+    reports `strength='weak'` downstream (closure_health's own strong/weak split, commit
+    af20ad9), never silently promoted to the same confidence as a hand-typed artifact=.
+
+    Idempotent per (thread, target) pair, same check-then-create shape `close_by_commits`'
+    own strong path already uses — a re-run over an already-backfilled thread is a no-op."""
+    repo_id = None
+    if repo:
+        repo_id = await actions.pool.fetchval(
+            "SELECT o.id FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+            "WHERE o.type='SoftwareProject' AND a.name='name' AND a.value #>> '{}'=$1 LIMIT 1",
+            repo)
+        if repo_id is None:
+            return {"note": f"no SoftwareProject named {repo!r}"}
+
+    candidates = await _needs_human_threads(actions.pool, repo_id)
+    resolved: list[dict[str, Any]] = []
+    unresolvable: list[dict[str, Any]] = []
+    no_candidate = 0
+    observed = datetime.now(UTC)
+
+    for t in candidates:
+        text = " ".join(filter(None, [t.get("resolved_because"), t.get("resolved_artifact")]))
+        if _WAKE_STORM_MARKER in text.lower():
+            continue  # constraint 4 — its own smaller dedup task, not this one
+        tokens = _HASH_TOKEN.findall(text)
+        if not tokens:
+            no_candidate += 1
+            continue
+        target = None
+        matched: str | None = None
+        for tok in tokens:
+            target = await _find_artifact(actions.pool, tok)
+            if target is not None:
+                matched = tok
+                break
+        tid = str(t["id"])
+        if target is None:
+            unresolvable.append({"thread": tid[:8], "candidate_tokens": tokens[:5]})
+            continue
+        resolved.append({"thread": tid[:8], "matched": matched, "target": str(target)[:8]})
+        if not dry_run and not await actions.pool.fetchval(
+                "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 "
+                "AND type='resolved_by' LIMIT 1", t["id"], target):
+            await actions.create_link(t["id"], target, "resolved_by", _BACKFILL_SOURCE,
+                                      observed, _CONF, evidence_class=_EC,
+                                      actor=_BACKFILL_SOURCE)
+
+    return {
+        "repo": repo, "dry_run": dry_run,
+        "candidates": len(candidates),
+        "resolved": len(resolved), "unresolvable": len(unresolvable),
+        "no_candidate": no_candidate,
+        "resolved_rows": resolved[:20], "unresolvable_rows": unresolvable[:20],
+        "note": ("DRY RUN — nothing written" if dry_run else
+                 f"{len(resolved)} closed via prose-mined citation (weak, source="
+                 f"{_BACKFILL_SOURCE!r}); {len(unresolvable)} had a hash-shaped candidate "
+                 "that resolved to nothing — the commit-ingestion gap"),
+    }
