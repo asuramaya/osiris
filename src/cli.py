@@ -74,6 +74,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 from collections.abc import Awaitable, Callable
@@ -768,6 +769,40 @@ def composition_gap_notes(have: set[str], expected: set[str]) -> list[str]:
             "(or `osiris seed --compositions-only`)." for name in sorted(expected - have)]
 
 
+def composition_drift_notes(
+    live_specs: dict[str, Any], expected: dict[str, dict[str, Any]],
+) -> list[str]:
+    """MISSING-OR-DIFFERENT, not just missing (obligation e4612853, ruling 38c71544 — "two
+    records of one truth with no reconciler": DEFAULT_COMPOSITIONS's Python constant and a
+    composition's own DB row are synced ONLY by someone remembering the separate manual
+    `osiris seed --compositions-only` step; nothing enforces it and, until this, nothing
+    detected skipping it). A real instance: a346a0d edited PROJECT_BRIEFING's columns in
+    source, the commit landed, the deploy was green, and the live 'project-briefing' row
+    kept serving the pre-edit spec for hours — every instrument said success; the read was
+    stale (fixed live, ruling 143899e1).
+
+    NAME every drifted composition, never a bare count (same law composition_gap_notes
+    already established, thread a25365a9) — a count can't be acted on; a name can.
+
+    CANNOT DISTINGUISH a forgotten re-save from a DELIBERATE live hand-edit in the composer
+    (both travel through the identical save_composition() write path, and the DB row carries
+    no marker of which happened) — stated here rather than guessed at with a heuristic that
+    would eventually cry wolf on legitimate forks and get ignored. A composition present in
+    `expected` but absent from `live_specs` is composition_gap_notes' own job, silently
+    skipped here to keep the two checks from double-reporting the same row."""
+    out = []
+    for name, source_spec in sorted(expected.items()):
+        if name not in live_specs:
+            continue
+        if json.dumps(source_spec, sort_keys=True) != json.dumps(live_specs[name], sort_keys=True):
+            out.append(
+                f"compositions: {name!r} DIFFERS from its own DEFAULT_COMPOSITIONS source — "
+                "either a deliberate live hand-edit (leave it) or a forgotten re-save after "
+                "editing the source constant (run `osiris seed --compositions-only`); this "
+                "check cannot tell which.")
+    return out
+
+
 def alembic_gap_note(current: str | None, head: str | None) -> str | None:
     if head is None or current == head:
         return None
@@ -804,13 +839,29 @@ async def _composition_gaps(pool: asyncpg.Pool) -> list[str]:
     would replay code OVER whatever the DB now holds under that name. Reporting by name
     keeps the fix in the same class as the ratchet: name what's missing, let a human decide.
 
+    ALSO CHECKS DRIFT, NOT ONLY ABSENCE (obligation e4612853, ruling 38c71544) — a composition
+    can EXIST under the right name and still be silently stale: `composition_drift_notes`
+    compares each DEFAULT_COMPOSITIONS entry's spec against the live DB row's own spec,
+    exhaustively, name by name. Measured live before this shipped: 0/29 currently drifted —
+    but that baseline is the CHEAPEST moment this check will ever have (any future nonzero
+    reading is unambiguous new drift, not archaeology through a pre-existing backlog). Same
+    ALARM-not-refuse posture as every other note this function returns: `cmd_deploy` prints
+    these under "UN-RUN STEPS:" and never touches its own exit code over them — a drifted
+    composition is a stale READ, not corruption, and refusing an unrelated deploy over it
+    would repeat the exact false-refusal cost core.hooksPath's own finding (ruling d4e65da0)
+    already proved real tonight.
+
     Also names every composition with room_id IS NULL (ruling 89e67c49) — a second, distinct
     gap class from a missing default, folded into the same end-of-deploy report rather than
     a separate command, since both are "a composition is silently unreachable" findings."""
     from src.orchestrator.compositions import DEFAULT_COMPOSITIONS
 
-    have = {r["name"] for r in await pool.fetch("SELECT name FROM compositions")}
+    rows = await pool.fetch("SELECT name, spec FROM compositions")
+    have = {r["name"] for r in rows}
+    live_specs = {r["name"]: (json.loads(r["spec"]) if isinstance(r["spec"], str) else r["spec"])
+                 for r in rows}
     notes = composition_gap_notes(have, set(DEFAULT_COMPOSITIONS))
+    notes += composition_drift_notes(live_specs, DEFAULT_COMPOSITIONS)
     unassigned = [r["name"] for r in
                  await pool.fetch("SELECT name FROM compositions WHERE room_id IS NULL")]
     notes += composition_room_gap_notes(unassigned)

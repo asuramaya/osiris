@@ -12,6 +12,7 @@ from typing import Any
 from src.actions.core import Actions
 from src.cli import (
     DEPLOY_UNITS,
+    _composition_gaps,
     _find_repo_root,
     _wait_for_health,
     _wait_for_smoke,
@@ -26,6 +27,7 @@ from src.cli import (
     cmd_migrate,
     cmd_seed,
     commit_deployed_notes,
+    composition_drift_notes,
     composition_gap_notes,
     composition_room_gap_notes,
     diff_tool_lists,
@@ -450,6 +452,64 @@ def test_composition_room_gap_notes_names_each_unassigned_composition() -> None:
 
 def test_composition_room_gap_notes_silent_when_none_unassigned() -> None:
     assert composition_room_gap_notes([]) == []
+
+
+# --- composition_drift_notes: MISSING-OR-DIFFERENT, not just missing (e4612853/38c71544) -------
+
+def test_composition_drift_notes_flags_a_differing_spec_by_name() -> None:
+    live = {"a": {"op": "select", "object_type": "Commit"}}
+    expected = {"a": {"op": "select", "object_type": "Decision"}}
+    notes = composition_drift_notes(live, expected)
+    assert len(notes) == 1
+    assert "'a'" in notes[0]
+    assert "DIFFERS" in notes[0]
+
+
+def test_composition_drift_notes_silent_when_specs_match() -> None:
+    live = {"a": {"op": "select", "object_type": "Commit"}}
+    expected = {"a": {"op": "select", "object_type": "Commit"}}
+    assert composition_drift_notes(live, expected) == []
+
+
+def test_composition_drift_notes_ignores_key_order() -> None:
+    """A spec is a dict, not a string — reordering keys during an unrelated refactor must
+    never read as drift (json.dumps(sort_keys=True) on both sides)."""
+    live = {"a": {"op": "select", "object_type": "Commit"}}
+    expected = {"a": {"object_type": "Commit", "op": "select"}}
+    assert composition_drift_notes(live, expected) == []
+
+
+def test_composition_drift_notes_never_reports_a_missing_composition() -> None:
+    """A name in `expected` but absent from `live_specs` is composition_gap_notes' own job
+    (a missing default) — this function must stay silent about it, never double-report."""
+    live: dict[str, Any] = {}
+    expected = {"a": {"op": "select"}}
+    assert composition_drift_notes(live, expected) == []
+
+
+def test_composition_drift_notes_multiple_drifts_all_named() -> None:
+    live = {"a": {"op": "select"}, "b": {"op": "select"}, "c": {"op": "select"}}
+    expected = {"a": {"op": "select"}, "b": {"op": "different"}, "c": {"op": "also-different"}}
+    notes = composition_drift_notes(live, expected)
+    assert len(notes) == 2
+    joined = " ".join(notes)
+    assert "'b'" in joined and "'c'" in joined and "'a'" not in joined
+
+
+async def test_composition_gaps_names_a_real_drifted_composition(actions: Actions) -> None:
+    """End-to-end against a real seeded pool (this repo's own never-mock-the-DB rule): seed
+    the real defaults, hand-mutate ONE composition's spec directly (standing in for "source
+    edited, DB row never re-pushed" — the exact a346a0d/project-briefing shape), confirm
+    _composition_gaps names it while every other default stays silent."""
+    assert await cmd_seed(compositions_only=True, pool=actions.pool) == 0
+    await actions.pool.execute(
+        "UPDATE compositions SET spec=$1 WHERE name='mail'",
+        '{"op": "function", "name": "not_the_real_mail_overview_anymore"}')
+    gaps = await _composition_gaps(actions.pool)
+    joined = " ".join(gaps)
+    assert "'mail'" in joined and "DIFFERS" in joined
+    assert "'briefing'" not in joined  # an untouched default stays silent
+    assert "'project-briefing'" not in joined
 
 
 def test_alembic_gap_note_flags_a_mismatch() -> None:
