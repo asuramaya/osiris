@@ -447,6 +447,13 @@ async def _cmd_launch_harness(
               f"Find it in `claude agents` as {live_name!r}.")
         return 0
 
+    from src.ingest.sessions import dormant_history_confession, dormant_history_note
+
+    dormant = dormant_history_confession(office)
+    if dormant is not None:
+        print(f"osiris launch: {handle!r}'s {dormant_history_note(dormant)}",
+              file=sys.stderr)
+
     resolved_model = resolve_model(model, facts["intended_model"], wake_default)
     name = f"[{_house_tag(facts['house'])}] {facts['handle']}"
     anchor = str(Path.home() / ".claude" / "jobs" / facts["seat_id"].replace(":", "-"))

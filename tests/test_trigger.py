@@ -2684,6 +2684,49 @@ async def test_launch_harness_lane_is_idempotent_returns_the_live_body_not_a_twi
     assert spawned == []  # NO twin spawned
 
 
+async def test_launch_harness_lane_confesses_dormant_history_before_spawn(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thread fc69b9b4 (Ooblek specimen): when launch_cwd already holds a substantial
+    transcript, the receipt names it — {"path", "size_bytes", "last_touched"} — rather than
+    silently spawning into it. Disclosure, not a gate: the spawn still fires."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:hw09", manager_agent="agent:hm09",
+        worker_handle="Ooblek-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/ooblek-test")
+
+    fake_info = {"path": "/tmp/ooblek-test.jsonl", "size_bytes": 20_300_000,
+                 "last_touched": "2026-08-02T17:57:18+00:00"}
+    monkeypatch.setattr(
+        "src.ingest.sessions.dormant_history_confession",
+        lambda cwd, **k: fake_info if cwd == "/tmp/ooblek-test" else None,
+    )
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm09", target=worker_seat,
+        spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "launched"
+    assert len(spawned) == 1  # the confession never blocks the spawn
+    assert d["dormant_history"] == fake_info
+
+
+async def test_launch_harness_lane_omits_dormant_history_key_when_absent(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:hw10", manager_agent="agent:hm10",
+        worker_handle="Clean-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/clean-test")
+    monkeypatch.setattr("src.ingest.sessions.dormant_history_confession", lambda cwd, **k: None)
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm10", target=worker_seat,
+        spawn=_fake_spawn([]), agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "launched"
+    assert "dormant_history" not in d
+
+
 async def test_launch_harness_lane_can_receive_true_when_the_session_comes_up_live(
     actions: Actions,
 ) -> None:

@@ -2883,7 +2883,13 @@ async def launch(target: str, message: str = "", model: str | None = None,
     hit), `manager-cold` (the PTY fallback's daemon is down — ask the operator to start
     osiris-manager; nothing spawned), `refused-not-your-worker` (no downward managed_by edge —
     nothing spawned), `refused-no-office`/`refused-no-handle` (the seat is not ready to be
-    bodied), or `refused-spawn` (the spawn declined — see `detail`)."""
+    bodied), or `refused-spawn` (the spawn declined — see `detail`).
+
+    `dormant_history` (harness-native lane only, present only when it fires): the target
+    cwd already holds a transcript with real conversational history — {"path", "size_bytes",
+    "last_touched"}. DISCLOSURE, not prevention (thread fc69b9b4) — `claude --bg` picks its
+    own session id, so this cannot know or stop the harness from handing the fresh mind that
+    same file; it only names what was already sitting there before this call spawned."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a launch must say who "

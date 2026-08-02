@@ -585,6 +585,55 @@ def test_locate_transcript_by_cwd_when_no_job_dir(tmp_path: Path) -> None:
     assert locate_transcript_by_cwd("/home/x/code/ghost", root=tmp_path) is None
 
 
+def test_dormant_history_confession_none_when_no_transcript(tmp_path: Path) -> None:
+    from src.ingest.sessions import dormant_history_confession
+
+    assert dormant_history_confession("/home/x/.osiris/seats/ghost", root=tmp_path) is None
+
+
+def test_dormant_history_confession_none_below_the_trivial_floor(tmp_path: Path) -> None:
+    """A bare metadata shell (a few KB, no real turns) must not confess — that is the
+    'misfires on every ordinary relaunch' failure Thoth named (DM 3129)."""
+    from src.ingest.sessions import dormant_history_confession
+
+    proj = tmp_path / "-home-x-.osiris-seats-ooblek"
+    proj.mkdir()
+    (proj / "c035336c-metadata.jsonl").write_text("x" * 100)
+    assert dormant_history_confession("/home/x/.osiris/seats/ooblek", root=tmp_path) is None
+
+
+def test_dormant_history_confession_fires_above_the_floor(tmp_path: Path) -> None:
+    """The Ooblek specimen, shaped: a substantial transcript already sitting at the office
+    cwd is named — path, size, and last-touched — before a fresh launch would spawn into it."""
+    import os
+
+    from src.ingest.sessions import _DORMANT_HISTORY_FLOOR_BYTES, dormant_history_confession
+
+    proj = tmp_path / "-home-x-.osiris-seats-ooblek"
+    proj.mkdir()
+    big = proj / "b5f04f84-live.jsonl"
+    big.write_text("x" * (_DORMANT_HISTORY_FLOOR_BYTES + 1))
+    os.utime(big, (1_700_000_000, 1_700_000_000))
+
+    info = dormant_history_confession("/home/x/.osiris/seats/ooblek", root=tmp_path)
+    assert info is not None
+    assert info["path"] == str(big)
+    assert info["size_bytes"] == _DORMANT_HISTORY_FLOOR_BYTES + 1
+    assert info["last_touched"] == datetime.fromtimestamp(1_700_000_000, UTC).isoformat()
+
+
+def test_dormant_history_note_renders_size_and_timestamp() -> None:
+    from src.ingest.sessions import dormant_history_note
+
+    note = dormant_history_note({
+        "path": "/whatever.jsonl", "size_bytes": 20_300_000,
+        "last_touched": "2026-08-02T17:57:18+00:00",
+    })
+    assert "20.3MB" in note
+    assert "2026-08-02T17:57:18+00:00" in note
+    assert "cannot see or control" in note  # the disclosure-not-prevention framing, load-bearing
+
+
 async def test_source_model_stamped_on_emitted_yield(actions: Actions) -> None:
     y = SessionYield(threads_opened=["wire the model probe into the miner"])
     await emit_yield(actions, y, repo=None, source_model="claude-opus-4-8")

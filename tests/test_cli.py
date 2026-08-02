@@ -329,6 +329,49 @@ async def test_cmd_launch_harness_spawns_and_confirms(actions: Actions) -> None:
     assert 'claim_name("freshbg")' in spawn_calls[0]["prompt"]
 
 
+async def test_cmd_launch_harness_confesses_dormant_history_to_stderr(
+    actions: Actions, monkeypatch: Any,
+) -> None:
+    """Thread fc69b9b4: a substantial transcript already sitting at the target office is
+    named — not silently spawned into — before `claude --bg` fires. Disclosure only: the
+    spawn still happens."""
+    import io
+    from contextlib import redirect_stderr
+
+    from src.cli import _cmd_launch_harness
+
+    await ensure_seat(actions, house="osiris", handle="ooblek-cli",
+                      anchor_cwd="/home/x/.osiris/seats/ooblek-cli", source="test")
+
+    fake_info = {"path": "/whatever/b5f04f84.jsonl", "size_bytes": 20_300_000,
+                 "last_touched": "2026-08-02T17:57:18+00:00"}
+    monkeypatch.setattr(
+        "src.ingest.sessions.dormant_history_confession",
+        lambda cwd, **k: fake_info if cwd == "/home/x/.osiris/seats/ooblek-cli" else None,
+    )
+
+    async def _spawn(*a: Any, **k: Any) -> None:
+        pass
+
+    poll_count = 0
+
+    async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        nonlocal poll_count
+        poll_count += 1
+        if poll_count < 2:  # call 1 = the pre-spawn already-live check: nothing there yet
+            return []
+        return [{"name": "[OS] ooblek-cli", "cwd": cwd, "sessionId": "sess-ooblek"}]
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await _cmd_launch_harness("ooblek-cli", model=None, pool=actions.pool,
+                                        wake_default=None, spawn=_spawn,
+                                        agents_json=_agents_json)
+    assert out == 0
+    assert "20.3MB" in buf.getvalue()
+    assert "2026-08-02T17:57:18+00:00" in buf.getvalue()
+
+
 async def test_cmd_launch_harness_gives_up_honestly_when_never_visible(
     actions: Actions,
 ) -> None:

@@ -1722,6 +1722,17 @@ async def launch_seat(
         # `spawn(launch_cwd, ...)` below) but is told to mount(cwd=office) all the same, the
         # identical pattern every seat in this house already follows by hand.
         boot_prompt = _bg_boot_prompt(office=office, anchor=anchor, handle=handle)
+
+        # THE DORMANT-HISTORY CONFESSION (thread fc69b9b4, Ooblek specimen 2026-08-02): a
+        # fresh mind can land on a transcript full of history it cannot read — `--bg` picks
+        # its own session id (the finding two comments up), so this side of the call cannot
+        # know or prevent a reuse, only NAME what's already sitting at launch_cwd before it
+        # happens. Checked pre-spawn on purpose, same "tell the truth at launch time" framing
+        # as the rest of this lane's receipt. `launch_cwd`, not `office` — same reasoning as
+        # the live-body check just above: a tree-bound seat's process sits at tree_cwd.
+        from src.ingest.sessions import dormant_history_confession
+        dormant = dormant_history_confession(launch_cwd)
+
         try:
             await spawn(launch_cwd, name=name, model=argv_model, prompt=boot_prompt)
         except OSError as exc:
@@ -1748,6 +1759,8 @@ async def launch_seat(
                        "--json`"),
             "attach": attach,
         }
+        if dormant is not None:
+            out["dormant_history"] = dormant
         # THE CEILING'S READ PATH (task #8, unblocked by the binding leg): a --bg body is a
         # real billed session on a metered backend, same as any other one — recorded into
         # llm_usage or the ceiling never learns it happened (the ghost-farm disease,

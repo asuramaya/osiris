@@ -327,6 +327,58 @@ def locate_transcript_by_cwd(cwd: str, root: Path | None = None) -> Path | None:
     return max(files, key=lambda p: p.stat().st_mtime) if files else None
 
 
+# A pure-metadata shell (no real turns) runs a few KB; real conversational history is an
+# order of magnitude past that. The floor is a JUDGMENT CALL, not a measurement (Thoth DM
+# 3129: "I do not know whether 'substantial history' is cleanly measurable, and a threshold
+# that misfires on every ordinary relaunch is worse than nothing") — picked to sit clearly
+# above the trivial-shell noise floor and clearly below what one real turn leaves behind,
+# named here so a future measurement has something concrete to correct rather than a bare
+# number buried in a conditional.
+_DORMANT_HISTORY_FLOOR_BYTES = 50_000
+
+
+def dormant_history_confession(cwd: str, *, root: Path | None = None) -> dict[str, Any] | None:
+    """None when the target cwd's newest transcript is absent or below the trivial floor.
+    Otherwise {"path", "size_bytes", "last_touched"} naming exactly what a fresh `claude
+    --bg` launch is about to land next to (thread fc69b9b4, the Ooblek specimen: a new mind
+    APPENDING TO a 20.3MB transcript it has no access to, verified live 2026-08-02).
+
+    THIS IS DISCLOSURE, NOT PREVENTION, ON PURPOSE. `claude --bg` manages its own session
+    id and silently ignores an explicit `--session-id` (trigger.py's own finding, a real
+    spawn, 2026-07-27) — nothing on this side of the spawn call can know or control whether
+    the harness's spare-process pool actually hands the new session THIS file. And a
+    REFUSAL keyed on "any history exists" would misfire on every ordinary relaunch in this
+    house — a seat's office is durable by design (never moves, reused across every prior
+    incarnation), so the common, healthy case (Khnum XIX -> XX -> XXI, Thoth LXVIII -> LXIX
+    -> LXX, ...) always has SOME transcript sitting here. Naming the size and timestamp
+    costs nothing and is always true; refusing would either block the routine case or train
+    everyone to reach for an override flag until nobody reads it either — the same "document
+    nobody reads" failure this house has already caught more than once (Practice-shaped, see
+    fleet_reconcile.py's own consecutive-blind alarm for the sibling instinct: watch, don't
+    silently gate)."""
+    path = locate_transcript_by_cwd(cwd, root=root)
+    if path is None:
+        return None
+    size = path.stat().st_size
+    if size < _DORMANT_HISTORY_FLOOR_BYTES:
+        return None
+    return {
+        "path": str(path),
+        "size_bytes": size,
+        "last_touched": datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat(),
+    }
+
+
+def dormant_history_note(info: dict[str, Any]) -> str:
+    """The rendered one-line confession for `dormant_history_confession`'s own receipt —
+    shared so the CLI lane and the MCP launch() tool say the identical sentence rather than
+    drifting into two wordings for one fact."""
+    mb = info["size_bytes"] / 1_000_000
+    return (f"this office already holds a transcript with {mb:.1f}MB of history, last "
+            f"touched {info['last_touched']} — launch cannot see or control whether the "
+            f"harness hands the fresh session that same file; naming it, not blocking it.")
+
+
 def locate_current_transcript(
     root: Path, job_dir: str | None, *, anchored_only: bool = False
 ) -> Path | None:
