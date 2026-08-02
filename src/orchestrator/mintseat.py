@@ -245,6 +245,26 @@ async def mint_seat(
         # THE ADOPT PATH (Tantra's shape): no new identity, no house crossing to refuse —
         # recognizing what already exists is not the same act as minting fresh
         worker_seat_id = existing_seat_id
+        # A LIVE SEAT IS NEVER ADOPTED (found live 2026-08-02, decision 2993b4e4): this
+        # branch's own office scaffold + anchor_cwd backfill below writes the exact same
+        # effect establish_office's own rollout guard (offices.py:262-278) refuses for a
+        # live seat — until this check, this path did it unguarded, for ANY handle that
+        # already resolves to a living Seat, including one whose session is running right
+        # now. Gated with seat_occupancy — already imported, already this function's own
+        # end-of-receipt authority for the identical question (below) — rather than a
+        # second hand-rolled copy of establish_office's SQL. establish_office's own inline
+        # check is a SEPARATE, still-separate implementation of this same question; this
+        # is a named, not silent, duplication left for a follow-up unification, not a
+        # third copy invented here.
+        occ = await seat_occupancy(actions.pool, worker_seat_id)
+        if occ["state"] == "occupied":
+            return {"error": f"cannot adopt {handle!r} ({worker_seat_id}) — it is LIVE "
+                             f"right now (holder {occ['holder']}). Adopting a live seat "
+                             "would move its office out from under a running session, "
+                             "splitting the session's history between two homes — the "
+                             "same rule establish_office enforces. Close its tab first, "
+                             "then mint_seat or establish_office; it wakes up in the "
+                             "office"}
         worker_facts = await seat_facts(actions.pool, worker_seat_id)
         worker_house = worker_facts.get("house")
         seat_minted = False

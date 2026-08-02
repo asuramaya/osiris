@@ -539,9 +539,14 @@ async def test_g_fresh_mint_receipt_reads_vacant(actions: Actions, tmp_path: Pat
     assert "furniture" in out["next_step"]
 
 
-async def test_g_adopting_a_live_seat_receipt_reads_occupied(
+async def test_g_adopting_a_live_seat_refuses(
     actions: Actions, tmp_path: Path,
 ) -> None:
+    """Found live 2026-08-02 (decision 2993b4e4): the adopt branch used to write the same
+    office+anchor_cwd effect establish_office's own live-seat guard exists to refuse — for
+    ANY handle already resolving to a living Seat, including one whose session is running
+    right now. It must now refuse, not merely report 'occupied' after the fact — the
+    exact scenario this test used to exercise as a success is the bug."""
     from src.orchestrator import mounts
     from src.orchestrator.seats import bind_holder
 
@@ -552,14 +557,21 @@ async def test_g_adopting_a_live_seat_receipt_reads_occupied(
     await mounts.save_mount(actions.pool, job_dir="/j/tantra01", agent_id="agent:tantra01",
                             project="osiris", cwd="/x", model="claude-sonnet-5",
                             session_key=None)
+    offices = tmp_path / "seats"
 
-    out = await mint_seat(actions, manager="Steward", handle="Tantra",
-                          office_root=tmp_path / "seats")
+    out = await mint_seat(actions, manager="Steward", handle="Tantra", office_root=offices)
 
-    assert out["seat_minted"] is False                # adopted, not twinned
-    assert out["occupancy"] == "occupied"
-    assert out["holder"] == "agent:tantra01"
-    assert out["next_step"] == "already live — no next step, someone's home"
+    assert "error" in out
+    assert "cannot adopt" in out["error"] and "LIVE" in out["error"]
+    assert "Tantra" in out["error"] and "agent:tantra01" in out["error"]
+    # the vocabulary rule (Khnum's, this reign): this refusal must read differently from
+    # mint_seat's OTHER refusals, never reuse "no such seat"
+    assert "no such" not in out["error"]
+    # nothing was written — the guard fires before any side effect, not after
+    facts = await seat_facts(actions.pool, worker_seat)
+    assert facts["anchor_cwd"] is None
+    assert not (offices / "tantra").exists()
+    assert not await _linked(actions, worker_seat, await _resolve_seat_ref(actions.pool, "Steward"))
 
 
 async def test_g_adopting_a_held_but_quiet_seat_receipt_reads_cold(
