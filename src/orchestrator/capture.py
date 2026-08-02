@@ -982,10 +982,14 @@ async def reclassify_thread(
 
 async def _find_artifact(pool: asyncpg.Pool, artifact: str) -> uuid.UUID | None:
     """Resolve an artifact pointer to the graph object it names: an exact canonical
-    ('commit:abc123def456', 'decision:…'), an object UUID or 8-char short id (Decision or
-    Commit only — the closer types), or a bare git hash (prefix-matched on commit:).
-    None for free-form pointers (a file:line, a path) — the resolved_artifact property
-    alone carries those; a pointer that matches nothing must never block the close."""
+    ('commit:abc123def456', 'decision:…', 'thread:…'), an object UUID or 8-char short id
+    (Decision, Commit, or Thread — the closer types, widened to include Thread per Thoth
+    DM 2975: a fold/merge into a SIBLING THREAD is a legitimate closure this resolver used
+    to have no shape for at all, structurally indistinguishable from a typo until now), or
+    a bare git hash (prefix-matched on commit:, Commit only — a thread reference never
+    looks like a hash, so that branch is unchanged). None for free-form pointers (a
+    file:line, a path) — the resolved_artifact property alone carries those; a pointer that
+    matches nothing must never block the close."""
     a = artifact.strip()
     oid = await pool.fetchval("SELECT id FROM objects WHERE canonical=$1", a)
     if oid is not None:
@@ -993,7 +997,7 @@ async def _find_artifact(pool: asyncpg.Pool, artifact: str) -> uuid.UUID | None:
     if re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f-]{4,28})?", a.lower()):
         rows = await pool.fetch(
             "SELECT id FROM objects WHERE id::text LIKE $1 || '%' "
-            "AND type IN ('Decision', 'Commit') LIMIT 2", a.lower()[:8])
+            "AND type IN ('Decision', 'Commit', 'Thread') LIMIT 2", a.lower()[:8])
         if len(rows) == 1:  # ambiguity → property-only, never a guessed edge
             return uuid.UUID(str(rows[0]["id"]))
     if re.fullmatch(r"[0-9a-f]{7,40}", a.lower()):

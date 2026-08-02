@@ -665,6 +665,22 @@ async def test_resolve_thread_artifact_points_at_the_closer(actions: Actions) ->
         "SELECT 1 FROM links WHERE from_id=$1 AND type='resolved_by'", t2) is None
 
 
+async def test_resolve_thread_artifact_resolves_a_sibling_thread(actions: Actions) -> None:
+    """Thoth DM 2975 / capture._find_artifact widened: a fold/merge into a SIBLING THREAD
+    is a legitimate closure the resolver used to have no shape for at all — only Decision
+    and Commit ever counted, so citing another thread's short id kept the property but
+    minted nothing. Now it mints resolved_by, the same as citing a Decision or Commit."""
+    dup = await open_thread(actions, "duplicate ask, same as the canonical one")
+    canonical = await open_thread(actions, "the canonical version of this ask")
+    closed = await resolve_thread(actions, str(dup), because="folded",
+                                  artifact=str(canonical)[:8])
+    assert closed == dup
+    assert await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='resolved_by'", dup) == canonical
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND type='closed_by'", dup) is None
+
+
 async def test_resolve_thread_mints_closed_by_when_no_artifact(actions: Actions) -> None:
     """Phase 1a (decision cb38d922): no artifact at all still mints exactly one closure
     edge — closed_by, to the closing agent's own Agent object — never leaving the thread
