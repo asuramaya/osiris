@@ -570,14 +570,18 @@ async def set_seat_attended(
     for reversing a prior stamp. The human-attended guard reads this directly and no longer
     infers anything from managed_by.
 
-    OPERATOR-APPROVED TO CHANGE, deliberately: this verb only builds the write path — the
-    actual stamp on thoth's own seat waits for the operator's explicit word, not this build.
+    OPERATOR-APPROVED TO CHANGE, ENFORCED (census a5e53ed8/3f97f9c7: this claimed it for
+    weeks while any mounted caller could stamp any seat's attendance signal — the same
+    unenforced-claim class as rename_seat, fixed the same way, mirroring charter_for's
+    already-real check): `actor` must be one of `_OPERATOR_ACTORS`'s sentinels, or the
+    seat `actor`'s own lineage holds must BE the target seat's manager (`manager_of_seat`'s
+    live `managed_by` edge).
 
     Refuses LOUDLY on: a value outside {'human','worker'} (no silent typo landing as
     'not human'); a blank `because` (a safety guard reads this property — the reason it
-    changed belongs on the record); an unknown or retired seat (a Seat's `status` column
-    stays 'active' forever — retirement is the `retired` property `retire_seat` stamps, the
-    same signal checked here)."""
+    changed belongs on the record); an unauthorized actor; an unknown or retired seat (a
+    Seat's `status` column stays 'active' forever — retirement is the `retired` property
+    `retire_seat` stamps, the same signal checked here)."""
     if attended not in _ATTENDED_VALUES:
         return {"error": f"attended must be one of {sorted(_ATTENDED_VALUES)}, not "
                          f"{attended!r}"}
@@ -585,6 +589,17 @@ async def set_seat_attended(
         return {"error": "because is required — a seat's attendance signal gates a safety "
                          "guard (dispatch_dm's human-attended check); the reason it changed "
                          "must be on the record"}
+    if actor not in _OPERATOR_ACTORS:
+        caller_seat = await held_seat(actions.pool, actor)
+        caller_seat_id = str(caller_seat["seat_id"]) if caller_seat else None
+        manager_seat_id = await manager_of_seat(actions.pool, seat_id)
+        if caller_seat_id is None or caller_seat_id != manager_seat_id:
+            caller_desc = (f"{actor} (seat {caller_seat_id})" if caller_seat_id
+                          else f"{actor} (holds no seat)")
+            manager_desc = manager_seat_id or "no manager on record"
+            return {"error": f"{caller_desc} is not authorized to set attendance on "
+                             f"{seat_id} — its manager is {manager_desc}, and {actor} is "
+                             "neither the manager nor the operator"}
     row = await actions.pool.fetchrow(
         "SELECT id, status FROM objects WHERE canonical=$1 AND type='Seat'", seat_id)
     if row is None:
@@ -613,7 +628,9 @@ async def rename_seat(
     self-claiming only (a mind picks its OWN name), and this house's handles have drifted
     in casing (vajra lowercase, TJMAX all-caps at the agent level vs tjmax at the seat) with
     nothing to correct it deliberately. A manager or the operator renames a seat by hand,
-    always with a reason on the record.
+    always with a reason on the record — ENFORCED (census a5e53ed8/3f97f9c7: this claimed
+    "a manager or the operator" for weeks while any mounted caller could rename any seat;
+    mirrors charter_for's already-real actor-vs-manager_of_seat check).
 
     SCOPE, both compensating assertions (old handle stays in history, never deleted):
     (1) the seat's own `handle` property; (2) the CURRENT holder's `handle` stamp too, if
@@ -630,13 +647,24 @@ async def rename_seat(
     rename is testimony — the reason must be on the record, the same discipline
     set_seat_attended holds); an unknown seat; `new_handle` already claimed by a DIFFERENT
     active seat, case-insensitive (seats_by_handle — the exact drift lesson that named this
-    build: 'vajra' and 'Vajra' must never both be claimable)."""
+    build: 'vajra' and 'Vajra' must never both be claimable); an unauthorized actor."""
     new_handle = (new_handle or "").strip()
     if not new_handle or len(new_handle) > 40:
         return {"error": "pick a short handle (1-40 chars)"}
     if not because.strip():
         return {"error": "because is required — a rename is testimony; the reason it "
                          "changed must be on the record"}
+    if actor not in _OPERATOR_ACTORS:
+        caller_seat = await held_seat(actions.pool, actor)
+        caller_seat_id = str(caller_seat["seat_id"]) if caller_seat else None
+        manager_seat_id = await manager_of_seat(actions.pool, seat_id)
+        if caller_seat_id is None or caller_seat_id != manager_seat_id:
+            caller_desc = (f"{actor} (seat {caller_seat_id})" if caller_seat_id
+                          else f"{actor} (holds no seat)")
+            manager_desc = manager_seat_id or "no manager on record"
+            return {"error": f"{caller_desc} is not authorized to rename {seat_id} — its "
+                             f"manager is {manager_desc}, and {actor} is neither the "
+                             "manager nor the operator"}
     row = await actions.pool.fetchrow(
         "SELECT id FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
         seat_id)

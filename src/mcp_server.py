@@ -3124,11 +3124,12 @@ async def fold_agent(dupe: str, into: str, evidence: str,
     reversible by compensating event, nothing deleted), authorship untouched (the dupe's
     words stay stamped with its id; provenance resolves at read time), and the ESTATE
     follows: unread mail, mount rows, and open threads land on `into`'s living head.
-    REVIEW-GATED, ALWAYS: run this only on the operator's word or an approved
-    merge_candidate, and `evidence` must cite what proves one mind (transcripts, census,
-    timing) — it is recorded in the event. Refuses: same-lineage folds (that is
-    succession's job), an actively-seated dupe (transfer the seat first), unknown or
-    already-folded labels."""
+    REVIEW-GATED, ALWAYS, ENFORCED: refuses any caller who is not the operator (or the
+    scheduled reaper's own sanctioned name, separately gated by
+    `osiris_fleet_reconcile_enabled`) — mount as the operator, or judge an approved
+    merge_candidate via `resolve_fold`, which relays the same check unchanged. `evidence`
+    must cite what proves one mind. Refuses: unauthorized actor; same-lineage folds (that
+    is succession's job), an actively-seated dupe, unknown or already-folded labels."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a fold is a mind's act, and the graph must know whose",
@@ -3227,8 +3228,8 @@ async def vacate_seat(seat_id: str, because: str, ctx: Context | None = None) ->
     `refused-ambiguous`, or `refused` (seats.vacate_holder's own graph-level refusal —
     see `detail`).
 
-    AUTO-INVOCATION IS OUT OF SCOPE (the reaper stays operator-gated) — this is for a
-    deliberate hand, on one named seat, never a sweep."""
+    AUTO-INVOCATION IS OUT OF SCOPE — this is for a deliberate hand, on one named seat,
+    never a sweep (see fleet_reconcile's own docstring for what gates ITS bulk path)."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — vacating a seat's holder is a deliberate act on "
@@ -3307,8 +3308,9 @@ async def assert_project_property(project: str, name: str, value: str,
     """The sanctioned write for a SINGLE project-scoped property (task #74) — closes the
     gap that forced in-process scripts for anything beyond a status flip during the reap.
     `project` resolves the same way retire_project does (UUID, 8-char short id, canonical
-    `repo:<name>`, or its `name` property) — SoftwareProject ONLY. NOT self-scoped: any
-    authorized caller may stamp any named project.
+    `repo:<name>`, or its `name` property) — SoftwareProject ONLY. NOT self-scoped, and
+    OPEN BY DESIGN: any mounted caller may stamp any named project's property, no
+    authority gate.
 
     Refuses LOUDLY on: blank project/name/value; an unresolved project; `name=='status'`
     (status has its own compensating-event path — retire_project, not a bare assertion)."""
@@ -3429,12 +3431,12 @@ async def correct_agent_house(agent_id: str, project: str | None = None,
 @mcp.tool()
 async def retire_agent(agent_id: str, because: str,
                        ctx: Context | None = None) -> dict[str, Any]:
-    """Third-party retirement for an agent (task #74) — the manager-scoped complement
-    to the self-scoped retire() (which derives the CALLER's own id, no target param at
-    all). Stamps retired/retired_by/retired_because AND flips objects.status via a
-    compensating event, same pattern as retire_seat/retire_project. NOT self-scoped —
-    the target need not be the caller; `actor` is attribution, never a same-caller
-    requirement.
+    """Third-party retirement for an agent (task #74) — the third-party-scoped
+    complement to the self-scoped retire() (which derives the CALLER's own id, no target
+    param at all). Stamps retired/retired_by/retired_because AND flips objects.status via
+    a compensating event, same pattern as retire_seat/retire_project. NOT self-scoped, NOT
+    manager-gated — any mounted caller may name any target, matching retire_seat/
+    retire_project; `actor` is attribution, never an authority gate.
 
     Refuses LOUDLY on: blank `because`; an unknown or already-non-active agent."""
     ident = await _ident_for(ctx)
@@ -3479,10 +3481,10 @@ async def set_seat_attended(seat_id: str, attended: str, because: str,
     guard instead of its old, broken `managed_by` proxy (true only while Thoth was the sole
     manager; false since workers started minting their own sub-workers and test seats).
 
-    OPERATOR-APPROVED TO CHANGE: this verb exists so the write CAN happen on the operator's
-    word — it does not itself decide who is human-attended. `attended='human'` marks a seat
-    the operator actually fronts; `attended='worker'` reverses a prior stamp. Refuses loudly
-    on a value outside {'human','worker'}, a blank `because`, or an unknown/retired seat."""
+    OPERATOR-APPROVED TO CHANGE, ENFORCED: the operator or the target seat's own manager
+    only. `attended='human'` marks a seat the operator actually fronts; `attended='worker'`
+    reverses a prior stamp. Refuses loudly on a value outside {'human','worker'}, a blank
+    `because`, an unauthorized actor, or an unknown/retired seat."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a seat's attendance signal is a mind's act, and the "
@@ -3495,14 +3497,13 @@ async def set_seat_attended(seat_id: str, attended: str, because: str,
 @mcp.tool()
 async def rename_seat(seat_id: str, new_handle: str, because: str,
                       ctx: Context | None = None) -> dict[str, Any]:
-    """Rename a Seat — manager/operator-invoked, no self-service (claim_name is for a mind
-    naming ITSELF). Stamps the seat's own `handle` and, if the seat is occupied, the
-    current holder's `handle` too — both compensating assertions, the old handle stays in
-    history. The harness-session display name is OUT of scope (a running process this call
-    has no reach into); the receipt says the graph renamed and the harness name follows at
-    the holder's next spawn. Refuses loudly on a blank/over-long `new_handle`, a blank
-    `because`, an unknown seat, or a `new_handle` another active seat already carries
-    (case-insensitive — the exact casing-drift this build exists to stop)."""
+    """Rename a Seat — manager/operator-invoked, ENFORCED, no self-service (claim_name is
+    for a mind naming ITSELF). Stamps the seat's own `handle` and, if the seat is occupied,
+    the current holder's `handle` too — both compensating assertions, the old handle stays
+    in history. The harness-session display name is OUT of scope; the receipt says the
+    graph renamed and the harness name follows at the holder's next spawn. Refuses loudly
+    on a blank/over-long `new_handle`, a blank `because`, an unauthorized actor, an unknown
+    seat, or a `new_handle` another active seat already carries (case-insensitive)."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a rename is a mind's act, and the graph must know "
@@ -3615,10 +3616,11 @@ async def resolve_fold(candidate_id: int, decision: str,
                        ctx: Context | None = None) -> dict[str, Any]:
     """Judge ONE agent-fold proposal from the tray (fold_candidates): decision='merged'
     executes the ESTATE-carrying fold (mail, mount rows, threads land on the living
-    head); 'rejected' links the pair not_same_as, never re-proposed. OPERATOR-GATED: run
-    this only relaying the operator's explicit judgment — the tray exists so a human
-    reads the evidence; an agent judging its own proposals is the auto-merge the
-    constitution forbids."""
+    head) — OPERATOR-GATED, ENFORCED: inherits fold_agent's own operator-actor gate
+    unchanged, never a second copy to drift. decision='rejected' links the pair
+    not_same_as, never re-proposed — OPEN to any mounted caller, deliberately: a
+    rejection judges two things are NOT the same mind, carrying none of 'merged's blast
+    radius."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first", "why": _anchorless(ctx)}
@@ -3641,8 +3643,14 @@ async def fleet_reconcile(execute: bool = False,
     report) and returns before/after tray counts as its receipt — proof the acted rows
     left the tray, not a trusted boolean. The sanctioned door for what was previously only
     reachable as orchestrator code (src.orchestrator.fleet_reconcile.reconcile_execute) —
-    built so a reviewed act never has to be a hand-written script against the live
-    graph."""
+    built so a reviewed act never has to be a hand-written script against the live graph.
+
+    THE FOLD BUCKETS ARE OPERATOR-GATED, ENFORCED: this wrapper itself checks only
+    mount — the authority check lives in fold_agent, one call down, and a non-operator
+    caller's fold items come back with `"error"` per item (never a crash) while
+    drop_ephemeral_test_cwd still runs. THIS WRAPPER IS REACHABLE INDEPENDENTLY OF
+    `osiris_fleet_reconcile_enabled` — that flag gates only the SEPARATE scheduled tick
+    (reconcile_scheduled_tick), never this tool; the fold_agent gate is what closes it."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first", "why": _anchorless(ctx)}
@@ -4466,19 +4474,19 @@ async def acquire_lease(
 
 @mcp.tool()
 async def release_lease(
-    resource_id: str, holder: str | None = None,
+    resource_id: str,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Release a resource YOU hold — only the ACTUAL holder's own release call frees it,
-    never a different agent's, even by name (the same asymmetry `resolve_thread` has no
-    equivalent of, deliberately: a lease's whole point is that holding it means something).
-    `released: false` for BOTH an unheld resource and a wrong-holder attempt — both are
-    refusals to report, never errors to raise; check `check_lease` first if you need to
-    tell the two apart."""
+    never a different agent's, even by name, ENFORCED: unlike `acquire_lease`'s deliberate
+    `holder` latitude ("claim on another's behalf"), this verb takes no `holder` param —
+    the identity checked is always the caller's own resolved `actor`. `released: false`
+    for BOTH an unheld resource and a wrong-holder attempt — both are refusals to report,
+    never errors to raise; check `check_lease` first if you need to tell the two apart."""
     pool = await _pool_get()
     actor = await _actor_for(ctx, subagent_id, subagent_type)
-    released = await resource_lease.release(pool, resource_id, holder or actor)
+    released = await resource_lease.release(pool, resource_id, actor)
     return {"resource_id": resource_id, "released": released}
 
 

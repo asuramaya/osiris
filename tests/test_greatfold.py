@@ -136,7 +136,9 @@ async def test_fold_seat_execute_folds_mints_the_seat_and_briefs_after(
     _transcript(projects, "khnum", "s-old", _SEND.format(agent="agent:aaaa1111"),
                 age_secs=3600)
     _transcript(projects, "khnum", "s-new", _SEND.format(agent="agent:bbbb2222-ii"))
-    out = await fold_seat(actions, handle="khnum", actor="agent:test", execute=True,
+    # fold_agent's own gate (census a5e53ed8) requires the operator's actor for a real
+    # fold — greatfold.fold_seat forwards `actor` unchanged, so the caller must be one
+    out = await fold_seat(actions, handle="khnum", actor="operator", execute=True,
                           office_root=offices, projects_root=projects)
     assert [f["folded"] for f in out["folded"]] == ["agent:aaaa1111"]
     assert not out["refused"]
@@ -150,7 +152,7 @@ async def test_fold_seat_execute_folds_mints_the_seat_and_briefs_after(
     assert brief and brief.startswith("GREAT FOLD — seat khnum")
     assert out["briefed"] is not None
     # idempotent: a second run finds nothing left to fold
-    again = await fold_seat(actions, handle="khnum", actor="agent:test", execute=True,
+    again = await fold_seat(actions, handle="khnum", actor="operator", execute=True,
                             office_root=offices, projects_root=projects)
     assert not again["will_fold"]
 

@@ -180,9 +180,14 @@ async def assert_project_property(
     the reap (msg 1675/1689) had no verb for anything beyond a status flip, forcing
     in-process scripts for every other lifecycle stamp. Resolves `project` exactly like
     retire_project (UUID/short-id/canonical/name, SoftwareProject ONLY — the same
-    seshat/ra disambiguation). NOT self-scoped: any authorized caller may stamp any
-    named project; `actor` is attribution, never a same-caller requirement (same
-    reasoning as correct_agent_house).
+    seshat/ra disambiguation). NOT self-scoped, and OPEN BY DESIGN, not merely
+    unenforced (census a5e53ed8/3f97f9c7 found "any authorized caller" a vacuous claim —
+    no authorization concept was ever checked here; corrected 2026-08-02 to say what is
+    actually true): any mounted caller may stamp any named project's property; `actor` is
+    attribution, never an authority gate (same reasoning as correct_agent_house). A
+    property write is reversible (a fresh assert supersedes cleanly) and fully visible in
+    the record — if a manager-only restriction is ever wanted, it belongs here as a real
+    check, not as prose a reader has to trust.
 
     Refuses LOUDLY on: blank project/name/value; an unresolved project; `name=='status'`
     — status has its OWN compensating-event path (retire_project -> Actions.set_status,

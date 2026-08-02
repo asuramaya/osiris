@@ -482,7 +482,9 @@ async def test_execute_true_folds_the_high_confidence_view_alias(
                      project="reconhouse", cwd="/w/swarm-repo", model=None,
                      session_key="sid:conn")
 
-    out = await reconcile_execute(actions, actor="agent:test-actor", execute=True,
+    # fold_agent's own gate (census a5e53ed8) requires the operator's actor for a real
+    # fold — reconcile_execute forwards `actor` unchanged
+    out = await reconcile_execute(actions, actor="operator", execute=True,
                                   projects_root=root, jobs_home=jobs,
                                   live_bodies_by_cwd=_bodies("/w/swarm-repo"))
 
@@ -589,6 +591,44 @@ async def test_scheduled_tick_acts_once_the_flag_is_flipped_on(actions: Actions)
         "SELECT count(*) FROM agent_mounts WHERE agent_id='agent:ghost0001'") == 0
 
 
+async def test_scheduled_tick_can_fold_because_its_own_actor_is_sanctioned(
+    actions: Actions, tmp_path,
+) -> None:
+    """POSITIVE CONTROL for fold_agent's operator-actor gate (census a5e53ed8): the
+    scheduled leg passes `actor="cron:fleet_reconcile_heartbeat"`, not an operator
+    sentinel — if fold_agent's gate only recognized `seats._OPERATOR_ACTORS`, the
+    already-gated cron tick would ALSO start refusing every fold it tries, breaking a
+    working feature to fix an authority hole. This proves the sanctioned exception
+    (`folds._SANCTIONED_AUTO_FOLD_ACTOR`) actually lands a fold, not just a drop, through
+    the real scheduled path — `osiris_fleet_reconcile_enabled=True` is this tick's own,
+    separate authorization; no other actor should be trusted the same way."""
+    p = actions.pool
+    root = tmp_path / "projects"
+    jobs = tmp_path / "jobs"
+    slug = root / "-w-cronswarm-repo"
+    slug.mkdir(parents=True)
+    (slug / "rea1cron-full-session.jsonl").write_text("{}\n")
+    await _mk_agent(actions, "agent:a11acron")
+    await _mk_agent(actions, "agent:rea1cron")
+    await save_mount(p, job_dir=str(jobs / "a11acron"), agent_id="agent:a11acron",
+                     project="reconhouse", cwd="/w/cronswarm-repo", model=None,
+                     session_key="whisper:a11acron")
+    await save_mount(p, job_dir=str(jobs / "rea1cron"), agent_id="agent:rea1cron",
+                     project="reconhouse", cwd="/w/cronswarm-repo", model=None,
+                     session_key="sid:conn")
+
+    out = await reconcile_scheduled_tick(
+        actions, settings=Settings(osiris_fleet_reconcile_enabled=True),
+        projects_root=root, jobs_home=jobs,
+        live_bodies_by_cwd=_bodies("/w/cronswarm-repo"))
+
+    assert out["state"] == "ACTS"
+    assert len(out["folded"]) == 1
+    assert out["folded"][0]["result"].get("folded") == "agent:a11acron"
+    st = await p.fetchval("SELECT status FROM objects WHERE canonical='agent:a11acron'")
+    assert st == "merged"
+
+
 # ── task #108: the desk receipt, the batch cap, the consecutive-blind alarm ────────────
 
 
@@ -621,7 +661,9 @@ async def test_desk_receipt_fires_with_before_after_counts_when_a_tick_acts(
                      project="reconhouse", cwd="/w/swarm-repo", model=None,
                      session_key="sid:conn")
 
-    out = await reconcile_execute(actions, actor="agent:test-actor", execute=True,
+    # fold_agent's own gate (census a5e53ed8) requires the operator's actor for a real
+    # fold — reconcile_execute forwards `actor` unchanged
+    out = await reconcile_execute(actions, actor="operator", execute=True,
                                   projects_root=root, jobs_home=jobs,
                                   live_bodies_by_cwd=_bodies("/w/swarm-repo"))
 

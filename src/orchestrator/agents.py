@@ -310,17 +310,20 @@ async def correct_agent_house(
 async def retire_agent(
     actions: Actions, *, agent_id: str, actor: str, because: str,
 ) -> dict[str, Any]:
-    """Third-party retirement for an agent — the manager-scoped complement to the
+    """Third-party retirement for an agent — the third-party-scoped complement to the
     self-scoped retire() (mcp_server.py derives the CALLER's own id, no target param at
     all). Task #74's own gap: msg 1713's reap needed exactly this — two genuinely-dead
     agents (Flip68Real's residue, e29d40ce/-ii) could only be retired via direct
     assert_property under the operator's own live permission grant, TWICE, because no
     sanctioned verb reached a THIRD PARTY.
 
-    UNLIKE self-scoped retire(): NOT self-scoped, on purpose, same reasoning as
-    correct_agent_house — a manager dispatching a worker to retire dead residue is
-    exactly this case, not a caller retiring itself by another name. Accountability
-    lives in `actor`, an explicit witness, never a same-caller requirement.
+    NOT SELF-SCOPED, and NOT MANAGER-GATED either — corrected 2026-08-02 (census
+    a5e53ed8/3f97f9c7: an earlier docstring's own "manager-scoped" phrasing invited a
+    reader to infer a check that has never existed here). Any mounted caller may name any
+    active agent as the target, the SAME shape retire_seat/retire_project already carry —
+    accountability lives in `actor`, an explicit witness, never an authority gate. If a
+    manager-only restriction is ever wanted, it belongs here as a real check (mirroring
+    charter_for's), not as prose a reader has to trust.
 
     Stamps `retired`/`retired_by`/`retired_because` (append-only assertions, the same
     free-form vocabulary this codebase already carries — `_PHANTOM_FOLD_SRC` etc. are
