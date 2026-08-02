@@ -56,13 +56,19 @@ from __future__ import annotations
 
 import json
 
-# Measured after #112's walk_in build (this commit): 117,067 chars exactly (was 115,146,
-# task #103's tree_cwd). Raised deliberately, not a reflex — walk_in's docstring was
-# already trimmed to the category rule's lean end (903 chars, the deep rationale moved to
-# src/orchestrator/walkin.py's own module docstring, unmeasured by this ratchet) before
-# raising; the remaining growth is the tool's real 8-parameter inputSchema, irreducible
-# without dropping a parameter the tool actually needs. Flagged to Thoth for review.
-TOOL_CONTRACT_CEILING_CHARS = 117_067
+# RAISED, task 187323d9's graph_lint gate (2026-08-02): found this test ALREADY failing at
+# 118,901 chars before touching anything — a genuinely pre-existing overage, not fresh
+# growth from this commit. Root cause: amend_practice (task #113, commit 9cbd8d6) landed a
+# whole new MCP tool (name+description+inputSchema, ~1,830 chars) after the 117,067 ceiling
+# was set for walk_in and nobody re-ran this specific test to catch it — the exact "a check
+# nobody runs is a check that isn't there" failure this ratchet exists to prevent, now
+# proven against itself. This session's own two docstring additions (launch()'s
+# dormant_history field, graph_lint's severity/counts_by_severity fields) were trimmed to
+# the category rule's lean end BEFORE raising — net effect vs the pre-existing 118,901 is
+# +2 chars, not the source of the overage. Raised to the exact measured total, not a round
+# number. Flagged to Thoth: this ratchet needs a standing habit (or a hook) that runs it on
+# every MCP-tool-touching commit, not memory.
+TOOL_CONTRACT_CEILING_CHARS = 118_903
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -95,6 +101,8 @@ async def test_tool_contract_stays_under_the_ceiling() -> None:
 async def test_tool_contract_has_the_expected_tool_count() -> None:
     """A cheap companion signal: if this number moves, a tool was added or removed — not
     what this ratchet polices, but worth knowing at a glance when the char total also
-    moves, to tell 'one tool's prose grew' from 'the surface itself changed shape'."""
+    moves, to tell 'one tool's prose grew' from 'the surface itself changed shape'. 99 -> 100
+    (2026-08-02): amend_practice (task #113, commit 9cbd8d6) was never reflected here either
+    — the same pre-existing drift the char ceiling above was just found and raised for."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 99
+    assert len(per_tool) == 100

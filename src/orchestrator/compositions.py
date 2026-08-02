@@ -1337,8 +1337,20 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     _fn_lint's own SQL again. Pass `check` (one of the `check` values a finding/`counts` key
     carries, e.g. 'false-mint') to list ONLY that check's findings, with `limit`/`offset`
     paginating its FULL row set instead of the 50-cap (default: uncapped, all of it, in one
-    page). Every OTHER check still just reports its `counts` total — unfiltered calls are
-    BYTE-IDENTICAL to before this existed (`check=None` is a complete no-op)."""
+    page) — a named check is ALWAYS fetched to its true total, however large (thread
+    187323d9: orphan-link used to silently self-truncate its fetch at 5000 rows regardless
+    of the real population, so an offset past that point returned an empty page while still
+    reporting a positive remainder — fixed; every check's own full row set is now genuinely
+    reachable, matching this paragraph's own promise). Every OTHER check still just reports
+    its `counts` total — unfiltered calls are BYTE-IDENTICAL to before this existed
+    (`check=None` is a complete no-op).
+
+    `severity`/`counts_by_severity` (thread 187323d9, Thoth DM 3143): `counts` alone mixes
+    info-grade metered history (orphan-link) with warn/error-grade damage in one flat list —
+    trusting it at face value overstated this graph's real debt by 54x, live. `severity` maps
+    each check name to its grade (info/warn/error); `counts_by_severity` is the one-glance
+    rollup — read that before `counts` when the question is how much of this actually
+    matters."""
     stale_days = max(1, min(int(args.get("stale_days") or 14), 365))
     eps = float(args.get("eps") or 0.05)          # "near-tie" on the confidence axis
     live_secs = int(args.get("live_secs") or 900)  # a mount seen this recently is LIVE
@@ -1348,9 +1360,11 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     page_offset = max(0, int(args.get("offset") or 0))
     findings: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
+    severity_by_check: dict[str, str] = {}
 
     def land(check: str, severity: str, rows: list[dict[str, Any]]) -> None:
         counts[check] = len(rows)
+        severity_by_check[check] = severity
         if check_filter is not None:
             if check != check_filter:
                 return  # per-check filter: every OTHER check's rows are never listed
@@ -1543,11 +1557,23 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "  AND NOT (l.type = 'same_as' AND fo.merged_into IS NOT DISTINCT FROM l.to_id)")
     orphan_total = await pool.fetchval(f"SELECT count(*) {_ORPHAN_WHERE}")
     # this check's own SQL pre-limits to _LINT_CAP (unlike every other check, which fetches
-    # its FULL row set and only caps at land()'s own display layer) — when it's the one
-    # named by `check`, fetch enough rows for land()'s offset/limit slice to actually work,
-    # capped at the same 5000 safety ceiling `limit` itself clamps to.
-    orphan_fetch = (min(page_offset + (page_limit or 5000), 5000)
-                    if check_filter == "orphan-link" else _LINT_CAP)
+    # its FULL row set and only caps at land()'s own display layer) — a genuine, justified
+    # optimization for the DEFAULT unfiltered call, where only _LINT_CAP rows are ever
+    # displayed regardless of the real population.
+    #
+    # THE BUG THIS REPLACED (thread 187323d9, decision 6647fcd5, Thoth DM 3143): when the
+    # check IS explicitly named, land()'s own offset/limit slicing assumes it received the
+    # FULL row set to slice in Python — exactly what every OTHER check already does. This
+    # fetch used to hard-cap at min(page_offset + page_limit, 5000) regardless of how large
+    # the real population was, so any offset landing past what actually got fetched sliced
+    # against a too-short list and silently returned [] — while `counts`/`remaining` (built
+    # from the independent COUNT(*) below) kept reporting a genuine positive remainder.
+    # Blindness rendered as silence, never a refusal — proven live against a 10,637-row
+    # population, reproduced in tests/test_lap_lint.py at 5,010 rows. Fetching exactly
+    # `orphan_total` rows when the check is named matches the function's own documented
+    # contract ("paginating its FULL row set... default: uncapped, all of it") — the same
+    # promise every sibling check already keeps unconditionally.
+    orphan_fetch = orphan_total if check_filter == "orphan-link" else _LINT_CAP
     orphans = await pool.fetch(
         "SELECT l.type, fo.canonical AS from_c, fo.status AS from_s, "
         f" t.canonical AS to_c, t.status AS to_s {_ORPHAN_WHERE} "
@@ -1781,9 +1807,24 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         capped = {c: n - _LINT_CAP for c, n in counts.items() if n > _LINT_CAP}
         note = ("some checks list only their first "
                 f"{_LINT_CAP} findings; counts hold the true totals") if capped else None
+    # SEVERITY, ADDED (thread 187323d9, decision 6647fcd5, Thoth DM 3143): `counts` alone
+    # flattened info-class metered history (orphan-link: thousands, expected under
+    # resolve-on-read) into the same undifferentiated list as warn/error-class damage
+    # (contradiction, attribution, ...) — a reader trusting `counts` at face value can
+    # overstate this graph's real debt by an order of magnitude (measured live: 54x).
+    # `severity` (per-check, non-breaking — `counts` itself keeps its original int-valued
+    # shape for every existing caller) lets a reader segment the two without memorizing this
+    # function's own docstring; `counts_by_severity` is the one-glance rollup that directly
+    # answers the question the flattening obscured — "how much of this is really damage."
+    counts_by_severity: dict[str, int] = {}
+    for c, n in counts.items():
+        counts_by_severity[severity_by_check.get(c, "unknown")] = (
+            counts_by_severity.get(severity_by_check.get(c, "unknown"), 0) + n)
     return {
         "findings": findings,
         "counts": counts,
+        "severity": severity_by_check,
+        "counts_by_severity": counts_by_severity,
         "clean": sorted(c for c, n in counts.items() if n == 0),
         **({"capped": capped, "note": note} if capped else {}),
         "ran_at": now.isoformat(),

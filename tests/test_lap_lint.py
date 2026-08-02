@@ -513,6 +513,66 @@ async def test_lint_orphan_link_check_filter_beyond_its_own_sql_cap(actions: Act
     assert len(full["findings"]) == 55
 
 
+async def test_lint_orphan_link_pagination_survives_the_5000_row_hard_cap(
+    actions: Actions,
+) -> None:
+    """Thread 187323d9 / decision 6647fcd5 (Thoth DM 3143), the live specimen: orphan-link's
+    own SQL fetch used to hard-cap at min(offset+limit, 5000) regardless of the real
+    population — so ANY offset at or past ~5000 silently returned an EMPTY findings list
+    while `note`/`capped` still reported a genuine positive remainder (graph_lint(offset=
+    5000) and (offset=10600) both returned [] against a real 10,637-row population, both
+    claiming a positive remainder). Blindness rendered as silence, never a refusal.
+    Reproduced with bulk SQL, not a per-row ORM loop — 5000+ rows one at a time is minutes,
+    not seconds."""
+    t = "agent:teller"
+    corpse = await actions.create_or_find_object("Organization", "org:hugecorpse", t)
+    await actions.pool.execute("UPDATE objects SET status='retired' WHERE id=$1", corpse)
+    n = 5010
+    await actions.pool.execute(
+        "WITH new_objs AS (INSERT INTO objects (type, canonical, status) "
+        "  SELECT 'Person', 'person:hugebulk'||g, 'active' FROM generate_series(1, $1) g "
+        "  RETURNING id) "
+        "INSERT INTO links (from_id, to_id, type, source_id, confidence, "
+        "  first_seen, last_seen) "
+        "SELECT id, $2, 'member_of', $3, 0.9, $4, $4 FROM new_objs",
+        n, corpse, t, NOW)
+
+    out = await _fn(actions, "lint", {"check": "orphan-link", "offset": 5000, "limit": 5})
+    assert out["counts"]["orphan-link"] == n
+    assert len(out["findings"]) == 5  # real rows past the old 5000-row hard fetch cap
+    remaining = n - 5000 - 5
+    assert out["capped"]["orphan-link"] == remaining
+    assert out["note"] is not None and str(remaining) in out["note"]
+    # decision 6647fcd5's third defect ("count and listable population disagree") was the
+    # same root cause as the pagination bug above, not an independent one — `counts` and
+    # the fetched population now agree because the fetch reaches the true total either way.
+    assert out["counts"]["orphan-link"] == n
+
+
+async def test_lint_counts_carries_a_severity_split(actions: Actions) -> None:
+    """Thread 187323d9's first defect: `counts` alone mixed info-grade metered history
+    (orphan-link) with warn-grade damage (contradiction) in one undifferentiated list — a
+    reader trusting it at face value overstated real debt 54x, live. `severity` (per-check)
+    and `counts_by_severity` (the rollup) fix that without changing `counts`'s own shape —
+    every existing caller reading `counts[check]` as a plain int is unaffected."""
+    t = "agent:teller"
+    corpse = await actions.create_or_find_object("Organization", "org:sevcorpse", t)
+    await actions.pool.execute("UPDATE objects SET status='retired' WHERE id=$1", corpse)
+    alive = await actions.create_or_find_object("Person", "person:sevorphan", t)
+    await actions.create_link(alive, corpse, "member_of", t, NOW, 0.9, evidence_class=_SD)
+    c = await actions.create_or_find_object("Organization", "org:sevcontra", t)
+    await actions.assert_property(c, "hq", "A", "agent:one", NOW, 0.9, evidence_class=_SD)
+    await actions.assert_property(c, "hq", "B", "agent:two", NOW + timedelta(minutes=1),
+                                  0.9, evidence_class=_SD)
+
+    out = await _fn(actions, "lint", {})
+    assert out["severity"]["orphan-link"] == "info"
+    assert out["severity"]["contradiction"] == "warn"
+    assert out["counts"]["orphan-link"] == 1  # counts's own shape is unchanged — a plain int
+    assert out["counts_by_severity"]["info"] >= 1
+    assert out["counts_by_severity"]["warn"] >= 1
+
+
 async def test_lint_is_report_only_and_a_clean_graph_says_so(actions: Actions) -> None:
     """Rule #7 in test form: the lint must not write a single row — a linter that healed
     would be a loop pathology. And silence must be legible: clean checks are NAMED."""

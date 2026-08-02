@@ -801,8 +801,9 @@ async def graph_lint(stale_days: int = 14, check: str | None = None, limit: int 
     `check`/`limit`/`offset`: every check normally lists only its first 50 findings
     (`counts` still holds the true total for all of them). Pass `check` (a value from
     `counts` or a finding's own `check` field, e.g. 'false-mint') to list ONLY that check's
-    findings, paginated by `limit`/`offset` across its FULL row set instead of the 50-cap.
-    Omitting `check` is a complete no-op, byte-identical to before this existed."""
+    findings, paginated by `limit`/`offset` across its FULL row set, always its true total.
+    Omitting `check` is a complete no-op. `counts` mixes info-grade history with warn/error-
+    grade damage; read `counts_by_severity` or `severity` for how much actually matters."""
     pool = await _pool_get()
     args: dict[str, Any] = {"stale_days": stale_days}
     if check is not None:
@@ -2885,11 +2886,10 @@ async def launch(target: str, message: str = "", model: str | None = None,
     nothing spawned), `refused-no-office`/`refused-no-handle` (the seat is not ready to be
     bodied), or `refused-spawn` (the spawn declined — see `detail`).
 
-    `dormant_history` (harness-native lane only, present only when it fires): the target
-    cwd already holds a transcript with real conversational history — {"path", "size_bytes",
-    "last_touched"}. DISCLOSURE, not prevention (thread fc69b9b4) — `claude --bg` picks its
-    own session id, so this cannot know or stop the harness from handing the fresh mind that
-    same file; it only names what was already sitting there before this call spawned."""
+    `dormant_history` (harness-native lane, present only when it fires): the target cwd
+    already holds a substantial transcript — {"path", "size_bytes", "last_touched"}.
+    Disclosure only, never prevention — `claude --bg` picks its own session id, so this
+    cannot stop the harness handing the fresh mind that same file, only name it beforehand."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a launch must say who "
