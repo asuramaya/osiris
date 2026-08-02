@@ -1887,6 +1887,9 @@ async def open_thread_wall(
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='arc' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS arc, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='is_handoff' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS is_handoff, "
         " (SELECT max(sa.observed_at) FROM assertions sa WHERE sa.object_id=o.id "
         "   AND sa.evidence_class='self_declared') AS last_touched, "
         " NOT EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
@@ -1921,6 +1924,9 @@ async def open_thread_wall(
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
             "   AND a.name='arc' "
             "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS arc, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "   AND a.name='is_handoff' "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS is_handoff, "
             " (SELECT max(sa.observed_at) FROM assertions sa WHERE sa.object_id=o.id "
             "   AND sa.evidence_class='self_declared') AS last_touched, "
             " NOT EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
@@ -1959,6 +1965,8 @@ async def open_thread_wall(
             item["owner"] = r["owner"]
         if r["arc"]:
             item["arc"] = r["arc"]
+        if r["is_handoff"]:  # Thoth DM 3090: orient()'s own _cap_text reads this to exempt
+            item["is_handoff"] = r["is_handoff"]  # a handoff record from the 160-char cap
         # THE MINER MAY NOTICE, BUT MUST NEVER OBLIGE (ruling 61c1b20d, extended from the desk
         # to the wall — 2026-07-12, the operator: "it's a snowball to hell").
         #
@@ -4231,7 +4239,8 @@ PROJECT_BRIEFING: dict[str, Any] = {
         # the set the ranker sees; a standalone fork still gets the recency-ordered lens.
         {"title": "open_threads", "body": {
             "op": "take", "n": 100, "from": {
-                "op": "table", "columns": [{"property": "summary"}, {"property": "kind"}],
+                "op": "table", "columns": [{"property": "summary"}, {"property": "kind"},
+                                           {"property": "is_handoff"}],
                 "from": {"op": "order", "by": "recency", "dir": "desc", "from": {
                     "op": "intersect", "sets": [
                         {"op": "select", "object_type": "Thread", "where": [
@@ -4244,7 +4253,7 @@ PROJECT_BRIEFING: dict[str, Any] = {
         {"title": "recent_decisions", "body": {
             "op": "take", "n": 15, "from": {
                 "op": "table", "columns": [{"property": "id"}, {"property": "summary"},
-                                           {"property": "kind"}],
+                                           {"property": "kind"}, {"property": "is_handoff"}],
                 "from": {"op": "order", "by": "recency", "dir": "desc", "from": {
                     "op": "intersect", "sets": [
                         {"op": "select", "object_type": "Decision", "where": [

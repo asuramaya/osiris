@@ -15,7 +15,7 @@ also carries `id` so a capped summary stays addressable via verbose=True or sear
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from src.actions.core import Actions
@@ -253,6 +253,24 @@ def test_cap_text_ignores_a_missing_or_non_string_key() -> None:
     assert out == [{"kind": "ruling"}, {"summary": None}]
 
 
+def test_cap_text_exempts_a_row_carrying_is_handoff_true(
+) -> None:
+    """Thoth DM 3090: a record written to be read exactly once, by exactly one reader, at
+    the moment they have the least context — the cap must skip it entirely, not merely
+    raise its limit. An ordinary row (no flag, or the flag absent/false) still caps."""
+    from src.mcp_server import _cap_text
+
+    items = [
+        {"summary": "x" * 200, "is_handoff": "true"},
+        {"summary": "y" * 200},
+        {"summary": "z" * 200, "is_handoff": "false"},
+    ]
+    out = _cap_text(items, "summary", limit=160, exempt_when_true="is_handoff")
+    assert out[0]["summary"] == "x" * 200  # exempt, untouched, no "…" marker
+    assert out[1]["summary"] == "y" * 160 + "…"
+    assert out[2]["summary"] == "z" * 160 + "…"  # "false" is not "true" — still capped
+
+
 # ═══ orient() data-volume — the tool-level integration ═══════════════════════════════════
 
 
@@ -301,6 +319,71 @@ async def test_orient_terse_caps_a_long_thread_summary(actions: Actions) -> None
         assert verbose["open_threads"][0]["summary"] == long_summary
     finally:
         srv._pool = saved
+
+
+async def test_orient_never_caps_a_decision_carrying_is_handoff(actions: Actions) -> None:
+    """THE LIVE SPECIMEN (Thoth DM 3090): his predecessor's confessed-mistakes handoff was
+    correctly filed, durable, and orient() still handed him a 160-char stub — he dispatched
+    off the fragment and repeated the exact mistake it confessed. `is_handoff:true` now
+    exempts the record from the cap entirely; an ORDINARY long decision in the SAME
+    briefing still caps, proving this isn't a blanket cap removal."""
+    from src import mcp_server as srv
+    from src.orchestrator.compositions import seed_default_compositions
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:trshandoff", "session")
+    handoff = await actions.create_or_find_object(
+        "Decision", "decision:trshandoff-1", "session")
+    long_handoff = "thirteen wrong premises, confessed at length so my heir does not " * 10
+    await actions.assert_property(handoff, "summary", long_handoff, "session",
+                                  datetime.now(UTC), 0.9)
+    await actions.assert_property(handoff, "kind", "ruling", "session", datetime.now(UTC), 0.9)
+    await actions.assert_property(handoff, "is_handoff", "true", "session",
+                                  datetime.now(UTC), 0.9)
+    await actions.create_link(handoff, proj, "in_repo", "session", datetime.now(UTC), 0.9)
+
+    ordinary = await actions.create_or_find_object(
+        "Decision", "decision:trshandoff-2", "session")
+    long_ordinary = "an ordinary long ruling with nothing special about it " * 10
+    await actions.assert_property(ordinary, "summary", long_ordinary, "session",
+                                  datetime.now(UTC) + timedelta(seconds=1), 0.9)
+    await actions.create_link(ordinary, proj, "in_repo", "session", datetime.now(UTC), 0.9)
+    await seed_default_compositions(actions.pool)
+
+    saved = srv._pool
+    srv._pool = actions.pool
+    try:
+        terse = await srv.orient(project="trshandoff")
+        h_row = next(r for r in terse["recent_decisions"] if r["id"] == str(handoff)[:8])
+        o_row = next(r for r in terse["recent_decisions"] if r["id"] == str(ordinary)[:8])
+    finally:
+        srv._pool = saved
+    assert h_row["summary"] == long_handoff  # whole, no "…" marker — the acceptance test
+    assert o_row["summary"] == long_ordinary[:160] + "…"  # an ordinary sibling still caps
+
+
+async def test_orient_never_caps_a_thread_carrying_is_handoff(actions: Actions) -> None:
+    """Same fix, the Thread shape — settle()'s own handoff box wants a Thread, Thoth's own
+    live specimen was a Decision; whatever carries the flag is exempt regardless of type."""
+    from src import mcp_server as srv
+
+    long_handoff = "a thread-shaped handoff note, written to be read exactly once " * 10
+    tid = await open_thread(actions, long_handoff, repo="trsthhandoff", kind="obligation",
+                            source="session")
+    await actions.assert_property(tid, "is_handoff", "true", "session", datetime.now(UTC), 0.9)
+    long_ordinary = "an ordinary long open thread with nothing special " * 10
+    await open_thread(actions, long_ordinary, repo="trsthhandoff", kind="obligation",
+                      source="session")
+
+    saved = srv._pool
+    srv._pool = actions.pool
+    try:
+        terse = await srv.orient(project="trsthhandoff")
+    finally:
+        srv._pool = saved
+    h_row = next(r for r in terse["open_threads"] if r["summary"] == long_handoff)
+    o_row = next(r for r in terse["open_threads"]
+                 if r["summary"] == long_ordinary[:160] + "…")
+    assert h_row is not None and o_row is not None
 
 
 async def test_orient_recent_decisions_more_only_past_a_full_page(actions: Actions) -> None:

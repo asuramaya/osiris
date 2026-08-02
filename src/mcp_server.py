@@ -1432,7 +1432,7 @@ _SUMMARY_CAP = 160  # matches the existing (but silent) [:160] precedent already
 
 
 def _cap_text(items: list[dict[str, Any]], key: str, limit: int = _SUMMARY_CAP,
-             ) -> list[dict[str, Any]]:
+             *, exempt_when_true: str | None = None) -> list[dict[str, Any]]:
     """Truncate `key` on each row to `limit` chars for a terse receipt — task #60/thread
     b81b0fac. Measured, not guessed: on the real dev graph, `summary` text is 96-98% of
     every open_threads/recent_decisions item's bytes, and this one cap took orient()'s
@@ -1445,8 +1445,19 @@ def _cap_text(items: list[dict[str, Any]], key: str, limit: int = _SUMMARY_CAP,
     NEVER silent — an explicit '…' marks a shortened value, because a truncated summary
     that reads as complete is worse than one that visibly isn't (the same law that made
     reachability()'s `detail` a required field, not a nice-to-have: a caller must be able
-    to tell 'this is all of it' from 'this is not'). Mutates and returns `items`."""
+    to tell 'this is all of it' from 'this is not'). Mutates and returns `items`.
+
+    `exempt_when_true` (Thoth DM 3090): a row whose named field reads the literal string
+    'true' is surfaced WHOLE, cap skipped entirely — is_handoff's real job. Settle certifies
+    a session WROTE; nothing certified a successor could READ, and the gap is not
+    theoretical: Thoth's own predecessor left a correctly-filed, durable confessed-mistakes
+    handoff, orient() capped it to 160 chars, and he dispatched off the fragment and
+    repeated the exact mistake it confessed. The cap itself stays — measured real savings,
+    96-98% of the payload — this exempts the ONE record class written to be read exactly
+    once, by exactly one reader, at the moment they have the least context to fill a gap."""
     for row in items:
+        if exempt_when_true and row.get(exempt_when_true) == "true":
+            continue
         val = row.get(key)
         if isinstance(val, str) and len(val) > limit:
             row[key] = val[:limit] + "…"
@@ -2208,8 +2219,8 @@ async def _project_briefing(
     # (compositions.py's _table gained the magic "id" property for this) so a capped
     # summary is addressable — verbose=True or search(query=...) recovers the rest.
     if not verbose:
-        _cap_text(out["open_threads"], "summary")
-        _cap_text(out["recent_decisions"], "summary")
+        _cap_text(out["open_threads"], "summary", exempt_when_true="is_handoff")
+        _cap_text(out["recent_decisions"], "summary", exempt_when_true="is_handoff")
     return out
 
 
