@@ -22,6 +22,19 @@ Hooks run BEFORE the permission/classifier gates and are never rejected by them.
 only TIGHTENS. Fail-open: any glitch → emit nothing → the call proceeds unmodified.
 
 Install (PreToolUse, matcher mcp__osiris__.*) via onboard.py --anchor; operator-gated.
+
+THE ALLOWLIST ROTTED SILENTLY ONCE ALREADY (obligation 570dd7e8, found as a side effect of
+#129's cost measurement, 2026-08-02): 11 verbs (wake, launch, lift, record_practice,
+acquire_lease, release_lease, settle, register_blind_spot, hold_memory, annotate_thread,
+amend_decision) were added to mcp_server.py AFTER the 2026-07-10 fix that first built
+SPAWN_AWARE, each genuinely calling `_actor_for(ctx, subagent_id, subagent_type)` for its own
+write attribution — but nobody remembered to extend this set, so a real sub-agent calling any
+of them silently attributed its own writes to its PARENT, unnoticed, until this measurement
+caught it. "Keep in lockstep with mcp_server" was a COMMENT, and a comment does not extend
+itself (Thoth's own words, msg 3031) — tests/test_anchor.py now carries the mechanical guard
+that makes the twelfth verb impossible to forget silently: it AST-scans mcp_server.py for
+every `_actor_for` call site and asserts the caller's name is in this set, failing loudly at
+test time instead of silently in production.
 """
 from __future__ import annotations
 
@@ -29,12 +42,17 @@ import json
 import sys
 from pathlib import Path
 
-# tools whose server signature accepts the spawn stamp — keep in lockstep with mcp_server
+# tools whose server signature accepts the spawn stamp — keep in lockstep with mcp_server.
+# ENFORCED, not just commented (tests/test_anchor.py's own AST-scan guard, obligation
+# 570dd7e8): every mcp_server.py function that calls `_actor_for` must be named here.
 SPAWN_AWARE = {
     "mcp__osiris__mount", "mcp__osiris__orient", "mcp__osiris__record_decision",
     "mcp__osiris__open_thread", "mcp__osiris__resolve_thread", "mcp__osiris__hold_tension",
     "mcp__osiris__send", "mcp__osiris__inbox", "mcp__osiris__ingest_reference",
-    "mcp__osiris__reclassify_thread",
+    "mcp__osiris__reclassify_thread", "mcp__osiris__wake", "mcp__osiris__launch",
+    "mcp__osiris__lift", "mcp__osiris__record_practice", "mcp__osiris__acquire_lease",
+    "mcp__osiris__release_lease", "mcp__osiris__settle", "mcp__osiris__register_blind_spot",
+    "mcp__osiris__hold_memory", "mcp__osiris__annotate_thread", "mcp__osiris__amend_decision",
 }
 
 # tools whose server signature accepts `session_anchor` — the RE-ATTACH hint, carried on EVERY

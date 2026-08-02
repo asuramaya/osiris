@@ -1097,7 +1097,6 @@ async def dossier_report(object_ref: str) -> str:
 @mcp.tool()
 async def handoff_briefing(
     repo: str, agent_ref: str | None = None, since: str | None = None,
-    subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """A SUCCESSION BRIEFING COMPILED FROM THE GRAPH — not hand-written from memory. Reads

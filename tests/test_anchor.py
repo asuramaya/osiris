@@ -21,6 +21,7 @@ only for mount().
 
 from __future__ import annotations
 
+import ast
 import inspect
 import json
 import subprocess
@@ -28,6 +29,7 @@ import sys
 from pathlib import Path
 
 _HOOK = Path(__file__).resolve().parent.parent / "scripts" / "osiris_mount_anchor.py"
+_MCP_SERVER = Path(__file__).resolve().parent.parent / "src" / "mcp_server.py"
 
 
 def _run_hook(payload: dict[str, object]) -> dict[str, object]:
@@ -95,3 +97,69 @@ def test_a_non_osiris_tool_is_never_touched() -> None:
     """The hook fires on every PreToolUse. It must be invisible to everything that is not ours."""
     assert _run_hook({"tool_name": "Bash", "session_id": "513aa520-aaaa",
                       "tool_input": {"command": "ls"}}) == {}
+
+
+# --- SPAWN_AWARE's OWN lockstep, the gap this file's own docstring above named and left open --
+# (obligation 570dd7e8, Thoth msg 3031, found as a side effect of #129's cost measurement:
+# SPAWN_AWARE rotted silently once already — 11 verbs added after the 2026-07-10 fix each
+# wired themselves to `_actor_for` for real write attribution, and nobody remembered to extend
+# the hand-maintained set, so a real sub-agent calling any of them attributed its writes to its
+# PARENT, unnoticed, until this measurement caught it. "A comment is not a guard" — this is.
+
+def _tools_calling_actor_for() -> set[str]:
+    """Every `@mcp.tool()` function in mcp_server.py whose body calls `_actor_for` anywhere —
+    the exact call the spawn stamp exists to feed a real subagent_id/subagent_type into.
+    AST-based (never a grep — a bare mention of "_actor_for" in a docstring or comment must
+    not count, the same discipline gate_hook.py's own import detection uses)."""
+    tree = ast.parse(_MCP_SERVER.read_text())
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        is_tool = any(
+            isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)
+            and dec.func.attr == "tool"
+            for dec in node.decorator_list
+        )
+        if not is_tool:
+            continue
+        calls_actor_for = any(
+            isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_actor_for"
+            for n in ast.walk(node)
+        )
+        if calls_actor_for:
+            found.add(node.name)
+    return found
+
+
+def test_every_actor_for_caller_is_in_SPAWN_AWARE() -> None:
+    """THE SHAPE FIX, not the list fix (Thoth msg 3031: "fix it at the shape... a test that
+    enumerates every tool feeding _actor_for and asserts membership, so the next verb fails
+    loudly at commit rather than silently in production"). A hand-maintained set with a
+    "keep in lockstep" comment is exactly what rotted the first time — this fails HERE, at
+    test time, the moment a twelfth verb calls `_actor_for` without SPAWN_AWARE knowing."""
+    from scripts.osiris_mount_anchor import SPAWN_AWARE
+
+    callers = _tools_calling_actor_for()
+    missing = {f"mcp__osiris__{name}" for name in callers} - SPAWN_AWARE
+    assert not missing, (
+        f"{sorted(missing)} call _actor_for for their own write attribution but are not in "
+        f"SPAWN_AWARE — a real sub-agent calling any of them right now silently attributes "
+        f"its writes to its PARENT (the exact 2026-07-10 bug, reproducing silently)")
+
+
+def test_SPAWN_AWARE_and_the_SERVER_stay_in_lockstep() -> None:
+    """The other half of the same class as `test_the_hook_and_the_SERVER_stay_in_LOCKSTEP`
+    above, for SPAWN_AWARE instead of ANCHOR_AWARE: a name in the set whose tool does not
+    accept `subagent_id` makes every spawn call to it fail schema validation — louder and
+    worse than the attribution bug it exists to fix."""
+    import src.mcp_server as srv
+    from scripts.osiris_mount_anchor import SPAWN_AWARE
+
+    for name in sorted(SPAWN_AWARE):
+        fn = getattr(srv, name.removeprefix("mcp__osiris__"), None)
+        assert fn is not None, f"{name} is stamped by the hook but does not exist on the server"
+        params = inspect.signature(fn).parameters
+        assert "subagent_id" in params, (
+            f"{name} is in SPAWN_AWARE but its signature does not accept `subagent_id` — "
+            "every call to it would fail schema validation")
