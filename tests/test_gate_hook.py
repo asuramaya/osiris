@@ -3,15 +3,19 @@ cheap enough to survive contact (Sekhmet's #112 finding: full-suite is 209s unde
 concurrency). Pure, IO-only via tmp_path, no git and no subprocess."""
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 from typing import Any
 
 import scripts.gate_hook as gate_hook
 from scripts.gate_hook import (
+    DERIVATION_TRACE_QUESTION,
+    _is_receipt_shaped,
     _module_imports,
     _status_word,
     classify_test_files,
     cmd_precommit,
+    receipt_shaped_touches,
     resolve_test_files,
     run_gates,
 )
@@ -369,3 +373,176 @@ def test_report_a_genuine_clean_run_says_plain_pass(capsys: Any) -> None:
     out = capsys.readouterr().out
     assert all_ok is True
     assert out.splitlines()[0] == "gate_hook[test]: PASS"
+
+
+# --- #117 piece (b): the derivation-trace nudge (decision d0ab1b0b, routed msg 2984) ----------
+
+def test_added_line_ranges_parses_a_single_hunk(tmp_path: Path, monkeypatch: Any) -> None:
+    diff = "@@ -0,0 +1,3 @@\n+def f():\n+    return {}\n+\n"
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, diff))
+    assert gate_hook._added_line_ranges(tmp_path, "x.py") == [(1, 3)]
+
+
+def test_added_line_ranges_omitted_count_defaults_to_one(tmp_path: Path, monkeypatch: Any) -> None:
+    diff = "@@ -5,0 +6 @@\n+a\n"
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, diff))
+    assert gate_hook._added_line_ranges(tmp_path, "x.py") == [(6, 6)]
+
+
+def test_added_line_ranges_a_pure_deletion_contributes_nothing(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """`+c,0` -- nothing landed on the new-file side at this point, only a deletion."""
+    diff = "@@ -5,2 +5,0 @@\n-a\n-b\n"
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, diff))
+    assert gate_hook._added_line_ranges(tmp_path, "x.py") == []
+
+
+def test_added_line_ranges_git_failure_returns_empty(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (False, "fatal: not a repo"))
+    assert gate_hook._added_line_ranges(tmp_path, "x.py") == []
+
+
+def _first_func(src: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    node = ast.parse(src).body[0]
+    assert isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    return node
+
+
+def test_is_receipt_shaped_true_for_mcp_tool_decorator() -> None:
+    assert _is_receipt_shaped(_first_func("@mcp.tool()\ndef f():\n    return {}\n")) is True
+
+
+def test_is_receipt_shaped_true_for_dict_str_any_return() -> None:
+    assert _is_receipt_shaped(_first_func("def f() -> dict[str, Any]:\n    return {}\n")) is True
+
+
+def test_is_receipt_shaped_false_for_a_plain_function() -> None:
+    assert _is_receipt_shaped(_first_func("def f():\n    return 1\n")) is False
+
+
+def test_is_receipt_shaped_false_for_a_different_dict_shape() -> None:
+    """The trigger is the EXACT `dict[str, Any]` shape, not any dict return -- a narrower,
+    more precise return type is not the receipt-collapse pattern #117 named."""
+    assert _is_receipt_shaped(_first_func("def f() -> dict[str, int]:\n    return {}\n")) is False
+
+
+def test_is_receipt_shaped_false_for_an_unrelated_decorator() -> None:
+    assert _is_receipt_shaped(_first_func("@app.route('/x')\ndef f():\n    return {}\n")) is False
+
+
+def test_receipt_shaped_touches_flags_a_newly_added_tool_function(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    content = (
+        "@mcp.tool()\n"
+        "def real_tool() -> dict[str, Any]:\n"
+        "    return {}\n"
+    )
+    _write(tmp_path, "src/pkg/x.py", content)
+    diff = "@@ -0,0 +1,3 @@\n+@mcp.tool()\n+def real_tool() -> dict[str, Any]:\n+    return {}\n"
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, diff))
+    out = receipt_shaped_touches(tmp_path, ["src/pkg/x.py"])
+    assert out == {"src/pkg/x.py": ["real_tool"]}
+
+
+def test_receipt_shaped_touches_ignores_an_untouched_function_in_the_same_file(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """A receipt-shaped function that ALREADY EXISTED and was not touched by this diff must
+    not be flagged just because the file is in `changed_files` -- only lines the diff itself
+    added or modified count."""
+    content = (
+        "@mcp.tool()\n"
+        "def untouched_tool() -> dict[str, Any]:\n"
+        "    return {}\n"
+        "\n"
+        "\n"
+        "def helper():\n"
+        "    return 1\n"
+    )
+    _write(tmp_path, "src/pkg/x.py", content)
+    # only the helper's body line changed (line 7)
+    diff = "@@ -7 +7 @@\n-    return 0\n+    return 1\n"
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, diff))
+    out = receipt_shaped_touches(tmp_path, ["src/pkg/x.py"])
+    assert out == {}
+
+
+def test_receipt_shaped_touches_catches_a_decorator_only_addition(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """Adding `@mcp.tool()` above an ALREADY-EXISTING function touches only the decorator
+    line, not `def`'s own line (ast's own lineno behavior) -- must still be caught."""
+    content = (
+        "@mcp.tool()\n"
+        "def now_a_tool() -> dict[str, Any]:\n"
+        "    return {}\n"
+    )
+    _write(tmp_path, "src/pkg/x.py", content)
+    diff = "@@ -0,0 +1 @@\n+@mcp.tool()\n"
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, diff))
+    out = receipt_shaped_touches(tmp_path, ["src/pkg/x.py"])
+    assert out == {"src/pkg/x.py": ["now_a_tool"]}
+
+
+def test_receipt_shaped_touches_ignores_non_python_files(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, "@@ -0,0 +1 @@\n+x\n"))
+    out = receipt_shaped_touches(tmp_path, ["docs/DEPLOY.md"])
+    assert out == {}
+
+
+def test_receipt_shaped_touches_skips_a_deleted_file(tmp_path: Path, monkeypatch: Any) -> None:
+    """`changed_files` can name a file this diff DELETES -- nothing left on disk to trace."""
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, "@@ -1 +0,0 @@\n-x\n"))
+    out = receipt_shaped_touches(tmp_path, ["src/pkg/gone.py"])
+    assert out == {}
+
+
+def test_precommit_prints_the_derivation_trace_question_when_a_tool_is_touched(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["src/pkg/x.py"])
+    monkeypatch.setattr(
+        gate_hook, "run_gates",
+        lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+    monkeypatch.setattr(
+        gate_hook, "receipt_shaped_touches",
+        lambda root, changed: {"src/pkg/x.py": ["real_tool"]})
+    assert cmd_precommit(enforce=True) == 0
+    out = capsys.readouterr().out
+    assert DERIVATION_TRACE_QUESTION in out
+    assert "src/pkg/x.py: real_tool" in out
+
+
+def test_precommit_is_silent_about_derivation_trace_when_nothing_receipt_shaped_touched(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
+    monkeypatch.setattr(
+        gate_hook, "run_gates",
+        lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+    monkeypatch.setattr(gate_hook, "receipt_shaped_touches", lambda root, changed: {})
+    assert cmd_precommit(enforce=True) == 0
+    out = capsys.readouterr().out
+    assert DERIVATION_TRACE_QUESTION not in out
+
+
+def test_derivation_trace_question_never_changes_the_verdict_on_a_failing_gate(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    """The nudge is print-only -- a REAL gate failure still refuses when enforced, with or
+    without a receipt-shaped touch alongside it."""
+    monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["src/pkg/x.py"])
+    monkeypatch.setattr(
+        gate_hook, "run_gates",
+        lambda root, changed: {"ruff": (False, "boom"), "mypy": (True, ""), "pytest": (True, "")})
+    monkeypatch.setattr(
+        gate_hook, "receipt_shaped_touches",
+        lambda root, changed: {"src/pkg/x.py": ["real_tool"]})
+    assert cmd_precommit(enforce=True) == 1
+    out = capsys.readouterr().out
+    assert DERIVATION_TRACE_QUESTION in out
+    assert "gate_hook: REFUSED" in out

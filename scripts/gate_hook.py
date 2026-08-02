@@ -61,11 +61,29 @@ split built on top of it — the same class of gap `resolve_test_files`'s own do
 inherited rather than solved by `classify_test_files` (Khnum's own honest caveat, msg 2941:
 "N direct" is a verified FLOOR, never a ceiling). This is a real, bounded blind spot, not a
 hidden one; `--audit`'s own report names it as a caveat, never as zero.
+
+#117's SECOND RULE, A NUDGE NOT A GATE (Khnum's investigation d0ab1b0b, proposal msg 2983,
+Thoth's routing msg 2984/2985) — piece (a) of #117 (tests/test_receipt_vocabulary.py, commit
+7ef3bc1) is the mechanical, automatable half: a behavioral test that a status vocabulary never
+collapses "didn't happen" onto "happened cleanly" (the exact 0044671 defect it was built to
+catch). Piece (b), DERIVATION TRACE, is explicitly NOT automatable the same way — Khnum's own
+honest split: whether a receipt field is genuinely templated from a locally-computed variable
+that was forced through the real branch/exception/return path, versus a string literal or a
+raw `args.get()`/parameter echo standing in for a value that should have been resolved first,
+is a judgment call, not a syntax check. So this prints a QUESTION, never a verdict, whenever a
+STAGED diff adds or modifies a function with a receipt-shaped signature (`@mcp.tool()` or
+`-> dict[str, Any]`) — `receipt_shaped_touches` below, wired only into `cmd_precommit`'s
+report (a retroactive `--audit` over already-merged history has no live author to hand the
+question to). MECHANICAL TRIGGER ONLY: it fires on the SHAPE, never inspects whether the body
+actually has the problem — same honest split as (a)/(b) generally, and it can never affect
+`ok`/the exit code, by construction (the printed block carries no truth value to fold into
+`_status_word`).
 """
 from __future__ import annotations
 
 import argparse
 import ast
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -338,6 +356,103 @@ def changed_files_for_commit(repo_root: Path, sha: str) -> list[str]:
     return [line for line in out.splitlines() if line] if ok else []
 
 
+_HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
+def _added_line_ranges(repo_root: Path, file: str) -> list[tuple[int, int]]:
+    """New-file line ranges this STAGED diff actually adds or modifies, read from `git diff
+    --cached -U0`'s own hunk headers (`@@ -a,b +c,d @@` -> the `+c,d` side only) — never the
+    whole file, so a function merely sitting near an edit is never wrongly flagged as
+    touched. A hunk with `+c,0` (pure deletion at that point, nothing added on the new-file
+    side) contributes no range."""
+    ok, out = _run(["git", "diff", "--cached", "-U0", "--", file], repo_root)
+    if not ok:
+        return []
+    ranges: list[tuple[int, int]] = []
+    for line in out.splitlines():
+        m = _HUNK_HEADER.match(line)
+        if not m:
+            continue
+        start = int(m.group(1))
+        count = int(m.group(2)) if m.group(2) is not None else 1
+        if count == 0:
+            continue
+        ranges.append((start, start + count - 1))
+    return ranges
+
+
+def _is_receipt_shaped(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """#117's own mechanical trigger (decision 7ca152c1) — decorated `@mcp.tool()` (an MCP
+    tool's return value IS the receipt every caller trusts) or annotated `-> dict[str, Any]`
+    (a hand-assembled dict receipt, #117's own named specimen shape). Matches the SHAPE only,
+    never inspects the body — whether it actually HAS a derivation problem is the judgment
+    call the printed question hands to whoever reads it, not this function's to make."""
+    for dec in node.decorator_list:
+        if (isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)
+                and dec.func.attr == "tool"):
+            return True
+    ret = node.returns
+    if (isinstance(ret, ast.Subscript) and isinstance(ret.value, ast.Name)
+            and ret.value.id == "dict"):
+        sl = ret.slice
+        if isinstance(sl, ast.Tuple) and len(sl.elts) == 2:
+            key, val = sl.elts
+            if (isinstance(key, ast.Name) and key.id == "str"
+                    and isinstance(val, ast.Name) and val.id == "Any"):
+                return True
+    return False
+
+
+DERIVATION_TRACE_QUESTION = (
+    "DERIVATION TRACE (#117 piece b, decision d0ab1b0b) — a reviewer question, never a gate; "
+    "does not affect this commit's PASS/FAIL. For every field the function(s) below return: "
+    "is it templated from a locally-computed variable that was actually forced through the "
+    "real branch/exception/return path? Or could it be a string literal that isn't, or a raw "
+    "args.get()/parameter echo standing in for a value that should have been resolved first?"
+)
+
+
+def receipt_shaped_touches(repo_root: Path, changed_files: list[str]) -> dict[str, list[str]]:
+    """{file: [function names]} for every function this STAGED diff adds or modifies (not
+    merely a touched FILE — `_added_line_ranges` scopes to the diff's own hunks) whose
+    signature is receipt-shaped (`_is_receipt_shaped`). Print-only input to the nudge in
+    `cmd_precommit`'s own report; never touches `ok`/the exit code — a mechanical trigger for
+    a human/agent judgment call, the same honest split Thoth endorsed for #117 piece (b)
+    generally (piece (a), the automatable half, already ships as its own behavioral test,
+    tests/test_receipt_vocabulary.py)."""
+    out: dict[str, list[str]] = {}
+    for f in changed_files:
+        if not f.endswith(".py"):
+            continue
+        path = repo_root / f
+        if not path.is_file():
+            continue
+        try:
+            tree = ast.parse(path.read_text())
+        except (OSError, SyntaxError):
+            continue
+        ranges = _added_line_ranges(repo_root, f)
+        if not ranges:
+            continue
+        names: list[str] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not _is_receipt_shaped(node):
+                continue
+            # start at the FIRST DECORATOR's own line, not `node.lineno` (which is the `def`
+            # line even for a decorated function, ast's own behavior since 3.8) -- a diff that
+            # only ADDS `@mcp.tool()` above an already-existing function must still count as
+            # touching it.
+            start = node.decorator_list[0].lineno if node.decorator_list else node.lineno
+            end = node.end_lineno if node.end_lineno is not None else node.lineno
+            if any(a <= end and start <= b for a, b in ranges):
+                names.append(node.name)
+        if names:
+            out[f] = names
+    return out
+
+
 def _report(label: str, results: dict[str, tuple[bool, str]]) -> bool:
     all_ok = all(ok for ok, _ in results.values())
     statuses = {name: _status_word(ok, out) for name, (ok, out) in results.items()}
@@ -370,6 +485,11 @@ def cmd_precommit(*, enforce: bool | None = None) -> int:
         return 0
     results = run_gates(REPO_ROOT, changed)
     all_ok = _report("staged", results)
+    touches = receipt_shaped_touches(REPO_ROOT, changed)
+    if touches:
+        print(DERIVATION_TRACE_QUESTION)
+        for f, names in sorted(touches.items()):
+            print(f"  {f}: {', '.join(sorted(names))}")
     if all_ok:
         return 0
     if not enforce:
