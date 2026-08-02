@@ -1856,13 +1856,13 @@ async def test_set_seat_attended_stamps_and_is_read_back(actions: Actions) -> No
 
     seat = (await ensure_seat(actions, house="demo", handle="Attendee",
                               source="test"))["seat_id"]
-    out = await set_seat_attended(actions, seat_id=seat, attended="human", actor="test",
+    out = await set_seat_attended(actions, seat_id=seat, attended="human", actor="operator",
                                   because="this seat is operator-fronted")
     assert out == {"seat": seat, "attended": "human", "because": "this seat is operator-fronted"}
     assert await _attended_value(actions, seat) == "human"
 
     # a later stamp reversing it supersedes cleanly — one current value, not a pile-up
-    await set_seat_attended(actions, seat_id=seat, attended="worker", actor="test",
+    await set_seat_attended(actions, seat_id=seat, attended="worker", actor="operator",
                             because="handed off to full automation")
     assert await _attended_value(actions, seat) == "worker"
     assert await actions.pool.fetchval(
@@ -1898,7 +1898,7 @@ async def test_set_seat_attended_refuses_an_unknown_seat(actions: Actions) -> No
     from src.orchestrator.seats import set_seat_attended
 
     out = await set_seat_attended(actions, seat_id="seat:nosuchsea", attended="human",
-                                  actor="test", because="no such seat exists")
+                                  actor="operator", because="no such seat exists")
     assert out == {"error": "no such seat: 'seat:nosuchsea'"}
 
 
@@ -1907,9 +1907,47 @@ async def test_set_seat_attended_refuses_a_retired_seat(actions: Actions) -> Non
 
     seat = (await ensure_seat(actions, house="demo", handle="Gone", source="test"))["seat_id"]
     await retire_seat(actions, seat, reason="role is over", actor="test")
-    out = await set_seat_attended(actions, seat_id=seat, attended="human", actor="test",
+    out = await set_seat_attended(actions, seat_id=seat, attended="human", actor="operator",
                                   because="attempting to stamp a dead seat")
     assert "error" in out and "retired" in out["error"]
+
+
+async def test_set_seat_attended_refuses_a_non_manager_non_operator(actions: Actions) -> None:
+    """NEGATIVE CONTROL (census a5e53ed8/3f97f9c7, fixed 2026-08-02): this docstring
+    claimed "OPERATOR-APPROVED TO CHANGE" for weeks while any mounted caller could stamp
+    any seat's attendance signal — confirmed against pre-fix code (see every OTHER test
+    in this section, all of which had to be updated to actor="operator" to keep passing,
+    since none of them were testing authority before — there was none to test)."""
+    from src.orchestrator.seats import attach_seat, bind_holder, set_seat_attended
+
+    manager = (await ensure_seat(actions, house="demo", handle="AttendMgr",
+                                 source="test"))["seat_id"]
+    worker = (await ensure_seat(actions, house="demo", handle="AttendWkr",
+                                source="test"))["seat_id"]
+    await attach_seat(actions, worker, manager, evidence="org chart", actor="test")
+    await bind_holder(actions, seat_id=worker, agent_id="agent:attend-stranger", source="test")
+
+    out = await set_seat_attended(actions, seat_id=worker, attended="human",
+                                  actor="agent:attend-stranger", because="unauthorized try")
+    assert "not authorized" in out["error"] and manager in out["error"]
+    assert await _attended_value(actions, worker) is None
+
+
+async def test_set_seat_attended_allows_the_target_seats_own_manager(actions: Actions) -> None:
+    from src.orchestrator.seats import attach_seat, bind_holder, set_seat_attended
+
+    manager = (await ensure_seat(actions, house="demo", handle="AttendMgr2",
+                                 source="test"))["seat_id"]
+    worker = (await ensure_seat(actions, house="demo", handle="AttendWkr2",
+                                source="test"))["seat_id"]
+    await attach_seat(actions, worker, manager, evidence="org chart", actor="test")
+    await bind_holder(actions, seat_id=manager, agent_id="agent:attend-manager", source="test")
+
+    out = await set_seat_attended(actions, seat_id=worker, attended="human",
+                                  actor="agent:attend-manager",
+                                  because="the manager stamps its own worker")
+    assert out["attended"] == "human"
+    assert await _attended_value(actions, worker) == "human"
 
 
 # ═══ RENAME_SEAT (operator-ordered, 2026-07-28 — the casing-drift build) ═══
@@ -1930,7 +1968,7 @@ async def test_rename_seat_stamps_seat_and_its_current_holder(actions: Actions) 
         await actions.create_or_find_object("Agent", "agent:tjholder", "test"),
         "handle", "TJMAX", "agent:tjholder", datetime.now(UTC), 0.9, evidence_class="self_declared")
 
-    out = await rename_seat(actions, seat_id=seat, new_handle="William", actor="test",
+    out = await rename_seat(actions, seat_id=seat, new_handle="William", actor="operator",
                             because="after William Shockley, replacing a linux-function name")
     assert out["seat"] == seat and out["old_handle"] == "tjmax" and out["new_handle"] == "William"
     assert out["holder_stamped"] == "agent:tjholder"
@@ -1947,7 +1985,7 @@ async def test_rename_seat_on_a_vacant_seat_only_stamps_the_seat(actions: Action
     from src.orchestrator.seats import rename_seat
 
     seat = (await ensure_seat(actions, house="demo", handle="Empty", source="test"))["seat_id"]
-    out = await rename_seat(actions, seat_id=seat, new_handle="StillEmpty", actor="test",
+    out = await rename_seat(actions, seat_id=seat, new_handle="StillEmpty", actor="operator",
                             because="renaming a seat nobody sits in yet")
     assert out["holder_stamped"] is None
     assert await _handle_of(actions, seat) == "StillEmpty"
@@ -1962,7 +2000,7 @@ async def test_rename_seat_refuses_a_name_another_seat_already_carries(
     await ensure_seat(actions, house="demo", handle="Vajra", source="test")
     other = (await ensure_seat(actions, house="demo", handle="Renameme",
                                source="test"))["seat_id"]
-    out = await rename_seat(actions, seat_id=other, new_handle="vajra", actor="test",
+    out = await rename_seat(actions, seat_id=other, new_handle="vajra", actor="operator",
                             because="attempting a casing-only collision")
     assert "error" in out and "already claimed" in out["error"]
     assert await _handle_of(actions, other) == "Renameme"
@@ -1997,8 +2035,47 @@ async def test_rename_seat_refuses_an_unknown_seat(actions: Actions) -> None:
     from src.orchestrator.seats import rename_seat
 
     out = await rename_seat(actions, seat_id="seat:nosuchsea", new_handle="Anyone",
-                            actor="test", because="no such seat exists")
+                            actor="operator", because="no such seat exists")
     assert out == {"error": "no such seat: 'seat:nosuchsea'"}
+
+
+async def test_rename_seat_refuses_a_non_manager_non_operator(actions: Actions) -> None:
+    """NEGATIVE CONTROL (census a5e53ed8/3f97f9c7, fixed 2026-08-02): this docstring
+    claimed "manager/operator-invoked, no self-service" for weeks while any mounted
+    caller could rename any active seat — confirmed against pre-fix code (a stranger's
+    actor="test" call renamed the seat cleanly before this gate existed, see every OTHER
+    test in this section, all of which had to be updated to actor="operator" to keep
+    passing). Mirrors charter_for's own refusal shape exactly."""
+    from src.orchestrator.seats import attach_seat, bind_holder, rename_seat
+
+    manager = (await ensure_seat(actions, house="demo", handle="RenameMgr",
+                                 source="test"))["seat_id"]
+    worker = (await ensure_seat(actions, house="demo", handle="RenameWkr",
+                                source="test"))["seat_id"]
+    await attach_seat(actions, worker, manager, evidence="org chart", actor="test")
+    await bind_holder(actions, seat_id=worker, agent_id="agent:rename-stranger", source="test")
+
+    out = await rename_seat(actions, seat_id=worker, new_handle="Stolen",
+                            actor="agent:rename-stranger", because="unauthorized try")
+    assert "not authorized" in out["error"] and manager in out["error"]
+    assert await _handle_of(actions, worker) == "RenameWkr"
+
+
+async def test_rename_seat_allows_the_target_seats_own_manager(actions: Actions) -> None:
+    from src.orchestrator.seats import attach_seat, bind_holder, rename_seat
+
+    manager = (await ensure_seat(actions, house="demo", handle="RenameMgr2",
+                                 source="test"))["seat_id"]
+    worker = (await ensure_seat(actions, house="demo", handle="RenameWkr2",
+                                source="test"))["seat_id"]
+    await attach_seat(actions, worker, manager, evidence="org chart", actor="test")
+    await bind_holder(actions, seat_id=manager, agent_id="agent:rename-manager", source="test")
+
+    out = await rename_seat(actions, seat_id=worker, new_handle="Renamed2",
+                            actor="agent:rename-manager",
+                            because="the manager renames its own worker")
+    assert out["new_handle"] == "Renamed2"
+    assert await _handle_of(actions, worker) == "Renamed2"
 
 
 # ═══ bind_seat_tree (task #103's re-scope, ff3bdc37, Thoth DM 2794 sign-off) ═══

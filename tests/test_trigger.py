@@ -2054,7 +2054,7 @@ async def test_dispatch_dm_never_injects_an_explicitly_attended_seat(actions: Ac
     stamp is what gates it now."""
     _, manager_seat = await _managed_pair(
         actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
-    await set_seat_attended(actions, seat_id=manager_seat, attended="human", actor="test",
+    await set_seat_attended(actions, seat_id=manager_seat, attended="human", actor="operator",
                             because="test: this seat IS the operator-fronted one")
 
     async def _boom(*a: Any, **kw: Any) -> Any:
@@ -2167,7 +2167,7 @@ async def test_wake_authorizes_worker_to_manager(actions: Actions, tmp_path: Pat
         actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
     # thread 96f62338: attendance is an explicit stamp now, not inferred from managed_by —
     # this manager IS the operator-fronted one for this test's purpose, so it's stamped.
-    await set_seat_attended(actions, seat_id=manager_seat, attended="human", actor="test",
+    await set_seat_attended(actions, seat_id=manager_seat, attended="human", actor="operator",
                             because="test: this seat is the operator-fronted one")
     _land_marker(sense, _wake_marker("agent:sender", worker_seat, "Worker"))
     calls: list[tuple[str, dict[str, Any]]] = []

@@ -3480,10 +3480,10 @@ async def set_seat_attended(seat_id: str, attended: str, because: str,
     guard instead of its old, broken `managed_by` proxy (true only while Thoth was the sole
     manager; false since workers started minting their own sub-workers and test seats).
 
-    OPERATOR-APPROVED TO CHANGE: this verb exists so the write CAN happen on the operator's
-    word — it does not itself decide who is human-attended. `attended='human'` marks a seat
-    the operator actually fronts; `attended='worker'` reverses a prior stamp. Refuses loudly
-    on a value outside {'human','worker'}, a blank `because`, or an unknown/retired seat."""
+    OPERATOR-APPROVED TO CHANGE, ENFORCED: the operator or the target seat's own manager
+    only. `attended='human'` marks a seat the operator actually fronts; `attended='worker'`
+    reverses a prior stamp. Refuses loudly on a value outside {'human','worker'}, a blank
+    `because`, an unauthorized actor, or an unknown/retired seat."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a seat's attendance signal is a mind's act, and the "
@@ -3496,14 +3496,13 @@ async def set_seat_attended(seat_id: str, attended: str, because: str,
 @mcp.tool()
 async def rename_seat(seat_id: str, new_handle: str, because: str,
                       ctx: Context | None = None) -> dict[str, Any]:
-    """Rename a Seat — manager/operator-invoked, no self-service (claim_name is for a mind
-    naming ITSELF). Stamps the seat's own `handle` and, if the seat is occupied, the
-    current holder's `handle` too — both compensating assertions, the old handle stays in
-    history. The harness-session display name is OUT of scope (a running process this call
-    has no reach into); the receipt says the graph renamed and the harness name follows at
-    the holder's next spawn. Refuses loudly on a blank/over-long `new_handle`, a blank
-    `because`, an unknown seat, or a `new_handle` another active seat already carries
-    (case-insensitive — the exact casing-drift this build exists to stop)."""
+    """Rename a Seat — manager/operator-invoked, ENFORCED, no self-service (claim_name is
+    for a mind naming ITSELF). Stamps the seat's own `handle` and, if the seat is occupied,
+    the current holder's `handle` too — both compensating assertions, the old handle stays
+    in history. The harness-session display name is OUT of scope; the receipt says the
+    graph renamed and the harness name follows at the holder's next spawn. Refuses loudly
+    on a blank/over-long `new_handle`, a blank `because`, an unauthorized actor, an unknown
+    seat, or a `new_handle` another active seat already carries (case-insensitive)."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a rename is a mind's act, and the graph must know "
