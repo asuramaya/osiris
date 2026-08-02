@@ -45,6 +45,19 @@ EXISTING verb rather than re-deriving it:
              --repos --because      the charter_for MCP tool wraps (thread 2474) — same
              --actor                second-door reasoning as fold-project, same guard,
                                      untouched
+  osiris amend-practice <ref>       the same capture.amend_practice the amend_practice MCP
+             <amendment> --actor    tool wraps (thread 06c3529b) — narrows a LIVE practice's
+                                     guidance without touching its id/statement/witness count.
+                                     Calls the orchestrator function directly with an explicit
+                                     --actor (fold-project/charter-for's own pattern, not
+                                     cmd_fleet's anonymous call_mcp_tool one) because this is a
+                                     WRITE that needs real attribution: an anonymous MCP session
+                                     has no mounted identity, so a call_mcp_tool round-trip
+                                     would stamp the amendment's source as the generic
+                                     "session" bucket (mcp_server._source_for's own documented
+                                     fallback) instead of a named actor — a real provenance
+                                     loss for a governance-relevant write, unlike cmd_fleet's
+                                     read-only round-trip where no attribution is at stake.
 
 CANONICAL ENV RESOLUTION (the actual root-fix, 3e96c10e's cousin): every DB-backed command
 applies src.config.dev_env.apply_dev_fallback() first — a bare invocation must target the
@@ -1208,6 +1221,74 @@ async def cmd_charter_for(
     return 0
 
 
+# --- amend-practice ----------------------------------------------------------------------------
+
+async def cmd_amend_practice(
+    ref: str, amendment: str, *, actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris amend-practice <ref> <amendment> --actor <who> — the console-script door onto
+    capture.amend_practice, the SAME function the amend_practice MCP tool wraps (no
+    duplicated guard: the refuted-practice refusal and the blank-amendment check are
+    exactly amend_practice's own, untouched here).
+
+    THE SANCTIONED SECOND DOOR (thread 06c3529b, the fourth occurrence of the same shape as
+    fold_project/charter_for/annotate_thread/amend_decision: a verb ships, deploys, and the
+    fleet's live MCP clients cannot see it in their own deferred-tool index — not this
+    module's bug, upstream per ruling 482c3d0f rather than worked around).
+
+    CALLS THE ORCHESTRATOR FUNCTION DIRECTLY, not cmd_fleet's call_mcp_tool round-trip
+    (Thoth DM 3126/3127's own open question — recorded here per his instruction): an
+    amendment is a WRITE, and a call_mcp_tool session is anonymous (no ctx, no mounted
+    identity), so the MCP wrapper's own `_actor_for`/`_source_for` fallback would stamp it
+    with the generic "session" bucket — a real provenance loss for a governance-relevant
+    write. fold-project/charter-for already established the right precedent for exactly
+    this class of write-through-CLI-door: own pool, explicit --actor, real attribution.
+    (Consequence, named honestly: unlike cmd_fleet, this door does NOT prove the frozen
+    tool-index is reachable server-side over the wire — it proves the underlying function
+    works, a narrower claim. Thoth's own three-verbs-in-one-call test already carries the
+    server-vs-client staleness proof; this door's job is unblocking the fleet, not
+    re-proving that diagnosis.)
+
+    TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474's general rule):
+    mirrors the MCP wrapper's own {"id", "amendment", "status"} / {"error": ...} shape by
+    hand, since capture.amend_practice itself returns a bare UUID | None and raises
+    ValueError rather than shaping either receipt itself — the MCP tool's own try/except
+    and None-check are duplicated here on purpose, not softened."""
+    from src.actions.core import Actions
+    from src.orchestrator.capture import amend_practice
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris amend-practice: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        try:
+            pid = await amend_practice(Actions(pool), ref, amendment, source=actor)
+        except ValueError as e:
+            print(f"osiris amend-practice: refused — {e}", file=sys.stderr)
+            return 1
+    finally:
+        if owns_pool:
+            await pool.close()
+    if pid is None:
+        print(f"osiris amend-practice: refused — no practice matches {ref!r}",
+              file=sys.stderr)
+        return 1
+    print(f"amended {pid}: {amendment.strip()}")
+    return 0
+
+
 # --- argv dispatch -----------------------------------------------------------------------------
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -1268,6 +1349,16 @@ def _build_parser() -> argparse.ArgumentParser:
                                help="who is declaring this charter (must be the seat's "
                                     "manager or an operator actor)")
 
+    p_amend_practice = sub.add_parser("amend-practice", help="narrow or correct a LIVE "
+                                      "practice's guidance — the same amend_practice the "
+                                      "MCP tool wraps, exposed as the sanctioned second door")
+    p_amend_practice.add_argument("ref", help="the target practice's uuid, canonical, "
+                                  "short-id prefix, or statement substring")
+    p_amend_practice.add_argument("amendment", help="the text to add — never replaces the "
+                                  "practice's own statement")
+    p_amend_practice.add_argument("--actor", required=True,
+                                  help="who is making this amendment")
+
     return p
 
 
@@ -1295,6 +1386,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "charter-for":
         repos = [r.strip() for r in args.repos.split(",") if r.strip()]
         return asyncio.run(cmd_charter_for(args.seat, repos, args.because, actor=args.actor))
+    if args.command == "amend-practice":
+        return asyncio.run(cmd_amend_practice(args.ref, args.amendment, actor=args.actor))
     return 2  # pragma: no cover - argparse's own `required=True` makes this unreachable
 
 

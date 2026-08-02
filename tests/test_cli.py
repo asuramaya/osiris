@@ -16,6 +16,7 @@ from src.cli import (
     _wait_for_health,
     _wait_for_smoke,
     alembic_gap_note,
+    cmd_amend_practice,
     cmd_attach,
     cmd_boot_status,
     cmd_charter_for,
@@ -1123,4 +1124,68 @@ async def test_cli_parser_accepts_charter_for(actions: Actions) -> None:
     assert args.seat == "seat:abc12345"
     assert args.repos == "a,b,c"
     assert args.because == "onboarding"
+    assert args.actor == "operator"
+
+
+async def test_cmd_amend_practice_amends_and_reports(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator.capture import practice_amendments, record_practice
+
+    p = await record_practice(actions, "always vendor the lockfile before a release")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_amend_practice(str(p), "confirmed live on gestalt, 2026-08-02",
+                                       actor="agent:cliamender1", pool=actions.pool)
+    assert out == 0
+    assert f"amended {p}" in buf.getvalue()
+    assert "confirmed live on gestalt, 2026-08-02" in buf.getvalue()
+
+    amendments = await practice_amendments(actions.pool, p)
+    assert [a["amendment"] for a in amendments] == ["confirmed live on gestalt, 2026-08-02"]
+    assert amendments[0]["source"] == "agent:cliamender1"
+
+
+async def test_cmd_amend_practice_refuses_a_refuted_practice(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    from src.orchestrator.capture import practice_amendments, record_practice, refute_practice
+
+    p = await record_practice(actions, "always retry twice on any timeout")
+    await refute_practice(actions, str(p), killed_by="decision:fix456")
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_amend_practice(str(p), "one more thought on the old lesson",
+                                       actor="agent:cliamender2", pool=actions.pool)
+    assert out == 1
+    assert "refused" in buf.getvalue() and "refuted" in buf.getvalue()
+    assert await practice_amendments(actions.pool, p) == []
+
+
+async def test_cmd_amend_practice_refuses_no_match(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_amend_practice("no such practice anywhere", "an amendment",
+                                       actor="agent:cliamender3", pool=actions.pool)
+    assert out == 1
+    assert "no practice matches" in buf.getvalue()
+
+
+async def test_cli_parser_accepts_amend_practice(actions: Actions) -> None:
+    """argparse wiring: ref + amendment positionals, --actor required."""
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["amend-practice", "practice:abc12345", "narrowed to its residual window",
+         "--actor", "operator"])
+    assert args.command == "amend-practice"
+    assert args.ref == "practice:abc12345"
+    assert args.amendment == "narrowed to its residual window"
     assert args.actor == "operator"
