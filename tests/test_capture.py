@@ -681,6 +681,28 @@ async def test_resolve_thread_artifact_resolves_a_sibling_thread(actions: Action
         "SELECT 1 FROM links WHERE from_id=$1 AND type='closed_by'", dup) is None
 
 
+async def test_resolve_thread_artifact_resolves_a_tension_or_practice(actions: Actions) -> None:
+    """Thoth DM 3052 / capture._find_artifact widened again: characterizing the
+    closure-backfill's 77 unresolvable rows found real citations of a Tension and a
+    Practice short id — types this resolver still had no shape for even after the Thread
+    widen, structurally indistinguishable from a typo until now."""
+    tension = await actions.create_or_find_object("Tension", "tension:t1", "session")
+    t1 = await open_thread(actions, "a thread that cites a tension by short id")
+    closed1 = await resolve_thread(actions, str(t1), because="held",
+                                   artifact=str(tension)[:8])
+    assert closed1 == t1
+    assert await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='resolved_by'", t1) == tension
+
+    practice = await actions.create_or_find_object("Practice", "practice:p1", "session")
+    t2 = await open_thread(actions, "a thread that cites a practice by short id")
+    closed2 = await resolve_thread(actions, str(t2), because="minted",
+                                   artifact=str(practice)[:8])
+    assert closed2 == t2
+    assert await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='resolved_by'", t2) == practice
+
+
 async def test_resolve_thread_mints_closed_by_when_no_artifact(actions: Actions) -> None:
     """Phase 1a (decision cb38d922): no artifact at all still mints exactly one closure
     edge — closed_by, to the closing agent's own Agent object — never leaving the thread

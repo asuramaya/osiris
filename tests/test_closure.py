@@ -376,6 +376,58 @@ async def test_prose_backfill_reports_unresolvable_separately_from_no_candidate(
     assert out["no_candidate"] == 1
 
 
+async def test_prose_backfill_splits_agent_fragments_out_as_not_a_hash(
+    actions: Actions,
+) -> None:
+    """Thoth DM 3052: an Agent canonical fragment in prose is a real match — just never a
+    commit. It must be pulled out of the scary headline number, and it must never mint an
+    edge (an Agent isn't what closed a thread; closed_by already exists for that)."""
+    await actions.create_or_find_object("Agent", "agent:ad1a1cb0-xxxv", "session")
+    tid = await _edgeless_resolved(
+        actions, "thread:agent-cited",
+        "Verified live per the fleet roster (agent:ad1a1cb0)")
+
+    out = await close_by_prose_backfill(actions, repo="pb", dry_run=False)
+    assert out["resolved"] == 0
+    assert out["unresolvable"] == 1
+    assert out["unresolvable_breakdown"] == {
+        "not_a_hash": 1, "out_of_scope_repo": 0, "genuinely_missing": 0}
+    assert out["unresolvable_breakdown_rows"]["not_a_hash"][0]["thread"] == tid[:8]
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1", uuid.UUID(tid)) == 1  # only in_repo
+
+
+async def test_prose_backfill_splits_out_of_scope_repo_from_genuinely_missing(
+    actions: Actions,
+) -> None:
+    """The other two-thirds of the split: a repo osiris has NEVER ingested a commit for
+    at all (out_of_scope_repo, the largest bucket in the real 77 — an onboarding question,
+    not a mining defect) versus a repo it actively mines where this one commit is still
+    missing (genuinely_missing — the real, narrow ingestion gap)."""
+    mined = await actions.create_or_find_object("Commit", "commit:minedone", "git")
+    await actions.assert_property(mined, "subject", "unrelated", "git", LATER, 0.9)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:mined-repo", "session")
+    await actions.assert_property(proj, "name", "mined-repo", "session", BORN, 0.9)
+    await actions.create_link(mined, proj, "in_repo", "git", BORN, 0.9)
+
+    unmined_id = await _edgeless_resolved(
+        actions, "thread:unmined-repo-cite", "shipped in deadcafe1", repo="unmined-repo")
+    missing_id = await _edgeless_resolved(
+        actions, "thread:mined-repo-cite", "shipped in beefface1", repo="mined-repo")
+
+    out_unmined = await close_by_prose_backfill(actions, repo="unmined-repo", dry_run=True)
+    assert out_unmined["unresolvable_breakdown"] == {
+        "not_a_hash": 0, "out_of_scope_repo": 1, "genuinely_missing": 0}
+    assert out_unmined["unresolvable_breakdown_rows"]["out_of_scope_repo"][0]["thread"] == \
+        unmined_id[:8]
+
+    out_mined = await close_by_prose_backfill(actions, repo="mined-repo", dry_run=True)
+    assert out_mined["unresolvable_breakdown"] == {
+        "not_a_hash": 0, "out_of_scope_repo": 0, "genuinely_missing": 1}
+    assert out_mined["unresolvable_breakdown_rows"]["genuinely_missing"][0]["thread"] == \
+        missing_id[:8]
+
+
 async def test_prose_backfill_excludes_the_wake_permission_storm_cluster(
     actions: Actions,
 ) -> None:

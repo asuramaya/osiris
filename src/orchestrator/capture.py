@@ -983,13 +983,19 @@ async def reclassify_thread(
 async def _find_artifact(pool: asyncpg.Pool, artifact: str) -> uuid.UUID | None:
     """Resolve an artifact pointer to the graph object it names: an exact canonical
     ('commit:abc123def456', 'decision:…', 'thread:…'), an object UUID or 8-char short id
-    (Decision, Commit, or Thread — the closer types, widened to include Thread per Thoth
-    DM 2975: a fold/merge into a SIBLING THREAD is a legitimate closure this resolver used
-    to have no shape for at all, structurally indistinguishable from a typo until now), or
-    a bare git hash (prefix-matched on commit:, Commit only — a thread reference never
-    looks like a hash, so that branch is unchanged). None for free-form pointers (a
-    file:line, a path) — the resolved_artifact property alone carries those; a pointer that
-    matches nothing must never block the close."""
+    (Decision, Commit, Thread, Tension, or Practice — the closer types, widened to include
+    Thread per Thoth DM 2975 (a fold/merge into a SIBLING THREAD is a legitimate closure
+    this resolver used to have no shape for at all), and Tension/Practice per Thoth DM 3052
+    (the closure-backfill characterization of the 77 unresolvable rows found 2 real
+    citations of exactly these types that this allowlist was simply missing), or a bare
+    git hash (prefix-matched on commit:, Commit only — a thread reference never looks like
+    a hash, so that branch is unchanged). Deliberately NOT widened to Agent (Thoth DM
+    3052): an Agent's short code is never a prefix of its own `id` — `id` is an unrelated
+    random UUID, the short code lives only in `canonical` — so adding Agent here would
+    match nothing, ever; and even if it matched, an Agent is not what CLOSED a thread
+    (`closed_by` already exists for that shape). None for free-form pointers (a file:line,
+    a path) — the resolved_artifact property alone carries those; a pointer that matches
+    nothing must never block the close."""
     a = artifact.strip()
     oid = await pool.fetchval("SELECT id FROM objects WHERE canonical=$1", a)
     if oid is not None:
@@ -997,7 +1003,8 @@ async def _find_artifact(pool: asyncpg.Pool, artifact: str) -> uuid.UUID | None:
     if re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f-]{4,28})?", a.lower()):
         rows = await pool.fetch(
             "SELECT id FROM objects WHERE id::text LIKE $1 || '%' "
-            "AND type IN ('Decision', 'Commit', 'Thread') LIMIT 2", a.lower()[:8])
+            "AND type IN ('Decision', 'Commit', 'Thread', 'Tension', 'Practice') LIMIT 2",
+            a.lower()[:8])
         if len(rows) == 1:  # ambiguity → property-only, never a guessed edge
             return uuid.UUID(str(rows[0]["id"]))
     if re.fullmatch(r"[0-9a-f]{7,40}", a.lower()):

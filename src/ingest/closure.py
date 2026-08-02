@@ -373,6 +373,19 @@ async def close_by_commits_scheduled_tick(
 # SAME resolver every citation goes through, `_find_artifact`, whether that token names a
 # real object. A coincidental hex-shaped word finding nothing real is reported as a MISS,
 # never guessed into a mint (Thoth's constraint 2) — see `unresolvable` below.
+#
+# KNOWN, DELIBERATE MISS (Thoth DM 3052, not fixed here): this regex extracts the bare
+# hex tail only, so a fully-qualified cross-project canonical in prose — "thread:
+# 83b35671dfd4 in heinrich" — loses its "thread:" prefix before `_find_artifact` ever
+# sees it, and the bare tail is not a prefix of that Thread's own `id` (a different
+# convention than Decision/Commit/Thread/Tension/Practice's own short-id-is-an-id-prefix
+# shape), so it can never resolve either way. Confirmed exactly ONE such case in the
+# fleet-wide 77. Fixing it would mean a second regex capturing the qualified form and
+# trying `_find_artifact`'s canonical-exact branch before the bare-hex branch — real,
+# targeted, and NOT built: one confirmed instance does not justify a second extraction
+# path, and the failure mode here is silent-safe (stays `unresolvable`, never a wrong
+# mint), not a defect that compounds. Revisit only if characterizing a later population
+# finds more than a handful.
 _HASH_TOKEN = re.compile(r"\b[0-9a-f]{7,40}\b", re.I)
 # The wake-permission-storm mined-echo cluster's own boilerplate (Thoth's constraint 4):
 # near-duplicate Thread objects for ONE incident, all citing "root cause thread ba73c0c8"
@@ -416,6 +429,26 @@ async def _needs_human_threads(
     return out
 
 
+async def _classify_miss(
+    pool: asyncpg.Pool, thread_id: uuid.UUID, tokens: list[str],
+    projects_with_commits: set[uuid.UUID],
+) -> str:
+    """Why a token that _find_artifact already refused stays refused (Thoth DM 3052) —
+    called only for the unresolvable minority, never the 610-wide candidate sweep, so the
+    extra queries here stay cheap. `not_a_hash` beats the other two: a token that merely
+    LOOKS like a miss but actually names a real Agent is never a commit question at all."""
+    for tok in tokens:
+        if await pool.fetchval(
+                "SELECT 1 FROM objects WHERE type='Agent' AND canonical LIKE "
+                "'agent:' || $1 || '%' LIMIT 1", tok):
+            return "not_a_hash"
+    proj_id = await pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='in_repo' LIMIT 1", thread_id)
+    if proj_id is not None and proj_id not in projects_with_commits:
+        return "out_of_scope_repo"
+    return "genuinely_missing"
+
+
 async def close_by_prose_backfill(
     actions: Actions, *, repo: str | None = None, dry_run: bool = True,
 ) -> dict[str, Any]:
@@ -433,12 +466,34 @@ async def close_by_prose_backfill(
 
     THE THREE-WAY REPORT IS THE DELIVERABLE (Thoth's own framing), not the mints:
       - `resolved` — a hash-shaped token in the thread's prose resolved to a real graph
-        object (Decision, Commit, or — since piece 1 — a sibling Thread). Mintable.
+        object (Decision, Commit, Thread, Tension, or Practice). Mintable.
       - `unresolvable` — hash-shaped text WAS found, but nothing in the graph matches it.
-        Never silently dropped or folded into a generic failure count: this is the
-        commit-ingestion gap, measured here for the first time, worth its own number.
+        Never silently dropped or folded into a generic failure count.
       - `no_candidate` — nothing hash-shaped in the prose at all. No change from today;
         still genuinely needs a human.
+
+    `unresolvable` ITSELF WAS A CONFLATED LABEL (Thoth DM 3052, found by hand-characterizing
+    all 77 fleet-wide unresolvable rows rather than trusting the count): a first pass called
+    every miss "the commit-ingestion gap," but that single number silently mixed three
+    unrelated facts. `unresolvable_breakdown` (and its matching `*_rows` samples) splits it
+    for real, mirroring closure_health's own strong/weak split one layer down:
+      - `not_a_hash` — the token names something real in the graph (checked directly,
+        never guessed), but of a kind that never CLOSES a thread — today that means an
+        Agent canonical (e.g. "ad1a1cb0" inside "agent:ad1a1cb0-xxxv"). Deliberately never
+        resolved into an edge (Thoth DM 3052: an Agent is not what closed a thread —
+        `closed_by` already exists for that shape) and deliberately never counted toward
+        the ingestion gap below — it was never a missing commit to begin with.
+      - `out_of_scope_repo` — the token matches nothing, AND the thread's own project has
+        never had a single Commit object ingested into this graph at all. Structurally
+        unresolvable by design (no pipeline exists for that repo), not evidence of a
+        mining defect — characterizing the 77 found this was the LARGEST bucket by far
+        (hector-vector alone was 27 of 77), and it had been silently inflating the
+        headline number.
+      - `genuinely_missing` — the token matches nothing, AND the thread's own project DOES
+        have Commit objects actively ingested. This, and only this, is the real
+        commit-ingestion gap — measured honestly for the first time by this split.
+    An unscoped thread (no `in_repo` link at all) is conservatively counted as
+    `genuinely_missing` — absence of scope is not evidence the repo is out of scope.
 
     NEVER MINTS resolved_by AT THE SAME TRUST LEVEL A DIRECT CITATION CARRIES (constraint
     1): every mint here uses the SAME resolved_by edge shape (correct — it IS what closed
@@ -464,8 +519,17 @@ async def close_by_prose_backfill(
     candidates = await _needs_human_threads(actions.pool, repo_id)
     resolved: list[dict[str, Any]] = []
     unresolvable: list[dict[str, Any]] = []
+    breakdown: dict[str, list[dict[str, Any]]] = {
+        "not_a_hash": [], "out_of_scope_repo": [], "genuinely_missing": [],
+    }
     no_candidate = 0
     observed = datetime.now(UTC)
+    projects_with_commits = {
+        r["to_id"] for r in await actions.pool.fetch(
+            "SELECT DISTINCT l.to_id FROM objects c "
+            "JOIN links l ON l.from_id = c.id AND l.type = 'in_repo' "
+            "WHERE c.type = 'Commit'")
+    }
 
     for t in candidates:
         text = " ".join(filter(None, [t.get("resolved_because"), t.get("resolved_artifact")]))
@@ -484,7 +548,10 @@ async def close_by_prose_backfill(
                 break
         tid = str(t["id"])
         if target is None:
-            unresolvable.append({"thread": tid[:8], "candidate_tokens": tokens[:5]})
+            row = {"thread": tid[:8], "candidate_tokens": tokens[:5]}
+            unresolvable.append(row)
+            kind = await _classify_miss(actions.pool, t["id"], tokens, projects_with_commits)
+            breakdown[kind].append(row)
             continue
         resolved.append({"thread": tid[:8], "matched": matched, "target": str(target)[:8]})
         if not dry_run and not await actions.pool.fetchval(
@@ -500,8 +567,14 @@ async def close_by_prose_backfill(
         "resolved": len(resolved), "unresolvable": len(unresolvable),
         "no_candidate": no_candidate,
         "resolved_rows": resolved[:20], "unresolvable_rows": unresolvable[:20],
+        "unresolvable_breakdown": {k: len(v) for k, v in breakdown.items()},
+        "unresolvable_breakdown_rows": {k: v[:20] for k, v in breakdown.items()},
         "note": ("DRY RUN — nothing written" if dry_run else
                  f"{len(resolved)} closed via prose-mined citation (weak, source="
                  f"{_BACKFILL_SOURCE!r}); {len(unresolvable)} had a hash-shaped candidate "
-                 "that resolved to nothing — the commit-ingestion gap"),
+                 "that resolved to nothing (not_a_hash="
+                 f"{len(breakdown['not_a_hash'])}, "
+                 f"out_of_scope_repo={len(breakdown['out_of_scope_repo'])}, "
+                 f"genuinely_missing={len(breakdown['genuinely_missing'])} — only the last "
+                 "is a real commit-ingestion gap)"),
     }
