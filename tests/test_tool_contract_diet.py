@@ -93,7 +93,17 @@ import json
 # as of 0146287. And note decision 94b85709: the EAGER-BOOT PREMISE THIS RATCHET DEFENDS IS
 # FALSE FOR THIS FLEET — every worker defers and pays via ToolSearch instead — so the reason
 # to keep a ceiling at all is a non-Claude-Code client, not us.
-TOOL_CONTRACT_CEILING_CHARS = 119_953
+#
+# RAISED, bind_seat_tree's own authority gap (2026-08-02, found scoping the seat-metadata
+# merge, Thoth msg 3307): the verb carried NO authority language at all, claimed or enforced
+# — worse than its rename_seat/set_seat_attended siblings, which at least overclaimed.
+# `tree_cwd` is what `launch_seat` trusts as the code a relaunched seat executes, so this is
+# judged gate-worthy on the same blast-radius reasoning already applied twice tonight, mirrors
+# charter_for's actor-vs-manager_of_seat check exactly. Trimmed the MCP-facing docstring to
+# the category rule's lean end first (dropped the dated citation and the "not a metadata gap"
+# aside, kept the WHY implicit in "trusts as the code it executes"); 119,953 -> 120,081, +128.
+# Exact measured total, not a round number.
+TOOL_CONTRACT_CEILING_CHARS = 120_081
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:

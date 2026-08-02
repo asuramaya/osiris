@@ -3523,8 +3523,9 @@ async def bind_seat_tree(seat_id: str, tree_cwd: str, because: str,
     """Point a seat's CODE checkout at `tree_cwd` — distinct from its office (identity home,
     untouched here). `launch_seat` reuses whatever is recorded until this is called again;
     osiris never provisions the directory — `launch_seat` checks it exists on disk before
-    trusting it, this only records the location. Refuses on a blank `tree_cwd`/`because` or
-    an unknown seat."""
+    trusting it, this only records the location. OPERATOR-OR-MANAGER ONLY, ENFORCED — this is
+    what a relaunched seat trusts as the code it executes. Refuses on a blank
+    `tree_cwd`/`because`, an unauthorized actor, or an unknown seat."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a tree binding is a mind's act, and the graph must "
