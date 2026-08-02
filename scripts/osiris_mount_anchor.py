@@ -35,6 +35,12 @@ itself (Thoth's own words, msg 3031) — tests/test_anchor.py now carries the me
 that makes the twelfth verb impossible to forget silently: it AST-scans mcp_server.py for
 every `_actor_for` call site and asserts the caller's name is in this set, failing loudly at
 test time instead of silently in production.
+
+THE GUARD ALREADY CAUGHT ITS TWELFTH VERB, THE SAME NIGHT (amend_practice, commit f20cf0b,
+added after this fix landed) — exactly the scenario it was built for: gate_hook's own armed
+run refused a wholly unrelated commit touching mcp_server.py because this allowlist had
+silently fallen one verb behind again, at gate time instead of in production. Fixed here by
+adding the name, not by touching the guard.
 """
 from __future__ import annotations
 
@@ -53,6 +59,7 @@ SPAWN_AWARE = {
     "mcp__osiris__lift", "mcp__osiris__record_practice", "mcp__osiris__acquire_lease",
     "mcp__osiris__release_lease", "mcp__osiris__settle", "mcp__osiris__register_blind_spot",
     "mcp__osiris__hold_memory", "mcp__osiris__annotate_thread", "mcp__osiris__amend_decision",
+    "mcp__osiris__amend_practice",
 }
 
 # tools whose server signature accepts `session_anchor` — the RE-ATTACH hint, carried on EVERY
