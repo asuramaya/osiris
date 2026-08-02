@@ -121,7 +121,21 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-VENV_BIN = REPO_ROOT / ".venv" / "bin"
+# NOT `REPO_ROOT / ".venv" / "bin"` (thread 64c6b197): when this module's own copy is a
+# worktree's (a different tree than the interpreter running it -- worktrees have no
+# materialized .venv, .gitignore excludes it), REPO_ROOT is the worktree but the live
+# interpreter is still whichever venv actually launched this process. `sys.executable` names
+# that unconditionally, so VENV_BIN stays correct whether __file__ lives in the main
+# checkout (the plain CLI/--audit path) or in a worktree (the pre-commit hook path, which
+# already resolves the interpreter from the main checkout's venv before exec'ing this file).
+# DELIBERATELY NOT `.resolve()`d (caught live by the worktree acceptance test, thread
+# 64c6b197): this is a uv-managed venv, and `.venv/bin/python` is a symlink straight to the
+# shared uv toolchain (`~/.local/share/uv/python/.../bin/python3.12`), not a copy -- fully
+# resolving it walks straight past the venv boundary to a directory with no ruff/mypy/pytest
+# at all. `sys.executable` is already the absolute `.venv/bin/python3` path as actually
+# invoked (verified: CPython does not resolve it), which is exactly the sibling directory
+# those tools live in.
+VENV_BIN = Path(sys.executable).parent
 
 # A hub module (mounts.py: 34-37 test files resolved, measured live -- the exact count shifts
 # a little commit to commit) makes the grep tier degrade toward the exact 209s full-suite

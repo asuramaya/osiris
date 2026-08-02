@@ -684,3 +684,54 @@ def test_precommit_no_race_is_unaffected_when_digest_is_stable(
     assert cmd_precommit(enforce=True) == 0
     out = capsys.readouterr().out
     assert "RACE" not in out
+
+
+def test_venv_bin_tracks_the_running_interpreter_not_repo_root(tmp_path: Path) -> None:
+    """The exact worktree bug (thread 64c6b197): a worktree has no materialized `.venv` --
+    `.gitignore` excludes it, so `git worktree add` never copies one. If VENV_BIN were still
+    `REPO_ROOT / ".venv" / "bin"` (derived from `__file__`, i.e. wherever this module's own
+    copy happens to live), running gate_hook.py from a tree with no .venv at all would
+    resolve to a nonexistent path. It must instead track `sys.executable` -- the venv that
+    actually launched the process -- regardless of where the module file itself sits."""
+    import shutil
+    import subprocess
+    import sys as real_sys
+
+    fake_repo = tmp_path / "no-venv-here"
+    fake_scripts = fake_repo / "scripts"
+    fake_scripts.mkdir(parents=True)
+    shutil.copy(Path(gate_hook.__file__), fake_scripts / "gate_hook.py")
+    assert not (fake_repo / ".venv").exists()  # proves REPO_ROOT/.venv/bin would be bogus here
+
+    proc = subprocess.run(
+        [real_sys.executable, "-c",
+         f"import sys; sys.path.insert(0, {str(fake_scripts)!r}); "
+         "import gate_hook; print(gate_hook.VENV_BIN)"],
+        capture_output=True, text=True, check=True,
+    )
+    assert proc.stdout.strip() == str(Path(real_sys.executable).parent)
+
+
+def test_venv_bin_does_not_resolve_past_a_symlinked_interpreter(tmp_path: Path) -> None:
+    """Caught live by the worktree acceptance test (thread 64c6b197): this repo's `.venv` is
+    uv-managed, and `.venv/bin/python` is a symlink STRAIGHT to the shared uv toolchain
+    (`~/.local/share/uv/python/.../bin/python3.12`), not a copy. `Path(sys.executable)
+    .resolve()` follows that symlink past the venv boundary entirely, landing in a directory
+    with no ruff/mypy/pytest. VENV_BIN must use the unresolved, as-invoked path instead."""
+    import subprocess
+
+    fake_venv_bin = tmp_path / "fake-venv" / "bin"
+    fake_venv_bin.mkdir(parents=True)
+    real_target = tmp_path / "elsewhere-real-interpreter"
+    real_target.write_text("")  # just needs to exist for the symlink to resolve somewhere
+    fake_python = fake_venv_bin / "python3"
+    fake_python.symlink_to(real_target)
+
+    proc = subprocess.run(
+        ["python3", "-c",
+         f"import sys; sys.executable = {str(fake_python)!r}; "
+         f"sys.path.insert(0, {str(Path(gate_hook.__file__).parent)!r}); "
+         "import gate_hook; print(gate_hook.VENV_BIN)"],
+        capture_output=True, text=True, check=True,
+    )
+    assert proc.stdout.strip() == str(fake_venv_bin)

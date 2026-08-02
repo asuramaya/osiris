@@ -2,8 +2,18 @@
 # The gates-are-law mechanism (scripts/gate_hook.py, task #131 follow-up, Thoth DM 2890).
 # INERT until BOTH of these are true, deliberately, not by accident:
 #   1. this file is wired in at all:  git config core.hooksPath .githooks
-#   2. Settings.osiris_gate_hook_enforce is True (src/config/settings.py, default False)
+#   2. Settings.osiris_gate_hook_enforce is True (src/config/settings.py — ARMED True since
+#      Thoth DM 3003, 2026-08-02; see that field's own comment for why)
 # Until both hold, this still RUNS every commit and PRINTS what it found (never silent),
 # it just never refuses. See scripts/gate_hook.py's own module docstring for the full case.
-exec "$(git rev-parse --show-toplevel)/.venv/bin/python3" \
+#
+# WORKTREE-AWARE (thread 64c6b197): only the MAIN checkout has a materialized .venv --
+# `.gitignore` excludes it, so `git worktree add` never copies one. `--git-common-dir` is
+# the one git-rev-parse form that resolves to the MAIN checkout's .git from ANY checkout
+# (worktree or main itself; verified both), so its parent is always the right place to find
+# the interpreter. The SCRIPT argument stays `--show-toplevel`-derived on purpose: it must
+# be the CALLING tree's own copy of gate_hook.py, so a worktree on a different branch gates
+# its own staged content, not the main checkout's.
+MAIN_ROOT="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+exec "$MAIN_ROOT/.venv/bin/python3" \
     "$(git rev-parse --show-toplevel)/scripts/gate_hook.py"
