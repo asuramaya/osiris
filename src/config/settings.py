@@ -294,6 +294,23 @@ class Settings(BaseSettings):
     # OBSERVED with four agents live before the hook path can actually block anybody). Wiring
     # core.hooksPath is a separate, later act, not this one.
     osiris_gate_hook_enforce: bool = True
+    # STAGE C, THE TURN-END PRACTICE-VIOLATION AUDIT (osiris_stophook.py's
+    # _confess_if_practice_violated) — OFF, DELIBERATELY DISARMED, not "not yet armed" like
+    # its siblings above. Five days live (since commit 8c07fec, 2026-07-28), 20 flags fleet-
+    # wide in a single 24h sample, 14 individually verified against the flagging agent's own
+    # turn text — 14/14 FALSE, zero true positives. A graph-wide search for even one
+    # confirmed true-positive catch across Stage C's entire deployment found none: every
+    # prior decision on this mechanism (2eebf8a8, b318a9d3, c04f93f8, a54072cb1b7c) is a
+    # false positive being found and partially patched. Full measurement: decision 54280c72
+    # (Khnum XX). Root cause is not a precision problem (a real signal diluted by noise) — the
+    # topical-overlap gate ("two shared words of length>=4") is not a topic signal at all in a
+    # corpus where nearly every turn says hook/task/practice/check/before; it fires hardest on
+    # the MOST careful engineering prose, an inverse-quality signal (Thoth/Alfred, msg 3059).
+    # SCOPED: this flag governs STAGE C ONLY. Layer 1 (record_decision's own CONTRADICT-vs-
+    # RE-DERIVE write-intercept, commit 6a029d4) and wake-arming are different mechanisms with
+    # different evidence and are UNTOUCHED by this flag. Re-arming this needs a demonstrated
+    # true-positive rate, not another narrow suppressor for a fifth false-positive shape.
+    osiris_stage_c_practice_check_enabled: bool = False
     # THE FROZEN LANE (wake(), thread 9f566244 / handoff 8f005905) — OFF by default, and this
     # QUARANTINE LIFTED (ruling 85fba696, operator 2026-07-29, superseding 482c3d0f). This was
     # dark because the house read the Claude daemon reply lane as a harness-level RCE (decisions

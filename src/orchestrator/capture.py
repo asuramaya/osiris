@@ -631,13 +631,28 @@ _CONTRADICTION_CUES = (
     "opposite", "wrong to", "should not", "shouldn't", "must not", "mustn't", "not to",
 )
 
+# WORD-BOUNDARY MATCHING (task #104's own named-but-never-built gap, confirmed live: "stop"
+# matched as a raw substring inside the unrelated house name "stopslop" — decision 54280c72,
+# the fleet-wide Stage C measurement that found it firing for real, not just latent). A plain
+# `cue in text` check is blind to word boundaries; `\b...\b` requires a non-word character (or
+# string edge) on both sides, so "stop" no longer matches inside "stopslop"/"backstop" while
+# still matching a genuine standalone occurrence. A STRICT NARROWING — every text this used to
+# flag via a genuine standalone word/phrase still flags; only substring-inside-a-longer-word
+# collisions stop matching. Precompiled once, not per call: this runs once per SENTENCE of
+# every turn's tail text (Stage C) as well as at every record_decision (layer 1), and multi-
+# word cues ("rather than") need no special casing — \b anchors the whole phrase's own edges.
+_CUE_PATTERNS = tuple(
+    (cue, re.compile(r"\b" + re.escape(cue) + r"\b")) for cue in _CONTRADICTION_CUES
+)
+
 
 def practice_contradiction_cues(text: str) -> list[str]:
-    """Which contradiction-flavored cue phrases appear in `text` (case-insensitive
-    substring match, deterministic, no NLP). See `_CONTRADICTION_CUES` for why this is a
-    lexical fingerprint check, not an entailment classifier."""
+    """Which contradiction-flavored cue phrases appear in `text` as a genuine standalone
+    word/phrase (case-insensitive, word-boundary-anchored, deterministic, no NLP). See
+    `_CONTRADICTION_CUES`/`_CUE_PATTERNS` for why this is a lexical fingerprint check, not
+    an entailment classifier, and why it requires word boundaries."""
     low = text.lower()
-    return [cue for cue in _CONTRADICTION_CUES if cue in low]
+    return [cue for cue, pattern in _CUE_PATTERNS if pattern.search(low)]
 
 
 def _ref_slug(title: str) -> str:

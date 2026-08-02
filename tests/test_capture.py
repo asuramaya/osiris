@@ -2986,14 +2986,40 @@ async def test_unified_prior_art_check_surfaces_a_practice_via_the_statement_fie
 
 
 def test_practice_contradiction_cues_is_a_pure_lexical_fingerprint() -> None:
-    """No NLP, no DB — a deterministic substring check, documented as a heuristic nudge
-    never a verdict (see the docstring on capture._CONTRADICTION_CUES)."""
+    """No NLP, no DB — a deterministic, word-boundary-anchored check, documented as a
+    heuristic nudge never a verdict (see the docstring on capture._CONTRADICTION_CUES)."""
     from src.orchestrator.capture import practice_contradiction_cues
 
     assert practice_contradiction_cues("never do X") == ["never"]
     assert practice_contradiction_cues("do X instead of Y, rather than Z") == [
         "instead of", "rather than"]
     assert practice_contradiction_cues("confirming the same lesson again") == []
+
+
+def test_practice_contradiction_cues_does_not_match_inside_a_longer_word(
+) -> None:
+    """THE LIVE SPECIMEN (decision 54280c72, task #104's own named-but-never-built gap): a
+    Stage C flag fired on the cue "stop" because it appeared as a raw substring inside the
+    unrelated house name "stopslop". Word-boundary anchoring must not match here."""
+    from src.orchestrator.capture import practice_contradiction_cues
+
+    assert practice_contradiction_cues('house="stopslop"') == []
+    assert practice_contradiction_cues("a backstop for the pipeline") == []
+    assert practice_contradiction_cues("nonstop work this week") == []
+    # but a genuine standalone occurrence right next to punctuation still matches
+    assert practice_contradiction_cues("stop, don't do that") == ["don't", "stop"]
+
+
+def test_practice_contradiction_cues_apostrophe_cues_still_match_standalone(
+) -> None:
+    """Word-boundary anchoring must not break the apostrophe-bearing cues themselves —
+    `\\b` treats `'` as a non-word character on both sides, which is exactly what's needed
+    here, not a special case."""
+    from src.orchestrator.capture import practice_contradiction_cues
+
+    assert practice_contradiction_cues("it doesn't work that way") == ["doesn't"]
+    assert practice_contradiction_cues("you mustn't skip this step") == [
+        "skip", "mustn't"]
 
 
 async def test_record_decision_flags_contradiction_when_reversal_language_matches_a_practice(

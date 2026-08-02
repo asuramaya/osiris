@@ -782,6 +782,63 @@ async def test_active_practices_excludes_refuted_and_reads_the_statement(
     assert live_row["statement"] == "route every dispatch through the DM lane"
 
 
+def _enable_stage_c(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stage C is OFF by default (Settings.osiris_stage_c_practice_check_enabled=False,
+    decision 54280c72: 5 days live, 20 flags in one 24h sample, 14/14 verified false, zero
+    confirmed true positives anywhere in its deployment history). The tests below exercise
+    the DETECTION logic itself (quote suppression, topical-overlap gating, dedup) — that
+    logic still needs proving correct even disarmed by default, so each one explicitly
+    arms it rather than relying on a default that could silently flip again later."""
+    import src.config.settings as settings_module
+
+    monkeypatch.setattr(
+        settings_module, "get_settings",
+        lambda: settings_module.Settings(osiris_stage_c_practice_check_enabled=True))
+
+
+async def test_stage_a_practice_check_disabled_by_default_sends_nothing(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
+) -> None:
+    """THE ACCEPTANCE TEST FOR THE KILL SWITCH ITSELF (Thoth ruling, DM 3059, decision
+    54280c72): the EXACT genuine-violation scenario the very next test proves DOES confess
+    once armed must send NOTHING with no override at all -- Settings()'s own real default,
+    not a monkeypatched one, so a regression that silently re-enables Stage C is caught
+    here rather than assumed away by always testing through the arm helper."""
+    monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    worker_agent, worker_seat = "agent:pviol000", "seat:pviol000"
+    manager_agent, manager_seat = "agent:pvmgr000", "seat:pvmgr000"
+    worker_obj = await actions.create_or_find_object("Seat", worker_seat, worker_agent)
+    manager_obj = await actions.create_or_find_object("Seat", manager_seat, manager_agent)
+    now = datetime.now(UTC)
+    await actions.assert_property(worker_obj, "handle", "pviolworker0", worker_agent, now,
+                                  0.9, evidence_class="self_declared")
+    await actions.create_link(worker_obj, manager_obj, "managed_by", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await bind_holder(actions, seat_id=worker_seat, agent_id=worker_agent)
+    await record_practice(
+        actions, "batch small commits into one PR for this class of change")
+
+    office = tmp_path / "office0"
+    office.mkdir()
+    transcript = tmp_path / "t0.jsonl"
+    _write_transcript(
+        transcript,
+        {"type": "assistant", "isSidechain": False, "message": {"content":
+            "Let's stop doing small batch commits for this kind of change — one big "
+            "commit instead. Done."}},
+    )
+    job_dir = str(tmp_path / "jobs" / "pviolat0")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=worker_agent, project="testhouse",
+                     cwd=str(office), model=None, session_key=None)
+    sid = "pviolat0-0000-4000-8000-000000000000"
+
+    before = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    await stophook._stage_a_async(
+        {"cwd": str(office), "session_id": sid, "transcript_path": str(transcript)})
+    after = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
+    assert after == before  # disarmed by default -- the same turn that WOULD confess below
+
+
 async def test_stage_a_confesses_when_a_turn_violates_a_standing_practice(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
 ) -> None:
@@ -790,6 +847,7 @@ async def test_stage_a_confesses_when_a_turn_violates_a_standing_practice(
     C catches it off the turn's own tail text at stop time, courtesy-DM only, never a
     block."""
     monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    _enable_stage_c(monkeypatch)
     worker_agent, worker_seat = "agent:pviol001", "seat:pviol001"
     manager_agent, manager_seat = "agent:pvmgr001", "seat:pvmgr001"
     worker_obj = await actions.create_or_find_object("Seat", worker_seat, worker_agent)
@@ -838,6 +896,7 @@ async def test_stage_a_does_not_confess_when_a_turn_merely_mentions_a_practice_t
     """Topical overlap alone, with no reversal cue, is just a plain mention — not flagged.
     Distinguishes this from the violation case above by wording only."""
     monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    _enable_stage_c(monkeypatch)
     worker_agent, worker_seat = "agent:pviol002", "seat:pviol002"
     manager_agent, manager_seat = "agent:pvmgr002", "seat:pvmgr002"
     worker_obj = await actions.create_or_find_object("Seat", worker_seat, worker_agent)
@@ -879,6 +938,7 @@ async def test_stage_a_does_not_confess_when_the_turn_quotes_the_practice_verbat
     not reversal. Reproduces it end to end: the practice's own statement carries a cue
     word, and the turn cites it directly."""
     monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    _enable_stage_c(monkeypatch)
     worker_agent, worker_seat = "agent:pviol003", "seat:pviol003"
     manager_agent, manager_seat = "agent:pvmgr003", "seat:pvmgr003"
     worker_obj = await actions.create_or_find_object("Seat", worker_seat, worker_agent)
@@ -922,6 +982,7 @@ async def test_stage_a_does_not_confess_when_reporting_someone_elses_violation_w
     sentence over. Same discipline as the msg-1800 test above, but proving the WIDER
     (whole-turn, not same-sentence) quote scope this task added."""
     monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    _enable_stage_c(monkeypatch)
     worker_agent, worker_seat = "agent:pviol004", "seat:pviol004"
     manager_agent, manager_seat = "agent:pvmgr004", "seat:pvmgr004"
     worker_obj = await actions.create_or_find_object("Seat", worker_seat, worker_agent)
@@ -1010,6 +1071,7 @@ async def test_stage_a_sends_the_practice_confession_once_per_agent_practice_per
     """Thread e96ed0c5 (Thoth, msg 1819): the SAME (agent, practice) violating turn,
     hit twice in one day (two separate stops), sends its courtesy confession only once —
     detection still runs both times, only the duplicate DM is suppressed."""
+    _enable_stage_c(monkeypatch)
     monkeypatch.setattr(stophook, "DSN", pg_dsn)
     worker_agent, worker_seat = "agent:pviol005", "seat:pviol005"
     manager_agent, manager_seat = "agent:pvmgr005", "seat:pvmgr005"

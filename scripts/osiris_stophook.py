@@ -715,7 +715,18 @@ async def _confess_if_practice_violated(
     own note: the caller's already-resolved seats.resolve_project, never re-derived here.
     DEDUP (thread e96ed0c5): a repeat hit against the SAME (agent, practice) already
     confessed today sends nothing further — detection still ran, only the duplicate DM
-    is suppressed."""
+    is suppressed.
+
+    DISARMED (Thoth ruling, DM 3059, decision 54280c72): 5 days live, 20 flags in one 24h
+    sample, 14/14 individually verified false, zero confirmed true positives found anywhere
+    in this mechanism's whole deployment history. Not a precision problem — the topical-
+    overlap gate is not a topic signal in this house's own dense vocabulary. Gated on
+    Settings.osiris_stage_c_practice_check_enabled (default False) so re-arming is one flag,
+    never a silent revert of this function's own logic."""
+    from src.config.settings import get_settings
+
+    if not get_settings().osiris_stage_c_practice_check_enabled:
+        return
     text = _last_assistant_text(str(payload.get("transcript_path") or ""))
     practices = await _active_practices(conn)
     hit = _practice_violation(text, practices)
