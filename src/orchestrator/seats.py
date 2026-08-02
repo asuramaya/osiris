@@ -52,11 +52,19 @@ _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 # 15-minute liveness window everywhere else — resolve_seat, agent_liveness, the roster)
 _LIVE_SECS = 900
 
-# THE OPERATOR'S OWN HAND — the actor strings that count as a deliberate operator act,
-# never a fleet agent's own. Lived here first as mintseat.py's private cross-house-mint
-# guard; moved up (mintseat.py now imports it from here) so derive_house's own house-
-# anchor check (ruling b4208fa3, thread 105f3425/bec2e4af) shares the SAME definition —
-# two independent notions of "the operator's hand" would drift the moment one changed.
+# NOT AN AUTHORIZATION BOUNDARY, AND CANNOT BE ONE (found live 2026-08-02, decision
+# c6a894d7): any agent that can run a shell can present any of these strings to a CLI
+# door or by importing this module directly — checked here by plain string equality,
+# nothing behind it verifies who is actually calling. What these sentinels DO buy is
+# DELIBERATENESS AND ATTRIBUTION: a caller must know and deliberately type one of them,
+# and the crossing's own audit stamp (mintseat.py's `source=actor`) records exactly
+# which one — a real, useful signal, just not a guarantee that the caller truly is the
+# operator. Lived here first as mintseat.py's private cross-house-mint guard; moved up
+# (mintseat.py now imports it from here) so derive_house's own house-anchor check
+# (ruling b4208fa3, thread 105f3425/bec2e4af) shares the SAME definition — two
+# independent notions of "the operator's hand" would drift the moment one changed. A
+# real authorization boundary would need the check to live somewhere an agent cannot
+# reach at all — a different, larger design, not this set.
 _OPERATOR_ACTORS = {"operator", "analyst:operator", "console"}
 
 
