@@ -75,7 +75,25 @@ import json
 # the category rule's lean end first (all dated citations and provenance cut), landing at
 # +744 chars over the prior ceiling. Load-bearing: a caller reading these four contracts
 # needs to know the gate is real, not prose creep. Raised to the exact measured total.
-TOOL_CONTRACT_CEILING_CHARS = 119_647
+# RAISED AT THE MERGE, 2026-08-02 (Thoth LXX, integrating four seat branches into composer
+# at the operator's "merge and deploy"): 119,647 -> 119,953, +306. THE RATCHET CAUGHT A
+# CROSS-BRANCH INTERACTION NO AUTHOR COULD HAVE SEEN. Khnum raised it to 119,647 on
+# seat/khnum for the authority-gate docstrings (2fe5aeb..a2f1333); Sekhmet independently
+# edited recall's own MCP tool doc on seat/sekhmet (c33d2a7). Neither branch could observe
+# the other — THE MERGE IS THE FIRST MOMENT THE COMBINED SURFACE EXISTS, and this test is
+# the only thing that looked. First real evidence that per-seat worktrees (bound tonight,
+# 0 of 31 seats had ever used one) move the collision from the working tree to the merge,
+# which is exactly where you want it and exactly where a ratchet must be watching.
+# Both authors trimmed to the category rule's lean end before their own raises, so the
+# residue is capability — four enforced authority gates plus a read path for addenda that
+# were previously unordered and untimestamped — not prose creep. Exact measured total.
+# STILL TRUE, STILL UNFIXED, NOW THREE FIRINGS IN ONE EVENING (two legitimate): nothing
+# forces this test to run on an MCP-tool-touching commit; each catch happened only because
+# someone ran the full suite by hand. It belongs in the gate hook, armed and worktree-aware
+# as of 0146287. And note decision 94b85709: the EAGER-BOOT PREMISE THIS RATCHET DEFENDS IS
+# FALSE FOR THIS FLEET — every worker defers and pays via ToolSearch instead — so the reason
+# to keep a ceiling at all is a non-Claude-Code client, not us.
+TOOL_CONTRACT_CEILING_CHARS = 119_953
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
