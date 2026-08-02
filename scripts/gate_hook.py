@@ -148,6 +148,13 @@ VENV_BIN = Path(sys.executable).parent
 _PYTEST_FANOUT_CAP = 12
 _PYTEST_TIMEOUT_SECS = 180
 
+# obligation a3c71bf5: the omitted-files summary is always the FIRST line of a SKIPPED
+# detail (see run_gates above) -- printing a fixed char cap keeps one pathological hub-module
+# fan-out from producing an unreadable wall of text, but the cap must never look like the
+# whole list (Khnum's census_blind rule: "could not show" must never render as "nothing to
+# show") -- see `_print_skip_detail` below.
+_SKIP_SUMMARY_DISPLAY_CAP = 2000
+
 # Sekhmet's #112 measurement (msg 2919, decision c63f5bd9): this box's swap was FULLY
 # EXHAUSTED (8.0/8.0Gi) with 49 claude processes live when she took the snapshot -- `-n auto`
 # spawns one worker per core (20 here), and this gate can fire from MULTIPLE concurrent
@@ -508,6 +515,33 @@ def receipt_shaped_touches(repo_root: Path, changed_files: list[str]) -> dict[st
     return out
 
 
+def _print_skip_detail(out: str, indent: str = "    ") -> None:
+    """obligation a3c71bf5, filed while verifying b9045c3: `run_gates` puts the omitted-files
+    summary on the FIRST line of a SKIPPED detail, with the pytest run's own (potentially
+    long) output following after a newline. The callers here used to print only
+    `out.splitlines()[-15:]` -- the LAST N lines of the WHOLE blob -- so a pytest run longer
+    than the cap silently scrolled the summary line out entirely: the headline still read
+    "SKIPPED (partial)" (honest) but named no files (useless). #117's shape one layer down
+    from where it was last caught (the audit's own "17/18 pass" headline, Thoth DM 2957).
+
+    The summary line is therefore ALWAYS printed here, in full, never subject to the tail
+    cap below (which still applies to whatever run output follows it, for diagnostic
+    context). If the summary line ITSELF is too long to show in full, it is truncated with
+    an explicit marker naming how much was cut -- Khnum's census_blind rule: "could not
+    show" must never render as "nothing to show." The file COUNT (stated by `run_gates`
+    before the bracketed name list) always survives the cap even when the names don't."""
+    head, _, body = out.partition("\n")
+    if len(head) > _SKIP_SUMMARY_DISPLAY_CAP:
+        print(f"{indent}{head[:_SKIP_SUMMARY_DISPLAY_CAP]}")
+        print(f"{indent}...TRUNCATED FOR DISPLAY ({len(head) - _SKIP_SUMMARY_DISPLAY_CAP} "
+              "more chars elided here -- not silently dropped, just not shown in full)")
+    else:
+        print(f"{indent}{head}")
+    if body.strip():
+        for line in body.splitlines()[-15:]:
+            print(f"{indent}{line}")
+
+
 def _report(label: str, results: dict[str, tuple[bool, str]]) -> bool:
     all_ok = all(ok for ok, _ in results.values())
     statuses = {name: _status_word(ok, out) for name, (ok, out) in results.items()}
@@ -520,7 +554,9 @@ def _report(label: str, results: dict[str, tuple[bool, str]]) -> bool:
     print(f"gate_hook[{label}]: {verdict}")
     for name, (ok, out) in results.items():
         print(f"  {name}: {statuses[name]}")
-        if not ok or statuses[name] == "SKIPPED":
+        if statuses[name] == "SKIPPED":
+            _print_skip_detail(out)
+        elif not ok:
             for line in out.splitlines()[-15:]:
                 print(f"    {line}")
     return all_ok
@@ -630,7 +666,10 @@ def cmd_audit(rev_range: str) -> int:
             elif verdict == "UNVERIFIED":
                 skipped.append(short)
             for name, (ok2, out2) in results.items():
-                if not ok2 or statuses[name] == "SKIPPED":
+                if statuses[name] == "SKIPPED":
+                    print(f"    {name} tail:")
+                    _print_skip_detail(out2, indent="      ")
+                elif not ok2:
                     print(f"    {name} tail:")
                     for line in out2.splitlines()[-10:]:
                         print(f"      {line}")
