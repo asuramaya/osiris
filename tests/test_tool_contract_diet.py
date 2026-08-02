@@ -56,11 +56,13 @@ from __future__ import annotations
 
 import json
 
-# Measured after task #103's tree_cwd build (this commit): 115,146 chars exactly (was
-# 114,216). ~200 chars of headroom above that, not the tighter exact-match chrome.py uses
-# for its per-file counts — see the module docstring's "A CEILING, NOT EXACT EQUALITY"
-# paragraph for why.
-TOOL_CONTRACT_CEILING_CHARS = 115_350
+# Measured after #112's walk_in build (this commit): 117,067 chars exactly (was 115,146,
+# task #103's tree_cwd). Raised deliberately, not a reflex — walk_in's docstring was
+# already trimmed to the category rule's lean end (903 chars, the deep rationale moved to
+# src/orchestrator/walkin.py's own module docstring, unmeasured by this ratchet) before
+# raising; the remaining growth is the tool's real 8-parameter inputSchema, irreducible
+# without dropping a parameter the tool actually needs. Flagged to Thoth for review.
+TOOL_CONTRACT_CEILING_CHARS = 117_067
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -95,4 +97,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     what this ratchet polices, but worth knowing at a glance when the char total also
     moves, to tell 'one tool's prose grew' from 'the surface itself changed shape'."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 98
+    assert len(per_tool) == 99

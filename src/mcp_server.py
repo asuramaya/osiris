@@ -3684,6 +3684,56 @@ async def lift(ref: str, handle: str, subagent_id: str | None = None,
 
 
 @mcp.tool()
+async def walk_in(
+    handle: str, wants_office: bool, cwd: str | None = None, job_dir: str | None = None,
+    model: str | None = None, subagent_id: str | None = None, subagent_type: str | None = None,
+    session_anchor: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """THE WALK-IN DOOR: one call over mount + claim_name + establish_office, for a mind
+    with nothing but this server (operator's framing, 2026-08-02). Composes each step
+    untouched, returns its receipt verbatim, stops at the first refusal — never lets a
+    later step's own downstream refusal misdescribe an earlier one (#117's disease,
+    pre-empted). Skips an already-done step honestly (`ran: false` + why), never silently
+    and never falsely.
+
+    `handle` and `wants_office` are both REQUIRED, never defaulted (refuse-never-guess,
+    practice f39a9849): nobody but the caller can pick a name, and forcing an office onto
+    a one-off visitor session would erase that class's whole reason for existing.
+
+    `cwd`/`job_dir` are only consulted if you aren't mounted yet; project/house are never
+    asked separately, they come free off `cwd` once mount runs. Full design rationale:
+    `src/orchestrator/walkin.py`'s own module docstring."""
+    pool = await _pool_get()
+    ident = await _ident_for(ctx, session_anchor)
+    if ident is None:
+        if not cwd:
+            return {"error": "not yet mounted, and no cwd given — pass cwd (your working "
+                             "directory) so walk_in can mount you first, or call mount() "
+                             "yourself before walk_in"}
+        mount_result = await mount(
+            cwd=cwd, job_dir=job_dir, model=model, subagent_id=subagent_id,
+            subagent_type=subagent_type, session_anchor=session_anchor, ctx=ctx)
+        if "error" in mount_result:
+            return {"error": mount_result["error"], "step": "mount"}
+        agent_id = mount_result.get("agent")
+        if not agent_id:
+            return {"error": "mount succeeded but returned no agent id — cannot continue",
+                    "step": "mount", "mount_result": mount_result}
+        mount_step: dict[str, Any] = {"ran": True, "result": mount_result}
+    else:
+        agent_id = ident.agent_id
+        mount_step = {"ran": False, "note": f"already mounted as {agent_id}, skipping"}
+
+    from src.orchestrator.walkin import walk_in_named
+    result = await walk_in_named(
+        pool, agent_id=agent_id, handle=handle, wants_office=wants_office)
+    if "error" in result:
+        result.setdefault("steps_so_far", {})["mount"] = mount_step
+        return result
+    return {**result, "mount": mount_step}
+
+
+@mcp.tool()
 async def mint_seat(
     handle: str, project: str | None = None, model: str | None = None,
     house: str | None = None, ctx: Context | None = None,
