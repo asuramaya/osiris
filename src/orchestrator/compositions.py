@@ -2275,10 +2275,13 @@ async def _fn_practices(
     record_bridge_anchor would apply to an incremented counter; a link COUNT cannot desync
     from the links it counts). A refuted Practice still lists — flagged, never hidden.
     `amendments` (Thoth DM 3071, capture.amend_practice) — every narrowing `amend_practice`
-    has added, oldest first, folded in HERE rather than left to rot the way a Decision's own
-    addenda currently do (decision_addenda has no MCP read path at all): this is the ONE
-    live surface every caller already uses to read a practice's current guidance, so an
-    amendment that isn't visible here isn't visible anywhere a reader would think to look."""
+    has added, oldest first, folded in HERE: this is the ONE live surface every caller
+    already uses to read a practice's current guidance, so an amendment that isn't visible
+    here isn't visible anywhere a reader would think to look. A Decision's own addenda
+    followed the identical reasoning onto its own equivalent surface, `recall()`, rather
+    than here (thread 1f4dcc03, fixed) — a Decision has no standing "current guidance"
+    listing the way Practices do; recall(kind='decision') is the read that already exists
+    for "give me the whole record." """
     surface = str(args.get("surface") or "").strip() or None
     limit = max(1, min(int(args.get("limit") or 50), 200))
     rows = await pool.fetch(

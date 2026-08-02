@@ -944,7 +944,11 @@ async def recall(ref: str, kind: str | None = None) -> dict[str, Any]:
     a UUID, the 8-char short id orient() already hands you, or a summary substring. `kind`
     ('thread' or 'decision') skips auto-detection when you already know which; omitted,
     tries Thread then Decision. Refuses loudly when nothing matches either type — never
-    guesses, and never widens into a fuzzy search (use search(query=...) for that)."""
+    guesses, and never widens into a fuzzy search (use search(query=...) for that).
+    Carries `notes` (annotate_thread's own additions, oldest first) on a Thread, or
+    `addenda` (amend_decision's own additions, oldest first) on a Decision — always a list,
+    empty when none. This is where those two verbs' own writes become visible; before this,
+    neither surfaced anywhere a reader would think to look."""
     from src.orchestrator.recall import recall as _recall
     return await _recall(await _pool_get(), ref, kind=kind)
 
