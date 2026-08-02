@@ -610,12 +610,14 @@ async def reconcile_scheduled_tick(
     instead of requiring a human to notice recovery and close it by hand. Both calls are
     try/excepted — a graph hiccup must never fail the tick that already decided whether
     to act."""
+    from src.orchestrator.folds import _SANCTIONED_AUTO_FOLD_ACTOR
+
     st = settings or get_settings()
     if not st.osiris_fleet_reconcile_enabled:
         return {"enabled": False, "state": "DARK", "folded": [], "dropped": [],
                 "note": "the reaper's scheduled leg is dark "
                         "(osiris_fleet_reconcile_enabled=0)"}
-    out = await reconcile_execute(actions, actor="cron:fleet_reconcile_heartbeat",
+    out = await reconcile_execute(actions, actor=_SANCTIONED_AUTO_FOLD_ACTOR,
                                   execute=True, projects_root=projects_root,
                                   jobs_home=jobs_home, live_bodies_by_cwd=live_bodies_by_cwd)
 

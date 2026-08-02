@@ -3124,11 +3124,12 @@ async def fold_agent(dupe: str, into: str, evidence: str,
     reversible by compensating event, nothing deleted), authorship untouched (the dupe's
     words stay stamped with its id; provenance resolves at read time), and the ESTATE
     follows: unread mail, mount rows, and open threads land on `into`'s living head.
-    REVIEW-GATED, ALWAYS: run this only on the operator's word or an approved
-    merge_candidate, and `evidence` must cite what proves one mind (transcripts, census,
-    timing) — it is recorded in the event. Refuses: same-lineage folds (that is
-    succession's job), an actively-seated dupe (transfer the seat first), unknown or
-    already-folded labels."""
+    REVIEW-GATED, ALWAYS, ENFORCED: refuses any caller who is not the operator (or the
+    scheduled reaper's own sanctioned name, separately gated by
+    `osiris_fleet_reconcile_enabled`) — mount as the operator, or judge an approved
+    merge_candidate via `resolve_fold`, which relays the same check unchanged. `evidence`
+    must cite what proves one mind. Refuses: unauthorized actor; same-lineage folds (that
+    is succession's job), an actively-seated dupe, unknown or already-folded labels."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a fold is a mind's act, and the graph must know whose",
@@ -3227,8 +3228,8 @@ async def vacate_seat(seat_id: str, because: str, ctx: Context | None = None) ->
     `refused-ambiguous`, or `refused` (seats.vacate_holder's own graph-level refusal —
     see `detail`).
 
-    AUTO-INVOCATION IS OUT OF SCOPE (the reaper stays operator-gated) — this is for a
-    deliberate hand, on one named seat, never a sweep."""
+    AUTO-INVOCATION IS OUT OF SCOPE — this is for a deliberate hand, on one named seat,
+    never a sweep (see fleet_reconcile's own docstring for what gates ITS bulk path)."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — vacating a seat's holder is a deliberate act on "
@@ -3615,10 +3616,11 @@ async def resolve_fold(candidate_id: int, decision: str,
                        ctx: Context | None = None) -> dict[str, Any]:
     """Judge ONE agent-fold proposal from the tray (fold_candidates): decision='merged'
     executes the ESTATE-carrying fold (mail, mount rows, threads land on the living
-    head); 'rejected' links the pair not_same_as, never re-proposed. OPERATOR-GATED: run
-    this only relaying the operator's explicit judgment — the tray exists so a human
-    reads the evidence; an agent judging its own proposals is the auto-merge the
-    constitution forbids."""
+    head) — OPERATOR-GATED, ENFORCED: inherits fold_agent's own operator-actor gate
+    unchanged, never a second copy to drift. decision='rejected' links the pair
+    not_same_as, never re-proposed — OPEN to any mounted caller, deliberately: a
+    rejection judges two things are NOT the same mind, carrying none of 'merged's blast
+    radius."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first", "why": _anchorless(ctx)}
@@ -3641,8 +3643,14 @@ async def fleet_reconcile(execute: bool = False,
     report) and returns before/after tray counts as its receipt — proof the acted rows
     left the tray, not a trusted boolean. The sanctioned door for what was previously only
     reachable as orchestrator code (src.orchestrator.fleet_reconcile.reconcile_execute) —
-    built so a reviewed act never has to be a hand-written script against the live
-    graph."""
+    built so a reviewed act never has to be a hand-written script against the live graph.
+
+    THE FOLD BUCKETS ARE OPERATOR-GATED, ENFORCED: this wrapper itself checks only
+    mount — the authority check lives in fold_agent, one call down, and a non-operator
+    caller's fold items come back with `"error"` per item (never a crash) while
+    drop_ephemeral_test_cwd still runs. THIS WRAPPER IS REACHABLE INDEPENDENTLY OF
+    `osiris_fleet_reconcile_enabled` — that flag gates only the SEPARATE scheduled tick
+    (reconcile_scheduled_tick), never this tool; the fold_agent gate is what closes it."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first", "why": _anchorless(ctx)}

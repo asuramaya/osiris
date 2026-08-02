@@ -68,7 +68,14 @@ import json
 # +2 chars, not the source of the overage. Raised to the exact measured total, not a round
 # number. Flagged to Thoth: this ratchet needs a standing habit (or a hook) that runs it on
 # every MCP-tool-touching commit, not memory.
-TOOL_CONTRACT_CEILING_CHARS = 118_903
+#
+# RAISED, the authority-census fix (2026-08-02, operator's word via Thoth msg 3273):
+# fold_agent/resolve_fold/fleet_reconcile/vacate_seat's docstrings now say what their code
+# actually enforces (previously false or silent on who may fold an identity) — trimmed to
+# the category rule's lean end first (all dated citations and provenance cut), landing at
+# +744 chars over the prior ceiling. Load-bearing: a caller reading these four contracts
+# needs to know the gate is real, not prose creep. Raised to the exact measured total.
+TOOL_CONTRACT_CEILING_CHARS = 119_647
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:

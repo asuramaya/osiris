@@ -48,7 +48,7 @@ async def test_fold_moves_the_estate_and_deflates_the_census(actions: Actions) -
     out = await fold_agent(actions, dupe="agent:f01dbeef", into="agent:0c11ec7a",
                            evidence="census: tmp-only jobs dir, no transcript, co-timed "
                                     "with the living session at the same cwd",
-                           actor="agent:test")
+                           actor="operator")
 
     assert out["living_head"] == "agent:0c11ec7a-ii"       # estate lands on the HEAD
     assert out["mail_readdressed"] == 1
@@ -103,7 +103,7 @@ async def test_fold_survives_a_crash_between_estate_move_and_merge(actions: Acti
 
     out = await fold_agent(actions, dupe="agent:crash001", into="agent:crash002",
                            evidence="retry after a simulated mid-fold crash",
-                           actor="agent:test")
+                           actor="operator")
 
     assert "error" not in out                 # the retry completed, it did not refuse
     assert out["mail_readdressed"] == 0        # already moved by the "crash" — a true no-op
@@ -120,7 +120,7 @@ async def test_send_forwards_a_folded_address_and_confesses(actions: Actions) ->
     await save_mount(p, job_dir="/jobs/beef2222", agent_id="agent:beef2222",
                      project="foldhouse", cwd="/w/f2", model=None, session_key=None)
     await fold_agent(actions, dupe="agent:dead1111", into="agent:beef2222",
-                     evidence="test evidence", actor="agent:test")
+                     evidence="test evidence", actor="operator")
 
     out = await send_message(p, from_agent="agent:sender", from_project="osiris",
                              to_agent="agent:dead1111", body="stale address book")
@@ -134,18 +134,96 @@ async def test_fold_refusals_are_loud_and_write_nothing(actions: Actions) -> Non
     await _mk_agent(actions, "agent:bbbb6666")
 
     out = await fold_agent(actions, dupe="agent:aaaa5555", into="agent:bbbb6666",
-                           evidence="   ", actor="agent:test")
+                           evidence="   ", actor="operator")
     assert "auto-merge" in out["error"]              # evidence is mandatory
     out = await fold_agent(actions, dupe="agent:aaaa5555", into="agent:aaaa5555-ii",
-                           evidence="x", actor="agent:test")
+                           evidence="x", actor="operator")
     assert "succession" in out["error"]              # generations never fold
     out = await fold_agent(actions, dupe="agent:nobody99", into="agent:bbbb6666",
-                           evidence="x", actor="agent:test")
+                           evidence="x", actor="operator")
     assert "unknown" in out["error"]
     # nothing was written by any refusal
     st = await actions.pool.fetchval(
         "SELECT status FROM objects WHERE canonical='agent:aaaa5555'")
     assert st == "active"
+
+
+async def test_fold_agent_refuses_a_non_operator_actor(actions: Actions) -> None:
+    """NEGATIVE CONTROL for the operator-actor gate (census a5e53ed8/3f97f9c7, fixed
+    2026-08-02): this docstring claimed "operator's word or an approved merge_candidate"
+    for weeks while ANY mounted caller could fold any two agents — confirmed against
+    pre-fix code (any non-empty evidence + valid, unheld, unmerged labels used to
+    succeed for actor="agent:some-mind"). Now it refuses, names the actor, and writes
+    nothing."""
+    await _mk_agent(actions, "agent:gate0001")
+    await _mk_agent(actions, "agent:gate0002")
+
+    out = await fold_agent(actions, dupe="agent:gate0001", into="agent:gate0002",
+                           evidence="a real reason, correctly formed",
+                           actor="agent:some-mind")
+
+    assert "not authorized" in out["error"]
+    assert "agent:some-mind" in out["error"]
+    st = await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE canonical='agent:gate0001'")
+    assert st == "active"  # refused, nothing written
+
+
+async def test_fold_agent_allows_the_sanctioned_cron_actor(actions: Actions) -> None:
+    """The scheduled reaper's own name is trusted — it is ALREADY gated separately by
+    osiris_fleet_reconcile_enabled, a distinct operator signature (see
+    test_fleet_reconcile.py's own positive control for the end-to-end path)."""
+    from src.orchestrator.folds import _SANCTIONED_AUTO_FOLD_ACTOR
+
+    await _mk_agent(actions, "agent:gate0003")
+    await _mk_agent(actions, "agent:gate0004")
+
+    out = await fold_agent(actions, dupe="agent:gate0003", into="agent:gate0004",
+                           evidence="the scheduled reaper's own sweep",
+                           actor=_SANCTIONED_AUTO_FOLD_ACTOR)
+
+    assert "error" not in out
+    assert out["folded"] == "agent:gate0003"
+
+
+async def test_resolve_fold_candidate_merged_inherits_the_gate_rejected_does_not(
+    actions: Actions, tmp_path,
+) -> None:
+    """Per-branch honesty (Thoth's decision rule, msg 3273): 'merged' carries fold_agent's
+    own blast radius and its gate; 'rejected' judges two things are NOT the same mind,
+    never merges an identity, and stays open to any mounted caller."""
+    from src.orchestrator.folds import find_agent_fold_candidates, resolve_fold_candidate
+
+    p = actions.pool
+    root = tmp_path / "projects"
+    jobs = tmp_path / "jobs"
+    slug = root / "-w-gatecheck-repo"
+    slug.mkdir(parents=True)
+    (slug / "rea1gate-full-session.jsonl").write_text("{}\n")
+    await _mk_agent(actions, "agent:a11agate")
+    await _mk_agent(actions, "agent:rea1gate")
+    await save_mount(p, job_dir=str(jobs / "a11agate"), agent_id="agent:a11agate",
+                     project="foldhouse", cwd="/w/gatecheck-repo", model=None,
+                     session_key="whisper:a11agate")
+    await save_mount(p, job_dir=str(jobs / "rea1gate"), agent_id="agent:rea1gate",
+                     project="foldhouse", cwd="/w/gatecheck-repo", model=None,
+                     session_key="sid:conn")
+    out = await find_agent_fold_candidates(p, projects_root=root, jobs_home=jobs)
+    mine = [c for c in out["pending"] if c["dupe"] == "agent:a11agate"]
+    assert mine
+
+    # a mounted agent judging its OWN proposal, unauthorized — the exact self-approval
+    # the constitution forbids, refused rather than silently permitted
+    verdict = await resolve_fold_candidate(actions, candidate_id=mine[0]["id"],
+                                           decision="merged", actor="agent:self-approver")
+    assert "not authorized" in verdict["error"]
+    st = await p.fetchval("SELECT status FROM objects WHERE canonical='agent:a11agate'")
+    assert st == "active"  # refused, nothing written, candidate stays unresolved
+
+    # the SAME non-operator actor may still reject it — no gate, no blast radius
+    verdict2 = await resolve_fold_candidate(actions, candidate_id=mine[0]["id"],
+                                            decision="rejected", actor="agent:self-approver")
+    assert verdict2["resolved"] == "rejected"
 
 
 async def test_fold_refuses_a_seated_dupe(actions: Actions) -> None:
@@ -163,7 +241,7 @@ async def test_fold_refuses_a_seated_dupe(actions: Actions) -> None:
                          job_dir="/jobs/cccc7777", agent_id="agent:cccc7777")
 
     out = await fold_agent(actions, dupe="agent:cccc7777", into="agent:dddd8888",
-                           evidence="x", actor="agent:test")
+                           evidence="x", actor="operator")
 
     assert "holds" in out["error"] and "seat" in out["error"].lower()
 
@@ -173,13 +251,13 @@ async def test_fold_of_an_already_folded_label_points_home(actions: Actions) -> 
     await _mk_agent(actions, "agent:ffff0000")
     await _mk_agent(actions, "agent:abab1212")
     await fold_agent(actions, dupe="agent:eeee9999", into="agent:ffff0000",
-                     evidence="x", actor="agent:test")
+                     evidence="x", actor="operator")
 
     out = await fold_agent(actions, dupe="agent:eeee9999", into="agent:abab1212",
-                           evidence="x", actor="agent:test")
+                           evidence="x", actor="operator")
     assert "already folded" in out["error"] and "agent:ffff0000" in out["error"]
     out = await fold_agent(actions, dupe="agent:abab1212", into="agent:eeee9999",
-                           evidence="x", actor="agent:test")
+                           evidence="x", actor="operator")
     assert "living label" in out["error"]            # fold into the canonical, not a ghost
 
 
@@ -217,9 +295,10 @@ async def test_archaeologist_proposes_a_view_alias(actions: Actions, tmp_path) -
     assert out["proposed"]["view-alias"] == 1
     mine = [c for c in out["pending"] if c["dupe"] == "agent:a11a5000"]
     assert mine and mine[0]["into_label"] == "agent:rea1baaa"
-    # judging it MERGED executes the estate-carrying fold and stamps the row
+    # judging it MERGED executes the estate-carrying fold and stamps the row — inherits
+    # fold_agent's own operator-actor gate, so the judge must be the operator too
     verdict = await resolve_fold_candidate(actions, candidate_id=mine[0]["id"],
-                                           decision="merged", actor="agent:operator-hand")
+                                           decision="merged", actor="operator")
     assert verdict["resolved"] == "merged" and verdict["folded"] == "agent:a11a5000"
     st = await p.fetchval("SELECT status FROM objects WHERE canonical='agent:a11a5000'")
     assert st == "merged"
@@ -249,8 +328,10 @@ async def test_archaeologist_rejection_is_remembered(actions: Actions, tmp_path)
     mine = [c for c in out["pending"] if c["dupe"] == "agent:0eadbea7"]
     assert mine
 
+    # 'rejected' is open to any mounted caller, deliberately (census a5e53ed8) — a
+    # rejection judges two things are NOT the same mind, never merges an identity
     verdict = await resolve_fold_candidate(actions, candidate_id=mine[0]["id"],
-                                           decision="rejected", actor="agent:operator-hand")
+                                           decision="rejected", actor="agent:any-mind")
     assert verdict["resolved"] == "rejected"
     again = await find_agent_fold_candidates(p, projects_root=root, jobs_home=jobs)
     assert not [c for c in again["pending"] if c["dupe"] == "agent:0eadbea7"]
@@ -449,7 +530,7 @@ async def test_unfold_reverses_a_fold_dry_run_writes_nothing(actions: Actions) -
     await _mk_agent(actions, "agent:un1dead0")
     await _mk_agent(actions, "agent:un1live0")
     await fold_agent(actions, dupe="agent:un1dead0", into="agent:un1live0",
-                     evidence="census: co-timed sessions, same cwd", actor="agent:test")
+                     evidence="census: co-timed sessions, same cwd", actor="operator")
 
     out = await unfold_agent(actions, dupe="agent:un1dead0",
                              because="wrongful fold — a real second mind",
@@ -467,7 +548,7 @@ async def test_unfold_executed_restores_the_dupe(actions: Actions) -> None:
     await _mk_agent(actions, "agent:un2dead0")
     await _mk_agent(actions, "agent:un2live0")
     await fold_agent(actions, dupe="agent:un2dead0", into="agent:un2live0",
-                     evidence="census: co-timed sessions, same cwd", actor="agent:test")
+                     evidence="census: co-timed sessions, same cwd", actor="operator")
 
     out = await unfold_agent(actions, dupe="agent:un2dead0",
                              because="a real second mind, wrongly folded",
@@ -495,7 +576,7 @@ async def test_unfold_refuses_a_blank_because(actions: Actions) -> None:
     await _mk_agent(actions, "agent:un4dead0")
     await _mk_agent(actions, "agent:un4live0")
     await fold_agent(actions, dupe="agent:un4dead0", into="agent:un4live0",
-                     evidence="x", actor="agent:test")
+                     evidence="x", actor="operator")
     out = await unfold_agent(actions, dupe="agent:un4dead0", because="   ",
                              actor="agent:judge")
     assert "because" in out["error"]
@@ -513,7 +594,7 @@ async def test_unfold_refuses_an_operator_blessed_fold_without_fresh_operator_wo
     await _mk_agent(actions, "agent:un5live0")
     await fold_agent(actions, dupe="agent:un5dead0", into="agent:un5live0",
                      evidence="the operator confirmed these are one mind, 2026-07-01",
-                     actor="agent:test")
+                     actor="operator")
 
     out = await unfold_agent(actions, dupe="agent:un5dead0",
                              because="I think this was wrong", actor="agent:judge")
@@ -539,7 +620,7 @@ async def test_unfold_clears_a_cross_lineage_succeeded_by_stitch(actions: Action
     await actions.assert_property(dupe_oid, "succeeded_by", "agent:un6live0-ii",
                                   "agent:bad-heal", now, 0.9, evidence_class="self_declared")
     await fold_agent(actions, dupe="agent:un6dead0", into="agent:un6live0",
-                     evidence="x", actor="agent:test")
+                     evidence="x", actor="operator")
 
     out = await unfold_agent(actions, dupe="agent:un6dead0", because="a real second mind",
                              actor="agent:judge", execute=True)
@@ -563,7 +644,7 @@ async def test_unfold_never_touches_a_real_same_lineage_successor(actions: Actio
                                   "agent:un7dead0-ii", now, 0.6,
                                   evidence_class="direct_observation")
     await fold_agent(actions, dupe="agent:un7dead0", into="agent:un7live0",
-                     evidence="x", actor="agent:test")
+                     evidence="x", actor="operator")
 
     out = await unfold_agent(actions, dupe="agent:un7dead0", because="wrongly folded",
                              actor="agent:judge", execute=True)
@@ -590,7 +671,7 @@ async def test_unfold_reports_unreturnable_mail_and_restores_reversible_threads(
     await actions.assert_property(tid, "owner", "agent:un8dead0", "agent:un8dead0", now, 0.9,
                                   evidence_class="self_declared")
     await fold_agent(actions, dupe="agent:un8dead0", into="agent:un8live0",
-                     evidence="x", actor="agent:test")
+                     evidence="x", actor="operator")
 
     out = await unfold_agent(actions, dupe="agent:un8dead0", because="wrongly folded",
                              actor="agent:judge")  # dry run

@@ -28,8 +28,17 @@ from typing import Any
 import asyncpg
 
 from src.actions.core import Actions
+from src.orchestrator.seats import _OPERATOR_ACTORS
 
 _log = logging.getLogger("osiris.folds")
+
+# THE SCHEDULED REAPER'S OWN NAME (fleet_reconcile.py's reconcile_scheduled_tick) — the
+# ONE non-operator actor fold_agent trusts, because that tick is ALREADY gated separately
+# by osiris_fleet_reconcile_enabled (a distinct, operator-flipped signature). Defined here
+# (not in fleet_reconcile.py) so the authority check and the identity it recognizes live
+# in the same file; fleet_reconcile.py imports this constant rather than repeating the
+# literal, so the two can never drift apart.
+_SANCTIONED_AUTO_FOLD_ACTOR = "cron:fleet_reconcile_heartbeat"
 
 
 async def living_head(pool: asyncpg.Pool, agent_id: str) -> str:
@@ -101,18 +110,33 @@ async def fold_agent(
     link) plus the estate — unread mail re-addressed to `into`'s LIVING HEAD, mount rows
     re-pointed, owned threads re-owned (evented via assert_property, never UPDATEd).
 
-    Refuses LOUDLY (an error dict, nothing written) when: evidence is empty; either label
-    is unknown or not an Agent; dupe==into or same lineage (generations are SUCCESSION,
-    not duplication — folding one would collapse a death boundary the mind ruling keeps);
-    dupe actively holds a Seat (transfer the seat first — a deliberate act, never a side
-    effect); dupe is already folded. `into` may be any generation — the estate finds the
-    living head regardless."""
+    ENFORCED, not just documented (census a5e53ed8/3f97f9c7, 2026-08-02: this docstring
+    claimed "operator's word or an approved merge_candidate" for weeks while any mounted
+    caller could fold any two agents): `actor` must be one of `seats._OPERATOR_ACTORS`'s
+    sentinels, or the scheduled reaper's own name (`_SANCTIONED_AUTO_FOLD_ACTOR` — that
+    tick is already gated separately by `osiris_fleet_reconcile_enabled`, a distinct
+    operator signature). `resolve_fold_candidate`'s `decision='merged'` branch calls this
+    function unchanged, so ITS caller inherits the same gate through this one check —
+    no separate copy to drift out of sync. Refuses LOUDLY, naming who was refused.
+
+    Refuses LOUDLY (an error dict, nothing written) when: evidence is empty; the actor is
+    not authorized (above); either label is unknown or not an Agent; dupe==into or same
+    lineage (generations are SUCCESSION, not duplication — folding one would collapse a
+    death boundary the mind ruling keeps); dupe actively holds a Seat (transfer the seat
+    first — a deliberate act, never a side effect); dupe is already folded. `into` may be
+    any generation — the estate finds the living head regardless."""
     from src.orchestrator.agents import _generation
 
     dupe, into = (dupe or "").strip(), (into or "").strip()
     if not (evidence or "").strip():
         return {"error": "a fold without evidence is an auto-merge wearing a signature — "
                          "cite the transcripts/census/timing that prove one mind"}
+    if actor not in _OPERATOR_ACTORS and actor != _SANCTIONED_AUTO_FOLD_ACTOR:
+        return {"error": f"{actor!r} is not authorized to fold agents — fold_agent runs "
+                         "only on the operator's own word (mount as the operator) or via "
+                         "resolve_fold's judgment of an approved merge_candidate, relaying "
+                         "the operator's own actor through unchanged; a mind cannot "
+                         "approve its own fold"}
     if not dupe or not into:
         return {"error": "fold_agent needs both labels: dupe and into"}
     if _generation(dupe)[0] == _generation(into)[0]:
@@ -571,10 +595,16 @@ async def resolve_fold_candidate(
 ) -> dict[str, Any]:
     """Judge one agent-fold proposal from the tray. 'merged' executes fold_agent — the
     ESTATE-carrying fold, never the bare kernel merge (an agent folded without its mail,
-    rows, and threads is the orphan machine again). 'rejected' mints not_same_as both
-    ways and the pair is never re-proposed. Either way the candidate row is stamped with
-    the judge's name. The entity tray's twin (resolution.resolve_candidate) stays for
-    Person/Company — this one exists because agents have estates."""
+    rows, and threads is the orphan machine again) — and INHERITS fold_agent's own
+    operator-actor gate unchanged (census a5e53ed8: this used to be the exact self-
+    approval gap the constitution forbids — an agent proposing AND judging its own
+    candidate — since fixed by fold_agent's own check, not a second copy here). 'rejected'
+    mints not_same_as both ways and the pair is never re-proposed — OPEN to any mounted
+    caller, deliberately: rejecting is a judgment that two things are NOT the same mind,
+    never an identity mutation, so it carries none of 'merged's blast radius and needs
+    none of its gate. Either way the candidate row is stamped with the judge's name. The
+    entity tray's twin (resolution.resolve_candidate) stays for Person/Company — this one
+    exists because agents have estates."""
     row = await actions.pool.fetchrow(
         "SELECT c.id, c.resolved, c.reasons FROM merge_candidates c WHERE c.id=$1",
         candidate_id)
