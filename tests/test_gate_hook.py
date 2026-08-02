@@ -284,6 +284,7 @@ def test_precommit_passes_clean_regardless_of_enforce(monkeypatch: Any) -> None:
     monkeypatch.setattr(
         gate_hook, "run_gates",
         lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+    monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "same")
     assert cmd_precommit(enforce=False) == 0
     assert cmd_precommit(enforce=True) == 0
 
@@ -293,6 +294,7 @@ def test_precommit_lets_a_failure_through_when_not_enforced(monkeypatch: Any) ->
     monkeypatch.setattr(
         gate_hook, "run_gates",
         lambda root, changed: {"ruff": (False, "boom"), "mypy": (True, ""), "pytest": (True, "")})
+    monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "same")
     assert cmd_precommit(enforce=False) == 0
 
 
@@ -301,6 +303,7 @@ def test_precommit_refuses_a_failure_when_enforced(monkeypatch: Any) -> None:
     monkeypatch.setattr(
         gate_hook, "run_gates",
         lambda root, changed: {"ruff": (False, "boom"), "mypy": (True, ""), "pytest": (True, "")})
+    monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "same")
     assert cmd_precommit(enforce=True) == 1
 
 
@@ -508,6 +511,7 @@ def test_precommit_prints_the_derivation_trace_question_when_a_tool_is_touched(
     monkeypatch.setattr(
         gate_hook, "run_gates",
         lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+    monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "same")
     monkeypatch.setattr(
         gate_hook, "receipt_shaped_touches",
         lambda root, changed: {"src/pkg/x.py": ["real_tool"]})
@@ -524,6 +528,7 @@ def test_precommit_is_silent_about_derivation_trace_when_nothing_receipt_shaped_
     monkeypatch.setattr(
         gate_hook, "run_gates",
         lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+    monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "same")
     monkeypatch.setattr(gate_hook, "receipt_shaped_touches", lambda root, changed: {})
     assert cmd_precommit(enforce=True) == 0
     out = capsys.readouterr().out
@@ -539,6 +544,7 @@ def test_derivation_trace_question_never_changes_the_verdict_on_a_failing_gate(
     monkeypatch.setattr(
         gate_hook, "run_gates",
         lambda root, changed: {"ruff": (False, "boom"), "mypy": (True, ""), "pytest": (True, "")})
+    monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "same")
     monkeypatch.setattr(
         gate_hook, "receipt_shaped_touches",
         lambda root, changed: {"src/pkg/x.py": ["real_tool"]})
@@ -546,3 +552,135 @@ def test_derivation_trace_question_never_changes_the_verdict_on_a_failing_gate(
     out = capsys.readouterr().out
     assert DERIVATION_TRACE_QUESTION in out
     assert "gate_hook: REFUSED" in out
+
+
+# --- the stage-race TOCTOU guard (Thoth DM 3005/3012, thread 3005) -----------------------------
+# NOT a #117 shape-3 cure (decision 96463307 found no general mechanical path for that) --
+# a narrower, separately-motivated mechanism for Practice 81cab2f4/decision b1863e56's own
+# documented hazard: a concurrent `git add` landing between a staged-diff check and the commit
+# that follows it. Reproduced live in a throwaway repo before this was built: git does not hold
+# the index lock across a pre-commit hook's own execution, so the hazard extends across the
+# ENTIRE gate run, not just an agent's own instant diff-then-commit gap.
+
+def test_staged_diff_digest_changes_with_content_not_just_file_list(
+    tmp_path: Any, monkeypatch: Any,
+) -> None:
+    """Practice 81cab2f4's own point: `--stat`/file names alone would miss a same-file
+    content race. The digest must be sensitive to the diff BODY."""
+    calls = iter(["diff --cached v1", "diff --cached v1", "diff --cached v2"])
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, next(calls)))
+    d1 = gate_hook._staged_diff_digest(tmp_path)
+    d1_again = gate_hook._staged_diff_digest(tmp_path)
+    d2 = gate_hook._staged_diff_digest(tmp_path)
+    assert d1 == d1_again
+    assert d1 != d2
+
+
+def test_precommit_detects_a_stage_race_and_refuses_when_enforced(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
+    monkeypatch.setattr(
+        gate_hook, "run_gates",
+        lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+    digests = iter(["before", "after"])
+    monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: next(digests))
+    assert cmd_precommit(enforce=True) == 1
+    out = capsys.readouterr().out
+    assert "gate_hook[staged]: RACE" in out
+    assert "gate_hook: REFUSED — staged content raced with the gate run" in out
+
+
+def test_precommit_stage_race_is_advisory_when_not_enforced(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
+    monkeypatch.setattr(
+        gate_hook, "run_gates",
+        lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+    digests = iter(["before", "after"])
+    monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: next(digests))
+    assert cmd_precommit(enforce=False) == 0
+    out = capsys.readouterr().out
+    assert "gate_hook[staged]: RACE" in out
+    assert "NOT ENFORCED" in out
+    assert "stage race" in out
+
+
+def test_precommit_stage_race_names_the_files_that_appeared(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    file_calls = iter([["a.py"], ["a.py", "b.py"]])
+    monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: next(file_calls))
+    monkeypatch.setattr(
+        gate_hook, "run_gates",
+        lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+    digests = iter(["before", "after"])
+    monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: next(digests))
+    assert cmd_precommit(enforce=True) == 1
+    out = capsys.readouterr().out
+    assert "b.py" in out
+
+
+def test_precommit_a_stage_race_takes_priority_even_when_gates_all_passed(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    """A race means the gate results above are not evidence about the tree that would
+    actually commit -- a coincidental all-clean gate run must not paper over that."""
+    monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
+    monkeypatch.setattr(
+        gate_hook, "run_gates",
+        lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+    digests = iter(["before", "after"])
+    monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: next(digests))
+    assert cmd_precommit(enforce=True) == 1
+    out = capsys.readouterr().out
+    assert "gate_hook[staged]: PASS" in out  # the (misleading, stale) gate verdict still prints
+    assert "RACE" in out                     # but the race verdict is what actually decides it
+
+
+def test_precommit_race_refusal_reads_differently_from_a_gate_failure_refusal(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    """THE VOCABULARY-DISTINCTNESS REQUIREMENT (Thoth DM 3012: 'must distinguish "the index
+    moved" from "the commit failed" in its own words'). Two REFUSED commits for two different
+    reasons must never render the identical sentence -- the same disjointness discipline as
+    tests/test_receipt_vocabulary.py, applied to this mechanism's own two refusal reasons."""
+    monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
+
+    monkeypatch.setattr(
+        gate_hook, "run_gates",
+        lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+    race_digests = iter(["before", "after"])
+    monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: next(race_digests))
+    assert cmd_precommit(enforce=True) == 1
+    race_out = capsys.readouterr().out
+    race_line = next(
+        line for line in race_out.splitlines() if line.startswith("gate_hook: REFUSED"))
+
+    monkeypatch.setattr(
+        gate_hook, "run_gates",
+        lambda root, changed: {"ruff": (False, "boom"), "mypy": (True, ""), "pytest": (True, "")})
+    monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "same")
+    assert cmd_precommit(enforce=True) == 1
+    fail_out = capsys.readouterr().out
+    fail_line = next(
+        line for line in fail_out.splitlines() if line.startswith("gate_hook: REFUSED"))
+
+    assert race_line != fail_line
+    assert "raced" in race_line and "raced" not in fail_line
+    assert "a gate failed" in fail_line and "a gate failed" not in race_line
+
+
+def test_precommit_no_race_is_unaffected_when_digest_is_stable(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    """Regression guard: the new bracket must be a no-op when nothing actually raced."""
+    monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
+    monkeypatch.setattr(
+        gate_hook, "run_gates",
+        lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+    monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "stable")
+    assert cmd_precommit(enforce=True) == 0
+    out = capsys.readouterr().out
+    assert "RACE" not in out

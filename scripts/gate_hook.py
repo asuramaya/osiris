@@ -62,6 +62,37 @@ inherited rather than solved by `classify_test_files` (Khnum's own honest caveat
 "N direct" is a verified FLOOR, never a ceiling). This is a real, bounded blind spot, not a
 hidden one; `--audit`'s own report names it as a caveat, never as zero.
 
+THE STAGE-RACE GUARD (Thoth DM 3005/3012, thread 3005) — A TOCTOU GUARD, NOT A #117 CURE.
+Decision 96463307 investigated whether #117's shape 3 ("a status flag outliving the state it
+described") is mechanizable and found NO general path — this is not that. It is one narrow,
+separately-motivated mechanism: Practice 81cab2f4/decision b1863e56 already documented, in
+prose, that "a verify-then-commit check on a shared git index is a SNAPSHOT, not a
+GUARANTEE — the index is shared mutable state, so a concurrent agent's own `git add` can land
+between your `git diff --staged` check and your `git commit`." Reproduced live before this
+was built (throwaway repo, a pre-commit hook that sleeps 5s): a SECOND process's `git add`
+during the FIRST process's hook execution lands, silently, INSIDE the first commit — git does
+NOT hold the index lock across a hook's own run. This means gate_hook's own gate execution
+(up to `_PYTEST_TIMEOUT_SECS`) is itself a live, previously-unrecognized EXTENSION of exactly
+this race window, not merely a place that could report on it.
+
+`cmd_precommit` now hashes the staged diff (`_staged_diff_digest`, full `git diff --cached`
+text, not just names — file-list alone would miss a same-file content race) BEFORE calling
+`run_gates` and AGAIN immediately after. A mismatch means the tree the gates just checked is
+not the tree about to be committed — reported as its own verdict word, RACE, distinct from
+FAILED/TIMEOUT/SKIPPED/ok (never folded into "a gate failed," the exact vocabulary-collapse
+shape #117 piece (a) exists to catch) — and refused under the SAME `osiris_gate_hook_enforce`
+flag as every other gate here, never a separate arming bit.
+
+NAMED HONESTLY, NOT OVERSOLD: this closes the window WHILE gates run (proven real, and
+probably the LARGER window in practice — up to 180s vs. a human/agent's near-instant
+diff-then-commit pair). It does NOT close the window BEFORE `git commit` is even invoked —
+the exact timing of b1863e56's own original incident, where the race landed between the
+agent's manual `git diff --staged` review and their separate `git commit` call, before this
+hook's process exists at all. Nothing running only after `git commit` starts can see before
+that point. Practice 81cab2f4's warning therefore still stands for that narrower residual
+case; its post-commit repair recipe (git reset --soft HEAD^ + selective unstage) becomes
+unnecessary only for races this guard actually catches, not for the pre-invocation gap.
+
 #117's SECOND RULE, A NUDGE NOT A GATE (Khnum's investigation d0ab1b0b, proposal msg 2983,
 Thoth's routing msg 2984/2985) — piece (a) of #117 (tests/test_receipt_vocabulary.py, commit
 7ef3bc1) is the mechanical, automatable half: a behavioral test that a status vocabulary never
@@ -83,6 +114,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import re
 import subprocess
 import sys
@@ -350,6 +382,15 @@ def changed_files_staged(repo_root: Path = REPO_ROOT) -> list[str]:
     return [line for line in out.splitlines() if line] if ok else []
 
 
+def _staged_diff_digest(repo_root: Path = REPO_ROOT) -> str:
+    """SHA-256 of the full staged patch text (`git diff --cached`, CONTENT not just names —
+    Practice 81cab2f4's own point: a same-file content race would show identical file lists
+    with different bodies). A failed `git diff` hashes the empty string, same as "nothing
+    staged" — comparing two digests never needs a separate ok-flag branch."""
+    ok, out = _run(["git", "diff", "--cached"], repo_root)
+    return hashlib.sha256((out if ok else "").encode()).hexdigest()
+
+
 def changed_files_for_commit(repo_root: Path, sha: str) -> list[str]:
     ok, out = _run(
         ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", sha], repo_root)
@@ -483,13 +524,34 @@ def cmd_precommit(*, enforce: bool | None = None) -> int:
     if not changed:
         print("gate_hook: nothing staged, nothing to gate")
         return 0
+    stage_before = _staged_diff_digest(REPO_ROOT)
     results = run_gates(REPO_ROOT, changed)
+    stage_after = _staged_diff_digest(REPO_ROOT)
     all_ok = _report("staged", results)
     touches = receipt_shaped_touches(REPO_ROOT, changed)
     if touches:
         print(DERIVATION_TRACE_QUESTION)
         for f, names in sorted(touches.items()):
             print(f"  {f}: {', '.join(sorted(names))}")
+    if stage_before != stage_after:
+        now = set(changed_files_staged(REPO_ROOT))
+        moved = sorted(now ^ set(changed))
+        detail = (f"file set changed: {', '.join(moved)}" if moved
+                  else "same files, staged content changed")
+        print(
+            "gate_hook[staged]: RACE — the staged tree changed WHILE the gates above "
+            "were running (a concurrent git add landed mid-run — Practice 81cab2f4's "
+            "TOCTOU hazard, proven live: git does not hold the index lock across a "
+            "pre-commit hook's own execution). The results above describe a tree that "
+            f"no longer exists and are not evidence about what is about to be "
+            f"committed. {detail}")
+        if not enforce:
+            print("gate_hook: NOT ENFORCED (osiris_gate_hook_enforce=False) — would "
+                  "have refused this commit for a stage race, letting it through")
+            return 0
+        print("gate_hook: REFUSED — staged content raced with the gate run and "
+              "enforcement is armed")
+        return 1
     if all_ok:
         return 0
     if not enforce:
