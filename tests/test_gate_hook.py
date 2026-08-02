@@ -378,6 +378,64 @@ def test_report_a_genuine_clean_run_says_plain_pass(capsys: Any) -> None:
     assert out.splitlines()[0] == "gate_hook[test]: PASS"
 
 
+# --- obligation a3c71bf5: the omitted-file list must survive the printed tail -----------------
+# Filed while verifying b9045c3 (Thoth msg 3281): the omitted-files summary is the FIRST line
+# of a SKIPPED detail, but a real pytest run underneath it can be long, and `[-15:]` takes the
+# LAST 15 lines of the WHOLE blob -- the summary line silently scrolls out. The headline still
+# reads "SKIPPED (partial)" (honest), but a reader has no way to learn WHICH files were
+# skipped (not actionable) -- #117's own shape one layer down from where it was last caught.
+
+def test_report_skip_summary_survives_a_long_pytest_tail(capsys: Any) -> None:
+    body = "\n".join(f"noise line {i}" for i in range(40))
+    detail = (
+        "SKIPPED (partial) — ran 3 clean, omitted 5 fixture-only files (hub-module fan-out, "
+        f"over cap 12): [a_test.py b_test.py c_test.py d_test.py e_test.py]\n{body}"
+    )
+    results = {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, detail)}
+    gate_hook._report("test", results)
+    out = capsys.readouterr().out
+    assert "omitted 5 fixture-only files" in out  # would fail pre-fix: pushed out by the tail
+    assert "a_test.py" in out and "e_test.py" in out
+
+
+def test_report_skip_with_no_body_still_shows_the_summary(capsys: Any) -> None:
+    results = {
+        "ruff": (True, ""), "mypy": (True, ""),
+        "pytest": (True, "SKIPPED — nothing ran; omitted 3 fixture-only files: [a.py b.py c.py]"),
+    }
+    gate_hook._report("test", results)
+    out = capsys.readouterr().out
+    assert "omitted 3 fixture-only files" in out
+    assert "a.py" in out and "c.py" in out
+
+
+def test_report_says_so_explicitly_when_the_omitted_list_is_too_long_to_show_in_full(
+    capsys: Any,
+) -> None:
+    many_files = " ".join(f"file_{i}.py" for i in range(400))
+    detail = (
+        f"SKIPPED — nothing ran; omitted 400 fixture-only files (hub-module fan-out, over "
+        f"cap 12): [{many_files}]"
+    )
+    results = {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, detail)}
+    gate_hook._report("test", results)
+    out = capsys.readouterr().out
+    # "could not show" must never render as "nothing to show" (Khnum's census_blind rule) --
+    # a truncation must say so explicitly, not just silently cut the line short.
+    assert "file_0.py" in out  # still shows what it can, from the front
+    assert "TRUNCATED" in out or "elided" in out
+    assert "400 fixture-only files" in out  # the count survives even when the names don't
+
+
+def test_report_a_real_failure_keeps_its_existing_tail_only_behavior(capsys: Any) -> None:
+    body = "\n".join(f"line {i}" for i in range(20)) + "\nAssertionError: boom"
+    results = {"ruff": (True, ""), "mypy": (True, ""), "pytest": (False, body)}
+    gate_hook._report("test", results)
+    out = capsys.readouterr().out
+    assert "AssertionError: boom" in out
+    assert "line 0" not in out  # unchanged: a real failure still only gets the last 15 lines
+
+
 # --- #117 piece (b): the derivation-trace nudge (decision d0ab1b0b, routed msg 2984) ----------
 
 def test_added_line_ranges_parses_a_single_hunk(tmp_path: Path, monkeypatch: Any) -> None:
