@@ -143,7 +143,17 @@ async def _offload_boxes(
     logic to settle.settle_boxes (ruling c5b184cd) so the hook and the /settle MCP tool read
     ONE implementation, never two drifting copies. Returns None only when the session itself
     can't be resolved to an agent (nothing to check at all — the caller treats that exactly
-    like 'everything satisfied')."""
+    like 'everything satisfied').
+
+    THE SAME #128-CLASS cwd EXPOSURE mcp_server.py's settle() just fixed (Khnum, commit
+    17b20e0, Thoth DM 3076), inherited here and closed the same way: a seat-office agent's
+    mount cwd can read as the bare container (~/.osiris/seats, not .../seats/<handle>),
+    which has no charter.md at all — charter_touched then fails OPEN to None (fog-of-war)
+    even when the seat's REAL office holds a genuinely stale charter.md that should read
+    False. This call site is the higher-stakes twin (fires unattended, every turn-end,
+    above the alarm line, nobody watching) — resolved via held_seat before calling
+    settle_boxes, exactly like the MCP wrapper; settle_boxes itself stays pure and
+    unchanged, shared unmodified with that call site."""
     import asyncpg
     from src.orchestrator.settle import settle_boxes
 
@@ -153,8 +163,15 @@ async def _offload_boxes(
         row = await find_session_row(conn, session_id or "")
         if row is None or not row["agent_id"] or not row["mounted_at"]:
             return None
+        from src.orchestrator.offices import _DEFAULT_OFFICE_ROOT
+        from src.orchestrator.seats import held_seat
+
+        charter_cwd = cwd
+        seat = await held_seat(conn, str(row["agent_id"]))
+        if seat and seat.get("handle"):
+            charter_cwd = str(_DEFAULT_OFFICE_ROOT / seat["handle"].lower())
         return await settle_boxes(conn, agent_id=str(row["agent_id"]),
-                                  mounted_at=row["mounted_at"], cwd=cwd)
+                                  mounted_at=row["mounted_at"], cwd=charter_cwd)
     finally:
         await conn.close()
 

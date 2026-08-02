@@ -11,6 +11,7 @@ of the house's tests use.
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -217,6 +218,49 @@ async def test_offload_boxes_detects_decisions_threads_charter_and_succession(
     assert boxes2["threads trued this session (opened or resolved)"] is True
     assert boxes2["charter.md touched this session"] is True
     assert boxes2["a live succession/handoff note (this lineage was minted)"] is True
+
+
+async def test_offload_boxes_resolves_the_seat_office_over_a_corrected_mount_cwd(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
+) -> None:
+    """THE SAME #128-CLASS SPECIMEN test_settle.py's own
+    test_settle_tool_resolves_the_seat_office_over_a_corrected_mount_cwd reproduces for the
+    MCP settle() call site (Khnum, commit 17b20e0, Thoth DM 3076/3096) — reproduced here for
+    THIS call site: a seated agent's mount cwd reads as the bare office CONTAINER, not this
+    agent's real office at <container>/<handle>. Before this fix, _offload_boxes passed that
+    corrupted cwd straight to settle_boxes, charter_touched found no charter.md at the
+    container root, and returned None (fog-of-war) — even with a real, 11-day-stale
+    charter.md sitting in the seat's actual office the whole time. The offload ritual fires
+    unattended at every turn-end above the alarm line, nobody watching to notice a silent
+    None where a real False belonged."""
+    monkeypatch.setattr(stophook, "DSN", pg_dsn)
+    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", tmp_path / "seats")
+    container = tmp_path / "seats"
+    container.mkdir()
+    real_office = container / "thoth"
+    real_office.mkdir()
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    (real_office / "charter.md").write_text("# eleven days old, untouched this session\n")
+    old_time = (mounted_at - timedelta(days=11)).timestamp()
+    os.utime(real_office / "charter.md", (old_time, old_time))
+
+    agent = "agent:0ffh00k01"
+    seat_id = "seat:0ffh00k01"
+    seat_oid = await actions.create_or_find_object("Seat", seat_id, agent)
+    await actions.assert_property(seat_oid, "handle", "Thoth", agent, mounted_at, 0.9,
+                                  evidence_class="self_declared")
+    await bind_holder(actions, seat_id=seat_id, agent_id=agent)
+
+    sid = "0ffh00k1-0000-4000-8000-000000000000"
+    job_dir = str(tmp_path / "jobs" / sid[:8])  # find_session_row matches sid[:8] == job_dir
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="osiris",
+                     cwd=str(container), model=None, session_key=None)  # the CORRUPTED cwd
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET mounted_at=$1 WHERE job_dir=$2", mounted_at, job_dir)
+    boxes = await stophook._offload_boxes(sid, str(container))  # the hook's own payload cwd
+
+    assert boxes is not None
+    assert boxes["charter.md touched this session"] is False, boxes  # not None
 
 
 async def test_offload_boxes_a_non_minted_session_carries_no_succession_box(
