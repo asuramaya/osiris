@@ -405,3 +405,70 @@ async def mint_tier2_threads(
         )
         out.append({"summary": m["summary"], "thread_id": str(tid)})
     return out
+
+
+# ── ARCHIVE ELIGIBILITY (Thoth DM 3266/thread e604ae84's item 1, the operator's write-back
+# authorization scoped NARROWLY: "your own session's own store from inside that session",
+# never the enumeration door ab27af61 forbade) ───────────────────────────────────────────
+#
+# THIS IS THE PURE HALF ONLY. No executor exists — a task's own store file under
+# ~/.claude/tasks is still never opened by this module, unchanged from the module's
+# original claim above. Two things block an executor, established this session, not
+# guessed: (a) nothing in this module resolves "this session" to one of the ~93 store
+# uuids on disk — that mapping does not exist here yet; (b) each store's own `.lock`
+# file's actual locking discipline is Claude-Code-harness-internal, undocumented and
+# unverifiable by reading this repo's source, so a direct file-write executor cannot be
+# proven safe the way every other claim in this module was. Wiring either the executor or
+# a Stop-hook trigger for it before those two are resolved would repeat, with higher
+# stakes (file deletion, not an additive DB write), the exact "fires blind" risk
+# established against mint_tier2_threads below (see test_mint_tier2_threads_twins_when_
+# the_citing_set_changes_between_runs).
+#
+# THE DISAGREEMENT QUESTION ("which side wins", thread e604ae84's item 2) IS ANSWERED BY
+# REFUSING IT: neither side ever auto-wins here. A task is archive-eligible ONLY where the
+# harness and the graph already fully agree it is done — convergence fires where there is
+# nothing left to converge. Anything still in dispute stays exactly where it is today:
+# Tier 2's report-only obligation mint, never auto-resolved by this module.
+#
+# WHY "bound" ONLY, NEVER "bound_partial": a task with even one still-unresolved citation
+# has not been cleanly checked against the whole of what it claims — archiving it because
+# its resolvable half happens to agree would silently discard the still-open half of its
+# own record.
+#
+# WHY EVERY bound thread_id MUST AGREE, NOT ANY: a task citing three threads where two are
+# resolved and one is still open is a task the operator is still working. Agreement must be
+# unanimous across everything the task itself cited, or this is the disagreement bucket
+# wearing a different hat.
+
+def archive_eligible_targets(
+    report: dict[str, Any], tasks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Pure. Every (task_id, store, thread_ids) from `report["bound"]` where the task's own
+    `status` is "completed" AND none of its bound thread_ids appear in
+    `report["disagreement"]`. Given `_status_disagrees`'s own definition (task_done !=
+    thread_done), "completed" plus "not disagreeing" together already IMPLY every one of
+    that task's bound threads carries property_status == "resolved" — no second lookup
+    against thread state is needed or done here, only against `report` and `tasks`, both
+    already computed by `reconcile`. Keyed by (task_id, store), never task_id alone — the
+    same collision hazard `reconcile` itself already refuses to repeat (a bare id repeats
+    across stores; see this module's own docstring). No writes; no filesystem access; the
+    rows this returns are eligible for an executor that does not exist yet, not archived
+    by this call."""
+    status_by_task_key = {
+        (t["id"], t.get("_store")): str(t.get("status") or "") for t in tasks
+    }
+    disagreeing_pairs = {
+        (d["task_id"], d.get("store"), d["thread_id"]) for d in report["disagreement"]
+    }
+    targets: list[dict[str, Any]] = []
+    for row in report["bound"]:
+        key = (row["task_id"], row.get("store"))
+        if status_by_task_key.get(key) != "completed":
+            continue
+        if any((*key, tid) in disagreeing_pairs for tid in row["thread_ids"]):
+            continue
+        targets.append({
+            "task_id": row["task_id"], "store": row.get("store"),
+            "thread_ids": list(row["thread_ids"]),
+        })
+    return targets

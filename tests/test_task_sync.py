@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from src.actions.core import Actions
 from src.orchestrator.capture import open_thread
 from src.orchestrator.task_sync import (
+    archive_eligible_targets,
     mint_tier2_threads,
     parse_thread_citations,
     reconcile,
@@ -349,3 +350,122 @@ async def test_mint_tier2_threads_is_idempotent_on_rerun(actions: Actions) -> No
     first = await mint_tier2_threads(actions, mints)
     second = await mint_tier2_threads(actions, mints)
     assert first[0]["thread_id"] == second[0]["thread_id"]  # collapses, never duplicates
+
+
+async def test_mint_tier2_threads_twins_when_the_citing_set_changes_between_runs(
+    actions: Actions,
+) -> None:
+    """THE REAL RISK Thoth's dispatch (msg 3266, item 4) asked to be established with
+    evidence, not assumed: mint_tier2_threads is idempotent on BYTE-IDENTICAL summary text
+    only (see test_mint_tier2_threads_is_idempotent_on_rerun, and open_thread's own
+    create_or_find_object -> ON CONFLICT (type, canonical) DO NOTHING, a real DB unique
+    constraint). But a disagreement summary encodes the FULL current citing-task set
+    (tier2_mints's own rerun note). A second run where a new task starts citing the same
+    disputed Thread changes the summary text and therefore mints a SECOND, DISTINCT Thread
+    rather than updating the first — a real twin, not a hypothetical one. This is why
+    firing this at every turn-end is not yet safe: the citing set legitimately changes
+    turn to turn as the agent works."""
+    disputed = await open_thread(actions, "disputed, citing set will grow", source="agent:me")
+    report_v1 = {
+        "disagreement": [{"task_id": "11", "store": "storeA", "thread_id": str(disputed),
+                           "task_status": "completed", "thread_property_status": "open"}],
+        "thread_side_orphans": [],
+    }
+    first = await mint_tier2_threads(actions, tier2_mints(report_v1))
+    # a second task starts citing the same disputed thread before the next run
+    report_v2 = {
+        "disagreement": [
+            {"task_id": "11", "store": "storeA", "thread_id": str(disputed),
+             "task_status": "completed", "thread_property_status": "open"},
+            {"task_id": "61", "store": "storeB", "thread_id": str(disputed),
+             "task_status": "completed", "thread_property_status": "open"},
+        ],
+        "thread_side_orphans": [],
+    }
+    second = await mint_tier2_threads(actions, tier2_mints(report_v2))
+    assert first[0]["thread_id"] != second[0]["thread_id"]  # TWINNED, not collapsed
+
+
+# ── archive_eligible_targets (Thoth DM 3266's item 1, pure computation only) ──────────────
+
+def test_archive_eligible_targets_wants_completed_task_and_full_agreement() -> None:
+    report = {
+        "bound": [{"task_id": "1", "store": "s1", "thread_ids": ["aaa"]}],
+        "disagreement": [],
+    }
+    tasks = [{"id": "1", "subject": "x", "description": "thread aaa", "status": "completed",
+              "_store": "s1"}]
+    assert archive_eligible_targets(report, tasks) == [
+        {"task_id": "1", "store": "s1", "thread_ids": ["aaa"]},
+    ]
+
+
+def test_archive_eligible_targets_refuses_a_completed_task_still_disagreeing() -> None:
+    # the harness says done but the graph's own bound thread never resolved -- exactly the
+    # disagreement bucket; neither side auto-wins, so this row must NOT be archive-eligible
+    report = {
+        "bound": [{"task_id": "1", "store": "s1", "thread_ids": ["aaa"]}],
+        "disagreement": [{"task_id": "1", "store": "s1", "thread_id": "aaa",
+                           "task_status": "completed", "thread_property_status": "open"}],
+    }
+    tasks = [{"id": "1", "subject": "x", "description": "thread aaa", "status": "completed",
+              "_store": "s1"}]
+    assert archive_eligible_targets(report, tasks) == []
+
+
+def test_archive_eligible_targets_refuses_a_task_still_pending() -> None:
+    # both sides agree it's still open -- agreement, but not the DONE agreement archiving
+    # requires
+    report = {"bound": [{"task_id": "1", "store": "s1", "thread_ids": ["aaa"]}],
+              "disagreement": []}
+    tasks = [{"id": "1", "subject": "x", "description": "thread aaa", "status": "pending",
+              "_store": "s1"}]
+    assert archive_eligible_targets(report, tasks) == []
+
+
+def test_archive_eligible_targets_never_touches_bound_partial() -> None:
+    # even a completed, fully-agreeing resolved half must not archive -- the task still
+    # carries an unresolved citation this module refuses to guess about
+    report = {
+        "bound": [],
+        "bound_partial": [{"task_id": "1", "store": "s1", "thread_ids": ["aaa"],
+                            "failed": [{"citation": "zzz", "why": "no Thread matches"}]}],
+        "disagreement": [],
+    }
+    tasks = [{"id": "1", "subject": "x", "description": "thread aaa, zzz",
+              "status": "completed", "_store": "s1"}]
+    assert archive_eligible_targets(report, tasks) == []
+
+
+def test_archive_eligible_targets_requires_unanimous_agreement_across_citations() -> None:
+    # one thread resolved, one still open -- a task the operator is still working, per the
+    # module's own rationale; must not archive on the strength of only the resolved half
+    report = {
+        "bound": [{"task_id": "1", "store": "s1", "thread_ids": ["aaa", "bbb"]}],
+        "disagreement": [{"task_id": "1", "store": "s1", "thread_id": "bbb",
+                           "task_status": "completed", "thread_property_status": "open"}],
+    }
+    tasks = [{"id": "1", "subject": "x", "description": "threads aaa, bbb",
+              "status": "completed", "_store": "s1"}]
+    assert archive_eligible_targets(report, tasks) == []
+
+
+def test_archive_eligible_targets_is_scoped_by_store_not_bare_task_id() -> None:
+    # the same collision hazard reconcile() itself refuses: task id "1" repeats across two
+    # stores, only one of which is genuinely done-and-agreeing
+    report = {
+        "bound": [
+            {"task_id": "1", "store": "storeA", "thread_ids": ["aaa"]},
+            {"task_id": "1", "store": "storeB", "thread_ids": ["bbb"]},
+        ],
+        "disagreement": [],
+    }
+    tasks = [
+        {"id": "1", "subject": "x", "description": "thread aaa", "status": "completed",
+         "_store": "storeA"},
+        {"id": "1", "subject": "x", "description": "thread bbb", "status": "pending",
+         "_store": "storeB"},
+    ]
+    assert archive_eligible_targets(report, tasks) == [
+        {"task_id": "1", "store": "storeA", "thread_ids": ["aaa"]},
+    ]

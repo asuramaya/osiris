@@ -12,7 +12,18 @@ Composes the SAME resolution ladder resolve_thread/record_decision already use p
 (`_find_thread`/`_find_decision` in capture.py — UUID -> short-id PREFIX -> summary
 substring) rather than duplicating it or widening `resolve_ref` globally: Thoth's explicit
 call was that prefix-matching everywhere risks ambiguity collisions in existing callers
-never designed for it, so this stays its own small, focused verb."""
+never designed for it, so this stays its own small, focused verb.
+
+NOTES AND ADDENDA NOW SURFACE HERE (Thoth DM 3278, thread 1f4dcc03: amend_decision's own
+docstring disclosed "recall() never reads it back" as a real, unfixed gap blocking the
+AMEND family's Phase 4 merge). This is THE surface a Decision's or Thread's readers already
+use to get the whole record back — the same reasoning `_fn_practices` already applied for
+amend_practice's amendments (folded into `practices()`, "the ONE live surface every caller
+already uses"), applied here to recall() instead, since that is Decision/Thread's own
+equivalent surface, not a listing composition. annotate_thread's `note:%` rows carried the
+IDENTICAL gap (verified: zero callers of `thread_notes` anywhere outside tests, same as
+`decision_addenda` before this fix) — fixed in the same pass since both live in this same
+function, not a second, separate defect worth leaving half-mended right next to the first."""
 from __future__ import annotations
 
 import uuid
@@ -29,7 +40,22 @@ async def _full_record(pool: asyncpg.Pool, oid: uuid.UUID, otype: str) -> dict[s
     trust an explicit-UUID-shaped ref as intent WITHOUT checking existence (the grave rule,
     correct for the write verbs they were built for) — this is where recall() actually
     checks, so a syntactically-valid-but-nonexistent UUID refuses honestly instead of
-    returning an empty shell of nulls."""
+    returning an empty shell of nulls.
+
+    `note:%`/`addendum:%` properties are EXCLUDED from the flat per-name dump above and
+    folded back in as `notes`/`addenda` — an ordered, oldest-first list via `thread_notes`/
+    `decision_addenda`, always present (empty list, never an absent key — this house's own
+    law against a bucket collapsing to silence). Left in the flat dump, each one would
+    appear as one more `note:a3f9c012`-shaped key: unordered (SQL sorts by the RANDOM
+    `_append_property_name` suffix, not time), untimestamped (this query never selects
+    `observed_at`), and undiscoverable unless a reader already knew the prefix to look for —
+    functionally unreadable despite being technically present, which is exactly what made
+    the original gap easy to miss. `observed_at` is stringified here (`.isoformat()`), not
+    left as asyncpg's raw datetime — this dict crosses the MCP wire as this function's own
+    caller, and every other datetime bound for that trip in this codebase is stringified at
+    its own call site (mcp_server.py has no blanket encoder); `thread_notes`/`decision_
+    addenda` keep returning real datetimes for their own direct callers (tests, `lap()`),
+    unchanged."""
     canonical = await pool.fetchval(
         "SELECT canonical FROM objects WHERE id=$1 AND type=$2 AND status='active'",
         oid, otype)
@@ -38,9 +64,20 @@ async def _full_record(pool: asyncpg.Pool, oid: uuid.UUID, otype: str) -> dict[s
     rows = await pool.fetch(
         "SELECT DISTINCT ON (a.name) a.name, a.value #>> '{}' AS value "
         "FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name NOT LIKE 'note:%' AND a.name NOT LIKE 'addendum:%' "
         "ORDER BY a.name, a.confidence DESC, a.observed_at DESC", oid)
-    return {"id": str(oid)[:8], "canonical": canonical, "type": otype,
-            **{r["name"]: r["value"] for r in rows}}
+    record: dict[str, Any] = {"id": str(oid)[:8], "canonical": canonical, "type": otype,
+                              **{r["name"]: r["value"] for r in rows}}
+    if otype == "Thread":
+        from src.orchestrator.capture import thread_notes
+        notes = await thread_notes(pool, oid)
+        record["notes"] = [{**n, "observed_at": n["observed_at"].isoformat()} for n in notes]
+    elif otype == "Decision":
+        from src.orchestrator.capture import decision_addenda
+        addenda = await decision_addenda(pool, oid)
+        record["addenda"] = [{**a, "observed_at": a["observed_at"].isoformat()}
+                              for a in addenda]
+    return record
 
 
 async def recall(pool: asyncpg.Pool, ref: str, *, kind: str | None = None) -> dict[str, Any]:

@@ -1450,13 +1450,13 @@ async def amend_practice(
     anything already on the object — same mechanism as `annotate_thread`/`amend_decision`
     (`_append_property_name`).
 
-    UNLIKE A DECISION'S ADDENDA, WHICH ARE WRITE-ONLY TODAY (decision_addenda has no MCP
-    tool and recall() never reads it back — a real, separate gap, named not fixed here): a
-    Practice already HAS a live read surface every caller actually uses (`practices()`), so
-    this verb's amendments are wired into that composition directly (`_fn_practices`), not
-    left to rot the same way. That is the whole point of narrowing a practice's text in
-    place — a reader who calls `practices()` must see it, not go hunting through `lap()`'s
-    raw provenance timeline for an `amendment:` assertion.
+    A Practice's own live read surface is `practices()` — every caller actually uses it, so
+    this verb's amendments are wired into that composition directly (`_fn_practices`), the
+    same reasoning `recall()` now applies to a Decision's own addenda (thread 1f4dcc03,
+    fixed — `recall()` no longer leaves them write-only, see recall.py's own docstring).
+    That is the whole point of narrowing a practice's text in place — a reader who calls
+    `practices()` must see it, not go hunting through `lap()`'s raw provenance timeline for
+    an `amendment:` assertion.
 
     Refuses (raises ValueError, naming `refute_practice` by name) when `ref` names a
     Practice already REFUTED (carries `refuted_by`) — a dead lesson does not grow new

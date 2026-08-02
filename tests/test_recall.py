@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 from src.actions.core import Actions
-from src.orchestrator.capture import open_thread, record_decision
+from src.orchestrator.capture import (
+    amend_decision,
+    annotate_thread,
+    open_thread,
+    record_decision,
+)
 from src.orchestrator.recall import recall
 
 _LONG_SUMMARY = (
@@ -91,6 +96,72 @@ async def test_recall_returns_the_object_canonical_and_short_id(actions: Actions
     # content-derived, independent of the object's own uuid `id`
     expected = "thread:" + hashlib.sha1(b"canonical check").hexdigest()[:12]
     assert out["canonical"] == expected
+
+
+# ═══════════ notes / addenda (Thoth DM 3278, thread 1f4dcc03) ═══════════
+# annotate_thread/amend_decision write via `_append_property_name` — before this fix,
+# neither `note:%` nor `addendum:%` rows surfaced anywhere a reader would think to look.
+
+async def test_recall_folds_thread_notes_oldest_first(actions: Actions) -> None:
+    tid = await open_thread(actions, "a thread that will collect notes", source="agent:me")
+    await annotate_thread(actions, str(tid), "first observation", source="agent:a")
+    await annotate_thread(actions, str(tid), "second observation", source="agent:b")
+
+    out = await recall(actions.pool, str(tid))
+
+    assert [n["note"] for n in out["notes"]] == ["first observation", "second observation"]
+    assert out["notes"][0]["source"] == "agent:a"
+    # the raw note:<hash> property must not ALSO leak into the flat per-name dump
+    assert not any(k.startswith("note:") for k in out)
+
+
+async def test_recall_thread_notes_is_an_empty_list_not_an_absent_key(
+    actions: Actions,
+) -> None:
+    tid = await open_thread(actions, "never annotated", source="agent:me")
+    out = await recall(actions.pool, str(tid))
+    assert out["notes"] == []
+
+
+async def test_recall_folds_decision_addenda_oldest_first(actions: Actions) -> None:
+    did = await record_decision(actions, "a decision that will collect addenda",
+                                kind="ruling", source="agent:me")
+    await amend_decision(actions, str(did), "the number was wrong by 9.2x", source="agent:a")
+    await amend_decision(actions, str(did), "corrected again after re-measuring",
+                         source="agent:b")
+
+    out = await recall(actions.pool, str(did))
+
+    assert [a["addendum"] for a in out["addenda"]] == [
+        "the number was wrong by 9.2x", "corrected again after re-measuring",
+    ]
+    assert out["addenda"][0]["source"] == "agent:a"
+    assert not any(k.startswith("addendum:") for k in out)
+
+
+async def test_recall_decision_addenda_is_an_empty_list_not_an_absent_key(
+    actions: Actions,
+) -> None:
+    did = await record_decision(actions, "never amended", kind="ruling", source="agent:me")
+    out = await recall(actions.pool, str(did))
+    assert out["addenda"] == []
+
+
+async def test_recall_addendum_observed_at_survives_real_json_serialization(
+    actions: Actions,
+) -> None:
+    """THE ACTUAL RISK: decision_addenda/thread_notes return a raw asyncpg datetime, and
+    every other datetime bound for the MCP wire in this codebase is stringified at its own
+    call site (no blanket encoder — mcp_server.py has none). json.dumps must not raise."""
+    import json
+
+    did = await record_decision(actions, "json safety check", kind="ruling", source="agent:me")
+    await amend_decision(actions, str(did), "must serialize cleanly", source="agent:me")
+
+    out = await recall(actions.pool, str(did))
+
+    assert isinstance(out["addenda"][0]["observed_at"], str)
+    json.dumps(out)  # raises TypeError on a live datetime object; must not raise
 
 
 # ═══════════ THE MCP TOOL LAYER ═══════════
