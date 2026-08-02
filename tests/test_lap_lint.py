@@ -192,6 +192,35 @@ async def test_lint_surfaces_coin_flip_winners(actions: Actions) -> None:
     assert _by_check(out2, "contradiction") == []
 
 
+async def test_lint_contradiction_sees_past_a_rank_3_rival_hidden_by_agreeing_top_2(
+    actions: Actions,
+) -> None:
+    """The check's mechanism (row_number() hard-joined at rn=1 AND rn=2) only ever compares
+    the TOP TWO ranked rows for an (object, field) pair — rows ranked 3+ are computed and
+    then discarded, never compared to anything. Proven concretely on repo:bytebye/name: 19
+    rival rows sat invisible at rn=3+ because rn=1 and rn=2 happened to already agree on the
+    same value. Reproduce the minimal shape: two sources CORROBORATE the winning value (so
+    it occupies both rn=1 and rn=2, and the old `w.v IS DISTINCT FROM r.v` check finds them
+    equal and stops looking) while a THIRD source disputes it at a confidence within eps of
+    the winner. To be precise about which claim this indicts: the RESOLVER's own supersession
+    still correctly serves the corroborated value — that mechanism is not in question. What's
+    wrong is the AUDITOR's completeness claim — it must still see a live, close-confidence
+    rival that the winner's own corroboration happens to be hiding from it."""
+    t = "agent:teller"
+    c = await actions.create_or_find_object("Organization", "org:tri", t)
+    await actions.assert_property(c, "hq", "Berlin", "agent:one", NOW, 0.9, evidence_class=_SD)
+    await actions.assert_property(c, "hq", "Berlin", "agent:two", NOW + timedelta(minutes=1),
+                                  0.9, evidence_class=_SD)   # corroborates -- ties rn=1/rn=2
+    await actions.assert_property(c, "hq", "Munich", "agent:three", NOW + timedelta(minutes=2),
+                                  0.87, evidence_class=_SD)  # rn=3 under the old ranking, but
+                                                              # within eps of the winner
+    out = await _fn(actions, "lint", {})
+    con = _by_check(out, "contradiction")
+    assert len(con) == 1
+    assert con[0]["subject"] == "org:tri" and con[0]["field"] == "hq"
+    assert "Berlin" in con[0]["detail"] and "Munich" in con[0]["detail"]
+
+
 async def test_lint_contradiction_excludes_a_non_active_subject(actions: Actions) -> None:
     """thread 4a7da43a/12a210ab (reap Stage 1b, 2026-07-28): a merged/historical/archived
     object's internal coin-flips are history, not live ambiguity — nothing in the read-path

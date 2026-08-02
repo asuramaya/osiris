@@ -1399,19 +1399,35 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     # verified live: lineage_head's walk continues through the winner regardless of whether
     # it later gets healed as false_mint itself — decision c41f74a6 — so this is resolver
     # noise from a known automated observer, not a coin-flip a mind needs to referee).
+    # rn=1 vs rn=2 ALONE used to miss a rank-3+ rival hiding behind an agreeing top-2 (the
+    # auditor's completeness gap, thread 59e95366/decision 93d8d15c — confirmed on
+    # repo:bytebye/name: 19 rows sat invisible at rn=3+ purely because rn=1 and rn=2
+    # happened to already agree).
+    # `per_value` collapses every source's row to ONE best row per DISTINCT VALUE first
+    # (same confidence/observed_at tiebreak the ranking already used), so two corroborating
+    # sources on the winning value can no longer occupy both of the compared slots and hide
+    # a genuinely different value sitting one rank deeper. `ranked` then compares the winner
+    # against EVERY other distinct value (r.rn>1), not just the row immediately below it —
+    # the RESOLVER's own supersession is untouched by this (it still serves the single
+    # current-winning assertion exactly as before); only the AUDITOR's coverage widens.
     con = await pool.fetch(
         "WITH multi AS (SELECT object_id, name FROM current_assertions "
         "  WHERE name NOT IN ('status', 'resolved_in', 'resolved_because') "
         "  GROUP BY object_id, name HAVING count(DISTINCT source_id) > 1), "
-        "ranked AS (SELECT ca.object_id, ca.name, ca.value #>> '{}' AS v, ca.source_id, "
-        "  ca.confidence, row_number() OVER (PARTITION BY ca.object_id, ca.name "
-        "    ORDER BY ca.confidence DESC, ca.observed_at DESC) AS rn "
-        "  FROM current_assertions ca JOIN multi USING (object_id, name)) "
+        "per_value AS (SELECT DISTINCT ON (ca.object_id, ca.name, ca.value #>> '{}') "
+        "  ca.object_id, ca.name, ca.value #>> '{}' AS v, ca.source_id, ca.confidence, "
+        "  ca.observed_at "
+        "  FROM current_assertions ca JOIN multi USING (object_id, name) "
+        "  ORDER BY ca.object_id, ca.name, ca.value #>> '{}', "
+        "    ca.confidence DESC, ca.observed_at DESC), "
+        "ranked AS (SELECT *, row_number() OVER (PARTITION BY object_id, name "
+        "    ORDER BY confidence DESC, observed_at DESC) AS rn "
+        "  FROM per_value) "
         "SELECT o.canonical, w.name AS field, w.v AS winner, w.source_id AS winner_source, "
         "  w.confidence AS winner_conf, r.v AS rival, r.source_id AS rival_source, "
         "  r.confidence AS rival_conf "
         "FROM ranked w JOIN ranked r ON r.object_id=w.object_id AND r.name=w.name "
-        "  AND w.rn=1 AND r.rn=2 "
+        "  AND w.rn=1 AND r.rn>1 "
         "JOIN objects o ON o.id=w.object_id "
         "WHERE w.v IS DISTINCT FROM r.v AND w.source_id <> r.source_id "
         "  AND w.confidence - r.confidence <= $1 "
