@@ -247,24 +247,37 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
     this mechanism exists to avoid. `classify_test_files` splits the resolved set into DIRECT
     (always run, no cap) and FIXTURE-ONLY (subject to `_PYTEST_FANOUT_CAP`) — a hub-module
     touch no longer means zero coverage, only that the files merely seeding a row for some
-    OTHER module's test get skipped past the cap. Neither tier resolving anything -> pytest
-    is skipped outright (`(True, "no resolvable test files touched")`), never silently
-    treated as a full-suite run and never treated as a failure."""
+    OTHER module's test get skipped past the cap.
+
+    A GATE THAT CANNOT DISTINGUISH "PASSED" FROM "NOT RUN" IS A DOCUMENT THAT COMPILES
+    (Thoth DM 2957, the sharpest finding of the night — found INSIDE this tool, not by it:
+    the first two retroactive audits reported "17/18 pass" as a real measurement when the
+    flat fan-out cap was silently skipping pytest entirely for hub-module-heavy commits and
+    the skip path returned `ok=True`, indistinguishable from a genuine pass). Every message
+    that names an omission (over-cap fixture-only files skipped, whether alongside a real run
+    of the direct tier or with nothing running at all) starts with the literal word "SKIPPED"
+    — `_status_word` renders that as its own word, never folded into "ok". `ok` itself STAYS
+    True for a skip (the enforcement semantics are unchanged and correct: an omitted file is
+    ruff/mypy's job, not a reason to refuse an otherwise-clean commit) — only the REPORTING
+    is fixed, because a caller reading "ok" as "verified" was the actual defect, not the
+    cap's own cost-saving choice to omit low-signal files. Neither tier resolving anything
+    AND nothing omitted -> `(True, "no resolvable test files touched")`, the one case that
+    is honestly a plain, unqualified "ok" — there was nothing to skip in the first place."""
     results: dict[str, tuple[bool, str]] = {}
     results["ruff"] = _run(
         [str(VENV_BIN / "ruff"), "check", "src", "tests", "scripts"], repo_root)
     results["mypy"] = _run([str(VENV_BIN / "mypy"), "src"], repo_root)
     direct, fixture_only = classify_test_files(changed_files, repo_root)
     selected = set(direct)
-    skip_note = ""
+    omitted = ""
     if len(fixture_only) > _PYTEST_FANOUT_CAP:
-        skip_note = (f" SKIPPED {len(fixture_only)} fixture-only files (hub-module fan-out, "
-                     f"over cap {_PYTEST_FANOUT_CAP}): [{' '.join(sorted(fixture_only))}]")
+        omitted = (f"{len(fixture_only)} fixture-only files (hub-module fan-out, over cap "
+                   f"{_PYTEST_FANOUT_CAP}): [{' '.join(sorted(fixture_only))}]")
     else:
         selected |= fixture_only
     if not selected:
         results["pytest"] = (
-            True, f"no resolvable test files touched.{skip_note}" if skip_note
+            True, f"SKIPPED — nothing ran; omitted {omitted}" if omitted
             else "no resolvable test files touched")
     else:
         import os
@@ -280,7 +293,14 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
             )
             ok = proc.returncode == 0
             out = ((proc.stdout or "") + (proc.stderr or "")).strip()
-            results["pytest"] = (ok, f"[{' '.join(test_files)}]{skip_note}\n{out}")
+            if ok and omitted:
+                # ran clean, but NOT the whole relevant set -- must not read as a plain "ok"
+                results["pytest"] = (
+                    True, f"SKIPPED (partial) — ran {len(test_files)} clean, omitted "
+                          f"{omitted}\n{out}")
+            else:
+                tail = f" (also omitted {omitted})" if omitted else ""
+                results["pytest"] = (ok, f"[{' '.join(test_files)}]{tail}\n{out}")
         except subprocess.TimeoutExpired:
             # A DISTINCT WORD FROM "FAILED" (Thoth DM 2948, same discipline as smoke_chrome's
             # timeout-vs-refusal split): a hang past _PYTEST_TIMEOUT_SECS is not proven to be
@@ -288,20 +308,22 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
             # timeout on ec01c42 before and after adding -n 4 parallelism) points at DB
             # contention from every worktree sharing the same live dev Postgres, not CPU-bound
             # test time. `_status_word` below renders this as TIMEOUT, never FAILED.
+            tail = f" (also omitted {omitted})" if omitted else ""
             results["pytest"] = (
                 False,
                 f"TIMED OUT after {_PYTEST_TIMEOUT_SECS}s under real ambient fleet load "
                 f"(not a proven code failure -- see the DB-contention negative control) "
-                f"[{' '.join(test_files)}]{skip_note}")
+                f"[{' '.join(test_files)}]{tail}")
     return results
 
 
 def _status_word(ok: bool, detail: str) -> str:
-    """"ok" / "TIMEOUT" / "FAILED" — never collapses a hang into the same word as a real
-    assertion failure (Thoth DM 2948)."""
-    if ok:
-        return "ok"
-    return "TIMEOUT" if detail.startswith("TIMED OUT") else "FAILED"
+    """"ok" / "SKIPPED" / "TIMEOUT" / "FAILED" — never collapses a not-run result into the
+    same word as a genuine pass (Thoth DM 2957), and never collapses a hang into the same
+    word as a real assertion failure (Thoth DM 2948)."""
+    if not ok:
+        return "TIMEOUT" if detail.startswith("TIMED OUT") else "FAILED"
+    return "SKIPPED" if detail.startswith("SKIPPED") else "ok"
 
 
 def changed_files_staged(repo_root: Path = REPO_ROOT) -> list[str]:
@@ -318,11 +340,17 @@ def changed_files_for_commit(repo_root: Path, sha: str) -> list[str]:
 
 def _report(label: str, results: dict[str, tuple[bool, str]]) -> bool:
     all_ok = all(ok for ok, _ in results.values())
-    verdict = "PASS" if all_ok else "FAIL"
+    statuses = {name: _status_word(ok, out) for name, (ok, out) in results.items()}
+    if not all_ok:
+        verdict = "FAIL"
+    elif "SKIPPED" in statuses.values():
+        verdict = "PASS (UNVERIFIED — see SKIPPED below, not the same as a real pass)"
+    else:
+        verdict = "PASS"
     print(f"gate_hook[{label}]: {verdict}")
     for name, (ok, out) in results.items():
-        print(f"  {name}: {_status_word(ok, out)}")
-        if not ok:
+        print(f"  {name}: {statuses[name]}")
+        if not ok or statuses[name] == "SKIPPED":
             for line in out.splitlines()[-15:]:
                 print(f"    {line}")
     return all_ok
@@ -369,6 +397,7 @@ def cmd_audit(rev_range: str) -> int:
           "own measured cross-process contention (#112).")
     fails: list[str] = []
     timeouts: list[str] = []
+    skipped: list[str] = []
     with tempfile.TemporaryDirectory(prefix="gate-audit-") as tmp:
         tmp_path = Path(tmp)
         for i, sha in enumerate(shas, 1):
@@ -383,26 +412,38 @@ def cmd_audit(rev_range: str) -> int:
             changed = changed_files_for_commit(REPO_ROOT, sha)
             results = run_gates(wt, changed)
             all_ok = all(v[0] for v in results.values())
-            print(f"[{i}/{len(shas)}] {short}: "
-                  f"{'PASS' if all_ok else 'FAIL'} "
-                  f"(ruff={_status_word(*results['ruff'])}, "
-                  f"mypy={_status_word(*results['mypy'])}, "
-                  f"pytest={_status_word(*results['pytest'])})")
+            statuses = {name: _status_word(*v) for name, v in results.items()}
+            # A skip is NEVER folded into "PASS" (Thoth DM 2957) -- it gets its own verdict
+            # word even though `all_ok` (the enforcement-relevant bit) is still True.
             if not all_ok:
-                if _status_word(*results["pytest"]) == "TIMEOUT" and all(
+                verdict = "FAIL"
+            elif "SKIPPED" in statuses.values():
+                verdict = "UNVERIFIED"
+            else:
+                verdict = "PASS"
+            print(f"[{i}/{len(shas)}] {short}: {verdict} "
+                  f"(ruff={statuses['ruff']}, mypy={statuses['mypy']}, "
+                  f"pytest={statuses['pytest']})")
+            if not all_ok:
+                if statuses["pytest"] == "TIMEOUT" and all(
                     ok for name, (ok, _) in results.items() if name != "pytest"
                 ):
                     timeouts.append(short)
                 else:
                     fails.append(short)
-                for name, (ok2, out2) in results.items():
-                    if not ok2:
-                        print(f"    {name} tail:")
-                        for line in out2.splitlines()[-10:]:
-                            print(f"      {line}")
+            elif verdict == "UNVERIFIED":
+                skipped.append(short)
+            for name, (ok2, out2) in results.items():
+                if not ok2 or statuses[name] == "SKIPPED":
+                    print(f"    {name} tail:")
+                    for line in out2.splitlines()[-10:]:
+                        print(f"      {line}")
             _run(["git", "worktree", "remove", "--force", str(wt)], REPO_ROOT)
-    settled = len(shas) - len(fails) - len(timeouts)
-    print(f"gate_hook audit: {settled}/{len(shas)} would have passed cleanly")
+    settled = len(shas) - len(fails) - len(timeouts) - len(skipped)
+    print(f"gate_hook audit: {settled}/{len(shas)} would have passed cleanly and VERIFIED")
+    if skipped:
+        print(f"UNVERIFIED (passed, but at least one gate was skipped — not proof of "
+              f"correctness, only absence of a caught problem): {', '.join(skipped)}")
     if fails:
         print(f"WOULD HAVE BEEN REFUSED (real gate failure): {', '.join(fails)}")
     if timeouts:

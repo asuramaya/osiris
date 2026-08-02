@@ -191,7 +191,10 @@ def test_run_gates_caps_only_the_fixture_only_tier(tmp_path: Path, monkeypatch: 
     results = run_gates(tmp_path, ["src/pkg/hub.py"])
     ok, msg = results["pytest"]
     assert ok is True
-    assert "SKIPPED 3 fixture-only files" in msg
+    assert msg.startswith("SKIPPED")  # never a plain "ok" — Thoth DM 2957
+    assert "ran 1 clean" in msg
+    assert "omitted 3 fixture-only files" in msg
+    assert _status_word(ok, msg) == "SKIPPED"
     cmd = captured["cmd"]
     assert "tests/test_direct.py" in cmd
     assert "tests/test_f1.py" not in cmd
@@ -216,8 +219,24 @@ def test_run_gates_all_fixture_only_and_over_cap_skips_pytest_entirely(
     results = run_gates(tmp_path, ["src/pkg/hub.py"])
     ok, msg = results["pytest"]
     assert ok is True
-    assert "no resolvable test files touched" in msg
+    assert msg.startswith("SKIPPED")  # never "no resolvable test files touched" —
+    assert "nothing ran" in msg       # that phrase means there was genuinely nothing to run,
+    assert "omitted 2 fixture-only files" in msg  # this is an omission, a different thing
+    assert _status_word(ok, msg) == "SKIPPED"
     assert not any("pytest" in c[0] for c in calls if c)
+
+
+def test_run_gates_genuinely_nothing_to_test_is_a_plain_ok(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """The one case that's honestly a plain pass: nothing was omitted because nothing was
+    ever relevant in the first place — must not be confused with a capped skip."""
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
+    results = run_gates(tmp_path, ["docs/DEPLOY.md"])
+    ok, msg = results["pytest"]
+    assert ok is True
+    assert msg == "no resolvable test files touched"
+    assert _status_word(ok, msg) == "ok"
 
 
 def test_run_gates_reports_no_resolvable_tests_distinctly(tmp_path: Path, monkeypatch: Any) -> None:
@@ -299,6 +318,15 @@ def test_status_word_distinguishes_timeout_from_failure() -> None:
     assert _status_word(False, "1 failed, 3 passed") == "FAILED"
 
 
+def test_status_word_never_folds_a_skip_into_a_plain_ok() -> None:
+    """Thoth DM 2957: the first two retroactive audits reported "17/18 pass" as real when a
+    flat cap silently skipped pytest for hub-module commits and the skip path returned
+    ok=True — indistinguishable from a genuine pass. "SKIPPED" must be its own word."""
+    assert _status_word(True, "SKIPPED — nothing ran; omitted 12 fixture-only files") \
+        == "SKIPPED"
+    assert _status_word(True, "SKIPPED (partial) — ran 3 clean, omitted 9 files") == "SKIPPED"
+
+
 def test_run_gates_pytest_timeout_is_reported_distinctly_from_a_failure(
     tmp_path: Path, monkeypatch: Any,
 ) -> None:
@@ -315,3 +343,29 @@ def test_run_gates_pytest_timeout_is_reported_distinctly_from_a_failure(
     assert msg.startswith("TIMED OUT")
     assert "not a proven code failure" in msg
     assert _status_word(ok, msg) == "TIMEOUT"
+
+
+# --- _report: a skip is UNVERIFIED, never folded into plain PASS (Thoth DM 2957) --------------
+
+def test_report_marks_a_skip_as_unverified_not_pass(capsys: Any) -> None:
+    results = {
+        "ruff": (True, ""), "mypy": (True, ""),
+        "pytest": (True, "SKIPPED — nothing ran; omitted 5 fixture-only files"),
+    }
+    all_ok = gate_hook._report("test", results)
+    out = capsys.readouterr().out
+    assert all_ok is True  # enforcement semantics unchanged -- a skip never refuses
+    assert "PASS (UNVERIFIED" in out.splitlines()[0]
+    assert "pytest: SKIPPED" in out
+    assert "omitted 5 fixture-only files" in out  # the detail is printed, not hidden
+
+
+def test_report_a_genuine_clean_run_says_plain_pass(capsys: Any) -> None:
+    results = {
+        "ruff": (True, ""), "mypy": (True, ""),
+        "pytest": (True, "[tests/test_a.py]\n1 passed"),
+    }
+    all_ok = gate_hook._report("test", results)
+    out = capsys.readouterr().out
+    assert all_ok is True
+    assert out.splitlines()[0] == "gate_hook[test]: PASS"
