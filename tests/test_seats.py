@@ -2093,7 +2093,7 @@ async def test_bind_seat_tree_records_a_distinct_property_from_anchor_cwd(
                                   datetime.now(UTC), 0.9)
 
     out = await bind_seat_tree(actions, seat_id="seat:bt1work0", tree_cwd="/repo/treebind",
-                               actor="test", because="test: new checkout for a task")
+                               actor="operator", because="test: new checkout for a task")
     assert out == {"seat": "seat:bt1work0", "old_tree_cwd": None, "tree_cwd": "/repo/treebind",
                    "because": "test: new checkout for a task",
                    "note": out["note"]}
@@ -2108,9 +2108,9 @@ async def test_bind_seat_tree_rebinding_reports_the_old_value(actions: Actions) 
     seat = await actions.create_or_find_object("Seat", "seat:bt2work0", "test")
     await actions.assert_property(seat, "handle", "Rebound", "test", datetime.now(UTC), 0.9)
     await bind_seat_tree(actions, seat_id="seat:bt2work0", tree_cwd="/repo/first",
-                         actor="test", because="test: first tree")
+                         actor="operator", because="test: first tree")
     out = await bind_seat_tree(actions, seat_id="seat:bt2work0", tree_cwd="/repo/second",
-                               actor="test", because="test: re-pointed for a new task")
+                               actor="operator", because="test: re-pointed for a new task")
     assert out["old_tree_cwd"] == "/repo/first" and out["tree_cwd"] == "/repo/second"
 
 
@@ -2138,8 +2138,38 @@ async def test_bind_seat_tree_refuses_an_unknown_seat(actions: Actions) -> None:
     from src.orchestrator.seats import bind_seat_tree
 
     out = await bind_seat_tree(actions, seat_id="seat:nosuchtre", tree_cwd="/repo/x",
-                               actor="test", because="test: no such seat")
+                               actor="operator", because="test: no such seat")
     assert out == {"error": "no such seat: 'seat:nosuchtre'"}
+
+
+async def test_bind_seat_tree_refuses_a_non_manager_non_operator(actions: Actions) -> None:
+    """THE NEGATIVE CONTROL (2026-08-02): before this gate existed, ANY mounted caller
+    could rebind ANY seat's tree_cwd — a code-execution vector at the seat's next launch,
+    not a metadata drift. This is the specimen that proves the gate now actually fires."""
+    from src.orchestrator.seats import bind_seat_tree
+
+    seat = await actions.create_or_find_object("Seat", "seat:bt5work0", "test")
+    await actions.assert_property(seat, "handle", "Guardedtree", "test", datetime.now(UTC), 0.9)
+    out = await bind_seat_tree(actions, seat_id="seat:bt5work0", tree_cwd="/repo/hostile",
+                               actor="agent:some-random-mind", because="test: unauthorized")
+    assert "not authorized to bind" in out["error"]
+    assert "seat:bt5work0" in out["error"]
+
+
+async def test_bind_seat_tree_allows_the_target_seats_own_manager(actions: Actions) -> None:
+    from src.orchestrator.seats import attach_seat, bind_holder, bind_seat_tree, ensure_seat
+
+    manager = (await ensure_seat(actions, house="demo", handle="TreeMgr",
+                                 source="test"))["seat_id"]
+    worker = (await ensure_seat(actions, house="demo", handle="TreeWkr",
+                                source="test"))["seat_id"]
+    await attach_seat(actions, worker, manager, evidence="org chart", actor="test")
+    await bind_holder(actions, seat_id=manager, agent_id="agent:tree-manager", source="test")
+
+    out = await bind_seat_tree(actions, seat_id=worker, tree_cwd="/repo/legit",
+                               actor="agent:tree-manager", because="the manager rebinds its worker")
+    assert out.get("error") is None
+    assert out["tree_cwd"] == "/repo/legit"
 
 
 # ═══ SEAT LIFECYCLE (ruling ff6148b0's completion, decision 87953278, thread cb374585) ═══

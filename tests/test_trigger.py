@@ -2872,7 +2872,7 @@ async def test_launch_refuses_a_tree_cwd_that_does_not_exist_on_disk(
     await _office(actions, worker_seat, str(tmp_path / "office"))
     ghost_tree = str(tmp_path / "never-created")
     bind = await bind_seat_tree(actions, seat_id=worker_seat, tree_cwd=ghost_tree,
-                                actor="test", because="test: refusal proof")
+                                actor="operator", because="test: refusal proof")
     assert bind.get("error") is None
     d = await trigger_module.launch_seat(
         actions, caller="agent:tm01", target=worker_seat,
@@ -2896,7 +2896,7 @@ async def test_launch_spawns_into_tree_cwd_not_office_pty_lane(
     tree = tmp_path / "worktree"
     tree.mkdir()
     await _office(actions, worker_seat, str(office))
-    await bind_seat_tree(actions, seat_id=worker_seat, tree_cwd=str(tree), actor="test",
+    await bind_seat_tree(actions, seat_id=worker_seat, tree_cwd=str(tree), actor="operator",
                          because="test: spawn location proof")
     record: list[dict[str, Any]] = []
     d = await trigger_module.launch_seat(
@@ -2921,7 +2921,7 @@ async def test_launch_spawns_into_tree_cwd_not_office_harness_lane(
     tree = tmp_path / "worktree2"
     tree.mkdir()
     await _office(actions, worker_seat, str(office))
-    await bind_seat_tree(actions, seat_id=worker_seat, tree_cwd=str(tree), actor="test",
+    await bind_seat_tree(actions, seat_id=worker_seat, tree_cwd=str(tree), actor="operator",
                          because="test: harness spawn location proof")
     spawned: list[dict[str, Any]] = []
     d = await trigger_module.launch_seat(
@@ -2950,7 +2950,7 @@ async def test_launch_harness_lane_idempotency_matches_on_tree_cwd_not_office(
     tree = tmp_path / "worktree3"
     tree.mkdir()
     await _office(actions, worker_seat, str(office))
-    await bind_seat_tree(actions, seat_id=worker_seat, tree_cwd=str(tree), actor="test",
+    await bind_seat_tree(actions, seat_id=worker_seat, tree_cwd=str(tree), actor="operator",
                          because="test: idempotency proof")
     spawned: list[dict[str, Any]] = []
     d = await trigger_module.launch_seat(

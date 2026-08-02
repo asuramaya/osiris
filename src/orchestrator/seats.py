@@ -711,15 +711,38 @@ async def bind_seat_tree(
     actually exists on disk before trusting it; this verb writes unconditionally on a valid
     call, exactly as `ensure_seat`'s own `anchor_cwd` write does.
 
+    OPERATOR-OR-MANAGER ONLY, ENFORCED (found 2026-08-02 while scoping the seat-metadata
+    merge, Thoth msg 3307: "nobody has ever ruled who may bind a tree" — this had NO
+    authority language at all, claimed or enforced, unlike its rename_seat/set_seat_attended
+    siblings which at least overclaimed. Judged gate-worthy, not honesty-worthy, because the
+    write is not merely descriptive metadata: `tree_cwd` is what `launch_seat` trusts as the
+    CODE a relaunched seat executes — a wrong or hostile rebind is a code-execution vector at
+    the seat's next launch, not a cosmetic drift. Mirrors charter_for's already-real
+    actor-vs-manager_of_seat check, the same pattern rename_seat/set_seat_attended now carry
+    (commit c2020a1)): `actor` must be one of `_OPERATOR_ACTORS`'s sentinels, or the seat
+    `actor`'s own lineage holds must BE the target seat's manager (`manager_of_seat`'s live
+    `managed_by` edge).
+
     Refuses LOUDLY on: a blank `tree_cwd`; a blank `because` (a location change is
-    testimony — the same discipline `rename_seat`/`set_seat_attended` hold); an unknown
-    seat."""
+    testimony — the same discipline `rename_seat`/`set_seat_attended` hold); an unauthorized
+    actor; an unknown seat."""
     tree_cwd = (tree_cwd or "").strip()
     if not tree_cwd:
         return {"error": "bind_seat_tree needs a tree_cwd"}
     if not because.strip():
         return {"error": "because is required — a tree binding is testimony; the reason "
                          "it changed must be on the record"}
+    if actor not in _OPERATOR_ACTORS:
+        caller_seat = await held_seat(actions.pool, actor)
+        caller_seat_id = str(caller_seat["seat_id"]) if caller_seat else None
+        manager_seat_id = await manager_of_seat(actions.pool, seat_id)
+        if caller_seat_id is None or caller_seat_id != manager_seat_id:
+            caller_desc = (f"{actor} (seat {caller_seat_id})" if caller_seat_id
+                          else f"{actor} (holds no seat)")
+            manager_desc = manager_seat_id or "no manager on record"
+            return {"error": f"{caller_desc} is not authorized to bind {seat_id}'s tree — "
+                             f"its manager is {manager_desc}, and {actor} is neither the "
+                             "manager nor the operator"}
     row = await actions.pool.fetchrow(
         "SELECT id FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
         seat_id)
