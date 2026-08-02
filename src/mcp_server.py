@@ -4639,26 +4639,65 @@ async def settle(
         missing_boxes,
         settle_boxes,
         uncommitted_git_work,
+        unevaluated_boxes,
     )
     mounted = await mounts.find_session_row(pool, ident.session)
     boxes: dict[str, bool | None] = {}
     missing: list[str] = []
+    unevaluated: list[str] = []
     identity_coherence: dict[str, Any] | None = None
     closure_coverage: dict[str, Any] | None = None
     if mounted is not None and mounted["mounted_at"]:
+        # DEFECT 1 (Thoth DM 3076): charter_touched checks `ident.cwd`,
+        # but a SEAT-OFFICE agent's mount cwd can read as the bare container
+        # (~/.osiris/seats, not .../seats/<handle>) after a #128-class cwd correction — the
+        # exact live case that hid Thoth's own 11-day-stale charter.md behind a silent
+        # None for the box's entire life. The SEAT BINDING knows where the office actually
+        # is; do not trust cwd for a seat that has one. Resolved here (not inside
+        # settle_boxes/charter_touched, which stay pure and shared with the Stop hook's
+        # own bare-Connection call site — that call site inherits this SAME exposure and is
+        # NOT fixed by this change; named explicitly in this commit's own report, not
+        # silently left for someone to rediscover).
+        from src.orchestrator.offices import _DEFAULT_OFFICE_ROOT
+        from src.orchestrator.seats import held_seat
+
+        charter_cwd = ident.cwd
+        seat = await held_seat(pool, ident.agent_id)
+        if seat and seat.get("handle"):
+            charter_cwd = str(_DEFAULT_OFFICE_ROOT / seat["handle"].lower())
         boxes = await settle_boxes(pool, agent_id=ident.agent_id,
-                                   mounted_at=mounted["mounted_at"], cwd=ident.cwd)
+                                   mounted_at=mounted["mounted_at"], cwd=charter_cwd)
         missing = missing_boxes(boxes)
+        # DEFECT 1(b): a box that could not be evaluated (None) is a DIFFERENT state from
+        # satisfied or missing and must be VISIBLE to a reader, not silently indistinguishable
+        # from "nothing to worry about" — the exact SHAPE C collapse this decision fixes.
+        # Deliberately still NON-BLOCKING (refuting Thoth's own instinct, with evidence, DM
+        # 3076 reply): after the cwd fix above, an unseated session with no charter.md to
+        # check is the remaining, LEGITIMATE source of None — the box's own original design
+        # intent ("never punished for a file that was never scaffolded here"), and the SAME
+        # class of check ruling 577988ed already forbids turning into a refusal ("a fleet-
+        # wide single-point-of-failure must never refuse-to-serve on a check that can itself
+        # false-positive"). Surfaced instead: `unevaluated_boxes` in the receipt, and named
+        # in `note` whenever non-empty, so it is seen even by a reader who only reads the
+        # summary fields.
+        unevaluated = unevaluated_boxes(boxes)
         # REPORT-ONLY, NEVER A GATE (Thoth's Lane 4 finding — settle verified WHAT John
         # wrote, never WHETHER his own successor could read it from where orient() looks):
         # `identity_coherence` never touches `missing`/`complete` below, however wrong it
         # looks — a false-positive here refusing a settle is a strictly worse outcome than
-        # the incoherence it would have caught (ruling 577988ed).
+        # the incoherence it would have caught (ruling 577988ed). AUDITED, not assumed
+        # (Thoth DM 3076 defect 3): `project` here comes from `ident.project`, which for a
+        # SEATED agent is ALREADY the seat's own derived house, UNCONDITIONALLY (seats.
+        # resolve_project's own seated-override, applied at mount time) — never raw cwd, so
+        # this check does NOT share charter_touched's #128 exposure. Confirmed by reading
+        # the actual override code, not assumed from the shared "cwd bug" framing.
         identity_coherence = await filed_under_check(
             pool, agent_id=ident.agent_id, mounted_at=mounted["mounted_at"],
             project=ident.project)
         # PHASE 1b (decision cb38d922): same report-only discipline, computed AFTER the
-        # dispatch above so it reflects any edges THIS call itself just wired.
+        # dispatch above so it reflects any edges THIS call itself just wired. AUDITED
+        # (Thoth DM 3076 defect 3): depends only on agent_id/mounted_at, no cwd or project
+        # at all — not exposed to the same defect class either.
         closure_coverage = await closure_edge_coverage(
             pool, agent_id=ident.agent_id, mounted_at=mounted["mounted_at"])
     # OBLIGATIONS ARE CARRIED, NOT UNWRITTEN (thread f0511eed, found on Thoth's first live
@@ -4667,41 +4706,60 @@ async def settle(
     # manager's project always has SOME open obligation, so complete could never read true
     # in practice). An open Thread is already durably RECORDED — that is exactly what
     # open_thread's write accomplishes — so it is not "unwritten state a compaction could
-    # lose" the way a missing box or an uncommitted git file is. The compaction-safety
-    # question this tool answers is "is THIS session's own state deposited," which the
-    # boxes (and the git check) answer completely on their own. Obligations stay in the
-    # receipt — surfaced, never hidden — but carried forward informationally; they no
-    # longer gate `complete`.
+    # lose" the way a missing box is. The compaction-safety question this tool answers is
+    # "is THIS session's own state deposited," which the boxes answer on their own.
+    # Obligations stay in the receipt — surfaced, never hidden — but carried forward
+    # informationally; they never gated `complete`.
     obligations = await _owned_open_threads(pool, ident.agent_id)
     git_dir = repo_path or ident.cwd
     uncommitted = await uncommitted_git_work(git_dir)
-    # a REJECTED item is unwritten state, same class as a missing box or an uncommitted git
-    # file (unlike `obligations` above, which are already durably recorded and never gate
-    # this) — so it gates `complete` too: a dump that dropped something is not yet deposited.
-    complete = not missing and not uncommitted and not rejected
+    # DEFECT 2 (Thoth DM 3076): `complete` must answer "is THIS
+    # SESSION'S OWN KNOWLEDGE durably recorded" — a question about the graph, which
+    # `missing`/`rejected` answer completely on their own. `uncommitted_git_files` runs
+    # `git status --porcelain` over the WHOLE repo at `git_dir`, with no notion of whose
+    # hand staged what; in a shared tree (this repo, routinely 4-5 concurrent agents) a
+    # manager's own settle could read complete:false on a WORKER's mid-build files, then
+    # flip to complete:true the instant that worker commits — compaction-safety decided by
+    # another agent's action, not this session's own. Same pattern this module's docstring
+    # already uses for `identity_coherence`/`closure_coverage` (never folded into
+    # missing_boxes/complete) — this box just wasn't using it. Uncommitted files in someone
+    # else's hands remain a REAL warning and stay fully SURFACED (uncommitted_git_files,
+    # and named in `note` below) — a different question from `complete`, never silently
+    # dropped, just no longer conflated with it.
+    complete = not missing and not rejected
     reasons = []
     if missing:
         reasons.append(f"{len(missing)} missing box(es)")
-    if uncommitted:
-        reasons.append(f"{len(uncommitted)} uncommitted git file(s)")
     if rejected:
         reasons.append(f"{len(rejected)} rejected item(s)")
     carried_note = (f" ({len(obligations)} open obligation(s) carried forward — "
                     "informational, already durably recorded, never blocks this)"
                     if obligations else "")
+    # ALWAYS surfaced, regardless of `complete` — these inform a reader without gating them
+    # (defects 1b and 2): uncommitted files may be someone else's in-flight work in a
+    # shared tree; an unevaluated box is fog-of-war, not a clean bill of health.
+    uncommitted_note = (
+        f" — {len(uncommitted)} uncommitted git file(s) at {git_dir!r}, informational "
+        "only (may be another agent's in-flight work in a shared tree, never gates "
+        "complete)" if uncommitted else "")
+    unevaluated_note = (
+        f" — could not evaluate: {', '.join(unevaluated)} (fog-of-war, not a pass, "
+        "never gates complete)" if unevaluated else "")
     out: dict[str, Any] = {
         "complete": complete,
         "boxes": boxes,
         "missing_boxes": missing,
+        "unevaluated_boxes": unevaluated,
         "open_obligations": obligations,
         "uncommitted_git_files": uncommitted,
         "git_checked_path": git_dir,
         "accepted": accepted,
         "rejected": rejected,
         "closure_edges_wired": cross_wired,
-        "note": (f"compaction-safe by construction{carried_note}" if complete else
+        "note": ((f"compaction-safe by construction{carried_note}" if complete else
                  f"still unsettled ({', '.join(reasons)}) — settle again once they're "
-                 "closed, or accept them in your next call"),
+                 "closed, or accept them in your next call")
+                 + uncommitted_note + unevaluated_note),
     }
     if identity_coherence is not None:
         out["identity_coherence"] = identity_coherence

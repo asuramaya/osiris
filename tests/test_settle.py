@@ -2,9 +2,11 @@
 /settle MCP tool, so the two never drift into disagreeing copies."""
 from __future__ import annotations
 
+import os
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from src.actions.core import Actions
 from src.orchestrator.capture import open_thread, record_decision
@@ -15,6 +17,7 @@ from src.orchestrator.settle import (
     missing_boxes,
     settle_boxes,
     uncommitted_git_work,
+    unevaluated_boxes,
 )
 
 
@@ -45,6 +48,19 @@ def test_missing_boxes_only_names_explicit_false() -> None:
     assert missing_boxes({"a": True, "b": False, "c": None, "d": False}) == ["b", "d"]
     assert missing_boxes({"a": True, "b": None}) == []
     assert missing_boxes({}) == []
+
+
+def test_unevaluated_boxes_only_names_explicit_none(
+) -> None:
+    """Thoth DM 3076, defect 1(b): None (could not evaluate) is a DIFFERENT state from
+    missing (False) and satisfied (True), and must be its own visible list — the exact
+    distinction charter_touched's own #128 masking collapsed away."""
+    assert unevaluated_boxes({"a": True, "b": False, "c": None, "d": None}) == ["c", "d"]
+    assert unevaluated_boxes({"a": True, "b": False}) == []
+    assert unevaluated_boxes({}) == []
+    # the two functions are proper partitions of the False/None population, never overlapping
+    boxes = {"a": True, "b": False, "c": None}
+    assert set(missing_boxes(boxes)) & set(unevaluated_boxes(boxes)) == set()
 
 
 async def test_uncommitted_git_work_none_cwd_cannot_be_evaluated() -> None:
@@ -762,6 +778,116 @@ async def test_settle_tool_handoff_marker_is_found_by_orient_via_structured_prop
     assert "settled structurally" in " ".join(n["text"] for n in note["notes"])
 
 
+async def test_settle_tool_resolves_the_seat_office_over_a_corrected_mount_cwd(
+    actions: Actions, tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """DEFECT 1 (Thoth DM 3076), THE LIVE SPECIMEN REPRODUCED: a seated agent's mount cwd
+    reads as the bare office CONTAINER (a #128-class correction, not this agent's real
+    office at <container>/<handle>) — before the fix, charter_touched checked the wrong
+    directory, found nothing, returned None, and `missing_boxes` silently dropped it: a
+    real, 11-day-stale charter.md sat unevaluated forever. The SEAT BINDING (bind_holder's
+    own `holds` link + the seat's `handle` property) must be resolved instead of trusting
+    the corrupted cwd — proving `held_seat`'s own lineage-aware resolution is reused, not
+    a naive re-derivation that could reintroduce the ancestor-generation gap it exists to
+    close."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.mounts import save_mount
+    from src.orchestrator.seats import bind_holder
+
+    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", tmp_path / "seats")
+    container = tmp_path / "seats"
+    container.mkdir()
+    real_office = container / "thoth"
+    real_office.mkdir()
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    (real_office / "charter.md").write_text("# eleven days old, untouched this session\n")
+    old_time = (mounted_at - timedelta(days=11)).timestamp()
+    os.utime(real_office / "charter.md", (old_time, old_time))
+
+    agent = "agent:settleseat1"
+    seat_id = "seat:settleseat1"
+    seat_oid = await actions.create_or_find_object("Seat", seat_id, agent)
+    await actions.assert_property(seat_oid, "handle", "Thoth", agent, mounted_at, 0.9,
+                                  evidence_class="self_declared")
+    await bind_holder(actions, seat_id=seat_id, agent_id=agent)
+
+    job_dir = str(tmp_path / "jobs" / "settlese")  # EXACTLY 8 chars
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="osiris",
+                     cwd=str(container), model=None, session_key=None)  # the CORRUPTED cwd
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET mounted_at=$1 WHERE job_dir=$2", mounted_at, job_dir)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=agent, session="settleseat1", project="osiris", model=None,
+        cwd=str(container))  # ident.cwd is the bare container, exactly Thoth's own specimen
+    try:
+        out = await srv.settle(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["boxes"]["charter.md touched this session"] is False, out
+    assert "charter.md touched this session" in out["missing_boxes"]
+    assert out["complete"] is False, out
+
+
+async def test_settle_tool_charter_box_still_none_for_an_unseated_session(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The refutation, backed by evidence, of Thoth's own instinct that None should always
+    block `complete` (DM 3076 defect 1b): an UNSEATED session (no `holds` link at all — an
+    ordinary code-repo session, not a seat office) has no seat binding to resolve and no
+    charter.md was ever scaffolded for it. Falls back to the cwd it was given; still
+    legitimately unevaluable, still non-blocking — ruling 577988ed's own reasoning (a
+    check that can false-positive must never refuse-to-serve) applies here exactly as it
+    already does for identity_coherence/closure_coverage. Now VISIBLE though, in
+    `unevaluated_boxes` and `note` — the part of the defect that WAS a real gap."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.mounts import save_mount
+
+    agent = "agent:settleunseated1"
+    job_dir = str(tmp_path / "jobs" / "settleun")  # EXACTLY 8 chars
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="someproj",
+                     cwd=str(tmp_path), model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET mounted_at=$1 WHERE job_dir=$2", mounted_at, job_dir)
+    await record_decision(actions, "settleunseated1's own ruling this session", source=agent)
+    await open_thread(actions, "settleunseated1's own thread this session", source=agent)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=agent, session="settleunseated1", project="someproj", model=None,
+        cwd=str(tmp_path))
+    try:
+        out = await srv.settle(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["boxes"]["charter.md touched this session"] is None
+    assert "charter.md touched this session" not in out["missing_boxes"]
+    assert "charter.md touched this session" in out["unevaluated_boxes"]
+    assert out["complete"] is True, out  # still non-blocking — refuted, not assumed
+    assert "could not evaluate" in out["note"]
+    assert "charter.md touched this session" in out["note"]
+
+
 async def test_settle_tool_confirms_complete_after_a_full_dump(
     actions: Actions, tmp_path: Path,
 ) -> None:
@@ -811,12 +937,16 @@ async def test_settle_tool_confirms_complete_after_a_full_dump(
     assert out["note"] == "compaction-safe by construction"
 
 
-async def test_settle_tool_uncommitted_git_work_blocks_complete_and_is_named(
+async def test_settle_tool_uncommitted_git_work_is_surfaced_but_never_blocks_complete(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE NEW BOX (operator, 2026-07-26, watching a live compaction): even with every
-    graph box satisfied and no open obligations, dirty git state in the mounted cwd keeps
-    `complete` False and names the file — the one check that was never in the graph."""
+    """THE NEW BOX (operator, 2026-07-26, watching a live compaction): dirty git state in
+    the mounted cwd is named in the receipt and the note. DEFECT 2 (Thoth DM 3076): it must
+    NOT gate `complete` — a shared tree's `git status` has no notion of whose hand staged
+    what, so a manager's own settle used to flip false/true purely off a WORKER's commit
+    timing, deciding this agent's compaction-safety by another agent's action. `complete`
+    now answers only "is THIS session's own graph knowledge deposited", the same report-
+    only discipline identity_coherence/closure_coverage already use."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
     from src.orchestrator.mounts import save_mount
@@ -853,11 +983,12 @@ async def test_settle_tool_uncommitted_git_work_blocks_complete_and_is_named(
         srv._agents.pop(srv._conn_key(ctx), None)
     assert out["missing_boxes"] == []
     assert out["open_obligations"] == []
-    assert out["complete"] is False, out
+    assert out["complete"] is True, out  # never gated by uncommitted git state
     assert out["uncommitted_git_files"] is not None
     assert any("dirty.txt" in line for line in out["uncommitted_git_files"])
     assert out["git_checked_path"] == str(tmp_path)  # no repo_path given — falls back to cwd
     assert "uncommitted git file" in out["note"]
+    assert "informational" in out["note"]
 
 
 async def test_settle_tool_repo_path_overrides_the_office_cwd(
@@ -909,7 +1040,13 @@ async def test_settle_tool_repo_path_overrides_the_office_cwd(
     assert out["git_checked_path"] == str(repo)
     assert out["uncommitted_git_files"] is not None
     assert any("dirty.txt" in line for line in out["uncommitted_git_files"])
+    # complete stays False here regardless — this session recorded no decisions/threads at
+    # all, an unrelated reason (defect 2 only changed whether uncommitted git state ITSELF
+    # can gate complete; see test_settle_tool_uncommitted_git_work_is_surfaced_but_never_
+    # blocks_complete for that specific proof, isolated from these other boxes). Still
+    # surfaced informationally in the note either way (defect 2's own "stays SURFACED").
     assert out["complete"] is False, out
+    assert "uncommitted git file" in out["note"]
 
 
 async def test_settle_tool_carries_open_obligations_without_blocking_complete(

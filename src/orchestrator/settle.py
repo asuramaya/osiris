@@ -209,6 +209,20 @@ def missing_boxes(boxes: dict[str, bool | None]) -> list[str]:
     return [label for label, ok in boxes.items() if ok is False]
 
 
+def unevaluated_boxes(boxes: dict[str, bool | None]) -> list[str]:
+    """The labels of any box that is None — COULD NOT BE EVALUATED, a DIFFERENT thing
+    from missing (False) or satisfied (True), and deliberately never folded into either
+    (Thoth DM 3076): a check that silently never runs and a check that genuinely ran and
+    found nothing satisfied must never collapse onto the same signal —
+    the exact SHAPE C defect (#117) that let charter_touched's own #128 cwd bug hide
+    behind `complete:true` for eleven days of a real, untouched charter.md. Fog-of-war
+    stays non-blocking (a box that is structurally inapplicable — e.g. an unseated session
+    with no charter.md to check — must not permanently red every settle it will ever
+    call), but it must never again be invisible: a caller SEES this list, distinctly from
+    `missing_boxes`, whether or not it changes what they decide to do about it."""
+    return [label for label, ok in boxes.items() if ok is None]
+
+
 async def uncommitted_git_work(repo_dir: str | None, *, timeout_s: float = 2.0) -> list[str] | None:
     """THE ONE BOX NOT IN THE GRAPH (operator, 2026-07-26, watching a live compaction: an
     agent asked "safe to compact?" had to run `git status` BY HAND before answering —
