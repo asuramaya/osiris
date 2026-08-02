@@ -3433,23 +3433,24 @@ async def correct_agent_house(agent_id: str, project: str | None = None,
 
 
 @mcp.tool()
-async def retire_agent(agent_id: str, because: str,
+async def retire_agent(agent_id: str, because: str, override_live: bool = False,
                        ctx: Context | None = None) -> dict[str, Any]:
-    """Third-party retirement for an agent (task #74) — the third-party-scoped
-    complement to the self-scoped retire() (which derives the CALLER's own id, no target
-    param at all). Stamps retired/retired_by/retired_because AND flips objects.status via
-    a compensating event, same pattern as retire_seat/retire_project. NOT self-scoped, NOT
-    manager-gated — any mounted caller may name any target, matching retire_seat/
-    retire_project; `actor` is attribution, never an authority gate.
+    """Third-party retirement — complements self-scoped retire() (no target param).
+    Stamps retired/retired_by/retired_because, flips objects.status. Not self-scoped or
+    manager-gated — any caller may name any target; `actor` is attribution, not
+    authority.
 
-    Refuses LOUDLY on: blank `because`; an unknown or already-non-active agent."""
+    ALWAYS releases the target's held seat and mount rows on success. Refuses LOUDLY on:
+    blank `because`; an unknown/non-active agent; a target that reads LIVE (seen within
+    15 min) unless `override_live=True`."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — retiring an agent is a deliberate act on the "
                          "record", "why": _anchorless(ctx)}
     from src.orchestrator.agents import retire_agent as _retire_agent
     return await _retire_agent(Actions(await _pool_get()), agent_id=agent_id,
-                               actor=ident.agent_id, because=because)
+                               actor=ident.agent_id, because=because,
+                               override_live=override_live)
 
 
 @mcp.tool()

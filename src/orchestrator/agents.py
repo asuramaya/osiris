@@ -309,6 +309,7 @@ async def correct_agent_house(
 
 async def retire_agent(
     actions: Actions, *, agent_id: str, actor: str, because: str,
+    override_live: bool = False,
 ) -> dict[str, Any]:
     """Third-party retirement for an agent — the third-party-scoped complement to the
     self-scoped retire() (mcp_server.py derives the CALLER's own id, no target param at
@@ -332,7 +333,35 @@ async def retire_agent(
     retirement is auditable and never just a label (the STATUS GAP class already fixed
     twice elsewhere in this house).
 
-    Refuses LOUDLY on: blank `because`; an unknown or already-non-active agent."""
+    THE LIVENESS + SEAT/MOUNT GAP (thread 00b1c341, Khnum's census — scoped OUT of the
+    authority build deliberately, it is not an authority defect): this used to do NONE of
+    what retire()'s own self-retirement already does for the exact same act. Fixed by
+    reusing two already-proven siblings rather than inventing a third mechanism:
+
+    (1) LIVENESS — mounts.agent_liveness (already built for send()'s own listener receipt,
+    "seen within 15 min") is the gate. retire_seat REFUSES outright on a live holder
+    (protecting an occupant's ongoing work in ITS ROLE); vacate_holder instead TRUSTS ITS
+    CALLER with no liveness check at all (its blast radius is one link + one property —
+    small). retire_agent's blast radius is bigger (a terminal Agent status plus deleted
+    mount rows), so blind trust under-protects a genuinely live third party — but this
+    verb's own founding purpose (third-party cleanup of agents that can never call
+    retire() on themselves) means a PERMANENT block would defeat it. The resolution is
+    retire()'s OWN shape, reused rather than reinvented: refuse by default on a live
+    target, naming the evidence, but accept `override_live=True` as a deliberate,
+    on-the-record act — the same escape hatch retire()'s `acknowledge_leftovers` already
+    is for its own preflight refusal.
+
+    (2) SEAT/MOUNT RELEASE — unconditional on a successful retirement, live or not: this
+    is the half of the bug with no defensible reason to stay broken (a corpse should never
+    keep holding a seat). held_seat + vacate_holder (seats.py) release any active `holds`
+    link the same way retire_seat's own vacate-then-retire discipline would, WITHOUT
+    retiring the seat itself (the role may still get a legitimate new occupant — only
+    retire_seat closes the role). mounts.release_mounts (thread b47b3814, retire()'s own
+    call) drops the durable mount row so a retired agent never haunts the fleet chrome as
+    a live mount, exactly as it already does for self-retirement.
+
+    Refuses LOUDLY on: blank `because`; an unknown or already-non-active agent; a LIVE
+    target unless `override_live=True`."""
     because = (because or "").strip()
     if not because:
         return {"error": "because is required — retiring an agent is a deliberate act "
@@ -344,6 +373,17 @@ async def retire_agent(
         return {"error": f"no such agent: {agent_id!r}"}
     if row["status"] != "active":
         return {"error": f"{agent_id} is already {row['status']} — nothing to retire"}
+
+    from src.orchestrator import mounts
+
+    liveness = await mounts.agent_liveness(actions.pool, agent_id)
+    if liveness["live"] and not override_live:
+        return {"error": f"{agent_id} is LIVE right now (last_seen {liveness['last_seen']}) "
+                         "— retire_agent refuses to pronounce a live mind dead by default; "
+                         "pass override_live=True to retire it anyway, a deliberate act on "
+                         "the record (mirroring retire()'s own acknowledge_leftovers escape "
+                         "hatch)", "liveness": liveness}
+
     now = datetime.now(UTC)
     await actions.assert_property(row["id"], "retired", "true", actor, now, _CONF,
                                   evidence_class=_EC)
@@ -352,7 +392,19 @@ async def retire_agent(
     await actions.assert_property(row["id"], "retired_because", because, actor, now, _CONF,
                                   evidence_class=_EC)
     await actions.set_status(row["id"], "retired", because, actor)
-    return {"retired": agent_id, "because": because}
+
+    from src.orchestrator.seats import held_seat, vacate_holder
+
+    out: dict[str, Any] = {"retired": agent_id, "because": because,
+                           "was_live": liveness["live"]}
+    bound = await held_seat(actions.pool, agent_id)
+    if bound is not None:
+        vac = await vacate_holder(actions, seat_id=bound["seat_id"], actor=actor,
+                                  because=f"holder retired: {because}")
+        if vac.get("vacated"):
+            out["seat_vacated"] = vac["vacated"]
+    out["mount_rows_released"] = await mounts.release_mounts(actions.pool, agent_id)
+    return out
 
 
 def seat_label(canonical: str, handle: str | None, generation: int | None = None) -> str | None:

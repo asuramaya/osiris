@@ -1189,8 +1189,10 @@ async def test_retire_agent_retires_someone_else(actions: Actions) -> None:
     await actions.create_or_find_object("Agent", "agent:ra1dead", "test")
     out = await retire_agent(actions, agent_id="agent:ra1dead", actor="agent:witness",
                              because="Flip68Real residue, confirmed dead via harness roster")
-    assert out == {"retired": "agent:ra1dead",
-                   "because": "Flip68Real residue, confirmed dead via harness roster"}
+    assert out["retired"] == "agent:ra1dead"
+    assert out["because"] == "Flip68Real residue, confirmed dead via harness roster"
+    assert out["was_live"] is False  # no mount row was ever set up for this agent
+    assert "seat_vacated" not in out  # never seated in the first place -- nothing to release
     row = await actions.pool.fetchrow("SELECT status FROM objects WHERE canonical='agent:ra1dead'")
     assert row["status"] == "retired"
     retired_by = await actions.pool.fetchval(
@@ -1232,6 +1234,115 @@ async def test_retire_agent_refuses_an_already_retired_agent(actions: Actions) -
     second = await retire_agent(actions, agent_id="agent:ra4twic", actor="agent:witness",
                                 because="second pass")
     assert "already retired" in second["error"]
+
+
+# --- thread 00b1c341: retire_agent had NO liveness check and NEVER released a held seat or
+# mount row — Khnum's census found it, scoped it out of the authority build (not an authority
+# defect), and it sat unowned as a live footgun: a caller could retire an agent that is
+# seated and mid-turn RIGHT NOW, and the seat it held stayed held by a corpse forever.
+#
+# MEASURED FIRST (Thoth DM 3309): retire_seat REFUSES on a live holder (protects an
+# occupant's ongoing work in ITS ROLE); vacate_holder releases a seat's holder but explicitly
+# "TRUSTS ITS CALLER" with no liveness check of its own (its blast radius is one link + one
+# property); retire()'s own self-retirement ALREADY solves the seat/mount release
+# (mounts.release_mounts, thread b47b3814) and ALSO already carries the shape used below —
+# refuse by default, but accept a deliberate, on-the-record override (acknowledge_leftovers)
+# rather than a permanent, unconditional block. retire_agent's blast radius (deletes mount
+# rows AND stamps a terminal Agent status) is bigger than vacate_holder's, so "trust the
+# caller" alone under-protects a genuinely live third party — but retire_agent's own founding
+# purpose (task #74: cleaning up agents that can never call retire() on themselves) means a
+# PERMANENT refusal would defeat the tool. mounts.agent_liveness (already built for send()'s
+# own listener receipt) gives a real, existing, non-invented signal — reused here as a
+# refuse-by-default gate with retire()'s own override_live=True escape hatch, mirroring
+# acknowledge_leftovers exactly. The seat/mount release always happens on a successful
+# retirement, live or not — that half of the bug has no defensible reason to stay broken.
+
+async def test_retire_agent_refuses_a_live_seated_agent_by_default(actions: Actions) -> None:
+    """NEGATIVE CONTROL: today's code has no liveness check at all — this must fail against
+    unfixed retire_agent (it would retire unconditionally, leaving both the seat and the
+    mount row exactly as broken as thread 00b1c341 describes)."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import retire_agent
+    from src.orchestrator.seats import bind_holder
+
+    await actions.create_or_find_object("Seat", "seat:ra5live0", "test")
+    await bind_holder(actions, seat_id="seat:ra5live0", agent_id="agent:ra5live0",
+                      source="test")
+    await mounts.save_mount(actions.pool, job_dir="/j/ra5live0", agent_id="agent:ra5live0",
+                            project="osiris", cwd="/x", model=None, session_key="k")
+
+    out = await retire_agent(actions, agent_id="agent:ra5live0", actor="agent:witness",
+                             because="mid-turn right now")
+    assert "LIVE" in out["error"] and "override_live" in out["error"]
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='agent:ra5live0'")
+    assert row["status"] == "active"  # refused, not retired
+    still_held = await actions.pool.fetchval(
+        "SELECT 1 FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE f.canonical='agent:ra5live0' "
+        "AND t.canonical='seat:ra5live0' AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())")
+    assert still_held == 1
+    assert await mounts.find_mount(actions.pool, job_dir="/j/ra5live0") is not None
+
+
+async def test_retire_agent_override_live_retires_and_releases_seat_and_mount(
+    actions: Actions,
+) -> None:
+    """NEGATIVE CONTROL: `override_live` does not exist on today's code at all — this fails
+    against unfixed retire_agent with a TypeError (unexpected keyword argument), and even a
+    caller that stripped the kwarg would find the seat/mount row untouched today."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import retire_agent
+    from src.orchestrator.seats import bind_holder
+
+    await actions.create_or_find_object("Seat", "seat:ra6ovrd0", "test")
+    await bind_holder(actions, seat_id="seat:ra6ovrd0", agent_id="agent:ra6ovrd0",
+                      source="test")
+    await mounts.save_mount(actions.pool, job_dir="/j/ra6ovrd0", agent_id="agent:ra6ovrd0",
+                            project="osiris", cwd="/x", model=None, session_key="k")
+
+    out = await retire_agent(actions, agent_id="agent:ra6ovrd0", actor="agent:witness",
+                             because="operator confirms genuinely wedged, retiring anyway",
+                             override_live=True)
+    assert out["retired"] == "agent:ra6ovrd0"
+    assert out["was_live"] is True
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='agent:ra6ovrd0'")
+    assert row["status"] == "retired"
+    still_held = await actions.pool.fetchval(
+        "SELECT 1 FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE f.canonical='agent:ra6ovrd0' "
+        "AND t.canonical='seat:ra6ovrd0' AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())")
+    assert still_held is None  # the holds link is released, not left dangling on a corpse
+    assert await mounts.find_mount(actions.pool, job_dir="/j/ra6ovrd0") is None
+
+
+async def test_retire_agent_releases_seat_and_mount_when_not_live(actions: Actions) -> None:
+    """The common case task #74 was built for: a genuinely dead third party (no mount row at
+    all, or one stale past the liveness window) retires cleanly, WITHOUT needing
+    override_live — and must not leave its seat held by a corpse (thread 00b1c341's own
+    headline complaint), which is the part of the bug that is unconditionally wrong."""
+    from src.orchestrator.agents import retire_agent
+    from src.orchestrator.seats import bind_holder
+
+    await actions.create_or_find_object("Seat", "seat:ra7dead0", "test")
+    await bind_holder(actions, seat_id="seat:ra7dead0", agent_id="agent:ra7dead0",
+                      source="test")
+    # no mount row at all -- e.g. a session that crashed before ever cleanly retiring itself
+
+    out = await retire_agent(actions, agent_id="agent:ra7dead0", actor="agent:witness",
+                             because="Flip68Real-shaped residue, confirmed dead")
+    assert out["retired"] == "agent:ra7dead0"
+    assert out["was_live"] is False
+    assert out["seat_vacated"] == "seat:ra7dead0"
+    still_held = await actions.pool.fetchval(
+        "SELECT 1 FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE f.canonical='agent:ra7dead0' "
+        "AND t.canonical='seat:ra7dead0' AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())")
+    assert still_held is None
 
 
 async def test_succeeds_seat_is_not_succeeded_from(actions: Actions) -> None:
