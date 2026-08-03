@@ -151,11 +151,18 @@ async def _move_agent_estate(
     implementation that could drift from what a normal fold already does. Resolves
     `into`'s CURRENT living head fresh — never trusts a stale `merged_into` pointer, the
     same live-resolution `fold_agent` itself always used — and moves whatever is STILL
-    live and addressed to `dupe`: unread mail, mount rows, open-thread ownership. Every
-    move here is individually idempotent (an item already moved no longer matches its own
-    WHERE clause), so running this twice, or running it after `fold_agent`'s own inline
-    call already did the same work, changes nothing on the second pass."""
+    live and addressed to `dupe`: unread mail, mount rows, open-thread ownership, and (as
+    of thread 20af2c95, 2026-08-03 — fold_agent's OWN gap, distinct from mint_heir's:
+    this estate-move never covered works_in/governs at all, not even a stale pointer, a
+    plain omission) works_in/governs edges, via `agents.move_agent_project_links` — the
+    SAME shared mover `mint_heir` now uses for its own, different gap on ordinary
+    succession, never a second implementation. Every move here is individually idempotent
+    (an item already moved no longer matches its own WHERE clause), so running this
+    twice, or running it after `fold_agent`'s own inline call already did the same work,
+    changes nothing on the second pass."""
     from datetime import UTC, datetime
+
+    from src.orchestrator.agents import move_agent_project_links
 
     head = await living_head(actions.pool, into)
     tag = await actions.pool.execute(
@@ -173,8 +180,17 @@ async def _move_agent_estate(
     for t in threads:
         await actions.assert_property(t["id"], "owner", head, actor, now, 0.9,
                                       evidence_class="self_declared")
+    dupe_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", dupe)
+    head_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", head)
+    project_links_moved: dict[str, int] = {}
+    if dupe_oid is not None and head_oid is not None and dupe_oid != head_oid:
+        project_links_moved = await move_agent_project_links(
+            actions, dupe_oid, head_oid, actor, now)
     return {"living_head": head, "mail_readdressed": mail_moved,
-            "mount_rows_repointed": rows_moved, "threads_reowned": len(threads)}
+            "mount_rows_repointed": rows_moved, "threads_reowned": len(threads),
+            "project_links_moved": project_links_moved}
 
 
 async def fold_agent(
@@ -271,11 +287,13 @@ async def fold_agent(
         "folded": dupe, "into": into, "living_head": estate["living_head"],
         "mail_readdressed": estate["mail_readdressed"],
         "mount_rows_repointed": estate["mount_rows_repointed"],
-        "threads_reowned": estate["threads_reowned"], "evidence": evidence,
+        "threads_reowned": estate["threads_reowned"],
+        "project_links_moved": estate["project_links_moved"], "evidence": evidence,
         "note": (f"{dupe} is folded into {into} — its words stay its own (provenance "
                  "resolves through merged_into at read); its unread mail, mount rows, "
-                 f"and open threads now belong to {estate['living_head']}. Reversible by "
-                 "compensating event; nothing was deleted."),
+                 "open threads, and works_in/governs edges now belong to "
+                 f"{estate['living_head']}. Reversible by compensating event; nothing "
+                 "was deleted."),
     }
 
 

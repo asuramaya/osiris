@@ -1076,6 +1076,176 @@ async def test_mint_heir_counts_and_inherits_the_seats_true_house_not_the_ancest
     assert gen == "5", "four clean ancestors + this heir — far better than the old bug's '2'"
 
 
+# ═══ thread 20af2c95, the mint_heir edge leak (measured fleet-wide 2026-08-03: 906 of
+# 6,245 live works_in/governs edges point from a superseded generation, not the current
+# head — mint_heir minted a fresh edge for the heir but never invalidated the
+# ancestor's) ═══
+
+
+async def test_mint_heir_moves_the_ancestors_works_in_and_governs_edges_to_the_heir(
+    actions: Actions,
+) -> None:
+    """The fix itself: an ancestor's live works_in AND governs edges — to projects OTHER
+    than the one it's about to inherit via `house` too, since a real agent can work_in/
+    govern more than one project across its life — move to the fresh heir, invalidated on
+    the ancestor, never duplicated on the heir."""
+    from src.orchestrator.agents import mint_heir
+
+    now = datetime.now(UTC)
+    ancestor_id = "agent:leak1anc0"
+    ancestor_oid = await actions.create_or_find_object("Agent", ancestor_id, "test")
+    proj_a = await actions.create_or_find_object("SoftwareProject", "repo:leakproja", "test")
+    proj_b = await actions.create_or_find_object("SoftwareProject", "repo:leakprojb", "test")
+    await actions.create_link(ancestor_oid, proj_a, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await actions.create_link(ancestor_oid, proj_b, "governs", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    heir, heir_oid = await mint_heir(actions, ancestor_id, ancestor_oid,
+                                     because="compaction", succession=None)
+
+    live_on_ancestor = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 "
+        "AND type IN ('works_in','governs') AND (valid_until IS NULL OR valid_until > now())",
+        ancestor_oid)
+    assert live_on_ancestor == 0, "the ancestor's own edges must no longer read live"
+    live_works_in_on_heir = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='works_in' "
+        "AND (valid_until IS NULL OR valid_until > now())", heir_oid, proj_a)
+    assert live_works_in_on_heir == 1
+    live_governs_on_heir = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='governs' "
+        "AND (valid_until IS NULL OR valid_until > now())", heir_oid, proj_b)
+    assert live_governs_on_heir == 1
+    # HISTORY PRESERVED, NEVER DELETED: the invalidated row is still there, walkable
+    still_on_record = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type IN ('works_in','governs')",
+        ancestor_oid)
+    assert still_on_record == 2, "invalidated, not deleted — who worked here stays answerable"
+
+
+async def test_mint_heir_never_duplicates_an_edge_the_heir_already_has(
+    actions: Actions,
+) -> None:
+    """Idempotent, same discipline as every other estate-move in this codebase: if the
+    heir (for whatever reason) already carries a live edge to the same project the
+    ancestor is handing over, the move must not mint a second live row."""
+    from src.orchestrator.agents import mint_heir
+
+    now = datetime.now(UTC)
+    ancestor_id = "agent:leak2anc0"
+    ancestor_oid = await actions.create_or_find_object("Agent", ancestor_id, "test")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:leakproj2", "test")
+    await actions.create_link(ancestor_oid, proj, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    # pre-seed the heir's own canonical with an ALREADY-live works_in edge to the same
+    # project (simulating a caller that stamped it directly before this mint)
+    heir_canonical = "agent:leak2anc0-ii"
+    heir_oid_preseed = await actions.create_or_find_object("Agent", heir_canonical, "test")
+    await actions.create_link(heir_oid_preseed, proj, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    heir, heir_oid = await mint_heir(actions, ancestor_id, ancestor_oid,
+                                     because="compaction", succession=None)
+    assert heir == heir_canonical and heir_oid == heir_oid_preseed
+
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND to_id=$2 AND type='works_in' "
+        "AND (valid_until IS NULL OR valid_until > now())", heir_oid, proj)
+    assert n == 1, "no duplicate live edge minted just because the ancestor also had one"
+
+
+async def test_backfill_agent_project_links_dry_run_writes_nothing(actions: Actions) -> None:
+    """The one-time repair for the 906/907 edges that already existed before the write-
+    side fixes landed — a genuinely OLD-shaped leak (an ancestor's edge, never moved,
+    with a live heir already minted), the shape the write-side fix can no longer produce
+    but which already exists fleet-wide. DRY RUN IS THE DEFAULT: reports the plan,
+    changes nothing."""
+    from src.orchestrator.agents import backfill_agent_project_links
+
+    now = datetime.now(UTC)
+    ancestor_oid = await actions.create_or_find_object("Agent", "agent:bf1anc0000", "test")
+    await actions.create_or_find_object("Agent", "agent:bf1anc0000-ii", "test")
+    await actions.assert_property(ancestor_oid, "succeeded_by", "agent:bf1anc0000-ii",
+                                  "test", now, 0.9, evidence_class="self_declared")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:bf1proj", "test")
+    await actions.create_link(ancestor_oid, proj, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    out = await backfill_agent_project_links(actions, actor="test", dry_run=True)
+
+    assert out["dry_run"] is True
+    item = next(p for p in out["plan"] if p["agent"] == "agent:bf1anc0000")
+    assert item["head"] == "agent:bf1anc0000-ii" and item["would_move"] == 1
+    still_live_on_ancestor = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND type='works_in' "
+        "AND (valid_until IS NULL OR valid_until > now())", ancestor_oid)
+    assert still_live_on_ancestor == 1, "dry run must write nothing"
+
+
+async def test_backfill_agent_project_links_applied_moves_the_edge(actions: Actions) -> None:
+    from src.orchestrator.agents import backfill_agent_project_links
+
+    now = datetime.now(UTC)
+    ancestor_oid = await actions.create_or_find_object("Agent", "agent:bf2anc0000", "test")
+    heir_oid = await actions.create_or_find_object("Agent", "agent:bf2anc0000-ii", "test")
+    await actions.assert_property(ancestor_oid, "succeeded_by", "agent:bf2anc0000-ii",
+                                  "test", now, 0.9, evidence_class="self_declared")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:bf2proj", "test")
+    await actions.create_link(ancestor_oid, proj, "governs", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    out = await backfill_agent_project_links(actions, actor="backfill:test", dry_run=False)
+
+    item = next(p for p in out["plan"] if p["agent"] == "agent:bf2anc0000")
+    assert item["moved"] == {"governs": 1}
+    assert out["moved_total"] == {"governs": 1}
+    live_on_ancestor = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND type='governs' "
+        "AND (valid_until IS NULL OR valid_until > now())", ancestor_oid)
+    assert live_on_ancestor is None
+    live_on_heir = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='governs' "
+        "AND (valid_until IS NULL OR valid_until > now())", heir_oid, proj)
+    assert live_on_heir == 1
+
+
+async def test_backfill_agent_project_links_scopes_to_only_bases(actions: Actions) -> None:
+    """Staged rollout, same convention `backfill_unbound_seats`'s `only_seats` already
+    uses: a scoped run touches only the named lineage bases and reports — never hides —
+    how many other off-head agents it deliberately left untouched."""
+    from src.orchestrator.agents import backfill_agent_project_links
+
+    now = datetime.now(UTC)
+    for base in ("agent:bf3scope0", "agent:bf3other0"):
+        anc = await actions.create_or_find_object("Agent", base, "test")
+        heir = f"{base}-ii"
+        await actions.create_or_find_object("Agent", heir, "test")
+        await actions.assert_property(anc, "succeeded_by", heir, "test", now, 0.9,
+                                      evidence_class="self_declared")
+        proj = await actions.create_or_find_object("SoftwareProject", f"repo:{base[6:]}",
+                                                    "test")
+        await actions.create_link(anc, proj, "works_in", "test", now, 0.9,
+                                  evidence_class="self_declared")
+
+    out = await backfill_agent_project_links(
+        actions, actor="test", dry_run=False, only_bases={"agent:bf3scope0"})
+
+    assert out["total_off_head"] == 2
+    assert out["scoped"] == 1 and out["scoped_out"] == 1
+    scoped_anc = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='agent:bf3scope0'")
+    other_anc = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='agent:bf3other0'")
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND type='works_in' "
+        "AND (valid_until IS NULL OR valid_until > now())", scoped_anc) is None
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND type='works_in' "
+        "AND (valid_until IS NULL OR valid_until > now())", other_anc) == 1, (
+        "the un-scoped lineage must be left exactly as it was")
+
+
 async def test_correct_agent_house_heals_a_polluted_stamp_on_someone_else(
     actions: Actions,
 ) -> None:

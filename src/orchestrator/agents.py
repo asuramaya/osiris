@@ -1181,6 +1181,118 @@ async def _fold_zero_turn_ancestors(
     return cur_id, cur_oid
 
 
+_AGENT_PROJECT_LINK_TYPES = ("works_in", "governs")
+
+
+async def move_agent_project_links(
+    actions: Actions, from_oid: uuid.UUID, to_oid: uuid.UUID, actor: str, now: datetime,
+) -> dict[str, int]:
+    """Re-point every live works_in/governs edge FROM `from_oid` onto `to_oid` — invalidate
+    + create, the SAME pattern `_move_project_estate`/`_move_agent_estate`/`_move_seat_
+    estate` already use (thread 20af2c95, measured 906 of 6,245 fleet-wide, 2026-08-03),
+    applied here to an AGENT's own OUTBOUND project edges instead of a project's inbound
+    ones. Two callers, one implementation, per Thoth's own instruction not to write a
+    fourth estate-mover: `mint_heir` (prospective — an ancestor's edges move to its fresh
+    heir on ordinary succession, the mechanism that was missing entirely) and `folds.
+    _move_agent_estate` (a DIFFERENT, related gap — fold_agent's own estate-move never
+    covered works_in/governs at all, only mail/mounts/threads; reconcile_agent_fold
+    inherits the fix automatically since it calls the same function unchanged).
+
+    Idempotent (a link already live on `to_oid` is never duplicated) and history-
+    preserving — the invalidated link's row stays exactly where it was, in whose name and
+    why, walkable by any reader who asks "which generations ever worked here" via the raw
+    `links` table rather than only `current_assertions`-style live reads. Returns
+    {link_type: count moved}, empty when `from_oid` had nothing live to move."""
+    moved: dict[str, int] = {}
+    for link_type in _AGENT_PROJECT_LINK_TYPES:
+        rows = await actions.pool.fetch(
+            "SELECT to_id AS proj_id FROM links WHERE from_id=$1 AND type=$2 "
+            "AND (valid_until IS NULL OR valid_until > now())", from_oid, link_type)
+        n = 0
+        for r in rows:
+            await actions.invalidate_link(from_oid, r["proj_id"], link_type, actor, now)
+            exists = await actions.pool.fetchval(
+                "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type=$3 "
+                "AND (valid_until IS NULL OR valid_until > now())",
+                to_oid, r["proj_id"], link_type)
+            if not exists:
+                await actions.create_link(to_oid, r["proj_id"], link_type, actor, now, _CONF,
+                                          evidence_class=_EC)
+            n += 1
+        if n:
+            moved[link_type] = n
+    return moved
+
+
+async def backfill_agent_project_links(
+    actions: Actions, *, actor: str, dry_run: bool = True, only_bases: set[str] | None = None,
+) -> dict[str, Any]:
+    """THE ONE-TIME REPAIR for thread 20af2c95's own measured leak (906 of 6,245 live
+    works_in/governs edges fleet-wide, 2026-08-03, across 400 lineages) — the write-side
+    fixes (`mint_heir`, `folds._move_agent_estate`) stop it from growing further but never
+    touch what already exists. Every Agent whose canonical is NOT its lineage's current
+    `living_head` but still carries a live works_in/governs edge gets that edge moved onto
+    the head, via the SAME `move_agent_project_links` both write-side fixes already use —
+    not a third implementation of the move itself, only a new ENUMERATION of who needs it.
+
+    DRY RUN IS THE DEFAULT (`dry_run=True`, mirroring `backfill_unbound_seats`'s own
+    established shape): reports the plan — how many edges each off-head agent would give
+    up, and which living head each resolves to — without writing anything. `only_bases`
+    scopes both the plan and the write to exactly those lineage bases (staged rollout,
+    same convention `backfill_unbound_seats`'s `only_seats` already uses) — every OTHER
+    off-head agent is still counted in `total_off_head` so a scoped run reports honestly
+    what it deliberately left untouched, never silently drops it from the number."""
+    from src.orchestrator.folds import living_head
+
+    rows = await actions.pool.fetch(
+        "SELECT DISTINCT f.id, f.canonical, f.status FROM links l "
+        "JOIN objects f ON f.id=l.from_id AND f.type='Agent' "
+        "JOIN objects t ON t.id=l.to_id AND t.type='SoftwareProject' "
+        "WHERE l.type IN ('works_in','governs') "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())")
+    bases = {_generation(str(r["canonical"]))[0] for r in rows}
+    head_of: dict[str, str] = {base: await living_head(actions.pool, base) for base in bases}
+
+    off_head = [r for r in rows
+               if str(r["canonical"]) != head_of[_generation(str(r["canonical"]))[0]]]
+    total_off_head = len(off_head)
+    scoped = [r for r in off_head
+             if only_bases is None or _generation(str(r["canonical"]))[0] in only_bases]
+    scoped_out = total_off_head - len(scoped)
+
+    now = datetime.now(UTC)
+    plan: list[dict[str, Any]] = []
+    moved_total: dict[str, int] = {}
+    for r in scoped:
+        base = _generation(str(r["canonical"]))[0]
+        head_label = head_of[base]
+        head_oid = await actions.pool.fetchval(
+            "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", head_label)
+        item: dict[str, Any] = {"agent": r["canonical"], "status": r["status"],
+                                "head": head_label}
+        if head_oid is None:
+            item["note"] = "living head resolved to a label with no Agent object — skipped"
+            plan.append(item)
+            continue
+        if dry_run:
+            n = await actions.pool.fetchval(
+                "SELECT count(*) FROM links WHERE from_id=$1 "
+                "AND type IN ('works_in','governs') "
+                "AND (valid_until IS NULL OR valid_until > now())", r["id"])
+            item["would_move"] = n
+        else:
+            moved = await move_agent_project_links(actions, r["id"], head_oid, actor, now)
+            for k, v in moved.items():
+                moved_total[k] = moved_total.get(k, 0) + v
+            item["moved"] = moved
+        plan.append(item)
+    return {
+        "dry_run": dry_run, "total_off_head": total_off_head, "scoped": len(scoped),
+        "scoped_out": scoped_out, "plan": plan,
+        "moved_total": moved_total if not dry_run else None,
+    }
+
+
 async def mint_heir(
     actions: Actions, ancestor_id: str, ancestor_oid: uuid.UUID, *,
     because: str, succession: str | None, now: datetime | None = None,
@@ -1300,6 +1412,16 @@ async def mint_heir(
     ancestor_seat = await held_seat(actions.pool, ancestor_id)
     house = (ancestor_seat["house"] if ancestor_seat and ancestor_seat.get("house")
             else await house_of(actions.pool, ancestor_id))
+    # THE MINT_HEIR EDGE LEAK, CLOSED (thread 20af2c95, measured 906 of 6,245 fleet-wide,
+    # 2026-08-03): mint_heir minted a fresh works_in edge for the heir below but NEVER
+    # touched the ancestor's own — so every past generation of a lineage that ever
+    # asserted works_in/governs kept it live FOREVER, through ordinary succession, growing
+    # on the most common event in the house. Move whatever the ancestor still has live
+    # (which may be MORE than just `house` — an agent can work_in/govern several projects
+    # across its life) onto the heir, invalidate+create, before stamping the heir's own
+    # current house below (idempotent either order — move_agent_project_links never
+    # duplicates a link already live on the heir).
+    await move_agent_project_links(actions, ancestor_oid, a, heir, now)
     if house:
         await actions.assert_property(a, "project", house, heir, now, _CONF, evidence_class=_EC)
         proj = await actions.create_or_find_object("SoftwareProject", f"repo:{house}", heir)

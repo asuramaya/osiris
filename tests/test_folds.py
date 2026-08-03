@@ -70,6 +70,69 @@ async def test_fold_moves_the_estate_and_deflates_the_census(actions: Actions) -
     assert src == "agent:f01dbeef"
 
 
+async def test_fold_agent_moves_the_dupes_works_in_and_governs_edges_too(
+    actions: Actions,
+) -> None:
+    """fold_agent's OWN gap (thread 20af2c95, distinct from mint_heir's — this estate-move
+    never covered works_in/governs at all, not even a stale pointer, a plain omission
+    found sweeping 443 of the fleet-wide leak's 906 edges). Fixed via the SAME shared
+    `move_agent_project_links` mint_heir now uses, wired through `_move_agent_estate`."""
+    p = actions.pool
+    await _mk_agent(actions, "agent:wgd1dupe0")
+    await _mk_agent(actions, "agent:wgd1into0")
+    dupe_oid = await actions.create_or_find_object("Agent", "agent:wgd1dupe0", "test")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:wgd1proj", "test")
+    await actions.create_link(dupe_oid, proj, "works_in", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+
+    out = await fold_agent(actions, dupe="agent:wgd1dupe0", into="agent:wgd1into0",
+                           evidence="test: a twin", actor="operator")
+
+    assert out["project_links_moved"] == {"works_in": 1}
+    into_oid = await p.fetchval(
+        "SELECT id FROM objects WHERE canonical='agent:wgd1into0'")
+    live_on_into = await p.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='works_in' "
+        "AND (valid_until IS NULL OR valid_until > now())", into_oid, proj)
+    assert live_on_into == 1
+    live_on_dupe = await p.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='works_in' "
+        "AND (valid_until IS NULL OR valid_until > now())", dupe_oid, proj)
+    assert live_on_dupe is None
+
+
+async def test_reconcile_agent_fold_repairs_a_stranded_works_in_edge(
+    actions: Actions,
+) -> None:
+    """The measured live shape (443 of 906 leaked edges, from a MERGED agent): an
+    OLD-style merge (a raw merge_objects call with no estate-move at all) leaves a
+    works_in edge stranded on the now-merged dupe. reconcile_agent_fold repairs it —
+    calling the same fixed `_move_agent_estate` fold_agent itself now uses — without
+    re-performing the merge."""
+    from src.orchestrator.folds import reconcile_agent_fold
+
+    await _mk_agent(actions, "agent:wgd2dupe0")
+    await _mk_agent(actions, "agent:wgd2into0")
+    dupe_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='agent:wgd2dupe0'")
+    into_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='agent:wgd2into0'")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:wgd2proj", "test")
+    await actions.create_link(dupe_id, proj, "governs", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+    await actions.merge_objects(into_id, dupe_id, justification="old-style merge",
+                                actor="operator")
+
+    out = await reconcile_agent_fold(actions, dupe="agent:wgd2dupe0",
+                                     into="agent:wgd2into0", actor="operator")
+
+    assert out["project_links_moved"] == {"governs": 1}
+    live_on_into = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='governs' "
+        "AND (valid_until IS NULL OR valid_until > now())", into_id, proj)
+    assert live_on_into == 1
+
+
 async def test_fold_survives_a_crash_between_estate_move_and_merge(actions: Actions) -> None:
     """Task #59's own precondition fix: the estate now moves BEFORE Actions.merge_objects,
     so a process death in that window leaves dupe.status=='active' — a retry re-enters
