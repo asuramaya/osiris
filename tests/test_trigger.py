@@ -684,6 +684,54 @@ async def test_a_dm_never_mints_a_stranger(actions: Actions, tmp_path: Path) -> 
     assert spawned == [] and rep["woke"] == 0         # nothing woken, nothing minted
 
 
+async def test_dispatch_dm_refusal_names_no_anchored_transcript_when_nothing_was_ever_mounted(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thoth's ruling (2026-08-03, #135/#136): dispatch_dm's own refusal used to collapse
+    two opposite situations into one identical sentence. This pins the 'genuinely nothing
+    to resume' shape — a mount exists, but its job_dir anchors no transcript at all under
+    the sense root."""
+    from src.orchestrator import mounts
+
+    await mounts.save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "abcd1234"),
+                            agent_id="agent:abcd1234", project="demo", cwd="/repo/demo",
+                            model=None, session_key=None)
+    await actions.pool.execute("UPDATE agent_mounts SET last_seen = now() - interval '1 hour'")
+    msg_id = await _dm_to_owner(actions)
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("no resumable session means no spawn at all")
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(tmp_path / "nowhere")),
+                          spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom)
+    assert d["mode"] == "pull-only"
+    assert "no anchored transcript at all" in d["detail"]
+
+
+async def test_dispatch_dm_refusal_names_the_ceiling_when_a_real_session_is_too_large(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The OPPOSITE shape of the sibling test above: a genuine, signed session exists but
+    every candidate is over osiris_resume_ceiling_bytes — the refusal must say so, not
+    collapse into the same 'no anchored transcript' sentence a truly-missing session gets.
+    No mint lane for DMs (unlike the project ladder's own ceiling test): a private message
+    stays pull-only, never handed to a fresh twin."""
+    sense = await _stale_resumable_owner(actions, tmp_path, transcript_bytes=64)
+    msg_id = await _dm_to_owner(actions)
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a DM never mints or resumes past the ceiling")
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense), ceiling=32),
+                          spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom)
+    assert d["mode"] == "pull-only"
+    assert "over the context ceiling" in d["detail"]
+
+
 async def test_mid_turn_means_the_transcript_is_moving_NOT_the_heartbeat(
     actions: Actions, tmp_path: Path
 ) -> None:

@@ -473,6 +473,29 @@ async def _agent_resumable(
         _pick_resumable_sync, cands, root, st.osiris_resume_ceiling_bytes)
 
 
+async def _agent_resume_miss_reason(pool: asyncpg.Pool, agent_id: str, st: Settings) -> str:
+    """Only called after _agent_resumable already returned None for this SAME agent_id —
+    re-walks its own three early-exit shapes (retired, no mounts at all, no anchored
+    transcript among its mounts) plus _resume_miss_reason's ceiling distinction, to name
+    WHICH one fired. A second pass rather than threading a reason through
+    _agent_resumable's own return, so every existing caller's tuple-or-None contract stays
+    exactly as it was (dispatch_dm's mid-turn check, _transcript_activity) — this only
+    runs on the refusal path dispatch_dm's message needed distinguished (Thoth's ruling,
+    2026-08-03, #135/#136), never the hot path."""
+    if await _retired(pool, agent_id):
+        return "retired — a deliberate close, never reanimated"
+    rows = await pool.fetch(
+        "SELECT job_dir, cwd FROM agent_mounts WHERE agent_id=$1 "
+        "ORDER BY last_seen DESC LIMIT 5", agent_id)
+    cands = [(r["job_dir"], r["cwd"]) for r in rows]
+    if not cands:
+        return "no anchored transcript at all"
+    root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
+        else Path.home() / ".claude" / "projects"
+    return await asyncio.to_thread(
+        _resume_miss_reason, cands, root, st.osiris_resume_ceiling_bytes)
+
+
 async def _owner_live(pool: asyncpg.Pool, project: str, within_secs: int) -> bool:
     """A mount fresher than the liveness window = an awake owner. DELIVER, don't spawn: its
     own chrome/orient shows the mail; waking a twin beside a live owner is the fragmentation
@@ -516,6 +539,32 @@ def _pick_resumable_sync(
             continue
         return t.stem, cwd, st.st_mtime, job_dir
     return None
+
+
+def _resume_miss_reason(
+    cands: list[tuple[str, str]], root: Path, ceiling_bytes: int
+) -> str:
+    """Why _pick_resumable_sync came back empty for these SAME candidates — the two
+    opposite shapes dispatch_dm's refusal message used to collapse into one identical
+    sentence (Thoth's ruling, 2026-08-03, #135/#136): 'no anchored transcript at all'
+    (nothing ever mounted here, or never wrote one) is not the same situation as 'found
+    a real session, every candidate simply too large to resume' — the first means there
+    is genuinely nothing to wait for; the second means a live mind exists but the ceiling
+    is refusing it. Never called on the hot path — only after resume-resolution already
+    returned None, to name which of the two it was. Mirrors _pick_resumable_sync's own
+    per-candidate logic exactly (anchor, then size-check) so the two can never disagree
+    on why a candidate was skipped; an unreadable transcript (OSError on stat) counts as
+    not-anchored here too, the same as it does there."""
+    for job_dir, _cwd in cands:
+        t = locate_current_transcript(root, job_dir, anchored_only=True)
+        if t is None:
+            continue
+        try:
+            if t.stat().st_size > ceiling_bytes:
+                return "found candidates, every one over the context ceiling"
+        except OSError:
+            continue
+    return "no anchored transcript at all"
 
 
 async def _resumable_owner(
@@ -1149,10 +1198,10 @@ async def dispatch_dm(
     if resume is None:
         who = target if wake_target == target else (
             f"{target} (its own live mount, {wake_target}, checked too)")
+        miss_reason = await _agent_resume_miss_reason(pool, wake_target, st)
         return {"mode": "pull-only",
-                "detail": f"{who} has no resumable session (no anchored transcript, or "
-                          "at the context ceiling) — a private message is never handed to "
-                          "a fresh twin"}
+                "detail": f"{who} has no resumable session ({miss_reason}) — a private "
+                          "message is never handed to a fresh twin"}
     session_id, repo = resume[0], resume[1]
     if await _resident_disagrees(pool, root, session_id, base,
                                  job_dir_hint=resume[3], seat_id=seat_id):
