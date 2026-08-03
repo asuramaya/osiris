@@ -130,15 +130,32 @@ async def acquire(
 async def release(pool: asyncpg.Pool, resource_id: str, holder: str) -> bool:
     """Release `resource_id`, but only for the holder that actually claimed it — never let
     a different agent release a lease it doesn't hold. Returns True iff a held row was
-    actually released (False for: not currently held, or held by someone else)."""
+    actually released (False for: not currently held, or held by someone else).
+
+    THREAD RE-SYNC, ENFORCED (2026-08-03, Thoth's Phase 0 Tier 2 dispatch, msg 3354): a
+    released `resource_leases` row used to leave its companion Thread's status='open' and
+    owner=<holder> FOREVER — correct for `check_lease` (reads this table directly, the live
+    authority) but WRONG for every graph-level reader that only ever sees Thread objects,
+    never this SQL table (orient()'s open_threads, recall, briefing, dossier — a released
+    lease read as a permanently-open obligation nobody was actually still holding). A
+    successful release now also `resolve_thread`s the paired Thread, in the SAME
+    transaction as the lease-row update — both land or neither does."""
     resource_id = resource_id.strip()
     holder = holder.strip()
-    row = await pool.fetchrow(
-        "UPDATE resource_leases SET status='released', released_at=now() "
-        "WHERE resource_id=$1 AND holder=$2 AND status='held' RETURNING id",
-        resource_id, holder,
-    )
-    return row is not None
+    async with pool.acquire() as conn, conn.transaction():
+        row = await conn.fetchrow(
+            "UPDATE resource_leases SET status='released', released_at=now() "
+            "WHERE resource_id=$1 AND holder=$2 AND status='held' RETURNING thread_id",
+            resource_id, holder,
+        )
+        if row is None:
+            return False
+        from src.orchestrator.capture import resolve_thread
+
+        await resolve_thread(
+            Actions(pool, conn=conn), str(row["thread_id"]),
+            because=f"resource lease released by {holder}", source=holder)
+    return True
 
 
 async def current_holder(pool: asyncpg.Pool, resource_id: str) -> dict[str, Any] | None:

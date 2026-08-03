@@ -58,6 +58,54 @@ async def test_release_of_an_unheld_resource_is_refused(actions: Actions) -> Non
     assert await rl.release(actions.pool, "never-claimed", "agent:anyone") is False
 
 
+async def _thread_status_and_owner(actions: Actions, thread_id: object) -> tuple[str, str]:
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        thread_id)
+    owner = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        thread_id)
+    return status, owner
+
+
+async def test_release_resyncs_the_paired_threads_status(actions: Actions) -> None:
+    """NEGATIVE CONTROL (2026-08-03, Thoth's Phase 0 Tier 2 dispatch, msg 3354): before
+    this fix, release() only ever touched the resource_leases SQL table — the paired
+    Thread stayed status='open'/owner=<holder> FOREVER, correct for check_lease (reads the
+    table directly) but wrong for every graph-level reader (orient's open_threads, recall,
+    briefing, dossier) that only ever sees Thread objects. Confirmed against pre-fix code:
+    git-stashing this fix and re-running left the Thread's status stuck at 'open' after a
+    real release (see decision recorded alongside this fix)."""
+    claim = await rl.acquire(actions, "deploy-pipeline", "agent:releaser")
+    before_status, before_owner = await _thread_status_and_owner(actions, claim.thread_id)
+    assert before_status == "open" and before_owner == "agent:releaser"
+
+    released = await rl.release(actions.pool, "deploy-pipeline", "agent:releaser")
+    assert released is True
+
+    after_status, _ = await _thread_status_and_owner(actions, claim.thread_id)
+    assert after_status == "resolved"
+    resolved_because = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='resolved_because' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "LIMIT 1", claim.thread_id)
+    assert resolved_because == "resource lease released by agent:releaser"
+
+
+async def test_release_then_reacquire_reopens_the_threads_status(actions: Actions) -> None:
+    """A reacquire after release must not leave the Thread permanently 'resolved' either —
+    acquire()'s own find-or-create + status='open' stamp already handles this (unchanged),
+    this just proves the two fixes compose cleanly across a release/reacquire cycle."""
+    first = await rl.acquire(actions, "shared-db", "agent:one")
+    await rl.release(actions.pool, "shared-db", "agent:one")
+    second = await rl.acquire(actions, "shared-db", "agent:two")
+    assert second.thread_id == first.thread_id
+    status, owner = await _thread_status_and_owner(actions, second.thread_id)
+    assert status == "open" and owner == "agent:two"
+
+
 async def test_current_holder_is_none_when_free(actions: Actions) -> None:
     assert await rl.current_holder(actions.pool, "nothing-here") is None
 
