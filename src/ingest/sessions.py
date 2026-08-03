@@ -337,11 +337,21 @@ def locate_transcript_by_cwd(cwd: str, root: Path | None = None) -> Path | None:
 _DORMANT_HISTORY_FLOOR_BYTES = 50_000
 
 
-def dormant_history_confession(cwd: str, *, root: Path | None = None) -> dict[str, Any] | None:
-    """None when the target cwd's newest transcript is absent or below the trivial floor.
-    Otherwise {"path", "size_bytes", "last_touched"} naming exactly what a fresh `claude
-    --bg` launch is about to land next to (thread fc69b9b4, the Ooblek specimen: a new mind
-    APPENDING TO a 20.3MB transcript it has no access to, verified live 2026-08-02).
+def dormant_history_confession(
+    cwd: str, *extra_cwds: str, root: Path | None = None,
+) -> dict[str, Any] | None:
+    """None when every candidate cwd's newest transcript is absent or below the trivial
+    floor. Otherwise {"path", "size_bytes", "last_touched"} naming exactly what a fresh
+    `claude --bg` launch is about to land next to (thread fc69b9b4, the Ooblek specimen: a
+    new mind APPENDING TO a 20.3MB transcript it has no access to, verified live
+    2026-08-02).
+
+    `extra_cwds` (task #135/#136, 2026-08-03): a seat's office and tree_cwd are two
+    DIFFERENT slugs by design (#103) — checking only whichever one this particular launch
+    is spawning into would miss a dormant transcript sitting under the other. Every
+    candidate is checked (via `locate_transcript_by_cwd`, itself single-slug — the fan-out
+    across slugs belongs here, at the caller with the full picture); the FRESHEST match
+    across all of them is confessed, never just the first one found.
 
     THIS IS DISCLOSURE, NOT PREVENTION, ON PURPOSE. `claude --bg` manages its own session
     id and silently ignores an explicit `--session-id` (trigger.py's own finding, a real
@@ -356,16 +366,20 @@ def dormant_history_confession(cwd: str, *, root: Path | None = None) -> dict[st
     nobody reads" failure this house has already caught more than once (Practice-shaped, see
     fleet_reconcile.py's own consecutive-blind alarm for the sibling instinct: watch, don't
     silently gate)."""
-    path = locate_transcript_by_cwd(cwd, root=root)
-    if path is None:
+    best: Path | None = None
+    for c in (cwd, *extra_cwds):
+        path = locate_transcript_by_cwd(c, root=root)
+        if path is not None and (best is None or path.stat().st_mtime > best.stat().st_mtime):
+            best = path
+    if best is None:
         return None
-    size = path.stat().st_size
+    size = best.stat().st_size
     if size < _DORMANT_HISTORY_FLOOR_BYTES:
         return None
     return {
-        "path": str(path),
+        "path": str(best),
         "size_bytes": size,
-        "last_touched": datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat(),
+        "last_touched": datetime.fromtimestamp(best.stat().st_mtime, UTC).isoformat(),
     }
 
 

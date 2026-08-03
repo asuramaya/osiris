@@ -1728,10 +1728,15 @@ async def launch_seat(
         # its own session id (the finding two comments up), so this side of the call cannot
         # know or prevent a reuse, only NAME what's already sitting at launch_cwd before it
         # happens. Checked pre-spawn on purpose, same "tell the truth at launch time" framing
-        # as the rest of this lane's receipt. `launch_cwd`, not `office` — same reasoning as
-        # the live-body check just above: a tree-bound seat's process sits at tree_cwd.
+        # as the rest of this lane's receipt.
+        #
+        # BOTH SLUGS, ALWAYS (task #135/#136, 2026-08-03): office and tree_cwd are two
+        # DIFFERENT slugs by design (#103) — checking only `launch_cwd` missed whichever one
+        # this particular launch was NOT spawning into. A dormant transcript can sit under
+        # either, so both are checked regardless of which one launch_cwd resolved to; the
+        # freshest match is confessed.
         from src.ingest.sessions import dormant_history_confession
-        dormant = dormant_history_confession(launch_cwd)
+        dormant = dormant_history_confession(office, *([tree_cwd] if tree_cwd else []))
 
         try:
             await spawn(launch_cwd, name=name, model=argv_model, prompt=boot_prompt)

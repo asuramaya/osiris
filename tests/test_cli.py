@@ -411,6 +411,100 @@ async def test_cmd_launch_harness_gives_up_honestly_when_never_visible(
     assert "not yet visible" in buf.getvalue()
 
 
+# ═══ tree_cwd (task #135/#136, 2026-08-03, ruling 983ec87a): `osiris launch` had drifted
+# from launch_seat's own #103 update — hardcoded to `office`, never reading `tree_cwd` at
+# all. Same three proofs test_trigger.py already carries for launch_seat itself, mirrored
+# here for the CLI door — two doors onto one act must return the same receipt. ═══
+
+async def test_cmd_launch_harness_refuses_a_tree_cwd_that_does_not_exist_on_disk(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """OSIRIS NEVER PROVISIONS THE TREE (ff3bdc37: harness owns isolation) — a seat naming a
+    tree_cwd the harness never actually created is refused, cleanly, before anything spawns,
+    exactly matching launch_seat's own refusal shape."""
+    from src.orchestrator.seats import bind_seat_tree
+
+    seat = await ensure_seat(actions, house="osiris", handle="clinotree",
+                             anchor_cwd=str(tmp_path / "office"), source="test")
+    ghost_tree = str(tmp_path / "never-created")
+    bind = await bind_seat_tree(actions, seat_id=seat["seat_id"], tree_cwd=ghost_tree,
+                                actor="operator", because="test: CLI refusal proof")
+    assert bind.get("error") is None
+
+    async def _unreachable(*a: Any, **k: Any) -> Any:
+        raise AssertionError("should never be called — the tree check refuses first")
+
+    out = await cmd_launch("clinotree", model=None, pool=actions.pool,
+                           spawn=_unreachable, agents_json=_unreachable)
+    assert out == 1
+
+
+async def test_cmd_launch_harness_spawns_into_tree_cwd_not_office(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The office (identity) and the tree (code) are DISTINCT — a bound, real tree_cwd is
+    where the body actually spawns; the boot prompt still anchors mount() at the office."""
+    from src.orchestrator.seats import bind_seat_tree
+
+    office = tmp_path / "office"
+    office.mkdir()
+    tree = tmp_path / "worktree"
+    tree.mkdir()
+    seat = await ensure_seat(actions, house="osiris", handle="clitreewalker",
+                             anchor_cwd=str(office), source="test")
+    await bind_seat_tree(actions, seat_id=seat["seat_id"], tree_cwd=str(tree),
+                         actor="operator", because="test: CLI spawn location proof")
+
+    spawn_calls: list[dict[str, Any]] = []
+
+    async def _spawn(repo: str, *, name: str, model: str | None, prompt: str) -> None:
+        spawn_calls.append({"repo": repo, "prompt": prompt})
+
+    poll_count = 0
+
+    async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        nonlocal poll_count
+        poll_count += 1
+        if poll_count < 2:
+            return []
+        return [{"name": "[OS] clitreewalker", "cwd": cwd, "sessionId": "sess-tree"}]
+
+    out = await cmd_launch("clitreewalker", model=None, pool=actions.pool,
+                           spawn=_spawn, agents_json=_agents_json)
+    assert out == 0
+    assert spawn_calls[0]["repo"] == str(tree)            # spawned INTO the tree
+    assert str(office) in spawn_calls[0]["prompt"]         # identity still anchors at office
+    assert str(tree) not in spawn_calls[0]["prompt"]
+
+
+async def test_cmd_launch_harness_idempotency_matches_on_tree_cwd_not_office(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE CORRECTNESS PROOF: a tree-bound seat's live process sits at tree_cwd. Matching
+    idempotency on `office` alone (the pre-fix shape) would never find it and would twin on
+    every relaunch."""
+    from src.orchestrator.seats import bind_seat_tree
+
+    office = tmp_path / "office2"
+    office.mkdir()
+    tree = tmp_path / "worktree2"
+    tree.mkdir()
+    seat = await ensure_seat(actions, house="osiris", handle="clitreewalker2",
+                             anchor_cwd=str(office), source="test")
+    await bind_seat_tree(actions, seat_id=seat["seat_id"], tree_cwd=str(tree),
+                         actor="operator", because="test: CLI idempotency proof")
+
+    async def _unreachable(*a: Any, **k: Any) -> Any:
+        raise AssertionError("should never be called — a live body already holds this seat")
+
+    async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        return [{"name": "[OS] clitreewalker2", "cwd": str(tree), "sessionId": "sess-live"}]
+
+    out = await cmd_launch("clitreewalker2", model=None, pool=actions.pool,
+                           spawn=_unreachable, agents_json=_agents_json)
+    assert out == 0  # returned the existing body, never twinned
+
+
 # --- osiris deploy: pure decision layer (task e51a841c) -----------------------------------------
 
 def test_dirty_tracked_src_files_flags_modified_tracked_files() -> None:

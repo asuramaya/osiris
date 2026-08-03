@@ -622,6 +622,53 @@ def test_dormant_history_confession_fires_above_the_floor(tmp_path: Path) -> Non
     assert info["last_touched"] == datetime.fromtimestamp(1_700_000_000, UTC).isoformat()
 
 
+def test_dormant_history_confession_checks_extra_cwds_and_picks_the_freshest(
+    tmp_path: Path,
+) -> None:
+    """Task #135/#136: office and tree_cwd are two different slugs by design (#103) — a
+    dormant transcript can sit under either one. A caller checking only the cwd it happens
+    to be launching into would miss the other slug entirely; `extra_cwds` fixes that, and
+    the FRESHEST match across every candidate wins, not just the first found."""
+    import os
+
+    from src.ingest.sessions import _DORMANT_HISTORY_FLOOR_BYTES, dormant_history_confession
+
+    office = tmp_path / "-home-x-.osiris-seats-imhotep"
+    office.mkdir()
+    office_transcript = office / "e08c3850-old.jsonl"
+    office_transcript.write_text("x" * (_DORMANT_HISTORY_FLOOR_BYTES + 1))
+    os.utime(office_transcript, (1_700_000_000, 1_700_000_000))  # older
+
+    tree = tmp_path / "-home-x-code-osiris-.claude-worktrees-imhotep"
+    tree.mkdir()
+    tree_transcript = tree / "aa0277bc-new.jsonl"
+    tree_transcript.write_text("y" * (_DORMANT_HISTORY_FLOOR_BYTES + 2))
+    os.utime(tree_transcript, (1_700_001_000, 1_700_001_000))  # newer
+
+    # checking the office cwd alone must NOT miss the tree slug's newer transcript
+    info = dormant_history_confession(
+        "/home/x/.osiris/seats/imhotep",
+        "/home/x/code/osiris/.claude/worktrees/imhotep",
+        root=tmp_path,
+    )
+    assert info is not None
+    assert info["path"] == str(tree_transcript)  # the FRESHER one, not the first argument
+
+    # order doesn't matter — same result checking the tree cwd first
+    info2 = dormant_history_confession(
+        "/home/x/code/osiris/.claude/worktrees/imhotep",
+        "/home/x/.osiris/seats/imhotep",
+        root=tmp_path,
+    )
+    assert info2 is not None
+    assert info2["path"] == str(tree_transcript)
+
+    # no extra_cwds at all — unchanged single-cwd behavior, still finds the office one
+    office_only = dormant_history_confession("/home/x/.osiris/seats/imhotep", root=tmp_path)
+    assert office_only is not None
+    assert office_only["path"] == str(office_transcript)
+
+
 def test_dormant_history_note_renders_size_and_timestamp() -> None:
     from src.ingest.sessions import dormant_history_note
 

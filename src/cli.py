@@ -445,19 +445,37 @@ async def _cmd_launch_harness(
     primitives, same boot-prompt wording via `_bg_boot_prompt` — one wording, never two to
     drift apart) but skips its managed_by/caller-seat gate: launch_seat's own docstring is
     explicit that the operator is a different trust boundary and never calls it directly —
-    this function IS that boundary, same as the PTY lane below it."""
-    from src.orchestrator.trigger import _bg_boot_prompt
+    this function IS that boundary, same as the PTY lane below it.
+
+    TREE_CWD (task #135/#136, 2026-08-03, ruling 983ec87a — two doors onto one act must
+    return the same receipt): this door had drifted from launch_seat's own #103 update —
+    hardcoded to `office` and never reading `tree_cwd` at all, so it could not correctly
+    body any tree-bound seat; it always spawned into the office, silently. Now mirrors
+    launch_seat's own tree_cwd handling exactly: bound-but-missing refuses (osiris never
+    provisions a tree), unset falls back to `office` unchanged."""
+    from src.orchestrator.trigger import _bg_boot_prompt, _tree_exists
 
     facts = await _resolve_launch_target(pool, handle)
     if facts is None:
         return 1
     office = facts["anchor_cwd"]
+    tree_cwd = facts["tree_cwd"]
+    launch_cwd = office
+    if tree_cwd:
+        if not _tree_exists(tree_cwd):
+            print(f"osiris launch: {handle!r} names tree_cwd={tree_cwd!r} but it does not "
+                  "exist on disk — osiris expects the harness (or a human, via "
+                  "EnterWorktree) to have created it before launch; it never provisions "
+                  "one itself.", file=sys.stderr)
+            return 1
+        launch_cwd = tree_cwd
 
     try:
-        roster = await agents_json(cwd=office)
+        roster = await agents_json(cwd=launch_cwd)
     except (OSError, TimeoutError, ValueError):
         roster = []
-    live = next((r for r in roster if isinstance(r, dict) and r.get("cwd") == office), None)
+    live = next((r for r in roster if isinstance(r, dict) and r.get("cwd") == launch_cwd),
+               None)
     if live is not None:
         live_name = live.get("name")
         print(f"osiris launch: a live body already holds {handle!r} — not minting a twin. "
@@ -466,7 +484,12 @@ async def _cmd_launch_harness(
 
     from src.ingest.sessions import dormant_history_confession, dormant_history_note
 
-    dormant = dormant_history_confession(office)
+    # BOTH SLUGS, ALWAYS (task #135/#136): office and tree_cwd are two DIFFERENT slugs by
+    # design (#103) — a dormant transcript can sit under either one, so check both
+    # regardless of which one this launch is actually spawning into, and confess whichever
+    # is freshest. locate_transcript_by_cwd was single-slug-blind; dormant_history_confession
+    # now takes every candidate cwd it's given.
+    dormant = dormant_history_confession(office, *([tree_cwd] if tree_cwd else []))
     if dormant is not None:
         print(f"osiris launch: {handle!r}'s {dormant_history_note(dormant)}",
               file=sys.stderr)
@@ -477,7 +500,7 @@ async def _cmd_launch_harness(
     boot_prompt = _bg_boot_prompt(office=office, anchor=anchor, handle=facts["handle"])
 
     try:
-        await spawn(office, name=name, model=resolved_model, prompt=boot_prompt)
+        await spawn(launch_cwd, name=name, model=resolved_model, prompt=boot_prompt)
     except OSError as exc:
         print(f"osiris launch: claude --bg failed to start ({exc}) — nothing was spawned.",
               file=sys.stderr)
@@ -488,8 +511,8 @@ async def _cmd_launch_harness(
     alive_row: dict[str, Any] | None = None
     for _ in range(8):
         try:
-            alive_row = next((r for r in await agents_json(cwd=office)
-                              if isinstance(r, dict) and r.get("cwd") == office), None)
+            alive_row = next((r for r in await agents_json(cwd=launch_cwd)
+                              if isinstance(r, dict) and r.get("cwd") == launch_cwd), None)
         except (OSError, TimeoutError, ValueError):
             alive_row = None
         if alive_row is not None:
