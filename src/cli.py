@@ -58,6 +58,23 @@ EXISTING verb rather than re-deriving it:
                                      fallback) instead of a named actor — a real provenance
                                      loss for a governance-relevant write, unlike cmd_fleet's
                                      read-only round-trip where no attribution is at stake.
+  osiris annotate-thread <ref>      the same capture.annotate_thread the annotate_thread MCP
+             <note> --actor         tool wraps (thread 2474 — named there alongside
+                                     amend_decision as sharing fold_project's stale-tool-index
+                                     shape, but never built until now) — appends to a thread's
+                                     record without closing it. Same explicit-actor,
+                                     direct-orchestrator-call pattern as amend-practice above.
+  osiris amend-decision <ref>       the same capture.amend_decision the amend_decision MCP
+             <addendum> --actor     tool wraps (thread 2474, the other half of the pair named
+                                     above) — appends reasoning to a LIVE decision without
+                                     superseding it. Same pattern, same reason.
+  osiris mint-seat <handle>         the same mintseat.mint_seat the mint_seat MCP tool wraps —
+             --manager <seat>       a DIFFERENT shape of gap than the four doors above: the MCP
+             [--project] [--house]  tool has no `manager` parameter at all, it infers the
+             [--model] --actor      manager from the CALLING agent's own held seat, which a raw
+             [--adopt] [--force]    terminal doesn't have. Takes `manager` explicitly instead —
+                                     closes the "brand-new seat needs a hand-rolled python -c
+                                     heredoc" gap CLI.md's own house law names as a finding.
 
 CANONICAL ENV RESOLUTION (the actual root-fix, 3e96c10e's cousin): every DB-backed command
 applies src.config.dev_env.apply_dev_fallback() first — a bare invocation must target the
@@ -1347,6 +1364,185 @@ async def cmd_amend_practice(
     return 0
 
 
+# --- annotate-thread ---------------------------------------------------------------------------
+
+async def cmd_annotate_thread(
+    ref: str, note: str, *, actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris annotate-thread <ref> <note> --actor <who> — the console-script door onto
+    capture.annotate_thread, the SAME function the annotate_thread MCP tool wraps (no
+    duplicated guard: the blank-note and no-match refusals are exactly annotate_thread's
+    own, untouched here).
+
+    NAMED BEFORE IT WAS BUILT: charter_for's own docstring already listed this verb
+    (thread 2474) as sharing fold_project's shape — a verb ships, deploys, and the fleet's
+    live MCP clients cannot see it in their own deferred-tool index (not this module's bug,
+    upstream per ruling 482c3d0f) — but only fold_project/charter_for/amend_practice ever
+    got the second door built. This closes that gap.
+
+    CALLS THE ORCHESTRATOR FUNCTION DIRECTLY, amend_practice's own precedent: an annotation
+    is a WRITE, and a call_mcp_tool round-trip is anonymous — the MCP wrapper's own
+    `_actor_for` fallback would stamp it with the generic "session" bucket instead of a
+    named actor, a real provenance loss for a governance-relevant write.
+
+    TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474's general rule):
+    mirrors the MCP wrapper's own {"id", "note", "status"} / {"error": ...} shape by hand."""
+    from src.actions.core import Actions
+    from src.orchestrator.capture import annotate_thread
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris annotate-thread: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        try:
+            tid = await annotate_thread(Actions(pool), ref, note, source=actor)
+        except ValueError as e:
+            print(f"osiris annotate-thread: refused — {e}", file=sys.stderr)
+            return 1
+    finally:
+        if owns_pool:
+            await pool.close()
+    if tid is None:
+        print(f"osiris annotate-thread: refused — no thread matches {ref!r}", file=sys.stderr)
+        return 1
+    print(f"annotated {tid}: {note.strip()}")
+    return 0
+
+
+# --- amend-decision ----------------------------------------------------------------------------
+
+async def cmd_amend_decision(
+    ref: str, addendum: str, *, actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris amend-decision <ref> <addendum> --actor <who> — the console-script door onto
+    capture.amend_decision, the SAME function the amend_decision MCP tool wraps (no
+    duplicated guard: the blank-addendum and already-superseded refusals are exactly
+    amend_decision's own, untouched here).
+
+    NAMED BEFORE IT WAS BUILT (thread 2474, same gap annotate_thread's own CLI door
+    above closes): shipped, deployed, invisible to a stale client's deferred-tool index
+    (ruling 482c3d0f), but never given a second door until now.
+
+    CALLS THE ORCHESTRATOR FUNCTION DIRECTLY (amend_practice's own precedent, same
+    reason): a call_mcp_tool round-trip has no mounted identity to stamp the addendum
+    with, only the generic "session" bucket — a real provenance loss.
+
+    TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT: mirrors the MCP wrapper's
+    own {"id", "addendum", "status"} / {"error": ...} shape by hand."""
+    from src.actions.core import Actions
+    from src.orchestrator.capture import amend_decision
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris amend-decision: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        try:
+            did = await amend_decision(Actions(pool), ref, addendum, source=actor)
+        except ValueError as e:
+            print(f"osiris amend-decision: refused — {e}", file=sys.stderr)
+            return 1
+    finally:
+        if owns_pool:
+            await pool.close()
+    if did is None:
+        print(f"osiris amend-decision: refused — no decision matches {ref!r}", file=sys.stderr)
+        return 1
+    print(f"amended {did}: {addendum.strip()}")
+    return 0
+
+
+# --- mint-seat -----------------------------------------------------------------------------------
+
+async def cmd_mint_seat(
+    handle: str, *, manager: str, project: str | None, house: str | None,
+    model: str | None, actor: str, adopt: bool = False, force: bool = False,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris mint-seat <handle> --manager <seat> [--project P] [--house H] [--model M]
+    --actor <who> [--adopt] [--force] — the console-script door onto mintseat.mint_seat,
+    the SAME function the mint_seat MCP tool wraps (no duplicated guard: the near-miss/
+    cross-house/live-adopt refusals are exactly mint_seat's own, untouched here).
+
+    A DIFFERENT SHAPE OF GAP than fold_project/charter_for/amend_practice's stale-tool-
+    index class: mint_seat's own MCP tool has no `manager` parameter at all — it INFERS
+    the manager from the CALLING agent's own held seat ("the calling seat is always the
+    manager... minting into someone else's org is a console act, deliberately absent
+    here", mint_seat's own docstring). A raw terminal has no mounted agent identity to
+    infer from, so this door takes `manager` explicitly — the same refuse-never-guess
+    discipline fold_project/charter_for/amend_practice already apply to `actor`, extended
+    one parameter further because this orchestrator function's whole shape assumes an
+    already-known caller-seat. Closes the exact gap CLI.md's own house law names: an
+    operator standing up a brand-new seat had no door but a hand-rolled `python -c`
+    heredoc against the live DB — precisely what ruling 45b074bf bans.
+
+    Prints the SAME next_step guidance the receipt already carries (mint_seat's own
+    occupancy-aware line — vacant: `osiris launch <handle>`; occupied/cold: nothing
+    needed) rather than a second, driftable copy of that advice."""
+    from src.actions.core import Actions
+    from src.orchestrator.mintseat import mint_seat as _mint_seat
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris mint-seat: could not reach postgres at {settings.database_url} "
+                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            return 1
+    try:
+        kwargs: dict[str, Any] = {"intended_model": model} if model else {}
+        out = await _mint_seat(Actions(pool), manager=manager, handle=handle, house=house,
+                               project=project, actor=actor, adopt=adopt, force=force,
+                               **kwargs)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris mint-seat: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"{'minted' if out['seat_minted'] else 'adopted'} {out['handle']} "
+          f"({out['seat_id']}), house={out['house']}")
+    office = out.get("office")
+    if office:
+        print(f"office: {office['office']} (pin {office['osiris_pin']}, orders "
+              f"{office['standing_orders']}, charter {office['charter_file']})")
+    print(f"model: {out['intended_model']}"
+          + (" (stamped)" if out.get("intended_model_stamped") else ""))
+    print(f"manager: {out['manager_seat_id']} ({out['managed_by']})")
+    print(f"occupancy: {out['occupancy']} — {out['next_step']}")
+    return 0
+
+
 # --- argv dispatch -----------------------------------------------------------------------------
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -1417,6 +1613,52 @@ def _build_parser() -> argparse.ArgumentParser:
     p_amend_practice.add_argument("--actor", required=True,
                                   help="who is making this amendment")
 
+    p_annotate_thread = sub.add_parser("annotate-thread", help="add to a thread's record "
+                                       "without closing it — the same annotate_thread the "
+                                       "MCP tool wraps, exposed as the sanctioned second door")
+    p_annotate_thread.add_argument("ref", help="the target thread's uuid, canonical, "
+                                   "short-id prefix, or summary substring")
+    p_annotate_thread.add_argument("note", help="the note to append — never touches "
+                                   "summary/status")
+    p_annotate_thread.add_argument("--actor", required=True,
+                                   help="who is adding this note")
+
+    p_amend_decision = sub.add_parser("amend-decision", help="append reasoning to a LIVE "
+                                      "decision without superseding it — the same "
+                                      "amend_decision the MCP tool wraps, exposed as the "
+                                      "sanctioned second door")
+    p_amend_decision.add_argument("ref", help="the target decision's uuid, canonical, "
+                                  "short-id prefix, or summary substring")
+    p_amend_decision.add_argument("addendum", help="the text to add — never replaces the "
+                                  "decision's own summary/rationale/kind")
+    p_amend_decision.add_argument("--actor", required=True,
+                                  help="who is making this addendum")
+
+    p_mint_seat = sub.add_parser("mint-seat", help="mint (or adopt) a worker seat under an "
+                                 "explicit manager — the same mint_seat the MCP tool wraps, "
+                                 "exposed as the sanctioned second door for a human at a "
+                                 "terminal with no held seat of their own")
+    p_mint_seat.add_argument("handle", help="the new worker seat's handle")
+    p_mint_seat.add_argument("--manager", required=True,
+                             help="the minting seat's own handle or seat_id — a raw "
+                                  "terminal has no held seat to infer this from")
+    p_mint_seat.add_argument("--project", default=None,
+                             help="the project the new seat's office is stamped with "
+                                  "(defaults to the manager's own house)")
+    p_mint_seat.add_argument("--house", default=None,
+                             help="defaults to the manager's own house; crossing houses "
+                                  "refuses unless --actor is an operator actor")
+    p_mint_seat.add_argument("--model", default=None,
+                             help="defaults to mint_seat's own worker default")
+    p_mint_seat.add_argument("--actor", required=True,
+                             help="who is performing this mint")
+    p_mint_seat.add_argument("--adopt", action="store_true",
+                             help="state explicitly that handle names an EXISTING seat to "
+                                  "adopt — refuses instead of silently minting fresh on no "
+                                  "match")
+    p_mint_seat.add_argument("--force", action="store_true",
+                             help="mint a distinct seat past a near-miss handle refusal")
+
     return p
 
 
@@ -1446,6 +1688,14 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_charter_for(args.seat, repos, args.because, actor=args.actor))
     if args.command == "amend-practice":
         return asyncio.run(cmd_amend_practice(args.ref, args.amendment, actor=args.actor))
+    if args.command == "annotate-thread":
+        return asyncio.run(cmd_annotate_thread(args.ref, args.note, actor=args.actor))
+    if args.command == "amend-decision":
+        return asyncio.run(cmd_amend_decision(args.ref, args.addendum, actor=args.actor))
+    if args.command == "mint-seat":
+        return asyncio.run(cmd_mint_seat(
+            args.handle, manager=args.manager, project=args.project, house=args.house,
+            model=args.model, actor=args.actor, adopt=args.adopt, force=args.force))
     return 2  # pragma: no cover - argparse's own `required=True` makes this unreachable
 
 

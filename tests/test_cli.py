@@ -17,7 +17,9 @@ from src.cli import (
     _wait_for_health,
     _wait_for_smoke,
     alembic_gap_note,
+    cmd_amend_decision,
     cmd_amend_practice,
+    cmd_annotate_thread,
     cmd_attach,
     cmd_boot_status,
     cmd_charter_for,
@@ -25,6 +27,7 @@ from src.cli import (
     cmd_fold_project,
     cmd_launch,
     cmd_migrate,
+    cmd_mint_seat,
     cmd_seed,
     commit_deployed_notes,
     composition_drift_notes,
@@ -1292,3 +1295,196 @@ async def test_cli_parser_accepts_amend_practice(actions: Actions) -> None:
     assert args.ref == "practice:abc12345"
     assert args.amendment == "narrowed to its residual window"
     assert args.actor == "operator"
+
+
+# --- annotate-thread: the fourth sanctioned second door (thread 2474) — calls the SAME
+# capture.annotate_thread the MCP wrapper calls, guard untouched -------------------------------
+
+async def test_cmd_annotate_thread_annotates_and_reports(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator.capture import open_thread, thread_notes
+
+    tid = await open_thread(actions, "the console door needs a second door too")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_annotate_thread(str(tid), "confirmed live via osiris annotate-thread",
+                                        actor="agent:cliannotator1", pool=actions.pool)
+    assert out == 0
+    assert f"annotated {tid}" in buf.getvalue()
+    assert "confirmed live via osiris annotate-thread" in buf.getvalue()
+
+    notes = await thread_notes(actions.pool, tid)
+    assert [n["note"] for n in notes] == ["confirmed live via osiris annotate-thread"]
+    assert notes[0]["source"] == "agent:cliannotator1"
+
+
+async def test_cmd_annotate_thread_refuses_no_match(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_annotate_thread("no such thread anywhere", "a note",
+                                        actor="agent:cliannotator2", pool=actions.pool)
+    assert out == 1
+    assert "no thread matches" in buf.getvalue()
+
+
+async def test_cli_parser_accepts_annotate_thread(actions: Actions) -> None:
+    """argparse wiring: ref + note positionals, --actor required."""
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["annotate-thread", "thread:abc12345", "a further observation", "--actor", "operator"])
+    assert args.command == "annotate-thread"
+    assert args.ref == "thread:abc12345"
+    assert args.note == "a further observation"
+    assert args.actor == "operator"
+
+
+# --- amend-decision: the fifth sanctioned second door (thread 2474) — calls the SAME
+# capture.amend_decision the MCP wrapper calls, guard untouched --------------------------------
+
+async def test_cmd_amend_decision_amends_and_reports(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator.capture import decision_addenda, record_decision
+
+    did = await record_decision(actions, "the CLI is one of exactly two doors")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_amend_decision(str(did), "reaffirmed after the mint-seat build",
+                                       actor="agent:cliamender4", pool=actions.pool)
+    assert out == 0
+    assert f"amended {did}" in buf.getvalue()
+    assert "reaffirmed after the mint-seat build" in buf.getvalue()
+
+    addenda = await decision_addenda(actions.pool, did)
+    assert [a["addendum"] for a in addenda] == ["reaffirmed after the mint-seat build"]
+    assert addenda[0]["source"] == "agent:cliamender4"
+
+
+async def test_cmd_amend_decision_refuses_a_superseded_decision(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    from src.orchestrator.capture import decision_addenda, record_decision
+
+    old = await record_decision(actions, "an earlier, now-corrected ruling")
+    await record_decision(actions, "the correction", supersedes=str(old))
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_amend_decision(str(old), "one more thought on the dead ruling",
+                                       actor="agent:cliamender5", pool=actions.pool)
+    assert out == 1
+    assert "refused" in buf.getvalue() and "already superseded" in buf.getvalue()
+    assert await decision_addenda(actions.pool, old) == []
+
+
+async def test_cmd_amend_decision_refuses_no_match(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_amend_decision("no such decision anywhere", "an addendum",
+                                       actor="agent:cliamender6", pool=actions.pool)
+    assert out == 1
+    assert "no decision matches" in buf.getvalue()
+
+
+async def test_cli_parser_accepts_amend_decision(actions: Actions) -> None:
+    """argparse wiring: ref + addendum positionals, --actor required."""
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["amend-decision", "decision:abc12345", "reaffirmed", "--actor", "operator"])
+    assert args.command == "amend-decision"
+    assert args.ref == "decision:abc12345"
+    assert args.addendum == "reaffirmed"
+    assert args.actor == "operator"
+
+
+# --- mint-seat: a different shape of second door (no stale-tool-index gap — mint_seat's own
+# MCP tool infers `manager` from the caller's held seat, which a raw terminal has none of) ------
+
+async def test_cmd_mint_seat_mints_fresh_worker_and_reports(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator.seats import ensure_seat
+
+    manager = await ensure_seat(actions, house="clihouse", handle="CliMintMgr1",
+                                source="test")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_mint_seat(
+            "CliMintWorker1", manager=manager["seat_id"], project="cliproj1", house=None,
+            model=None, actor="agent:climinter1", pool=actions.pool)
+    assert out == 0
+    text = buf.getvalue()
+    assert "minted CliMintWorker1" in text and "house=clihouse" in text
+    assert "office:" in text
+    assert f"manager: {manager['seat_id']} (linked)" in text
+    assert "occupancy: vacant" in text and "launch(target='CliMintWorker1')" in text
+
+    from src.orchestrator.seats import seat_facts, seats_by_handle
+
+    worker_ids = await seats_by_handle(actions.pool, "CliMintWorker1")
+    assert len(worker_ids) == 1
+    facts = await seat_facts(actions.pool, worker_ids[0])
+    assert facts["anchor_cwd"]
+
+
+async def test_cmd_mint_seat_refuses_unknown_manager(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_mint_seat(
+            "CliMintWorker2", manager="NoSuchManagerAnywhere", project=None, house=None,
+            model=None, actor="agent:climinter2", pool=actions.pool)
+    assert out == 1
+    assert "no such manager seat" in buf.getvalue()
+
+
+async def test_cmd_mint_seat_refuses_cross_house_without_operator_actor(
+    actions: Actions,
+) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    from src.orchestrator.seats import ensure_seat
+
+    manager = await ensure_seat(actions, house="clihouseA", handle="CliMintMgr3",
+                                source="test")
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_mint_seat(
+            "CliMintWorker3", manager=manager["seat_id"], project=None, house="clihouseB",
+            model=None, actor="agent:climinter3", pool=actions.pool)
+    assert out == 1
+    assert "cross-house mint refused" in buf.getvalue()
+
+
+async def test_cli_parser_accepts_mint_seat(actions: Actions) -> None:
+    """argparse wiring: handle positional, --manager/--actor required, the rest optional."""
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["mint-seat", "NewWorker", "--manager", "seat:abc12345", "--actor", "operator"])
+    assert args.command == "mint-seat"
+    assert args.handle == "NewWorker"
+    assert args.manager == "seat:abc12345"
+    assert args.actor == "operator"
+    assert args.project is None and args.house is None and args.model is None
+    assert args.adopt is False and args.force is False

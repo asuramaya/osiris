@@ -188,7 +188,77 @@ implying a hold protects everything:
   that has no bearing on the surface in question would be theater, not a guard. For these,
   review has to happen *before* the commit, not after.
 
-## The house law behind all seven
+## `osiris fold-project <dupe> <into> --evidence <text> --actor <who>`
+
+The sanctioned second door onto `projects.fold_project` — the same function the
+`fold_project` MCP tool wraps, no softened gate (the evidence check and
+`_contradicting_properties` refusal are exactly `fold_project`'s own). Exists for a live
+client whose deferred-tool index sits frozen across a deploy (ruling `482c3d0f`), or a
+worker whose sandbox classifier permits an installed entrypoint but refuses a raw
+`DATABASE_URL` script. Folds `dupe` into `into` (type read off `dupe`'s own form); the merge
+event and `same_as` link the MCP wrapper's own receipt surfaces are queried and printed here
+too — two doors onto one function return the same receipt, never a weaker echo.
+
+## `osiris charter-for <seat> --repos a,b,c --because <text> --actor <who>`
+
+The sanctioned second door onto `charter.charter_for` — same guard as the MCP tool, fully
+enforced (the `managed_by`/operator-actor check is the whole point of this verb, never
+softened here). `--repos` is the WHOLE charter, not an increment; `--actor` must be the
+seat's own manager or an operator actor, or it refuses by name.
+
+## `osiris amend-practice <ref> <amendment> --actor <who>`
+
+The sanctioned second door onto `capture.amend_practice` — narrows a LIVE practice's
+guidance without touching its id, its `statement` (the idempotency key), or its witness
+count. Refuses on a refuted practice or a blank amendment, the same as the MCP tool. Folded
+directly into `practices()`'s own live listing, not left write-only.
+
+## `osiris annotate-thread <ref> <note> --actor <who>`
+
+The sanctioned second door onto `capture.annotate_thread` — the same function the
+`annotate_thread` MCP tool wraps. Appends to a thread's record without closing it;
+`summary`/`status` are never touched. `ref` matches a Thread's UUID, canonical, short-id
+prefix, or summary substring, regardless of the thread's own open/resolved/deferred status.
+
+Named as a gap before it was built: `charter-for`'s own docstring already listed this verb
+(alongside `amend-decision`) as sharing `fold-project`'s shape — shipped, deployed, and
+invisible to a fleet client whose deferred-tool index sat frozen (ruling `482c3d0f`) — but
+only `fold-project`/`charter-for`/`amend-practice` had a second door built. Calls the
+orchestrator function directly with an explicit `--actor`, the same reason those three do:
+a real provenance loss otherwise, not a generic "session" bucket.
+
+## `osiris amend-decision <ref> <addendum> --actor <who>`
+
+The other half of that same pair — the sanctioned second door onto `capture.amend_decision`.
+Appends reasoning to a LIVE decision as understanding develops, WITHOUT superseding it;
+`summary`/`rationale`/`kind` are never touched. Refuses when `ref` resolves to a decision
+already superseded (amend the successor instead, or use `record_decision(supersedes=...)`
+for an actual correction).
+
+## `osiris mint-seat <handle> --manager <seat> [--project] [--house] [--model] --actor [--adopt] [--force]`
+
+The sanctioned second door onto `mintseat.mint_seat` — a DIFFERENT shape of gap than the
+three doors above: those exist because a client's tool index can go stale; this one exists
+because the `mint_seat` MCP tool has **no `manager` parameter at all** — it infers the
+manager from the calling agent's own held seat ("the calling seat is always the manager...
+minting into someone else's org is a console act, deliberately absent here," `mint_seat`'s
+own docstring). A raw terminal has no mounted agent identity to infer from, so this door
+takes `manager` explicitly — the same refuse-never-guess discipline the other second doors
+already apply to `--actor`, extended one parameter further.
+
+One call does the whole ceremony: `ensure_seat` + the office scaffold (dir, `.osiris` pin,
+`CLAUDE.md` + `charter.md`) + an `intended_model` stamp + the `managed_by` edge to
+`--manager`. Idempotent — a handle that already names a living seat is *adopted*
+(fill-missing-only), never twinned; `--adopt` states that intent explicitly (refuses on no
+match rather than silently minting fresh), `--force` is the only door past a near-miss
+handle refusal (ruling `7cffda8f`). The receipt prints `mint_seat`'s own occupancy-aware
+next step — vacant names the exact `launch(target=...)` call to body it next.
+
+This closes the exact gap this file's own house law names below: before this command
+existed, standing up a brand-new seat from a terminal had no door but a hand-rolled
+`python -c` heredoc against the live DB — precisely what ruling `45b074bf` bans.
+
+## The house law behind every subcommand
 
 `osiris` is one of exactly two ways into this system — the other is the MCP tool surface an
 agent uses. Both exist so that "how do I do X" always has a documented, honest, idempotent
