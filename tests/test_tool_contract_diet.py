@@ -103,7 +103,16 @@ import json
 # the category rule's lean end first (dropped the dated citation and the "not a metadata gap"
 # aside, kept the WHY implicit in "trusts as the code it executes"); 119,953 -> 120,081, +128.
 # Exact measured total, not a round number.
-TOOL_CONTRACT_CEILING_CHARS = 120_081
+#
+# RAISED, consolidate's missing refusal (2026-08-03, Thoth LXXI's Phase 0 Tier 2 dispatch,
+# msg 3354, his own priority pick of the three): the tool took NO parameters at all before
+# this fix — not even `ctx` — an ungated whole-graph automatic merge sweep any mounted
+# caller could trigger. Added `ctx` + an `_OPERATOR_ACTORS` check, the same convention
+# mint_seat's cross-house guard already uses for a no-target global operation. Trimmed the
+# MCP-facing docstring to the category rule's lean end first (dropped the dated citation and
+# the mechanism-name aside, kept only what it refuses and why); 120,081 -> 120,268, +187.
+# Exact measured total, not a round number.
+TOOL_CONTRACT_CEILING_CHARS = 120_268
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:

@@ -1042,10 +1042,22 @@ async def expand_clinical_site(facility: str) -> dict[str, int]:
 
 
 @mcp.tool()
-async def consolidate() -> dict[str, int]:
+async def consolidate(ctx: Context | None = None) -> dict[str, Any]:
     """Graph hygiene: re-type mis-ingested entities (GP/LLC 'persons' -> Organizations),
     then queue + resolve cross-base merges (same company across bases) and collapse
-    SPV-name company variants. Run after collecting to de-fragment entities."""
+    SPV-name company variants. Run after collecting to de-fragment entities.
+    OPERATOR ONLY, ENFORCED — a whole-graph automatic merge sweep with no per-merge
+    review, not a per-object act any mounted caller should trigger on a whim. Refuses on
+    an unauthorized actor."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a consolidation sweep is a mind's act, and the "
+                         "graph must know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.seats import _OPERATOR_ACTORS
+    if ident.agent_id not in _OPERATOR_ACTORS:
+        return {"error": f"{ident.agent_id!r} is not authorized to run consolidate — this "
+                         "is an operator-only whole-graph merge sweep, not a per-object act "
+                         "any mounted caller may trigger"}
     actions = Actions(await _pool_get())
     reclassified = await reclassify_mistyped_entities(actions)
     await find_cross_base_candidates(actions.pool)
