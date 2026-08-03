@@ -32,7 +32,7 @@ import asyncpg
 from src.actions.core import Actions
 from src.config.settings import Settings, get_settings
 from src.ingest.providers import spend_is_metered
-from src.ingest.sessions import locate_current_transcript
+from src.ingest.sessions import locate_current_transcript, resumable_tail_bytes
 from src.orchestrator.bodies import BodyProvider, LocalProvider
 from src.orchestrator.ceiling import may_spend
 from src.orchestrator.mailbox import OPERATOR_ADDR, send_message
@@ -521,19 +521,40 @@ def _pick_resumable_sync(
     """The disk half of resume-resolution (sync — called via to_thread): for each candidate
     (job_dir, cwd), anchor its transcript and check the context ceiling. Returns
     (full_session_id, cwd, transcript_mtime, job_dir) for the first resumable owner. The
-    transcript stem IS the session id `claude --resume` takes; a transcript at the ceiling
-    is retirement-by-compaction territory — resuming it would replay a sibling project's
-    21:30 case, which was LEGITIMATE succession. The mtime rides along as the ONE honest
-    mid-turn signal: a turn writes the transcript; nothing else does (the statusline-
-    heartbeat superstition, killed 2026-07-20 — see dispatch_dm). `job_dir` (thread
-    25943031) rides along too, additive — see _agent_resumable's own docstring."""
+    transcript stem IS the session id `claude --resume` takes.
+
+    THE CEILING CHECKS THE RESUMABLE TAIL, NOT THE RAW FILE SIZE (thread 771366d1, corrected
+    2026-08-03 — the original ceiling, introduced alongside this whole resume-not-mint
+    dispatch in commit d9e9c016, conflated two different concerns: (1) don't reanimate a
+    generation that already retired via a legitimate succession — "his 21:30 retirement was
+    legitimate succession" — which is ALREADY the `_retired()` check every caller here runs
+    FIRST, explicitly and authoritatively, not a size guess; and (2) don't resume something
+    expensive — which raw file size measures badly, per `resumable_tail_bytes`'s own
+    finding (src/ingest/sessions.py): a 72-103MB transcript's actual live-since-last-
+    compaction content is 2-3MB.
+    Small files (already under ceiling by raw size) skip the tail-scan entirely — same cost
+    as before for the common case; only a file OVER the raw ceiling pays for the more
+    accurate, more expensive check, which is exactly the population that check might rescue.
+    The mtime rides along as the ONE honest mid-turn signal: a turn writes the transcript;
+    nothing else does (the statusline-heartbeat superstition, killed 2026-07-20 — see
+    dispatch_dm). `job_dir` (thread 25943031) rides along too, additive — see
+    _agent_resumable's own docstring.
+
+    NOTE FOR WHOEVER MERGES eebeb1f (Sekhmet's #136, unmerged as of this fix):
+    `_resume_miss_reason` duplicates this function's OLD raw-size check byte for byte, by
+    its own explicit design ("mirrors _pick_resumable_sync's own per-candidate logic
+    exactly so the two can never disagree"). It needs the SAME tail-measurement swap or the
+    two will disagree — precisely the failure mode its own docstring warns against."""
     for job_dir, cwd in cands:
         t = locate_current_transcript(root, job_dir, anchored_only=True)
         if t is None:
             continue
         try:
             st = t.stat()
-            if st.st_size > ceiling_bytes:
+            size = st.st_size
+            if size > ceiling_bytes:
+                size = resumable_tail_bytes(t)
+            if size > ceiling_bytes:
                 continue
         except OSError:
             continue
@@ -1785,7 +1806,9 @@ async def launch_seat(
         # either, so both are checked regardless of which one launch_cwd resolved to; the
         # freshest match is confessed.
         from src.ingest.sessions import dormant_history_confession
-        dormant = dormant_history_confession(office, *([tree_cwd] if tree_cwd else []))
+        dormant = dormant_history_confession(
+            office, *([tree_cwd] if tree_cwd else []),
+            ceiling_bytes=st.osiris_resume_ceiling_bytes)
 
         try:
             await spawn(launch_cwd, name=name, model=argv_model, prompt=boot_prompt)

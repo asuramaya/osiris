@@ -569,6 +569,109 @@ async def test_retired_owner_is_never_reanimated(actions: Actions, tmp_path: Pat
         "SELECT mode FROM agent_wakes ORDER BY id DESC LIMIT 1") == "mint"
 
 
+# --- the ceiling checks the RESUMABLE TAIL, not raw file size (thread 771366d1, task #135/
+# #136) — a transcript's cumulative lifetime size is a poor proxy for what a resume actually
+# has to hydrate; Claude Code auto-compacts, and only the content since the LAST compaction is
+# live. Verified against two real specimens: imhotep XVIII (72MB, 17 boundaries, 2.29MB tail)
+# and seshat XXIII (103MB, 20 boundaries, 2.23MB tail) — both under 3% of their own file size.
+# `resumable_tail_bytes` itself lives in src/ingest/sessions.py (tests: test_sessions.py) —
+# these tests cover only `_pick_resumable_sync`'s own use of it. ----------------------------
+
+_COMPACT_LINE = (
+    b'{"type":"system","subtype":"compact_boundary","summary":"compacted"}\n'
+)
+
+
+def _write_transcript(path: Path, body: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body)
+
+
+def test_pick_resumable_sync_rescues_a_large_transcript_with_a_small_tail(
+    tmp_path: Path,
+) -> None:
+    """THE FIX, directly: raw size is well over the ceiling, but everything since the last
+    compaction fits comfortably under it — now correctly resumable, where the old raw-size
+    check would have refused it (exactly Sekhmet's two real repro cases, imhotep XVIII and
+    seshat XXIII)."""
+    root = tmp_path / "projects"
+    proj = root / "-repo-demo"
+    body = (b'{"type":"assistant","message":"old"}\n' * 100_000 + _COMPACT_LINE
+            + b'{"type":"user","message":"new"}\n' * 3)
+    assert len(body) > 1_000_000  # comfortably over the small ceiling used below
+    _write_transcript(proj / f"{FULL_SID}.jsonl", body)
+    out = trigger_module._pick_resumable_sync(
+        [("jobs/abcd1234", "/repo/demo")], root, ceiling_bytes=1000)
+    assert out is not None and out[0] == FULL_SID
+
+
+def test_pick_resumable_sync_still_refuses_when_the_tail_itself_is_over_ceiling(
+    tmp_path: Path,
+) -> None:
+    """The fix narrows the false-refusal, it does not remove the ceiling: a transcript whose
+    LIVE tail is genuinely large stays refused."""
+    root = tmp_path / "projects"
+    proj = root / "-repo-demo"
+    body = (b'{"type":"assistant","message":"old"}\n' * 100_000 + _COMPACT_LINE
+            + b'{"type":"user","message":"new"}\n' * 100_000)
+    _write_transcript(proj / f"{FULL_SID}.jsonl", body)
+    out = trigger_module._pick_resumable_sync(
+        [("jobs/abcd1234", "/repo/demo")], root, ceiling_bytes=1000)
+    assert out is None
+
+
+def test_pick_resumable_sync_never_pays_the_scan_cost_under_ceiling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A file already under the ceiling by raw size must not even open the tail-scan — same
+    cost as before the fix for the common case."""
+    root = tmp_path / "projects"
+    proj = root / "-repo-demo"
+    _write_transcript(proj / f"{FULL_SID}.jsonl", b'{"type":"user","message":"hi"}\n')
+
+    def _boom(transcript: Path) -> int:
+        raise AssertionError("must not be called when raw size is already under ceiling")
+
+    monkeypatch.setattr(trigger_module, "resumable_tail_bytes", _boom)
+    out = trigger_module._pick_resumable_sync(
+        [("jobs/abcd1234", "/repo/demo")], root, ceiling_bytes=1_000_000)
+    assert out is not None and out[0] == FULL_SID
+
+
+async def test_trigger_resumes_a_large_transcript_with_a_small_tail_end_to_end(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """End-to-end through trigger_mail_tick, not just the pure/unit layer: a transcript over
+    the raw ceiling but with a small post-compaction tail is now RESUMED, not minted."""
+    await _agent_with_mail(actions)
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-demo"
+    body = (b'{"type":"assistant","message":"old"}\n' * 100_000 + _COMPACT_LINE
+            + b'{"type":"user","message":"new"}\n' * 3)
+    _write_transcript(proj / f"{FULL_SID}.jsonl", body)
+    import os
+    import time as _time
+
+    from src.orchestrator import mounts
+
+    job = tmp_path / "jobs" / "abcd1234"
+    await mounts.save_mount(actions.pool, job_dir=str(job), agent_id="agent:abcd1234",
+                            project="demo", cwd="/repo/demo", model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '1 hour'")
+    old = _time.time() - 3600
+    os.utime(proj / f"{FULL_SID}.jsonl", (old, old))
+    calls: list[dict[str, Any]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append(kw)
+
+    rep = await trigger_mail_tick(
+        actions, settings=_settings(enabled=True, sense=str(sense), ceiling=1000), spawn=_spawn)
+    assert rep["resumed"] == 1   # "woke" is a superset counter incremented alongside resumed
+    assert calls[0].get("resume_session") == FULL_SID
+
+
 async def test_ceiling_transcript_mints_instead(actions: Actions, tmp_path: Path) -> None:
     """A transcript at the context ceiling is retirement-by-compaction territory — resuming it
     would replay a legitimate succession; the dispatch mints."""
