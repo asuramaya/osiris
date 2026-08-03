@@ -766,12 +766,12 @@ async def practices(
 
 
 @mcp.tool()
-async def lap(ref: str, limit: int = 200, ctx: Context | None = None) -> dict[str, Any]:
+async def provenance(ref: str, limit: int = 200, ctx: Context | None = None) -> dict[str, Any]:
     """ONE object's full provenance timeline — how the graph came to believe what it
     believes about it. Every assertion (with supersession fate), every link (both
     directions, retractions marked), every kernel event, in observed order, each carrying
     source + evidence grade + confidence; `believes` holds the current winning view.
-    search finds the WHAT; lap shows the HOW-WE-KNOW — run it before trusting a surprising
+    search finds the WHAT; this shows the HOW-WE-KNOW — run it before trusting a surprising
     fact, before merging/healing an object, or to autopsy a corpse (a uuid ref reaches
     merged/retired objects too). `ref` = uuid | canonical (e.g. 'agent:ad1a1cb0') | name."""
     pool = await _pool_get()
@@ -927,7 +927,7 @@ async def smoke() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def doors(ref: str) -> dict[str, Any]:
+async def whois(ref: str) -> dict[str, Any]:
     """One coherent answer about an agent, a seat, or a cwd — 'ref' is sniffed: an `agent:` id,
     a `seat:` id, a bare handle, or an absolute cwd path (`/...` or `~/...`). Always returns
     {ref, resolved, matches: [...]} — an agent/seat/handle resolves to 0-or-1 match (one
@@ -2996,11 +2996,11 @@ async def inbox(project: str | None = None, peek: bool = False,
 
 
 @mcp.tool()
-async def dim(message_id: int, because: str, ctx: Context | None = None) -> dict[str, Any]:
-    """DIM an operator-desk brief — annotate it moot-with-a-reason ('true when sent; root
+async def moot_brief(message_id: int, because: str, ctx: Context | None = None) -> dict[str, Any]:
+    """MOOT an operator-desk brief — annotate it moot-with-a-reason ('true when sent; root
     cause fixed in <commit>') so the desk renders it collapsed under your note instead of
     shouting a dead alarm. NEVER a settle: dismissing stays exclusively the human's word
-    (the membrane); a dim is you saving them the archaeology, stamped with your name.
+    (the membrane); a moot is you saving them the archaeology, stamped with your name.
     Only works on briefs addressed to the operator's desk. Requires mount."""
     ident = await _ident_for(ctx)
     if ident is None:
@@ -3703,14 +3703,14 @@ async def lift(ref: str, handle: str, subagent_id: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
     """Pull a NAMED, QUIET rogue out of its ad hoc cwd and into a clean osiris office — the
     P2V move: import a running-but-unmanaged instance, preserve its state,
-    give it a clean managed identity. Composes `doors(ref)` to resolve the target (refuses on
+    give it a clean managed identity. Composes `whois(ref)` to resolve the target (refuses on
     0 matches, on >1 — an ambiguous multi-tenant cwd, name a specific `agent:` id instead —
     and on a LIVE match: moving a live seat splits its running session's history between two
     homes, close its tab first), `claim_name(handle)` (propagating its own real refusals: a
     visitor, a name held live elsewhere, a cross-house collision), and `establish_office`
-    (the actual move). `ref` accepts anything `doors()` does — an `agent:` id, a `seat:` id, a
+    (the actual move). `ref` accepts anything `whois()` does — an `agent:` id, a `seat:` id, a
     bare handle, or an absolute cwd path. The receipt's `verified` field is a FRESH post-write
-    `doors()` read, never an echo of what the earlier steps each individually claimed.
+    `whois()` read, never an echo of what the earlier steps each individually claimed.
 
     SELF-LIFT IS STRUCTURALLY IMPOSSIBLE, not just refused: your own session's `last_seen` is
     kept perpetually fresh by your own terminal's statusline heartbeat, so you can never

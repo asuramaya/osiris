@@ -97,7 +97,7 @@ discipline — never a bare `launched: true`:
   facts, is the window actually alive and has a fresh body mounted at the office and
   self-reported *which* model it's running. If those two disagree — the receipt says
   `MISMATCH` and names both models — that is thread `20e4feb6`'s own bug class, caught
-  mechanically instead of by a human re-deriving it from `doors()`/`dossier()` by hand (as
+  mechanically instead of by a human re-deriving it from `whois()`/`dossier()` by hand (as
   this exact incident once required, decision `8e9c48d9`).
 - **Default (`--bg`) lane**: polls `claude agents --json` (bounded, same discipline) for the
   spawned body to appear, then reports it confirmed — `find it in claude agents as
