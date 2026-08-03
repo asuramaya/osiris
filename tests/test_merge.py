@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src.actions.core import Actions
-from src.orchestrator.merge import _merge_type, merge, unmerge
+from src.orchestrator.merge import _merge_type, merge, reconcile_merge, unmerge
 
 NOW = datetime.now(UTC)
 
@@ -234,3 +234,105 @@ async def test_unmerge_tool_reaches_unfold_seat_through_the_wrapper(actions: Act
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
     assert out["was_merged_into"] == "seat:umt1into"
+
+
+# ═══ reconcile_merge (#127's repair door, dispatch layer only — each type's own
+# refusal surface is proven in test_folds.py/test_seats.py/test_projects.py) ═══
+
+
+async def test_reconcile_merge_routes_an_agent_dupe_to_reconcile_agent_fold(
+    actions: Actions,
+) -> None:
+    await _mk_agent(actions, "agent:rm1dupe0")
+    await _mk_agent(actions, "agent:rm1into0")
+    dupe_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='agent:rm1dupe0'")
+    into_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='agent:rm1into0'")
+    await actions.merge_objects(into_id, dupe_id, justification="old-style", actor="operator")
+
+    out = await reconcile_merge(actions, dupe="agent:rm1dupe0", into="agent:rm1into0",
+                                actor="operator")
+    assert out["reconciled"] == "agent:rm1dupe0" and out["into"] == "agent:rm1into0"
+
+
+async def test_reconcile_merge_routes_a_seat_dupe_to_reconcile_seat_fold(
+    actions: Actions,
+) -> None:
+    dupe = await actions.create_or_find_object("Seat", "seat:rm2dupe0", "test")
+    into = await actions.create_or_find_object("Seat", "seat:rm2into0", "test")
+    await actions.merge_objects(into, dupe, justification="old-style", actor="test")
+
+    out = await reconcile_merge(actions, dupe="seat:rm2dupe0", into="seat:rm2into0",
+                                actor="test")
+    assert out["reconciled"] == "seat:rm2dupe0" and out["into"] == "seat:rm2into0"
+
+
+async def test_reconcile_merge_routes_a_bare_project_dupe_to_reconcile_project_fold(
+    actions: Actions,
+) -> None:
+    await _stub_project(actions, "repo:rm3dupe0", "rm3dupe0")
+    await _stub_project(actions, "repo:rm3into0", "rm3into0")
+    await merge(actions, dupe="rm3dupe0", into="rm3into0", evidence="x", actor="agent:test")
+
+    out = await reconcile_merge(actions, dupe="rm3dupe0", into="rm3into0", actor="agent:test")
+    assert out["reconciled"] == "repo:rm3dupe0" and out["into"] == "repo:rm3into0"
+
+
+async def test_reconcile_merge_refuses_a_cross_type_pairing(actions: Actions) -> None:
+    await _mk_agent(actions, "agent:rm4dupe0")
+    await actions.create_or_find_object("Seat", "seat:rm4into0", "test")
+
+    out = await reconcile_merge(actions, dupe="agent:rm4dupe0", into="seat:rm4into0",
+                                actor="operator")
+    assert "same-type only" in out["error"]
+
+
+async def test_reconcile_merge_agent_branch_is_actor_gated(actions: Actions) -> None:
+    """The one asymmetry this repair door deliberately keeps: the Agent branch is gated
+    like fold_agent/merge (962579a6), Seat/Project stay open — proven at the dispatch
+    layer since this is the door callers actually reach."""
+    await _mk_agent(actions, "agent:rm5dupe0")
+    await _mk_agent(actions, "agent:rm5into0")
+    dupe_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='agent:rm5dupe0'")
+    into_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='agent:rm5into0'")
+    await actions.merge_objects(into_id, dupe_id, justification="old-style", actor="operator")
+
+    gated = await reconcile_merge(actions, dupe="agent:rm5dupe0", into="agent:rm5into0",
+                                  actor="agent:rando")
+    assert "not authorized" in gated["error"]
+
+    dupe = await actions.create_or_find_object("Seat", "seat:rm5dupe0", "test")
+    into = await actions.create_or_find_object("Seat", "seat:rm5into0", "test")
+    await actions.merge_objects(into, dupe, justification="old-style", actor="test")
+    open_ = await reconcile_merge(actions, dupe="seat:rm5dupe0", into="seat:rm5into0",
+                                  actor="agent:rando")
+    assert "error" not in open_  # Seat stays open, unreconciled on purpose
+
+
+async def test_reconcile_merge_tool_refuses_when_unmounted() -> None:
+    from src import mcp_server as srv
+
+    out = await srv.reconcile_merge(dupe="agent:x", into="agent:y", ctx=None)
+    assert "mount first" in out["error"]
+
+
+async def test_reconcile_merge_tool_reaches_reconcile_seat_fold_through_the_wrapper(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    dupe = await actions.create_or_find_object("Seat", "seat:rmt1dupe", "test")
+    into = await actions.create_or_find_object("Seat", "seat:rmt1into", "test")
+    await actions.merge_objects(into, dupe, justification="old-style", actor="test")
+
+    saved_pool = srv._pool
+    ctx = await _mounted(actions, "agent:reconciletool1", "mergetoolproj")
+    try:
+        out = await srv.reconcile_merge(dupe="seat:rmt1dupe", into="seat:rmt1into", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["reconciled"] == "seat:rmt1dupe" and out["into"] == "seat:rmt1into"

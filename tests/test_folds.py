@@ -14,6 +14,7 @@ from src.orchestrator.folds import (
     canonical_agent,
     fold_agent,
     living_head,
+    reconcile_agent_fold,
     unfold_agent,
     wakeable_identity,
 )
@@ -688,6 +689,126 @@ async def test_unfold_reports_unreturnable_mail_and_restores_reversible_threads(
         "WHERE o.canonical='thread:un8t0001' AND a.name='owner' "
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1")
     assert owner == "agent:un8dead0"
+
+
+# ═══ reconcile_agent_fold (#127, the repair path fold_agent never had — mirrors
+# reconcile_project_fold's exact design, sharing the SAME _move_agent_estate fold_agent
+# itself calls) ═══
+
+
+async def test_reconcile_agent_fold_repairs_an_orphaned_edge_from_a_partial_fold(
+    actions: Actions,
+) -> None:
+    """An OLD-style merge (a raw merge_objects call with no estate-move at all) leaves
+    unread mail stranded on the now-merged dupe. reconcile repairs it without
+    re-performing the merge."""
+    await _mk_agent(actions, "agent:ra1dead0")
+    await _mk_agent(actions, "agent:ra1live0")
+    await send_message(actions.pool, from_agent="agent:sender", from_project="osiris",
+                       to_agent="agent:ra1dead0", body="stranded by an old-style merge")
+    dupe_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='agent:ra1dead0'")
+    into_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='agent:ra1live0'")
+    # simulate the OLD, estate-blind merge path directly — no fold_agent involved
+    await actions.merge_objects(into_id, dupe_id, justification="old-style merge",
+                                actor="operator")
+    events_before = await actions.pool.fetchval(
+        "SELECT count(*) FROM object_events WHERE event_type='merge'")
+
+    out = await reconcile_agent_fold(actions, dupe="agent:ra1dead0", into="agent:ra1live0",
+                                     actor="operator")
+
+    assert out["reconciled"] == "agent:ra1dead0" and out["into"] == "agent:ra1live0"
+    assert out["mail_readdressed"] == 1
+    unread = await unread_count(actions.pool, "foldhouse", reader_agent="agent:ra1live0")
+    assert unread >= 1
+    # never re-performed the merge
+    events_after = await actions.pool.fetchval(
+        "SELECT count(*) FROM object_events WHERE event_type='merge'")
+    assert events_after == events_before
+    status = await actions.pool.fetchval("SELECT status FROM objects WHERE id=$1", dupe_id)
+    assert status == "merged"  # unchanged — still exactly one merge, ever
+
+
+async def test_reconcile_agent_fold_is_a_true_noop_on_a_healthy_fold(
+    actions: Actions,
+) -> None:
+    """NEGATIVE CONTROL, by construction: a fold_agent run that already moved everything
+    must come out UNCHANGED when reconcile runs on it."""
+    await _mk_agent(actions, "agent:ra2dead0")
+    await _mk_agent(actions, "agent:ra2live0")
+    await send_message(actions.pool, from_agent="agent:sender", from_project="osiris",
+                       to_agent="agent:ra2dead0", body="moved by a clean fold")
+    fold_out = await fold_agent(actions, dupe="agent:ra2dead0", into="agent:ra2live0",
+                                evidence="census match", actor="operator")
+    assert fold_out["mail_readdressed"] == 1
+
+    out = await reconcile_agent_fold(actions, dupe="agent:ra2dead0", into="agent:ra2live0",
+                                     actor="operator")
+
+    assert out["mail_readdressed"] == 0
+    assert out["mount_rows_repointed"] == 0
+    assert out["threads_reowned"] == 0
+
+
+async def test_reconcile_agent_fold_refuses_a_still_active_dupe(actions: Actions) -> None:
+    """REFUSAL CONTROL: reconcile must never become a side door into performing a fold —
+    an active (never-folded) dupe is fold_agent's job, not this one's."""
+    await _mk_agent(actions, "agent:ra3active0")
+    await _mk_agent(actions, "agent:ra3into000")
+
+    out = await reconcile_agent_fold(actions, dupe="agent:ra3active0",
+                                     into="agent:ra3into000", actor="operator")
+
+    assert "not merged" in out["error"] and "merge" in out["error"]
+    status = await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE canonical='agent:ra3active0'")
+    assert status == "active"
+
+
+async def test_reconcile_agent_fold_refuses_to_redirect_a_merge(actions: Actions) -> None:
+    """A dupe already merged into A is not this pair's business if the caller names B —
+    reconcile never guesses or redirects which merge a repair applies to."""
+    await _mk_agent(actions, "agent:ra4dupe00")
+    await _mk_agent(actions, "agent:ra4real00")
+    await _mk_agent(actions, "agent:ra4wrong00")
+    await fold_agent(actions, dupe="agent:ra4dupe00", into="agent:ra4real00",
+                     evidence="x", actor="operator")
+
+    out = await reconcile_agent_fold(actions, dupe="agent:ra4dupe00",
+                                     into="agent:ra4wrong00", actor="operator")
+
+    assert "not" in out["error"] and "agent:ra4real00" in out["error"]
+
+
+async def test_reconcile_agent_fold_refuses_unknown_refs(actions: Actions) -> None:
+    await _mk_agent(actions, "agent:ra5dupe00")
+    await _mk_agent(actions, "agent:ra5into00")
+    await fold_agent(actions, dupe="agent:ra5dupe00", into="agent:ra5into00",
+                     evidence="x", actor="operator")
+
+    missing_into = await reconcile_agent_fold(actions, dupe="agent:ra5dupe00",
+                                              into="agent:nope-at-all", actor="operator")
+    assert "no such agent" in missing_into["error"]
+
+    missing_dupe = await reconcile_agent_fold(actions, dupe="agent:nope-either",
+                                              into="agent:ra5into00", actor="operator")
+    assert "no such agent" in missing_dupe["error"]
+
+
+async def test_reconcile_agent_fold_refuses_a_non_operator_actor(actions: Actions) -> None:
+    """SAME GATE AS fold_agent (finding 962579a6): repairing a merge needs the same
+    authority as making one."""
+    await _mk_agent(actions, "agent:ra6dupe00")
+    await _mk_agent(actions, "agent:ra6into00")
+    await fold_agent(actions, dupe="agent:ra6dupe00", into="agent:ra6into00",
+                     evidence="x", actor="operator")
+
+    out = await reconcile_agent_fold(actions, dupe="agent:ra6dupe00",
+                                     into="agent:ra6into00", actor="agent:rando")
+
+    assert "not authorized" in out["error"]
 
 
 async def test_living_head_follows_a_cross_base_succession(actions: Actions) -> None:

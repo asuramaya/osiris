@@ -1142,6 +1142,51 @@ async def correct_house(actions: Actions, agent_id: str, new_house: str, *, sour
     return {"seat_id": seat_id, "house": new_house, "was": was, **prior_art_bits}
 
 
+async def _move_seat_estate(
+    actions: Actions, dupe_oid: uuid.UUID, dupe: str, into: str, actor: str,
+) -> dict[str, Any]:
+    """The seat estate-move itself, factored out of `fold_seat` so `reconcile_seat_fold`
+    (#127) can run the EXACT same repair on an already-merged pair rather than a second
+    implementation that could drift from what a normal fold already does. Every item here
+    is individually idempotent — a holder or managed_by edge already re-pointed, or mail
+    already moved, no longer matches its own WHERE clause — so running this twice, or
+    running it after `fold_seat`'s own inline call already did the same work, changes
+    nothing on the second pass."""
+    now = datetime.now(UTC)
+    into_obj = await actions.create_or_find_object("Seat", into, actor)
+    holders = await actions.pool.fetch(
+        "SELECT f.id AS fid, f.canonical AS holder FROM links l JOIN objects f ON f.id=l.from_id "
+        "WHERE l.to_id=$1 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "ORDER BY l.first_seen ASC", dupe_oid)
+    for row in holders:
+        await actions.invalidate_link(row["fid"], dupe_oid, "holds", actor, now)
+        await bind_holder(actions, seat_id=into, agent_id=row["holder"], source=actor)
+    managing = await actions.pool.fetch(
+        "SELECT to_id AS tid, t.canonical AS mgr FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='managed_by' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", dupe_oid)
+    for row in managing:
+        await actions.invalidate_link(dupe_oid, row["tid"], "managed_by", actor, now)
+        await actions.create_link(into_obj, row["tid"], "managed_by", actor, now, _CONF,
+                                  evidence_class=_EC)
+    managed = await actions.pool.fetch(
+        "SELECT from_id AS fid, f.canonical AS worker FROM links l "
+        "JOIN objects f ON f.id=l.from_id "
+        "WHERE l.to_id=$1 AND l.type='managed_by' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", dupe_oid)
+    for row in managed:
+        await actions.invalidate_link(row["fid"], dupe_oid, "managed_by", actor, now)
+        await actions.create_link(row["fid"], into_obj, "managed_by", actor, now, _CONF,
+                                  evidence_class=_EC)
+    mail_tag = await actions.pool.execute(
+        "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
+        into, dupe)
+    mail_moved = int(mail_tag.rsplit(" ", 1)[-1])
+    return {"holders_moved": [r["holder"] for r in holders],
+            "managed_by_moved": len(managing) + len(managed), "mail_moved": mail_moved}
+
+
 async def fold_seat(
     actions: Actions, *, dupe: str, into: str, evidence: str, actor: str,
 ) -> dict[str, Any]:
@@ -1183,56 +1228,72 @@ async def fold_seat(
         return {"error": f"{dupe} is already folded — nothing to do"}
     if by_label[into]["status"] == "merged":
         return {"error": f"{into} is itself folded — fold into the living seat instead"}
-    now = datetime.now(UTC)
     dupe_oid, into_oid = by_label[dupe]["id"], by_label[into]["id"]
-    into_obj = await actions.create_or_find_object("Seat", into, actor)
     # THE ESTATE, seat-shaped: active holders move first — the point of this verb, where
-    # fold_agent refuses instead. OLDEST FIRST, DELIBERATELY: bind_holder's own succession
-    # law (one active holder per seat, prior heals by valid_until) means whichever holder
-    # is bound LAST survives as the seat's single active holder — a twin's multiple
-    # concurrent holders (a data anomaly the fold exists to close, not preserve) converge
-    # to the NEWEST one, the same recency-wins convention this codebase already uses
-    # everywhere else. Still reported in `holders_moved`, whether or not they end up
-    # active — every one was RE-POINTED off the dupe seat, which is what "moved" means.
-    holders = await actions.pool.fetch(
-        "SELECT f.id AS fid, f.canonical AS holder FROM links l JOIN objects f ON f.id=l.from_id "
-        "WHERE l.to_id=$1 AND l.type='holds' "
-        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
-        "ORDER BY l.first_seen ASC", dupe_oid)
-    for row in holders:
-        await actions.invalidate_link(row["fid"], dupe_oid, "holds", actor, now)
-        await bind_holder(actions, seat_id=into, agent_id=row["holder"], source=actor)
-    # managed_by, either direction — a folded seat's org-chart position survives with it
-    managing = await actions.pool.fetch(
-        "SELECT to_id AS tid, t.canonical AS mgr FROM links l JOIN objects t ON t.id=l.to_id "
-        "WHERE l.from_id=$1 AND l.type='managed_by' "
-        "AND (l.valid_until IS NULL OR l.valid_until > now())", dupe_oid)
-    for row in managing:
-        await actions.invalidate_link(dupe_oid, row["tid"], "managed_by", actor, now)
-        await actions.create_link(into_obj, row["tid"], "managed_by", actor, now, _CONF,
-                                  evidence_class=_EC)
-    managed = await actions.pool.fetch(
-        "SELECT from_id AS fid, f.canonical AS worker FROM links l "
-        "JOIN objects f ON f.id=l.from_id "
-        "WHERE l.to_id=$1 AND l.type='managed_by' "
-        "AND (l.valid_until IS NULL OR l.valid_until > now())", dupe_oid)
-    for row in managed:
-        await actions.invalidate_link(row["fid"], dupe_oid, "managed_by", actor, now)
-        await actions.create_link(row["fid"], into_obj, "managed_by", actor, now, _CONF,
-                                  evidence_class=_EC)
-    # mail, moved BEFORE the kernel merge (#59's own precondition fix, mirroring
-    # fold_project/fold_agent's now-shared pattern): a crash between here and the merge
-    # below leaves dupe.status=='active', so a retry continues rather than hitting the
-    # merge's own "already folded" refusal with mail stranded on dupe forever.
-    mail_tag = await actions.pool.execute(
-        "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
-        into, dupe)
-    mail_moved = int(mail_tag.rsplit(" ", 1)[-1])
+    # fold_agent refuses instead (bind_holder's own succession law converges a twin's
+    # multiple concurrent holders to the NEWEST one, matching every recency-wins
+    # convention elsewhere in this codebase) — mail and managed_by follow too, BEFORE the
+    # kernel merge (#59's own precondition fix, mirroring fold_project/fold_agent's now-
+    # shared pattern): a crash between here and the merge below leaves dupe.status==
+    # 'active', so a retry continues rather than hitting the merge's own "already folded"
+    # refusal with estate stranded on dupe forever.
+    estate = await _move_seat_estate(actions, dupe_oid, dupe, into, actor)
     # the kernel merge: event, projection, resolve-on-read — the same primitive fold_agent
     # itself calls, type-agnostic, no Agent-only check inside it
     await actions.merge_objects(into_oid, dupe_oid, justification=evidence, actor=actor)
-    return {"folded": dupe, "into": into, "holders_moved": [r["holder"] for r in holders],
-           "managed_by_moved": len(managing) + len(managed), "mail_moved": mail_moved}
+    return {"folded": dupe, "into": into, **estate}
+
+
+async def reconcile_seat_fold(
+    actions: Actions, *, dupe: str, into: str, actor: str,
+) -> dict[str, Any]:
+    """THE REPAIR PATH fold_seat never had (#127, Thoth's framing verbatim: "folds are
+    idempotent-by-REFUSAL when they need to be idempotent-by-REPAIR"): re-points any live
+    holder/managed_by/mail estate item still aimed at an ALREADY-merged dupe, using the
+    SAME `_move_seat_estate` `fold_seat` itself calls — not a second implementation that
+    could drift from what a normal fold already does.
+
+    THE INVERSE PRECONDITION of fold_seat, on purpose, so the two verbs' refusal
+    conditions never overlap: fold_seat REQUIRES status=='active' and refuses an already-
+    folded dupe; reconcile REQUIRES dupe.status=='merged' AND dupe's own `merged_into`
+    pointing at exactly `into` (refuses to redirect a dupe merged into some OTHER seat —
+    never guesses which pair a caller means). NEVER re-performs the fold: no
+    `merge_objects` call.
+
+    NO ACTOR GATE, matching `fold_seat`'s own current (flagged, unfixed) posture —
+    finding 962579a6: this build inherits that asymmetry consistently rather than
+    reconciling it now.
+
+    Refuses LOUDLY on: blank dupe/into; dupe==into; dupe not resolving to a Seat;
+    dupe.status != 'merged' (fold_seat's job, not this one's); dupe's own `merged_into`
+    not equal to `into`'s id; into not resolving to an ACTIVE Seat."""
+    dupe, into = (dupe or "").strip(), (into or "").strip()
+    if not dupe or not into:
+        return {"error": "reconcile_seat_fold needs both labels: dupe and into"}
+    if dupe == into:
+        return {"error": "dupe and into name the same seat — nothing to reconcile"}
+    row = await actions.pool.fetchrow(
+        "SELECT id, status, merged_into FROM objects WHERE canonical=$1 AND type='Seat'",
+        dupe)
+    if row is None:
+        return {"error": f"no such seat: {dupe!r} — reconcile never invents a label"}
+    if row["status"] != "merged":
+        return {"error": f"{dupe} is {row['status']}, not merged — reconcile_seat_fold "
+                         "only repairs an ALREADY-completed fold; use merge to fold it in "
+                         "the first place"}
+    into_row = await actions.pool.fetchrow(
+        "SELECT id, status FROM objects WHERE canonical=$1 AND type='Seat'", into)
+    if into_row is None:
+        return {"error": f"no such seat: {into!r} — reconcile never invents a label"}
+    if into_row["id"] != row["merged_into"]:
+        actual = await actions.pool.fetchval(
+            "SELECT canonical FROM objects WHERE id=$1", row["merged_into"])
+        return {"error": f"{dupe} is merged into {actual}, not {into} — "
+                         "reconcile_seat_fold never redirects to a different pair"}
+    if into_row["status"] != "active":
+        return {"error": f"{into} is {into_row['status']}, not active"}
+    estate = await _move_seat_estate(actions, row["id"], dupe, into, actor)
+    return {"reconciled": dupe, "into": into, **estate}
 
 
 async def unfold_seat(

@@ -177,7 +177,17 @@ import json
 # collapse. REPORTED, NEVER ARGUED FROM: operator's ruling 31c02dca is explicit that a
 # collapse is justified by findability and symmetry and NEVER by size. This number is an
 # observation. It is not why any of this was built and must never be cited as though it were.
-TOOL_CONTRACT_CEILING_CHARS = 119_810
+#
+# RAISED, reconcile_merge (2026-08-03, task #127, Thoth msg 3504): a genuinely NEW
+# capability, not prose creep — the repair door task #127 asked for existed for NO type
+# before this (reconcile_project_fold shipped #127's own P0 half but was never given an
+# MCP tool of its own, a doorless verb the same class as b8654e4c; Agent and Seat had no
+# repair at all). Trimmed the MCP-facing docstring to the category rule's lean end FIRST
+# (cut the "first ever exposure"/provenance framing and a restatement of merge's own
+# idempotent-by-refusal contrast, kept only what it refuses, why, and the unmerge-then-
+# remerge trap) — 1,535 -> 1,128 chars for the tool itself before raising anything.
+# 119,810 -> 120,938, +1,128. 98 -> 99 tools. Exact measured total, not a round number.
+TOOL_CONTRACT_CEILING_CHARS = 120_938
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -214,6 +224,8 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     (2026-08-02): amend_practice (task #113, commit 9cbd8d6) was never reflected here either
     — the same pre-existing drift the char ceiling above was just found and raised for.
     100 -> 98 (2026-08-03, ruling 31c02dca): fold_agent/unfold_agent/fold_seat/fold_project
-    retired in favor of merge/unmerge — a real shrink in the surface, not drift."""
+    retired in favor of merge/unmerge — a real shrink in the surface, not drift.
+    98 -> 99 (2026-08-03, task #127): reconcile_merge, the repair door's first-ever MCP
+    exposure for any type."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 98
+    assert len(per_tool) == 99

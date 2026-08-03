@@ -114,3 +114,41 @@ async def unmerge(actions: Actions, *, dupe: str, because: str, actor: str,
                                  execute=execute)
     return await unfold_project(actions, dupe=dupe_s, because=because, actor=actor,
                                 execute=execute)
+
+
+async def reconcile_merge(actions: Actions, *, dupe: str, into: str, actor: str,
+                          ) -> dict[str, Any]:
+    """THE REPAIR DOOR task #127 asked for — never existed for ANY type before this build.
+    `reconcile_project_fold` shipped task #127's own P0 half (commit 1eb33a08) but was
+    never given an MCP tool of its own (a doorless verb, same class as b8654e4c); Agent
+    and Seat had no repair at all. Accepts an ALREADY-MERGED `dupe` and re-points whatever
+    estate is still aimed at it, WITHOUT re-performing the merge — the idempotent-by-
+    REPAIR primitive task #127 names directly, distinct from `merge`'s idempotent-by-
+    REFUSAL (a second `merge` call on an already-folded dupe correctly does nothing;
+    `reconcile_merge` is for the estate that first fold left stranded).
+
+    UNMERGE-THEN-REMERGE IS NOT A SUBSTITUTE: `unmerge`'s own `estate_unreturnable` path
+    reports — and drops — exactly the links a partial fold already broke, since a raw
+    UPDATE erases which pre-fold item was ever provably the dupe's own.
+
+    Type is read off `dupe`'s own form, same rule as `merge`/`unmerge`. Refuses: `dupe`
+    and `into` resolving to different types; `dupe` not merged (that's `merge`'s job, not
+    this one's); `dupe`'s own `merged_into` pointing at a DIFFERENT `into` (never
+    redirects to a pair the caller didn't name); `into` not active. THE AGENT BRANCH IS
+    ACTOR-GATED exactly like `fold_agent`/`merge` (finding 962579a6: repairing a merge
+    needs the same authority as making one); Seat and Project stay open, matching their
+    own fold_X's current posture — unreconciled on purpose, same as `merge` itself."""
+    from src.orchestrator.folds import reconcile_agent_fold
+    from src.orchestrator.projects import reconcile_project_fold
+    from src.orchestrator.seats import reconcile_seat_fold
+
+    dupe_s, into_s = (dupe or "").strip(), (into or "").strip()
+    dupe_type, into_type = _merge_type(dupe_s), _merge_type(into_s)
+    if dupe_type != into_type:
+        return {"error": f"dupe {dupe_s!r} looks like a {dupe_type} and into {into_s!r} "
+                         f"looks like a {into_type} — reconcile is same-type only"}
+    if dupe_type == "Agent":
+        return await reconcile_agent_fold(actions, dupe=dupe_s, into=into_s, actor=actor)
+    if dupe_type == "Seat":
+        return await reconcile_seat_fold(actions, dupe=dupe_s, into=into_s, actor=actor)
+    return await reconcile_project_fold(actions, dupe=dupe_s, into=into_s, actor=actor)
