@@ -3866,10 +3866,11 @@ async def record_decision(
     produced the finding — the exact command line, seeds, thresholds, bucket edges — so a
     successor RERUNS instead of re-deriving; a ruling that states only the conclusion invites
     exactly that re-derivation.
-    `supersedes` = an earlier decision this one CORRECTS (UUID, 8-char short id, or a
-    summary substring): the old entry is buried under this one — it leaves orient's recent
-    list and the decision-log grays it with its successor; never deleted, always unwindable.
-    Idempotent on the summary.
+    `supersedes` = an earlier decision this one CORRECTS — UUID, canonical, or 8-char
+    short id ONLY, never a free-text/prose match (an addressing act that BURIES a record
+    must name it exactly, or it refuses, the same law `resolves` follows): the old entry
+    is buried under this one — it leaves orient's recent list and the decision-log grays
+    it with its successor; never deleted, always unwindable. Idempotent on the summary.
     `resolves` = the THREAD(s) this decision ANSWERS — UUID, canonical, or 8-char short id
     ONLY, never a free-text/prose match: an addressing act must name its target exactly, or
     it refuses. It closes the thread(s) in the same act. USE IT whenever your ruling settles
@@ -3887,20 +3888,28 @@ async def record_decision(
     agents actually inherit, e.g. 'NEVER DM BY NAME'); each is minted a dead Superstition,
     searchable forever, and orient announces recent kills FLEET-WIDE so any mind carrying the
     practice strikes it. USE IT whenever your fix makes a known workaround unnecessary.
-    `confirms` = the Practice(s) this decision RE-DERIVES: a `witnesses` link is minted to
-    each — NEVER automatic on a mere topical match. Resolves like `resolves`'s list form:
-    each entry independent, a miss reported not fatal. `confirmed` (the composition's count)
-    is this link count, read at query time.
-    `refutes` = a Practice this decision DISPROVES (UUID, 8-char short id, or a statement
-    substring): converts it to a dead Superstition, reusing the Practice's own statement. The
-    Practice stays ACTIVE carrying `refuted_by` — never retired, so a half-remembered refuted
-    lesson stays findable. Same strictness as `supersedes`: a target matching nothing errors
-    and NOTHING is recorded.
+    `confirms` = the Practice(s) this decision RE-DERIVES — same UUID/canonical/short-id-
+    only addressing as `supersedes`, never a free-text/prose match: a `witnesses` link is
+    minted to each. Resolves like `resolves`'s list form: each entry independent, a miss
+    reported not fatal. `confirmed` (the composition's count) is this link count, read at
+    query time.
+    `refutes` = a Practice this decision DISPROVES — same addressing strictness (UUID,
+    canonical, or 8-char short id only): converts it to a dead Superstition, reusing the
+    Practice's own statement. The Practice stays ACTIVE carrying `refuted_by` — never
+    retired, so a half-remembered refuted lesson stays findable. Same strictness as
+    `supersedes`: a target matching nothing errors and NOTHING is recorded.
     `implements` = a standing Decision this one is a SPECIFIC EXECUTION of — the parent stays
     alive, unlike `supersedes`. Same strictness as `supersedes`.
     `ack_prior_art` = when this call's own `prior_art_flag` fires and none of supersedes/
     implements/confirms/grounds already answers it, pass True to record the dismissal as a
-    graph event instead of a shrug that leaves no trace."""
+    graph event instead of a shrug that leaves no trace.
+    ANY ERROR ON THIS CALL — including a dropped connection or a timeout with NO response
+    at all — IS SAFE TO RETRY WITH THE SAME `summary`: the same failure string covers
+    both "written, you just didn't hear back" and "never written," and a caller cannot
+    tell them apart without this guarantee. This call is idempotent on `summary`: an
+    exact rewrite reuses the same decision, and — when `repo` is given — so does a
+    near-duplicate reword of it (`reused_existing_decision` in the receipt names when
+    that happened). Retrying never mints a twin."""
     pool = await _pool_get()
     gids: list[uuid.UUID] = []
     grounded: list[dict[str, str]] = []
@@ -3913,23 +3922,31 @@ async def record_decision(
         else:
             missing.append(g)
     old: uuid.UUID | None = None
+    # require_identifier=True (task #117: an identifier-shaped arg like a bare local task
+    # number must REFUSE fleet-wide rather than fall through to a prose/summary-substring
+    # search — the same law resolves='s own fix already applied; supersedes/implements/
+    # refutes/confirms BURY, CONVERT, or LINK the record they name, never a merely-read
+    # act, so they carry the identical addressing-act risk resolves= was fixed for).
     if supersedes:  # resolve BEFORE recording — a correction that can't name its target
-        old = await capture._find_decision(pool, supersedes)  # records NOTHING
+        old = await capture._find_decision(pool, supersedes, require_identifier=True)
         if old is None:
             return {"error": f"supersedes matched no decision: {supersedes!r} — quote its "
-                             "UUID, 8-char short id, or a summary substring"}
+                             "UUID, canonical, or 8-char short id (no longer a prose "
+                             "match — an addressing act refuses rather than guesses)"}
     impl_id: uuid.UUID | None = None
     if implements:  # same resolve-before-record strictness as supersedes
-        impl_id = await capture._find_decision(pool, implements)
+        impl_id = await capture._find_decision(pool, implements, require_identifier=True)
         if impl_id is None:
             return {"error": f"implements matched no decision: {implements!r} — quote its "
-                             "UUID, 8-char short id, or a summary substring"}
+                             "UUID, canonical, or 8-char short id (no longer a prose "
+                             "match — an addressing act refuses rather than guesses)"}
     refute_id: uuid.UUID | None = None
     if refutes:  # same strictness — a refutation that can't name its target has refuted nothing
-        refute_id = await capture._find_practice(pool, refutes)
+        refute_id = await capture._find_practice(pool, refutes, require_identifier=True)
         if refute_id is None:
             return {"error": f"refutes matched no practice: {refutes!r} — quote its UUID, "
-                             "8-char short id, or a statement substring"}
+                             "canonical, or 8-char short id (no longer a prose match — "
+                             "an addressing act refuses rather than guesses)"}
     # resolve BEFORE recording, same discipline as supersedes — a single string keeps the
     # original all-or-nothing strictness; a list resolves each entry independently and
     # reports (never raises) on a miss, so one typo can't veto the rest of the set.
@@ -3963,15 +3980,29 @@ async def record_decision(
     confirm_ids: list[uuid.UUID] = []
     confirm_receipt: list[dict[str, str]] = []
     for ref in confirms or []:
-        pid = await capture._find_practice(pool, ref)
+        pid = await capture._find_practice(pool, ref, require_identifier=True)
         if pid is None:
             confirm_receipt.append({"ref": ref, "matched": "false",
                                     "note": "matched no practice — quote its UUID, "
-                                            "8-char short id, or a statement substring"})
+                                            "canonical, or 8-char short id (no longer a "
+                                            "prose match)"})
             continue
         confirm_ids.append(pid)
         confirm_receipt.append({"ref": ref, "matched": "true", "id": str(pid)[:8]})
     actor = await _actor_for(ctx, subagent_id, subagent_type)
+    # NEAR-DUP RECEIPT HONESTY (task #117, thread ed9f73ce, Seshat's live specimen): the
+    # SAME lookup `capture.record_decision` runs internally to decide whether to reuse an
+    # existing decision, run here FIRST so the receipt can show what a hit is about to
+    # overwrite — a pre-check outside the write transaction, same non-locking caveat as
+    # the lookup it mirrors. `repo` gates it exactly like the real call (no safe scope to
+    # dedup against without one).
+    dup_before: uuid.UUID | None = None
+    prior_content: dict[str, str | None] | None = None
+    if repo:
+        dup_before = await capture.find_near_duplicate_decision(pool, summary, repo=repo,
+                                                                 exclude=old)
+        if dup_before is not None:
+            prior_content = await capture._decision_snapshot(pool, dup_before)
     try:
         d = await capture.record_decision(
             Actions(pool), summary, kind=kind, rationale=rationale, repo=repo,
@@ -3983,6 +4014,22 @@ async def record_decision(
     except ValueError as e:  # task #107: e.g. a path-shaped repo — refuse clean, no traceback
         return {"error": str(e)}
     out: dict[str, Any] = {"id": str(d), "kind": kind, "summary": summary}
+    if dup_before is not None and str(dup_before) == str(d):
+        out["reused_existing_decision"] = True
+        out["prior_content"] = prior_content
+        exact_repeat = prior_content is not None and prior_content.get("summary") == summary
+        out["note"] = (
+            (f"this call's summary exactly matched decision {str(d)[:8]}'s own current "
+             "summary — a safe repeat (e.g. a retry after a dropped/timed-out response); "
+             "nothing was overwritten that this call didn't already say itself.")
+            if exact_repeat else
+            (f"this call's summary was judged a near-duplicate of decision {str(d)[:8]}'s "
+             "EXISTING content (shown in prior_content) and REUSED that object instead of "
+             "minting a new one — its prior summary/rationale are now superseded (still "
+             "readable via the assertions history, never deleted) but no longer current. "
+             "If these two rulings are NOT actually the same decision, this was a false "
+             "positive (task #117) — the summaries shared enough boilerplate to score "
+             "above the similarity bar without describing the same thing."))
     # PRIOR-ART SURFACING (thread 44635c42, task #67; UNIFIED across {Decisions, Practices,
     # Superstitions} by THE THAW, ruling 1e6d7367): before a ruling stands, name what
     # standing law/technique already covers this ground — search is the same fused engine

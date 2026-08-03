@@ -253,7 +253,19 @@ def _tool_chars(t: Any) -> int:
 #
 # REPORTED, NEVER ARGUED FROM (operator ruling 31c02dca): this number exists to catch
 # regrowth. It is not a justification for any build and must never be cited as one.
-TOOL_CONTRACT_CEILING_CHARS = 132_836
+#
+# RAISED, task #117's urgent record_decision fixes (2026-08-03, Thoth msg 3524): no new
+# tool, same 100 — pure docstring growth, so scrutinized harder than a new-verb raise.
+# Trimmed three dated ("task #117") citations from the live docstring first (the WHY
+# survives without the ticket number; category rule: cut provenance, keep refusals).
+# The residue is load-bearing: callers now need to know (a) supersedes/implements/
+# refutes/confirms no longer accept a free-text/prose match — a real behavior change,
+# not prose — and (b) ANY error on this call, including a dropped connection with no
+# response at all, is safe to retry (task #117 point 2: the same failure string
+# covered "written, you didn't hear back" and "never written," and a caller could not
+# tell them apart without this guarantee). 132,836 -> 133,621, +785. Exact measured
+# total via this file's own `_measure_tool_contract`, not a round number.
+TOOL_CONTRACT_CEILING_CHARS = 133_621
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
