@@ -3204,6 +3204,29 @@ async def unmerge(dupe: str, because: str, execute: bool = False,
 
 
 @mcp.tool()
+async def reconcile_merge(dupe: str, into: str, ctx: Context | None = None) -> dict[str, Any]:
+    """Accepts an ALREADY-MERGED `dupe` and re-points whatever mail/mount/thread/holder/
+    managed_by/edge estate is still aimed at it, WITHOUT re-performing the merge —
+    idempotent-by-REPAIR, for the estate a partial first fold left stranded. UNMERGE-
+    THEN-REMERGE IS NOT A SUBSTITUTE: `unmerge`'s own `estate_unreturnable` path reports
+    — and drops — exactly the links a partial fold already broke.
+
+    Type is read off `dupe`'s own form, same rule as `merge`/`unmerge`. Refuses: `dupe`
+    and `into` resolving to different types; `dupe` not merged (that's `merge`'s job);
+    `dupe`'s own `merged_into` pointing at a DIFFERENT `into` (never redirects); `into`
+    not active. THE AGENT BRANCH IS ACTOR-GATED exactly like `merge`'s own Agent branch
+    (repairing a merge needs the same authority as making one); Seat and Project stay
+    open, matching their own fold's current posture — unreconciled on purpose."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a reconcile is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.merge import reconcile_merge as _reconcile_merge
+    return await _reconcile_merge(Actions(await _pool_get()), dupe=dupe, into=into,
+                                  actor=ident.agent_id)
+
+
+@mcp.tool()
 async def correct_house(new_house: str, ctx: Context | None = None) -> dict[str, Any]:
     """A HEAD corrects its OWN stored house (ruling ff6148b0, decision 87953278) — the one
     legitimate write left after house became a live derivation off the managed_by chain

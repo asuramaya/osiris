@@ -2522,6 +2522,118 @@ async def test_unfold_seat_reports_unreturnable_mail(actions: Actions) -> None:
     assert len(out["estate_unreturnable"]["mail"]) == 1
 
 
+# ═══ reconcile_seat_fold (#127, the repair path fold_seat never had — mirrors
+# reconcile_project_fold's exact design, sharing the SAME _move_seat_estate fold_seat
+# itself calls) ═══
+
+
+async def test_reconcile_seat_fold_repairs_an_orphaned_holder_from_a_partial_fold(
+    actions: Actions,
+) -> None:
+    """An OLD-style merge (a raw merge_objects call with no estate-move at all) leaves an
+    active holder stranded on the now-merged dupe seat. reconcile repairs it without
+    re-performing the merge."""
+    from src.orchestrator.seats import held_seat, reconcile_seat_fold
+
+    dupe = await actions.create_or_find_object("Seat", "seat:rs1dupe0", "test")
+    into = await actions.create_or_find_object("Seat", "seat:rs1into0", "test")
+    holder = await actions.create_or_find_object("Agent", "agent:rs1hld00", "test")
+    await actions.create_link(holder, dupe, "holds", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+    # simulate the OLD, estate-blind merge path directly — no fold_seat involved
+    await actions.merge_objects(into, dupe, justification="old-style merge", actor="test")
+    events_before = await actions.pool.fetchval(
+        "SELECT count(*) FROM object_events WHERE event_type='merge'")
+
+    out = await reconcile_seat_fold(actions, dupe="seat:rs1dupe0", into="seat:rs1into0",
+                                    actor="test")
+
+    assert out["reconciled"] == "seat:rs1dupe0" and out["into"] == "seat:rs1into0"
+    assert out["holders_moved"] == ["agent:rs1hld00"]
+    bound = await held_seat(actions.pool, "agent:rs1hld00")
+    assert bound is not None and bound["seat_id"] == "seat:rs1into0"
+    events_after = await actions.pool.fetchval(
+        "SELECT count(*) FROM object_events WHERE event_type='merge'")
+    assert events_after == events_before
+    status = await actions.pool.fetchval("SELECT status FROM objects WHERE id=$1", dupe)
+    assert status == "merged"  # unchanged — still exactly one merge, ever
+
+
+async def test_reconcile_seat_fold_is_a_true_noop_on_a_healthy_fold(actions: Actions) -> None:
+    """NEGATIVE CONTROL, by construction: a fold_seat run that already moved everything
+    must come out UNCHANGED when reconcile runs on it."""
+    from src.orchestrator.seats import fold_seat, reconcile_seat_fold
+
+    await actions.create_or_find_object("Seat", "seat:rs2dupe0", "test")
+    await actions.create_or_find_object("Seat", "seat:rs2into0", "test")
+    holder = await actions.create_or_find_object("Agent", "agent:rs2hld00", "test")
+    dupe_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='seat:rs2dupe0'")
+    await actions.create_link(holder, dupe_oid, "holds", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+    fold_out = await fold_seat(actions, dupe="seat:rs2dupe0", into="seat:rs2into0",
+                               evidence="x", actor="test")
+    assert fold_out["holders_moved"] == ["agent:rs2hld00"]
+
+    out = await reconcile_seat_fold(actions, dupe="seat:rs2dupe0", into="seat:rs2into0",
+                                    actor="test")
+
+    assert out["holders_moved"] == []
+    assert out["managed_by_moved"] == 0
+    assert out["mail_moved"] == 0
+
+
+async def test_reconcile_seat_fold_refuses_a_still_active_dupe(actions: Actions) -> None:
+    """REFUSAL CONTROL: reconcile must never become a side door into performing a fold —
+    an active (never-folded) dupe is fold_seat's job, not this one's."""
+    from src.orchestrator.seats import reconcile_seat_fold
+
+    await actions.create_or_find_object("Seat", "seat:rs3active", "test")
+    await actions.create_or_find_object("Seat", "seat:rs3into00", "test")
+
+    out = await reconcile_seat_fold(actions, dupe="seat:rs3active", into="seat:rs3into00",
+                                    actor="test")
+
+    assert "not merged" in out["error"] and "merge" in out["error"]
+    status = await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE canonical='seat:rs3active'")
+    assert status == "active"
+
+
+async def test_reconcile_seat_fold_refuses_to_redirect_a_merge(actions: Actions) -> None:
+    """A dupe already merged into A is not this pair's business if the caller names B —
+    reconcile never guesses or redirects which merge a repair applies to."""
+    from src.orchestrator.seats import fold_seat, reconcile_seat_fold
+
+    await actions.create_or_find_object("Seat", "seat:rs4dupe0", "test")
+    await actions.create_or_find_object("Seat", "seat:rs4real0", "test")
+    await actions.create_or_find_object("Seat", "seat:rs4wrong0", "test")
+    await fold_seat(actions, dupe="seat:rs4dupe0", into="seat:rs4real0", evidence="x",
+                    actor="test")
+
+    out = await reconcile_seat_fold(actions, dupe="seat:rs4dupe0", into="seat:rs4wrong0",
+                                    actor="test")
+
+    assert "not" in out["error"] and "seat:rs4real0" in out["error"]
+
+
+async def test_reconcile_seat_fold_refuses_unknown_refs(actions: Actions) -> None:
+    from src.orchestrator.seats import fold_seat, reconcile_seat_fold
+
+    await actions.create_or_find_object("Seat", "seat:rs5dupe0", "test")
+    await actions.create_or_find_object("Seat", "seat:rs5into0", "test")
+    await fold_seat(actions, dupe="seat:rs5dupe0", into="seat:rs5into0", evidence="x",
+                    actor="test")
+
+    missing_into = await reconcile_seat_fold(actions, dupe="seat:rs5dupe0",
+                                             into="seat:nope-at-all", actor="test")
+    assert "no such seat" in missing_into["error"]
+
+    missing_dupe = await reconcile_seat_fold(actions, dupe="seat:nope-either",
+                                             into="seat:rs5into0", actor="test")
+    assert "no such seat" in missing_dupe["error"]
+
+
 async def test_retire_seat_closes_a_vacant_seat(actions: Actions) -> None:
     from src.orchestrator.seats import retire_seat
 

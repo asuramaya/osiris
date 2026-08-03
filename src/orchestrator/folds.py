@@ -143,6 +143,40 @@ async def _reversible_moved_links(
     return [dict(r) for r in rows]
 
 
+async def _move_agent_estate(
+    actions: Actions, dupe: str, into: str, actor: str,
+) -> dict[str, Any]:
+    """The agent estate-move itself, factored out of `fold_agent` so `reconcile_agent_fold`
+    (#127) can run the EXACT same repair on an already-merged pair rather than a second
+    implementation that could drift from what a normal fold already does. Resolves
+    `into`'s CURRENT living head fresh — never trusts a stale `merged_into` pointer, the
+    same live-resolution `fold_agent` itself always used — and moves whatever is STILL
+    live and addressed to `dupe`: unread mail, mount rows, open-thread ownership. Every
+    move here is individually idempotent (an item already moved no longer matches its own
+    WHERE clause), so running this twice, or running it after `fold_agent`'s own inline
+    call already did the same work, changes nothing on the second pass."""
+    from datetime import UTC, datetime
+
+    head = await living_head(actions.pool, into)
+    tag = await actions.pool.execute(
+        "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
+        head, dupe)
+    mail_moved = int(tag.rsplit(" ", 1)[-1])
+    tag = await actions.pool.execute(
+        "UPDATE agent_mounts SET agent_id=$1 WHERE agent_id=$2", head, dupe)
+    rows_moved = int(tag.rsplit(" ", 1)[-1])
+    threads = await actions.pool.fetch(
+        "SELECT t.id FROM objects t JOIN current_assertions a ON a.object_id=t.id "
+        "WHERE t.type='Thread' AND t.status='active' AND a.name='owner' "
+        "AND a.value #>> '{}' = $1", dupe)
+    now = datetime.now(UTC)
+    for t in threads:
+        await actions.assert_property(t["id"], "owner", head, actor, now, 0.9,
+                                      evidence_class="self_declared")
+    return {"living_head": head, "mail_readdressed": mail_moved,
+            "mount_rows_repointed": rows_moved, "threads_reowned": len(threads)}
+
+
 async def fold_agent(
     actions: Actions, *, dupe: str, into: str, evidence: str, actor: str,
 ) -> dict[str, Any]:
@@ -218,23 +252,7 @@ async def fold_agent(
     # through it. `living_head(into)` is independent of dupe's own merge status (into is
     # already guaranteed unmerged by the guard above), so computing it before the merge
     # changes nothing about what it resolves to.
-    head = await living_head(actions.pool, into)
-    tag = await actions.pool.execute(
-        "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
-        head, dupe)
-    mail_moved = int(tag.rsplit(" ", 1)[-1])
-    tag = await actions.pool.execute(
-        "UPDATE agent_mounts SET agent_id=$1 WHERE agent_id=$2", head, dupe)
-    rows_moved = int(tag.rsplit(" ", 1)[-1])
-    threads = await actions.pool.fetch(
-        "SELECT t.id FROM objects t JOIN current_assertions a ON a.object_id=t.id "
-        "WHERE t.type='Thread' AND t.status='active' AND a.name='owner' "
-        "AND a.value #>> '{}' = $1", dupe)
-    from datetime import UTC, datetime
-    now = datetime.now(UTC)
-    for t in threads:
-        await actions.assert_property(t["id"], "owner", head, actor, now, 0.9,
-                                      evidence_class="self_declared")
+    estate = await _move_agent_estate(actions, dupe, into, actor)
     # the kernel merge: event, projection, same_as, case union, audit — resolve-on-read
     await actions.merge_objects(by_label[into]["id"], by_label[dupe]["id"],
                                 justification=evidence, actor=actor)
@@ -247,16 +265,80 @@ async def fold_agent(
         "WHERE resolved IS NULL AND (a_id, b_id) IN (($1,$2),($2,$1))",
         by_label[dupe]["id"], by_label[into]["id"], actor)
     _log.info("fold: %s → %s (head %s): mail %d, rows %d, threads %d",
-              dupe, into, head, mail_moved, rows_moved, len(threads))
+              dupe, into, estate["living_head"], estate["mail_readdressed"],
+              estate["mount_rows_repointed"], estate["threads_reowned"])
     return {
-        "folded": dupe, "into": into, "living_head": head,
-        "mail_readdressed": mail_moved, "mount_rows_repointed": rows_moved,
-        "threads_reowned": len(threads), "evidence": evidence,
+        "folded": dupe, "into": into, "living_head": estate["living_head"],
+        "mail_readdressed": estate["mail_readdressed"],
+        "mount_rows_repointed": estate["mount_rows_repointed"],
+        "threads_reowned": estate["threads_reowned"], "evidence": evidence,
         "note": (f"{dupe} is folded into {into} — its words stay its own (provenance "
                  "resolves through merged_into at read); its unread mail, mount rows, "
-                 f"and open threads now belong to {head}. Reversible by compensating "
-                 "event; nothing was deleted."),
+                 f"and open threads now belong to {estate['living_head']}. Reversible by "
+                 "compensating event; nothing was deleted."),
     }
+
+
+async def reconcile_agent_fold(
+    actions: Actions, *, dupe: str, into: str, actor: str,
+) -> dict[str, Any]:
+    """THE REPAIR PATH fold_agent never had (#127, Thoth's framing verbatim: "folds are
+    idempotent-by-REFUSAL when they need to be idempotent-by-REPAIR"): re-points any live
+    mail/mount/thread estate item still aimed at an ALREADY-merged dupe, using the SAME
+    `_move_agent_estate` `fold_agent` itself calls — not a second implementation that
+    could drift from what a normal fold already does.
+
+    THE INVERSE PRECONDITION of fold_agent, on purpose, so the two verbs' refusal
+    conditions never overlap: fold_agent REQUIRES status=='active' and refuses a merged
+    dupe; reconcile REQUIRES dupe.status=='merged' AND dupe's own `merged_into` pointing
+    at exactly `into` (refuses to redirect a dupe merged into some OTHER agent — never
+    guesses which pair a caller means).
+
+    NEVER re-performs the fold: no `merge_objects` call, no same-lineage/actively-seated
+    checks (those decide whether a fold SHOULD happen; this object already IS folded, so
+    the only question is whether its estate move finished). UNMERGE-THEN-REMERGE IS NOT A
+    SUBSTITUTE for this verb: `unfold_agent`'s own `estate_unreturnable` path would report
+    — and drop — exactly the mail/mount items a partial fold already broke.
+
+    SAME ACTOR GATE AS fold_agent, ENFORCED (finding 962579a6: a repair verb touching a
+    merged estate needs the SAME authority as making the merge, not less — repairing is
+    the same act, continued, never a lesser one).
+
+    Refuses LOUDLY on: unauthorized actor; blank dupe/into; dupe==into; dupe not
+    resolving to an Agent; dupe.status != 'merged' (fold_agent's job, not this one's);
+    dupe's own `merged_into` not equal to `into`'s id; into not resolving to an ACTIVE
+    Agent."""
+    dupe, into = (dupe or "").strip(), (into or "").strip()
+    if actor not in _OPERATOR_ACTORS and actor != _SANCTIONED_AUTO_FOLD_ACTOR:
+        return {"error": f"{actor!r} is not authorized to reconcile an agent fold — same "
+                         "gate as fold_agent itself (962579a6): repairing a merge needs "
+                         "the same authority as making one"}
+    if not dupe or not into:
+        return {"error": "reconcile_agent_fold needs both labels: dupe and into"}
+    if dupe == into:
+        return {"error": "dupe and into name the same agent — nothing to reconcile"}
+    row = await actions.pool.fetchrow(
+        "SELECT id, status, merged_into FROM objects WHERE canonical=$1 AND type='Agent'",
+        dupe)
+    if row is None:
+        return {"error": f"no such agent: {dupe!r} — reconcile never invents a label"}
+    if row["status"] != "merged":
+        return {"error": f"{dupe} is {row['status']}, not merged — reconcile_agent_fold "
+                         "only repairs an ALREADY-completed fold; use merge to fold it in "
+                         "the first place"}
+    into_row = await actions.pool.fetchrow(
+        "SELECT id, status FROM objects WHERE canonical=$1 AND type='Agent'", into)
+    if into_row is None:
+        return {"error": f"no such agent: {into!r} — reconcile never invents a label"}
+    if into_row["id"] != row["merged_into"]:
+        actual = await actions.pool.fetchval(
+            "SELECT canonical FROM objects WHERE id=$1", row["merged_into"])
+        return {"error": f"{dupe} is merged into {actual}, not {into} — "
+                         "reconcile_agent_fold never redirects to a different pair"}
+    if into_row["status"] != "active":
+        return {"error": f"{into} is {into_row['status']}, not active"}
+    estate = await _move_agent_estate(actions, dupe, into, actor)
+    return {"reconciled": dupe, "into": into, **estate}
 
 async def unfold_agent(
     actions: Actions, *, dupe: str, because: str, actor: str, execute: bool = False,
