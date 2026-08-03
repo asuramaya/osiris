@@ -133,3 +133,70 @@ async def test_name_variant_same_org_queues_review_candidate(actions: Actions) -
     assert frozenset((alex, other)) not in pairs          # different surname is not
     cand = next(t for t in tray if {t["a_id"], t["b_id"]} == {alex, alexander})
     assert cand["score"] == pytest.approx(0.55)
+
+
+# ═══ consolidate MCP tool wrapper — the whole-graph sweep's own gate (2026-08-03) ═══
+
+class _Ctx:
+    """A single live identity per instance is all these tests need (sequential calls,
+    never two contexts alive at once in the same test) — the simpler shared-session shape
+    test_charter.py already uses, not test_resource_lease.py's two-live-at-once variant."""
+
+    class request_context:  # noqa: N801
+        request = None
+        session = object()
+
+
+async def test_consolidate_refuses_a_non_operator_actor(actions: Actions) -> None:
+    """NEGATIVE CONTROL (2026-08-03): before this gate existed, consolidate() took NO
+    parameters at all — not even `ctx` — and ran unconditionally for any mounted caller, a
+    whole-graph automatic merge sweep with zero refusal and no identity concept to check.
+    Confirmed against pre-fix code: git-stashing the gate and re-running this exact call
+    raised `TypeError: consolidate() got an unexpected keyword argument 'ctx'` — sharper
+    evidence than a silent success, since it shows the old tool had no hook for an actor to
+    even attach to. Now refused by name."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:some-random-mind", session="s", project="consolidatetest",
+        model=None, cwd=None)
+    try:
+        out = await srv.consolidate(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "not authorized to run consolidate" in out["error"]
+
+
+async def test_consolidate_allows_the_operator(actions: Actions) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="operator", session="s", project="consolidatetest", model=None, cwd=None)
+    try:
+        out = await srv.consolidate(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out.get("error") is None
+    assert "entities_retyped" in out
+
+
+async def test_consolidate_refuses_when_unmounted(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.consolidate(ctx=None)
+    finally:
+        srv._pool = saved_pool
+    assert "mount first" in out["error"]

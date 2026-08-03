@@ -1042,10 +1042,22 @@ async def expand_clinical_site(facility: str) -> dict[str, int]:
 
 
 @mcp.tool()
-async def consolidate() -> dict[str, int]:
+async def consolidate(ctx: Context | None = None) -> dict[str, Any]:
     """Graph hygiene: re-type mis-ingested entities (GP/LLC 'persons' -> Organizations),
     then queue + resolve cross-base merges (same company across bases) and collapse
-    SPV-name company variants. Run after collecting to de-fragment entities."""
+    SPV-name company variants. Run after collecting to de-fragment entities.
+    OPERATOR ONLY, ENFORCED — a whole-graph automatic merge sweep with no per-merge
+    review, not a per-object act any mounted caller should trigger on a whim. Refuses on
+    an unauthorized actor."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a consolidation sweep is a mind's act, and the "
+                         "graph must know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.seats import _OPERATOR_ACTORS
+    if ident.agent_id not in _OPERATOR_ACTORS:
+        return {"error": f"{ident.agent_id!r} is not authorized to run consolidate — this "
+                         "is an operator-only whole-graph merge sweep, not a per-object act "
+                         "any mounted caller may trigger"}
     actions = Actions(await _pool_get())
     reclassified = await reclassify_mistyped_entities(actions)
     await find_cross_base_candidates(actions.pool)
@@ -4319,15 +4331,30 @@ async def resolve_thread(
     never finds (022bd24a). Put the evidence THERE and keep `because` short. The receipt's
     `resolved_by` field CONFIRMS whether that edge actually landed — an artifact that only
     matched free text (a file:line, an unresolvable pointer) says so plainly rather than
-    leaving the caller to guess from a conditional sentence."""
+    leaving the caller to guess from a conditional sentence.
+    RE-RESOLVING IS ALLOWED, NOT REFUSED, ON PURPOSE — `ref` is matched by identity only,
+    never status, so a second call on an already-resolved thread is how a later, more
+    specific closure witness gets attached. because/resolved_artifact become this call's
+    own text (latest wins, earlier reasoning stays in history, not current). The receipt
+    names it plainly when a call landed on an already-resolved thread."""
     pool = await _pool_get()
+    probe_tid = await capture._find_thread(pool, ref)
+    was_already_resolved = (
+        probe_tid is not None
+        and await capture._thread_resolved_in(pool, probe_tid) is not None)
     tid = await capture.resolve_thread(
         Actions(pool), ref, because=because, artifact=artifact,
         source=await _actor_for(ctx, subagent_id, subagent_type)
     )
     if tid is None:
-        return {"error": f"no open thread matches {ref!r}"}
+        return {"error": f"no thread matches {ref!r}"}
     out = {"id": str(tid), "status": "resolved"}
+    if was_already_resolved:
+        out["note"] = ("this thread was already resolved before this call — "
+                       "because/resolved_artifact now reflect THIS call's own text, "
+                       "not the original close; earlier reasoning is still readable in "
+                       "the graph's history, not overwritten there, just not what a "
+                       "current-value read shows anymore")
     if artifact:
         out["artifact"] = f"{artifact} — kept as resolved_artifact"
         target = await pool.fetchrow(
