@@ -15,6 +15,7 @@ from src.orchestrator.projects import (
     fold_project,
     reconcile_project_fold,
     retire_project,
+    unfold_project,
 )
 from src.orchestrator.seats import ensure_seat
 
@@ -424,9 +425,165 @@ async def test_fold_project_is_reversible_via_unmerge(actions: Actions) -> None:
         dupe_id, into_id) == 1
 
 
-# ═══ the fold_project MCP wrapper (mcp_server.py, decision 5dbd4dce closed) — the gate
-# must survive exposure through the tool layer, and the reversibility witnesses must
-# reach the caller, not just the graph. ═══
+# ═══ unfold_project (ruling 31c02dca's PARITY requirement: fold_project had NO reversal
+# before this — a Project fold was permanent, task #127's own named case) ═══
+
+
+async def test_unfold_project_dry_run_plans_the_estate_restore(actions: Actions) -> None:
+    await _stub_project(actions, "repo:up1dupe0", "up1dupe0")
+    await _stub_project(actions, "repo:up1into0", "up1into0")
+    dupe_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:up1dupe0'")
+    commit = await actions.create_or_find_object("Commit", "commit:up1c0001", "test")
+    await actions.create_link(commit, dupe_id, "in_repo", "test", NOW, 0.9)
+
+    await fold_project(actions, dupe="up1dupe0", into="up1into0", evidence="test: a twin",
+                       actor="agent:test")
+
+    out = await unfold_project(actions, dupe="repo:up1dupe0",
+                               because="wrongful fold — a real second project",
+                               actor="agent:judge")
+    assert out["execute"] is False
+    assert out["was_merged_into"] == "repo:up1into0"
+    ops = {p["op"] for p in out["plan"]}
+    assert "unmerge_objects" in ops and "move_link" in ops
+    st = await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE canonical='repo:up1dupe0'")
+    assert st == "merged"  # dry run never writes
+
+
+async def test_unfold_project_executed_restores_the_estate(actions: Actions) -> None:
+    await _stub_project(actions, "repo:up2dupe0", "up2dupe0")
+    await _stub_project(actions, "repo:up2into0", "up2into0")
+    dupe_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:up2dupe0'")
+    into_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:up2into0'")
+    commit = await actions.create_or_find_object("Commit", "commit:up2c0001", "test")
+    await actions.create_link(commit, dupe_id, "in_repo", "test", NOW, 0.9)
+
+    await fold_project(actions, dupe="up2dupe0", into="up2into0", evidence="test: a twin",
+                       actor="agent:test")
+
+    out = await unfold_project(actions, dupe="repo:up2dupe0",
+                               because="a real second project, wrongly folded",
+                               actor="agent:judge", execute=True)
+
+    assert out["unmerged"] is True
+    assert out["edges_restored"] == 1
+    row = await actions.pool.fetchrow(
+        "SELECT status, merged_into FROM objects WHERE canonical='repo:up2dupe0'")
+    assert row["status"] == "active" and row["merged_into"] is None
+    live_to_dupe = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='in_repo' "
+        "AND (valid_until IS NULL OR valid_until > now())", commit, dupe_id)
+    assert live_to_dupe == 1
+    live_to_into = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='in_repo' "
+        "AND (valid_until IS NULL OR valid_until > now())", commit, into_id)
+    assert live_to_into is None
+    same_as = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='same_as'",
+        dupe_id, into_id)
+    assert same_as == 1
+
+
+async def test_unfold_project_refuses_a_never_folded_dupe(actions: Actions) -> None:
+    await _stub_project(actions, "repo:up3free0", "up3free0")
+    out = await unfold_project(actions, dupe="up3free0", because="x", actor="agent:judge")
+    assert "not folded" in out["error"]
+
+
+async def test_unfold_project_refuses_a_blank_because(actions: Actions) -> None:
+    await _stub_project(actions, "repo:up4dupe0", "up4dupe0")
+    await _stub_project(actions, "repo:up4into0", "up4into0")
+    await fold_project(actions, dupe="up4dupe0", into="up4into0", evidence="x",
+                       actor="agent:test")
+    out = await unfold_project(actions, dupe="up4dupe0", because="   ", actor="agent:judge")
+    assert "because" in out["error"]
+
+
+async def test_unfold_project_refuses_an_unknown_dupe(actions: Actions) -> None:
+    out = await unfold_project(actions, dupe="does-not-exist-up5", because="x",
+                               actor="agent:judge")
+    assert "no such SoftwareProject" in out["error"]
+
+
+async def test_unfold_project_refuses_an_operator_blessed_fold_without_fresh_operator_word(
+    actions: Actions,
+) -> None:
+    await _stub_project(actions, "repo:up6dupe0", "up6dupe0")
+    await _stub_project(actions, "repo:up6into0", "up6into0")
+    await fold_project(actions, dupe="up6dupe0", into="up6into0",
+                       evidence="the operator confirmed these are one project, 2026-07-01",
+                       actor="operator")
+
+    out = await unfold_project(actions, dupe="repo:up6dupe0",
+                               because="I think this was wrong", actor="agent:judge")
+    assert "operator" in out["error"]
+    st = await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE canonical='repo:up6dupe0'")
+    assert st == "merged"  # refused, nothing written
+
+    out2 = await unfold_project(
+        actions, dupe="repo:up6dupe0",
+        because="the operator's fresh word, 2026-07-28: this fold was wrong",
+        actor="agent:judge", execute=True)
+    assert out2["unmerged"] is True
+
+
+async def test_unfold_project_does_not_restore_an_edge_that_moved_on_since(
+    actions: Actions,
+) -> None:
+    """The unfold_agent honesty model, generalized to links: an edge only gets restored to
+    dupe when it is still live and pointing at into exactly where the fold left it. An
+    edge later re-pointed to a THIRD project is never guessed back."""
+    await _stub_project(actions, "repo:up7dupe0", "up7dupe0")
+    await _stub_project(actions, "repo:up7into0", "up7into0")
+    await _stub_project(actions, "repo:up7thrd0", "up7thrd0")
+    dupe_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:up7dupe0'")
+    into_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:up7into0'")
+    third_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:up7thrd0'")
+    commit = await actions.create_or_find_object("Commit", "commit:up7c0001", "test")
+    await actions.create_link(commit, dupe_id, "in_repo", "test", NOW, 0.9)
+
+    await fold_project(actions, dupe="up7dupe0", into="up7into0", evidence="test: a twin",
+                       actor="agent:test")
+    # the edge moves on to a THIRD project, unrelated to the fold
+    now = datetime.now(UTC)
+    await actions.invalidate_link(commit, into_id, "in_repo", "test", now)
+    await actions.create_link(commit, third_id, "in_repo", "test", now, 0.9)
+
+    out = await unfold_project(actions, dupe="repo:up7dupe0", because="wrongly folded",
+                               actor="agent:judge", execute=True)
+    assert out["edges_restored"] == 0
+    live_to_third = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='in_repo' "
+        "AND (valid_until IS NULL OR valid_until > now())", commit, third_id)
+    assert live_to_third == 1, (
+        "an edge that moved on since the fold is never pulled back onto the reversed project")
+
+
+async def test_unfold_project_reports_unreturnable_mounts(actions: Actions) -> None:
+    await _stub_project(actions, "repo:up8dupe0", "up8dupe0")
+    await _stub_project(actions, "repo:up8into0", "up8into0")
+    await save_mount(actions.pool, job_dir="/j/up8", agent_id="agent:x", project="up8into0",
+                     cwd="/w/up8", model="claude-fable-5", session_key=None, alive=True)
+
+    await fold_project(actions, dupe="up8dupe0", into="up8into0", evidence="x",
+                       actor="agent:test")
+
+    out = await unfold_project(actions, dupe="repo:up8dupe0", because="wrongly folded",
+                               actor="agent:judge")  # dry run
+    assert len(out["estate_unreturnable"]["mounts"]) == 1
+
+
+# ═══ the fold_project MCP wrapper — now `merge` (decision 5dbd4dce closed; collapsed
+# under ruling 31c02dca) — the gate must survive exposure through the tool layer, and the
+# reversibility witnesses must reach the caller, not just the graph. ═══
 
 
 class _Ctx:
@@ -450,7 +607,9 @@ async def test_fold_project_tool_still_refuses_a_contradiction_through_the_wrapp
     actions: Actions,
 ) -> None:
     """The gate must survive exposure — the wrapper is not a second, softer path to the
-    same act."""
+    same act. Now reached through `merge`, not a dedicated fold_project tool (ruling
+    31c02dca) — "wcd1"/"wcd2" carry no agent:/seat: prefix, so `merge` routes them to
+    fold_project exactly as the old dedicated tool did."""
     from src import mcp_server as srv
 
     await _stub_project(actions, "repo:wcd1", "wcd1")
@@ -463,8 +622,8 @@ async def test_fold_project_tool_still_refuses_a_contradiction_through_the_wrapp
     saved_pool = srv._pool
     ctx = await _mounted(actions, "agent:foldtool1", "foldtoolproj")
     try:
-        out = await srv.fold_project(dupe="wcd1", into="wcd2",
-                                     evidence="looks like a twin", ctx=ctx)
+        out = await srv.merge(dupe="wcd1", into="wcd2",
+                              evidence="looks like a twin", ctx=ctx)
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
@@ -478,7 +637,7 @@ async def test_fold_project_tool_surfaces_the_merge_event_and_same_as_link(
 ) -> None:
     """Reversibility must reach the CALLER, not stay implicit in the graph — the receipt
     names the merge event and the same_as link `merge_objects` mints, the two witnesses
-    an `unmerge_objects` reversal needs."""
+    an `unmerge_objects` reversal needs. Reached through `merge` now (ruling 31c02dca)."""
     from src import mcp_server as srv
 
     await _stub_project(actions, "repo:wrev1", "wrev1")
@@ -489,8 +648,8 @@ async def test_fold_project_tool_surfaces_the_merge_event_and_same_as_link(
     saved_pool = srv._pool
     ctx = await _mounted(actions, "agent:foldtool2", "foldtoolproj")
     try:
-        out = await srv.fold_project(dupe="wrev1", into="wrev2",
-                                     evidence="reversibility reaches the caller", ctx=ctx)
+        out = await srv.merge(dupe="wrev1", into="wrev2",
+                              evidence="reversibility reaches the caller", ctx=ctx)
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)

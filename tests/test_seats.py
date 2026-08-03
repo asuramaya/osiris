@@ -2350,6 +2350,178 @@ async def test_fold_seat_refuses_an_unknown_seat(actions: Actions) -> None:
     assert "unknown seat" in out["error"] and "seat:fs4ghost" in out["error"]
 
 
+# ═══ unfold_seat (ruling 31c02dca's PARITY requirement: fold_seat had NO reversal before
+# this — a Seat fold was permanent, task #127's own named case) ═══
+
+
+async def test_unfold_seat_dry_run_plans_the_holder_and_managed_by_restore(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import fold_seat, unfold_seat
+
+    dupe = await actions.create_or_find_object("Seat", "seat:us1dupe0", "test")
+    await actions.create_or_find_object("Seat", "seat:us1into0", "test")
+    mgr = await actions.create_or_find_object("Seat", "seat:us1mgr00", "test")
+    holder = await actions.create_or_find_object("Agent", "agent:us1hld00", "test")
+    await actions.create_link(holder, dupe, "holds", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+    await _link_managed_by(actions, dupe, mgr)
+
+    await fold_seat(actions, dupe="seat:us1dupe0", into="seat:us1into0",
+                    evidence="test: a twin", actor="test")
+
+    out = await unfold_seat(actions, dupe="seat:us1dupe0",
+                            because="wrongful fold — a real second seat",
+                            actor="agent:judge")
+    assert out["execute"] is False
+    assert out["was_merged_into"] == "seat:us1into0"
+    ops = {p["op"] for p in out["plan"]}
+    assert "unmerge_objects" in ops and "move_link" in ops
+    st = await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE canonical='seat:us1dupe0'")
+    assert st == "merged"  # dry run never writes
+
+
+async def test_unfold_seat_executed_restores_holder_and_managed_by(actions: Actions) -> None:
+    from src.orchestrator.seats import fold_seat, held_seat, manager_of_seat, unfold_seat
+
+    dupe = await actions.create_or_find_object("Seat", "seat:us2dupe0", "test")
+    into = await actions.create_or_find_object("Seat", "seat:us2into0", "test")
+    mgr = await actions.create_or_find_object("Seat", "seat:us2mgr00", "test")
+    assert dupe and into and mgr
+    holder = await actions.create_or_find_object("Agent", "agent:us2hld00", "test")
+    await actions.create_link(holder, dupe, "holds", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+    await _link_managed_by(actions, dupe, mgr)
+
+    await fold_seat(actions, dupe="seat:us2dupe0", into="seat:us2into0",
+                    evidence="test: a twin", actor="test")
+
+    out = await unfold_seat(actions, dupe="seat:us2dupe0",
+                            because="a real second seat, wrongly folded",
+                            actor="agent:judge", execute=True)
+
+    assert out["unmerged"] is True
+    assert out["holders_restored"] == 1
+    assert out["managed_by_restored"] == 1
+    row = await actions.pool.fetchrow(
+        "SELECT status, merged_into FROM objects WHERE canonical='seat:us2dupe0'")
+    assert row["status"] == "active" and row["merged_into"] is None
+    bound = await held_seat(actions.pool, "agent:us2hld00")
+    assert bound is not None and bound["seat_id"] == "seat:us2dupe0"
+    assert await manager_of_seat(actions.pool, "seat:us2dupe0") == "seat:us2mgr00"
+    # the merge event and same_as link stay as witnesses (unmerge_objects' own contract)
+    same_as = await actions.pool.fetchval(
+        "SELECT 1 FROM links l JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
+        "WHERE f.canonical='seat:us2dupe0' AND t.canonical='seat:us2into0' "
+        "AND l.type='same_as'")
+    assert same_as == 1
+
+
+async def test_unfold_seat_refuses_a_never_folded_dupe(actions: Actions) -> None:
+    from src.orchestrator.seats import unfold_seat
+
+    await actions.create_or_find_object("Seat", "seat:us3free0", "test")
+    out = await unfold_seat(actions, dupe="seat:us3free0", because="x", actor="agent:judge")
+    assert "not folded" in out["error"]
+
+
+async def test_unfold_seat_refuses_a_blank_because(actions: Actions) -> None:
+    from src.orchestrator.seats import fold_seat, unfold_seat
+
+    await actions.create_or_find_object("Seat", "seat:us4dupe0", "test")
+    await actions.create_or_find_object("Seat", "seat:us4into0", "test")
+    await fold_seat(actions, dupe="seat:us4dupe0", into="seat:us4into0", evidence="x",
+                    actor="test")
+    out = await unfold_seat(actions, dupe="seat:us4dupe0", because="   ", actor="agent:judge")
+    assert "because" in out["error"]
+
+
+async def test_unfold_seat_refuses_an_unknown_dupe(actions: Actions) -> None:
+    from src.orchestrator.seats import unfold_seat
+
+    out = await unfold_seat(actions, dupe="seat:nobody99", because="x", actor="agent:judge")
+    assert "unknown" in out["error"]
+
+
+async def test_unfold_seat_refuses_an_operator_blessed_fold_without_fresh_operator_word(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import fold_seat, unfold_seat
+
+    await actions.create_or_find_object("Seat", "seat:us5dupe0", "test")
+    await actions.create_or_find_object("Seat", "seat:us5into0", "test")
+    await fold_seat(actions, dupe="seat:us5dupe0", into="seat:us5into0",
+                    evidence="the operator confirmed these are one seat, 2026-07-01",
+                    actor="operator")
+
+    out = await unfold_seat(actions, dupe="seat:us5dupe0",
+                            because="I think this was wrong", actor="agent:judge")
+    assert "operator" in out["error"]
+    st = await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE canonical='seat:us5dupe0'")
+    assert st == "merged"  # refused, nothing written
+
+    out2 = await unfold_seat(
+        actions, dupe="seat:us5dupe0",
+        because="the operator's fresh word, 2026-07-28: this fold was wrong",
+        actor="agent:judge", execute=True)
+    assert out2["unmerged"] is True
+
+
+async def test_unfold_seat_does_not_restore_a_holder_who_moved_on_since(
+    actions: Actions,
+) -> None:
+    """The unfold_agent honesty model, generalized to links: a holder only gets restored
+    to dupe when their CURRENT active seat is still exactly what the fold left them on. A
+    holder who has since moved to a THIRD seat is never guessed back — reported as simply
+    not among the reversible items, the same discipline unfold_agent holds for mail it
+    cannot prove was ever the dupe's own."""
+    from src.orchestrator.seats import fold_seat, held_seat, unfold_seat
+
+    dupe = await actions.create_or_find_object("Seat", "seat:us6dupe0", "test")
+    into = await actions.create_or_find_object("Seat", "seat:us6into0", "test")
+    third = await actions.create_or_find_object("Seat", "seat:us6thrd0", "test")
+    assert dupe and into and third
+    holder = await actions.create_or_find_object("Agent", "agent:us6hld00", "test")
+    await actions.create_link(holder, dupe, "holds", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+
+    await fold_seat(actions, dupe="seat:us6dupe0", into="seat:us6into0",
+                    evidence="test: a twin", actor="test")
+    # the holder moves on to a THIRD seat, unrelated to the fold — a real transfer vacates
+    # the old seat first (bind_holder alone only heals a SEAT's prior holder, never an
+    # AGENT's own other seat) — nothing should stitch this back onto dupe when the fold is
+    # later reversed
+    now = datetime.now(UTC)
+    await actions.invalidate_link(holder, into, "holds", "test", now)
+    await actions.create_link(holder, third, "holds", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    out = await unfold_seat(actions, dupe="seat:us6dupe0", because="wrongly folded",
+                            actor="agent:judge", execute=True)
+    assert out["holders_restored"] == 0
+    bound = await held_seat(actions.pool, "agent:us6hld00")
+    assert bound is not None and bound["seat_id"] == "seat:us6thrd0", (
+        "a holder who moved on since the fold is never pulled back onto the reversed seat")
+
+
+async def test_unfold_seat_reports_unreturnable_mail(actions: Actions) -> None:
+    from src.orchestrator.mailbox import send_message
+    from src.orchestrator.seats import fold_seat, unfold_seat
+
+    await actions.create_or_find_object("Seat", "seat:us7dupe0", "test")
+    await actions.create_or_find_object("Seat", "seat:us7into0", "test")
+    await send_message(actions.pool, from_agent="agent:sender", from_project="osiris",
+                       to_agent="seat:us7dupe0", body="a question for the twin")
+    await fold_seat(actions, dupe="seat:us7dupe0", into="seat:us7into0", evidence="x",
+                    actor="test")
+
+    out = await unfold_seat(actions, dupe="seat:us7dupe0", because="wrongly folded",
+                            actor="agent:judge")  # dry run
+    assert len(out["estate_unreturnable"]["mail"]) == 1
+
+
 async def test_retire_seat_closes_a_vacant_seat(actions: Actions) -> None:
     from src.orchestrator.seats import retire_seat
 
