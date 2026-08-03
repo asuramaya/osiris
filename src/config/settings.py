@@ -170,11 +170,30 @@ class Settings(BaseSettings):
     # a response severed by a server bounce costs a duplicate, never a silent loss.
     osiris_mail_lease_secs: int = 900
     # Resume-not-mint (thread 9f2ddb44): the wake dispatch is deliver → resume → mint. A
-    # transcript larger than this is at the context ceiling (retirement-by-compaction
-    # territory) — NOT resumable; the wake mints a fresh twin instead. An owner whose mount
-    # is fresher than osiris_owner_live_secs is LIVE: no wake at all, the mail just sits in
-    # its box (the owner's own chrome/orient shows it — never spawn beside a live owner).
+    # transcript larger than this is at the context ceiling — NOT resumable; the wake mints
+    # a fresh twin instead. An owner whose mount is fresher than osiris_owner_live_secs is
+    # LIVE: no wake at all, the mail just sits in its box (the owner's own chrome/orient
+    # shows it — never spawn beside a live owner). CEILING CORRECTED 2026-08-03 (thread
+    # 771366d1, task #135/#136): this used to check raw transcript file size, which
+    # measured the wrong thing — verified live on two real specimens (72MB/103MB
+    # transcripts) that a resume only hydrates the content since the last Claude Code
+    # auto-compaction, 2-3% of the total file. `resumable_tail_bytes`
+    # (src/ingest/sessions.py) now checks that tail, not cumulative lifetime size.
     osiris_resume_ceiling_bytes: int = 8_000_000
+    # THE COMPACTION GATE, INDEPENDENT OF SIZE (Thoth's ruling, same thread, refining the
+    # size-only fix above): a small tail after 17 compactions and a small tail after zero
+    # are opposite cases, not similar ones — the FIRST compaction is the moment a resume
+    # stops returning "the mind that did the work" and starts returning "a lossy summary of
+    # it" (ruling 7fa4b599's own mechanism — that summary is approximately what a fresh
+    # mind's own orient()+handoff+dispatch-brief ritual already delivers, from an audited
+    # source, not a lossy one). Default 0 — evidence-based, not guessed: measured across
+    # every real transcript on this box over the trivial-shell floor (767 candidates,
+    # 2026-08-03), 85.4% have NEVER compacted (a clean, natural boundary), and of the 37
+    # that compacted exactly once, 35 already carry a tail under the byte ceiling above —
+    # meaning this gate does REAL, ORTHOGONAL work the size ceiling alone would miss for
+    # the large majority of once-drifted sessions. Full measurement in
+    # `resume_diagnostics`'s own docstring.
+    osiris_resume_max_compactions: int = 0
     osiris_owner_live_secs: int = 900
     # Wake ECONOMICS (operator, 2026-07-08): most wakes are triage-shaped (read, reply,
     # settle) — pin them to a cheaper model and let the PROMPT escalate real work back to a
