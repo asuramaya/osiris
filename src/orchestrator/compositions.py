@@ -619,6 +619,21 @@ async def _semantic_hits(pool: asyncpg.Pool, q: str, limit: int) -> list[dict[st
     return deduped
 
 
+async def _fn_reference_catalog(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any],
+) -> Any:
+    """The type catalog osiris SHIPS — object/link types, straight from schema.py's static
+    declared manifest (task #111, thread 26694d10). Deliberately NOT catalog.py's live,
+    accretive one: `ensure_type`'s stub-minting must never touch what this reads (Thoth's
+    ruling, msg 2099) — an agent correctly using the accretion path can never turn this
+    composition, or the REFERENCE.md doc `docs_compiler.py` renders from the SAME manifest,
+    into something that changed underneath them. Ignores `pool`/`subject` entirely: the data
+    is pool-free by the same ruling that makes the doc pool-free."""
+    from src.ontology.schema import catalog
+
+    return catalog()
+
+
 async def _fn_canon(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
     """Consult the design canon — Palantir/Notion's models + Osiris's own docs, ingested as
     `Reference` objects (src/ingest/reference.py). 'Cite, don't re-derive': given a query (a
@@ -3256,6 +3271,7 @@ _FUNCTIONS: dict[str, Function] = {
     "desk_project": _fn_desk_project,
     "triage": _fn_triage,
     "closure_health": _fn_closure_health,
+    "reference_catalog": _fn_reference_catalog,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
@@ -3270,7 +3286,7 @@ _SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "puls
                  "lap", "lint", "echoes", "wall", "desk_decisions", "practices",
                  "fleet_live_agents", "fleet_pulse_line", "fleet_live", "mail_overview",
                  "mail_threads", "overhead", "desk_overview", "desk_project", "triage",
-                 "closure_health"}
+                 "closure_health", "reference_catalog"}
 
 
 def list_functions() -> list[str]:
@@ -4535,6 +4551,10 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     # the dedicated canon view: the project's design memory (Palantir/Notion + own docs),
     # rendered as a sectioned read-model. Run with no subject; `consult_canon(q)` queries it.
     "design-canon": {"op": "function", "name": "canon", "args": {}},
+    # the type catalog osiris SHIPS (task #111, thread 26694d10) — schema.py's static
+    # manifest, deliberately NOT catalog.py's live accretive one (msg 2099). No subject
+    # needed; also the pool-free source docs_compiler.py's REFERENCE.md render reads.
+    "reference": {"op": "function", "name": "reference_catalog"},
     # the decision log: the project's WHY — a `sections` op-tree (was a Function).
     "decision-log": DECISION_LOG,
     # the family audit: what drifted across a set of similar repos (every ingested family).
@@ -4620,6 +4640,8 @@ _COMP_META: dict[str, tuple[str, str]] = {
     "echoes": ("wall", "the triage pile: untouched miner echoes, oldest first"),
     "decision-log": ("memory", "every decision with its WHY; superseded entries grayed"),
     "design-canon": ("memory", "the design memory — ask it before re-deriving"),
+    "reference": ("memory", "the type catalog osiris SHIPS — static and pool-free, never a "
+                            "live accretive stub"),
     "docs": ("memory", "the docs canon by topic — getting-started, concepts, reference, "
                        "deployment, history"),
     "recent work": ("memory", "latest commits across the graph"),

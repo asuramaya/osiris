@@ -115,8 +115,8 @@ async def test_function_registry_is_listable(actions: Actions) -> None:
                                 "family_drift", "fleet_live", "fleet_live_agents",
                                 "fleet_pulse_line", "lap", "lint", "mail_overview",
                                 "mail_threads", "overhead", "portfolio", "practices",
-                                "project", "pulse", "roadmap_open", "screen_network", "search",
-                                "subject_report", "triage", "wall"]
+                                "project", "pulse", "reference_catalog", "roadmap_open",
+                                "screen_network", "search", "subject_report", "triage", "wall"]
 
 
 async def test_briefing_is_a_sections_op_tree(actions: Actions) -> None:
@@ -323,6 +323,22 @@ async def test_canon_is_subject_free_and_seeded(actions: Actions) -> None:
     await seed_default_compositions(actions.pool)
     res = await run_composition(actions.pool, "design-canon")     # NO subject → must not raise
     assert res["kind"] == "data"
+
+
+async def test_reference_catalog_is_subject_free_seeded_and_pool_independent(
+        actions: Actions) -> None:
+    """task #111 (thread 26694d10): `reference_catalog` is registered + subject-free, the
+    `reference` view is a default composition, and — the one thing that distinguishes it
+    from every other Function here — its DATA is identical whether or not a real pool/DB
+    is behind the call, because it reads schema.py's static manifest, never the graph
+    (msg 2099: never catalog.py's live accretive one)."""
+    from src.ontology.schema import catalog
+
+    assert "reference_catalog" in list_functions()
+    await seed_default_compositions(actions.pool)
+    res = await run_composition(actions.pool, "reference")        # NO subject → must not raise
+    assert res["kind"] == "data"
+    assert res["items"] == catalog()
 
 
 # --- family consistency audit (the developer persona, multi-repo) ------------

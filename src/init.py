@@ -79,6 +79,9 @@ ROOM_COMPOSITIONS: dict[str, tuple[str, ...]] = {
         # the four numbers as a standing surface (Thoth DM 2835/2917) — how much of thread
         # closure is held by structure vs memory, fleet-wide by default.
         "closure-health",
+        # the type catalog osiris SHIPS (task #111, thread 26694d10) — same room as
+        # design-canon/decision-log: a developer project-memory lens, not an entity one.
+        "reference",
     ),
     "analyst": (
         "who-is-this", "operational-vs-disclosed-geography", "co-investment-ties",
