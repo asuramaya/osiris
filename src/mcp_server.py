@@ -3813,16 +3813,18 @@ async def mint_seat(
 
 
 @mcp.tool()
-async def bootstrap(cwd: str) -> dict[str, Any]:
+async def bootstrap(cwd: str, ctx: Context | None = None) -> dict[str, Any]:
     """Onboard a project by migrating its markdown MEMORY (CLAUDE.md build log / DESIGN.md /
     memory essays) INTO the shared graph as retrieval-sized Reference nodes — so its history
     becomes a bounded query (consult_canon) instead of bloat re-injected into every context.
     Registers the project and returns a suggested boot-sector CLAUDE.md. Osiris does NOT touch
     your files (no hands): review the suggestion, write it yourself, archive the originals.
-    Public docs (README/ARCHITECTURE) are left alone — they're human-facing exports, not memory."""
+    Public docs (README/ARCHITECTURE) are left alone — they're human-facing exports, not memory.
+    Every write is stamped with your mounted identity (or "session"), never a fixed literal."""
     from src.orchestrator.bootstrap import bootstrap_project
 
-    return await bootstrap_project(Actions(await _pool_get()), cwd)
+    source = await _source_for(ctx)
+    return await bootstrap_project(Actions(await _pool_get()), cwd, source=source)
 
 
 # --- write-back: the prosthesis (capture what you decided / what's still open) ---
@@ -4520,9 +4522,14 @@ async def reap_stale_leases(older_than_secs: int = 3600) -> dict[str, Any]:
     suspect a stale claim right now and don't want to wait for the cron's next tick (every
     5 minutes, arq_worker.reap_leases, mirroring `reap_runs`'s own wiring for helper_runs).
     An hour's default is deliberately looser than helper_runs' 900s — a resource
-    lease here is agent-work-paced (a whole session touching a file), not machine-paced."""
+    lease here is agent-work-paced (a whole session touching a file), not machine-paced.
+    `older_than_secs` has a 60s floor (below it force-releases every held lease fleet-wide
+    at once), refused loudly."""
     pool = await _pool_get()
-    n = await resource_lease.reap_stale(pool, older_than_secs=older_than_secs)
+    try:
+        n = await resource_lease.reap_stale(pool, older_than_secs=older_than_secs)
+    except ValueError as e:
+        return {"error": str(e)}
     return {"reaped": n, "older_than_secs": older_than_secs}
 
 

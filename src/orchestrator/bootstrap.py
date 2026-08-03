@@ -110,21 +110,31 @@ a rug-pull is confessed, never inherited blind.
 
 
 async def bootstrap_project(
-    actions: Actions, path: str, *, project: str | None = None
+    actions: Actions, path: str, *, project: str | None = None, source: str = "ref:osiris"
 ) -> dict[str, Any]:
     """Migrate `path`'s markdown memory into the graph + register the project. Returns what
-    was ingested and a suggested boot-sector for the agent to review + write itself."""
+    was ingested and a suggested boot-sector for the agent to review + write itself.
+
+    `source` STAMPS EVERY WRITE THIS CALL MAKES (the SoftwareProject registration and every
+    ingested log entry — `ingest_reference_doc`'s essays are unaffected, their provenance is
+    the document's own claimed vendor, not the caller). Defaults to the synthetic
+    "ref:osiris" for the bare-CLI case (`main()` below, no caller identity exists at all);
+    the MCP tool wrapper (mcp_server.bootstrap) passes the real mounted caller instead.
+    FIXED 2026-08-03 (Thoth's Tier 1 dispatch off the silent-authority census, decision
+    497a066a): every write used to be hardcoded "ref:osiris" regardless of who actually
+    called bootstrap — worse than anonymous, a bad injection read as deliberate system
+    canon and could not be traced back to a caller even after the fact."""
     project, log_specs, essays = _plan(path, project)
     now = datetime.now(UTC)
 
-    proj = await actions.create_or_find_object("SoftwareProject", f"repo:{project}", "ref:osiris")
-    await actions.assert_property(proj, "name", project, "ref:osiris", now, _CONF,
+    proj = await actions.create_or_find_object("SoftwareProject", f"repo:{project}", source)
+    await actions.assert_property(proj, "name", project, source, now, _CONF,
                                   evidence_class=_EC.value)
 
     ingested: list[dict[str, Any]] = []
     total = 0
     for fpath, topic, display in log_specs:
-        r = await ingest_log(actions, fpath, topic=f"{project}-{topic}")
+        r = await ingest_log(actions, fpath, topic=f"{project}-{topic}", source=source)
         total += r["entries"]
         ingested.append({"file": display, "entries": r["entries"], "as": "log"})
     for essay in essays:

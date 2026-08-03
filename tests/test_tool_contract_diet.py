@@ -103,7 +103,18 @@ import json
 # the category rule's lean end first (dropped the dated citation and the "not a metadata gap"
 # aside, kept the WHY implicit in "trusts as the code it executes"); 119,953 -> 120,081, +128.
 # Exact measured total, not a round number.
-TOOL_CONTRACT_CEILING_CHARS = 120_081
+#
+# RAISED, the silent-authority census's Tier 1 fixes (2026-08-03, Thoth's dispatch off
+# decision 497a066a): bootstrap() and reap_stale_leases() both had a REAL blast radius --
+# bootstrap() stamped every write with a hardcoded literal regardless of caller (untraceable
+# even after the fact); reap_stale_leases(older_than_secs=0) force-released every held lease
+# fleet-wide in one call, no gate needed, the parameter itself was the weapon. Trimmed both
+# docstrings to the category rule's lean end across two passes (cut the redundant "unmounted
+# callers still bootstrap, never gated" aside and the restated "rather than silently reaping
+# less than asked") before raising; the residue is WHAT EACH NOW REFUSES AND WHY, the one
+# thing this rule never cuts. 120,081 -> 120,282, +201. Exact measured total, not a round
+# number.
+TOOL_CONTRACT_CEILING_CHARS = 120_282
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:

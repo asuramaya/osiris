@@ -144,14 +144,22 @@ def _canon_like_sections(text: str) -> list[tuple[str, str]]:
 
 
 async def ingest_log(
-    actions: Actions, path: str, *, topic: str, case_id: uuid.UUID | None = None
+    actions: Actions, path: str, *, topic: str, case_id: uuid.UUID | None = None,
+    source: str = "ref:osiris",
 ) -> dict[str, Any]:
     """Ingest a build log as per-entry `Reference` nodes (canonical
     `ref:<topic>-[<date>-]<title-slug>`), SELF_DECLARED (our own record of our own work).
-    Idempotent: canonical find-or-create + the byte-dup assertion skip absorb re-runs."""
+    Idempotent: canonical find-or-create + the byte-dup assertion skip absorb re-runs.
+
+    `source` defaults to the synthetic "ref:osiris" (the bare-CLI, no-caller case) but a
+    real caller's identity should be threaded through when there is one — see
+    bootstrap_project's own fix (2026-08-03, Thoth's Tier 1 dispatch off the
+    silent-authority census, decision 497a066a): every entry used to be stamped
+    "ref:osiris" regardless of who actually ran the ingest, so a bad entry could not be
+    traced back to a caller even after the fact."""
     ec = EvidenceClass.SELF_DECLARED
     conf, now = confidence_for(ec), datetime.now(UTC)
-    source_id = "ref:osiris"
+    source_id = source
     entries = parse_log(_read(path))
     ids: list[uuid.UUID] = []
     for e in entries:
