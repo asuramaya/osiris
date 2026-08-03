@@ -134,6 +134,42 @@ async def test_census_trees_mints_the_unmodeled_and_paths_the_known(
     assert again["known"] == 2  # both now known; the unchanged disk writes nothing
 
 
+def test_git_dirs_skips_a_bare_venv_one_level_shallower_than_the_depth_cutoff(
+    tmp_path: Path,
+) -> None:
+    """Task #122's mechanical fix, proven as a negative control both ways. `mirror/venv`
+    (depth 2, AT the max_depth=2 cutoff) was already accidentally safe: `depth >= max_depth`
+    returns before venv's own children are ever iterated, regardless of the skip list. A
+    bare `venv` ONE LEVEL SHALLOWER (depth 1) has no such protection — pre-fix, the walker
+    descends straight into it and finds whatever sits inside; post-fix (_CENSUS_SKIP now
+    matches "venv" as well as ".venv"), it does not."""
+    from src.orchestrator import neighborhoods
+    from src.orchestrator.neighborhoods import _git_dirs
+
+    (tmp_path / "code" / "venv" / "nested-repo" / ".git").mkdir(parents=True)
+    (tmp_path / "code" / "mirror" / "venv" / "also-nested" / ".git").mkdir(parents=True)
+
+    # PRE-FIX (reproduced directly, not by inference): without "venv" in the skip set, the
+    # shallow venv's own nested repo IS found — the trap, live.
+    without_fix = neighborhoods._CENSUS_SKIP - {"venv"}
+    original = neighborhoods._CENSUS_SKIP
+    neighborhoods._CENSUS_SKIP = without_fix
+    try:
+        pre_fix = _git_dirs([str(tmp_path / "code")])
+    finally:
+        neighborhoods._CENSUS_SKIP = original
+    assert any(p.name == "nested-repo" for p in pre_fix)
+
+    # POST-FIX (the real, currently-shipped _CENSUS_SKIP): the shallow venv is never
+    # descended into at all.
+    post_fix = _git_dirs([str(tmp_path / "code")])
+    assert not any(p.name == "nested-repo" for p in post_fix)
+
+    # the depth-2 mirror/venv case was ALREADY safe before this fix (the accidental
+    # protection Thoth named) and stays safe after it, for a different reason.
+    assert not any(p.name == "also-nested" for p in post_fix)
+
+
 async def test_census_trees_refuses_a_malformed_name_and_keeps_walking(
     actions: Actions, tmp_path: Path,
 ) -> None:
