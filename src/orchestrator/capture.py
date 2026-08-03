@@ -316,8 +316,12 @@ async def record_decision(
     stamped supersedes, so the correction navigates both ways. The lens does the graying:
     superseded decisions leave orient's recent list; the decision-log renders them with
     their successor. NEVER a delete — the wrong hypothesis stays readable under its
-    correction. Raises ValueError when the ref matches nothing (the new decision is NOT
-    recorded — a correction that can't name its target is not yet a correction).
+    correction. UUID, CANONICAL, OR SHORT-ID ONLY (task #117, the same law `resolves`
+    follows below): a free-text/prose ref no longer falls through to a summary-substring
+    match — burying a decision is an addressing act, and an identifier-shaped-but-wrong
+    arg must refuse fleet-wide rather than search for something it merely resembles.
+    Raises ValueError when the ref matches nothing (the new decision is NOT recorded —
+    a correction that can't name its target is not yet a correction).
 
     `resolves` CLOSES THE THREAD THIS DECISION ANSWERS, in the same act — mints `answers`
     and marks the thread resolved. Until this existed, capture had a one-way valve: the
@@ -355,10 +359,15 @@ async def record_decision(
     observed = datetime.now(UTC)
     old: uuid.UUID | None = None
     if supersedes:
-        old = await _find_decision(actions.pool, supersedes)
+        # require_identifier=True (task #117, the same law resolves= already follows,
+        # below): burying a decision under this one is an addressing act, not a search —
+        # an identifier-shaped-but-wrong arg (a bare local task number) must refuse
+        # fleet-wide rather than fall through to a prose/summary-substring match.
+        old = await _find_decision(actions.pool, supersedes, require_identifier=True)
         if old is None:
             raise ValueError(f"supersedes matched no decision: {supersedes!r} — quote its "
-                             "UUID, 8-char short id, or a summary substring")
+                             "UUID, canonical, or 8-char short id (no longer a prose "
+                             "match — an addressing act refuses rather than guesses)")
     answered: list[uuid.UUID] = []
     if isinstance(resolves, list):
         for thread_ref in resolves:
@@ -554,6 +563,24 @@ async def _find_decision(
     that CLOSES the record it names rather than merely reading it (ack_handoff)."""
     return await _resolve_ref(pool, "Decision", ref, text_field="summary",
                               require_identifier=require_identifier)
+
+
+async def _decision_snapshot(pool: asyncpg.Pool, decision_id: uuid.UUID) -> dict[str, str | None]:
+    """The CURRENT summary/rationale for a Decision — read BEFORE a near-duplicate reuse
+    overwrites them, so the MCP wrapper's receipt can show a caller what a false-positive
+    dedup hit is about to erase (task #117, thread ed9f73ce: record_decision's near-dup
+    guard silently merged two distinct rulings that shared a boilerplate summary template,
+    with no signal in either receipt)."""
+    row = await pool.fetchrow(
+        "SELECT "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS summary, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "   AND a.name='rationale' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS rationale",
+        decision_id)
+    return {"summary": row["summary"], "rationale": row["rationale"]}
 
 
 async def _thread_summary(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | None:
@@ -1346,11 +1373,18 @@ async def kill_superstition(
     return s
 
 
-async def _find_practice(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
+async def _find_practice(
+    pool: asyncpg.Pool, ref: str, *, require_identifier: bool = False,
+) -> uuid.UUID | None:
     """A Practice by UUID, by canonical, by short-id PREFIX, then by `statement`
     substring (shortest statement wins) — same resolution ladder as
-    `_find_decision`/`_find_thread`; see `_resolve_ref`."""
-    return await _resolve_ref(pool, "Practice", ref, text_field="statement")
+    `_find_decision`/`_find_thread`; see `_resolve_ref`. `require_identifier=True` drops
+    the statement-substring leg, the same opt-in `_find_decision`/`_find_thread` expose —
+    for a call path that CONVERTS or LINKS the record it names rather than merely reading
+    it (`refutes=`/`confirms=` on record_decision, task #117: an identifier-shaped arg
+    like a bare local task number must refuse fleet-wide, not search for it)."""
+    return await _resolve_ref(pool, "Practice", ref, text_field="statement",
+                              require_identifier=require_identifier)
 
 
 async def _witness_link(

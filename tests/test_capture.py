@@ -15,6 +15,7 @@ from src.actions.core import Actions
 from src.ingest.mined import consolidate_memory
 from src.mcp_server import _project_briefing
 from src.orchestrator.capture import (
+    _decision_snapshot,
     amend_decision,
     annotate_thread,
     backfill_decided_in,
@@ -334,6 +335,115 @@ async def test_record_decision_still_runs_supersedes_through_a_dedup_hit(
         "SELECT a.value #>> '{}' FROM current_assertions a "
         "WHERE a.object_id=$1 AND a.name='superseded_by'", target)
     assert superseded_by == str(near)  # the supersede still landed, on the deduped object
+
+
+# ═══ task #117, thread ed9f73ce (Seshat's live specimen): the near-dup guard's own reuse
+# was SILENT — no signal in either receipt when it overwrote an unrelated decision's
+# content. `_decision_snapshot` + the MCP wrapper's pre-check make that reuse honest. ═══
+
+
+async def test_decision_snapshot_reads_the_current_summary_and_rationale(
+    actions: Actions,
+) -> None:
+    d = await record_decision(actions, "the daemon restarts on a schema change",
+                              rationale="found live, 2026-08-03", repo="snapproj")
+    snap = await _decision_snapshot(actions.pool, d)
+    assert snap == {"summary": "the daemon restarts on a schema change",
+                    "rationale": "found live, 2026-08-03"}
+
+
+async def test_record_decision_near_dup_reuse_silently_overwrites_without_the_fix(
+    actions: Actions,
+) -> None:
+    """NEGATIVE CONTROL BY CONSTRUCTION, at the layer the bug actually lives: this is
+    `capture.record_decision` itself (never touched by this fix — the MCP wrapper is
+    where the receipt honesty was added), reproducing Seshat's EXACT live shape —
+    summaries reproduced verbatim from decision 48c1610c's own account (the real
+    template both her lap->provenance and doors->whois attempts shared, "Rename MCP
+    verb X -> Y (naming-sweep phase 6, decision 4dd526fe/aed9d4c1eb43)", differing only
+    in the verb pair). Two GENUINELY DIFFERENT rulings collide onto ONE object, and the
+    first ruling's own rationale is GONE from the current view — proving the underlying
+    overwrite this fix makes visible, not fixes away (task #117: the reuse+overwrite
+    design is intentional for a genuine retry; only the SILENCE was the defect)."""
+    first = await record_decision(
+        actions,
+        "Rename MCP verb lap -> provenance (naming-sweep phase 6, decision 4dd526fe/aed9d4c1eb43)",
+        rationale="lap scored #6 on the intent-search axis; provenance is unambiguous.",
+        repo="renameproj")
+    second = await record_decision(
+        actions,
+        "Rename MCP verb doors -> whois (naming-sweep phase 6, decision 4dd526fe/aed9d4c1eb43)",
+        rationale="doors collided with resolve_identity; whois has no such collision.",
+        repo="renameproj")
+    assert first == second  # the collision itself: one object wearing two rulings' words
+    snap = await _decision_snapshot(actions.pool, first)
+    assert snap["rationale"] == (
+        "doors collided with resolve_identity; whois has no such collision.")
+    assert "lap" not in (snap["summary"] or "")  # the first ruling's own words are gone
+
+
+async def test_record_decision_tool_names_a_near_dup_reuse_and_its_prior_content(
+    actions: Actions,
+) -> None:
+    """THE FIX: the MCP wrapper's receipt now says plainly when a call landed on an
+    existing decision instead of minting a fresh one, and shows exactly what is about to
+    be overwritten — the same 'receipt echo' principle John's design constraint named for
+    `resolves`, extended to this silent-merge specimen. Same real summaries as the unit
+    test above."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        first = await srv.record_decision(
+            "Rename MCP verb lap -> provenance (naming-sweep phase 6, decision "
+            "4dd526fe/aed9d4c1eb43)",
+            rationale="lap scored #6 on the intent-search axis.", repo="toolrenameproj")
+        assert "reused_existing_decision" not in first  # the FIRST call mints fresh, no hit
+
+        second = await srv.record_decision(
+            "Rename MCP verb doors -> whois (naming-sweep phase 6, decision "
+            "4dd526fe/aed9d4c1eb43)",
+            rationale="doors collided with resolve_identity.", repo="toolrenameproj")
+    finally:
+        srv._pool = saved_pool
+
+    assert second["id"] == first["id"]  # same underlying collision as the unit test above
+    assert second["reused_existing_decision"] is True
+    assert second["prior_content"]["summary"] == (
+        "Rename MCP verb lap -> provenance (naming-sweep phase 6, decision "
+        "4dd526fe/aed9d4c1eb43)")
+    assert second["prior_content"]["rationale"] == "lap scored #6 on the intent-search axis."
+    assert "false positive" in second["note"]
+
+
+async def test_record_decision_tool_names_an_exact_retry_as_a_safe_repeat(
+    actions: Actions,
+) -> None:
+    """MEASURED, NOT ASSUMED: an exact-summary retry (with `repo` set) goes through this
+    SAME `find_near_duplicate_decision` mechanism — its own normalized-exact-match tier
+    runs BEFORE the similarity check, so it is not a separate code path from the near-dup
+    case above. That is the right outcome for task #117's point (2): retrying after a
+    dropped/ambiguous response should say plainly that it landed on the SAME object with
+    the SAME content, not stay silent about which of the two mechanisms fired. The two
+    cases are told apart by wording, not by whether `reused_existing_decision` appears at
+    all — prior_content's summary matches this call's own summary exactly here, unlike
+    the false-positive case above where it does not."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        first = await srv.record_decision("the gate hook runs on every commit",
+                                          repo="exactretryproj")
+        second = await srv.record_decision("the gate hook runs on every commit",
+                                           repo="exactretryproj")
+    finally:
+        srv._pool = saved_pool
+    assert second["id"] == first["id"]
+    assert second["reused_existing_decision"] is True
+    assert second["prior_content"]["summary"] == "the gate hook runs on every commit"
+    assert "safe repeat" in second["note"] and "false positive" not in second["note"]
 
 
 async def test_find_near_duplicate_decision_excludes_a_given_id(actions: Actions) -> None:
@@ -1898,6 +2008,30 @@ async def test_supersede_that_names_nothing_records_nothing(actions: Actions) ->
         "AND a.value #>> '{}' LIKE '%points at a ghost%'") == 0
 
 
+async def test_supersede_no_longer_falls_through_to_a_prose_match(actions: Actions) -> None:
+    """task #117's law extended to `supersedes` (mirrors `test_resolves_no_longer_falls_
+    through_to_a_prose_match` exactly): a genuinely free-text ref — not identifier-shaped
+    at all — used to fall through to `_resolve_ref`'s fuzzy ILIKE leg and could silently
+    bury whatever decision's summary happened to contain it. `supersedes` now REQUIRES an
+    identifier; this exact call refuses instead of guessing, and the target decision is
+    left untouched."""
+    import pytest
+
+    target = await record_decision(actions, "the daemon must restart after a kernel change",
+                                   source="agent:me")
+    with pytest.raises(ValueError, match="supersedes matched no decision"):
+        await record_decision(actions, "a ruling recorded in passing", source="agent:me",
+                              supersedes="daemon must restart")  # a real substring of target
+    superseded_by = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='superseded_by'", target)
+    assert superseded_by is None  # never touched
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions a WHERE a.name='summary' "
+        "AND a.value #>> '{}' = 'a ruling recorded in passing'")
+    assert n == 0  # same strictness as any other supersedes miss — nothing half-recorded
+
+
 async def test_supersede_self_is_a_noop_not_a_burial(actions: Actions) -> None:
     """Idempotent re-record whose supersedes resolves to ITSELF (same summary hash):
     a decision never buries itself — no superseded_by stamp lands."""
@@ -3117,6 +3251,75 @@ async def test_record_decision_implements_and_ack_prior_art(actions: Actions) ->
         assert lonely["prior_art_acknowledged"] == (
             "no prior-art hit was found at all — nothing to acknowledge")
         assert "prior_art" not in lonely
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
+async def test_record_decision_tool_refuses_a_bare_local_task_number_everywhere(
+    actions: Actions,
+) -> None:
+    """task #117's own live specimen, generalized: Seshat passed resolves=["126"] — her
+    LOCAL harness task id — and it substring-matched an unrelated thread's summary in
+    ANOTHER PROJECT (fixed already, `resolves` requires an identifier). supersedes/
+    implements/refutes/confirms shared the IDENTICAL unprotected fallthrough, never
+    patched by that fix — this proves all four now refuse the same bare "126" rather
+    than searching for it, against a REAL decision/practice whose own text contains that
+    exact substring (so a pre-fix run would have silently hit it)."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import record_decision as rd_tool
+    from src.mcp_server import record_practice as rp_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:bareid1", session="bareid1", project="bareid-land", model=None,
+        cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        # a REAL decision and a REAL practice whose own text contains "126", the exact
+        # shape a substring leak would hit
+        unrelated_decision = await rd_tool(
+            "GO issued to seats for msgs 122/123/126 — unrelated protocol note",
+            kind="decision", ctx=ctx)
+        unrelated_practice = await rp_tool(
+            "never cite task 126 without reading its own text first", ctx=ctx)
+
+        bad_supersedes = await rd_tool("a ruling that mis-cites its own supersedes target",
+                                       kind="decision", supersedes="126", ctx=ctx)
+        assert "error" in bad_supersedes
+        assert "supersedes matched no decision" in bad_supersedes["error"]
+
+        bad_implements = await rd_tool("a ruling that mis-cites its own implements target",
+                                       kind="decision", implements="126", ctx=ctx)
+        assert "error" in bad_implements
+        assert "implements matched no decision" in bad_implements["error"]
+
+        bad_refutes = await rd_tool("a ruling that mis-cites its own refutes target",
+                                    kind="decision", refutes="126", ctx=ctx)
+        assert "error" in bad_refutes
+        assert "refutes matched no practice" in bad_refutes["error"]
+
+        bad_confirms = await rd_tool("a ruling that mis-cites its own confirms target",
+                                     kind="decision", confirms=["126"], ctx=ctx)
+        assert bad_confirms["confirms_resolution"][0]["matched"] == "false"
+        assert "confirmed_practices" not in bad_confirms
+
+        # neither real object was touched by any of the four refused calls
+        superseded_by = await actions.pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+            "AND a.name='superseded_by'", uuid.UUID(unrelated_decision["id"]))
+        assert superseded_by is None
+        refuted_by = await actions.pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+            "AND a.name='refuted_by'", uuid.UUID(unrelated_practice["id"]))
+        assert refuted_by is None
     finally:
         srv._pool = saved_pool
         _agents.pop(_conn_key(ctx), None)
