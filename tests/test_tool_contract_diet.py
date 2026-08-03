@@ -103,7 +103,18 @@ import json
 # the category rule's lean end first (dropped the dated citation and the "not a metadata gap"
 # aside, kept the WHY implicit in "trusts as the code it executes"); 119,953 -> 120,081, +128.
 # Exact measured total, not a round number.
-TOOL_CONTRACT_CEILING_CHARS = 120_081
+#
+# RAISED, phase 6 of the naming sweep (4dd526fe/aed9d4c1eb43, Thoth DM 3436): three verbs
+# renamed for the intent-search axis after a control-validated live ToolSearch measurement
+# showed their old names failing it — lap->provenance, doors->whois, dim->moot_brief. The
+# growth is the names themselves (longer, literal words a caller's own phrasing actually
+# contains, chosen FOR ranking, not decoration) plus the sibling references that had to
+# follow (lift()'s own docstring names whois() three times). Trimmed to the category rule's
+# lean end first (dropped provenance()'s and moot_brief()'s self-referential restatement of
+# their own new name in running prose, e.g. "this shows" not "provenance shows"); residual
+# growth is the two 7-char-longer names themselves, irreducible without cutting the rename's
+# own point. 120,081 -> 120,099, +18. Exact measured total, not a round number.
+TOOL_CONTRACT_CEILING_CHARS = 120_099
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:

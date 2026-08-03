@@ -52,7 +52,7 @@ Pass `is_handoff: true` on the decision that summarizes a session's own state-of
 This mints a **structured, typed marker** on that decision — not prose a successor has to
 grep for and hope they matched the right wording (the root fragility behind more than one
 "Thoth II"-style mislabel this house has hit). A successor's own `orient()` finds a
-`is_handoff` marker directly, the same way `doors()` finds a `holds` graph edge rather than a
+`is_handoff` marker directly, the same way `whois()` finds a `holds` graph edge rather than a
 cached column: the strong, structural fact, not a string that merely *looks like* the fact.
 
 A good handoff decision names: every commit made this stretch, every decision id worth a

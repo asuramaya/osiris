@@ -129,7 +129,7 @@ async def test_the_mcp_tool_wrapper_delegates_to_doors(actions: Actions) -> None
     saved_pool = srv._pool
     srv._pool = actions.pool
     try:
-        out = await srv.doors("agent:wraptest1")
+        out = await srv.whois("agent:wraptest1")
     finally:
         srv._pool = saved_pool
     assert out["resolved"] is True and out["matches"][0]["agent_id"] == "agent:wraptest1"
