@@ -1235,6 +1235,125 @@ async def fold_seat(
            "managed_by_moved": len(managing) + len(managed), "mail_moved": mail_moved}
 
 
+async def unfold_seat(
+    actions: Actions, *, dupe: str, because: str, actor: str, execute: bool = False,
+) -> dict[str, Any]:
+    """Reverse a wrongful fold_seat — the Seat sibling of `folds.unfold_agent`, built for
+    PARITY (ruling 31c02dca: fold_seat shipped with NO reversal at all, so a fold here was
+    permanent and unrepairable — task #127's own named case). DRY RUN IS THE DEFAULT
+    (`execute=False`): returns the plan without writing.
+
+    Refuses LOUDLY (an error dict, nothing written) when: `because` is blank; `dupe` is
+    unknown or not currently folded (status != 'merged'); the ORIGINAL fold's own
+    justification cites the operator's word and `because` does not ALSO carry a fresh one
+    — the same discipline `unfold_agent` already holds, generalized to seats.
+
+    ESTATE, seat-shaped: fold_seat's holders and managed_by moves are event-sourced
+    (`invalidate_link` + `create_link`) and are restored automatically WHEN AND ONLY WHEN
+    nothing has touched them since (`folds._reversible_moved_links` — a holder now on some
+    OTHER seat, or a managed_by edge since re-pointed again, is never guessed back). Mail
+    was moved by a raw UPDATE (the same as `fold_agent`'s own mail leg) and is never
+    reversible — always reported as `estate_unreturnable`, never restored."""
+    from src.orchestrator.folds import _reversible_moved_links
+
+    dupe, because = (dupe or "").strip(), (because or "").strip()
+    if not because:
+        return {"error": "an unfold without a because is an un-audited reversal — cite "
+                         "the evidence/ruling that proves the fold was wrong"}
+    if not dupe:
+        return {"error": "unfold_seat needs a dupe label"}
+    row = await actions.pool.fetchrow(
+        "SELECT id, status, merged_into FROM objects WHERE canonical=$1 AND type='Seat'",
+        dupe)
+    if row is None:
+        return {"error": f"unknown seat: {dupe} — an unfold never invents a label"}
+    if row["status"] != "merged":
+        return {"error": f"{dupe} is not folded (status={row['status']}) — nothing to "
+                         "unfold"}
+    into_id = row["merged_into"]
+    into_canon = await actions.pool.fetchval(
+        "SELECT canonical FROM objects WHERE id=$1", into_id)
+    ev = await actions.pool.fetchrow(
+        "SELECT payload, actor, created_at FROM object_events "
+        "WHERE event_type='merge' AND related_id=$1 ORDER BY created_at DESC LIMIT 1",
+        row["id"])
+    original_evidence = str((ev["payload"] or {}).get("justification", "")) if ev else ""
+    if "operator" in original_evidence.lower() and "operator" not in because.lower():
+        return {"error": f"{dupe}'s fold was justified by citing the operator's word "
+                         f"({original_evidence!r}) — an unfold needs the operator's word "
+                         "too; add it to `because` or get it first"}
+
+    holders = await _reversible_moved_links(actions.pool, dupe_id=row["id"], into_id=into_id,
+                                            link_type="holds", from_dupe=True)
+    managing_out = await _reversible_moved_links(  # dupe's OWN managers (dupe managed_by X)
+        actions.pool, dupe_id=row["id"], into_id=into_id, link_type="managed_by",
+        from_dupe=False)
+    managing_in = await _reversible_moved_links(  # dupe's subordinates (X managed_by dupe)
+        actions.pool, dupe_id=row["id"], into_id=into_id, link_type="managed_by",
+        from_dupe=True)
+    unreturnable_mail = [dict(r) for r in await actions.pool.fetch(
+        "SELECT id, from_agent, created_at, read_at, left(body,120) AS body "
+        "FROM fleet_messages WHERE to_agent=$1 AND created_at <= $2 ORDER BY created_at",
+        into_canon, ev["created_at"] if ev else datetime.now(UTC))]
+
+    plan: list[dict[str, Any]] = [
+        {"op": "unmerge_objects", "target": dupe, "detail": f"status merged→active, "
+         f"merged_into cleared (was {into_canon})"}]
+    for h in holders:
+        plan.append({"op": "move_link", "target": h["label"], "detail":
+                    f"holds {into_canon} → {dupe} (restoring the pre-fold holder)"})
+    for m in managing_out:
+        plan.append({"op": "move_link", "target": m["label"], "detail":
+                    f"managed_by {into_canon} → {dupe} (dupe's own manager)"})
+    for m in managing_in:
+        plan.append({"op": "move_link", "target": m["label"], "detail":
+                    f"managed_by {into_canon} → {dupe} (dupe's subordinate)"})
+
+    report: dict[str, Any] = {
+        "dupe": dupe, "was_merged_into": into_canon,
+        "fold_actor": ev["actor"] if ev else None, "fold_justification": original_evidence,
+        "plan": plan,
+        "estate_unreturnable": {
+            "mail": unreturnable_mail,
+            "note": ("pre-fold UPDATEs overwrote to_agent in place — these predate the "
+                     "fold and still sit on the living seat, but nothing proves they were "
+                     "ever addressed to dupe rather than already into's own; read them "
+                     "and judge by hand, never auto-moved") if unreturnable_mail else
+                    "none found — no pre-fold mail sits unclaimed on the living seat",
+        },
+        "execute": execute,
+    }
+    if not execute:
+        return report
+
+    now = datetime.now(UTC)
+    await actions.unmerge_objects(row["id"], because, actor)
+    for h in holders:
+        await actions.invalidate_link(h["fid"], into_id, "holds", actor, now)
+        await actions.create_link(h["fid"], row["id"], "holds", actor, now, _CONF,
+                                  evidence_class=_EC)
+    for m in managing_out:
+        await actions.invalidate_link(into_id, m["fid"], "managed_by", actor, now)
+        await actions.create_link(row["id"], m["fid"], "managed_by", actor, now, _CONF,
+                                  evidence_class=_EC)
+    for m in managing_in:
+        await actions.invalidate_link(m["fid"], into_id, "managed_by", actor, now)
+        await actions.create_link(m["fid"], row["id"], "managed_by", actor, now, _CONF,
+                                  evidence_class=_EC)
+    report.update({
+        "unmerged": True, "holders_restored": len(holders),
+        "managed_by_restored": len(managing_out) + len(managing_in),
+        "note": (f"{dupe} is active again — provenance for the folded era stays on the "
+                 "record (the merge event and same_as link are witnesses, never erased). "
+                 + (f"{len(holders)} holder(s) restored. " if holders else "")
+                 + (f"{len(managing_out) + len(managing_in)} managed_by edge(s) restored. "
+                    if (managing_out or managing_in) else "")
+                 + ("Unreturnable mail is listed above for a human to judge by hand."
+                    if unreturnable_mail else "")),
+    })
+    return report
+
+
 async def retire_seat(actions: Actions, seat_id: str, *, reason: str = "", actor: str,
                       ) -> dict[str, Any]:
     """Mark a Seat permanently CLOSED — a genuinely dead role, no successor, no merge

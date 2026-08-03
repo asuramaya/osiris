@@ -334,6 +334,123 @@ async def fold_project(
            "edges_moved": moved, "mounts_moved": mounts_moved}
 
 
+async def unfold_project(
+    actions: Actions, *, dupe: str, because: str, actor: str, execute: bool = False,
+) -> dict[str, Any]:
+    """Reverse a wrongful fold_project — the Project sibling of `folds.unfold_agent`, built
+    for PARITY (ruling 31c02dca: fold_project shipped with NO reversal at all, so a fold
+    here was permanent and unrepairable — task #127's own named case). DRY RUN IS THE
+    DEFAULT (`execute=False`): returns the plan without writing.
+
+    Refuses LOUDLY on: blank `because`; `dupe` not resolving to a SoftwareProject (the SAME
+    flexible resolution `fold_project` itself uses — UUID, short id, canonical, or bare
+    name — an already-merged object is reachable only by its exact canonical, exactly as
+    `_resolve_software_project` already documents); `dupe.status != 'merged'`; the original
+    fold's own justification citing the operator's word when `because` doesn't carry a
+    fresh one.
+
+    ESTATE: every `_PROJECT_ESTATE_LINK_TYPES` edge `fold_project` moved is event-sourced
+    and restored automatically WHEN AND ONLY WHEN nothing has re-pointed it since
+    (`folds._reversible_moved_links` — the same 'unchanged since the fold' proof
+    `unfold_agent`'s own thread reversal uses, generalized to links). `agent_mounts.project`
+    was moved by a raw UPDATE — reported as `estate_unreturnable`, never guessed back,
+    exactly like `fold_agent`'s own mount rows."""
+    from src.orchestrator.folds import _reversible_moved_links
+
+    dupe, because = (dupe or "").strip(), (because or "").strip()
+    if not because:
+        return {"error": "an unfold without a because is an un-audited reversal — cite "
+                         "the evidence/ruling that proves the fold was wrong"}
+    if not dupe:
+        return {"error": "unfold_project needs a dupe label"}
+    try:
+        row = await _resolve_software_project(actions.pool, dupe)
+    except AmbiguousProjectRef as amb:
+        return {"error": f"{amb.ref!r} is ambiguous — {len(amb.candidates)} active "
+                         f"SoftwareProjects answer to it: {', '.join(amb.candidates)}. "
+                         "Name the exact one (canonical or id) — unfold_project never "
+                         "guesses which."}
+    if row is None:
+        return {"error": f"no such SoftwareProject: {dupe!r} — an unfold never invents "
+                         "a label"}
+    if row["status"] != "merged":
+        return {"error": f"{row['canonical']} is not folded (status={row['status']}) — "
+                         "nothing to unfold"}
+    into_id = await actions.pool.fetchval(
+        "SELECT merged_into FROM objects WHERE id=$1", row["id"])
+    into_canon = await actions.pool.fetchval(
+        "SELECT canonical FROM objects WHERE id=$1", into_id)
+    ev = await actions.pool.fetchrow(
+        "SELECT payload, actor, created_at FROM object_events "
+        "WHERE event_type='merge' AND related_id=$1 ORDER BY created_at DESC LIMIT 1",
+        row["id"])
+    original_evidence = str((ev["payload"] or {}).get("justification", "")) if ev else ""
+    if "operator" in original_evidence.lower() and "operator" not in because.lower():
+        return {"error": f"{row['canonical']}'s fold was justified by citing the "
+                         f"operator's word ({original_evidence!r}) — an unfold needs the "
+                         "operator's word too; add it to `because` or get it first"}
+
+    moved: dict[str, list[dict[str, Any]]] = {}
+    for link_type in _PROJECT_ESTATE_LINK_TYPES:
+        found = await _reversible_moved_links(
+            actions.pool, dupe_id=row["id"], into_id=into_id, link_type=link_type,
+            from_dupe=True)
+        if found:
+            moved[link_type] = found
+    unreturnable_mounts = [dict(r) for r in await actions.pool.fetch(
+        "SELECT job_dir, cwd, mounted_at FROM agent_mounts WHERE project=$1 "
+        "AND mounted_at <= $2 ORDER BY mounted_at",
+        str(into_canon).removeprefix("repo:"),
+        ev["created_at"] if ev else datetime.now(UTC))]
+
+    plan: list[dict[str, Any]] = [
+        {"op": "unmerge_objects", "target": row["canonical"], "detail":
+         f"status merged→active, merged_into cleared (was {into_canon})"}]
+    for link_type, items in moved.items():
+        for it in items:
+            plan.append({"op": "move_link", "target": it["label"], "detail":
+                        f"{link_type} {into_canon} → {row['canonical']}"})
+
+    report: dict[str, Any] = {
+        "dupe": row["canonical"], "was_merged_into": into_canon,
+        "fold_actor": ev["actor"] if ev else None, "fold_justification": original_evidence,
+        "plan": plan,
+        "estate_unreturnable": {
+            "mounts": unreturnable_mounts,
+            "note": ("pre-fold UPDATEs overwrote agent_mounts.project in place — these "
+                     "predate the fold and still sit on the living project, but nothing "
+                     "proves they were ever mounted against dupe rather than already "
+                     "into's own; read them and judge by hand, never auto-moved")
+                    if unreturnable_mounts else
+                    "none found — no pre-fold mount rows sit unclaimed on the living "
+                    "project",
+        },
+        "execute": execute,
+    }
+    if not execute:
+        return report
+
+    now = datetime.now(UTC)
+    await actions.unmerge_objects(row["id"], because, actor)
+    edges_restored = 0
+    for link_type, items in moved.items():
+        for it in items:
+            await actions.invalidate_link(it["fid"], into_id, link_type, actor, now)
+            await actions.create_link(it["fid"], row["id"], link_type, actor, now, _CONF,
+                                      evidence_class=_EC)
+            edges_restored += 1
+    report.update({
+        "unmerged": True, "edges_restored": edges_restored,
+        "note": (f"{row['canonical']} is active again — provenance for the folded era "
+                 "stays on the record (the merge event and same_as link are witnesses, "
+                 "never erased). "
+                 + (f"{edges_restored} edge(s) restored. " if edges_restored else "")
+                 + ("Unreturnable mount rows are listed above for a human to judge by "
+                    "hand." if unreturnable_mounts else "")),
+    })
+    return report
+
+
 async def _move_project_estate(
     actions: Actions, dupe_oid: uuid.UUID, into_oid: uuid.UUID, dupe_canonical: str,
     into_canonical: str, actor: str, now: datetime,

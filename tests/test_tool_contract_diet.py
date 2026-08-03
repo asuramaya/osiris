@@ -103,7 +103,19 @@ import json
 # the category rule's lean end first (dropped the dated citation and the "not a metadata gap"
 # aside, kept the WHY implicit in "trusts as the code it executes"); 119,953 -> 120,081, +128.
 # Exact measured total, not a round number.
-TOOL_CONTRACT_CEILING_CHARS = 120_081
+#
+# LOWERED, the merge/unmerge collapse (2026-08-03, operator's ruling 31c02dca, branched
+# additively from composer at 88e09cf per Thoth's own merge plan — this file's prior
+# entries above reflect composer's state, not this seat's own Phase 0 Tier 2 branch,
+# which lands separately and is not yet folded in here): four tools (fold_agent,
+# unfold_agent, fold_seat, fold_project) retired in favor of two (merge, unmerge) — a
+# real reduction in the advertised surface, not prose trimming, so the ceiling moves DOWN
+# to track it rather than leaving slack a future regrowth could hide in. 120,081 ->
+# 118,940, -1,141. 100 -> 98 tools. Measured, reported — per the operator's own
+# instruction on this exact build: NEVER offered as the reason to collapse the three
+# folds (findability and parity were; this number is only the honest side effect of two
+# fewer doors). Exact measured total, not a round number.
+TOOL_CONTRACT_CEILING_CHARS = 118_940
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -138,6 +150,8 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     what this ratchet polices, but worth knowing at a glance when the char total also
     moves, to tell 'one tool's prose grew' from 'the surface itself changed shape'. 99 -> 100
     (2026-08-02): amend_practice (task #113, commit 9cbd8d6) was never reflected here either
-    — the same pre-existing drift the char ceiling above was just found and raised for."""
+    — the same pre-existing drift the char ceiling above was just found and raised for.
+    100 -> 98 (2026-08-03, ruling 31c02dca): fold_agent/unfold_agent/fold_seat/fold_project
+    retired in favor of merge/unmerge — a real shrink in the surface, not drift."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 100
+    assert len(per_tool) == 98

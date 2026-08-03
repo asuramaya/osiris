@@ -3121,45 +3121,74 @@ async def rebind_seat(seat: str, new_cwd: str, extract: bool = False,
 
 
 @mcp.tool()
-async def fold_agent(dupe: str, into: str, evidence: str,
-                     ctx: Context | None = None) -> dict[str, Any]:
-    """THE RECONCILIATION FOLD (thread b975851b) — declare two agent labels ONE MIND:
-    `dupe` folds into `into`. Append-only (a 'merge' event + the merged_into projection —
-    reversible by compensating event, nothing deleted), authorship untouched (the dupe's
-    words stay stamped with its id; provenance resolves at read time), and the ESTATE
-    follows: unread mail, mount rows, and open threads land on `into`'s living head.
-    REVIEW-GATED, ALWAYS, ENFORCED: refuses any caller who is not the operator (or the
-    scheduled reaper's own sanctioned name, separately gated by
-    `osiris_fleet_reconcile_enabled`) — mount as the operator, or judge an approved
-    merge_candidate via `resolve_fold`, which relays the same check unchanged. `evidence`
-    must cite what proves one mind. Refuses: unauthorized actor; same-lineage folds (that
-    is succession's job), an actively-seated dupe, unknown or already-folded labels."""
+async def merge(dupe: str, into: str, evidence: str,
+                ctx: Context | None = None) -> dict[str, Any]:
+    """THE RECONCILIATION FOLD (thread b975851b, unified under ruling 31c02dca) — declare
+    two labels of the SAME type ONE THING: `dupe` folds into `into`. Replaces
+    fold_agent/fold_seat/fold_project as the one door for all three; type is read off
+    `dupe`'s own form ('agent:...' / 'seat:...' / anything else -> SoftwareProject).
+    Append-only (a 'merge' event + the merged_into projection — reversible via `unmerge`,
+    nothing deleted), authorship untouched (the dupe's own words stay stamped with its id;
+    provenance resolves at read time), and each type's own ESTATE follows: for an Agent,
+    unread mail/mount rows/open threads land on `into`'s living head; for a Seat, active
+    holders and managed_by edges move too (a Seat merge's whole reason to exist, unlike an
+    Agent merge, which REFUSES an actively-seated dupe instead); for a SoftwareProject,
+    every in_repo/works_in/governs/informs edge and mount row re-points.
+
+    `evidence` must cite what proves one thing under two labels — required for every type.
+    AGENT MERGES ARE ACTOR-GATED, ENFORCED: refuses any caller who is not the operator (or
+    the scheduled reaper's own sanctioned name) — mount as the operator, or judge an
+    approved merge_candidate via `resolve_fold`. Seat and Project merges carry no such
+    gate today (unchanged by this collapse — a parity build, not a fresh authority pass).
+    Refuses: dupe and into resolving to DIFFERENT types (the one refusal this collapse
+    itself introduces); thin evidence; dupe==into; unknown or already-folded labels; an
+    Agent same-lineage pair (succession's job, not a fold's); a SoftwareProject pair that
+    contradicts on any non-name/tag property."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a fold is a mind's act, and the graph must know whose",
                 "why": _anchorless(ctx)}
-    from src.orchestrator.folds import fold_agent as _fold
-    return await _fold(Actions(await _pool_get()), dupe=dupe, into=into,
-                       evidence=evidence, actor=ident.agent_id)
+    from src.orchestrator.merge import _merge_type
+    from src.orchestrator.merge import merge as _merge
+    pool = await _pool_get()
+    out = await _merge(Actions(pool), dupe=dupe, into=into, evidence=evidence,
+                       actor=ident.agent_id)
+    if "error" in out or _merge_type((dupe or "").strip()) != "SoftwareProject":
+        return out
+    witness = await pool.fetchrow(
+        "SELECT oe.id AS merge_event_id, l.id AS same_as_link_id "
+        "FROM objects d JOIN objects i ON i.canonical=$2 "
+        "JOIN object_events oe ON oe.event_type='merge' AND oe.related_id=d.id "
+        "  AND oe.object_id=i.id "
+        "LEFT JOIN links l ON l.type='same_as' AND l.from_id=d.id AND l.to_id=i.id "
+        "WHERE d.canonical=$1 ORDER BY oe.created_at DESC LIMIT 1",
+        out["folded"], out["into"])
+    if witness:
+        out["merge_event_id"] = witness["merge_event_id"]
+        out["same_as_link_id"] = witness["same_as_link_id"]
+    return out
 
 
 @mcp.tool()
-async def unfold_agent(dupe: str, because: str, execute: bool = False,
-                       ctx: Context | None = None) -> dict[str, Any]:
-    """Reverse a wrongful `fold_agent` call — the compensating event fold_agent's own
-    docstring promises. DRY RUN IS THE DEFAULT (`execute=False`): returns the exact plan
-    (the kernel unmerge, any chain-integrity fix, and the estate items that CAN'T cleanly
-    return) without writing anything — review it, then call again with `execute=True` to
-    perform it. Refuses: `dupe` not currently folded, a blank `because`, or a fold whose
-    original justification cites the operator's word when `because` doesn't carry a
-    fresh one — reversing an operator-blessed fold needs the operator's word too."""
+async def unmerge(dupe: str, because: str, execute: bool = False,
+                  ctx: Context | None = None) -> dict[str, Any]:
+    """Reverse a wrongful `merge` call — replaces unfold_agent as the one door for all
+    three types, closing the parity gap the operator named (31c02dca): before this, only
+    an Agent merge was ever reversible; a Seat or Project merge was permanent (task #127).
+    Type is read off `dupe`'s own form, same rule as `merge`. DRY RUN IS THE DEFAULT
+    (`execute=False`) for every type: returns the exact plan (the kernel unmerge, any
+    type-specific estate items that CAN cleanly return, and the ones that CAN'T) without
+    writing anything — review it, then call again with `execute=True`. Refuses: `dupe` not
+    currently merged, a blank `because`, or a merge whose original justification cites the
+    operator's word when `because` doesn't carry a fresh one — reversing an
+    operator-blessed merge needs the operator's word too, for every type."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — an unfold is a mind's act, and the graph must "
                          "know whose", "why": _anchorless(ctx)}
-    from src.orchestrator.folds import unfold_agent as _unfold
-    return await _unfold(Actions(await _pool_get()), dupe=dupe, because=because,
-                         actor=ident.agent_id, execute=execute)
+    from src.orchestrator.merge import unmerge as _unmerge
+    return await _unmerge(Actions(await _pool_get()), dupe=dupe, because=because,
+                          actor=ident.agent_id, execute=execute)
 
 
 @mcp.tool()
@@ -3177,25 +3206,6 @@ async def correct_house(new_house: str, ctx: Context | None = None) -> dict[str,
     from src.orchestrator.seats import correct_house as _correct_house
     return await _correct_house(Actions(await _pool_get()), ident.agent_id, new_house,
                                 source=ident.agent_id)
-
-
-@mcp.tool()
-async def fold_seat(dupe: str, into: str, evidence: str,
-                    ctx: Context | None = None) -> dict[str, Any]:
-    """Fold seat `dupe` into seat `into` — the deliberate cure for a TWIN (thread cb374585,
-    the Vajra shape: claim_name's own resolution-order bug minted a second seat while the
-    real one sat vacant). UNLIKE fold_agent, this MOVES active holders rather than refusing
-    on one — that is its whole job; concurrent holders on the dupe converge to the newest
-    as the surviving active holder. managed_by edges and unread mail follow too. Refuses
-    LOUDLY on thin evidence, an unknown or non-Seat label, dupe==into, or an already-folded
-    dupe."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a fold is a mind's act, and the graph must know whose",
-                "why": _anchorless(ctx)}
-    from src.orchestrator.seats import fold_seat as _fold_seat
-    return await _fold_seat(Actions(await _pool_get()), dupe=dupe, into=into,
-                            evidence=evidence, actor=ident.agent_id)
 
 
 @mcp.tool()
@@ -3263,47 +3273,6 @@ async def retire_project(project: str, because: str,
     from src.orchestrator.projects import retire_project as _retire_project
     return await _retire_project(Actions(await _pool_get()), project=project,
                                  actor=ident.agent_id, because=because)
-
-
-@mcp.tool()
-async def fold_project(dupe: str, into: str, evidence: str,
-                       ctx: Context | None = None) -> dict[str, Any]:
-    """Fold SoftwareProject `dupe` into `into` — the deliberate, evidence-gated cure for a
-    TWIN (two SoftwareProject objects that are really one project under two labels). Same
-    shape as fold_seat: refuses LOUDLY, nothing written, on thin evidence; blank/equal
-    labels; either label not resolving to an ACTIVE SoftwareProject (fold_project never
-    invents `into` — a target that doesn't exist yet wants a RENAME, a different verb); or
-    a genuine cross-object contradiction on any non-name/tag property
-    (`_contradicting_properties` — SAME data under different tags is one project and merges
-    clean; SAME tag over contested data is two things, or a disagreement worth keeping, and
-    this refuses rather than destroy it).
-
-    REVERSIBLE, never a delete: `dupe` is stamped merged/merged_into, not removed. On
-    success this receipt also names the two witnesses a reversal (`unmerge_objects`) would
-    need — the merge event and the `same_as` link `merge_objects` mints — surfaced here
-    rather than left for a caller to re-derive by hand."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a fold is a mind's act, and the graph must know whose",
-                "why": _anchorless(ctx)}
-    from src.orchestrator.projects import fold_project as _fold_project
-    pool = await _pool_get()
-    out = await _fold_project(Actions(pool), dupe=dupe, into=into, evidence=evidence,
-                              actor=ident.agent_id)
-    if "error" in out:
-        return out
-    witness = await pool.fetchrow(
-        "SELECT oe.id AS merge_event_id, l.id AS same_as_link_id "
-        "FROM objects d JOIN objects i ON i.canonical=$2 "
-        "JOIN object_events oe ON oe.event_type='merge' AND oe.related_id=d.id "
-        "  AND oe.object_id=i.id "
-        "LEFT JOIN links l ON l.type='same_as' AND l.from_id=d.id AND l.to_id=i.id "
-        "WHERE d.canonical=$1 ORDER BY oe.created_at DESC LIMIT 1",
-        out["folded"], out["into"])
-    if witness:
-        out["merge_event_id"] = witness["merge_event_id"]
-        out["same_as_link_id"] = witness["same_as_link_id"]
-    return out
 
 
 @mcp.tool()

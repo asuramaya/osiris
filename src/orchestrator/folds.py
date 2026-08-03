@@ -22,6 +22,7 @@ wearing a signature.
 from __future__ import annotations
 
 import logging
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -101,6 +102,45 @@ async def canonical_agent(pool: asyncpg.Pool, agent_id: str) -> str:
             return current
         current = str(nxt)
     return current
+
+
+async def _reversible_moved_links(
+    pool: asyncpg.Pool, *, dupe_id: uuid.UUID, into_id: uuid.UUID, link_type: str,
+    from_dupe: bool,
+) -> list[dict[str, Any]]:
+    """MERGE/UNMERGE's shared estate-reversal probe (ruling 31c02dca, built for
+    unfold_seat/unfold_project's parity with unfold_agent): every OTHER object whose live
+    `link_type` edge now points at `into` but which ALSO carries a now-invalid edge of the
+    same type that once pointed at `dupe` — the exact trail an event-sourced
+    (`invalidate_link` + `create_link`) estate move leaves behind, safe to auto-reverse
+    because nothing has touched it since. Generalizes `unfold_agent`'s own thread-ownership
+    check (`assert_property`'s history) from PROPERTIES to LINKS: fold_seat's holders and
+    managed_by edges, fold_project's estate links. `from_dupe=True` reads edges pointing
+    INTO dupe/into (holds, in_repo, works_in, governs, informs — the other object is the
+    link's `from_id`); `from_dupe=False` reads edges pointing OUT of dupe/into (the
+    managed_by direction where dupe/into is itself the manager — the other object is the
+    link's `to_id`). A raw-UPDATE-moved estate item (mail, agent_mounts) leaves no such
+    trail and is never found here — the caller reports those as `estate_unreturnable`
+    instead, exactly as `unfold_agent` already does for its own mail/mounts."""
+    if from_dupe:
+        rows = await pool.fetch(
+            "SELECT DISTINCT f.id AS fid, f.canonical AS label "
+            "FROM links l JOIN objects f ON f.id=l.from_id "
+            "WHERE l.to_id=$1 AND l.type=$3 "
+            "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+            "AND EXISTS (SELECT 1 FROM links l2 WHERE l2.from_id=f.id AND l2.to_id=$2 "
+            "AND l2.type=$3)",
+            into_id, dupe_id, link_type)
+    else:
+        rows = await pool.fetch(
+            "SELECT DISTINCT t.id AS fid, t.canonical AS label "
+            "FROM links l JOIN objects t ON t.id=l.to_id "
+            "WHERE l.from_id=$1 AND l.type=$3 "
+            "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+            "AND EXISTS (SELECT 1 FROM links l2 WHERE l2.to_id=t.id AND l2.from_id=$2 "
+            "AND l2.type=$3)",
+            into_id, dupe_id, link_type)
+    return [dict(r) for r in rows]
 
 
 async def fold_agent(
