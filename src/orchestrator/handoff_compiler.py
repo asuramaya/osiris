@@ -91,6 +91,14 @@ async def since_last_handoff(
     one I wrote myself earlier in this same reign" — the boundary for what counts as
     NEW — so it must check `agent_id` first.
 
+    Calls `nearest_handoff_ancestor` with `respect_ack=False` — this asks "when did this
+    reign end", a historical boundary fact that stays true whether or not anyone has since
+    acknowledged reading the handoff (the ack-based retirement redesign, 2026-08-03). With
+    the default `respect_ack=True`, an already-acked handoff would be invisible here and
+    this function would silently walk past it to a more distant ancestor, mis-dating the
+    boundary and re-listing already-summarized work — the exact double-count this
+    function's own EXCLUSIVE-boundary logic below exists to prevent.
+
     None (compile the FULL history) when no handoff is found within `max_hops` — a fresh
     lineage, or one that predates the convention, is not an error; it is simply
     everything.
@@ -101,7 +109,8 @@ async def since_last_handoff(
     would otherwise re-list a predecessor's own handoff as "shipped" in their successor's
     first briefing, which is exactly the kind of confusing double-count a boundary exists
     to prevent."""
-    found = await nearest_handoff_ancestor(pool, agent_id, max_hops=max_hops)
+    found = await nearest_handoff_ancestor(
+        pool, agent_id, max_hops=max_hops, respect_ack=False)
     if found is None:
         return None, "no prior handoff found within the walked chain — compiling full history"
     ancestor_id, picks = found

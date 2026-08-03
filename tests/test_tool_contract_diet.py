@@ -103,7 +103,15 @@ import json
 # the category rule's lean end first (dropped the dated citation and the "not a metadata gap"
 # aside, kept the WHY implicit in "trusts as the code it executes"); 119,953 -> 120,081, +128.
 # Exact measured total, not a round number.
-TOOL_CONTRACT_CEILING_CHARS = 120_081
+#
+# RAISED AGAIN, the is_handoff read-receipt redesign (2026-08-03, operator ruling): a new
+# tool, `ack_handoff` (2,181 chars — the only thing that retires a live handoff now, replacing
+# Thoth DM 3355's write-triggered version), plus a rewritten `settle()` section explaining the
+# supersession. Trimmed both docstrings to the category rule's lean end FIRST (ack_handoff cut
+# from 3,098 to 2,181 chars, settle's new section cut by more than half) before raising this —
+# the remaining growth is a genuinely new capability, not unpruned prose. 120,081 -> 122,936,
+# +2,855. Exact measured total, not a round number.
+TOOL_CONTRACT_CEILING_CHARS = 122_936
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -138,6 +146,7 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     what this ratchet polices, but worth knowing at a glance when the char total also
     moves, to tell 'one tool's prose grew' from 'the surface itself changed shape'. 99 -> 100
     (2026-08-02): amend_practice (task #113, commit 9cbd8d6) was never reflected here either
-    — the same pre-existing drift the char ceiling above was just found and raised for."""
+    — the same pre-existing drift the char ceiling above was just found and raised for.
+    100 -> 101 (2026-08-03): `ack_handoff`, the is_handoff read-receipt redesign."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 100
+    assert len(per_tool) == 101
