@@ -6,16 +6,20 @@ either guard exists to catch.
 """
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
 from src.actions.core import Actions
 from src.orchestrator.deploy_guard import (
+    _is_ancestor,
     alarm_schema_drift,
     alarm_unreviewed_boot,
+    check_diverged_since_last_deploy,
     check_schema_drift,
     check_unreviewed_boot,
+    diverged_since_last_deploy,
     schema_drift,
     unreviewed_boot,
 )
@@ -377,6 +381,203 @@ def test_worker_startup_imports_the_reboot_guard_too() -> None:
 
     src_text = inspect.getsource(arq_worker.startup)
     assert "check_unreviewed_boot" in src_text and "alarm_unreviewed_boot" in src_text
+
+
+# --- the ref-race detector (thread 771366d1: two agents moved main/composer out from under
+# each other tonight; nothing noticed until a by-hand branch survey). DISTINCT from
+# unreviewed_boot: that one fires on ANY head difference (including a normal fast-forward
+# between deploys), which would be useless noise here — every deploy after the first one has
+# a different running head than the last. This fires ONLY when the last-deployed head fell
+# OUT of the branch's own ancestry, the specific shape of a rewrite/reset/force-move. ---------
+
+
+def test_matching_heads_are_not_a_divergence() -> None:
+    assert diverged_since_last_deploy("abc", "abc", is_ancestor=None) is None
+
+
+def test_a_normal_fast_forward_is_not_a_divergence() -> None:
+    """The common case: every deploy after the first advances past the last one. is_ancestor
+    True means the old head is still in this branch's own past — ordinary progress."""
+    assert diverged_since_last_deploy("new", "old", is_ancestor=True) is None
+
+
+def test_a_genuine_rewrite_is_named_both_ways() -> None:
+    out = diverged_since_last_deploy("new", "old", is_ancestor=False)
+    assert out is not None and "old" in out and "new" in out
+
+
+def test_either_side_unknown_is_not_a_divergence() -> None:
+    assert diverged_since_last_deploy(None, "old", is_ancestor=False) is None
+    assert diverged_since_last_deploy("new", None, is_ancestor=False) is None
+
+
+def test_unresolvable_ancestry_is_not_a_divergence() -> None:
+    """is_ancestor=None means the check itself could not run (bad sha, git failure) — 'don't
+    know', same fail-open law as every other comparison in this module. A false alarm here
+    is exactly the noise that teaches a reader to stop looking at a real one."""
+    assert diverged_since_last_deploy("new", "old", is_ancestor=None) is None
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+
+def _commit(repo: Path, msg: str) -> str:
+    _git(repo, "commit", "--allow-empty", "-q", "-m", msg)
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+@pytest.fixture
+def small_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@test")
+    _git(repo, "config", "user.name", "test")
+    return repo
+
+
+def test_is_ancestor_true_for_a_real_fast_forward(small_repo: Path) -> None:
+    a = _commit(small_repo, "a")
+    b = _commit(small_repo, "b")
+    assert _is_ancestor(small_repo, a, b) is True
+
+
+def test_is_ancestor_false_for_a_real_rewrite(small_repo: Path) -> None:
+    """Same shape as tonight's incident: `a` was once HEAD, then the branch got reset to a
+    sibling commit that does not descend from it."""
+    a = _commit(small_repo, "a")
+    _git(small_repo, "checkout", "-q", "--orphan", "unrelated")
+    c = _commit(small_repo, "c")
+    assert _is_ancestor(small_repo, a, c) is False
+
+
+def test_is_ancestor_none_for_an_unresolvable_sha(small_repo: Path) -> None:
+    b = _commit(small_repo, "b")
+    assert _is_ancestor(small_repo, "0" * 40, b) is None
+
+
+def test_is_ancestor_none_off_a_non_git_root(tmp_path: Path) -> None:
+    assert _is_ancestor(tmp_path, "a", "b") is None
+
+
+async def test_check_diverged_is_clean_when_the_ledger_matches_running_head(
+    actions: Actions,
+) -> None:
+    import src.orchestrator.deploy_guard as guard
+    from src.orchestrator.monitor import set_cursor
+
+    running = guard._git_head(guard._REPO_ROOT)
+    assert running is not None
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, running)
+    assert await check_diverged_since_last_deploy(actions.pool) is None
+
+
+async def test_check_diverged_is_clean_on_a_box_with_no_deploy_history(
+    actions: Actions,
+) -> None:
+    assert await check_diverged_since_last_deploy(actions.pool) is None
+
+
+async def test_check_diverged_fails_open_when_git_cannot_run(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.orchestrator.deploy_guard as guard
+    from src.orchestrator.monitor import set_cursor
+
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, "0" * 40)
+    monkeypatch.setattr(guard, "_REPO_ROOT", guard._REPO_ROOT / "no-such-path")
+    assert await check_diverged_since_last_deploy(actions.pool) is None
+
+
+async def test_check_diverged_finds_a_real_rewrite(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch, small_repo: Path,
+) -> None:
+    """End-to-end through the IO wrapper against a real throwaway repo, not just the pure
+    function — the exact shape of tonight's incident: `a` was recorded as deployed, then the
+    branch got rewritten onto an unrelated history and never re-deployed before something
+    else tried to trust it."""
+    import src.orchestrator.deploy_guard as guard
+    from src.orchestrator.monitor import set_cursor
+
+    a = _commit(small_repo, "a")
+    _git(small_repo, "checkout", "-q", "--orphan", "unrelated")
+    c = _commit(small_repo, "c")
+    monkeypatch.setattr(guard, "_REPO_ROOT", small_repo)
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, a)
+    out = await check_diverged_since_last_deploy(actions.pool)
+    assert out is not None and a in out and c in out
+
+
+async def test_check_diverged_is_clean_on_a_real_fast_forward(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch, small_repo: Path,
+) -> None:
+    """The common case must stay silent end-to-end too, not just in the pure function."""
+    import src.orchestrator.deploy_guard as guard
+    from src.orchestrator.monitor import set_cursor
+
+    a = _commit(small_repo, "a")
+    _commit(small_repo, "b")
+    monkeypatch.setattr(guard, "_REPO_ROOT", small_repo)
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, a)
+    assert await check_diverged_since_last_deploy(actions.pool) is None
+
+
+# --- wiring: osiris deploy actually calls the ref-race detector (src/cli.py) ---------------
+
+
+async def test_cmd_deploy_warns_but_never_refuses_on_a_real_divergence(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, small_repo: Path,
+) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    import src.orchestrator.deploy_guard as guard
+    from src.cli import cmd_deploy
+    from src.orchestrator.monitor import set_cursor
+
+    a = _commit(small_repo, "a")
+    _git(small_repo, "checkout", "-q", "--orphan", "unrelated")
+    c = _commit(small_repo, "c")
+    monkeypatch.setattr(guard, "_REPO_ROOT", small_repo)
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, a)
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [],
+                               restart=_restart, pool=actions.pool)
+    assert "WARNING: HISTORY DIVERGED SINCE THE LAST DEPLOY" in buf.getvalue()
+    assert a in buf.getvalue() and c in buf.getvalue()
+    # THE LOAD-BEARING ASSERTION (577988ed: never refuse on a check that can false-positive):
+    # a real divergence PRINTS, it does not change the exit code — restart still ran and the
+    # deploy completed on its own ordinary merits, exactly as if the warning were absent.
+    assert out in (0, 1)
+
+
+async def test_cmd_deploy_is_silent_on_a_normal_deploy(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """No prior deploy recorded (conftest truncates `watermarks` per test) — must not print
+    the divergence warning on an ordinary first-ever deploy."""
+    import io
+    from contextlib import redirect_stdout
+
+    from src.cli import cmd_deploy
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                         pool=actions.pool)
+    assert "HISTORY DIVERGED" not in buf.getvalue()
 
 
 # --- the ledger's write side (src/cli.py's own _real_record_deploy) ------------------------
