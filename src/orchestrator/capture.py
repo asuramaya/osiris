@@ -544,11 +544,16 @@ async def _resolve_ref(
     )
 
 
-async def _find_decision(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
+async def _find_decision(
+    pool: asyncpg.Pool, ref: str, *, require_identifier: bool = False,
+) -> uuid.UUID | None:
     """A Decision by UUID, by canonical, by short-id PREFIX, then by summary substring
     (shortest summary wins) — see `_resolve_ref` for the full ladder and why it refuses
-    rather than guesses on identifier-shaped input."""
-    return await _resolve_ref(pool, "Decision", ref, text_field="summary")
+    rather than guesses on identifier-shaped input. `require_identifier=True` drops the
+    summary-substring leg, the same opt-in `_find_thread` already exposes — for a call path
+    that CLOSES the record it names rather than merely reading it (ack_handoff)."""
+    return await _resolve_ref(pool, "Decision", ref, text_field="summary",
+                              require_identifier=require_identifier)
 
 
 async def _thread_summary(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | None:

@@ -1990,3 +1990,44 @@ async def test_nearest_handoff_ancestor_gives_up_past_the_bound(actions: Actions
                                       evidence_class="direct_observation")
         prev = cur
     assert await nearest_handoff_ancestor(actions.pool, "agent:nhb0006") is None
+
+
+async def test_nearest_handoff_ancestor_respects_an_explicit_ack_by_default(
+    actions: Actions,
+) -> None:
+    """An acked (is_handoff='false') record must not resurrect via the ILIKE fallback just
+    because its own summary text still says "handoff" — the whole point of ack_handoff is
+    that it stops being treated as live (the operator's read-receipt redesign, 2026-08-03).
+    respect_ack=False (since_last_handoff's own need, handoff_compiler.py) still finds it,
+    because that caller asks "when did this reign end", not "is this still unclaimed"."""
+    from src.orchestrator.agents import nearest_handoff_ancestor
+
+    did = await record_decision(actions, "HANDOFF — bleedack0001's own state of the board",
+                                kind="choice", source="agent:bleedack0001", repo="nhaproj")
+    now = datetime.now(UTC)
+    await actions.assert_property(did, "is_handoff", "true", "agent:bleedack0001", now, 0.9,
+                                  evidence_class="self_declared")
+    # a DIFFERENT source acks it (the successor, not the original author) — the exact shape
+    # ack_handoff itself writes; current_assertions legitimately holds both rows at once.
+    await actions.assert_property(did, "is_handoff", "false", "agent:bleedack0001-ii",
+                                  now + timedelta(seconds=1), 0.9,
+                                  evidence_class="self_declared")
+
+    assert await nearest_handoff_ancestor(actions.pool, "agent:bleedack0001") is None
+    found = await nearest_handoff_ancestor(
+        actions.pool, "agent:bleedack0001", respect_ack=False)
+    assert found is not None and found[0] == "agent:bleedack0001"
+
+
+async def test_nearest_handoff_ancestor_surfaces_the_object_id(actions: Actions) -> None:
+    """Every pick now carries `id` — before this fix, callers had a summary and a type but
+    nothing to name back to ack_handoff(ref=...)."""
+    from src.orchestrator.agents import nearest_handoff_ancestor
+
+    did = await record_decision(actions, "the estate is settled, nameable this time",
+                                kind="choice", source="agent:nhaid0001", repo="nhaproj")
+    await actions.assert_property(did, "is_handoff", "true", "agent:nhaid0001",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    found = await nearest_handoff_ancestor(actions.pool, "agent:nhaid0001")
+    assert found is not None
+    assert str(found[1][0]["id"]) == str(did)

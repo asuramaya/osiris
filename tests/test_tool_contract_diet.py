@@ -226,6 +226,13 @@ def _tool_chars(t: Any) -> int:
 # idempotent-by-refusal contrast, kept only what it refuses, why, and the unmerge-then-
 # remerge trap) — 1,535 -> 1,128 chars for the tool itself before raising anything.
 # 119,810 -> 120,938, +1,128. 98 -> 99 tools. Exact measured total, not a round number.
+# RAISED AGAIN, the is_handoff read-receipt redesign (2026-08-03, operator ruling): a new
+# tool, `ack_handoff` (2,181 chars — the only thing that retires a live handoff now, replacing
+# Thoth DM 3355's write-triggered version), plus a rewritten `settle()` section explaining the
+# supersession. Trimmed both docstrings to the category rule's lean end FIRST (ack_handoff cut
+# from 3,098 to 2,181 chars, settle's new section cut by more than half) before raising this —
+# the remaining growth is a genuinely new capability, not unpruned prose. 120,081 -> 122,936,
+# +2,855. Exact measured total, not a round number.
 TOOL_CONTRACT_CEILING_CHARS = 128_672
 
 
@@ -281,3 +288,6 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     exposure for any type."""
     _, per_tool = await _measure_tool_contract()
     assert len(per_tool) == 99
+    100 -> 101 (2026-08-03): `ack_handoff`, the is_handoff read-receipt redesign."""
+    _, per_tool = await _measure_tool_contract()
+    assert len(per_tool) == 101

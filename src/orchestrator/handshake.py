@@ -755,7 +755,8 @@ async def automount(
             if handoff_found:
                 handoff_from, handoff_picks = handoff_found
                 handoff = {"from": handoff_from,
-                          "notes": [{"kind": r["type"].lower(), "text": r["summary"][:800]}
+                          "notes": [{"kind": r["type"].lower(), "id": str(r["id"])[:8],
+                                     "text": r["summary"][:800]}
                                     for r in handoff_picks]}
             if charter_path or (newest and newest["summary"]) or handoff:
                 succession = {

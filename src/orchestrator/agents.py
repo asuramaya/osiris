@@ -957,7 +957,7 @@ async def lineage_head(pool: asyncpg.Pool, canonical: str) -> str:
 
 
 async def nearest_handoff_ancestor(
-    pool: asyncpg.Pool, start_id: str, *, max_hops: int = 5,
+    pool: asyncpg.Pool, start_id: str, *, max_hops: int = 5, respect_ack: bool = True,
 ) -> tuple[str, list[dict[str, Any]]] | None:
     """Bounded chain-walk to the nearest ancestor bearing a handoff (thread e749036e,
     2026-07-27, Thoth LX's diagnosis): a one-hop-only succession-note read goes blind the
@@ -968,22 +968,61 @@ async def nearest_handoff_ancestor(
     succession-steering — one implementation, not two copies drifting.
 
     STRUCTURED FIRST, PROSE AS FALLBACK (ruling c5b184cd): an is_handoff='true' property
-    (settle()'s own typed stamp) is the reliable half; the ILIKE '%handoff%'/'%letter%'
-    text match stays for handoffs minted before that existed. Walks succeeded_from up to
-    `max_hops` links (mint_heir's own kind of bound), returning the FIRST ancestor found
-    with a handoff-bearing Thread/Decision and its 2 freshest picks — or None if nothing
-    is found within the bound (never widens into an unbounded search)."""
+    (ack_handoff's own typed stamp, once written) is the reliable half; the ILIKE
+    '%handoff%'/'%letter%' text match stays for handoffs minted before that existed. Walks
+    succeeded_from up to `max_hops` links (mint_heir's own kind of bound), returning the
+    FIRST ancestor found with a handoff-bearing Thread/Decision and its 2 freshest picks —
+    or None if nothing is found within the bound (never widens into an unbounded search).
+
+    `respect_ack` (default True — "is this baton still live", what orient()'s succession-
+    note block and the boot whisper both actually want, the operator's "read receipt"
+    redesign, 2026-08-03): an explicit is_handoff='false' (ack_handoff's own retirement
+    stamp) EXCLUDES the record entirely, overriding the ILIKE fallback too — once
+    acknowledged, a handoff must not resurrect for a LATER generation merely because
+    nothing more recent exists; recall()/search() stay the door for that history, orient()
+    should not re-deliver a baton someone already took. The fallback applies ONLY to
+    objects that never had an is_handoff property asserted at all (genuine pre-property
+    legacy records) — an object that HAS the property, however it currently resolves, is
+    never routed through prose-matching. The property's CURRENT value is resolved the same
+    way every other property-read in this codebase does (confidence DESC, observed_at DESC
+    LIMIT 1) — never a bare EXISTS(value='true'), which a superseding assertion from a
+    DIFFERENT source (the acker, not the original author) would leave sitting in
+    current_assertions as a non-winning but still-existing row.
+
+    Pass `respect_ack=False` for a DIFFERENT question — "when did this reign end", a
+    historical boundary fact that stays true whether or not anyone has since acknowledged
+    reading it (`since_last_handoff`, handoff_compiler.py, is the one caller that wants
+    this: it must keep finding ITS OWN already-acked handoff as its reign's own closing
+    marker, or it would silently walk past it to a more distant ancestor and mis-date the
+    boundary — the exact double-count bug its own docstring exists to prevent).
+
+    Each returned pick now also carries `id` (the object's own short-resolvable uuid,
+    stringified) — ack_handoff needs a ref to acknowledge; before this fix callers had no
+    way to name what they were looking at."""
+    ack_clause = (
+        "(SELECT h.value #>> '{}' FROM current_assertions h "
+        " WHERE h.object_id = o.id AND h.name = 'is_handoff' "
+        " ORDER BY h.confidence DESC, h.observed_at DESC LIMIT 1) = 'true' "
+        "OR ("
+        "  NOT EXISTS (SELECT 1 FROM current_assertions h2 "
+        "              WHERE h2.object_id = o.id AND h2.name = 'is_handoff') "
+        "  AND (a.value #>> '{}' ILIKE '%handoff%' OR a.value #>> '{}' ILIKE '%letter%')"
+        ")"
+    ) if respect_ack else (
+        "EXISTS (SELECT 1 FROM current_assertions h WHERE h.object_id = o.id "
+        "        AND h.name = 'is_handoff' AND h.value #>> '{}' = 'true') "
+        "OR a.value #>> '{}' ILIKE '%handoff%' OR a.value #>> '{}' ILIKE '%letter%'"
+    )
     cur = start_id
     for _ in range(max_hops):
         rows = await pool.fetch(
-            "SELECT DISTINCT ON (o.id) o.type, a.value #>> '{}' AS summary, a.observed_at "
+            "SELECT DISTINCT ON (o.id) o.id, o.type, a.value #>> '{}' AS summary, "
+            "a.observed_at "
             "FROM current_assertions a JOIN objects o ON o.id = a.object_id "
             "WHERE a.name = 'summary' AND a.source_id = $1 "
             "AND a.evidence_class = 'self_declared' "
             "AND o.type IN ('Thread','Decision') AND o.status = 'active' "
-            "AND (EXISTS (SELECT 1 FROM current_assertions h WHERE h.object_id = o.id "
-            "             AND h.name = 'is_handoff' AND h.value #>> '{}' = 'true') "
-            "     OR a.value #>> '{}' ILIKE '%handoff%' OR a.value #>> '{}' ILIKE '%letter%') "
+            f"AND ({ack_clause}) "
             "ORDER BY o.id, a.confidence DESC, a.observed_at DESC", cur)
         picks = sorted(rows, key=lambda r: r["observed_at"], reverse=True)[:2]
         if picks:

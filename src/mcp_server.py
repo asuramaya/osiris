@@ -2324,6 +2324,13 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
     # moment the IMMEDIATE ancestor never wrote a handoff (a phantom, or simply silent) even
     # though a real one sits further back — nearest_handoff_ancestor (agents.py) walks up to
     # 5 succeeded_from links, shared with the boot whisper so both read one implementation.
+    # READ RECEIPT, NOT INFERRED-READ (operator ruling, 2026-08-03, superseding a3e2851's
+    # write-triggered retirement): delivery here is UNCONDITIONAL — this block never writes
+    # anything, so the non-negotiable acceptance test (a fresh seat's first orient() must
+    # receive its predecessor's handoff WHOLE) holds by construction, not by careful
+    # ordering. What makes a handoff stop being delivered is a SEPARATE, deliberate
+    # ack_handoff(ref=...) call, mirroring inbox()'s own lease-vs-settle split — an
+    # unacknowledged handoff redelivers on every orient(), exactly like unsettled mail.
     inheritance = None
     if ident and ident.succeeded_from:
         found = await nearest_handoff_ancestor(pool, ident.succeeded_from)
@@ -2331,9 +2338,13 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             from_id, picks = found
             inheritance = {
                 "from": from_id,
-                "notes": [{"kind": r["type"].lower(), "text": r["summary"][:800]}
+                "notes": [{"kind": r["type"].lower(), "id": str(r["id"])[:8],
+                           "text": r["summary"][:800]}
                           for r in picks],
-                "note": "your ancestor's own parting words — read before taking up work",
+                "note": "your ancestor's own parting words — read before taking up work. "
+                        "ack_handoff(ref=<id>) once you have: an unacknowledged handoff "
+                        "stays live and keeps costing every future orient() in this "
+                        "project, not just yours.",
             }
     # CO-AGENT AWARENESS (Deckard XXVI, msg 258: a live sibling shared his exact worktree
     # and the graph never said so — he re-derived 'never git add -A' from a local file
@@ -4552,6 +4563,121 @@ async def reap_stale_leases(older_than_secs: int = 3600) -> dict[str, Any]:
     return {"reaped": n, "older_than_secs": older_than_secs}
 
 
+async def _retire_stale_handoffs(
+    pool: asyncpg.Pool, actor: str, keep: uuid.UUID, now: datetime,
+) -> list[str]:
+    """A ONE-TIME BACKFILL UTILITY, NOT A LIVE TRIGGER (Thoth DM 3355 built the write-
+    triggered version this originally was; the operator's 2026-08-03 ruling superseded that
+    trigger with an explicit ack_handoff(ref=...) receipt — see settle()'s own docstring).
+    Kept as a plain function, called manually, for exactly one job: cleaning up the
+    population of is_handoff='true' records that accumulated BEFORE the receipt model
+    existed and that nobody will ever explicitly ack retroactively (there is no way to know,
+    after the fact, who "read" a years-old handoff). NOT wired into settle() or any other
+    live call path — a fresh is_handoff write no longer retires anything automatically.
+
+    Retires every is_handoff='true' record from `actor`'s own LINEAGE — same seat, any
+    earlier OR same generation, Decision or Thread alike, `_generation()`'s root match, the
+    identical test `rank_open_threads.whose_move` already uses for 'mine to act' — except
+    `keep`. Cross-lineage records are NEVER touched: Khnum's handoff is never retired by a
+    Sekhmet-actor's backfill run.
+
+    Resolves each candidate's CURRENT is_handoff value the same way every other property-
+    read in this codebase does (confidence DESC, observed_at DESC LIMIT 1) rather than a
+    bare EXISTS(value='true') — a record already acked by a DIFFERENT source (ack_handoff
+    runs as the successor, not the original author) would otherwise still show up here
+    because its stale 'true' row never physically leaves current_assertions; re-retiring an
+    already-acked record would be harmless (idempotent, same eventual state) but is still
+    the wrong thing to assert and worth avoiding on principle.
+
+    Never touches `summary`/`kind`/anything else on the retired object — same append-only
+    discipline as `amend_decision`/`amend_practice`, an independent property, not a rewrite.
+    Returns the short ids of every record retired, for the caller's own receipt — a silent
+    mutation behind an already-silent bleed would just be a quieter version of the same
+    disease."""
+    from src.orchestrator.agents import _generation
+
+    root = _generation(actor)[0]
+    rows = await pool.fetch(
+        "SELECT o.id AS object_id, "
+        "(SELECT a.source_id FROM current_assertions a WHERE a.object_id=o.id "
+        " AND a.name='is_handoff' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        " AS source_id "
+        "FROM objects o WHERE o.id != $1 AND EXISTS ("
+        "  SELECT 1 FROM current_assertions a2 WHERE a2.object_id = o.id "
+        "  AND a2.name = 'is_handoff') "
+        "AND (SELECT a3.value #>> '{}' FROM current_assertions a3 "
+        "     WHERE a3.object_id=o.id AND a3.name='is_handoff' "
+        "     ORDER BY a3.confidence DESC, a3.observed_at DESC LIMIT 1) = 'true'", keep)
+    retired: list[str] = []
+    actions = Actions(pool)
+    for r in rows:
+        if _generation(r["source_id"])[0] == root:
+            await actions.assert_property(r["object_id"], "is_handoff", "false", actor, now,
+                                          0.9, evidence_class="self_declared")
+            retired.append(str(r["object_id"])[:8])
+    return retired
+
+
+@mcp.tool()
+async def ack_handoff(
+    ref: str, subagent_id: str | None = None, subagent_type: str | None = None,
+    session_anchor: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """THE READ RECEIPT (operator ruling, 2026-08-03, replacing Thoth DM 3355's write-
+    triggered version — see settle()'s own docstring): the ONLY thing that retires a live
+    `is_handoff` marker. Mirrors inbox()'s lease-vs-settle split — orient() DELIVERS a
+    handoff unconditionally, this ACKNOWLEDGES it, a separate deliberate act naming the id.
+    `ref` is the id orient()'s succession_note or recall() gave you, resolved with
+    `require_identifier=True` (never a free-text guess — this CLOSES the record). Tries
+    Thread then Decision, like recall().
+
+    Refuses rather than guesses: unresolvable ref ("no handoff matches"); already
+    acknowledged or never a handoff ("already acknowledged or not a handoff" — a duplicate
+    ack is a clean error, not a second write); caller isn't a lineage descendant of the
+    handoff's own author (`_generation()` root match, same test `rank_open_threads.
+    whose_move` uses — "not your lineage's handoff to ack"). That last check is defense in
+    depth: delivery alone never burns a baton, but a MISTAKEN ack (a copy-pasted ref from
+    another lineage) would permanently retire someone else's live handoff, so it's refused.
+
+    PER-OBJECT not per-reader (first ack wins, retires for everyone). FINAL not a lease — an
+    ack does not reopen if that generation goes on to produce zero further turns, the same
+    way a mail ack is never revoked for going unfollowed-up. An UNacked handoff is what
+    redelivers, mail's own at-least-once shape — the correct failure mode, not a bug.
+
+    Never deleted, never inaccessible — recall()/search() see it exactly as before; only
+    succession_note and the open_threads/recent_decisions cap-exemption change."""
+    from src.orchestrator.agents import _generation
+    from src.orchestrator.capture import RefAmbiguous, _find_decision, _find_thread
+
+    pool = await _pool_get()
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
+    try:
+        oid = await _find_thread(pool, ref, require_identifier=True)
+        if oid is None:
+            oid = await _find_decision(pool, ref, require_identifier=True)
+    except RefAmbiguous as exc:
+        return {"error": str(exc)}
+    if oid is None:
+        return {"error": f"no handoff matches {ref!r}"}
+    row = await pool.fetchrow(
+        "SELECT "
+        "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        " AND a.name='is_handoff' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        " AS is_handoff, "
+        "(SELECT a2.source_id FROM current_assertions a2 WHERE a2.object_id=o.id "
+        " AND a2.name='summary' AND a2.evidence_class='self_declared' "
+        " ORDER BY a2.confidence DESC, a2.observed_at DESC LIMIT 1) AS author "
+        "FROM objects o WHERE o.id=$1", oid)
+    if row is None or row["is_handoff"] != "true":
+        return {"error": f"{str(oid)[:8]} is already acknowledged or is not a handoff"}
+    if row["author"] is None or _generation(row["author"])[0] != _generation(actor)[0]:
+        return {"error": f"{str(oid)[:8]} is not your lineage's handoff to ack"}
+    now = datetime.now(UTC)
+    await Actions(pool).assert_property(
+        oid, "is_handoff", "false", actor, now, 0.9, evidence_class="self_declared")
+    return {"id": str(oid)[:8], "acknowledged": True}
+
+
 @mcp.tool()
 async def settle(
     decisions: list[dict[str, Any]] | None = None,
@@ -4583,8 +4709,17 @@ async def settle(
 
     `is_handoff: true` on a decision or thread item MINTS A STRUCTURED HANDOFF MARKER (a
     typed property, not a summary text the reader greps for) on that object: your
-    successor's orient() finds it directly. Idempotent and safe to call repeatedly through
-    a session — later calls only add to what's already written, never duplicate it.
+    successor's orient() finds it directly, whole, exempt from the usual 160-char cap.
+    Idempotent and safe to call repeatedly through a session — later calls only add to
+    what's already written, never duplicate it.
+
+    THE EXEMPTION RETIRES ON READ RECEIPT, NOT YOUR NEXT WRITE (operator ruling, 2026-08-03,
+    superseding Thoth DM 3355's write-triggered version): settle() no longer auto-retires
+    your predecessor's handoff the moment you mint your own — that inferred a read from a
+    write. Your successor calls `ack_handoff(ref=<id>)` once they've actually read your note
+    (orient()'s succession_note names the id); that is what stops it riding every future
+    orient() at full length. Until acknowledged it stays live and redelivers, like unsettled
+    mail — correct, not a bug. Never deleted either way — recall()/search() always see it.
 
     SURFACE also runs `git status --porcelain` (`uncommitted_git_files` in the receipt) —
     the one box that isn't in the graph. PASS `repo_path` NAMING YOUR CODE REPO — your

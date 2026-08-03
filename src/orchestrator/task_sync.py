@@ -411,18 +411,47 @@ async def mint_tier2_threads(
 # authorization scoped NARROWLY: "your own session's own store from inside that session",
 # never the enumeration door ab27af61 forbade) ───────────────────────────────────────────
 #
-# THIS IS THE PURE HALF ONLY. No executor exists — a task's own store file under
+# THIS IS THE PURE HALF ONLY, AND NO EXECUTOR IS RECOMMENDED — not "not yet", RECOMMENDED
+# AGAINST, on evidence gathered after this comment's own earlier draft (decision b1c3e6d5,
+# and the TaskUpdate check below, both post-date it). A task's own store file under
 # ~/.claude/tasks is still never opened by this module, unchanged from the module's
-# original claim above. Two things block an executor, established this session, not
-# guessed: (a) nothing in this module resolves "this session" to one of the ~93 store
-# uuids on disk — that mapping does not exist here yet; (b) each store's own `.lock`
-# file's actual locking discipline is Claude-Code-harness-internal, undocumented and
-# unverifiable by reading this repo's source, so a direct file-write executor cannot be
-# proven safe the way every other claim in this module was. Wiring either the executor or
-# a Stop-hook trigger for it before those two are resolved would repeat, with higher
-# stakes (file deletion, not an additive DB write), the exact "fires blind" risk
-# established against mint_tier2_threads below (see test_mint_tier2_threads_twins_when_
-# the_citing_set_changes_between_runs).
+# original claim above.
+#
+# (a) THE SESSION -> STORE MAPPING IS SOLVED, not blocking: a store's directory name under
+# ~/.claude/tasks/ IS the harness's own `session_id` verbatim, a pure string join, verified
+# six independent ways including one live co-agent (decision b1c3e6d5). Do not re-derive
+# this — it was the first thing checked and it is not the reason nothing is built.
+#
+# (b) .lock's WRITE-SAFETY STAYS UNVERIFIABLE for a DIRECT file-write executor specifically
+# (decision b1c3e6d5: POSIX flock() is timestamp-invisible to static observation, and a
+# live contention probe has too little statistical power either way — a structural ceiling
+# on the evidence, not a gap in effort).
+#
+# (c) BUT (b) IS THE WRONG QUESTION, because the sanctioned door was never a direct file
+# write — it is the harness's own TaskUpdate tool, the same trust boundary TaskList/TaskGet
+# already cross for reads. Routing through it sidesteps (b) entirely. Checked directly
+# against TaskUpdate's own tool contract (2026-08-03): status is one of pending /
+# in_progress / completed / deleted, and deleted "permanently removes the task" — its own
+# words, not an inference. THERE IS NO ARCHIVE VERB. The only way to make a completed row
+# stop recurring in every injection is to delete it forever; leaving it "completed" is the
+# status quo this whole lane exists to improve on. So the real choice was never "archive
+# vs. leave it" — it is "delete it permanently vs. leave it", and an agent-triggered
+# irreversible deletion of the operator's own task history is a materially bigger
+# authorization question than a graph-side property write, independent of write-safety.
+#
+# (d) THE MOTIVATING COST IS ALSO SMALLER THAN THE LANE WAS ORIGINALLY SIZED AGAINST:
+# decision 74fad683's own addendum corrected its 98,932-char completed-row estimate — the
+# harness only ever injects `subject`, never `description` — to 12,734 chars, and named
+# the architecture the operator was asking for ("pull descriptions on demand") as already
+# how the harness works. Real, recurring, not zero — but an order of magnitude below what
+# motivated building an executor at all.
+#
+# NET: no executor is buildable non-destructively today, the destructive one is a bigger
+# ask than this lane was ever authorized for, and the win it would buy is smaller than
+# believed when the lane opened. `archive_eligible_targets` stays as a pure, tested
+# function with no consumer — correct to keep (idle code costs nothing and the underlying
+# convergence logic may matter again if the harness ever grows a real archive verb), wrong
+# to wire to anything.
 #
 # THE DISAGREEMENT QUESTION ("which side wins", thread e604ae84's item 2) IS ANSWERED BY
 # REFUSING IT: neither side ever auto-wins here. A task is archive-eligible ONLY where the
