@@ -157,7 +157,27 @@ import json
 # instruction on this exact build: NEVER offered as the reason to collapse the three
 # folds (findability and parity were; this number is only the honest side effect of two
 # fewer doors). Exact measured total, not a round number.
-TOOL_CONTRACT_CEILING_CHARS = 118_940
+#
+# RESOLVED AT A FOUR-WAY MERGE, 2026-08-03 (Thoth LXXI, integrating the whole night's work
+# at the operator's "deploy all now"). FOUR branches each raised this ceiling independently
+# and NOT ONE COULD SEE THE OTHER THREE: khnum-phase0t2 -> 120,693 (Phase 0 Tier 2's three
+# verbs), seat/imhotep -> 120,282 (the silent-authority census's Tier 1), seat/seshat ->
+# 120,099 (lap/doors/dim renamed to provenance/whois/moot_brief), khnum-mergeunmerge ->
+# 118,940 (the fold collapse, forked from composer BEFORE any of the other three landed).
+# Every one of those numbers was honestly measured and every one is WRONG for the combined
+# tree. THE ONLY MOMENT THE REAL SURFACE EXISTS IS THE MERGE, and this test is again the
+# only thing that looked. Fourth firing in two evenings; second time it caught a cross-branch
+# interaction no author could have seen; first time across four branches at once.
+#
+# TRUE COMBINED, measured on the merged tree, not derived from any branch: 98 tools,
+# 119,810 chars. LOWER than three of the four branch numbers, because merge/unmerge retires
+# four verbs (fold_agent/fold_seat/fold_project/unfold_agent) and adds two, and that -2 net
+# more than absorbs the three fix branches' additions. The session opened at 120,081 and
+# closes at 119,810 — DOWN 271 despite shipping four authority fixes, three renames and a
+# collapse. REPORTED, NEVER ARGUED FROM: operator's ruling 31c02dca is explicit that a
+# collapse is justified by findability and symmetry and NEVER by size. This number is an
+# observation. It is not why any of this was built and must never be cited as though it were.
+TOOL_CONTRACT_CEILING_CHARS = 119_810
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
