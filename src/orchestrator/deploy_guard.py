@@ -155,6 +155,71 @@ async def check_unreviewed_boot(pool: asyncpg.Pool) -> str | None:
         return None
 
 
+def diverged_since_last_deploy(
+    running_head: str | None, last_deployed: str | None, *, is_ancestor: bool | None,
+) -> str | None:
+    """Pure comparison, no IO — same null-handling discipline as `schema_drift`/
+    `unreviewed_boot`. DISTINCT from `unreviewed_boot` (which fires on ANY difference,
+    including a normal fast-forward advance): this fires ONLY when `last_deployed` is no
+    longer an ancestor of `running_head` — the branch was rewritten, reset, or force-moved
+    sideways since the last deploy, never just advanced. `is_ancestor=None` means the
+    ancestry check itself could not run (a git failure, an unknown sha, a fresh box with no
+    prior deploy) — 'unknown', never a mismatch (thread 771366d1: this whole check exists
+    because two agents each acting on a locally-correct read moved the SAME ref out from
+    under each other tonight — a false alarm here would be exactly the noise that teaches a
+    reader to stop looking)."""
+    if not running_head or not last_deployed or running_head == last_deployed:
+        return None
+    if is_ancestor is None or is_ancestor:
+        return None
+    return (f"HISTORY DIVERGED SINCE THE LAST DEPLOY: {last_deployed!r} (what `osiris "
+            f"deploy` last recorded) is no longer an ancestor of the current HEAD "
+            f"{running_head!r} — this branch was rewritten, reset, or force-moved sideways, "
+            f"not just advanced. If nobody meant to rewrite history, find out who else "
+            f"touched this ref before trusting this deploy.")
+
+
+def _is_ancestor(repo_root: Path, older: str, newer: str) -> bool | None:
+    """True/False from `git merge-base --is-ancestor <older> <newer>` — exit 0 means
+    `older` IS an ancestor of `newer` (a normal fast-forward), exit 1 means it is NOT (a
+    rewrite/reset/force-move). Any OTHER outcome — git missing, not a repo, either sha
+    unknown to this checkout (exit 128) — is None, 'unknown', same fail-open law as every
+    other check in this module: a check that cannot complete must never be read as a
+    confident mismatch."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "merge-base", "--is-ancestor", older, newer],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return None
+    if proc.returncode == 0:
+        return True
+    if proc.returncode == 1:
+        return False
+    return None
+
+
+async def check_diverged_since_last_deploy(pool: asyncpg.Pool) -> str | None:
+    """The IO half — same fail-open discipline as `check_unreviewed_boot`: any failure
+    (git missing, not a checkout, the watermark unreadable) degrades to None, never a
+    refusal. Deliberately NOT wired into service boot (unlike its two siblings above) —
+    the race this exists to catch happens around `osiris deploy` time, when a human/agent
+    is about to trust whatever ref is currently checked out, not at a service restart."""
+    try:
+        from src.orchestrator.monitor import get_cursor
+
+        running = _git_head(_REPO_ROOT)
+        last_deployed = await get_cursor(pool, _DEPLOY_CURSOR_KEY)
+        ancestor = None
+        if running and last_deployed and running != last_deployed:
+            ancestor = _is_ancestor(_REPO_ROOT, last_deployed, running)
+        return diverged_since_last_deploy(running, last_deployed, is_ancestor=ancestor)
+    except Exception as exc:  # noqa: BLE001 — a check that can't complete is UNKNOWN, not a refusal
+        _log.warning("diverged_since_last_deploy check failed, treating as unknown: %r", exc)
+        return None
+
+
 async def alarm_unreviewed_boot(pool: asyncpg.Pool, drift: str, *, service: str) -> None:
     """LOUD, never a refusal, never blocking — the reboot-is-a-deploy confession (thread
     489a39d0). Same shape as `alarm_schema_drift`, including the same lesson already applied

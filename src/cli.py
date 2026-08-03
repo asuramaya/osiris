@@ -1120,6 +1120,12 @@ async def cmd_deploy(
                   f"— {exc}. NOTHING was restarted.", file=sys.stderr)
             return 1
     try:
+        from src.orchestrator.deploy_guard import check_diverged_since_last_deploy
+
+        diverged = await check_diverged_since_last_deploy(pool)
+        if diverged:
+            print(f"WARNING: {diverged}")
+
         migrated_ok, migration_note = await _apply_pending_migrations(
             pool, root, state=migration_state, run_migrations=run_migrations)
         print(migration_note)
