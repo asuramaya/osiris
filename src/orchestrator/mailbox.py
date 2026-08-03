@@ -204,11 +204,13 @@ async def send_message(
     inbox() call would ever scope to, silently, reported as sent (shape 3 of #117; obligation
     45e52530).
     With `reply_to` and no explicit address,
-    it routes by channel: a reply to a DM goes back to that sender as a DM; a reply to a broadcast
-    routes to the referenced message's project (replying to YOUR OWN broadcast routes ONWARD to
-    its recipient — the desk supersession lane), joining the thread and settling the referenced
-    message for the replier (replying proves perception). An identical (sender, recipient, body)
-    within the dedup window returns the EXISTING id. Raises ValueError on an unknown reply_to or
+    it routes by channel: a reply to a DM goes back to that sender as a DM; a reply to YOUR OWN
+    outgoing DM continues that same DM with its original recipient (thread 7d670c74); a reply to
+    a broadcast routes to the referenced message's project (replying to YOUR OWN broadcast routes
+    ONWARD to its recipient — the desk supersession lane), joining the thread and settling the
+    referenced message for the replier (replying proves perception). An identical (sender,
+    recipient, body) within the dedup window returns the EXISTING id. Raises ValueError on an
+    unknown reply_to or
     an unroutable message. `desk_kind` is the sender's own triage of an operator brief
     ('decision' | 'hands' | 'fyi') — which band of the desk it belongs to. `grade` is the
     SENDER'S OWN triage of what this message wants from its reader (thread f9449d8d):
@@ -328,6 +330,20 @@ async def send_message(
                     f"no inbox() call would ever see this broadcast{hint}")
     elif ref is not None and await _addressed_to_me(pool, ref["to_agent"], from_agent):
         to_a, to_p = ref["from_agent"], ref["from_project"]  # a DM to me → DM back to its sender
+    elif (ref is not None and ref["to_agent"] is not None
+          and await _addressed_to_me(pool, ref["from_agent"], from_agent)):
+        # REPLYING TO MY OWN DM CONTINUES THAT SAME DM (thread 7d670c74, 2026-08-03): `ref`
+        # here is a message I SENT, not one sent to me — the case below (the "own message"
+        # branch) was built for replying to my own BROADCAST, the desk supersession lane,
+        # where to_project names where it should route onward. A DM's to_project is normally
+        # NULL, so falling into that branch either raised a misleading "no recipient" error
+        # or — if the original send had also carried an explicit to_project alongside
+        # to_agent — silently rebroadcast the reply to that project instead of continuing the
+        # conversation with the person actually being talked to (live specimen: a DM to Thoth,
+        # replied-to via its own id, landed as a stalled project broadcast nobody was
+        # watching). Continuing the SAME DM is the only sensible reading of "replying to my
+        # own outgoing message" when that message was itself a DM.
+        to_a, to_p = ref["to_agent"], ref["to_project"]
     elif ref is not None:  # a broadcast/own message → project routing (supersession lane)
         own = from_project and _norm(ref["from_project"] or "") == _norm(from_project)
         if own:

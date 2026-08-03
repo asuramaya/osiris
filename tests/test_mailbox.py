@@ -328,6 +328,52 @@ async def test_reply_to_unknown_message_is_an_error(actions: Actions) -> None:
         await send_message(actions.pool, from_agent="agent:x", from_project="a", body="lost")
 
 
+async def test_replying_to_your_own_dm_continues_it(actions: Actions) -> None:
+    """Thread 7d670c74: `reply_to` naming a message YOU sent (not one sent to you) used to
+    fall into the broadcast/supersession branch built for replying to your own BROADCAST —
+    for a DM (to_project normally NULL) that raised a misleading "no recipient" error rather
+    than continuing the conversation with the person you were actually DMing."""
+    p = actions.pool
+    dm = await send_message(p, from_agent="agent:asker", from_project="handlingtheloop",
+                            to_agent="agent:engine", body="engine, status?")
+    reply = await send_message(p, from_agent="agent:asker", from_project="handlingtheloop",
+                               body="following up — still waiting", reply_to=dm["id"])
+    assert reply["to_agent"] == "agent:engine" and reply["to"] is None
+    assert reply["thread_id"] == dm["id"]
+    assert await unread_count(p, "handlingtheloop", reader_agent="agent:engine") == 2
+
+
+async def test_replying_to_your_own_dually_addressed_dm_still_reaches_the_agent(
+        actions: Actions) -> None:
+    """The silent-broadcast shape of the same bug: an original send that carried BOTH
+    to_agent and to_project (nothing forbids passing both) used to let a self-reply's
+    `to_p` resolve to that project ALONE — the DM recipient dropped entirely, a reply meant
+    for one person landing as a project-wide broadcast nobody in particular was watching.
+    The fix continues the DM verbatim, including whatever project rode along with it."""
+    await _seed(actions.pool, "sidechannel")
+    p = actions.pool
+    dm = await send_message(p, from_agent="agent:asker", from_project="handlingtheloop",
+                            to_agent="agent:engine", to_project="sidechannel",
+                            body="engine, status? (cc sidechannel)")
+    reply = await send_message(p, from_agent="agent:asker", from_project="handlingtheloop",
+                               body="following up", reply_to=dm["id"])
+    assert reply["to_agent"] == "agent:engine"  # the DM recipient survives, not just the cc
+
+
+async def test_replying_to_your_own_broadcast_still_supersedes_not_a_dm(
+        actions: Actions) -> None:
+    """Regression guard: the fix for the DM case must not touch the existing supersession
+    lane — replying to your own BROADCAST (to_agent NULL) still routes onward to the
+    broadcast's own project, not into a DM."""
+    await _seed(actions.pool, "b")
+    p = actions.pool
+    first = await send_message(p, from_agent="agent:x", from_project="a", to_project="b",
+                               body="draft one")
+    reply = await send_message(p, from_agent="agent:x", from_project="a",
+                               body="draft two, supersedes", reply_to=first["id"])
+    assert reply["to"] == "b" and reply["to_agent"] is None
+
+
 async def test_dm_echoes_the_resolved_seat_and_lineage_head(actions: Actions) -> None:
     """dd47c1da: alfred's build order resolved silently to a raw agent id, unverified. A DM's
     receipt now names who it actually reached — the claimed seat, and where that id's own
