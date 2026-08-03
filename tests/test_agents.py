@@ -11,6 +11,7 @@ import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from src.actions.core import Actions
 from src.ingest.harness import ModelReading
@@ -226,13 +227,14 @@ def test_read_project_model_declares_the_repo_intent(tmp_path: Path) -> None:
     assert read_project_model(str(tmp_path)) is None                    # undeclared → default
 
 
-def test_read_project_pin_distinguishes_no_declaration_from_could_not_read(
+def test_read_project_pin_distinguishes_all_three_no_project_shapes(
     tmp_path: Path,
 ) -> None:
-    """THE TELL-APART-ABLE PAIR (Sekhmet's design, e3f4f159): NO DECLARATION (no file, or a
-    valid file that simply never sets `project` — the heinrich boundary case) collapses to
-    one shape; COULD NOT READ (a file exists but fails to parse) is a DIFFERENT shape and
-    must carry the path + the actual error, never a bare None."""
+    """THREE tell-apart-able shapes (Sekhmet's design, e3f4f159; widened task #128 wave 2,
+    2026-08-03), not two: NO FILE AT ALL, FOUND-BUT-NEVER-SETS-THE-KEY (the heinrich
+    boundary case — real, valid, just answering a different question), and COULD NOT READ
+    (a file exists but fails to parse). Each must be its own shape, never collapsed with
+    either neighbor."""
     from src.orchestrator.agents import read_project_pin
 
     no_file = tmp_path / "no-osiris"
@@ -240,13 +242,14 @@ def test_read_project_pin_distinguishes_no_declaration_from_could_not_read(
     out = read_project_pin(str(no_file))
     assert out.value is None and out.error is None and out.path is None
 
-    # heinrich: valid TOML, never sets `project` — a NO DECLARATION, not a couldn't-read,
-    # even though the file itself is real and non-empty
+    # heinrich: valid TOML, never sets `project` — found, not broken, distinct from both
+    # "no file" (path would be None) and "could not read" (error would be set)
     heinrich = tmp_path / "heinrich"
     heinrich.mkdir()
     (heinrich / ".osiris").write_text('model = "claude-fable-5"\n')
     out = read_project_pin(str(heinrich))
-    assert out.value is None and out.error is None and out.path is None
+    assert out.value is None and out.error is None
+    assert out.path == str(heinrich / ".osiris")
 
     # redmonth/sutra's own malformation: colon syntax is not valid TOML
     malformed = tmp_path / "redmonth"
@@ -290,23 +293,35 @@ def test_resolve_identity_carries_the_could_not_read_signal_but_still_falls_back
     assert ident.project_pin_path == str(repo / ".osiris")
 
 
-def test_resolve_identity_stays_silent_on_no_declaration(tmp_path: Path) -> None:
+def test_resolve_identity_flags_project_pin_missing_on_genuine_no_declaration(
+    tmp_path: Path,
+) -> None:
+    """No .osiris anywhere in the climb: still no error, still no found-but-unset path —
+    but project_pin_missing is now True (task #128 wave 2), the third leg that used to be
+    indistinguishable from the heinrich shape."""
     repo = tmp_path / "undeclared"
     repo.mkdir()
     ident = resolve_identity(cwd=str(repo), job_dir="/j/jobs/undeclared1")
     assert ident.project_pin_error is None and ident.project_pin_path is None
+    assert ident.project_pin_missing is True
 
 
-def test_resolve_identity_stays_silent_on_a_valid_pin_that_never_sets_project(
+def test_resolve_identity_carries_found_but_unset_without_masquerading_as_broken(
     tmp_path: Path,
 ) -> None:
-    """The heinrich boundary case, exercised through the real resolution path — a valid
-    but incomplete .osiris file must never masquerade as a broken one."""
+    """The heinrich boundary case, exercised through the real resolution path (task #128
+    wave 2): a valid but incomplete .osiris file must never masquerade as a broken one
+    (project_pin_error stays None) — but it must ALSO no longer masquerade as no file at
+    all (project_pin_path is now set, project_pin_missing is False), so a caller can build
+    the "found, valid, never declares project" message rather than the "no pin anywhere"
+    one for this exact shape."""
     heinrich = tmp_path / "heinrich"
     heinrich.mkdir()
     (heinrich / ".osiris").write_text('model = "claude-fable-5"\n')
     ident = resolve_identity(cwd=str(heinrich), job_dir="/j/jobs/heinrich1")
-    assert ident.project_pin_error is None and ident.project_pin_path is None
+    assert ident.project_pin_error is None
+    assert ident.project_pin_path == str(heinrich / ".osiris")
+    assert ident.project_pin_missing is False
 
 
 def test_resolve_identity_never_confesses_an_explicit_project_label_override(
@@ -322,9 +337,14 @@ def test_resolve_identity_never_confesses_an_explicit_project_label_override(
                              project_label="explicit-override")
     assert ident.project == "explicit-override"
     assert ident.project_pin_error is None and ident.project_pin_path is None
+    assert ident.project_pin_missing is False
 
 
-def test_project_pin_banner_fires_only_on_could_not_read() -> None:
+def test_project_pin_banner_fires_on_all_three_no_project_shapes(tmp_path: Path) -> None:
+    """Task #128 wave 2: WARN, never refuse, on all three ways a session can end up
+    resolving its project from a basename guess — three DISTINCT messages, since b3a1f987
+    found each needs its own repair. Silent only when a real pin was found and used, or for
+    the bare seat-office root carve-out (ruling 577988ed)."""
     from src.orchestrator.agents import project_pin_banner
 
     clean = AgentIdentity(agent_id="agent:clean1", session="clean1", project="fine",
@@ -340,6 +360,46 @@ def test_project_pin_banner_fires_only_on_could_not_read() -> None:
     assert "/x/redmonth/.osiris" in banner
     assert "TOMLDecodeError" in banner
     assert "redmonth" in banner  # the basename-fallback value it landed on, named
+
+    found_unset = AgentIdentity(agent_id="agent:heinrich1", session="heinrich1",
+                                project="heinrich", model=None, cwd="/x/heinrich",
+                                project_pin_path="/x/heinrich/.osiris")
+    banner = project_pin_banner(found_unset)
+    assert banner is not None
+    assert "/x/heinrich/.osiris" in banner
+    assert "NEVER DECLARES" in banner
+    assert "heinrich" in banner
+    assert "TOMLDecodeError" not in banner  # not the broken-file message
+
+    missing = AgentIdentity(agent_id="agent:tantra1", session="tantra1", project="tantra",
+                            model=None, cwd="/x/tantra", project_pin_missing=True)
+    banner = project_pin_banner(missing)
+    assert banner is not None
+    assert "/x/tantra" in banner
+    assert "NO .osiris PIN ANYWHERE" in banner
+    assert "tantra" in banner
+
+    # bare seat-office root carve-out (577988ed): resolve_identity never sets
+    # project_pin_missing here even though nothing is pinned — the banner must stay silent
+    bare_root = AgentIdentity(agent_id="agent:anon1", session="anon1", project=None,
+                              model=None, cwd="/home/x/.osiris/seats")
+    assert project_pin_banner(bare_root) is None
+
+
+def test_resolve_identity_never_flags_project_pin_missing_at_the_bare_seat_root(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """Ruling 577988ed's own carve-out, through the real resolution path: the bare seat-
+    office container has no pin and no single project of its own — project stays None AND
+    project_pin_missing stays False, so no wave-2 banner ever fires there."""
+    from src.orchestrator import agents as agents_mod
+
+    seats_root = tmp_path / "seats"
+    seats_root.mkdir()
+    monkeypatch.setattr(agents_mod, "_DEFAULT_OFFICE_ROOT", seats_root)
+    ident = resolve_identity(cwd=str(seats_root), job_dir="/j/jobs/bareroot1")
+    assert ident.project is None
+    assert ident.project_pin_missing is False
 
 
 async def test_register_stamps_intent_and_the_swap(actions: Actions, tmp_path: Path) -> None:

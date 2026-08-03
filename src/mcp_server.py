@@ -1808,7 +1808,7 @@ async def mount(
         expected=await _expected_model(pool, cwd, ident.project),  # repo intent wins
         anchored=ident.model_method == "job_dir",   # only a true anchor confesses a swap
         deliberate=ident.model_deliberate))         # a /model on the record is never a sin
-    pin_warn = project_pin_banner(ident)  # a broken .osiris pin — see agents.py, e3f4f159
+    pin_warn = project_pin_banner(ident)  # no pin / unparseable / found-but-unset — agents.py
     seat = await handshake._seat_of(Actions(pool), ident.agent_id)
     # co-agent awareness at ARRIVAL (Deckard XXVI, msg 258): a live sibling in your own
     # repo is the one blindness that costs unrecoverable work (a stomped commit)
@@ -2305,7 +2305,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         deliberate=ident.model_deliberate)) if ident else None
     if spawn is not None:
         swap = None  # the seat's swap history is the PARENT's confession duty, not the child's
-    pin_warn = project_pin_banner(ident) if ident else None  # broken .osiris pin, e3f4f159
+    pin_warn = project_pin_banner(ident) if ident else None  # no/unparseable/found-unset pin
     if swap and ident:  # a triage wake on the economy model is policy, not a rug-pull
         swap = await _wake_economy_standdown(pool, proj, ident.model) or swap
     away = await mounts.while_away(

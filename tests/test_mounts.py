@@ -223,12 +223,14 @@ async def test_mount_confesses_a_broken_osiris_pin(
         srv._pool = saved_pool
 
 
-async def test_mount_stays_silent_on_a_valid_pin_that_never_sets_project(
+async def test_mount_warns_on_a_valid_pin_that_never_sets_project(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The heinrich boundary case (Sekhmet's design, e3f4f159), exercised through the real
-    mount() tool: a VALID .osiris file that simply never declares `project` is a NO
-    DECLARATION, never a couldn't-read — no banner, even though the file is real."""
+    """The heinrich boundary case (Sekhmet's design, e3f4f159; task #128 wave 2, 2026-08-03),
+    exercised through the real mount() tool: a VALID .osiris file that simply never
+    declares `project` is a NO DECLARATION, never a couldn't-read — but wave 2 now WARNS
+    on it too (a check keyed on "has a pin" would never catch this shape), with a message
+    distinct from the broken-file one."""
     from src import mcp_server as srv
 
     heinrich = tmp_path / "heinrich"
@@ -239,7 +241,32 @@ async def test_mount_stays_silent_on_a_valid_pin_that_never_sets_project(
     srv._pool = actions.pool
     try:
         out = await srv.mount(cwd=str(heinrich), job_dir=job_dir)
-        assert "project_pin_error" not in out
+        warn = out.get("project_pin_error")
+        assert warn is not None, f"mount() never warned on the found-but-unset pin: {out}"
+        assert "NEVER DECLARES" in warn and "TOMLDecodeError" not in warn
+    finally:
+        srv._pool = saved_pool
+
+
+async def test_mount_warns_on_no_osiris_pin_anywhere(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The third wave-2 shape, exercised through mount(): genuinely nothing ever declared —
+    the ordinary 29-name UNPINNED-LUCKY case — now warns too, distinct wording from both
+    the broken-file and found-but-unset messages."""
+    from src import mcp_server as srv
+
+    repo = tmp_path / "xxit"
+    repo.mkdir()
+    job_dir = str(tmp_path / "jobs" / "nopin01")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(repo), job_dir=job_dir)
+        assert out["project"] == "xxit"  # basename fallback, unbroken
+        warn = out.get("project_pin_error")
+        assert warn is not None, f"mount() never warned on the missing pin: {out}"
+        assert "NO .osiris PIN ANYWHERE" in warn and "xxit" in warn
     finally:
         srv._pool = saved_pool
 
