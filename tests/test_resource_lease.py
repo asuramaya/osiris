@@ -130,22 +130,117 @@ async def test_the_same_resource_id_always_resolves_to_the_same_thread(
     assert first.thread_id == second.thread_id == third.thread_id
 
 
+async def _backdate_acquired_at(actions: Actions, resource_id: str, secs_ago: int = 90) -> None:
+    """Simulate a genuinely stale claim without sleeping in a test — reap_stale's floor
+    (_MIN_REAP_AGE_SECS, 2026-08-03) refuses older_than_secs below 60, so the old trick of
+    passing older_than_secs=0 against a lease acquired an instant ago no longer works; the
+    lease's own acquired_at has to actually be old."""
+    await actions.pool.execute(
+        "UPDATE resource_leases SET acquired_at = now() - make_interval(secs => $1) "
+        "WHERE resource_id=$2", secs_ago, resource_id,
+    )
+
+
 async def test_reap_stale_releases_an_old_held_lease(actions: Actions) -> None:
     await rl.acquire(actions, "abandoned-resource", "agent:crashed")
     # not stale yet under a generous window
     assert await rl.reap_stale(actions.pool, older_than_secs=3600) == 0
-    # a 0-second window makes every held lease immediately "stale" for the test's purposes
-    reaped = await rl.reap_stale(actions.pool, older_than_secs=0)
+    await _backdate_acquired_at(actions, "abandoned-resource")
+    reaped = await rl.reap_stale(actions.pool, older_than_secs=rl._MIN_REAP_AGE_SECS)
     assert reaped == 1
     assert await rl.current_holder(actions.pool, "abandoned-resource") is None
 
 
 async def test_reaping_frees_the_resource_for_a_fresh_claim(actions: Actions) -> None:
     await rl.acquire(actions, "wedged", "agent:crashed")
-    await rl.reap_stale(actions.pool, older_than_secs=0)
+    await _backdate_acquired_at(actions, "wedged")
+    await rl.reap_stale(actions.pool, older_than_secs=rl._MIN_REAP_AGE_SECS)
     fresh = await rl.acquire(actions, "wedged", "agent:survivor")
     assert fresh.acquired is True
     assert fresh.holder == "agent:survivor"
+
+
+# --- the floor (2026-08-03, Thoth's Tier 1 dispatch off the silent-authority census,
+# decision 497a066a): older_than_secs used to be fully caller-controlled with no minimum --
+# older_than_secs=0 force-released EVERY currently-held lease fleet-wide in one call, no
+# gate required, the parameter itself was the weapon -----------------------------------
+
+async def test_reap_stale_refuses_a_below_floor_older_than_secs(actions: Actions) -> None:
+    """NEGATIVE CONTROL: confirmed against pre-fix code (git stash) that
+    reap_stale(older_than_secs=0) against a lease acquired an instant ago returned 1
+    (reaped), not a refusal -- the exploit this floor closes."""
+    await rl.acquire(actions, "just-claimed", "agent:live")
+    try:
+        await rl.reap_stale(actions.pool, older_than_secs=0)
+        raise AssertionError("expected ValueError below the floor")
+    except ValueError as e:
+        assert str(rl._MIN_REAP_AGE_SECS) in str(e)
+    # a refused reap must not have touched anything
+    holder = await rl.current_holder(actions.pool, "just-claimed")
+    assert holder is not None and holder["holder"] == "agent:live"
+
+
+async def test_reap_stale_leases_wrapper_refuses_a_below_floor_value(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        await srv.acquire_lease("still-fresh", holder="agent:live")
+        out = await srv.reap_stale_leases(older_than_secs=1)
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out
+    assert await rl.current_holder(actions.pool, "still-fresh") is not None
+
+
+async def _thread_status_and_resolved_because(
+    actions: Actions, thread_id: object
+) -> tuple[str, str | None]:
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        thread_id)
+    because = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='resolved_because' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "LIMIT 1", thread_id)
+    return status, because
+
+
+async def test_reap_stale_resyncs_the_paired_threads_status(actions: Actions) -> None:
+    """NEGATIVE CONTROL: before this fix, reap_stale() only ever touched the
+    resource_leases SQL table -- the paired Thread stayed status='open' forever after a
+    reap, correct for check_lease (reads the table directly) but wrong for every
+    graph-level reader (orient's open_threads, recall, briefing, dossier) that only ever
+    sees Thread objects. Confirmed against pre-fix code (git stash): the Thread's status
+    read 'open' after a real reap. Same pattern as release()'s own fix, commit 510b4a9."""
+    claim = await rl.acquire(actions, "crashed-mid-session", "agent:crashed")
+    await _backdate_acquired_at(actions, "crashed-mid-session")
+    reaped = await rl.reap_stale(actions.pool, older_than_secs=rl._MIN_REAP_AGE_SECS)
+    assert reaped == 1
+    status, because = await _thread_status_and_resolved_because(actions, claim.thread_id)
+    assert status == "resolved"
+    assert because == "resource lease reaped (stale, held by agent:crashed)"
+
+
+async def test_reap_stale_resyncs_every_reaped_threads_status_in_one_call(
+    actions: Actions,
+) -> None:
+    """The bulk case: reap_stale can recover many leases in one call, and the fix loops
+    over every reaped row inside the SAME transaction -- prove it isn't just the
+    single-row path that got fixed."""
+    a = await rl.acquire(actions, "stale-a", "agent:one")
+    b = await rl.acquire(actions, "stale-b", "agent:two")
+    await _backdate_acquired_at(actions, "stale-a")
+    await _backdate_acquired_at(actions, "stale-b")
+    reaped = await rl.reap_stale(actions.pool, older_than_secs=rl._MIN_REAP_AGE_SECS)
+    assert reaped == 2
+    status_a, _ = await _thread_status_and_resolved_because(actions, a.thread_id)
+    status_b, _ = await _thread_status_and_resolved_because(actions, b.thread_id)
+    assert status_a == "resolved" and status_b == "resolved"
 
 
 async def test_empty_resource_id_or_holder_refuses_loudly(actions: Actions) -> None:
@@ -338,10 +433,11 @@ async def test_reap_stale_leases_wrapper_recovers_an_abandoned_claim(
     srv._pool = actions.pool
     try:
         await srv.acquire_lease("wedged-by-a-crash", holder="agent:crashed")
-        out = await srv.reap_stale_leases(older_than_secs=0)
+        await _backdate_acquired_at(actions, "wedged-by-a-crash")
+        out = await srv.reap_stale_leases(older_than_secs=rl._MIN_REAP_AGE_SECS)
     finally:
         srv._pool = saved_pool
-    assert out == {"reaped": 1, "older_than_secs": 0}
+    assert out == {"reaped": 1, "older_than_secs": rl._MIN_REAP_AGE_SECS}
     assert await rl.current_holder(actions.pool, "wedged-by-a-crash") is None
 
 
