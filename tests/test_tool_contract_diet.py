@@ -6,13 +6,26 @@ tools, names 1,109 + descriptions ~85,988 + inputSchemas ~32,130 chars ~= 119,22
 deferred -> stale cache. Every char cut here is pressure off the thing that freezes.
 
 THE MEASUREMENT IS THE LIVE, IN-PROCESS TOOL REGISTRATION, NOT A DOCSTRING GREP: `t.name` /
-`t.description` / `t.inputSchema` come from `mcp.list_tools()` on the actual FastMCP server
-object this module builds — the exact three fields a connecting client receives (json.dumps
-on inputSchema because that is how it travels the wire, a dict). A raw `ast.get_docstring`
-scan under-counts: FastMCP's own description rendering and the JSON schema (which is NOT a
-docstring at all — it comes from the function's type hints and Field() defaults) both add
-weight a source-only scan would miss entirely. No live deploy or network round-trip needed
-(list_tools() runs against the local server object) — this stays a plain, offline pytest.
+`t.description` / `t.inputSchema` / `t.outputSchema` come from `mcp.list_tools()` on the
+actual FastMCP server object this module builds (json.dumps on the two schema dicts because
+that is how each travels the wire). A raw `ast.get_docstring` scan under-counts: FastMCP's
+own description rendering and the JSON schemas (NOT docstrings at all — they come from the
+function's type hints and Field() defaults) both add weight a source-only scan would miss
+entirely. No live deploy or network round-trip needed (list_tools() runs against the local
+server object) — this stays a plain, offline pytest.
+
+FOUR FIELDS, NOT THREE (2026-08-03, decision 553b5173) — this docstring itself used to claim
+"the exact three fields a connecting client receives", and that claim was FALSE: verified
+against the live deployed server three independent ways (real SDK round-trip, raw HTTP
+JSON-RPC bytes, a bracket-matched substring off the raw wire text, all three agreeing),
+every tool ships a FOURTH field, `outputSchema` (FastMCP auto-generates one per tool from
+its Python return-type annotation — the `structured_output` param on `@mcp.tool()`, never
+set anywhere in this codebase, defaults to auto-detect). That field was invisible to this
+ratchet by construction, not drift, the same shape as `consolidate()`'s own blind spot in
+the silent-authority census (decision 497a066a): a check that reads green while an entire
+category sits outside its field of view. In-process vs wire is NOT the gap for the three
+original fields — those two are identical, verified the same three ways (119,810 chars,
+both sides) — the gap was fields-measured vs fields-shipped.
 
 THIS NUMBER MOVES DOWNWARD BY HAND, NEVER RECOMPUTED (same law as
 tests/test_render_hygiene.py's `_ALLOWLIST`, Thoth msg 1921): a ratchet that derives its own
@@ -55,6 +68,8 @@ moves rather than the tool disappearing. 97 -> 98 tools.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+from typing import Any
 
 # RAISED, task 187323d9's graph_lint gate (2026-08-02): found this test ALREADY failing at
 # 118,901 chars before touching anything — a genuinely pre-existing overage, not fresh
@@ -177,20 +192,58 @@ import json
 # collapse. REPORTED, NEVER ARGUED FROM: operator's ruling 31c02dca is explicit that a
 # collapse is justified by findability and symmetry and NEVER by size. This number is an
 # observation. It is not why any of this was built and must never be cited as though it were.
-TOOL_CONTRACT_CEILING_CHARS = 119_810
+#
+# RAISED, a FOURTH FIELD the ratchet never measured (2026-08-03, task #129's re-scope,
+# Thoth DM 3505/3513, decision 553b5173): every tool ships an `outputSchema` (FastMCP
+# auto-generates one per tool from its Python return-type annotation) that this ratchet's
+# three-field sum — name+description+inputSchema — never counted, BY CONSTRUCTION, not
+# drift; the same blind-spot shape as `consolidate()`'s in the silent-authority census
+# (decision 497a066a), a check reading green while a whole category sat outside its view.
+# Verified against the live deployed server three independent ways (real SDK round-trip,
+# raw HTTP JSON-RPC bytes, a bracket-matched substring off the raw wire text) before
+# touching this file — for the ORIGINAL three fields, in-process and wire are identical
+# (119,810 both sides); the gap was never source-vs-wire, it was fields-measured-vs-
+# fields-shipped. This is a CORRECTNESS fix, defensible on its own — the ratchet was
+# silently guarding 93% of the real surface — not a size argument (31c02dca): 119,810 ->
+# 128,672, +8,862, all of it outputSchema, none of it prose. Exact measured total, not a
+# round number.
+TOOL_CONTRACT_CEILING_CHARS = 128_672
+
+
+def _tool_chars(t: Any) -> int:
+    """One tool's own wire cost: name + description + inputSchema + outputSchema — all
+    FOUR fields a connecting client actually receives (decision 553b5173). `outputSchema`
+    is None for a tool FastMCP couldn't derive one for; never counted when absent."""
+    total = len(t.name) + len(t.description or "") + len(json.dumps(t.inputSchema))
+    if t.outputSchema is not None:
+        total += len(json.dumps(t.outputSchema))
+    return total
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
-    """Returns (total_chars, {tool_name: its own name+description+inputSchema chars})."""
+    """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
     from src import mcp_server as srv
 
     tools = await srv.mcp.list_tools()
-    per_tool: dict[str, int] = {}
-    for t in tools:
-        per_tool[t.name] = (
-            len(t.name) + len(t.description or "") + len(json.dumps(t.inputSchema))
-        )
+    per_tool = {t.name: _tool_chars(t) for t in tools}
     return sum(per_tool.values()), per_tool
+
+
+def test_tool_chars_counts_outputschema_not_just_the_original_three_fields() -> None:
+    """NEGATIVE CONTROL (2026-08-03, decision 553b5173): before this fix, the per-tool sum
+    (then inlined in `_measure_tool_contract`) counted only name+description+inputSchema —
+    two tools differing ONLY in outputSchema measured IDENTICALLY, a real ~8,862-char
+    fleet-wide undercount (98 tools) found by comparing the live deployed server against
+    this ratchet's own in-process measurement three independent ways. Pre-fix, `_tool_chars`
+    didn't exist at all — confirmed failing via git stash (AttributeError, not a semantic
+    pass)."""
+    base = {"name": "t", "description": "d", "inputSchema": {"type": "object"}}
+    without_output = SimpleNamespace(outputSchema=None, **base)
+    with_output = SimpleNamespace(
+        outputSchema={"type": "object", "title": "TOutput"}, **base)
+    assert _tool_chars(with_output) > _tool_chars(without_output)
+    assert _tool_chars(with_output) - _tool_chars(without_output) == len(
+        json.dumps(with_output.outputSchema))
 
 
 async def test_tool_contract_stays_under_the_ceiling() -> None:
