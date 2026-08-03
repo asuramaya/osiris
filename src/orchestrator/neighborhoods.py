@@ -144,14 +144,20 @@ async def discover_trees(pool: asyncpg.Pool, *, watched: list[str]) -> list[dict
     return out
 
 
-_CENSUS_SKIP = {".claude", "node_modules", ".venv", "__pycache__"}
+_CENSUS_SKIP = {".claude", "node_modules", ".venv", "venv", "__pycache__"}
 
 
 def _git_dirs(roots: list[str], *, max_depth: int = 2) -> list[Path]:
     """Every git repository under the census roots (bounded walk, sync disk IO).
 
     Depth 2 covers the operator's layout (~/code/<repo> and ~/code/REPOS/<repo>) without
-    crawling the world; hidden dirs, tool caches, and worktree nests are skipped."""
+    crawling the world; hidden dirs, tool caches, and worktree nests are skipped.
+
+    _CENSUS_SKIP matches "venv" as well as ".venv" (task #122, 2026-08-03): before this fix
+    a bare `venv` survived ONLY by accident, in layouts where it happened to sit exactly at
+    the depth-2 cutoff (e.g. `mirror/venv`) — `depth >= max_depth` returned before its own
+    children were ever iterated. A `venv` one level shallower had no such protection and
+    the walker would descend straight into it."""
     found: list[Path] = []
 
     def walk(d: Path, depth: int) -> None:
