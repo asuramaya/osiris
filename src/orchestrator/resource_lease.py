@@ -152,16 +152,50 @@ async def current_holder(pool: asyncpg.Pool, resource_id: str) -> dict[str, Any]
     return dict(row) if row is not None else None
 
 
+_MIN_REAP_AGE_SECS = 60  # a floor, not a gate -- see reap_stale's own docstring
+
+
 async def reap_stale(pool: asyncpg.Pool, *, older_than_secs: int = 3600) -> int:
     """Recover leases an agent never released (a crash, a compaction, a dropped session) —
     the active-claim partial unique index would otherwise wedge that resource_id FOREVER,
     the same risk `runner.reap_stale_runs` names for `helper_runs`. Default an hour: a
     resource lease here is agent-work-paced (a whole session touching a file), not a
     machine-timescale run, so this is deliberately looser than `helper_runs`' 900s. Returns
-    the count recovered."""
-    rows = await pool.fetch(
-        "UPDATE resource_leases SET status='reaped', released_at=now() "
-        "WHERE status='held' AND acquired_at < now() - make_interval(secs => $1) "
-        "RETURNING id", older_than_secs,
-    )
+    the count recovered.
+
+    FLOORED (2026-08-03, Thoth's Tier 1 dispatch off the silent-authority census, decision
+    497a066a): `older_than_secs` used to be fully caller-controlled with no minimum —
+    `older_than_secs=0` force-released EVERY currently-held lease fleet-wide in one call, a
+    mutual-exclusion break wearing a garbage collector's name; no gate was even needed to
+    abuse it, the parameter itself was the weapon. A numeric floor, not an authority gate
+    (ruling 577988ed: a fleet-wide single point of failure must never refuse-to-serve on a
+    check that can false-positive — an identity/actor resolution can; a deterministic clamp
+    on an integer cannot, so it can never wedge a legitimate reap). Refuses loudly below
+    `_MIN_REAP_AGE_SECS`, never silently clamps — a caller who asked for an aggressive reap
+    and got a quietly smaller one would never know its request was rewritten.
+
+    THREAD RE-SYNC (same dispatch, same pattern as `release`'s own fix, commit 510b4a9): a
+    reaped row used to leave its companion Thread's status='open' forever — correct for
+    `check_lease` (reads this table directly) but wrong for every graph-level reader
+    (orient's open_threads, recall, briefing, dossier) that only ever sees Thread objects.
+    Each reaped row now also `resolve_thread`s its paired Thread, in the SAME transaction
+    as the bulk UPDATE — both land or neither does."""
+    if older_than_secs < _MIN_REAP_AGE_SECS:
+        raise ValueError(
+            f"older_than_secs must be >= {_MIN_REAP_AGE_SECS} — reap_stale is a crash/"
+            "compaction backstop, not a way to force-release every held lease fleet-wide "
+            "in one call")
+    async with pool.acquire() as conn, conn.transaction():
+        rows = await conn.fetch(
+            "UPDATE resource_leases SET status='reaped', released_at=now() "
+            "WHERE status='held' AND acquired_at < now() - make_interval(secs => $1) "
+            "RETURNING id, thread_id, holder", older_than_secs,
+        )
+        from src.orchestrator.capture import resolve_thread
+
+        for row in rows:
+            await resolve_thread(
+                Actions(pool, conn=conn), str(row["thread_id"]),
+                because=f"resource lease reaped (stale, held by {row['holder']})",
+                source=_SOURCE)
     return len(rows)
