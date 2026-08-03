@@ -4526,6 +4526,55 @@ async def reap_stale_leases(older_than_secs: int = 3600) -> dict[str, Any]:
     return {"reaped": n, "older_than_secs": older_than_secs}
 
 
+async def _retire_stale_handoffs(
+    pool: asyncpg.Pool, actor: str, keep: uuid.UUID, now: datetime,
+) -> list[str]:
+    """THE is_handoff BLEED FIX (Thoth DM 3355, the operator's own named priority): a
+    Decision or Thread carrying `is_handoff='true'` is exempt from `_cap_text`'s 160-char
+    cap (DM 3090) so a genuine successor gets it whole — but nothing ever RETIRED the
+    exemption, so it accumulated: at boot tonight orient() carried SIX uncapped handoff
+    rows, 39.7% of its whole terse payload by measured bytes (10,395 of 26,153), most of
+    them years past the one reader they were written for.
+
+    THE FIX IS A REAL STATE TRANSITION, NOT A RENDER FILTER (Thoth's own stated lean): the
+    moment `actor` writes a NEW is_handoff record (`keep`), every OLDER is_handoff='true'
+    record from `actor`'s own LINEAGE — same seat, any earlier OR same generation, Decision
+    or Thread alike, `_generation()`'s existing root match, the identical test
+    `rank_open_threads.whose_move` already uses for 'mine to act' — gets a fresh
+    `is_handoff='false'` assertion. `current_assertions` resolves the newer row as the
+    winner, so `_cap_text`'s exemption check (`row.get('is_handoff') == 'true'`) stops
+    matching it from this call forward: it renders exactly like every other summary from
+    then on, still fully readable via recall()/search(), just no longer exempt.
+
+    THE ACCEPTANCE TEST THIS PRESERVES BY CONSTRUCTION: a fresh successor's FIRST orient()
+    call happens BEFORE they have written their own handoff — at that moment their
+    predecessor's record is still the LATEST for that lineage, still is_handoff='true',
+    still delivered whole. Only once THIS successor reaches their OWN settle() (meaning
+    they already read, worked, and are now leaving their own note) does the one before it
+    retire — by which point the intended reader already had it for their whole reign.
+    Cross-lineage records are NEVER touched: Khnum's handoff is never retired by Sekhmet's.
+
+    Never touches `summary`/`kind`/anything else on the retired object — same append-only
+    discipline as `amend_decision`/`amend_practice`, an independent property, not a rewrite.
+    Returns the short ids of every record retired, for the caller's own receipt — a silent
+    mutation behind an already-silent bleed would just be a quieter version of the same
+    disease."""
+    from src.orchestrator.agents import _generation
+
+    root = _generation(actor)[0]
+    rows = await pool.fetch(
+        "SELECT object_id, source_id FROM current_assertions "
+        "WHERE name='is_handoff' AND value #>> '{}' = 'true' AND object_id != $1", keep)
+    retired: list[str] = []
+    actions = Actions(pool)
+    for r in rows:
+        if _generation(r["source_id"])[0] == root:
+            await actions.assert_property(r["object_id"], "is_handoff", "false", actor, now,
+                                          0.9, evidence_class="self_declared")
+            retired.append(str(r["object_id"])[:8])
+    return retired
+
+
 @mcp.tool()
 async def settle(
     decisions: list[dict[str, Any]] | None = None,
@@ -4557,8 +4606,16 @@ async def settle(
 
     `is_handoff: true` on a decision or thread item MINTS A STRUCTURED HANDOFF MARKER (a
     typed property, not a summary text the reader greps for) on that object: your
-    successor's orient() finds it directly. Idempotent and safe to call repeatedly through
-    a session — later calls only add to what's already written, never duplicate it.
+    successor's orient() finds it directly, whole, exempt from the usual 160-char cap.
+    Idempotent and safe to call repeatedly through a session — later calls only add to
+    what's already written, never duplicate it. THE EXEMPTION RETIRES ITSELF (Thoth DM
+    3355, the operator's own named priority, the is_handoff bleed): writing a NEW
+    is_handoff record retires every OLDER
+    one from your own lineage (`_retire_stale_handoffs`) — your own predecessor's note has
+    already served the one reader it was for (you), so it stops riding every future
+    orient() at full length. A retired record carries `retired_handoffs` on this call's own
+    receipt when it fires; it is never deleted, never inaccessible — recall()/search() see
+    it exactly as before, only the cap-exemption is gone.
 
     SURFACE also runs `git status --porcelain` (`uncommitted_git_files` in the receipt) —
     the one box that isn't in the graph. PASS `repo_path` NAMING YOUR CODE REPO — your
@@ -4620,10 +4677,15 @@ async def settle(
         except ValueError as e:
             rejected.append({"kind": "decision", "summary": summary, "error": str(e)})
             continue
+        retired_handoffs: list[str] = []
         if is_handoff:
             await Actions(pool).assert_property(did, "is_handoff", "true", actor, now, 0.9,
                                                 evidence_class="self_declared")
-        accepted["decisions"].append({"id": str(did)[:8], "is_handoff": is_handoff})
+            retired_handoffs = await _retire_stale_handoffs(pool, actor, did, now)
+        accepted["decisions"].append({
+            "id": str(did)[:8], "is_handoff": is_handoff,
+            **({"retired_handoffs": retired_handoffs} if retired_handoffs else {}),
+        })
         for ref in (resolves_arg if isinstance(resolves_arg, list) else
                     [resolves_arg] if resolves_arg else []):
             tid = await capture._find_thread(pool, ref, require_identifier=True)
@@ -4640,10 +4702,15 @@ async def settle(
         except ValueError as e:
             rejected.append({"kind": "thread", "summary": summary, "error": str(e)})
             continue
+        retired_handoffs = []
         if is_handoff:
             await Actions(pool).assert_property(tid, "is_handoff", "true", actor, now, 0.9,
                                                 evidence_class="self_declared")
-        accepted["threads_opened"].append({"id": str(tid)[:8], "is_handoff": is_handoff})
+            retired_handoffs = await _retire_stale_handoffs(pool, actor, tid, now)
+        accepted["threads_opened"].append({
+            "id": str(tid)[:8], "is_handoff": is_handoff,
+            **({"retired_handoffs": retired_handoffs} if retired_handoffs else {}),
+        })
     cross_wired = 0
     for item in threads_resolve or []:
         item = dict(item)

@@ -778,6 +778,158 @@ async def test_settle_tool_handoff_marker_is_found_by_orient_via_structured_prop
     assert "settled structurally" in " ".join(n["text"] for n in note["notes"])
 
 
+# ═══ THE is_handoff BLEED FIX (Thoth DM 3355) — retirement as a real state transition ═════
+# Measured before this fix: orient()'s own terse payload carried 6 uncapped is_handoff rows,
+# 39.7% of its total bytes (10,395 of 26,153), because nothing ever retired the exemption
+# DM 3090 granted. _retire_stale_handoffs (mcp_server.py) fires on every NEW is_handoff
+# write: same-lineage earlier records (_generation()'s own root match) get a fresh
+# is_handoff='false' assertion, so _cap_text's exemption stops matching them.
+
+class _FakeCtx:
+    class request_context:  # noqa: N801
+        request = None
+        session = object()
+
+
+async def _settle_as(pool: Any, agent_id: str, **kwargs: Any) -> dict[str, Any]:
+    """Mount `agent_id` on a throwaway ctx, call settle(**kwargs), release the ctx. Mirrors
+    test_settle_tool_handoff_marker_is_found_by_orient_via_structured_property's own
+    pattern, factored out since this block calls it many times."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    ctx = _FakeCtx()
+    saved_pool = srv._pool
+    srv._pool = pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=agent_id, session=agent_id, project="handoffbleed", model=None, cwd=None)
+    try:
+        return await srv.settle(ctx=ctx, **kwargs)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+
+async def _is_handoff_value(pool: Any, short_id: str) -> str | None:
+    """The CURRENT winner only — same resolution every composition in this codebase uses
+    (ORDER BY confidence DESC, observed_at DESC LIMIT 1), never a bare unordered fetchval:
+    is_handoff can carry competing assertions from TWO sources (the original author's
+    'true', a later retirement's 'false') that legitimately coexist in current_assertions
+    — only this ordering picks the one _cap_text/compositions actually see."""
+    return await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE a.name='is_handoff' AND o.id::text LIKE $1 || '%' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", short_id)
+
+
+async def test_settle_retires_a_same_lineage_earlier_handoff(actions: Actions) -> None:
+    gen1 = await _settle_as(
+        actions.pool, "agent:bleedone",
+        decisions=[{"summary": "bleedone's own state of the board", "kind": "choice",
+                   "is_handoff": True}])
+    d1 = gen1["accepted"]["decisions"][0]["id"]
+    assert await _is_handoff_value(actions.pool, d1) == "true"
+
+    gen2 = await _settle_as(
+        actions.pool, "agent:bleedone-ii",
+        threads_open=[{"summary": "bleedone-ii's own state of the board",
+                       "kind": "obligation", "is_handoff": True}])
+    t2 = gen2["accepted"]["threads_opened"][0]["id"]
+
+    # the receipt NAMES what it retired — never a silent mutation
+    assert gen2["accepted"]["threads_opened"][0]["retired_handoffs"] == [d1]
+    # and the retirement is REAL, not just claimed by the receipt
+    assert await _is_handoff_value(actions.pool, d1) == "false"
+    assert await _is_handoff_value(actions.pool, t2) == "true"  # the fresh one stands
+
+
+async def test_settle_never_retires_a_different_lineages_handoff(actions: Actions) -> None:
+    a = await _settle_as(
+        actions.pool, "agent:bleedalpha",
+        decisions=[{"summary": "alpha's own state of the board", "kind": "choice",
+                   "is_handoff": True}])
+    da = a["accepted"]["decisions"][0]["id"]
+
+    b = await _settle_as(
+        actions.pool, "agent:bleedbeta",
+        decisions=[{"summary": "beta's own, unrelated state of the board", "kind": "choice",
+                   "is_handoff": True}])
+    assert b["accepted"]["decisions"][0].get("retired_handoffs", []) == []
+    assert await _is_handoff_value(actions.pool, da) == "true"  # untouched, different lineage
+
+
+async def test_settle_retires_across_decision_and_thread_types(actions: Actions) -> None:
+    """The real specimen this session measured: Sekhmet V's THREAD-shaped handoff (6c4d6669)
+    was never retired by Sekhmet VIII's DECISION-shaped one, because nothing was watching
+    across the type boundary. Retirement must not care which shape either side is."""
+    gen1 = await _settle_as(
+        actions.pool, "agent:bleedcross",
+        threads_open=[{"summary": "bleedcross's own thread-shaped handoff",
+                       "kind": "obligation", "is_handoff": True}])
+    t1 = gen1["accepted"]["threads_opened"][0]["id"]
+
+    gen2 = await _settle_as(
+        actions.pool, "agent:bleedcross-ii",
+        decisions=[{"summary": "bleedcross-ii's own decision-shaped handoff",
+                   "kind": "choice", "is_handoff": True}])
+    assert gen2["accepted"]["decisions"][0]["retired_handoffs"] == [t1]
+    assert await _is_handoff_value(actions.pool, t1) == "false"
+
+
+async def test_settle_retirement_leaves_the_record_fully_readable(actions: Actions) -> None:
+    """Retirement touches ONE property, never the record itself — recall() must still
+    return the whole thing, same discipline as amend_decision/amend_practice."""
+    from src.orchestrator.recall import recall
+
+    gen1 = await _settle_as(
+        actions.pool, "agent:bleedread",
+        decisions=[{"summary": "bleedread's own state of the board, still fully readable",
+                   "kind": "choice", "is_handoff": True}])
+    d1 = gen1["accepted"]["decisions"][0]["id"]
+    await _settle_as(
+        actions.pool, "agent:bleedread-ii",
+        decisions=[{"summary": "bleedread-ii's own note", "kind": "choice",
+                   "is_handoff": True}])
+
+    rec = await recall(actions.pool, d1)
+    assert rec["summary"] == "bleedread's own state of the board, still fully readable"
+    assert rec["is_handoff"] == "false"
+
+
+async def test_settle_handoff_survives_whole_for_the_immediate_successors_first_orient(
+    actions: Actions,
+) -> None:
+    """THE NON-NEGOTIABLE ACCEPTANCE TEST (Thoth DM 3355, verbatim): 'a fresh seat's
+    orient() must still receive its OWN IMMEDIATE PREDECESSOR'S handoff WHOLE.' The
+    successor's FIRST orient() happens BEFORE it has written its own handoff — retirement
+    can only ever fire from a LATER settle(), so the first read is provably unaffected."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.compositions import seed_default_compositions
+
+    await seed_default_compositions(actions.pool)
+    long_handoff = ("thirteen wrong premises, confessed at length so my heir does not "
+                    "repeat them, on and on past the old 160-char cap ") * 6
+    await _settle_as(
+        actions.pool, "agent:bleedheir1",
+        decisions=[{"summary": long_handoff, "kind": "choice", "is_handoff": True,
+                   "repo": "handoffbleed"}])
+
+    ctx = _FakeCtx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:bleedheir1-ii", session="bleedheir1-ii", project="handoffbleed",
+        model=None, cwd=None, succeeded_from="agent:bleedheir1")
+    try:
+        out = await srv.orient(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    row = next(r for r in out["recent_decisions"] if r["summary"].startswith("thirteen"))
+    assert row["summary"] == long_handoff  # whole — no "…" marker, not yet retired
+
+
 async def test_settle_tool_resolves_the_seat_office_over_a_corrected_mount_cwd(
     actions: Actions, tmp_path: Path, monkeypatch: Any,
 ) -> None:
