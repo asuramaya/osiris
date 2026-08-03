@@ -990,6 +990,20 @@ async def _current_owner(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | None
     )
 
 
+async def _thread_resolved_in(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | None:
+    """Whether a thread was ALREADY resolved before the current call — `resolved_in` is
+    stamped both by `resolve_thread` itself and by record_decision's own `resolves=`
+    mechanism (capture.py:450, the same shape, deliberately). Purely INFORMATIONAL (2026-
+    08-03): the MCP tool's receipt uses this to tell a caller plainly when their call landed
+    on an already-resolved thread, rather than looking identical to a fresh close — it does
+    NOT gate or skip anything; resolve_thread always writes regardless of what this reads."""
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='resolved_in' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        thread_id,
+    )
+
+
 async def _find_thread(
     pool: asyncpg.Pool, ref: str, *, require_identifier: bool = False,
 ) -> uuid.UUID | None:
@@ -1105,7 +1119,24 @@ async def resolve_thread(
     (unchanged), else closed_by to the resolving agent (`source`), whether `artifact` was
     unresolvable free text or absent entirely. A weak edge that always exists beats a
     strong one that exists a fifth of the time — the READ path can traverse the weak one
-    and cannot traverse absence."""
+    and cannot traverse absence.
+
+    RE-RESOLVING IS ALLOWED, NOT REFUSED, ON PURPOSE (2026-08-03, Thoth's Phase 0 Tier 2
+    dispatch, msg 3354, corrected from an earlier, too-broad draft of this note): `_find_
+    thread` matches on IDENTITY only, never status. A second call on an already-resolved
+    thread is NOT a mistake to guard against — Phase 1a's own multi-witness design depends
+    on it (test_two_strong_edges_still_report_strong: record_decision's `resolves=` closes
+    a thread with only an `answers` edge; a LATER resolve_thread(artifact=...) call naming
+    the real closing commit/decision is how the strong `resolved_by` witness gets attached
+    after the fact, and must not be refused). `because`/`resolved_artifact` follow the same
+    latest-write-wins model as every other property this kernel writes — the SECOND call's
+    text becomes the new CURRENT value, the first is not lost (still readable via the non-
+    current assertion rows, `recall`'s own decision/thread addenda pattern), never a claim
+    that PAST reasoning survives at the CURRENT read. `resolved_by`/`closed_by` EDGES,
+    unlike the property, accumulate per distinct target (check-then-create) rather than
+    replacing — a thread can carry more than one closure witness. The MCP tool's receipt
+    names when a call landed on an already-resolved thread, so a caller is told plainly
+    rather than left to assume this was the first close."""
     tid = await _find_thread(actions.pool, ref)
     if tid is None:
         return None

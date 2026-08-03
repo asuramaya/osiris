@@ -112,7 +112,21 @@ import json
 # MCP-facing docstring to the category rule's lean end first (dropped the dated citation and
 # the mechanism-name aside, kept only what it refuses and why); 120,081 -> 120,268, +187.
 # Exact measured total, not a round number.
-TOOL_CONTRACT_CEILING_CHARS = 120_268
+#
+# RAISED, resolve_thread's misleading error text (2026-08-03, same Tier 2 dispatch): the
+# tool's own error text ("no open thread matches") always implied a status check that
+# never ran — `_find_thread` matches by identity only. FIRST DRAFT of this fix built a
+# gate (refuse/no-op a repeat close) reasoning it must be a mistake to guard against;
+# MEASURED against test_two_strong_edges_still_report_strong (Phase 1a's own multi-witness
+# design: a SECOND resolve_thread(artifact=...) call legitimately attaches a real closure
+# witness after record_decision's `resolves=` closed a thread with only an `answers`
+# edge) and found the gate broke it — a real premise refutation, not a hypothetical one.
+# Corrected to cure B (honesty): re-resolving is allowed, error text dropped the
+# misleading "open", and the receipt names plainly when a call landed on an already-
+# resolved thread instead of looking identical to a fresh close. Trimmed the MCP-facing
+# docstring to the category rule's lean end twice (once per draft); 120,532 -> 120,693,
+# +161 net for the corrected, final design. Exact measured total, not a round number.
+TOOL_CONTRACT_CEILING_CHARS = 120_693
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:

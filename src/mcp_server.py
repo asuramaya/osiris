@@ -4331,15 +4331,30 @@ async def resolve_thread(
     never finds (022bd24a). Put the evidence THERE and keep `because` short. The receipt's
     `resolved_by` field CONFIRMS whether that edge actually landed — an artifact that only
     matched free text (a file:line, an unresolvable pointer) says so plainly rather than
-    leaving the caller to guess from a conditional sentence."""
+    leaving the caller to guess from a conditional sentence.
+    RE-RESOLVING IS ALLOWED, NOT REFUSED, ON PURPOSE — `ref` is matched by identity only,
+    never status, so a second call on an already-resolved thread is how a later, more
+    specific closure witness gets attached. because/resolved_artifact become this call's
+    own text (latest wins, earlier reasoning stays in history, not current). The receipt
+    names it plainly when a call landed on an already-resolved thread."""
     pool = await _pool_get()
+    probe_tid = await capture._find_thread(pool, ref)
+    was_already_resolved = (
+        probe_tid is not None
+        and await capture._thread_resolved_in(pool, probe_tid) is not None)
     tid = await capture.resolve_thread(
         Actions(pool), ref, because=because, artifact=artifact,
         source=await _actor_for(ctx, subagent_id, subagent_type)
     )
     if tid is None:
-        return {"error": f"no open thread matches {ref!r}"}
+        return {"error": f"no thread matches {ref!r}"}
     out = {"id": str(tid), "status": "resolved"}
+    if was_already_resolved:
+        out["note"] = ("this thread was already resolved before this call — "
+                       "because/resolved_artifact now reflect THIS call's own text, "
+                       "not the original close; earlier reasoning is still readable in "
+                       "the graph's history, not overwritten there, just not what a "
+                       "current-value read shows anymore")
     if artifact:
         out["artifact"] = f"{artifact} — kept as resolved_artifact"
         target = await pool.fetchrow(

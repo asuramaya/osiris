@@ -765,6 +765,82 @@ async def test_resolve_thread_closed_by_is_idempotent_on_a_repeat_close(
     assert count == 1
 
 
+async def test_resolve_thread_repeat_close_updates_current_but_keeps_history(
+    actions: Actions,
+) -> None:
+    """CORRECTED PREMISE (2026-08-03, Thoth's Phase 0 Tier 2 dispatch, msg 3354): an earlier
+    draft of this fix REFUSED (silently, via a no-op) a second resolve_thread call on an
+    already-resolved thread, reasoning it must be a mistake to guard against. That broke a
+    load-bearing existing feature — test_two_strong_edges_still_report_strong depends on a
+    SECOND resolve_thread(artifact=...) call attaching a real closure witness after
+    record_decision's own `resolves=` closed a thread with only an `answers` edge. Measured,
+    not assumed: git-stashing that first draft's guard and re-running the two-strong-edges
+    test confirmed it broke. The actual fix is honesty, not a gate — a second call's
+    because/artifact DO become the new current values (same latest-write-wins model every
+    property write in this kernel follows), but the FIRST call's values are never deleted,
+    only superseded: still readable as a non-current assertion row, `recall`'s own
+    decision/thread-addenda pattern for exactly this shape."""
+    t = await open_thread(actions, "a thread resolved twice, on purpose")
+    d1 = await record_decision(actions, "the first closer named", kind="decision")
+    await resolve_thread(actions, str(t), because="the first reason", artifact=str(d1)[:8],
+                         source="agent:closer-e")
+    d2 = await record_decision(actions, "the second closer named", kind="decision")
+    tid_again = await resolve_thread(actions, str(t), because="the second reason",
+                                     artifact=str(d2)[:8], source="agent:closer-f")
+    assert tid_again == t
+    props = await _props(actions.pool, t)
+    assert props["resolved_because"] == "the second reason"      # latest wins, at CURRENT
+    assert props["resolved_artifact"] == str(d2)[:8]
+    first_reason_still_readable = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM assertions a WHERE a.object_id=$1 "
+        "AND a.name='resolved_because' AND a.value #>> '{}' = 'the first reason'", t)
+    assert first_reason_still_readable == "the first reason"     # never deleted, just not current
+    # BOTH artifacts' resolved_by edges accumulate — Phase 1a's multi-witness design,
+    # the exact behavior test_two_strong_edges_still_report_strong depends on.
+    edge_targets = {r["to_id"] for r in await actions.pool.fetch(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='resolved_by'", t)}
+    assert edge_targets == {d1, d2}
+
+
+async def test_resolve_thread_tool_receipt_names_an_already_resolved_thread_honestly(
+    actions: Actions,
+) -> None:
+    """The receipt no longer looks identical whether this was the first close or the
+    fifth — `note` says so plainly instead of leaving the caller to assume a fresh close,
+    and the second call still SUCCEEDS (status: resolved), it is never refused."""
+    from src import mcp_server as srv
+
+    t = await open_thread(actions, "a thread closed twice through the MCP tool")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        first = await srv.resolve_thread(str(t), because="the original close")
+        second = await srv.resolve_thread(str(t), because="a later, more specific close")
+    finally:
+        srv._pool = saved_pool
+    assert first["status"] == "resolved"
+    assert "note" not in first
+    assert second["status"] == "resolved"                # still succeeds, never refused
+    assert "already resolved before this call" in second["note"]
+
+
+async def test_resolve_thread_refuses_cleanly_when_nothing_matches_at_all(
+    actions: Actions,
+) -> None:
+    """The corrected error text drops the misleading word 'open' — `_find_thread` was
+    never status-gated, so the old wording ('no OPEN thread matches') implied a rule that
+    did not exist, exactly the defect this whole fix responds to (Thoth msg 3354)."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.resolve_thread("no-such-thread-at-all-zzz")
+    finally:
+        srv._pool = saved_pool
+    assert out == {"error": "no thread matches 'no-such-thread-at-all-zzz'"}
+
+
 async def test_resolve_thread_closed_by_reuses_an_already_mounted_agent(
     actions: Actions,
 ) -> None:
