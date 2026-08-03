@@ -766,7 +766,7 @@ async def practices(
 
 
 @mcp.tool()
-async def provenance(ref: str, limit: int = 200, ctx: Context | None = None) -> dict[str, Any]:
+async def trace_evidence(ref: str, limit: int = 200, ctx: Context | None = None) -> dict[str, Any]:
     """ONE object's full provenance timeline — how the graph came to believe what it
     believes about it. Every assertion (with supersession fate), every link (both
     directions, retractions marked), every kernel event, in observed order, each carrying
@@ -927,7 +927,7 @@ async def smoke() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def whois(ref: str) -> dict[str, Any]:
+async def identify_agent(ref: str) -> dict[str, Any]:
     """One coherent answer about an agent, a seat, or a cwd — 'ref' is sniffed: an `agent:` id,
     a `seat:` id, a bare handle, or an absolute cwd path (`/...` or `~/...`). Always returns
     {ref, resolved, matches: [...]} — an agent/seat/handle resolves to 0-or-1 match (one
@@ -3007,7 +3007,8 @@ async def inbox(project: str | None = None, peek: bool = False,
 
 
 @mcp.tool()
-async def moot_brief(message_id: int, because: str, ctx: Context | None = None) -> dict[str, Any]:
+async def dismiss_brief(message_id: int, because: str,
+                        ctx: Context | None = None) -> dict[str, Any]:
     """MOOT an operator-desk brief — annotate it moot-with-a-reason ('true when sent; root
     cause fixed in <commit>') so the desk renders it collapsed under your note instead of
     shouting a dead alarm. NEVER a settle: dismissing stays exclusively the human's word
@@ -3150,8 +3151,8 @@ async def merge(dupe: str, into: str, evidence: str,
     two labels of the SAME type ONE THING: `dupe` folds into `into`. Replaces
     fold_agent/fold_seat/fold_project as the one door for all three; type is read off
     `dupe`'s own form ('agent:...' / 'seat:...' / anything else -> SoftwareProject).
-    Append-only (a 'merge' event + the merged_into projection — reversible via `unmerge`,
-    nothing deleted), authorship untouched (the dupe's own words stay stamped with its id;
+    Append-only (a 'merge' event + the merged_into projection, nothing deleted),
+    authorship untouched (the dupe's own words stay stamped with its id;
     provenance resolves at read time), and each type's own ESTATE follows: for an Agent,
     unread mail/mount rows/open threads land on `into`'s living head; for a Seat, active
     holders and managed_by edges move too (a Seat merge's whole reason to exist, unlike an
@@ -3706,14 +3707,15 @@ async def lift(ref: str, handle: str, subagent_id: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
     """Pull a NAMED, QUIET rogue out of its ad hoc cwd and into a clean osiris office — the
     P2V move: import a running-but-unmanaged instance, preserve its state,
-    give it a clean managed identity. Composes `whois(ref)` to resolve the target (refuses on
-    0 matches, on >1 — an ambiguous multi-tenant cwd, name a specific `agent:` id instead —
-    and on a LIVE match: moving a live seat splits its running session's history between two
-    homes, close its tab first), `claim_name(handle)` (propagating its own real refusals: a
-    visitor, a name held live elsewhere, a cross-house collision), and `establish_office`
-    (the actual move). `ref` accepts anything `whois()` does — an `agent:` id, a `seat:` id, a
-    bare handle, or an absolute cwd path. The receipt's `verified` field is a FRESH post-write
-    `whois()` read, never an echo of what the earlier steps each individually claimed.
+    give it a clean managed identity. Composes `identify_agent(ref)` to resolve the target
+    (refuses on 0 matches, on >1 — an ambiguous multi-tenant cwd, name a specific `agent:` id
+    instead — and on a LIVE match: moving a live seat splits its running session's history
+    between two homes, close its tab first), `claim_name(handle)` (propagating its own real
+    refusals: a visitor, a name held live elsewhere, a cross-house collision), and
+    `establish_office` (the actual move). `ref` accepts anything `identify_agent()` does — an
+    `agent:` id, a `seat:` id, a bare handle, or an absolute cwd path. The receipt's `verified`
+    field is a FRESH post-write `identify_agent()` read, never an echo of what the earlier
+    steps each individually claimed.
 
     SELF-LIFT IS STRUCTURALLY IMPOSSIBLE, not just refused: your own session's `last_seen` is
     kept perpetually fresh by your own terminal's statusline heartbeat, so you can never

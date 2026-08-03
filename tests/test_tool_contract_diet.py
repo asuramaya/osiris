@@ -265,7 +265,22 @@ def _tool_chars(t: Any) -> int:
 # covered "written, you didn't hear back" and "never written," and a caller could not
 # tell them apart without this guarantee). 132,836 -> 133,621, +785. Exact measured
 # total via this file's own `_measure_tool_contract`, not a round number.
-TOOL_CONTRACT_CEILING_CHARS = 133_621
+#
+# RAISED, Thoth's naming-pattern falsification test (2026-08-03, DM 3541, reply to Seshat's
+# control-validated phase-6 sweep, decision e9ad0cc8): provenance/whois/moot_brief all failed
+# intent-search on their current bare-noun names (0/3, 3/3-miss, 2/3-miss respectively).
+# Re-proposed as verb+self-typing-target per design law 3d4a792e — NOT yet final, Thoth's own
+# words ("candidates to beat, not to adopt") — built and gated so the pattern can be tested
+# empirically post-deploy, the same protocol the original renames used.
+# provenance->trace_evidence (888->900, +12), whois->identify_agent (757->784, +27, also
+# fixing lift()'s own three cross-references to the old name), moot_brief->dismiss_brief
+# (729->738, +9). SAME DISPATCH also trimmed merge's docstring (2025->1998, -27): it named
+# `unmerge` and said "reversible via unmerge" in its own prose — Seshat's measurement showed
+# this was CANNIBALIZING unmerge's own findability ("undo a merge that turned out wrong"
+# ranked merge #1 and unmerge not at all, even at max_results=20). Net: 133,621 -> 133,673,
+# +52, no tool added or removed (100 -> 100, a rename ratchet). Exact measured total via this
+# file's own `_measure_tool_contract`, not a round number.
+TOOL_CONTRACT_CEILING_CHARS = 133_673
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
