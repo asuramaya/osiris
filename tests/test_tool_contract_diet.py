@@ -233,7 +233,27 @@ def _tool_chars(t: Any) -> int:
 # from 3,098 to 2,181 chars, settle's new section cut by more than half) before raising this —
 # the remaining growth is a genuinely new capability, not unpruned prose. 120,081 -> 122,936,
 # +2,855. Exact measured total, not a round number.
-TOOL_CONTRACT_CEILING_CHARS = 128_672
+#
+# RESOLVED AT A FOUR-WAY MERGE, 2026-08-03 (Thoth LXXI, second such merge in one session).
+# FOUR branches, FOUR ceilings, every one honestly measured and every one wrong for the
+# combined tree: seat/imhotep 128,672 (the outputSchema fix, 98 tools), khnum-reconcile127
+# 120,938 (reconcile_merge, +1 tool, measured with the OLD three-field formula because it
+# forked before the fix), seat/sekhmet 122,936 (ack_handoff, also pre-fix formula),
+# sekhmet-task122 119,810 (untouched). TWO OF THOSE NUMBERS WERE COMPUTED BY A FORMULA THAT
+# WAS ITSELF WRONG — the branches forked before outputSchema was known to exist.
+#
+# TRUE COMBINED, measured by THIS FILE'S OWN _tool_chars on the merged tree: 100 tools,
+# 132,836 chars. That is +4,164 over Imhotep's 98-tool four-field baseline, for exactly two
+# new verbs (reconcile_merge, ack_handoff) — proportionate, and NOT prose creep.
+#
+# NOTE FOR ANYONE RE-DERIVING THIS: an ad-hoc script using json.dumps with compact separators
+# read 129,245 on the same tree. THE DIFFERENCE IS SERIALIZATION, NOT SURFACE. Only this
+# file's own measurement is authoritative for this ceiling, because only it is what the
+# ratchet actually compares against. Do not set this constant from any other instrument.
+#
+# REPORTED, NEVER ARGUED FROM (operator ruling 31c02dca): this number exists to catch
+# regrowth. It is not a justification for any build and must never be cited as one.
+TOOL_CONTRACT_CEILING_CHARS = 132_836
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -284,10 +304,9 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     — the same pre-existing drift the char ceiling above was just found and raised for.
     100 -> 98 (2026-08-03, ruling 31c02dca): fold_agent/unfold_agent/fold_seat/fold_project
     retired in favor of merge/unmerge — a real shrink in the surface, not drift.
-    98 -> 99 (2026-08-03, task #127): reconcile_merge, the repair door's first-ever MCP
-    exposure for any type."""
+    98 -> 100 (2026-08-03, ONE MERGE, TWO INDEPENDENT ADDITIONS): reconcile_merge (task #127,
+    the fold family's first-ever repair door for any type) and ack_handoff (the is_handoff
+    read-receipt redesign). Neither author could see the other's branch; this file is again
+    the only place the combined surface exists."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 99
-    100 -> 101 (2026-08-03): `ack_handoff`, the is_handoff read-receipt redesign."""
-    _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 101
+    assert len(per_tool) == 100
