@@ -794,7 +794,10 @@ async def graph_lint(stale_days: int = 14, check: str | None = None, limit: int 
     duties older than `stale_days`), attribution anomalies (writes from agent ids the graph
     never registered — the impersonation class), phantom twins (an anonymous un-spawned
     agent mounted at a Seat's office beside a different holder lineage), parallel lives (a
-    generation minted while a different door of its own lineage still pulsed).
+    generation minted while a different door of its own lineage still pulsed), duplicate
+    works_in (a currently-live agent carrying more than one simultaneously-live works_in
+    edge — orient() resolves through exactly one, so a live lineage can hide its own
+    threads/decisions from itself).
     Findings are TESTIMONY for a mind to judge, not verdicts to auto-apply; heal with
     compensating events, never DELETE (constitution 3).
 
@@ -3424,6 +3427,30 @@ async def attach_seat(
     from src.orchestrator.seats import attach_seat as _attach
     return await _attach(Actions(await _pool_get()), worker, manager, evidence=evidence,
                          actor=ident.agent_id)
+
+
+@mcp.tool()
+async def invalidate_works_in(stale_project: str, because: str,
+                              ctx: Context | None = None) -> dict[str, Any]:
+    """Drop ONE OF YOUR OWN duplicate works_in edges — for a live agent carrying two
+    simultaneously-live works_in edges (a stale fork/rename side surviving beside the
+    current one). orient() resolves through whichever edge wins, so a duplicate is not
+    cosmetic — it can hide your own lineage's threads/decisions from you, live.
+    SELF-SCOPED like correct_house, never operator-fenced: no `agent_id` parameter — the
+    caller IS the target, never another agent's edge.
+
+    Refuses LOUDLY on: blank `because`; a caller not mounted as an active Agent;
+    `stale_project` resolving ambiguously (never guesses) or to no SoftwareProject at
+    all; no active works_in edge from you to it; or `stale_project` naming your ONLY
+    live works_in edge — dropping your last project is amputation, not cleanup; this
+    verb is for duplicates only."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — invalidating a works_in edge is a deliberate "
+                         "act on the record", "why": _anchorless(ctx)}
+    from src.orchestrator.agents import invalidate_works_in as _invalidate_works_in
+    return await _invalidate_works_in(Actions(await _pool_get()), ident.agent_id,
+                                      stale_project, because=because, actor=ident.agent_id)
 
 
 @mcp.tool()
