@@ -1,0 +1,8 @@
+# tests/test_tool_contract_diet.py's TOOL_CONTRACT_CEILING_CHARS is a single hand-authored
+# constant every MCP-tool-touching branch bumps — two parallel branches raising it from the
+# same base collide on this exact line (dispatch 26686b77, Thoth msg 3658). The registered
+# driver (scripts/reconcile_tool_contract_ceiling.py, self-installed by tests/conftest.py's
+# pytest_configure — a plain `git config`, so `.gitattributes` alone is NOT enough on a
+# fresh clone) re-measures the merged tree instead of guessing between the two conflicting
+# values.
+tests/test_tool_contract_diet.py merge=tool_contract_ceiling

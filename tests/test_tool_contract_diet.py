@@ -311,6 +311,17 @@ def _tool_chars(t: Any) -> int:
 # docstring; invalidate_works_in's own docstring untouched, only its code grew. +112 alone.
 #
 # 135,077 -> 135,404. 101 -> 101 tools, no tool added or removed.
+#
+# THIS COLLISION IS NOW STRUCTURAL, NOT JUST DOCUMENTED (dispatch 26686b77, Thoth msg
+# 3658): the merge driver registered for this file (.gitattributes + self-installed by
+# tests/conftest.py's pytest_configure, see scripts/reconcile_tool_contract_ceiling.py's
+# own docstring for the full reasoning) re-measures this constant on the merged tree
+# whenever two branches raise it from the same base — the exact fix above, automated at
+# the collision point, never by comparing the two conflicting numbers. If you land here
+# because a raw conflict survived anyway (the driver couldn't recognize the shape, or
+# isn't registered — run pytest once, which installs it), resolve it BY HAND the same
+# way: `uv run python scripts/measure_tool_contract.py`, never by picking the larger of
+# the two values.
 TOOL_CONTRACT_CEILING_CHARS = 135_404
 
 
