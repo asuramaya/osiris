@@ -82,7 +82,7 @@ async def test_lone_co_occurrence_is_a_speculative_leaf(actions: Actions, case_i
 async def test_derived_handle_is_a_speculative_leaf(actions: Actions, case_id: str) -> None:
     cid = uuid.UUID(case_id)
     seed = await _seed(actions, cid, "Email", "priya@kowalski.dev")
-    guess = await _child(actions, cid, "Username", "hector")
+    guess = await _child(actions, cid, "Username", "priya")
     await _link(actions, cid, seed, guess, "derived_handle", EvidenceClass.DERIVED)
     assert not await is_expandable(actions.pool, cid, guess)
 

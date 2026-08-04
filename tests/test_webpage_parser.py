@@ -12,7 +12,7 @@ def _inp(url: str) -> InputObject:
 
 def test_parse_webpage_extracts_identity_signals() -> None:
     html = """
-    <html><head><title>  Hector — home  </title></head><body>
+    <html><head><title>  Priya — home  </title></head><body>
       <a rel="me" href="https://github.com/asuramaya">github</a>
       <a rel="me noopener" href="https://mastodon.social/@asuramaya">fedi</a>
       <a href="mailto:priya@kowalski.dev?subject=hi">email me</a>
@@ -39,7 +39,7 @@ def test_parse_webpage_extracts_identity_signals() -> None:
     assert ("URL", "https://example.com/some/article") not in objs
     # page title labels the fetched URL
     title_obj = objs[("URL", "https://asuramaya.com")]
-    assert title_obj.properties["page_title"] == "Hector — home"
+    assert title_obj.properties["page_title"] == "Priya — home"
 
     rel_me_links = [link for link in r.links if link.type == "rel_me"]
     assert len(rel_me_links) == 2

@@ -87,8 +87,8 @@ def test_url_account_rejects_platform_reserved_pages() -> None:
 
 def test_email_handles_skips_common_names() -> None:
     from src.parsers.handles import parse_email_handles
-    # "hector" is a common first name -> no discriminating power, not enumerated
-    r = parse_email_handles({}, _inp("Email", "priya@kowalski.dev"))
+    # "carlos" is a common first name -> no discriminating power, not enumerated
+    r = parse_email_handles({}, _inp("Email", "carlos@asuramaya.com"))
     assert {o.canonical for o in r.objects} == set()
     # a distinctive local part still derives handles
     r2 = parse_email_handles({}, _inp("Email", "dakota.jm@gmail.com"))

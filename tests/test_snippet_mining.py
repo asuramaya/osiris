@@ -42,7 +42,7 @@ def test_snippet_mining_emits_speculative_co_occurs() -> None:
         "selector": "priya@kowalski.dev",
         "dork_results": [
             {"query": '"priya@kowalski.dev"', "results": [
-                {"url": "https://blog.example/post", "title": "Hector (@asuramaya)",
+                {"url": "https://blog.example/post", "title": "Priya (@asuramaya)",
                  "content": "reach me at priya@kowalski.dev or github.com/asuramaya",
                  "engine": "ddg"},
             ]},
