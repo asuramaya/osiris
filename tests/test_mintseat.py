@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from src.actions.core import Actions
 from src.orchestrator.greatfold import fold_census
-from src.orchestrator.mintseat import _resolve_seat_ref, mint_seat
+from src.orchestrator.mintseat import _resolve_seat_ref, found_seat, mint_seat
 from src.orchestrator.seats import ensure_seat, seat_facts
 
 NOW = datetime(2026, 7, 20, tzinfo=UTC)
@@ -591,3 +591,111 @@ async def test_g_adopting_a_held_but_quiet_seat_receipt_reads_cold(
     assert out["occupancy"] == "cold"
     assert out["holder"] == "agent:tantra02"
     assert "resumes on its own" in out["next_step"]
+
+
+# ═══════════ found_seat: dispatch 3685/3688, Ooblek's own real shape ═══════════
+
+async def test_found_seat_founds_a_self_managed_seat_with_no_manager(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    offices = tmp_path / "seats"
+    workspace = tmp_path / "workspace" / "henry"
+
+    out = await found_seat(actions, handle="Henry", path=str(workspace), actor="console",
+                           office_root=offices)
+
+    assert out["seat_minted"] is True
+    assert out["handle"] == "Henry" and out["house"] == "Henry"
+    assert out["project"] == "Henry"
+    assert out["managed_by"] is None
+    assert out["intended_model"] == "claude-sonnet-5"
+
+    office = offices / "henry"
+    assert office.is_dir()
+    orders = (office / "CLAUDE.md").read_text()
+    assert "Your role: COORDINATOR" in orders
+    assert "no manager, so nobody else will do it for you" in orders
+
+    assert workspace.is_dir()
+    pin = (workspace / ".osiris").read_text()
+    assert 'project = "Henry"' in pin
+
+    tree_cwd = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='tree_cwd'", out["seat_id"])
+    assert tree_cwd == str(workspace)
+
+    no_manager = await actions.pool.fetchval(
+        "SELECT 1 FROM links l JOIN objects f ON f.id=l.from_id AND f.canonical=$1 "
+        "WHERE l.type='managed_by' AND (l.valid_until IS NULL OR l.valid_until > now())",
+        out["seat_id"])
+    assert no_manager is None
+
+
+async def test_found_seat_defaults_project_to_handle_and_path_to_home_code(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fakehome")
+    out = await found_seat(actions, handle="Aster", actor="console",
+                           office_root=tmp_path / "seats")
+    assert out["project"] == "Aster"
+    assert out["workspace"] == str(tmp_path / "fakehome" / "code" / "aster")
+    assert Path(out["workspace"]).is_dir()
+
+
+async def test_found_seat_is_idempotent_on_a_second_call(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    offices = tmp_path / "seats"
+    workspace = tmp_path / "workspace"
+
+    first = await found_seat(actions, handle="Henry", path=str(workspace), actor="console",
+                             office_root=offices)
+    second = await found_seat(actions, handle="Henry", path=str(workspace), actor="console",
+                              office_root=offices)
+
+    assert first["seat_id"] == second["seat_id"]
+    assert first["seat_minted"] is True
+    assert second["seat_minted"] is False
+    assert second["workspace_pin"] == "left in place"
+
+
+async def test_found_seat_refuses_a_handle_already_managed_by_someone_else(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    manager = await _seat(actions, "Steward", "osiris")
+    await mint_seat(actions, manager="Steward", handle="Vajra",
+                    office_root=tmp_path / "seats1")
+
+    out = await found_seat(actions, handle="Vajra", path=str(tmp_path / "vajra_ws"),
+                           actor="console", office_root=tmp_path / "seats2")
+
+    assert "error" in out
+    assert "already names a MANAGED seat" in out["error"]
+    assert manager in out["error"]
+
+
+async def test_found_seat_refuses_a_near_miss_handle(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    await found_seat(actions, handle="Tantra", path=str(tmp_path / "ws1"), actor="console",
+                     office_root=tmp_path / "seats1")
+
+    out = await found_seat(actions, handle="tantra 1", path=str(tmp_path / "ws2"),
+                           actor="console", office_root=tmp_path / "seats2")
+
+    assert "error" in out and "near-miss twin refused" in out["error"]
+
+
+async def test_found_seat_never_overwrites_an_existing_workspace_pin(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    (workspace / ".osiris").write_text('project = "already-here"\nmodel = "custom"\n')
+
+    out = await found_seat(actions, handle="Henry", path=str(workspace), actor="console",
+                           office_root=tmp_path / "seats")
+
+    assert out["workspace_pin"] == "left in place"
+    assert 'project = "already-here"' in (workspace / ".osiris").read_text()

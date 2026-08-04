@@ -35,12 +35,22 @@ EXISTING verb rather than re-deriving it:
                                      point of view), restart osiris-mcp/worker/console, run
                                      smoke, and name any un-run seeder step by comparison
                                      instead of assuming one happened
-  osiris fold-project <dupe> <into> the same evidence-gated projects.fold_project the
-             --evidence --actor     fold_project MCP tool wraps (thread 2446) — the
-                                     sanctioned second door for a worker whose sandbox
-                                     classifier permits an installed entrypoint but refuses
-                                     a raw DATABASE_URL script, or when a client's MCP tool
-                                     index is stale
+  osiris merge <dupe> <into>        the same self-typing orchestrator.merge.merge the merge
+             --evidence --actor     MCP tool wraps (thread 2446, renamed from fold-project
+                                     per dispatch 3683 — fold_project no longer exists as an
+                                     MCP tool, ruling 31c02dca/decision a926a8d0, and the CLI
+                                     had silently kept the old name) — the sanctioned second
+                                     door for a worker whose sandbox classifier permits an
+                                     installed entrypoint but refuses a raw DATABASE_URL
+                                     script, or when a client's MCP tool index is stale.
+                                     `osiris fold-project` still works (identical args,
+                                     SoftwareProject-only) as a hidden, printed-deprecated
+                                     alias — never advertised, never silently broken.
+  osiris unmerge <dupe>             the same orchestrator.merge.unmerge the unmerge MCP tool
+             --because --actor      wraps — reverses a wrongful merge. Dry run by default
+             [--execute]            (matches the MCP tool's own convention); built alongside
+                                     merge's own CLI rename, dispatch 3683's own point that
+                                     an MCP pair had no reason to stay asymmetric here.
   osiris charter-for <seat>         the same manager/operator-enforced charter.charter_for
              --repos --because      the charter_for MCP tool wraps (thread 2474) — same
              --actor                second-door reasoning as fold-project, same guard,
@@ -94,6 +104,7 @@ import asyncio
 import json
 import os
 import sys
+import textwrap
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -105,6 +116,16 @@ from src.manager.client import default_socket_path, manager_call
 ManagerCall = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 SpawnClaudeBg = Callable[..., Awaitable[None]]
 AgentsJson = Callable[..., Awaitable[list[dict[str, Any]]]]
+
+# dispatch 3678, the operator's own "make the cli friendly": every sanctioned-second-door
+# command below used to REQUIRE --actor, forcing a human at a raw terminal to type a value
+# that is always going to be the same one anyway. `console` is already a member of
+# `_OPERATOR_ACTORS` (src/orchestrator/seats.py) — a raw terminal call IS a console act by
+# construction (no MCP round-trip, no borrowed agent identity), so it already carries
+# operator authority; defaulting to it is naming a fact, not granting one. Never inferred
+# silently past this: the flag stays a real override for a caller who wants a different
+# name attributed (a script driving this CLI on someone else's behalf, say).
+_CONSOLE_ACTOR = "console"
 
 
 async def _default_manager(req: dict[str, Any]) -> dict[str, Any]:
@@ -1190,35 +1211,30 @@ async def cmd_deploy(
             await pool.close()
 
 
-# --- fold-project ------------------------------------------------------------------------------
+# --- merge / unmerge ---------------------------------------------------------------------------
 
-async def cmd_fold_project(
+async def cmd_merge(
     dupe: str, into: str, evidence: str, *, actor: str,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris fold-project <dupe> <into> --evidence <text> --actor <who> — the console-
-    script door onto projects.fold_project, the SAME function the fold_project MCP tool
-    wraps (no duplicated logic, no softened gate: the evidence check and
-    _contradicting_properties refusal are exactly fold_project's own, untouched here).
+    """osiris merge <dupe> <into> --evidence <text> [--actor <who>] — the console-script
+    door onto orchestrator.merge.merge, the SAME function the merge MCP tool wraps (no
+    duplicated logic, no softened gate). SELF-TYPING, exactly like the MCP tool: `dupe`'s
+    own form picks Agent/Seat/SoftwareProject (agent:.../seat:.../else) — this is NOT
+    fold-project's old SoftwareProject-only behavior wearing a new name, it is the full
+    merge surface, dispatch 3683's own finding that the two doors had drifted apart.
 
-    THE SANCTIONED SECOND DOOR (thread 2446): the MCP tool exists (cc8823d) but a live
-    client's deferred-tool index can sit frozen across multiple deploys — not this
-    module's bug, flagged upstream per ruling 482c3d0f rather than worked around — and a
-    worker whose sandbox classifier correctly refuses a raw DATABASE_URL script needs a
-    path that isn't the MCP index at all. An installed entrypoint is that path, the same
-    class of thing as `osiris deploy` (task #69/45b074bf, #63: one installed entrypoint,
-    no raw DB, no runes). Never executes on its own initiative — dupe/into/evidence/actor
-    are all named explicitly by the caller, every time; this command performs exactly one
-    fold, for the invocation it was given.
+    THE SANCTIONED SECOND DOOR (thread 2446, formerly fold-project's): the MCP tool can
+    sit invisible in a live client's stale deferred-tool index across a deploy, or be
+    unreachable to a worker whose sandbox classifier refuses a raw DATABASE_URL script —
+    an installed entrypoint is a path that isn't the MCP index at all.
 
-    TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474, Thoth's own
-    miss as much as anyone's — he trusted this command's receipt for two real folds
-    without having read this far): the merge event and same_as link the MCP wrapper
-    queries after the fact are queried here too, the identical SELECT, not a redesign. A
-    weaker second door is worse than no second door — it gets used exactly when the
-    strong one is unavailable, which is precisely when the evidence matters most."""
+    TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474): the
+    merge-event/same_as witness the MCP wrapper queries after the fact — SoftwareProject
+    merges only, matching the MCP tool's own conditional exactly — is queried here too."""
     from src.actions.core import Actions
-    from src.orchestrator.projects import fold_project
+    from src.orchestrator.merge import _merge_type
+    from src.orchestrator.merge import merge as _merge
 
     owns_pool = pool is None
     if pool is None:
@@ -1231,13 +1247,12 @@ async def cmd_fold_project(
         try:
             pool = await create_pool(settings.database_url, min_size=1, max_size=4)
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris fold-project: could not reach postgres at {settings.database_url} "
+            print(f"osiris merge: could not reach postgres at {settings.database_url} "
                   f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
-        out = await fold_project(Actions(pool), dupe=dupe, into=into, evidence=evidence,
-                                 actor=actor)
-        if "error" not in out:
+        out = await _merge(Actions(pool), dupe=dupe, into=into, evidence=evidence, actor=actor)
+        if "error" not in out and _merge_type(dupe.strip()) == "SoftwareProject":
             witness = await pool.fetchrow(
                 "SELECT oe.id AS merge_event_id, l.id AS same_as_link_id "
                 "FROM objects d JOIN objects i ON i.canonical=$2 "
@@ -1253,7 +1268,7 @@ async def cmd_fold_project(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris fold-project: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris merge: refused — {out['error']}", file=sys.stderr)
         return 1
     print(f"folded {out['folded']} into {out['into']}")
     if out.get("edges_moved"):
@@ -1263,6 +1278,62 @@ async def cmd_fold_project(
     if out.get("merge_event_id") is not None:
         print(f"merge event: {out['merge_event_id']}  same_as link: "
               f"{out.get('same_as_link_id')}")
+    return 0
+
+
+async def cmd_fold_project(
+    dupe: str, into: str, evidence: str, *, actor: str,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """DEPRECATED ALIAS (dispatch 3683): fold_project no longer exists as an MCP tool —
+    it collapsed into merge() (ruling 31c02dca, decision a926a8d0) and the CLI never
+    followed, the exact "two halves of this house use different words for one act"
+    specimen the operator's own consistency ask named. Kept working, hidden from the
+    front-door listing, forwarding straight to cmd_merge with the identical arguments —
+    never break a human's muscle memory silently, but never advertise the old name either."""
+    print("osiris fold-project is deprecated — use `osiris merge` (identical arguments, "
+          "same evidence-gated fold). Continuing as merge.", file=sys.stderr)
+    return await cmd_merge(dupe, into, evidence, actor=actor, pool=pool)
+
+
+async def cmd_unmerge(
+    dupe: str, because: str, *, actor: str, execute: bool = False,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris unmerge <dupe> --because <text> [--actor <who>] [--execute] — the console-
+    script door onto orchestrator.merge.unmerge, the SAME function the unmerge MCP tool
+    wraps. DRY RUN IS THE DEFAULT, matching the MCP tool's own convention exactly: without
+    --execute this returns the reversal PLAN (what would move back) and writes nothing;
+    review it, then re-run with --execute. Self-typing off `dupe`'s own form, same rule
+    as merge/cmd_merge. Built alongside merge's own CLI rename (dispatch 3683) — the two
+    verbs are a pair on the MCP side and had no reason to stay asymmetric on this one."""
+    from src.actions.core import Actions
+    from src.orchestrator.merge import unmerge as _unmerge
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris unmerge: could not reach postgres at {settings.database_url} "
+                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await _unmerge(Actions(pool), dupe=dupe, because=because, actor=actor,
+                             execute=execute)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris unmerge: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(json.dumps(out, indent=2, default=str))
     return 0
 
 
@@ -1506,13 +1577,55 @@ async def cmd_amend_decision(
 
 # --- mint-seat -----------------------------------------------------------------------------------
 
+def _context_house(house: str | None) -> str | None:
+    """The house to hunt for a lone manager candidate in: `--house` if given, else the
+    cwd's own `.osiris` pin (`project = "..."`), else the cwd's own basename — the same
+    fallback chain seats.resolve_project runs for an unseated caller (a raw terminal has
+    no seated agent_id to short-circuit through, so the seated branch never applies here)."""
+    if house:
+        return house
+    from src.orchestrator.agents import read_project_label
+
+    pinned = read_project_label(os.getcwd())
+    if pinned:
+        return pinned
+    return Path.cwd().name or None
+
+
+async def _infer_manager(
+    pool: asyncpg.Pool, house: str | None,
+) -> tuple[str | None, str | None]:
+    """(manager_handle, error). The SOLE existing seat in `house`, never a guess among
+    several and never a fabricated manager for an empty house — crossing into a brand-new
+    house always needs an explicit --manager naming a seat that already exists somewhere
+    else (mint_seat's own cross-house guard requires it; an empty house has nothing to
+    infer from by construction, and inventing one here would be exactly the silent-guess
+    failure #135 exists to name)."""
+    if not house:
+        return None, ("no --manager given and no house could be inferred (no --house, no "
+                      ".osiris pin, empty cwd name) — pass --manager explicitly, or --house, "
+                      "or run this from inside a project directory")
+    from src.orchestrator.seats import fleet_occupancy
+
+    candidates = [s for s in await fleet_occupancy(pool) if s.get("house") == house]
+    if not candidates:
+        return None, (f"no seats exist in house {house!r} yet — mint-seat needs an existing "
+                      "seat as manager-of-record even to start a brand-new house (crossing "
+                      "into one always does); pass --manager naming any existing seat")
+    if len(candidates) > 1:
+        names = ", ".join(sorted(c["handle"] for c in candidates if c.get("handle")))
+        return None, (f"{len(candidates)} seats in house {house!r} ({names}) — ambiguous, "
+                      "name one explicitly with --manager")
+    return candidates[0]["handle"], None
+
+
 async def cmd_mint_seat(
-    handle: str, *, manager: str, project: str | None, house: str | None,
+    handle: str, *, manager: str | None, project: str | None, house: str | None,
     model: str | None, actor: str, adopt: bool = False, force: bool = False,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris mint-seat <handle> --manager <seat> [--project P] [--house H] [--model M]
-    --actor <who> [--adopt] [--force] — the console-script door onto mintseat.mint_seat,
+    """osiris mint-seat <handle> [--manager <seat>] [--project P] [--house H] [--model M]
+    [--actor <who>] [--adopt] [--force] — the console-script door onto mintseat.mint_seat,
     the SAME function the mint_seat MCP tool wraps (no duplicated guard: the near-miss/
     cross-house/live-adopt refusals are exactly mint_seat's own, untouched here).
 
@@ -1521,12 +1634,14 @@ async def cmd_mint_seat(
     the manager from the CALLING agent's own held seat ("the calling seat is always the
     manager... minting into someone else's org is a console act, deliberately absent
     here", mint_seat's own docstring). A raw terminal has no mounted agent identity to
-    infer from, so this door takes `manager` explicitly — the same refuse-never-guess
-    discipline fold_project/charter_for/amend_practice already apply to `actor`, extended
-    one parameter further because this orchestrator function's whole shape assumes an
-    already-known caller-seat. Closes the exact gap CLI.md's own house law names: an
-    operator standing up a brand-new seat had no door but a hand-rolled `python -c`
-    heredoc against the live DB — precisely what ruling 45b074bf bans.
+    infer from, so this door took `manager` explicitly at first — then dispatch 3678 (the
+    operator's own "make the cli friendly") asked for that requirement inferred too, the
+    same way `--actor` already is: when `manager` is omitted, `_infer_manager` looks for
+    the SOLE seat in the target house (`_context_house`: --house, else the cwd's own
+    .osiris pin, else the cwd's own name) and refuses loudly — never guesses — if that's
+    zero or several. Closes the exact gap CLI.md's own house law names: an operator
+    standing up a brand-new seat had no door but a hand-rolled `python -c` heredoc against
+    the live DB — precisely what ruling 45b074bf bans.
 
     Prints the SAME next_step guidance the receipt already carries (mint_seat's own
     occupancy-aware line — vacant: `osiris launch <handle>`; occupied/cold: nothing
@@ -1549,6 +1664,15 @@ async def cmd_mint_seat(
                   f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
+        if manager is None:
+            ctx_house = _context_house(house)
+            manager, infer_error = await _infer_manager(pool, ctx_house)
+            if infer_error:
+                print(f"osiris mint-seat: {infer_error}", file=sys.stderr)
+                return 1
+            assert manager is not None  # _infer_manager's own contract: error XOR manager
+            print(f"osiris mint-seat: inferred --manager={manager!r} — the only seat in "
+                  f"house {ctx_house!r}; pass --manager explicitly to override")
         kwargs: dict[str, Any] = {"intended_model": model} if model else {}
         out = await _mint_seat(Actions(pool), manager=manager, handle=handle, house=house,
                                project=project, actor=actor, adopt=adopt, force=force,
@@ -1572,115 +1696,337 @@ async def cmd_mint_seat(
     return 0
 
 
+# --- new -----------------------------------------------------------------------------------------
+
+async def cmd_new(
+    handle: str, path: str | None, *, project: str | None, model: str | None,
+    actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris new <handle> [path] [--project P] [--model M] [--actor <who>] — ONE
+    command, no ceremony (dispatch 3685/3688, the operator's own "too much witchcraft to
+    spawn a project... I'll remember 'osiris new' boom"): found a SELF-MANAGED seat —
+    Ooblek's own real shape, read off its own dossier before this was built rather than
+    assumed — a directory + `.osiris` pin for its own code workspace (created if absent,
+    `path` defaults to `~/code/<handle>`), a Seat with NO `managed_by` edge ever, an
+    office scaffold at the standard `~/.osiris/seats/<handle>/` location, and its tree
+    bound to the workspace (`bind_seat_tree` — distinct from the office, offices.py's own
+    "code stays in the repos they GOVERN"). The console-script door onto
+    mintseat.found_seat, which composes mint_seat's OWN primitives (`ensure_seat`,
+    `_scaffold_office`) rather than reimplementing them.
+
+    Does not create a `governs` edge — the new seat charters itself, live, on its own
+    first turn (its own compiled CLAUDE.md says so), matching Ooblek's real bootstrap
+    order: self-claimed, then officed, then — once actually live — self-chartered.
+
+    `osiris new` and `osiris launch` are the two commands meant to be memorized: found,
+    then launch. Prints the exact `osiris launch <handle>` line so the second half never
+    needs remembering either."""
+    from src.actions.core import Actions
+    from src.orchestrator.mintseat import found_seat as _found_seat
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris new: could not reach postgres at {settings.database_url} "
+                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            return 1
+    try:
+        kwargs: dict[str, Any] = {"intended_model": model} if model else {}
+        out = await _found_seat(Actions(pool), handle=handle, path=path, project=project,
+                                actor=actor, **kwargs)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris new: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"{'founded' if out['seat_minted'] else 'converged on'} {out['handle']} "
+          f"({out['seat_id']}) — self-managed, no manager")
+    print(f"project: {out['project']}")
+    print(f"workspace: {out['workspace']} ({out['workspace_pin']})")
+    office = out.get("office")
+    if office:
+        print(f"office: {office['office']} (pin {office['osiris_pin']}, orders "
+              f"{office['standing_orders']}, charter {office['charter_file']})")
+    print(f"model: {out['intended_model']}"
+          + (" (stamped)" if out.get("intended_model_stamped") else ""))
+    print(f"occupancy: {out['occupancy']} — {out['next_step']}")
+    print(f"next: osiris launch {out['handle']}")
+    return 0
+
+
 # --- argv dispatch -----------------------------------------------------------------------------
 
-def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="osiris", description="The osiris console-script — no "
-                                "bash runes; every command names its own next step on failure.")
-    sub = p.add_subparsers(dest="command", required=True)
+# dispatch 3678, "make the cli a front door instead of a dump": bare `osiris` used to be
+# an argparse error (`the following arguments are required: command`) followed, on -h/
+# --help, by a flat alphabetical dump of thirteen verbs with no sense of what a newcomer
+# actually needs first. This is that front door — GROUPED by what a person is trying to
+# DO (#97's own acceptance test: a stranger with no context gets from `osiris` to a
+# running worker without reading source or asking anyone), with the newcomer path shown
+# as literal copy-pasteable lines rather than prose describing it. Every individual
+# subcommand's own `help=` text is suppressed from argparse's default listing (it would
+# otherwise print AGAIN, alphabetically, right below this) — `osiris <verb> --help`
+# still shows that verb's own full description and a worked example, untouched.
+_TOP_LEVEL_HELP = """\
+THE TWO COMMANDS TO REMEMBER — nothing to a working, independent mind:
+    osiris new <name>
+    osiris launch <name>
+`new` founds a SELF-MANAGED seat (no manager, ever) with its own code workspace
+(~/code/<name> by default) — a brand-new, independent project in the same act, no repo
+required. `launch` bodies it. Nothing else to hold in memory; everything below is
+discoverable when you need it, not something to remember in advance.
 
-    p_attach = sub.add_parser("attach", help="attach to a live seat's PTY session")
+ADDING A WORKER TO A HOUSE YOU ALREADY RUN (a different case — MANAGED, not independent):
+    osiris mint-seat <name>
+    osiris launch <name>
+(--manager/--actor are inferred — the seat you're standing in, the console actor — and
+stay real overrides when that's wrong or ambiguous. Naming a --house with no seats in it
+yet brings that house/project into existence in this same act too — --project defaults
+to the house name.)
+
+COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
+  start a mind          new, launch, mint-seat, attach
+  see the fleet         fleet, boot-status, smoke
+  write to the record   annotate-thread, amend-decision, charter-for, amend-practice,
+                        merge, unmerge
+  operate               deploy, migrate, seed
+
+Run `osiris <command> --help` for that command's own flags and a worked example.
+"""
+
+
+class _RawSubparser(argparse.ArgumentParser):
+    """Every subcommand's own --help gets RawDescriptionHelpFormatter too (not just the
+    top level) — several epilogs below are literal copy-pasteable command lines, and the
+    default formatter re-wraps/re-flows them, destroying exactly the thing they're for."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("formatter_class", argparse.RawDescriptionHelpFormatter)
+        super().__init__(*args, **kwargs)
+
+
+def _d(text: str) -> str:
+    """Wrap a subcommand's own `description=` prose to a terminal-friendly width.
+    RawDescriptionHelpFormatter (needed below so worked-example epilogs keep their literal
+    line breaks) disables argparse's own wrapping for EVERYTHING on that parser, description
+    included — without this, a description written as ordinary flowing prose renders as one
+    unbroken line, exactly the "flat dump" this whole rebuild exists to fix."""
+    return textwrap.fill(text, width=78)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="osiris", description=_TOP_LEVEL_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="command", required=False, parser_class=_RawSubparser)
+
+    p_attach = sub.add_parser("attach", description=_d("attach to a live seat's PTY session"),
+                              epilog="example: osiris attach Khnum")
     p_attach.add_argument("handle")
 
-    sub.add_parser("smoke", help="the same deploy-time liveness probe the fleet runs")
+    sub.add_parser("smoke", description=_d("the same deploy-time liveness probe the fleet runs"),
+                  epilog="example: osiris smoke")
 
-    sub.add_parser("boot-status", help="name every active seat with no compiled managed "
-                   "section, classified by why (report-only; exit 1 if any)")
+    sub.add_parser("boot-status", description=_d(
+        "name every active seat with no compiled managed section, "
+                               "classified by why (report-only; exit 1 if any)"),
+                   epilog="example: osiris boot-status")
 
-    p_seed = sub.add_parser("seed", help="seed default compositions (and rooms)")
+    p_seed = sub.add_parser("seed", description=_d("seed default compositions (and rooms)"),
+                            epilog="example: osiris seed\nexample: osiris seed "
+                                   "--compositions-only")
     p_seed.add_argument("--compositions-only", action="store_true",
                         help="seed + room DEFAULT_COMPOSITIONS only; skip the canon ingest")
 
-    p_launch = sub.add_parser("launch", help="body a seat (spawn its claude process)")
+    p_launch = sub.add_parser("launch", description=_d("body a seat: spawn its claude process via "
+                                          "`claude --bg` (task #72) so it lands in the "
+                                          "operator's own `claude agents` list"),
+                              epilog="example: osiris launch Khnum")
     p_launch.add_argument("handle")
     p_launch.add_argument("--model", default=None)
     p_launch.add_argument("--debug", action="store_true",
                           help="use the osiris PTY-broker lane instead of the default "
                                "`claude --bg` — for an incident or a build with no --bg")
 
-    p_fleet = sub.add_parser("fleet", help="the fleet roster, grouped by project")
+    p_fleet = sub.add_parser("fleet", description=_d(
+        "the fleet roster, grouped by project — the same "
+                                         "fleet() the MCP tool answers, called over the wire"),
+                             epilog="example: osiris fleet\nexample: osiris fleet --full")
     p_fleet.add_argument("--full", action="store_true")
 
-    p_migrate = sub.add_parser("migrate", help="env-correct `alembic upgrade head` "
-                               "(--check reports without applying)")
+    p_migrate = sub.add_parser("migrate", description=_d(
+        "env-correct `alembic upgrade head` (--check "
+                                           "reports without applying)"),
+                               epilog="example: osiris migrate --check")
     p_migrate.add_argument("--check", action="store_true",
                            help="report a pending revision without applying it")
 
-    sub.add_parser("deploy", help="the deploy ritual: dirty-guard, migrate, restart, smoke, "
-                   "un-run-step report")
+    sub.add_parser("deploy", description=_d("the deploy ritual as one verb: dirty-guard, migrate, "
+                               "restart, smoke, un-run-step report"),
+                   epilog="example: osiris deploy")
 
-    p_fold_project = sub.add_parser("fold-project", help="fold a duplicate SoftwareProject "
-                                    "into its survivor — the same evidence-gated fold_project "
-                                    "the MCP tool wraps, exposed as the sanctioned second door")
+    p_merge = sub.add_parser(
+        "merge", description=_d("Fold `dupe` into `into` — declare two labels of the SAME "
+            "type one thing (Agent, Seat, or SoftwareProject; self-typing off dupe's own "
+            "form: agent:.../seat:.../else). Append-only (a merge event, nothing "
+            "deleted); each type's own estate (mail, mounts, threads, holders, edges) "
+            "follows onto the survivor. The same orchestrator.merge.merge the MCP tool "
+            "wraps — replaces the old `fold-project` name (kept as a deprecated, working "
+            "alias for a SoftwareProject-only call)."),
+        epilog="example: osiris merge OldLabel NewLabel --evidence \"same repo, two "
+            "labels\"")
+    p_merge.add_argument("dupe", help="the duplicate label — agent:/seat: prefix picks "
+                         "that type, anything else means SoftwareProject")
+    p_merge.add_argument("into", help="the surviving label, same type as dupe")
+    p_merge.add_argument("--evidence", required=True,
+                         help="why these are one thing, not two")
+    p_merge.add_argument("--actor", default=_CONSOLE_ACTOR,
+                         help="who is performing this merge — defaults to "
+                              f"{_CONSOLE_ACTOR!r} (a terminal call already carries "
+                              "operator authority, the only gate an Agent merge enforces)")
+
+    p_unmerge = sub.add_parser(
+        "unmerge", description=_d("Reverse a wrongful `merge` — dry run by default (returns "
+            "the reversal plan, writes nothing); pass --execute once you've reviewed it. "
+            "Self-typing off dupe's own form, same rule as merge. The same "
+            "orchestrator.merge.unmerge the MCP tool wraps."),
+        epilog="example, review the plan first:\n"
+            "    osiris unmerge OldLabel --because \"was never actually a duplicate\"\n"
+            "example, then apply it:\n"
+            "    osiris unmerge OldLabel --because \"was never actually a duplicate\" "
+            "--execute")
+    p_unmerge.add_argument("dupe", help="the previously-merged label to un-fold")
+    p_unmerge.add_argument("--because", required=True,
+                           help="why this merge is being reversed")
+    p_unmerge.add_argument("--actor", default=_CONSOLE_ACTOR,
+                           help=f"who is reversing this merge — defaults to "
+                                f"{_CONSOLE_ACTOR!r}")
+    p_unmerge.add_argument("--execute", action="store_true",
+                           help="apply the reversal plan instead of only showing it")
+
+    # DEPRECATED (dispatch 3683): fold_project no longer exists as an MCP tool — see
+    # cmd_fold_project's own docstring. Kept working, hidden from the front-door listing
+    # (no help= means argparse's own choice listing never mentions it either) — never
+    # break a human's muscle memory silently, but never advertise the old name again.
+    p_fold_project = sub.add_parser(
+        "fold-project",
+        description=_d("DEPRECATED — use `osiris merge` instead (identical arguments, same "
+            "evidence-gated fold). Kept working for muscle memory; never advertised."),
+        epilog="example: osiris fold-project OldLabel NewLabel --evidence "
+            "\"same repo, two labels\"")
     p_fold_project.add_argument("dupe", help="the duplicate project's label")
     p_fold_project.add_argument("into", help="the surviving project's label")
     p_fold_project.add_argument("--evidence", required=True,
                                 help="why these are one project, not two")
-    p_fold_project.add_argument("--actor", required=True,
-                                help="who is performing this fold")
+    p_fold_project.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                help="who is performing this fold — defaults to "
+                                     f"{_CONSOLE_ACTOR!r} (a terminal call already carries "
+                                     "operator authority); override to attribute it "
+                                     "elsewhere")
 
-    p_charter_for = sub.add_parser("charter-for", help="declare a charter on behalf of a "
-                                   "seat — the same manager/operator-enforced charter_for "
-                                   "the MCP tool wraps, exposed as the sanctioned second door")
+    p_charter_for = sub.add_parser("charter-for", description=_d(
+        "declare a charter on behalf of a seat — the "
+                                       "same manager/operator-enforced charter_for the MCP "
+                                       "tool wraps, exposed as the sanctioned second door"),
+                                   epilog="example: osiris charter-for seat:a1b2c3d4 "
+                                       "--repos osiris,osiris-console "
+                                       "--because \"declared on the seat's own behalf\"")
     p_charter_for.add_argument("seat", help="the target seat's canonical (seat:<id>)")
     p_charter_for.add_argument("--repos", required=True,
                                help="comma-separated repo labels — the whole charter, not "
                                     "an increment")
     p_charter_for.add_argument("--because", required=True,
                                help="why this charter is being declared on the seat's behalf")
-    p_charter_for.add_argument("--actor", required=True,
-                               help="who is declaring this charter (must be the seat's "
-                                    "manager or an operator actor)")
+    p_charter_for.add_argument("--actor", default=_CONSOLE_ACTOR,
+                               help="who is declaring this charter — must be the seat's "
+                                    f"manager or an operator actor; defaults to {_CONSOLE_ACTOR!r} "
+                                    "(already an operator actor)")
 
-    p_amend_practice = sub.add_parser("amend-practice", help="narrow or correct a LIVE "
-                                      "practice's guidance — the same amend_practice the "
-                                      "MCP tool wraps, exposed as the sanctioned second door")
+    p_amend_practice = sub.add_parser("amend-practice", description=_d(
+        "narrow or correct a LIVE practice's "
+                                          "guidance — the same amend_practice the MCP tool "
+                                          "wraps, exposed as the sanctioned second door"),
+                                      epilog="example: osiris amend-practice a1b2c3d4 "
+                                          "\"except when the target is a fresh clone\"")
     p_amend_practice.add_argument("ref", help="the target practice's uuid, canonical, "
                                   "short-id prefix, or statement substring")
     p_amend_practice.add_argument("amendment", help="the text to add — never replaces the "
                                   "practice's own statement")
-    p_amend_practice.add_argument("--actor", required=True,
-                                  help="who is making this amendment")
+    p_amend_practice.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                  help=f"who is making this amendment — defaults to "
+                                       f"{_CONSOLE_ACTOR!r}")
 
-    p_annotate_thread = sub.add_parser("annotate-thread", help="add to a thread's record "
-                                       "without closing it — the same annotate_thread the "
-                                       "MCP tool wraps, exposed as the sanctioned second door")
+    p_annotate_thread = sub.add_parser("annotate-thread", description=_d(
+        "add to a thread's record without "
+                                           "closing it — the same annotate_thread the MCP "
+                                           "tool wraps, exposed as the sanctioned second door"),
+                                       epilog="example: osiris annotate-thread a1b2c3d4 "
+                                           "\"confirmed independently, see commit abc1234\"")
     p_annotate_thread.add_argument("ref", help="the target thread's uuid, canonical, "
                                    "short-id prefix, or summary substring")
     p_annotate_thread.add_argument("note", help="the note to append — never touches "
                                    "summary/status")
-    p_annotate_thread.add_argument("--actor", required=True,
-                                   help="who is adding this note")
+    p_annotate_thread.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                   help=f"who is adding this note — defaults to "
+                                        f"{_CONSOLE_ACTOR!r}")
 
-    p_amend_decision = sub.add_parser("amend-decision", help="append reasoning to a LIVE "
-                                      "decision without superseding it — the same "
-                                      "amend_decision the MCP tool wraps, exposed as the "
-                                      "sanctioned second door")
+    p_amend_decision = sub.add_parser("amend-decision", description=_d(
+        "append reasoning to a LIVE decision "
+                                          "without superseding it — the same amend_decision "
+                                          "the MCP tool wraps, exposed as the sanctioned "
+                                          "second door"),
+                                      epilog="example: osiris amend-decision a1b2c3d4 "
+                                          "\"the smaller residual specimen still held up\"")
     p_amend_decision.add_argument("ref", help="the target decision's uuid, canonical, "
                                   "short-id prefix, or summary substring")
     p_amend_decision.add_argument("addendum", help="the text to add — never replaces the "
                                   "decision's own summary/rationale/kind")
-    p_amend_decision.add_argument("--actor", required=True,
-                                  help="who is making this addendum")
+    p_amend_decision.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                  help=f"who is making this addendum — defaults to "
+                                       f"{_CONSOLE_ACTOR!r}")
 
-    p_mint_seat = sub.add_parser("mint-seat", help="mint (or adopt) a worker seat under an "
-                                 "explicit manager — the same mint_seat the MCP tool wraps, "
-                                 "exposed as the sanctioned second door for a human at a "
-                                 "terminal with no held seat of their own")
+    p_mint_seat = sub.add_parser(
+        "mint-seat", description=_d(
+            "Mint (or adopt) a worker seat: ensure_seat + an office scaffold on "
+            "disk (a directory, an .osiris pin carrying project AND model, CLAUDE.md, "
+            "charter.md) + an intended_model stamp + a managed_by link to the manager. "
+            "Idempotent — a handle that already names a living seat is ADOPTED (missing "
+            "pieces filled in, nothing rewritten) rather than twinned. The same "
+            "mintseat.mint_seat the MCP tool wraps; --manager/--actor are CLI-only (a raw "
+            "terminal holds no seat of its own to infer them from, so this door infers "
+            "them a different way — see their own --help below) and --adopt/--force are "
+            "deliberate console-only escape hatches an agent caller can never reach."),
+        epilog="example, adding a worker to your own house:\n"
+            "    osiris mint-seat NewBot\n"
+            "example, starting a brand-new house/project:\n"
+            "    osiris mint-seat NewBot --manager Thoth --house NewProject")
     p_mint_seat.add_argument("handle", help="the new worker seat's handle")
-    p_mint_seat.add_argument("--manager", required=True,
-                             help="the minting seat's own handle or seat_id — a raw "
-                                  "terminal has no held seat to infer this from")
+    p_mint_seat.add_argument("--manager", default=None,
+                             help="the minting seat's own handle or seat_id. Omit it and "
+                                  "this infers the sole seat in the target house (--house, "
+                                  "else the cwd's .osiris pin, else the cwd's own name) — "
+                                  "refuses loudly instead of guessing among several")
     p_mint_seat.add_argument("--project", default=None,
                              help="the project the new seat's office is stamped with "
                                   "(defaults to the manager's own house)")
     p_mint_seat.add_argument("--house", default=None,
-                             help="defaults to the manager's own house; crossing houses "
-                                  "refuses unless --actor is an operator actor")
+                             help="defaults to the manager's own house; naming a house with "
+                                  "no seats in it yet CREATES that house/project in this "
+                                  "same act (a console actor already carries the operator "
+                                  "authority a house crossing needs)")
     p_mint_seat.add_argument("--model", default=None,
                              help="defaults to mint_seat's own worker default")
-    p_mint_seat.add_argument("--actor", required=True,
-                             help="who is performing this mint")
+    p_mint_seat.add_argument("--actor", default=_CONSOLE_ACTOR,
+                             help=f"who is performing this mint — defaults to "
+                                  f"{_CONSOLE_ACTOR!r}")
     p_mint_seat.add_argument("--adopt", action="store_true",
                              help="state explicitly that handle names an EXISTING seat to "
                                   "adopt — refuses instead of silently minting fresh on no "
@@ -1688,11 +2034,45 @@ def _build_parser() -> argparse.ArgumentParser:
     p_mint_seat.add_argument("--force", action="store_true",
                              help="mint a distinct seat past a near-miss handle refusal")
 
+    p_new = sub.add_parser(
+        "new", description=_d(
+            "Found a SELF-MANAGED seat: no manager, ever (Ooblek's own real shape, "
+            "read off its dossier, never a flag). One act: create/verify a code "
+            "workspace directory + its own .osiris pin, mint the seat, scaffold its "
+            "identity office at the standard ~/.osiris/seats/<handle>/ location, and "
+            "bind its tree to the workspace. Does not charter the seat over a "
+            "project — it charters itself, live, on its own first turn."),
+        epilog="example, converging on ~/code/henry:\n"
+            "    osiris new henry\n"
+            "example, naming the workspace explicitly:\n"
+            "    osiris new henry ~/projects/henry-thing\n"
+            "then:\n"
+            "    osiris launch henry")
+    p_new.add_argument("handle", help="the new self-managed seat's handle")
+    p_new.add_argument("path", nargs="?", default=None,
+                       help="the code workspace directory (created if absent) — "
+                            "defaults to ~/code/<handle>")
+    p_new.add_argument("--project", default=None,
+                       help="the project name written into the workspace's own .osiris "
+                            "pin — defaults to the handle")
+    p_new.add_argument("--model", default=None,
+                       help="defaults to mint_seat's own worker default")
+    p_new.add_argument("--actor", default=_CONSOLE_ACTOR,
+                       help=f"who is performing this act — defaults to {_CONSOLE_ACTOR!r}")
+
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.command is None:
+        # dispatch 3678/3681: bare `osiris` used to be argparse's own terse usage error.
+        # Thoth's own measurement says the EXIT CODE (2, a real usage condition — no
+        # command was given) was already correct and must stay; only the TEXT was the
+        # dump. print_help() shows the full front-door description above; the code stays 2.
+        parser.print_help()
+        return 2
     if args.command == "attach":
         return asyncio.run(cmd_attach(args.handle))
     if args.command == "smoke":
@@ -1709,6 +2089,11 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_migrate(check=args.check))
     if args.command == "deploy":
         return asyncio.run(cmd_deploy())
+    if args.command == "merge":
+        return asyncio.run(cmd_merge(args.dupe, args.into, args.evidence, actor=args.actor))
+    if args.command == "unmerge":
+        return asyncio.run(cmd_unmerge(args.dupe, args.because, actor=args.actor,
+                                       execute=args.execute))
     if args.command == "fold-project":
         return asyncio.run(cmd_fold_project(args.dupe, args.into, args.evidence,
                                             actor=args.actor))
@@ -1725,7 +2110,12 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_mint_seat(
             args.handle, manager=args.manager, project=args.project, house=args.house,
             model=args.model, actor=args.actor, adopt=args.adopt, force=args.force))
-    return 2  # pragma: no cover - argparse's own `required=True` makes this unreachable
+    if args.command == "new":
+        return asyncio.run(cmd_new(
+            args.handle, args.path, project=args.project, model=args.model,
+            actor=args.actor))
+    return 2  # pragma: no cover - every real subparser choice is handled above; argparse
+    # itself refuses anything not in `sub.choices`, so this is unreachable in practice
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -322,7 +322,21 @@ def _tool_chars(t: Any) -> int:
 # isn't registered — run pytest once, which installs it), resolve it BY HAND the same
 # way: `uv run python scripts/measure_tool_contract.py`, never by picking the larger of
 # the two values.
-TOOL_CONTRACT_CEILING_CHARS = 135_404
+#
+# RAISED, closing an MCP/CLI parameter-asymmetry gap Thoth's own measurement found
+# (2026-08-04, dispatch 3678 addendum, msg 3681): `osiris mint-seat`'s --adopt/--force are
+# parameters of the shared mintseat.mint_seat function that the MCP tool's own signature
+# cannot reach at all — not stated anywhere as deliberate, so a reader had no way to tell
+# "omitted on purpose" from "a real gap." Measured which it is rather than guessing: an
+# agent's ordinary mint (extending itself with a fresh specialist, per this tool's own
+# docstring) has no evident need for either — --adopt's whole effect is refusing instead
+# of the SAME auto-adopt-on-exact-match this tool already does unconditionally, and
+# --force exists to override the near-miss-twin safety guard, a deliberate human
+# judgment call, not a coordinator's routine act. One sentence added stating this
+# explicitly, so nobody re-opens it as an oversight; no new parameter, no new tool.
+# 135,404 -> 135,689, +285. Exact measured total via this file's own
+# `_measure_tool_contract`, not a round number.
+TOOL_CONTRACT_CEILING_CHARS = 135_689
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:

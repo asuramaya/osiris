@@ -25,6 +25,75 @@ Every subcommand follows the same law: **an error names the next step.** A dark 
 which unit to check; an ambiguous handle lists the candidates; a refusal says what to fix.
 None of them print a raw Python traceback for a condition the CLI can see coming.
 
+**Bare `osiris` (no arguments) is the front door, not an error dump** (dispatch 3678/3681,
+the operator's own "make the cli itself explain better than a dump so it can be friendly"):
+it prints the newcomer path as two copy-pasteable lines, groups every command by what
+you're trying to DO rather than alphabetically, and states plainly that there is no
+separate project-creation command beyond `osiris new` itself. The exit code stays `2` (a
+real usage condition — no command was given), only the text changed. Every subcommand's
+own `--help` ends with at least one worked, realistic invocation.
+
+**The two commands meant to be memorized** (dispatch 3685/3688, the operator's own "too
+much witchcraft to spawn a project... I'll remember 'osiris x y z' boom"): `osiris new
+<handle>` then `osiris launch <handle>` — nothing to a working, independent mind. See
+`osiris new` below; everything else on this page is discoverable when you need it, not
+something to hold in memory in advance.
+
+**`--actor` defaults to `console`** (one of `src.orchestrator.seats._OPERATOR_ACTORS`'s own
+sentinels) on every sanctioned-second-door command below — a raw terminal call already
+carries operator authority by construction (no MCP round-trip, no borrowed agent identity),
+so typing it by hand was never adding information. Pass it explicitly only to attribute an
+act to someone or something else.
+
+**Consistency with the MCP surface is now an enforced invariant, not a convention**
+(decision `0b29f1cbcc5a`): `tests/test_cli_mcp_parity.py` walks both the argparse structure
+here and the live MCP tool registry, and fails the suite if any shared act's name or
+parameters drift apart without an explicit, reasoned allowlist entry. If you're renaming or
+re-parameterizing a command below, that test — not this file — is the one that will catch
+you first.
+
+## `osiris new <handle> [path] [--project P] [--model M] [--actor <who>]`
+
+**One of the two commands meant to be memorized** (dispatch 3685/3688) — the whole point
+is that a human should be able to spawn an independent, self-managed project from memory,
+months from now, with no notes. Founds a **self-managed seat**: a Seat with NO
+`managed_by` edge at all, ever — not a flag, the absence itself (Ooblek's own real shape,
+read off its dossier before this was built rather than assumed: self-claimed, then
+officed, then — hours later, live — self-declared its own `governs` edge; no minting
+agent, no manager, ever involved). Composes the SAME primitives `mint-seat` does
+(`ensure_seat`, the office scaffold) rather than reimplementing them — see
+`mintseat.found_seat`.
+
+One act does all of: create the code workspace directory if absent (`path`, defaulting to
+`~/code/<handle>` — **no git repo required**, proven not assumed: a seat's office is
+already routinely a bare, non-repo folder that mounts fine, and project resolution reads
+a `.osiris` pin or a bare folder name, never git), write that workspace's own `.osiris`
+pin (`project` defaults to `handle`), mint the seat, scaffold its identity office at the
+standard `~/.osiris/seats/<handle>/` location (distinct from the workspace — offices.py's
+own ruling `ed5f5ce2`: "agents sit at `~/.osiris/seats/<handle>/`, code stays in the
+repos they GOVERN"), and `bind_seat_tree` the workspace to the new seat so `osiris
+launch` spawns into the *code*, never the identity office. Prints the exact `osiris
+launch <handle>` line — the second command never needs remembering either.
+
+**Does not create a `governs` edge.** Ooblek's own real bootstrap order was self-claim,
+then office, then — once actually live — self-charter; inventing a `governs` fact on an
+unlaunched mind's behalf would be exactly the kind of thing this call has no standing to
+assert. The scaffolded `CLAUDE.md` already tells a fresh, self-managed seat that its
+first act is `charter(repos=[...])` naming its own project, in its own voice, once live.
+
+Idempotent — a handle that already names a living, already self-managed seat converges
+(fills in whatever's missing, mints nothing new); a handle already `managed_by` someone
+else REFUSES (`osiris new` founds independence, it does not strip an existing manager);
+a near-miss handle (ruling `7cffda8f`) refuses the same way `mint-seat`'s own fresh path
+does.
+
+**Not on the MCP surface, deliberately, and not a violation of the surface-unity law**
+(decision `0b29f1cbcc5a`'s own reasoning, worth restating since it looks like a
+conflict): `walk_in` is a mind that ALREADY EXISTS naming itself — a self-act. `osiris
+new` is an OPERATOR founding a seat for a mind that does not exist yet, then launching
+into it. Different actor, different precondition, different moment — two genuinely
+different acts may carry two different names without violating "one act, one name."
+
 ## `osiris attach <handle>`
 
 Attach to a seat's live PTY session — the interactive replacement for the raw
@@ -188,32 +257,51 @@ implying a hold protects everything:
   that has no bearing on the surface in question would be theater, not a guard. For these,
   review has to happen *before* the commit, not after.
 
-## `osiris fold-project <dupe> <into> --evidence <text> --actor <who>`
+## `osiris merge <dupe> <into> --evidence <text> [--actor <who>]`
 
-The sanctioned second door onto `projects.fold_project` — the same function the
-`fold_project` MCP tool wraps, no softened gate (the evidence check and
-`_contradicting_properties` refusal are exactly `fold_project`'s own). Exists for a live
-client whose deferred-tool index sits frozen across a deploy (ruling `482c3d0f`), or a
-worker whose sandbox classifier permits an installed entrypoint but refuses a raw
-`DATABASE_URL` script. Folds `dupe` into `into` (type read off `dupe`'s own form); the merge
-event and `same_as` link the MCP wrapper's own receipt surfaces are queried and printed here
-too — two doors onto one function return the same receipt, never a weaker echo.
+The sanctioned second door onto `orchestrator.merge.merge` — the same self-typing function
+the `merge` MCP tool wraps, no softened gate. Type is read off `dupe`'s own form
+(`agent:...`/`seat:...`/else → `SoftwareProject`); every refusal any of the three original
+`fold_X` verbs had is reachable unchanged. Exists for a live client whose deferred-tool
+index sits frozen across a deploy (ruling `482c3d0f`), or a worker whose sandbox classifier
+permits an installed entrypoint but refuses a raw `DATABASE_URL` script. The merge event and
+`same_as` link the MCP wrapper's own receipt surfaces (SoftwareProject merges only, matching
+the MCP tool's own conditional) are queried and printed here too — two doors onto one
+function return the same receipt, never a weaker echo.
 
-## `osiris charter-for <seat> --repos a,b,c --because <text> --actor <who>`
+**Renamed from `fold-project`** (dispatch 3683, decision `0b29f1cbcc5a`): `fold_project` was
+retired as an MCP tool in favor of `merge`/`unmerge` for findability (ruling `31c02dca`,
+decision `a926a8d0`) and the CLI silently kept the old name — two halves of this house using
+different words for one act, the exact failure the operator's own consistency law names.
+`osiris fold-project <dupe> <into> --evidence <text>` still works, identical arguments,
+SoftwareProject-only — a hidden, deprecated alias that prints a one-line pointer to `merge`
+on every call. Never advertised in the front-door listing; never silently broken either.
+
+## `osiris unmerge <dupe> --because <text> [--actor <who>] [--execute]`
+
+The sanctioned second door onto `orchestrator.merge.unmerge` — the same function the
+`unmerge` MCP tool wraps. Reverses a wrongful `merge`; type is read off `dupe`'s own form,
+same rule as `merge`. **Dry run is the default**, matching the MCP tool's own convention
+exactly: without `--execute` this only prints the reversal plan (nothing written); review
+it, then re-run with `--execute` to apply it. Built alongside `merge`'s own CLI rename —
+the two verbs are a pair on the MCP side and had no reason to stay asymmetric here.
+
+## `osiris charter-for <seat> --repos a,b,c --because <text> [--actor <who>]`
 
 The sanctioned second door onto `charter.charter_for` — same guard as the MCP tool, fully
 enforced (the `managed_by`/operator-actor check is the whole point of this verb, never
 softened here). `--repos` is the WHOLE charter, not an increment; `--actor` must be the
-seat's own manager or an operator actor, or it refuses by name.
+seat's own manager or an operator actor (defaults to `console`, already an operator actor),
+or it refuses by name.
 
-## `osiris amend-practice <ref> <amendment> --actor <who>`
+## `osiris amend-practice <ref> <amendment> [--actor <who>]`
 
 The sanctioned second door onto `capture.amend_practice` — narrows a LIVE practice's
 guidance without touching its id, its `statement` (the idempotency key), or its witness
 count. Refuses on a refuted practice or a blank amendment, the same as the MCP tool. Folded
 directly into `practices()`'s own live listing, not left write-only.
 
-## `osiris annotate-thread <ref> <note> --actor <who>`
+## `osiris annotate-thread <ref> <note> [--actor <who>]`
 
 The sanctioned second door onto `capture.annotate_thread` — the same function the
 `annotate_thread` MCP tool wraps. Appends to a thread's record without closing it;
@@ -227,7 +315,7 @@ only `fold-project`/`charter-for`/`amend-practice` had a second door built. Call
 orchestrator function directly with an explicit `--actor`, the same reason those three do:
 a real provenance loss otherwise, not a generic "session" bucket.
 
-## `osiris amend-decision <ref> <addendum> --actor <who>`
+## `osiris amend-decision <ref> <addendum> [--actor <who>]`
 
 The other half of that same pair — the sanctioned second door onto `capture.amend_decision`.
 Appends reasoning to a LIVE decision as understanding develops, WITHOUT superseding it;
@@ -235,24 +323,34 @@ Appends reasoning to a LIVE decision as understanding develops, WITHOUT supersed
 already superseded (amend the successor instead, or use `record_decision(supersedes=...)`
 for an actual correction).
 
-## `osiris mint-seat <handle> --manager <seat> [--project] [--house] [--model] --actor [--adopt] [--force]`
+## `osiris mint-seat <handle> [--manager <seat>] [--project] [--house] [--model] [--actor] [--adopt] [--force]`
 
 The sanctioned second door onto `mintseat.mint_seat` — a DIFFERENT shape of gap than the
-three doors above: those exist because a client's tool index can go stale; this one exists
-because the `mint_seat` MCP tool has **no `manager` parameter at all** — it infers the
-manager from the calling agent's own held seat ("the calling seat is always the manager...
-minting into someone else's org is a console act, deliberately absent here," `mint_seat`'s
-own docstring). A raw terminal has no mounted agent identity to infer from, so this door
-takes `manager` explicitly — the same refuse-never-guess discipline the other second doors
-already apply to `--actor`, extended one parameter further.
+doors above: those exist because a client's tool index can go stale; this one exists because
+the `mint_seat` MCP tool has **no `manager` parameter at all** — it infers the manager from
+the calling agent's own held seat ("the calling seat is always the manager... minting into
+someone else's org is a console act, deliberately absent here," `mint_seat`'s own
+docstring). A raw terminal has no mounted agent identity to infer from.
+
+**`--manager` is inferred, not required** (dispatch 3678/3681): omit it and this door looks
+for the *sole* existing seat in the target house — `--house` if given, else the cwd's own
+`.osiris` pin, else the cwd's own directory name — and uses it. Zero or several candidate
+seats refuses loudly, naming what was tried and how to disambiguate, never a silent guess.
+Naming a `--house` with no seats in it at all (a brand-new house/project) always needs an
+explicit `--manager` naming any existing seat elsewhere — crossing into an empty house has
+nothing to infer from by construction, and `mint_seat`'s own cross-house guard requires it
+anyway (satisfied automatically: `--actor` already defaults to an operator actor).
 
 One call does the whole ceremony: `ensure_seat` + the office scaffold (dir, `.osiris` pin,
-`CLAUDE.md` + `charter.md`) + an `intended_model` stamp + the `managed_by` edge to
-`--manager`. Idempotent — a handle that already names a living seat is *adopted*
+`CLAUDE.md` + `charter.md`) + an `intended_model` stamp + the `managed_by` edge to the
+manager. Idempotent — a handle that already names a living seat is *adopted*
 (fill-missing-only), never twinned; `--adopt` states that intent explicitly (refuses on no
 match rather than silently minting fresh), `--force` is the only door past a near-miss
-handle refusal (ruling `7cffda8f`). The receipt prints `mint_seat`'s own occupancy-aware
-next step — vacant names the exact `launch(target=...)` call to body it next.
+handle refusal (ruling `7cffda8f`). Both are **deliberate console-only escape hatches** —
+stated explicitly in `mint_seat`'s own MCP docstring since dispatch 3683's addendum — an
+agent caller can never reach them, on purpose: an ordinary coordinator's mint never needs to
+refuse-instead-of-adopt or force past a safety guard. The receipt prints `mint_seat`'s own
+occupancy-aware next step — vacant names the exact `launch(target=...)` call to body it next.
 
 This closes the exact gap this file's own house law names below: before this command
 existed, standing up a brand-new seat from a terminal had no door but a hand-rolled

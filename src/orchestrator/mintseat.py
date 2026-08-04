@@ -50,7 +50,13 @@ from typing import Any
 from src.actions.core import Actions
 from src.orchestrator.boot_compiler import compile_managed_body, template_version, wrap_managed
 from src.orchestrator.offices import _CHARTER_TEMPLATE, _DEFAULT_OFFICE_ROOT
-from src.orchestrator.seats import _OPERATOR_ACTORS, ensure_seat, seat_facts, seat_occupancy
+from src.orchestrator.seats import (
+    _OPERATOR_ACTORS,
+    bind_seat_tree,
+    ensure_seat,
+    seat_facts,
+    seat_occupancy,
+)
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -149,7 +155,7 @@ async def _near_miss(pool: Any, handle: str) -> str | None:
 
 async def _scaffold_office(
     actions: Actions, *, handle: str, house: str, project: str, intended_model: str,
-    office_root: Path, seat_id: str, manager_seat_id: str,
+    office_root: Path, seat_id: str, manager_seat_id: str | None,
 ) -> dict[str, Any]:
     """A worker's office — dir + `.osiris` (project AND model, assignment 3's own gap
     for pre-existing seats closed at birth for a new one) + CLAUDE.md + charter.md + the
@@ -160,10 +166,18 @@ async def _scaffold_office(
     exist to collide with, and an ADOPTED seat's office (Alfred's field pilot, ruling
     7cffda8f — Tantra's real shell was an operator-made dir with no pin, no orders, a
     HOLLOW adoption otherwise) gets exactly its missing pieces filled, nothing present
-    ever touched. `manager_seat_id` is passed explicitly (role='worker' is explicit
-    too) rather than derived live — the caller's own `managed_by` link isn't created
-    until AFTER this call returns, so a live derive here would read a brand-new worker
-    as a manager-less 'coordinator'."""
+    ever touched. `manager_seat_id` is passed explicitly (role is explicit too) rather
+    than derived live — the caller's own `managed_by` link, when there is one, isn't
+    created until AFTER this call returns, so a live derive here would read a brand-new
+    worker as a manager-less 'coordinator'.
+
+    `manager_seat_id=None` scaffolds a SELF-MANAGED seat instead (dispatch 3685/3688,
+    `osiris new` — Ooblek's own real shape: a seat with no `managed_by` edge at all,
+    never a flag, the absence itself). Role becomes 'coordinator' (the only template
+    `derive_role` would ever assign a manager-less seat live, so this matches what a
+    later `reissue_office` would derive anyway) and the charter prompt drops the
+    worker-specific "GOVERNS, not where it sits" framing for language that doesn't
+    presuppose an org chart above this seat."""
     office = office_root / handle.lower()
     office.mkdir(parents=True, exist_ok=True)
     pin = office / ".osiris"
@@ -174,16 +188,23 @@ async def _scaffold_office(
     orders = office / "CLAUDE.md"
     orders_state = "left in place"
     if not orders.exists():
+        if manager_seat_id is not None:
+            role, charter_block = "worker", (
+                "Your charter was never formally declared — it lives only in prose. First "
+                "act: `charter(repos=[...])` naming the repos you actually govern. A house "
+                "is what a seat GOVERNS, not where it sits.")
+        else:
+            role, charter_block = "coordinator", (
+                "Your charter was never formally declared — it lives only in prose. First "
+                "act: `charter(repos=[...])` naming the project you actually own — this "
+                "seat has no manager, so nobody else will do it for you.")
         body = await compile_managed_body(
             actions, seat_id=seat_id, handle=handle, house=house, office=str(office),
             seat_line=" — not yet seated: your next claim binds you (the on-ramp).",
-            charter_block=(
-                "Your charter was never formally declared — it lives only in prose. First "
-                "act: `charter(repos=[...])` naming the repos you actually govern. A house "
-                "is what a seat GOVERNS, not where it sits."),
+            charter_block=charter_block,
             # a FRESH mint can never yet carry a peer_of edge (offices.py's own
             # establish_office is where a peer bonded later gets picked up live)
-            peer_block="\n", role="worker", manager_seat_id=manager_seat_id)
+            peer_block="\n", role=role, manager_seat_id=manager_seat_id)
         orders.write_text(wrap_managed(body, template_version()))
         orders_state = "written"
     charter = office / "charter.md"
@@ -353,5 +374,132 @@ async def mint_seat(
         "intended_model_stamped": stamped_model,
         "manager_seat_id": manager_seat_id,
         "managed_by": "linked" if linked_now else "already linked",
+        "occupancy": occ["state"], "holder": occ["holder"], "next_step": next_step,
+    }
+
+
+async def found_seat(
+    actions: Actions, *, handle: str, path: str | None = None,
+    project: str | None = None, intended_model: str = DEFAULT_WORKER_MODEL,
+    office_root: Path | None = None, actor: str,
+) -> dict[str, Any]:
+    """ONE ACT, no ceremony (dispatch 3685/3688, the operator's own "too much witchcraft
+    to spawn a project... I'll remember 'osiris new' boom"): found a SELF-MANAGED seat —
+    Ooblek's own real shape, a Seat with NO `managed_by` edge at all, never a flag, the
+    absence itself (read off Ooblek's own dossier before building this, not assumed:
+    seat:e9db6202 was self-claimed, then given an office, then — hours later, live —
+    self-declared its own `governs` edge; no minting agent, no manager, ever). Composes
+    the SAME primitives `mint_seat` does (`ensure_seat` + `_scaffold_office`, with
+    `manager_seat_id=None`) plus `bind_seat_tree` for the CODE workspace — deliberately
+    distinct from the seat's own identity office (offices.py's own ruling ed5f5ce2:
+    "agents sit at ~/.osiris/seats/<handle>/, code stays in the repos they GOVERN").
+
+    `path` defaults to `~/code/<handle>` (this repo's own convention) and is created if
+    absent — osiris never assumes a git repo already exists there (a project needs none;
+    resolution reads a `.osiris` pin or a bare folder name, never git — proven, not
+    assumed: `~/.osiris/seats/ooblek` is not a repo and carries `project = "stopslop"`
+    fine). `project` defaults to `handle`. Neither `.osiris` pin (the workspace's own, and
+    the office's own) is ever overwritten if already present — fill-missing-only, the same
+    law every office write in this codebase holds.
+
+    DOES NOT eagerly create a `governs` edge — inventing one on an unlaunched mind's
+    behalf would be exactly the kind of fact this call has no standing to assert. The
+    scaffolded CLAUDE.md's own charter_block already tells a fresh, self-managed seat to
+    `charter(repos=[...])` naming its own project as its first act, once it is actually
+    live to say so in its own voice — matching Ooblek's own real bootstrap order exactly.
+
+    IDEMPOTENT: a handle that already names a living, ALREADY self-managed seat converges
+    (fills in whatever's missing, mints nothing new). A handle that names a living MANAGED
+    seat (a real `managed_by` edge already out) REFUSES — this call founds independence,
+    it does not strip an existing manager. A near-miss handle (Tantra-vs-'tantra 1' shape,
+    ruling 7cffda8f) refuses the same way `mint_seat`'s own fresh path does."""
+    from src.orchestrator.seats import manager_of_seat
+
+    handle = (handle or "").strip()
+    if not handle:
+        return {"error": "a self-managed seat needs a handle"}
+    person = await _person_collision(actions.pool, handle)
+    if person:
+        return {"error": f"{handle!r} names a Person record ({person}), not a seat — "
+                         "found_seat never mints or adopts a case entity as a worker"}
+
+    root = office_root or _DEFAULT_OFFICE_ROOT
+    office_path = root / handle.lower()
+    project_name = project or handle
+    # Path.home() alone, never `.expanduser()` (ASYNC240, this codebase's own ruff gate,
+    # flags that specific method inside an async def; a shell has already expanded a
+    # literal `~` in `path` by the time argv reaches this call anyway — this only
+    # defensively handles a caller that passed one through unexpanded, e.g. a test).
+    if path and (path == "~" or path.startswith("~/")):
+        workspace = Path.home() / path[2:]
+    elif path:
+        workspace = Path(path)
+    else:
+        workspace = Path.home() / "code" / handle.lower()
+
+    existing_seat_id = await _resolve_seat_ref(actions.pool, handle)
+    if existing_seat_id is not None:
+        existing_manager = await manager_of_seat(actions.pool, existing_seat_id)
+        if existing_manager is not None:
+            return {"error": f"{handle!r} ({existing_seat_id}) already names a MANAGED "
+                             f"seat (manager {existing_manager}) — found_seat only founds "
+                             "or converges on a self-managed one; pick a different handle, "
+                             "or work with the existing seat through its own manager"}
+        worker_seat_id = existing_seat_id
+        seat_minted = False
+    else:
+        near = await _near_miss(actions.pool, handle)
+        if near:
+            return {"error": f"near-miss twin refused: living seat {near!r} normalizes to "
+                             f"the same name as {handle!r} — pass the exact handle {near!r} "
+                             "to work with it, or choose a distinct one"}
+        seat_result = await ensure_seat(
+            actions, house=handle, handle=handle, source=actor, anchor_cwd=str(office_path))
+        if "error" in seat_result:
+            return seat_result
+        worker_seat_id = seat_result["seat_id"]
+        seat_minted = bool(seat_result["minted"])
+
+    workspace.mkdir(parents=True, exist_ok=True)
+    workspace_pin = workspace / ".osiris"
+    workspace_pin_state = "left in place"
+    if not workspace_pin.exists():
+        workspace_pin.write_text(f'project = "{project_name}"\n')
+        workspace_pin_state = "written"
+
+    office_result = await _scaffold_office(
+        actions, handle=handle, house=handle, project=project_name,
+        intended_model=intended_model, office_root=root, seat_id=worker_seat_id,
+        manager_seat_id=None)
+
+    tree = await bind_seat_tree(
+        actions, seat_id=worker_seat_id, tree_cwd=str(workspace), actor=actor,
+        because=f"osiris new: {handle}'s own code workspace")
+
+    worker_obj = await actions.create_or_find_object("Seat", worker_seat_id, actor)
+    worker_facts = await seat_facts(actions.pool, worker_seat_id)
+    stamped_model = False
+    if not worker_facts.get("intended_model"):
+        await actions.assert_property(worker_obj, "intended_model", intended_model, actor,
+                                      datetime.now(UTC), _CONF, evidence_class=_EC)
+        stamped_model = True
+
+    occ = await seat_occupancy(actions.pool, worker_seat_id)
+    next_step = {
+        "vacant": f"no session has ever attached — furniture until a body sits in it; "
+                 f"launch(target={handle!r}) to body it",
+        "occupied": "already live — no next step, someone's home",
+        "cold": "held, but nobody's live right now — its holder resumes on its own next "
+               "mount; no outside hand needed",
+    }[occ["state"]]
+
+    return {
+        "seat_id": worker_seat_id, "handle": handle, "house": handle,
+        "seat_minted": seat_minted, "project": project_name, "workspace": str(workspace),
+        "workspace_pin": workspace_pin_state, "office": office_result,
+        "tree_cwd": tree.get("tree_cwd"),
+        "intended_model": intended_model if stamped_model else worker_facts.get("intended_model"),
+        "intended_model_stamped": stamped_model,
+        "managed_by": None,
         "occupancy": occ["state"], "holder": occ["holder"], "next_step": next_step,
     }
