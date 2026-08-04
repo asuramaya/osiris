@@ -2246,6 +2246,46 @@ async def test_correct_house_refuses_a_caller_with_no_seat(actions: Actions) -> 
     assert "holds no seat" in out["error"]
 
 
+async def test_correct_house_mcp_wrapper_moves_orient_without_reconnecting(
+    actions: Actions,
+) -> None:
+    """THE SAME ACCEPTANCE TEST invalidate_works_in's own wrapper carries (Thoth's ruling,
+    thread 8640a625 / decision 4001f6d1 — the gap that made John's own fix appear to take
+    effect three steps late): a live session correcting its OWN house must see orient()'s
+    resolution move WITHOUT reconnecting, not just the DB row."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity, claim_name
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    claimed = await claim_name(actions, "agent:chwrap1aa", "ChwrapHead", source="test")
+    assert claimed.get("error") is None
+
+    ident = AgentIdentity(agent_id="agent:chwrap1aa", session="chwrap1", project="oldhouse",
+                          model="claude-sonnet-5", cwd=None, model_method="job_dir",
+                          model_history=("claude-sonnet-5",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    key = srv._conn_key(ctx)
+    srv._agents[key] = ident
+    try:
+        before = await srv.orient(ctx=ctx)
+        assert before["project"] == "oldhouse"               # the stale cache, before anything
+
+        out = await srv.correct_house("newhouse", ctx=ctx)
+        assert out["house"] == "newhouse"
+
+        after = await srv.orient(ctx=ctx)                    # SAME ctx — no reconnect
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(key, None)
+    assert after["project"] == "newhouse"                    # RESOLUTION moved, not just the row
+
+
 async def test_fold_seat_moves_active_holders_and_estate_the_vajra_shape(
     actions: Actions,
 ) -> None:

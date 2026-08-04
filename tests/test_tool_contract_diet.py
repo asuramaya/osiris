@@ -291,13 +291,27 @@ def _tool_chars(t: Any) -> int:
 # way. 133,673 -> 135,077, +1,404. 100 -> 101 tools. Exact measured total via this file's
 # own `_measure_tool_contract`, not a round number.
 #
-# RAISED, succession_chain gains `session` (2026-08-04, ruling 7fa4b599's own named
-# additive step, task #135/#136 point 4): the operator asked how to reliably tell the
-# latest transcript; the record already existed (mount() asserts it on every generation's
-# own Agent object) and the walker just never read it — one subquery, no new tool, no new
-# table. 135,077 -> 135,292, +215. 101 -> 101 tools (no tool added or removed). Exact
-# measured total via this file's own `_measure_tool_contract`, not a round number.
-TOOL_CONTRACT_CEILING_CHARS = 135_292
+# RAISED TWICE IN ONE MERGE, and this comment block is the resolution of a real conflict —
+# two workers raised this constant from the SAME base (135,077) on parallel branches, to
+# 135,292 and 135,189 respectively. NEITHER number is correct for the merged tree: they are
+# disjoint docstring growth, so the combined total is larger than either. The conflict was
+# resolved by RE-MEASURING via this file's own `_measure_tool_contract` on the merged tree,
+# never by taking the larger of the two. Both causes below; both are true.
+#
+# (a) succession_chain gains `session` (ruling 7fa4b599's own named additive step, task
+# #135/#136 point 4): the operator asked how to reliably tell the latest transcript; the
+# record already existed (mount() asserts it on every generation's own Agent object) and
+# the walker just never read it — one subquery, no new tool, no new table. +215 alone.
+#
+# (b) the cache-coherence follow-on (thread 8640a625 / decision 4001f6d1):
+# invalidate_works_in and correct_house now patch every live cached identity in the
+# caller's own lineage after a successful write, closing the gap that made John's own fix
+# appear to take effect three steps late (rebind_seat's own docstring named the trap first;
+# neither of these two followed it). One sentence added to correct_house's own MCP-facing
+# docstring; invalidate_works_in's own docstring untouched, only its code grew. +112 alone.
+#
+# 135,077 -> 135,404. 101 -> 101 tools, no tool added or removed.
+TOOL_CONTRACT_CEILING_CHARS = 135_404
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
