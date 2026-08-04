@@ -2978,7 +2978,10 @@ async def test_launch_harness_lane_can_receive_true_when_the_session_comes_up_li
 
     assert d["status"] == "launched"
     assert d["body_exists"] is True and d["can_receive"] is True
-    assert d["detail"] == "body created and live"
+    # THE RECEIPT NAMES THE RESUME DECISION EVERY TIME (Thoth msg 3691) — no bare "body
+    # created and live" anymore; a holder with no session on record says so, then "; live".
+    assert d["detail"].startswith("booted fresh") and d["detail"].endswith("; live")
+    assert d["resume_check"] == ["gen None: minted but never mounted, no session to check"]
 
 
 async def test_launch_harness_lane_reports_refused_spawn_when_claude_bg_fails(
@@ -3096,21 +3099,63 @@ async def test_launch_harness_lane_delivers_the_opening_brief_over_the_mail_lane
 # resume branch, REUSED via `_resume_guard`/`_agent_resumable`/`_DM_RESUME_PROMPT`, never
 # reimplemented. ONE-SHOT: the resumed body runs its turn and exits — re-summonable via the
 # next mail wake, not a standing window (315c3181's own unresolved tradeoff, now settled).
+#
+# LIVE-FIRE CORRECTION (Thoth msg 3691, 2026-08-04, Sekhmet): the lookup moved from
+# agent_mounts (wakeable_identity/_agent_resumable, dispatch_dm's own DM-lane shape) to a
+# succession_chain WALK (_lineage_resume_candidate) — a `--bg`-launched seat's every
+# generation shares ONE durable per-seat mount anchor, so agent_mounts can never encode a
+# real per-generation session id; only the graph's own `session` property assertion
+# survives. The fixtures below assert `session` directly (succession_chain's own shape),
+# never `mounts.save_mount` — the old agent_mounts-only setup silently stopped exercising
+# the resume path at all once this fix landed (it still "passed" by falling through to
+# mint, for the wrong reason — caught rewriting these tests, not left in).
+
+
+async def _lineage_holder_with_session(
+    actions: Actions, tmp_path: Path, *, agent_id: str, transcript_bytes: int = 16,
+    compacted: bool = False,
+) -> Path:
+    """A seat holder whose resumable session lives ONLY as a graph `session` property
+    (succession_chain's own shape) plus a real transcript on disk anchored to that same
+    session id — NOT an agent_mounts row, which is exactly the record this fixture proves
+    the new lookup no longer needs. Returns the sense root."""
+    import os
+    import time as _time
+
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-demo"
+    proj.mkdir(parents=True, exist_ok=True)
+    t = proj / f"{FULL_SID}.jsonl"
+    signed = ('{"type":"user","toolUseResult":'
+              '"{\\"sent\\":1,\\"from\\":\\"' + agent_id + '\\"}"}\n').encode()
+    body = signed + (_COMPACT_LINE if compacted else b"") + b"x" * transcript_bytes
+    t.write_bytes(body)
+    old = _time.time() - 3600
+    os.utime(t, (old, old))
+    obj = await actions.create_or_find_object("Agent", agent_id, "test")
+    await actions.assert_property(obj, "seat_generation", "1", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(obj, "session", FULL_SID, "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    return sense
 
 async def test_launch_harness_lane_resumes_a_stale_but_resumable_holder(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The payoff: a seat whose last holder left a resumable session is CONTINUED via its
-    own `-p --resume`, never minted fresh — mode='resumed' in the receipt, the shared
-    `_DM_RESUME_PROMPT` (never a launch-specific copy), and the spawn call carries
-    resume_session, never job_dir (a resume is not a birth). The resumed body's own cwd
-    comes from ITS transcript's own mount, not the seat's configured office — proven by
-    setting them to different paths."""
-    sense = await _stale_resumable_owner(actions, tmp_path)
+    """The payoff: a seat whose holder left a resumable session (a graph `session`
+    property — the ONLY record that survives the shared-anchor collapse, see this
+    section's own header comment) is CONTINUED via its own `-p --resume`, never minted
+    fresh — mode='resumed' in the receipt, the shared `_DM_RESUME_PROMPT` (never a
+    launch-specific copy), and the spawn call carries resume_session, never job_dir (a
+    resume is not a birth). The resumed body's own repo is the SEAT's own launch_cwd —
+    deliberately, not a per-generation agent_mounts.cwd, which is exactly the record this
+    lookup no longer trusts (see _lineage_resume_candidate's own docstring)."""
+    sense = await _lineage_holder_with_session(
+        actions, tmp_path, agent_id="agent:abcd1234")
     worker_seat, _manager_seat = await _managed_pair(
         actions, worker_agent="agent:abcd1234", manager_agent="agent:hm-resume",
         worker_handle="Stale-Test", house="osiris")
-    await _office(actions, worker_seat, "/tmp/stale-test-office")  # deliberately NOT /repo/demo
+    await _office(actions, worker_seat, "/tmp/stale-test-office")
     manc = await actions.create_or_find_object("Agent", "agent:hm-resume", "test")
     await actions.assert_property(manc, "project", "osiris", "test", NOW, 0.9,
                                   evidence_class="self_declared")
@@ -3132,9 +3177,12 @@ async def test_launch_harness_lane_resumes_a_stale_but_resumable_holder(
     assert d["session"] == FULL_SID
     assert d["body_exists"] is True and d["can_receive"] is True
     assert d.get("brief_message_id")
+    # THE RECEIPT NAMES THE DECISION (Thoth msg 3691): which generation, how far back.
+    assert d["resume_check"] == [f"gen 1 (session {FULL_SID[:8]}, 0MB): resumable, 0 hop(s) back"]
+    assert "gen 1" in d["detail"] and "1 generation(s) back" in d["detail"]
     assert len(resumed) == 1
     call = resumed[0]
-    assert call["repo"] == "/repo/demo"  # the HOLDER's own mount cwd, not the seat's office
+    assert call["repo"] == "/tmp/stale-test-office"  # the SEAT's own launch_cwd
     assert call.get("resume_session") == FULL_SID
     assert "job_dir" not in call  # a resume is not a birth (mirrors dispatch_dm's own call)
     assert "private" in call["prompt"] and "seat" in call["prompt"]  # _DM_RESUME_PROMPT itself
@@ -3143,6 +3191,50 @@ async def test_launch_harness_lane_resumes_a_stale_but_resumable_holder(
     row = await actions.pool.fetchrow(
         "SELECT body FROM fleet_messages WHERE id=$1", int(d["brief_message_id"]))
     assert row is not None and "pick up where you left off" in row["body"]
+
+
+async def test_launch_harness_lane_walks_past_a_zero_turn_generation(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE LIVE-FIRE CASE ITSELF (Thoth msg 3691, Sekhmet): the seat's CURRENT holder is a
+    generation minted at a compaction seam whose body never ran (no `session` asserted at
+    all) — the walk must go ONE HOP BACK to the predecessor's own resumable session,
+    exactly as succession_chain's own generation-2 test fixture shapes it, rather than
+    reporting the whole seat unresumable the instant the newest generation turns out
+    stillborn."""
+    # NAMING NOTE: "agent:seat-zt" (no suffix) is generation 1 by _generation()'s own
+    # convention (agent:x = gen 1; agent:x-ii = gen 2) — a "-i" suffix on the ROOT would
+    # parse as its OWN base (roman "i" = 1, which _generation only splits at >= 2), landing
+    # the signed-tail check on a different base than the successor's and refusing as a
+    # false crossed-registry mismatch. Matched to house convention, not worked around.
+    sense = await _lineage_holder_with_session(
+        actions, tmp_path, agent_id="agent:seat-zt")
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:seat-zt-ii", manager_agent="agent:hm-zt",
+        worker_handle="ZeroTurn-Test", house="osiris")
+    await actions.assert_property(
+        (await actions.create_or_find_object("Agent", "agent:seat-zt-ii", "test")),
+        "succeeded_from", "agent:seat-zt", "test", NOW, 0.9,
+        evidence_class="self_declared")  # minted, never mounted — no seat_generation/session
+    await _office(actions, worker_seat, "/tmp/zeroturn-test")
+    spawned: list[dict[str, Any]] = []
+    resumed: list[dict[str, Any]] = []
+
+    async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
+        resumed.append({"repo": repo, "prompt": prompt, **kw})
+
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm-zt", target=worker_seat, substrate="harness",
+        settings=_settings(enabled=True, sense=str(sense)),
+        spawn=_fake_spawn(spawned), resume_spawn=_resume_spawn,
+        agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "launched" and d["mode"] == "resumed"
+    assert d["session"] == FULL_SID
+    assert spawned == []  # never minted fresh
+    assert len(resumed) == 1 and resumed[0].get("resume_session") == FULL_SID
+    assert d["resume_check"][0] == "gen None: minted but never mounted, no session to check"
+    assert "resumable, 1 hop(s) back" in d["resume_check"][1]
 
 
 async def test_launch_harness_lane_falls_through_to_mint_when_nothing_is_resumable(
@@ -3172,30 +3264,15 @@ async def test_launch_harness_lane_falls_through_to_mint_when_nothing_is_resumab
 async def test_launch_harness_lane_never_resumes_past_the_compaction_gate(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thoth's explicit condition (msg 3639): 'resumable does not mean resume-everything' —
-    a holder whose transcript compacted even once, at the default max_compactions=0, falls
-    through to mint fresh exactly like the no-history case, never resumed. Same gate
-    dispatch_dm's mail-wake already honors (`_agent_resumable` itself), reused here by
-    construction rather than re-checked by hand."""
-    import os
-    import time as _time
-
-    from src.orchestrator import mounts
-
-    job = tmp_path / "jobs" / "abcd1234"
-    sense = tmp_path / "projects"
-    proj = sense / "-repo-demo"
-    proj.mkdir(parents=True, exist_ok=True)
-    t = proj / f"{FULL_SID}.jsonl"
-    signed = (b'{"type":"user","toolUseResult":'
-              b'"{\\"sent\\":1,\\"from\\":\\"agent:abcd1234\\"}"}\n')
-    t.write_bytes(signed + _COMPACT_LINE + b"x" * 16)
-    old = _time.time() - 3600
-    os.utime(t, (old, old))
-    await mounts.save_mount(actions.pool, job_dir=str(job), agent_id="agent:abcd1234",
-                            project="demo", cwd="/repo/demo", model=None, session_key=None)
-    await actions.pool.execute(
-        "UPDATE agent_mounts SET last_seen = now() - interval '1 hour'")
+    """Thoth's explicit condition (msg 3639, reaffirmed live in msg 3691's own build order,
+    point 3 — 'do NOT loosen the compaction gate to make this case resume, it was right to
+    refuse'): a holder whose transcript compacted even once, at the default
+    max_compactions=0, falls through to mint fresh exactly like the no-history case, never
+    resumed. The receipt still NAMES the refusal with real numbers (Thoth's own worked
+    example: 'gen 11's transcript is 32MB, 12 compactions, gate is 0 — booting fresh'),
+    not a silent fall-through."""
+    sense = await _lineage_holder_with_session(
+        actions, tmp_path, agent_id="agent:abcd1234", compacted=True)
     worker_seat, _manager_seat = await _managed_pair(
         actions, worker_agent="agent:abcd1234", manager_agent="agent:hm-compact",
         worker_handle="Compacted-Test", house="osiris")
@@ -3213,6 +3290,13 @@ async def test_launch_harness_lane_never_resumes_past_the_compaction_gate(
 
     assert d["status"] == "launched" and "mode" not in d
     assert len(spawned) == 1
+    # THE REFUSAL IS NAMED, NOT SILENT: the receipt carries which generation, its size, and
+    # the specific gate that fired — a human reads one line instead of re-deriving it.
+    assert len(d["resume_check"]) == 1
+    reason = d["resume_check"][0]
+    assert "gen 1" in reason and f"session {FULL_SID[:8]}" in reason
+    assert "compacted 1 time" in reason
+    assert "max_compactions=0" in d["detail"]
 
 
 # ═══ tree_cwd (task #103's re-scope, ff3bdc37, Thoth DM 2794) — the office/code split. ═══

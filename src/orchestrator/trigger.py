@@ -957,6 +957,76 @@ async def _resume_guard(
     return None
 
 
+async def _lineage_resume_candidate(
+    pool: asyncpg.Pool, holder: str, st: Settings, *, repo: str,
+) -> tuple[tuple[str, str, float, str], list[str]] | list[str]:
+    """THE STRUCTURAL FIX for a live-fire defect (Thoth, 2026-08-04, msg 3691 — Sekhmet):
+    `_agent_resumable`/`wakeable_identity` resolve a resume candidate through
+    `agent_mounts.job_dir`, which works for a `-p --resume`-triggered wake (a fresh,
+    session-specific job_dir every time) but NOT for a `--bg`-launched seat: `_launch_anchor`
+    gives EVERY generation of one seat the SAME durable per-seat anchor
+    (".../jobs/<seat-id>"), set once in CLAUDE_JOB_DIR at process spawn and unchanged for
+    that process's entire life — so agent_mounts' one shared row for that anchor NEVER
+    encodes a real session id, only whichever generation most recently mounted (confirmed
+    live against Sekhmet's own data: her 32MB, 12-compaction gen-11 session, d80350e5, has
+    NO agent_mounts row at all — it was overwritten the instant gen 12 mounted, even though
+    gen 12's own body never ran a single turn). This is not a zero-turn-generation edge
+    case alone; it is the whole `--bg`-anchor scheme colliding with a job-dir-keyed lookup,
+    for EVERY generation in a self-compacting lineage, not only a stillborn one.
+
+    THE FIX: walk `succession_chain` (reused, not reimplemented — it already returns the
+    one thing agent_mounts cannot: `session`, a GRAPH property register_agent stamps on
+    every mount, per Agent object, immune to the shared-anchor collapse) from `holder`
+    backward, and for each hop with a session, apply the IDENTICAL gate
+    `_agent_resumable`'s own hot path uses (`_resume_candidate_verdict` — so the compaction
+    +ceiling gates can never drift between the two lookup strategies). Bounded by
+    succession_chain's own MAX_SUCCESSION_HOPS, the same "a walk never widens unbounded"
+    discipline as every other resume check in this file.
+
+    Returns ((session_id, repo, mtime, job_dir=""), log) on the first hop that clears both
+    gates — `repo` is the CALLER's own `launch_cwd`, since every generation of one seat
+    works in the same place by construction, not a per-hop agent_mounts.cwd (which suffers
+    the identical anchor-collapse this function exists to route around); `job_dir=""`
+    because no per-hop anchor is available for `_resume_guard`'s corroboration fallback —
+    a known, disclosed narrowing (see the caller's own receipt/report), not a silent one.
+    Returns the bare `log` (no candidate) when NOTHING in the walk clears both gates — each
+    entry names the generation, its session's transcript size, and the SPECIFIC gate that
+    refused it (numbers, not adjectives — Thoth's own explicit requirement), so a caller's
+    receipt can read one line instead of a human re-running succession_chain by hand."""
+    from src.orchestrator.succession import succession_chain
+
+    chain = await succession_chain(pool, holder)
+    root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
+        else Path.home() / ".claude" / "projects"
+    log: list[str] = []
+    for hop in chain:
+        gen, session = hop["generation"], hop["session"]
+        if not session:
+            log.append(f"gen {gen}: minted but never mounted, no session to check")
+            continue
+        t = await asyncio.to_thread(
+            locate_current_transcript, root, f"jobs/{session}", anchored_only=True)
+        if t is None:
+            log.append(f"gen {gen} (session {session[:8]}): mounted but no transcript "
+                       "found on disk")
+            continue
+        try:
+            size_mb = t.stat().st_size / 1_000_000
+        except OSError:
+            log.append(f"gen {gen} (session {session[:8]}): transcript unreadable")
+            continue
+        verdict = await asyncio.to_thread(
+            _resume_candidate_verdict, t, st.osiris_resume_ceiling_bytes,
+            st.osiris_resume_max_compactions)
+        if verdict is not None:
+            log.append(f"gen {gen} (session {session[:8]}, {size_mb:.0f}MB): {verdict}")
+            continue
+        log.append(f"gen {gen} (session {session[:8]}, {size_mb:.0f}MB): resumable, "
+                   f"{len(log)} hop(s) back")
+        return (session, repo, t.stat().st_mtime, ""), log
+    return log
+
+
 def _mail_envelope(msg_id: int, *, sender_label: str, addressee_label: str,
                    grade: str | None, preview: str) -> str:
     """The nudge as a CUTE LITTLE MAIL (operator, 2026-07-20: 'formatting is important so
@@ -1649,13 +1719,26 @@ async def launch_seat(
 
     THE RESUME LANE (operator's own order, 2026-08-04, ruling via decision a829a15d + msg
     3639 — reverses the "not built, deliberately" call in 315c3181): the harness lane, before
-    minting fresh, now checks whether the seat's own last holder left a resumable session
-    (`_agent_resumable`, the SAME compaction+ceiling gates dispatch_dm's mail-wake already
-    honors — resumable never means resume-everything) and, if so, CONTINUES it instead —
-    reusing dispatch_dm's own resume branch (`_resume_guard`, `_DM_RESUME_PROMPT`,
-    `_spawn_claude`'s `--resume` lane it already runs in production) rather than
-    reimplementing it, so the two can never drift apart the way a hand-copied gate check
-    already has once this reign (eebeb1f). ONE-SHOT, DELIBERATELY, not a standing window: a
+    minting fresh, now checks whether the seat's own lineage left a resumable session
+    (`_lineage_resume_candidate` — walks past a zero-turn generation to find one, the SAME
+    compaction+ceiling gates dispatch_dm's mail-wake already honors — resumable never means
+    resume-everything) and, if so, CONTINUES it instead — reusing dispatch_dm's own resume
+    machinery (`_resume_guard`, `_DM_RESUME_PROMPT`, `_spawn_claude`'s `--resume` lane it
+    already runs in production) rather than reimplementing it, so the two can never drift
+    apart the way a hand-copied gate check already has once this reign (eebeb1f).
+
+    WHY A LINEAGE WALK, NOT PLAIN `_agent_resumable` (live-fire correction, 2026-08-04,
+    Thoth msg 3691 — Sekhmet): a `--bg`-launched seat's every generation shares ONE durable
+    per-seat mount anchor (`_launch_anchor`), fixed in CLAUDE_JOB_DIR for that OS process's
+    entire life — so `agent_mounts`' one shared row for it NEVER encodes a real session id,
+    only whichever generation most recently mounted, and a plain `agent_mounts`-keyed
+    lookup is structurally blind to every earlier generation's own resumable transcript,
+    not merely a stillborn one. `_lineage_resume_candidate` reads `session` instead — a
+    GRAPH property, immune to the shared-anchor collapse — and the receipt now NAMES the
+    decision every time (which generation, how many hops back, the actual transcript size
+    and gate numbers), never a silent correct-by-accident refusal (4ef68cfe).
+
+    ONE-SHOT, DELIBERATELY, not a standing window: a
     `-p --resume` body runs its one turn and exits (confirmed live: `claude agents --json
     --all` cannot retain it even when the body itself calls mount() mid-turn — a harness
     fact, not ours to fix, decision a829a15d). This is not a downgrade from `--bg`'s
@@ -1668,7 +1751,6 @@ async def launch_seat(
     parallel to `spawn`/`agents_json`/`cost_reader` above."""
     pool = actions.pool
     from src.orchestrator.agents import _generation, house_of
-    from src.orchestrator.folds import wakeable_identity
     from src.orchestrator.seats import held_seat, seat_receipt
     manager = manager or _manager_control
     windows = windows or _manager_windows
@@ -1845,15 +1927,32 @@ async def launch_seat(
                     "detail": f"a live body already holds {handle} — not minting a twin"}
 
         # THE RESUME LANE (this docstring's own "THE RESUME LANE" section explains the
-        # policy; this is just the mechanism). Checked BEFORE minting fresh: a resumable
-        # session for this seat's own last holder is dispatch_dm's exact resume shape,
-        # reused rather than reimplemented. `holder` (not `target_seat`) is the identity
-        # `_agent_resumable`/`_resume_guard` need — a Seat is never itself an Agent lineage.
+        # policy; this is just the mechanism). Checked BEFORE minting fresh. `holder` (not
+        # `target_seat`) is the identity `_lineage_resume_candidate`/`_resume_guard` need —
+        # a Seat is never itself an Agent lineage. WALKS THE LINEAGE (`_lineage_resume_
+        # candidate`, not the plain agent_mounts-keyed `_agent_resumable`/`wakeable_
+        # identity` dispatch_dm's DM lane uses) — a `--bg`-launched seat's every generation
+        # shares ONE durable per-seat mount anchor, so the job-dir-keyed lookup is
+        # structurally blind to any of them; the lineage's own `session` graph property
+        # survives where agent_mounts cannot (see that function's own docstring; live-fire
+        # finding, Thoth msg 3691, Sekhmet).
         holder = ((await seat_receipt(pool, target_seat)) or {}).get("holder")
-        wake_target = await wakeable_identity(pool, holder) if holder else None
-        resume = await _agent_resumable(pool, wake_target, st) if wake_target else None
-        if resume is not None and holder is not None and await _resume_guard(
-                pool, resume, _generation(holder)[0], seat_id=target_seat, st=st) is None:
+        resume_outcome = await _lineage_resume_candidate(
+            pool, holder, st, repo=launch_cwd) if holder else ["no seat holder on record"]
+        resume_log = resume_outcome[1] if isinstance(resume_outcome, tuple) else resume_outcome
+        resume = resume_outcome[0] if isinstance(resume_outcome, tuple) else None
+        if resume is not None:
+            # holder is truthy whenever resume is set — resume_outcome only comes from
+            # _lineage_resume_candidate(holder, ...), never the bare-string branch, when
+            # holder was falsy. Asserted, not silently narrowed: a violated invariant here
+            # should be loud, never a quiet skip of the identity gate.
+            assert holder is not None
+            refusal = await _resume_guard(
+                pool, resume, _generation(holder)[0], seat_id=target_seat, st=st)
+            if refusal is not None:
+                resume_log = [*resume_log, f"crossed-registry guard refused it: {refusal}"]
+                resume = None
+        if resume is not None:
             session_id, repo = resume[0], resume[1]
             # THE MESSAGE LANDS BEFORE THE SPAWN, deliberately unlike the fresh-mint lane
             # below (which sends its brief AFTER spawning): a fresh `--bg` body takes
@@ -1875,12 +1974,13 @@ async def launch_seat(
                 "status": "launched", "mode": "resumed", "seat": target_seat,
                 "session": session_id, "body_exists": True, "can_receive": True,
                 "spawned_model": argv_model, "attach": attach,
-                "detail": f"resumed the seat's own session ({session_id[:8]}) as a ONE-SHOT "
-                          "turn, the same shape dispatch_dm's mail-wake resume already uses "
-                          "in production — it runs the brief and exits; `claude agents "
-                          "--json` shows it only WHILE it runs, never after (a harness "
-                          "fact, not a bug: a further mail wake continues it, exactly like "
-                          "any other dormant addressee)",
+                "resume_check": resume_log,
+                "detail": f"resumed session {session_id[:8]} as a ONE-SHOT turn — walked "
+                          f"{len(resume_log)} generation(s) back to find it "
+                          f"({'; '.join(resume_log)}); it runs the brief and exits; "
+                          "`claude agents --json` shows it only WHILE it runs, never after "
+                          "(a harness fact, not a bug: a further mail wake continues it, "
+                          "exactly like any other dormant addressee)",
             }
             if resume_brief_id is not None:
                 out["brief_message_id"] = resume_brief_id
@@ -1945,12 +2045,20 @@ async def launch_seat(
                               if isinstance(r, dict) and r.get("cwd") == launch_cwd), None)
         except (OSError, TimeoutError, ValueError):
             pass
+        # THE RECEIPT NAMES THE RESUME DECISION EVERY TIME (Thoth's explicit condition,
+        # msg 3691: "a correct decision made silently is indistinguishable from a broken
+        # one"). `resume_log` carries WHY this booted fresh instead — numbers, not
+        # adjectives (transcript size, compaction count, the gate's own threshold), one
+        # line a human reads instead of re-running succession_chain by hand.
+        booted_why = (f"booted fresh — {'; '.join(resume_log)} (gate: max_compactions="
+                      f"{st.osiris_resume_max_compactions}, ceiling="
+                      f"{st.osiris_resume_ceiling_bytes}b)")
         out = {
             "status": "launched", "window": name, "seat": target_seat,
             "body_exists": True, "can_receive": alive_row is not None,
-            "spawned_model": argv_model,
-            "detail": ("body created and live" if alive_row is not None else
-                       "body created; mount NOT yet confirmed — the claude is booting and "
+            "spawned_model": argv_model, "resume_check": resume_log,
+            "detail": (f"{booted_why}; live" if alive_row is not None else
+                       f"{booted_why}; mount NOT yet confirmed — the claude is booting and "
                        "will self-bind via its own boot prompt; confirm with `claude agents "
                        "--json`"),
             "attach": attach,
