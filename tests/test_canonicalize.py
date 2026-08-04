@@ -9,7 +9,7 @@ from src.ontology.intake import intake
 
 def test_email_canonicalization() -> None:
     # predictable: lowercase + googlemail->gmail domain alias only; local part kept
-    assert canonicalize("Email", "priya.kowalski42@gmail.com") == "priya.kowalski42@gmail.com"
+    assert canonicalize("Email", "Priya.Kowalski42@Gmail.com") == "priya.kowalski42@gmail.com"
     assert canonicalize("Email", "a.b.c@googlemail.com") == "a.b.c@gmail.com"
 
 
@@ -41,7 +41,7 @@ def test_btc_is_case_preserving() -> None:
 async def test_intake_deterministic_auto_merge(actions: Actions, case_id: str) -> None:
     cid = uuid.UUID(case_id)
     # case-folding still dedups (dots are now preserved, so they must match)
-    a = await intake(actions, "Email", "priya.kowalski42@gmail.com", "analyst:test", cid)
+    a = await intake(actions, "Email", "Priya.KOWALSKI42@Gmail.com", "analyst:test", cid)
     b = await intake(actions, "Email", "priya.kowalski42@gmail.com", "analyst:test", cid)
     assert a == b  # two raw forms collapse to one object
 
@@ -55,4 +55,4 @@ async def test_intake_deterministic_auto_merge(actions: Actions, case_id: str) -
             a,
         )
     }
-    assert "priya.kowalski42@gmail.com" in observed
+    assert "Priya.KOWALSKI42@Gmail.com" in observed

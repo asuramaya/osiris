@@ -15,7 +15,7 @@ def test_email_handles_pivot() -> None:
     r = parse_email_handles({}, _email("dakota.jm@gmail.com"))
     handles = {o.canonical for o in r.objects if o.type == "Username"}
     # local part + dot-stripped + underscore + first-segment variants
-    assert handles == {"asuramaya.hq", "asuramayahq", "asuramaya_hq", "asuramaya"}
+    assert handles == {"dakota.jm", "dakotajm", "dakota_jm", "dakota"}
     assert all(link.type == "derived_handle" for link in r.links)
 
 
