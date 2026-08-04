@@ -30,6 +30,7 @@ from src.cli import (
     cmd_merge,
     cmd_migrate,
     cmd_mint_seat,
+    cmd_new,
     cmd_seed,
     cmd_unmerge,
     commit_deployed_notes,
@@ -1747,5 +1748,47 @@ def test_bare_osiris_shows_help_and_exits_2(capsys: pytest.CaptureFixture[str]) 
     out = main([])
     assert out == 2
     captured = capsys.readouterr()
-    assert "NEW WORKER, START TO FINISH" in captured.out
+    assert "THE TWO COMMANDS TO REMEMBER" in captured.out
     assert "COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO" in captured.out
+
+
+async def test_cli_parser_accepts_new(actions: Actions) -> None:
+    from src.cli import _build_parser
+
+    parser = _build_parser()
+    args = parser.parse_args(["new", "Henry"])
+    assert args.command == "new"
+    assert args.handle == "Henry" and args.path is None
+    assert args.project is None and args.model is None and args.actor == "console"
+
+    with_path = parser.parse_args(["new", "Henry", "/tmp/henry-ws", "--project", "Custom"])
+    assert with_path.path == "/tmp/henry-ws" and with_path.project == "Custom"
+
+
+async def test_cmd_new_founds_a_self_managed_seat_and_prints_the_launch_line(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cmd_new has no office_root passthrough (matching cmd_mint_seat's own shape) — the
+    real default lives in mintseat._DEFAULT_OFFICE_ROOT, patched here so this test never
+    writes into the operator's actual ~/.osiris/seats/."""
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator import mintseat as mintseat_module
+
+    workspace = tmp_path / "henry-ws"
+    monkeypatch.setattr(mintseat_module, "_DEFAULT_OFFICE_ROOT", tmp_path / "seats")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_new("Henry", str(workspace), project=None, model=None,
+                            actor="console", pool=actions.pool)
+
+    assert out == 0
+    text = buf.getvalue()
+    assert "founded Henry" in text and "self-managed, no manager" in text
+    assert "project: Henry" in text
+    assert f"workspace: {workspace}" in text
+    assert "next: osiris launch Henry" in text
+    assert workspace.is_dir()
+    assert (workspace / ".osiris").read_text() == 'project = "Henry"\n'

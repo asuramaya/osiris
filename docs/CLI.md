@@ -29,10 +29,15 @@ None of them print a raw Python traceback for a condition the CLI can see coming
 the operator's own "make the cli itself explain better than a dump so it can be friendly"):
 it prints the newcomer path as two copy-pasteable lines, groups every command by what
 you're trying to DO rather than alphabetically, and states plainly that there is no
-separate project-creation command — `osiris mint-seat` brings a new house/project into
-existence in the same act whenever `--house` names one with no seats in it yet. The exit
-code stays `2` (a real usage condition — no command was given), only the text changed.
-Every subcommand's own `--help` ends with at least one worked, realistic invocation.
+separate project-creation command beyond `osiris new` itself. The exit code stays `2` (a
+real usage condition — no command was given), only the text changed. Every subcommand's
+own `--help` ends with at least one worked, realistic invocation.
+
+**The two commands meant to be memorized** (dispatch 3685/3688, the operator's own "too
+much witchcraft to spawn a project... I'll remember 'osiris x y z' boom"): `osiris new
+<handle>` then `osiris launch <handle>` — nothing to a working, independent mind. See
+`osiris new` below; everything else on this page is discoverable when you need it, not
+something to hold in memory in advance.
 
 **`--actor` defaults to `console`** (one of `src.orchestrator.seats._OPERATOR_ACTORS`'s own
 sentinels) on every sanctioned-second-door command below — a raw terminal call already
@@ -46,6 +51,48 @@ here and the live MCP tool registry, and fails the suite if any shared act's nam
 parameters drift apart without an explicit, reasoned allowlist entry. If you're renaming or
 re-parameterizing a command below, that test — not this file — is the one that will catch
 you first.
+
+## `osiris new <handle> [path] [--project P] [--model M] [--actor <who>]`
+
+**One of the two commands meant to be memorized** (dispatch 3685/3688) — the whole point
+is that a human should be able to spawn an independent, self-managed project from memory,
+months from now, with no notes. Founds a **self-managed seat**: a Seat with NO
+`managed_by` edge at all, ever — not a flag, the absence itself (Ooblek's own real shape,
+read off its dossier before this was built rather than assumed: self-claimed, then
+officed, then — hours later, live — self-declared its own `governs` edge; no minting
+agent, no manager, ever involved). Composes the SAME primitives `mint-seat` does
+(`ensure_seat`, the office scaffold) rather than reimplementing them — see
+`mintseat.found_seat`.
+
+One act does all of: create the code workspace directory if absent (`path`, defaulting to
+`~/code/<handle>` — **no git repo required**, proven not assumed: a seat's office is
+already routinely a bare, non-repo folder that mounts fine, and project resolution reads
+a `.osiris` pin or a bare folder name, never git), write that workspace's own `.osiris`
+pin (`project` defaults to `handle`), mint the seat, scaffold its identity office at the
+standard `~/.osiris/seats/<handle>/` location (distinct from the workspace — offices.py's
+own ruling `ed5f5ce2`: "agents sit at `~/.osiris/seats/<handle>/`, code stays in the
+repos they GOVERN"), and `bind_seat_tree` the workspace to the new seat so `osiris
+launch` spawns into the *code*, never the identity office. Prints the exact `osiris
+launch <handle>` line — the second command never needs remembering either.
+
+**Does not create a `governs` edge.** Ooblek's own real bootstrap order was self-claim,
+then office, then — once actually live — self-charter; inventing a `governs` fact on an
+unlaunched mind's behalf would be exactly the kind of thing this call has no standing to
+assert. The scaffolded `CLAUDE.md` already tells a fresh, self-managed seat that its
+first act is `charter(repos=[...])` naming its own project, in its own voice, once live.
+
+Idempotent — a handle that already names a living, already self-managed seat converges
+(fills in whatever's missing, mints nothing new); a handle already `managed_by` someone
+else REFUSES (`osiris new` founds independence, it does not strip an existing manager);
+a near-miss handle (ruling `7cffda8f`) refuses the same way `mint-seat`'s own fresh path
+does.
+
+**Not on the MCP surface, deliberately, and not a violation of the surface-unity law**
+(decision `0b29f1cbcc5a`'s own reasoning, worth restating since it looks like a
+conflict): `walk_in` is a mind that ALREADY EXISTS naming itself — a self-act. `osiris
+new` is an OPERATOR founding a seat for a mind that does not exist yet, then launching
+into it. Different actor, different precondition, different moment — two genuinely
+different acts may carry two different names without violating "one act, one name."
 
 ## `osiris attach <handle>`
 

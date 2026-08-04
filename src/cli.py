@@ -1696,6 +1696,73 @@ async def cmd_mint_seat(
     return 0
 
 
+# --- new -----------------------------------------------------------------------------------------
+
+async def cmd_new(
+    handle: str, path: str | None, *, project: str | None, model: str | None,
+    actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris new <handle> [path] [--project P] [--model M] [--actor <who>] — ONE
+    command, no ceremony (dispatch 3685/3688, the operator's own "too much witchcraft to
+    spawn a project... I'll remember 'osiris new' boom"): found a SELF-MANAGED seat —
+    Ooblek's own real shape, read off its own dossier before this was built rather than
+    assumed — a directory + `.osiris` pin for its own code workspace (created if absent,
+    `path` defaults to `~/code/<handle>`), a Seat with NO `managed_by` edge ever, an
+    office scaffold at the standard `~/.osiris/seats/<handle>/` location, and its tree
+    bound to the workspace (`bind_seat_tree` — distinct from the office, offices.py's own
+    "code stays in the repos they GOVERN"). The console-script door onto
+    mintseat.found_seat, which composes mint_seat's OWN primitives (`ensure_seat`,
+    `_scaffold_office`) rather than reimplementing them.
+
+    Does not create a `governs` edge — the new seat charters itself, live, on its own
+    first turn (its own compiled CLAUDE.md says so), matching Ooblek's real bootstrap
+    order: self-claimed, then officed, then — once actually live — self-chartered.
+
+    `osiris new` and `osiris launch` are the two commands meant to be memorized: found,
+    then launch. Prints the exact `osiris launch <handle>` line so the second half never
+    needs remembering either."""
+    from src.actions.core import Actions
+    from src.orchestrator.mintseat import found_seat as _found_seat
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris new: could not reach postgres at {settings.database_url} "
+                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            return 1
+    try:
+        kwargs: dict[str, Any] = {"intended_model": model} if model else {}
+        out = await _found_seat(Actions(pool), handle=handle, path=path, project=project,
+                                actor=actor, **kwargs)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris new: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"{'founded' if out['seat_minted'] else 'converged on'} {out['handle']} "
+          f"({out['seat_id']}) — self-managed, no manager")
+    print(f"project: {out['project']}")
+    print(f"workspace: {out['workspace']} ({out['workspace_pin']})")
+    office = out.get("office")
+    if office:
+        print(f"office: {office['office']} (pin {office['osiris_pin']}, orders "
+              f"{office['standing_orders']}, charter {office['charter_file']})")
+    print(f"model: {out['intended_model']}"
+          + (" (stamped)" if out.get("intended_model_stamped") else ""))
+    print(f"occupancy: {out['occupancy']} — {out['next_step']}")
+    print(f"next: osiris launch {out['handle']}")
+    return 0
+
+
 # --- argv dispatch -----------------------------------------------------------------------------
 
 # dispatch 3678, "make the cli a front door instead of a dump": bare `osiris` used to be
@@ -1709,23 +1776,24 @@ async def cmd_mint_seat(
 # otherwise print AGAIN, alphabetically, right below this) — `osiris <verb> --help`
 # still shows that verb's own full description and a worked example, untouched.
 _TOP_LEVEL_HELP = """\
-NEW WORKER, START TO FINISH — copy these two lines:
+THE TWO COMMANDS TO REMEMBER — nothing to a working, independent mind:
+    osiris new <name>
+    osiris launch <name>
+`new` founds a SELF-MANAGED seat (no manager, ever) with its own code workspace
+(~/code/<name> by default) — a brand-new, independent project in the same act, no repo
+required. `launch` bodies it. Nothing else to hold in memory; everything below is
+discoverable when you need it, not something to remember in advance.
+
+ADDING A WORKER TO A HOUSE YOU ALREADY RUN (a different case — MANAGED, not independent):
     osiris mint-seat <name>
     osiris launch <name>
 (--manager/--actor are inferred — the seat you're standing in, the console actor — and
-stay real overrides when that's wrong or ambiguous)
-
-A NEW HOUSE OR PROJECT, IN THE SAME ACT: there is no separate create-project command.
-Naming a --house with no seats in it yet brings that house into existence right here —
-a raw terminal call already carries the operator authority a house crossing needs:
-    osiris mint-seat <name> --manager <any-existing-seat> --house <new-house-name>
-(--project defaults to the house name; pass it separately only if they should differ.
-A directory with no seat of its own still HAS a project — whatever its .osiris pin
-declares, or its own folder name absent a pin — but that's a read, not a create; the
-line above is the only thing that brings a new one into existence.)
+stay real overrides when that's wrong or ambiguous. Naming a --house with no seats in it
+yet brings that house/project into existence in this same act too — --project defaults
+to the house name.)
 
 COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
-  start a mind          launch, mint-seat, attach
+  start a mind          new, launch, mint-seat, attach
   see the fleet         fleet, boot-status, smoke
   write to the record   annotate-thread, amend-decision, charter-for, amend-practice,
                         merge, unmerge
@@ -1966,6 +2034,32 @@ def _build_parser() -> argparse.ArgumentParser:
     p_mint_seat.add_argument("--force", action="store_true",
                              help="mint a distinct seat past a near-miss handle refusal")
 
+    p_new = sub.add_parser(
+        "new", description=_d(
+            "Found a SELF-MANAGED seat: no manager, ever (Ooblek's own real shape, "
+            "read off its dossier, never a flag). One act: create/verify a code "
+            "workspace directory + its own .osiris pin, mint the seat, scaffold its "
+            "identity office at the standard ~/.osiris/seats/<handle>/ location, and "
+            "bind its tree to the workspace. Does not charter the seat over a "
+            "project — it charters itself, live, on its own first turn."),
+        epilog="example, converging on ~/code/henry:\n"
+            "    osiris new henry\n"
+            "example, naming the workspace explicitly:\n"
+            "    osiris new henry ~/projects/henry-thing\n"
+            "then:\n"
+            "    osiris launch henry")
+    p_new.add_argument("handle", help="the new self-managed seat's handle")
+    p_new.add_argument("path", nargs="?", default=None,
+                       help="the code workspace directory (created if absent) — "
+                            "defaults to ~/code/<handle>")
+    p_new.add_argument("--project", default=None,
+                       help="the project name written into the workspace's own .osiris "
+                            "pin — defaults to the handle")
+    p_new.add_argument("--model", default=None,
+                       help="defaults to mint_seat's own worker default")
+    p_new.add_argument("--actor", default=_CONSOLE_ACTOR,
+                       help=f"who is performing this act — defaults to {_CONSOLE_ACTOR!r}")
+
     return p
 
 
@@ -2016,7 +2110,12 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_mint_seat(
             args.handle, manager=args.manager, project=args.project, house=args.house,
             model=args.model, actor=args.actor, adopt=args.adopt, force=args.force))
-    return 2  # pragma: no cover - argparse's own `required=True` makes this unreachable
+    if args.command == "new":
+        return asyncio.run(cmd_new(
+            args.handle, args.path, project=args.project, model=args.model,
+            actor=args.actor))
+    return 2  # pragma: no cover - every real subparser choice is handled above; argparse
+    # itself refuses anything not in `sub.choices`, so this is unreachable in practice
 
 
 if __name__ == "__main__":  # pragma: no cover

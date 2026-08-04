@@ -49,6 +49,12 @@ NO_MCP_EQUIVALENT = {
     "seed": "operator devops bootstrap act, rare and deliberate, not an ordinary agent verb",
     "fold-project": "deprecated alias for merge (dispatch 3683) — kept working for muscle "
                     "memory, never advertised; not a live act to reconcile",
+    "new": "an OPERATOR founding a self-managed seat for a mind that does not exist yet "
+          "(dispatch 3685/3688) is a DIFFERENT act from walk_in's self-naming (a mind "
+          "that already exists arriving and naming ITSELF) — different actor, different "
+          "precondition, different moment. The unity law binds one act to one name on "
+          "both surfaces; it does not force two genuinely different acts to share one "
+          "just because they're adjacent in purpose. Reasoned explicitly, not assumed.",
 }
 
 # (cli_command, param) -> reason: a CLI-only param beyond the blanket "actor" exemption.
