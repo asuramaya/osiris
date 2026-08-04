@@ -3091,6 +3091,130 @@ async def test_launch_harness_lane_delivers_the_opening_brief_over_the_mail_lane
     assert row is not None and "mount and orient" in row["body"]
 
 
+# ═══ THE RESUME LANE (operator's own order, 2026-08-04, decision a829a15d + msg 3639,
+# reversing 315c3181's "not built, deliberately") — launch_seat gains dispatch_dm's own
+# resume branch, REUSED via `_resume_guard`/`_agent_resumable`/`_DM_RESUME_PROMPT`, never
+# reimplemented. ONE-SHOT: the resumed body runs its turn and exits — re-summonable via the
+# next mail wake, not a standing window (315c3181's own unresolved tradeoff, now settled).
+
+async def test_launch_harness_lane_resumes_a_stale_but_resumable_holder(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The payoff: a seat whose last holder left a resumable session is CONTINUED via its
+    own `-p --resume`, never minted fresh — mode='resumed' in the receipt, the shared
+    `_DM_RESUME_PROMPT` (never a launch-specific copy), and the spawn call carries
+    resume_session, never job_dir (a resume is not a birth). The resumed body's own cwd
+    comes from ITS transcript's own mount, not the seat's configured office — proven by
+    setting them to different paths."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:abcd1234", manager_agent="agent:hm-resume",
+        worker_handle="Stale-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/stale-test-office")  # deliberately NOT /repo/demo
+    manc = await actions.create_or_find_object("Agent", "agent:hm-resume", "test")
+    await actions.assert_property(manc, "project", "osiris", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    resumed: list[dict[str, Any]] = []
+
+    async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
+        resumed.append({"repo": repo, "prompt": prompt, **kw})
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a resumable holder must never be minted fresh")
+
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm-resume", target=worker_seat,
+        message="pick up where you left off", substrate="harness",
+        settings=_settings(enabled=True, sense=str(sense)),
+        spawn=_boom, resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "launched" and d["mode"] == "resumed"
+    assert d["session"] == FULL_SID
+    assert d["body_exists"] is True and d["can_receive"] is True
+    assert d.get("brief_message_id")
+    assert len(resumed) == 1
+    call = resumed[0]
+    assert call["repo"] == "/repo/demo"  # the HOLDER's own mount cwd, not the seat's office
+    assert call.get("resume_session") == FULL_SID
+    assert "job_dir" not in call  # a resume is not a birth (mirrors dispatch_dm's own call)
+    assert "private" in call["prompt"] and "seat" in call["prompt"]  # _DM_RESUME_PROMPT itself
+    # THE ORDERING GUARANTEE: the brief landed in mail BEFORE the spawn was even issued —
+    # a one-shot resumed body's first turn IS its inbox() check, no boot lag to hide behind.
+    row = await actions.pool.fetchrow(
+        "SELECT body FROM fleet_messages WHERE id=$1", int(d["brief_message_id"]))
+    assert row is not None and "pick up where you left off" in row["body"]
+
+
+async def test_launch_harness_lane_falls_through_to_mint_when_nothing_is_resumable(
+    actions: Actions,
+) -> None:
+    """The ordinary case (no prior mount at all) must still mint fresh exactly as before this
+    lane existed — the resume check is a first look, never a hard gate that could strand a
+    launch when nothing is there to continue."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:hw-fresh", manager_agent="agent:hm-fresh",
+        worker_handle="Fresh-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/fresh-test")
+    spawned: list[dict[str, Any]] = []
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("nothing resumable exists — resume_spawn must never be called")
+
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm-fresh", target=worker_seat, substrate="harness",
+        settings=_settings(enabled=True, sense=""),
+        spawn=_fake_spawn(spawned), resume_spawn=_boom, agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "launched" and "mode" not in d
+    assert len(spawned) == 1
+
+
+async def test_launch_harness_lane_never_resumes_past_the_compaction_gate(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thoth's explicit condition (msg 3639): 'resumable does not mean resume-everything' —
+    a holder whose transcript compacted even once, at the default max_compactions=0, falls
+    through to mint fresh exactly like the no-history case, never resumed. Same gate
+    dispatch_dm's mail-wake already honors (`_agent_resumable` itself), reused here by
+    construction rather than re-checked by hand."""
+    import os
+    import time as _time
+
+    from src.orchestrator import mounts
+
+    job = tmp_path / "jobs" / "abcd1234"
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-demo"
+    proj.mkdir(parents=True, exist_ok=True)
+    t = proj / f"{FULL_SID}.jsonl"
+    signed = (b'{"type":"user","toolUseResult":'
+              b'"{\\"sent\\":1,\\"from\\":\\"agent:abcd1234\\"}"}\n')
+    t.write_bytes(signed + _COMPACT_LINE + b"x" * 16)
+    old = _time.time() - 3600
+    os.utime(t, (old, old))
+    await mounts.save_mount(actions.pool, job_dir=str(job), agent_id="agent:abcd1234",
+                            project="demo", cwd="/repo/demo", model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '1 hour'")
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:abcd1234", manager_agent="agent:hm-compact",
+        worker_handle="Compacted-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/compacted-test")
+    spawned: list[dict[str, Any]] = []
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a once-compacted transcript at max_compactions=0 must never "
+                             "be resumed")
+
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm-compact", target=worker_seat, substrate="harness",
+        settings=_settings(enabled=True, sense=str(sense), max_compactions=0),
+        spawn=_fake_spawn(spawned), resume_spawn=_boom, agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "launched" and "mode" not in d
+    assert len(spawned) == 1
+
+
 # ═══ tree_cwd (task #103's re-scope, ff3bdc37, Thoth DM 2794) — the office/code split. ═══
 
 async def test_launch_refuses_a_tree_cwd_that_does_not_exist_on_disk(
