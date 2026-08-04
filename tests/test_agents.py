@@ -1306,6 +1306,165 @@ async def test_backfill_agent_project_links_scopes_to_only_bases(actions: Action
         "the un-scoped lineage must be left exactly as it was")
 
 
+# ═══ INVALIDATE_WORKS_IN (thread 8640a625, decision fce39baa) — the toolkit hole John
+# XVII's own specimen exposed: unpeer heals peer_of, detach_seat heals managed_by, nothing
+# healed works_in before this. Self-scoped identity hygiene, same posture as correct_house —
+# but tested here at the underlying function's own generic layer (agent_id explicit),
+# self-scoping is the MCP wrapper's own job. ═══════════════════════════════════════════════
+
+async def test_invalidate_works_in_drops_the_named_edge_and_leaves_the_other(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.agents import invalidate_works_in
+
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:iwi1aaaaa", "test")
+    stale = await actions.create_or_find_object("SoftwareProject", "repo:iwi1stale", "test")
+    keep = await actions.create_or_find_object("SoftwareProject", "repo:iwi1keep", "test")
+    await actions.create_link(a, stale, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await actions.create_link(a, keep, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    out = await invalidate_works_in(actions, "agent:iwi1aaaaa", "repo:iwi1stale",
+                                    because="fork residue, ballgem is current", actor="test")
+
+    assert out == {"invalidated": "agent:iwi1aaaaa", "was_working_in": "repo:iwi1stale",
+                   "still_working_in": ["repo:iwi1keep"],
+                   "because": "fork residue, ballgem is current"}
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='works_in' "
+        "AND (valid_until IS NULL OR valid_until > now())", a, stale) is None
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='works_in' "
+        "AND (valid_until IS NULL OR valid_until > now())", a, keep) == 1
+    reason = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id AND a.name='works_in_invalidated_because' "
+        "WHERE o.canonical=$1", "agent:iwi1aaaaa")
+    assert reason == "fork residue, ballgem is current"
+
+
+async def test_invalidate_works_in_refuses_blank_because(actions: Actions) -> None:
+    from src.orchestrator.agents import invalidate_works_in
+
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:iwi2aaaaa", "test")
+    p1 = await actions.create_or_find_object("SoftwareProject", "repo:iwi2p1", "test")
+    p2 = await actions.create_or_find_object("SoftwareProject", "repo:iwi2p2", "test")
+    await actions.create_link(a, p1, "works_in", "test", now, 0.9, evidence_class="self_declared")
+    await actions.create_link(a, p2, "works_in", "test", now, 0.9, evidence_class="self_declared")
+
+    out = await invalidate_works_in(actions, "agent:iwi2aaaaa", "repo:iwi2p1",
+                                    because=" ", actor="test")
+    assert "because is required" in out["error"]
+
+
+async def test_invalidate_works_in_refuses_an_unknown_agent(actions: Actions) -> None:
+    from src.orchestrator.agents import invalidate_works_in
+
+    out = await invalidate_works_in(actions, "agent:no-such-one", "repo:whatever",
+                                    because="test", actor="test")
+    assert "no such active Agent" in out["error"]
+
+
+async def test_invalidate_works_in_refuses_no_active_edge_to_that_project(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.agents import invalidate_works_in
+
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:iwi3aaaaa", "test")
+    p1 = await actions.create_or_find_object("SoftwareProject", "repo:iwi3p1", "test")
+    p2 = await actions.create_or_find_object("SoftwareProject", "repo:iwi3p2", "test")
+    await actions.create_link(a, p1, "works_in", "test", now, 0.9, evidence_class="self_declared")
+    await actions.create_link(a, p2, "works_in", "test", now, 0.9, evidence_class="self_declared")
+    unrelated = await actions.create_or_find_object(
+        "SoftwareProject", "repo:iwi3unrelated", "test")
+
+    out = await invalidate_works_in(actions, "agent:iwi3aaaaa", "repo:iwi3unrelated",
+                                    because="test", actor="test")
+    assert "no active works_in edge" in out["error"]
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='works_in' "
+        "AND (valid_until IS NULL OR valid_until > now())", a, p1) == 1, (
+        "a refused call must write nothing")
+    _ = unrelated
+
+
+async def test_invalidate_works_in_refuses_the_agents_only_live_edge(
+    actions: Actions,
+) -> None:
+    """The safety net: dropping a lone works_in edge is not cleanup, it's amputation —
+    this verb exists for duplicates, never for an agent's only project."""
+    from src.orchestrator.agents import invalidate_works_in
+
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:iwi4aaaaa", "test")
+    only = await actions.create_or_find_object("SoftwareProject", "repo:iwi4only", "test")
+    await actions.create_link(a, only, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    out = await invalidate_works_in(actions, "agent:iwi4aaaaa", "repo:iwi4only",
+                                    because="test", actor="test")
+    assert "ONLY" in out["error"] and "live works_in edge" in out["error"]
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='works_in' "
+        "AND (valid_until IS NULL OR valid_until > now())", a, only) == 1
+
+
+async def test_invalidate_works_in_mcp_wrapper_self_scopes_to_the_caller(
+    actions: Actions,
+) -> None:
+    """No `agent_id` parameter exists on the tool surface — the caller IS the target,
+    exactly correct_house's own self-scoping shape, never operator-fenced for this case."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:iwiwrap1", "test")
+    stale = await actions.create_or_find_object("SoftwareProject", "repo:iwiwrapstale", "test")
+    keep = await actions.create_or_find_object("SoftwareProject", "repo:iwiwrapkeep", "test")
+    await actions.create_link(a, stale, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await actions.create_link(a, keep, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    ident = AgentIdentity(agent_id="agent:iwiwrap1", session="iwiwrap1",
+                          project="p", model="claude-sonnet-5", cwd=None,
+                          model_method="job_dir", model_history=("claude-sonnet-5",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = ident
+    try:
+        out = await srv.invalidate_works_in("repo:iwiwrapstale", "cleaning up my own fork "
+                                            "residue", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["invalidated"] == "agent:iwiwrap1" and out["was_working_in"] == "repo:iwiwrapstale"
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='works_in' "
+        "AND (valid_until IS NULL OR valid_until > now())", a, stale) is None
+
+
+async def test_invalidate_works_in_mcp_wrapper_refuses_before_mount(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.invalidate_works_in("repo:whatever", "test")
+    finally:
+        srv._pool = saved_pool
+    assert "mount first" in out["error"]
+
+
 async def test_correct_agent_house_heals_a_polluted_stamp_on_someone_else(
     actions: Actions,
 ) -> None:

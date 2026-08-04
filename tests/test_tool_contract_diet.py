@@ -280,7 +280,17 @@ def _tool_chars(t: Any) -> int:
 # ranked merge #1 and unmerge not at all, even at max_results=20). Net: 133,621 -> 133,673,
 # +52, no tool added or removed (100 -> 100, a rename ratchet). Exact measured total via this
 # file's own `_measure_tool_contract`, not a round number.
-TOOL_CONTRACT_CEILING_CHARS = 133_673
+#
+# RAISED, invalidate_works_in (2026-08-03, task #128 piece 4, thread 8640a625/decision
+# fce39baa): a genuinely NEW capability — unpeer heals peer_of, detach_seat heals
+# managed_by, nothing healed works_in before this, so a live agent's own duplicate edge
+# (John XVII's own specimen) had no repair path except raw SQL. Trimmed the MCP-facing
+# docstring to the category rule's lean end FIRST (cut the thread-id citation and the
+# fork-story provenance, kept only what it does, the self-scoping, and the refusals) —
+# graph_lint's own docstring addition (the new duplicate-works-in check) trimmed the same
+# way. 133,673 -> 135,077, +1,404. 100 -> 101 tools. Exact measured total via this file's
+# own `_measure_tool_contract`, not a round number.
+TOOL_CONTRACT_CEILING_CHARS = 135_077
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -334,6 +344,8 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     98 -> 100 (2026-08-03, ONE MERGE, TWO INDEPENDENT ADDITIONS): reconcile_merge (task #127,
     the fold family's first-ever repair door for any type) and ack_handoff (the is_handoff
     read-receipt redesign). Neither author could see the other's branch; this file is again
-    the only place the combined surface exists."""
+    the only place the combined surface exists.
+    100 -> 101 (2026-08-03, task #128 piece 4): invalidate_works_in — a live agent's own
+    repair door for a duplicate works_in edge, thread 8640a625's own toolkit hole."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 100
+    assert len(per_tool) == 101

@@ -1340,6 +1340,84 @@ async def backfill_agent_project_links(
     }
 
 
+async def invalidate_works_in(
+    actions: Actions, agent_id: str, stale_project: str, *, because: str, actor: str,
+) -> dict[str, Any]:
+    """A head drops ONE OF ITS OWN duplicate works_in edges — the toolkit hole named at
+    thread 8640a625 (decision fce39baa's own finding, task #128 piece 4): `unpeer` heals
+    peer_of, `detach_seat` heals managed_by, nothing healed works_in before this, so a
+    live agent carrying two SIMULTANEOUSLY-live works_in edges (John XVII's own specimen,
+    ->redmonth + ->ballgem, both self_declared, redmonth the stale side of decision
+    ebffcf4b's fork) had no repair path except raw SQL. orient() resolves through
+    whichever edge wins, so the duplicate is not cosmetic — it can hide a lineage's own
+    threads/decisions from itself, live.
+
+    SAME POSTURE AS correct_house: self-scoped identity hygiene, never operator-fenced —
+    but the self-scoping lives ENTIRELY in the MCP wrapper's refusal to expose `agent_id`
+    as a parameter (auto-filled from the caller's own resolved identity), exactly as
+    correct_house's own underlying function takes an explicit `agent_id` and does not
+    itself check agent_id==actor. This function stays generic/composable on purpose (the
+    same shape backfill_agent_project_links needs for a future scripted sweep).
+
+    DELIBERATELY NARROW — a same-agent, same-generation cleanup, orthogonal to thread
+    20af2c95's own still-open question (does a PREDECESSOR generation's stale works_in
+    edge get moved on succession, write-side or read-side): this never touches an
+    ancestor's edges, never re-points anything onto a different agent, and does not use
+    the estate-move pattern `_move_agent_estate`/`move_agent_project_links` use for
+    exactly that reason — those move edges BETWEEN two agent objects; this invalidates
+    one of the SAME agent's own two edges. No mail/mounts/thread-ownership moves with it
+    (unlike a fold's estate move) because nothing there is project-scoped in a way a
+    dropped works_in edge would orphan.
+
+    Refuses LOUDLY on: blank `because`; `agent_id` not resolving to an active Agent;
+    `stale_project` resolving ambiguously (never guesses) or to no SoftwareProject at
+    all; no active works_in edge from `agent_id` to it; or `stale_project` naming the
+    agent's ONLY live works_in edge — dropping your last project is not cleanup, it is
+    amputation; this verb exists for duplicates, never for a lone edge."""
+    from src.orchestrator.projects import _resolve_project_ref
+
+    because = (because or "").strip()
+    if not because:
+        return {"error": "because is required — invalidating a works_in edge is a "
+                         "deliberate act on the record"}
+    agent_id = (agent_id or "").strip()
+    if not agent_id:
+        return {"error": "agent_id is required"}
+    agent_row = await actions.pool.fetchrow(
+        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Agent' "
+        "AND status='active'", agent_id)
+    if agent_row is None:
+        return {"error": f"no such active Agent: {agent_id!r}"}
+    stale_project = (stale_project or "").strip()
+    if not stale_project:
+        return {"error": "stale_project is required"}
+    proj_row, err = await _resolve_project_ref(
+        actions.pool, stale_project, verb="invalidate_works_in")
+    if err:
+        return err
+    if proj_row is None:
+        return {"error": f"no such SoftwareProject: {stale_project!r}"}
+    live = await actions.pool.fetch(
+        "SELECT to_id, t.canonical AS project FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='works_in' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", agent_row["id"])
+    live_by_id = {r["to_id"]: r["project"] for r in live}
+    if proj_row["id"] not in live_by_id:
+        return {"error": f"{agent_row['canonical']} has no active works_in edge to "
+                         f"{proj_row['canonical']} — nothing to invalidate"}
+    if len(live_by_id) <= 1:
+        return {"error": f"{proj_row['canonical']} is {agent_row['canonical']}'s ONLY "
+                         "live works_in edge — invalidate_works_in is for duplicates, "
+                         "never for a lone edge"}
+    now = datetime.now(UTC)
+    await actions.invalidate_link(agent_row["id"], proj_row["id"], "works_in", actor, now)
+    await actions.assert_property(agent_row["id"], "works_in_invalidated_because", because,
+                                  actor, now, _CONF, evidence_class=_EC)
+    remaining = sorted(v for k, v in live_by_id.items() if k != proj_row["id"])
+    return {"invalidated": agent_row["canonical"], "was_working_in": proj_row["canonical"],
+            "still_working_in": remaining, "because": because}
+
+
 async def mint_heir(
     actions: Actions, ancestor_id: str, ancestor_oid: uuid.UUID, *,
     because: str, succession: str | None, now: datetime | None = None,

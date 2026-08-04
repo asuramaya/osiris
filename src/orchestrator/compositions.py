@@ -1329,7 +1329,12 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     row; the one identity degradation that must never be silent), PARALLEL-LIVES (a
     generation minted while a different door of its own lineage held a live pulse — the
     predecessor was not dead; reads the parallel_pulse_door stamp mint_heir writes at
-    the mint, thread 4bcd6541).
+    the mint, thread 4bcd6541), DUPLICATE-WORKS-IN (a currently-LIVE agent carrying more
+    than one simultaneously-live works_in edge — orient() resolves through exactly one, so
+    a live lineage's own threads/decisions can hide from itself, John XVII's own specimen;
+    thread 8640a625/decision fce39baa — invalidate_works_in is the repair, this only
+    counts, per ruling 1973d46f's own law that a reconciler with no trigger is worse than
+    none).
 
     `check`/`limit`/`offset` (task #74, thread 12a210ab leg 1): every check hard-caps its
     LISTED findings at `_LINT_CAP` (50) regardless — the reap needed the full 19
@@ -1807,6 +1812,40 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                    f"last seen {r['pulse_at'] or '?'}) — a parallel life: the "
                    "predecessor was not dead. Verify the seam; fold by hand if false"}
         for r in par])
+
+    # DUPLICATE-WORKS-IN (thread 8640a625, decision fce39baa — John XVII's own specimen):
+    # a LIVE agent carrying more than one simultaneously-live works_in edge. orient()
+    # resolves through exactly one of them, so the duplicate is not cosmetic — it can hide
+    # a lineage's own threads/decisions from itself while it is running (measured live,
+    # 2026-08-03: 41 agents fleet-wide carry the shape, but only currently-LIVE agents are
+    # operationally dangerous — a dead generation's leftover duplicate resolves nothing for
+    # anyone, the same reasoning orphan-link already applies; that larger historical count
+    # is thread 20af2c95's own separate, still-open concern, not this check's). Scoped to
+    # `live_secs` — the SAME liveness window phantom-twin already uses, not a second
+    # definition of "live". Testimony only: this counts, it never judges which edge is the
+    # stale one — invalidate_works_in is the repair, a mind names the target.
+    dup = await pool.fetch(
+        "WITH live_agents AS (SELECT DISTINCT agent_id FROM agent_mounts "
+        "  WHERE last_seen > now() - make_interval(secs => $1)) "
+        "SELECT o.canonical AS agent, "
+        "  array_agg(DISTINCT p.canonical ORDER BY p.canonical) AS projects, "
+        "  count(DISTINCT l.to_id) AS n "
+        "FROM links l "
+        "JOIN objects o ON o.id=l.from_id AND o.type='Agent' AND o.status='active' "
+        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+        "JOIN live_agents la ON la.agent_id=o.canonical "
+        "WHERE l.type='works_in' AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "GROUP BY o.canonical HAVING count(DISTINCT l.to_id) > 1 "
+        "ORDER BY o.canonical", live_secs)
+    land("duplicate-works-in", "warn", [
+        {"subject": r["agent"],
+         "detail": f"{r['agent']} is live right now and carries {r['n']} simultaneously-"
+                   f"live works_in edges ({', '.join(r['projects'])}) — orient() resolves "
+                   "through exactly one, so a successor mounting here may see the wrong "
+                   "project's threads/decisions entirely. Name the stale one and "
+                   "invalidate_works_in it; this check only counts, it never guesses "
+                   "which"}
+        for r in dup])
 
     findings.sort(key=lambda f: (_SEVERITY_RANK.get(str(f["severity"]), 9), str(f["check"])))
     if check_filter is not None:

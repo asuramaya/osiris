@@ -659,6 +659,51 @@ async def test_lint_flags_the_phantom_twin_at_an_office(actions: Actions) -> Non
     assert "never auto-merge" in twins[0]["detail"]      # constitution #1 in the finding
 
 
+async def test_lint_flags_a_live_agent_with_duplicate_works_in_edges(actions: Actions) -> None:
+    """DUPLICATE-WORKS-IN (thread 8640a625, John XVII's own specimen): a currently-live
+    agent carrying two simultaneously-live works_in edges — orient() resolves through
+    exactly one, so the duplicate can hide a live lineage's own threads/decisions from
+    itself. Scoped to LIVE agents only (via agent_mounts, the same liveness window
+    phantom-twin already uses) — a dead generation's own leftover duplicate is thread
+    20af2c95's separate, still-open concern, not this check's."""
+    t = "agent:teller"
+    live = await actions.create_or_find_object("Agent", "agent:dup1live0", t)
+    stale = await actions.create_or_find_object("SoftwareProject", "repo:dup1stale", t)
+    keep = await actions.create_or_find_object("SoftwareProject", "repo:dup1keep", t)
+    await actions.create_link(live, stale, "works_in", t, NOW, 0.9, evidence_class=_SD)
+    await actions.create_link(live, keep, "works_in", t, NOW, 0.9, evidence_class=_SD)
+    await mounts.save_mount(actions.pool, job_dir="/x/jobs/dup1live0",
+                            agent_id="agent:dup1live0", project="dup1keep", cwd="/w/dup1",
+                            model=None, session_key=None)
+
+    out = await _fn(actions, "lint", {})
+
+    dup = _by_check(out, "duplicate-works-in")
+    assert [f["subject"] for f in dup] == ["agent:dup1live0"]
+    assert dup[0]["severity"] == "warn"
+    assert "repo:dup1keep" in dup[0]["detail"] and "repo:dup1stale" in dup[0]["detail"]
+    assert "invalidate_works_in" in dup[0]["detail"]
+
+
+async def test_lint_does_not_flag_a_dead_generations_duplicate_works_in(
+    actions: Actions,
+) -> None:
+    """The historical-noise exclusion: the same duplicate shape on an agent with NO live
+    mount stays silent here — nobody's orient() is resolving through it right now, and
+    that larger pile is thread 20af2c95's own separate concern."""
+    t = "agent:teller"
+    dead = await actions.create_or_find_object("Agent", "agent:dup2dead0", t)
+    p1 = await actions.create_or_find_object("SoftwareProject", "repo:dup2p1", t)
+    p2 = await actions.create_or_find_object("SoftwareProject", "repo:dup2p2", t)
+    await actions.create_link(dead, p1, "works_in", t, NOW, 0.9, evidence_class=_SD)
+    await actions.create_link(dead, p2, "works_in", t, NOW, 0.9, evidence_class=_SD)
+    # never mounted at all — no agent_mounts row for this agent
+
+    out = await _fn(actions, "lint", {})
+
+    assert _by_check(out, "duplicate-works-in") == []
+
+
 async def test_lint_flags_a_parallel_life(actions: Actions) -> None:
     """PARALLEL-LIVES (thread 4bcd6541, invariant 3 of the guarantee): a generation
     minted while a DIFFERENT door of its own lineage still pulsed — the predecessor was
