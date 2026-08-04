@@ -13,7 +13,8 @@ _SD = "self_declared"
 
 
 async def _agent(actions: Actions, canonical: str, *, generation: str, minted_because: str,
-                 succeeded_from: str | None = None, wrote: bool = True) -> None:
+                 succeeded_from: str | None = None, wrote: bool = True,
+                 session: str | None = None) -> None:
     a = await actions.create_or_find_object("Agent", canonical, "test")
     await actions.assert_property(a, "seat_generation", generation, "test", NOW, 0.9,
                                   evidence_class=_SD)
@@ -24,6 +25,9 @@ async def _agent(actions: Actions, canonical: str, *, generation: str, minted_be
                                       evidence_class=_SD)
     if wrote:
         await actions.assert_property(a, "note", "did something real", "test", NOW, 0.9,
+                                      evidence_class=_SD)
+    if session:
+        await actions.assert_property(a, "session", session, "test", NOW, 0.9,
                                       evidence_class=_SD)
 
 
@@ -41,6 +45,24 @@ async def test_walks_the_whole_chain_one_entry_per_hop(actions: Actions) -> None
     assert chain[0]["wrote_anything"] is False
     assert chain[1]["minted_because"] == "compaction"
     assert chain[2]["generation"] == "1"
+
+
+async def test_session_rides_along_per_hop(actions: Actions) -> None:
+    """7fa4b599's own named additive step (2026-08-04): the walker already read three
+    sibling properties off the identical current_assertions row — session is the fourth,
+    the transcript filename's own stem, asserted at mount() same as the other three. A
+    generation that never mounted (no session asserted) reads None, not a crash or a
+    guess."""
+    await _agent(actions, "agent:sess-i", generation="1", minted_because="bootstrap",
+                session="11111111-aaaa-4bbb-8ccc-000000000001")
+    await _agent(actions, "agent:sess-ii", generation="2", minted_because="compaction",
+                succeeded_from="agent:sess-i", session="22222222-aaaa-4bbb-8ccc-000000000002")
+    await _agent(actions, "agent:sess-iii", generation="3", minted_because="compaction",
+                succeeded_from="agent:sess-ii")  # no session — never mounted
+
+    chain = await succession_chain(actions.pool, "agent:sess-iii")
+    assert [c["session"] for c in chain] == [
+        None, "22222222-aaaa-4bbb-8ccc-000000000002", "11111111-aaaa-4bbb-8ccc-000000000001"]
 
 
 async def test_stops_at_a_root_with_no_predecessor(actions: Actions) -> None:

@@ -36,7 +36,7 @@ async def succession_chain(
     pool: asyncpg.Pool, ref: str, *, max_hops: int = MAX_SUCCESSION_HOPS,
 ) -> list[dict[str, Any]]:
     """Walk an Agent's `succeeded_from` chain backward, one entry per hop:
-    {agent_id, generation, minted_because, wrote_anything}. `ref` accepts anything
+    {agent_id, generation, minted_because, wrote_anything, session}. `ref` accepts anything
     resolve_ref does (UUID, 8-char short id, canonical, or name) for the STARTING agent;
     each subsequent hop follows `succeeded_from`'s own stored canonical directly (the shape
     it's actually asserted in — no re-resolution needed hop to hop). Stops at a root (no
@@ -48,7 +48,16 @@ async def succession_chain(
     whether it ever did anything (caught live by this module's own test — a zero-write
     phantom's OWN mint-time bookkeeping made the naive check read as work). Deliberately
     simpler than agent_has_acted's own debounce-specific exclude-PAIR logic, which doesn't
-    fit a walk visiting many hops with no single fixed pair to exclude."""
+    fit a walk visiting many hops with no single fixed pair to exclude.
+
+    `session` (the operator's own question, "how can you reliably tell the latest
+    transcript?", ruling 7fa4b599's named additive step, task #135/#136 point 4, 2026-08-04):
+    NOT a new write — `register_agent` already asserts this on every mount() call
+    (agents.py, `assert_property(a, "session", identity.session, ...)`), SELF_DECLARED, the
+    harness session id that IS the transcript filename's own stem. This walker already read
+    three sibling properties off the identical `current_assertions` row; it was simply never
+    asked for the fourth. 1973d46f's shape — the record already existed, only the reader
+    didn't reach it — confirmed by reading source, not guessed."""
     start = await resolve_ref(pool, ref)
     if start is None:
         return []
@@ -69,13 +78,17 @@ async def succession_chain(
             " (EXISTS (SELECT 1 FROM assertions x WHERE x.source_id=o.canonical "
             "     AND x.object_id != o.id) "
             "  OR EXISTS (SELECT 1 FROM fleet_messages WHERE from_agent=o.canonical)) "
-            " AS wrote_anything "
+            " AS wrote_anything, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "   AND a.name='session' ORDER BY a.confidence DESC, a.observed_at DESC "
+            "   LIMIT 1) AS session "
             "FROM objects o WHERE o.canonical=$1 AND o.type='Agent'", cur)
         if row is None:
             break
         out.append({"agent_id": cur, "generation": row["generation"],
                     "minted_because": row["minted_because"],
-                    "wrote_anything": row["wrote_anything"]})
+                    "wrote_anything": row["wrote_anything"],
+                    "session": row["session"]})
         nxt = await pool.fetchval(
             "SELECT a.value #>> '{}' FROM current_assertions a "
             "JOIN objects o ON o.id=a.object_id "
