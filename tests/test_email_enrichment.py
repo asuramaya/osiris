@@ -28,8 +28,8 @@ def test_gravatar_profile_to_person_and_accounts() -> None:
     response = {
         "found": True, "hash": "deadbeef",
         "entry": [{
-            "displayName": "Hector",
-            "currentLocation": "Lima",
+            "displayName": "Priya",
+            "currentLocation": "Denver",
             "accounts": [
                 {"shortname": "github", "username": "asuramaya", "url": "https://github.com/asuramaya"},
                 {"shortname": "twitter", "display": "@asuramaya_hq", "url": "https://x.com/asuramaya_hq"},
@@ -39,7 +39,7 @@ def test_gravatar_profile_to_person_and_accounts() -> None:
     r = parse_gravatar(response, _email("dakota.jm@gmail.com"))
     person = [o for o in r.objects if o.type == "Person"]
     accounts = [o for o in r.objects if o.type == "Account"]
-    assert len(person) == 1 and person[0].properties["name"] == "Hector"
+    assert len(person) == 1 and person[0].properties["name"] == "Priya"
     assert {a.properties["platform"] for a in accounts} == {"github", "twitter"}
     assert any(link.type == "has_profile" for link in r.links)
     assert sum(1 for link in r.links if link.type == "has_account") == 2

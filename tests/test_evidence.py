@@ -49,11 +49,11 @@ def test_emit_derives_confidence_from_class() -> None:
         "Account",
         "github:asuramaya",
         EvidenceClass.AUTHORITATIVE_API,
-        properties={"name": "Hector"},
+        properties={"name": "Priya"},
     )
     assert spec.confidence == confidence_for(EvidenceClass.AUTHORITATIVE_API)
     assert spec.evidence_class is EvidenceClass.AUTHORITATIVE_API
-    assert spec.properties == {"name": "Hector"}
+    assert spec.properties == {"name": "Priya"}
 
 
 def test_emit_supports_per_property_classes() -> None:

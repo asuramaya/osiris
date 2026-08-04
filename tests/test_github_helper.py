@@ -18,14 +18,14 @@ def _inp(handle: str) -> InputObject:
 
 def test_parse_github_user_emits_account_email_url_twitter() -> None:
     resp = {"found": True, "user": {
-        "login": "asuramaya", "name": "Hector", "company": "@acme",
+        "login": "asuramaya", "name": "Priya", "company": "@acme",
         "blog": "asuramaya.com", "twitter_username": "@asuramaya_hq",
-        "email": "priya@kowalski.dev", "location": "Earth", "bio": "hi",
+        "email": "Priya@Kowalski.dev", "location": "Earth", "bio": "hi",
         "html_url": "https://github.com/asuramaya",
     }}
     r = parse_github_user(resp, _inp("asuramaya"))
     objs = {(o.type, o.canonical): o for o in r.objects}
-    assert objs[("Account", "github:asuramaya")].properties["name"] == "Hector"
+    assert objs[("Account", "github:asuramaya")].properties["name"] == "Priya"
     assert ("Email", "priya@kowalski.dev") in objs  # canonicalized lowercase
     assert ("URL", "https://asuramaya.com") in objs   # blog scheme-completed
     assert ("Account", "twitter:asuramaya_hq") in objs
