@@ -1421,7 +1421,7 @@ async def invalidate_works_in(
 async def mint_heir(
     actions: Actions, ancestor_id: str, ancestor_oid: uuid.UUID, *,
     because: str, succession: str | None, now: datetime | None = None,
-    minting_door: str | None = None,
+    minting_door: str | None = None, upcoming_project: str | None = None,
 ) -> tuple[str, uuid.UUID]:
     """Mint the next generation of a lineage — ruling a882b334: a new MIND gets a new numeral,
     and the seams that count as a new mind include mid-session ones (live model swap,
@@ -1435,7 +1435,21 @@ async def mint_heir(
     _fold_zero_turn_ancestors BEFORE this is called (both real callers do). Kept out of
     here on purpose: this function's return tuple is unpacked by ~20 call sites across the
     test suite, and threading the resolved ancestor back out would mean changing every one
-    of them for a fact the caller already has in hand before it calls in."""
+    of them for a fact the caller already has in hand before it calls in.
+
+    `upcoming_project`, when the caller already knows it (register_agent's own
+    `identity.project`, moments before it asserts it — the heartbeat/live-swap call site
+    has no such reading and leaves this None): THE DUPLICATE-EDGE RACE, CLOSED (f6f11d78,
+    shares a root with 20af2c95's own perpetuation mechanism — see that thread's notes and
+    decision 5b217d13, 2026-08-04). The house-relink below and register_agent's later
+    identity.project assertion (agents.py:2121-2128) used to fire unconditionally in the
+    SAME call, sharing one `now` — any divergence between the seat's derived `house` (often
+    stale) and the session's fresh, correctly-resolved `identity.project` produced TWO live
+    works_in edges on the heir, byte-identical to the microsecond, which move_agent_project_
+    links then faithfully carries forward on every subsequent mint, forever, even after the
+    underlying disagreement is corrected. This is the MINIMAL write-side narrowing, not the
+    full answer — it stops NEW duplicates; it does not retroactively heal the 41 already-live
+    specimens (invalidate_works_in is the per-lineage repair for those)."""
     now = now or datetime.now(UTC)
     heir = next_generation(ancestor_id)
     # A MINT NEVER LANDS ON A GRAVE (Ra's resurrection, 2026-07-17): after a same-lineage
@@ -1546,8 +1560,16 @@ async def mint_heir(
     # across its life) onto the heir, invalidate+create, before stamping the heir's own
     # current house below (idempotent either order — move_agent_project_links never
     # duplicates a link already live on the heir).
-    await move_agent_project_links(actions, ancestor_oid, a, heir, now)
-    if house:
+    moved = await move_agent_project_links(actions, ancestor_oid, a, heir, now)
+    # THE RACE, NARROWED (f6f11d78/20af2c95, decision 5b217d13, 2026-08-04): this used to
+    # _link_once `house` unconditionally, regardless of what move_agent_project_links just
+    # carried forward or what register_agent (the register_agent call site's own caller) is
+    # about to assert moments later in the SAME call, sharing this same `now` — the shared
+    # timestamp is WHY the duplicate lands byte-identical rather than merely close. `house`
+    # is only ever the sole source of truth for the heir's project when nothing else is:
+    # skip it the moment either move_agent_project_links found something live to carry
+    # forward, or the caller already knows a fresher project is coming right behind it.
+    if house and not moved and not upcoming_project:
         await actions.assert_property(a, "project", house, heir, now, _CONF, evidence_class=_EC)
         proj = await actions.create_or_find_object("SoftwareProject", f"repo:{house}", heir)
         await _link_once(actions, a, proj, "works_in", heir, now)
@@ -2048,7 +2070,8 @@ async def register_agent(
             identity.succeeded_from = identity.agent_id
             heir, a = await mint_heir(actions, identity.agent_id, a, because=mint_because,
                                       succession=identity.model_succession, now=now,
-                                      minting_door=identity.session)
+                                      minting_door=identity.session,
+                                      upcoming_project=identity.project)
             identity.agent_id = heir
             src = heir
     if mint_because is not None and mint_because == mint_reason and (

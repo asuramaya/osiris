@@ -1215,6 +1215,81 @@ async def test_mint_heir_never_duplicates_an_edge_the_heir_already_has(
     assert n == 1, "no duplicate live edge minted just because the ancestor also had one"
 
 
+# ═══ threads f6f11d78/20af2c95 (decision 5b217d13, 2026-08-04): mint_heir's house-relink
+# and register_agent's own identity.project assertion used to fire unconditionally in the
+# SAME call, sharing one `now` — a seat's stale derived `house` disagreeing with the
+# session's fresh, correctly-resolved project landed BOTH edges on the heir, byte-identical
+# to the microsecond (John/agent:d5c671c1-*'s own specimen). upcoming_project narrows the
+# house-relink to fire only when nothing else will ever assert a project for the heir. ═══
+
+
+async def test_mint_heir_skips_the_house_relink_when_a_fresher_project_is_already_known(
+    actions: Actions,
+) -> None:
+    """Direct unit-level proof: pass `upcoming_project` (what register_agent already knows
+    moments before it asserts it) and the house-derived edge/property must never land at
+    all — the caller's own later assertion is the sole source of truth here, not a race
+    between two writers sharing one clock."""
+    from src.orchestrator.agents import claim_name, mint_heir
+
+    now = datetime.now(UTC)
+    ancestor_id = "agent:staleh01"
+    a = await actions.create_or_find_object("Agent", ancestor_id, "test")
+    await actions.assert_property(a, "project", "redmonth", "test", now, 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    claimed = await claim_name(actions, ancestor_id, "Staleheir", source="test")
+    assert claimed.get("error") is None  # the seat's derived house now reads 'redmonth'
+
+    heir, heir_oid = await mint_heir(actions, ancestor_id, a, because="compaction",
+                                     succession=None, upcoming_project="ballgem")
+
+    live = await actions.pool.fetch(
+        "SELECT t.canonical FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='works_in' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", heir_oid)
+    assert live == [], (
+        "the stale house must never land a works_in edge when the caller already knows "
+        "a fresher project is coming right behind it")
+    stamped = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='project' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        heir_oid)
+    assert stamped is None, "no house-derived 'project' stamp either — same deferral"
+
+
+async def test_register_agent_mint_does_not_duplicate_works_in_on_a_stale_house(
+    actions: Actions,
+) -> None:
+    """End-to-end reproduction of John's own specimen: a seat's house stuck at 'redmonth'
+    (never corrected) while the session's own cwd correctly resolves to 'ballgem' — before
+    the narrowing, mint_heir's house-relink and register_agent's identity.project assertion
+    each `_link_once`d their own project inside ONE call, sharing one `now`, so both edges
+    landed live on the heir at the identical microsecond. A mint through a genuinely
+    divergent house must now produce exactly ONE live works_in edge — the fresher one."""
+    from src.orchestrator.agents import claim_name
+
+    now = datetime.now(UTC)
+    ancestor_id = "agent:staleh02"
+    a = await actions.create_or_find_object("Agent", ancestor_id, "test")
+    await actions.assert_property(a, "project", "redmonth", "test", now, 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    claimed = await claim_name(actions, ancestor_id, "Staleheir2", source="test")
+    assert claimed.get("error") is None
+
+    fresher = AgentIdentity(agent_id=ancestor_id, session="staleh02", project="ballgem",
+                            model="claude-fable-5", cwd=None, model_method="job_dir",
+                            model_observed_at=now)
+    heir_oid = await register_agent(actions, fresher, actor="test", mint_reason="compaction")
+
+    live = await actions.pool.fetch(
+        "SELECT t.canonical FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='works_in' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", heir_oid)
+    assert {r["canonical"] for r in live} == {"repo:ballgem"}, (
+        "exactly one live works_in edge — the fresher, correctly-resolved project — "
+        "never the stale house's edge too")
+
+
 async def test_backfill_agent_project_links_dry_run_writes_nothing(actions: Actions) -> None:
     """The one-time repair for the 906/907 edges that already existed before the write-
     side fixes landed — a genuinely OLD-shaped leak (an ancestor's edge, never moved,
