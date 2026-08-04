@@ -1,7 +1,7 @@
 """'This is me' — the developer unifies their own identity across repos.
 
 The resolver catches dev Persons that share a name/handle, but a real name and a handle
-(hector ↔ asuramaya) share no deterministic key — that's a human assertion. The first
+(priya ↔ asuramaya) share no deterministic key — that's a human assertion. The first
 claim designates a canonical `self`; a later claim merges that identity into it.
 """
 from __future__ import annotations
@@ -38,20 +38,20 @@ async def test_first_claim_designates_then_a_later_claim_merges(
 ) -> None:
     asura = await _dev(actions, "dakota.jm@gmail.com", "asuramaya")
     # same person, no shared key
-    hector = await _dev(actions, "priya.kowalski42@gmail.com", "hector")
+    priya = await _dev(actions, "priya.kowalski42@gmail.com", "priya")
 
     # first claim → this Person becomes the canonical self
     r1 = (await client.post(f"/objects/{asura}/claim-identity")).json()
     assert r1["action"] == "designated" and r1["self"] == asura
 
     # a later claim → merge that identity INTO the self (winner = the self)
-    r2 = (await client.post(f"/objects/{hector}/claim-identity")).json()
-    assert r2["action"] == "merged" and r2["self"] == asura and r2["merged"] == hector
+    r2 = (await client.post(f"/objects/{priya}/claim-identity")).json()
+    assert r2["action"] == "merged" and r2["self"] == asura and r2["merged"] == priya
 
     p = actions.pool
-    # hector is now merged into asuramaya (event-sourced projection), asuramaya stays active
-    assert await p.fetchval("SELECT status FROM objects WHERE id=$1", hector) == "merged"
-    assert await p.fetchval("SELECT merged_into FROM objects WHERE id=$1", hector) == \
+    # priya is now merged into asuramaya (event-sourced projection), asuramaya stays active
+    assert await p.fetchval("SELECT status FROM objects WHERE id=$1", priya) == "merged"
+    assert await p.fetchval("SELECT merged_into FROM objects WHERE id=$1", priya) == \
         await p.fetchval("SELECT id FROM objects WHERE id=$1", asura)
     assert await p.fetchval("SELECT status FROM objects WHERE id=$1", asura) == "active"
 
