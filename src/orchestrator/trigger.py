@@ -32,7 +32,7 @@ import asyncpg
 from src.actions.core import Actions
 from src.config.settings import Settings, get_settings
 from src.ingest.providers import spend_is_metered
-from src.ingest.sessions import locate_current_transcript
+from src.ingest.sessions import locate_current_transcript, resume_diagnostics
 from src.orchestrator.bodies import BodyProvider, LocalProvider
 from src.orchestrator.ceiling import may_spend
 from src.orchestrator.mailbox import OPERATOR_ADDR, send_message
@@ -470,7 +470,8 @@ async def _agent_resumable(
     root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
         else Path.home() / ".claude" / "projects"
     return await asyncio.to_thread(
-        _pick_resumable_sync, cands, root, st.osiris_resume_ceiling_bytes)
+        _pick_resumable_sync, cands, root, st.osiris_resume_ceiling_bytes,
+        st.osiris_resume_max_compactions)
 
 
 async def _agent_resume_miss_reason(pool: asyncpg.Pool, agent_id: str, st: Settings) -> str:
@@ -493,7 +494,8 @@ async def _agent_resume_miss_reason(pool: asyncpg.Pool, agent_id: str, st: Setti
     root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
         else Path.home() / ".claude" / "projects"
     return await asyncio.to_thread(
-        _resume_miss_reason, cands, root, st.osiris_resume_ceiling_bytes)
+        _resume_miss_reason, cands, root, st.osiris_resume_ceiling_bytes,
+        st.osiris_resume_max_compactions)
 
 
 async def _owner_live(pool: asyncpg.Pool, project: str, within_secs: int) -> bool:
@@ -515,25 +517,70 @@ async def _retired(pool: asyncpg.Pool, agent_canonical: str) -> bool:
     return bool(v == "true")
 
 
+def _resume_candidate_verdict(t: Path, ceiling_bytes: int, max_compactions: int) -> str | None:
+    """None iff `t` is genuinely resumable under BOTH gates; otherwise the reason it is
+    not. The ONE computation `_pick_resumable_sync` (the hot path) and `_resume_miss_
+    reason` (the refusal-message path) both read from, so the two can never
+    independently drift — closed by construction, not by two hand-synchronized copies.
+    That drift already happened once: eebeb1f (Sekhmet's #136) shipped a byte-for-byte
+    duplicate of this function's OLD raw-size check, explicitly to never disagree with
+    it, and would have silently gone stale the moment this fix landed without also
+    touching that copy (Thoth's ruling, 2026-08-03 — "that is 38c71544 exactly"). Raises
+    OSError on an unreadable transcript; both callers handle it the same way (skip this
+    candidate).
+
+    BOTH GATES MUST PASS, CHECKED INDEPENDENTLY (Thoth's ruling, refining the original
+    size-only fix, same thread 771366d1): don't reanimate a generation that already
+    retired via legitimate succession is ALREADY `_retired()`'s job, checked first by
+    every caller here, authoritatively — not this function's concern. This function
+    answers a narrower question: would a resume return something worth having.
+
+    COMPACTION COUNT FIRST: a small tail after many compactions and a small tail after
+    zero are opposite cases, not similar ones — the first compaction is the moment a
+    resume stops returning "the mind that did the work" and starts returning "a lossy
+    summary of it" (ruling 7fa4b599's own mechanism: that summary is approximately what a
+    fresh mind's own orient()+handoff+dispatch-brief ritual already delivers, from an
+    audited source, not a lossy one — falling through to fresh is an upgrade, not a
+    denial). Default threshold 0, evidence-based: measured across every real transcript
+    on this box over the trivial-shell floor (767 candidates, 2026-08-03) — 85.4% have
+    NEVER compacted (a clean, natural boundary), and of the 37 that compacted exactly
+    once, 35 already pass the byte ceiling below — meaning this gate does real,
+    orthogonal work the size gate alone would miss for the large majority of once-
+    drifted sessions. Full measurement in `resume_diagnostics`'s own docstring
+    (src/ingest/sessions.py).
+
+    THEN THE RESUMABLE-TAIL CEILING, NOT RAW FILE SIZE (the original fix, same thread):
+    raw file size measures a session's cumulative lifetime, not what a resume actually
+    hydrates — verified live on two real specimens (72MB/103MB transcripts) that only
+    2-3% of the file, the content since the LAST compaction, is what a resume needs."""
+    count, tail = resume_diagnostics(t)
+    if count > max_compactions:
+        return (f"found a candidate, but it has compacted {count} time(s) — a resume "
+                f"would return a compaction summary, not the mind that did the work; a "
+                f"fresh mind's own orient()+handoff is the better, audited summary "
+                f"already (ruling 7fa4b599)")
+    if tail > ceiling_bytes:
+        return "found a candidate, but its resumable content is over the context ceiling"
+    return None
+
+
 def _pick_resumable_sync(
-    cands: list[tuple[str, str]], root: Path, ceiling_bytes: int
+    cands: list[tuple[str, str]], root: Path, ceiling_bytes: int, max_compactions: int = 0,
 ) -> tuple[str, str, float, str] | None:
     """The disk half of resume-resolution (sync — called via to_thread): for each candidate
-    (job_dir, cwd), anchor its transcript and check the context ceiling. Returns
+    (job_dir, cwd), anchor its transcript and run `_resume_candidate_verdict`. Returns
     (full_session_id, cwd, transcript_mtime, job_dir) for the first resumable owner. The
-    transcript stem IS the session id `claude --resume` takes; a transcript at the ceiling
-    is retirement-by-compaction territory — resuming it would replay a sibling project's
-    21:30 case, which was LEGITIMATE succession. The mtime rides along as the ONE honest
-    mid-turn signal: a turn writes the transcript; nothing else does (the statusline-
-    heartbeat superstition, killed 2026-07-20 — see dispatch_dm). `job_dir` (thread
-    25943031) rides along too, additive — see _agent_resumable's own docstring."""
+    transcript stem IS the session id `claude --resume` takes. The mtime rides along as
+    the ONE honest mid-turn signal: a turn writes the transcript; nothing else does (the
+    statusline-heartbeat superstition, killed 2026-07-20 — see dispatch_dm). `job_dir`
+    (thread 25943031) rides along too, additive — see _agent_resumable's own docstring."""
     for job_dir, cwd in cands:
         t = locate_current_transcript(root, job_dir, anchored_only=True)
         if t is None:
             continue
         try:
             st = t.stat()
-            if st.st_size > ceiling_bytes:
+            if _resume_candidate_verdict(t, ceiling_bytes, max_compactions) is not None:
                 continue
         except OSError:
             continue
@@ -542,28 +589,29 @@ def _pick_resumable_sync(
 
 
 def _resume_miss_reason(
-    cands: list[tuple[str, str]], root: Path, ceiling_bytes: int
+    cands: list[tuple[str, str]], root: Path, ceiling_bytes: int, max_compactions: int = 0,
 ) -> str:
     """Why _pick_resumable_sync came back empty for these SAME candidates — the two
     opposite shapes dispatch_dm's refusal message used to collapse into one identical
     sentence (Thoth's ruling, 2026-08-03, #135/#136): 'no anchored transcript at all'
     (nothing ever mounted here, or never wrote one) is not the same situation as 'found
-    a real session, every candidate simply too large to resume' — the first means there
-    is genuinely nothing to wait for; the second means a live mind exists but the ceiling
-    is refusing it. Never called on the hot path — only after resume-resolution already
-    returned None, to name which of the two it was. Mirrors _pick_resumable_sync's own
-    per-candidate logic exactly (anchor, then size-check) so the two can never disagree
-    on why a candidate was skipped; an unreadable transcript (OSError on stat) counts as
-    not-anchored here too, the same as it does there."""
+    a real session, disqualified by ceiling or compaction depth' — the first means there
+    is genuinely nothing to wait for; the second means a mind exists but a resume of it
+    would not be worth having. Never called on the hot path — only after resume-
+    resolution already returned None, to name which of the two it was. Reads the SAME
+    `_resume_candidate_verdict` `_pick_resumable_sync` does, so the two can never
+    disagree on why a candidate was skipped; an unreadable transcript (OSError) counts
+    as not-anchored here too, the same as it does there."""
     for job_dir, _cwd in cands:
         t = locate_current_transcript(root, job_dir, anchored_only=True)
         if t is None:
             continue
         try:
-            if t.stat().st_size > ceiling_bytes:
-                return "found candidates, every one over the context ceiling"
+            reason = _resume_candidate_verdict(t, ceiling_bytes, max_compactions)
         except OSError:
             continue
+        if reason is not None:
+            return reason
     return "no anchored transcript at all"
 
 
@@ -585,7 +633,8 @@ async def _resumable_owner(
     root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
         else Path.home() / ".claude" / "projects"
     return await asyncio.to_thread(
-        _pick_resumable_sync, cands, root, st.osiris_resume_ceiling_bytes)
+        _pick_resumable_sync, cands, root, st.osiris_resume_ceiling_bytes,
+        st.osiris_resume_max_compactions)
 
 
 async def _last_wake_mode(pool: asyncpg.Pool, project: str, message_id: int) -> str | None:
@@ -1785,7 +1834,10 @@ async def launch_seat(
         # either, so both are checked regardless of which one launch_cwd resolved to; the
         # freshest match is confessed.
         from src.ingest.sessions import dormant_history_confession
-        dormant = dormant_history_confession(office, *([tree_cwd] if tree_cwd else []))
+        dormant = dormant_history_confession(
+            office, *([tree_cwd] if tree_cwd else []),
+            ceiling_bytes=st.osiris_resume_ceiling_bytes,
+            max_compactions=st.osiris_resume_max_compactions)
 
         try:
             await spawn(launch_cwd, name=name, model=argv_model, prompt=boot_prompt)

@@ -669,6 +669,167 @@ def test_dormant_history_confession_checks_extra_cwds_and_picks_the_freshest(
     assert office_only["path"] == str(office_transcript)
 
 
+# --- resumable_tail_bytes (thread 771366d1, task #135/#136): a transcript's cumulative
+# lifetime size is a poor proxy for what a resume would actually hydrate — Claude Code
+# auto-compacts, and only content since the LAST compaction is live. Verified against two
+# real specimens: imhotep XVIII (72MB, 17 boundaries, 2.29MB tail, 3.2%) and seshat XXIII
+# (103MB, 20 boundaries, 2.23MB tail, 2.2%). ------------------------------------------------
+
+_COMPACT_LINE = b'{"type":"system","subtype":"compact_boundary","summary":"compacted"}\n'
+
+
+def test_resumable_tail_bytes_is_the_whole_file_when_never_compacted(tmp_path: Path) -> None:
+    """No compact_boundary marker at all: nothing to discount from — the raw size IS the
+    live size (a short session that never triggered auto-compaction)."""
+    from src.ingest.sessions import resumable_tail_bytes
+
+    t = tmp_path / "x.jsonl"
+    t.write_bytes(b'{"type":"user","message":"hi"}\n' * 5)
+    assert resumable_tail_bytes(t) == t.stat().st_size
+
+
+def test_resumable_tail_bytes_measures_only_content_after_the_last_boundary(
+    tmp_path: Path,
+) -> None:
+    """The exact shape found live: a big file, one boundary near the end, a small tail."""
+    from src.ingest.sessions import resumable_tail_bytes
+
+    t = tmp_path / "x.jsonl"
+    head = b'{"type":"assistant","message":"old turn"}\n' * 1000  # the bulk of the file
+    tail = b'{"type":"user","message":"new turn"}\n' * 3
+    t.write_bytes(head + _COMPACT_LINE + tail)
+    expected = len(_COMPACT_LINE) + len(tail)
+    assert resumable_tail_bytes(t) == expected
+    assert expected < len(head)  # the fix's whole point: tail << total file size
+
+
+def test_resumable_tail_bytes_uses_the_last_boundary_not_the_first(tmp_path: Path) -> None:
+    """Multiple compactions across a long session — only the MOST RECENT one bounds the
+    live tail; earlier ones are themselves now historical residue."""
+    from src.ingest.sessions import resumable_tail_bytes
+
+    t = tmp_path / "x.jsonl"
+    tail = b'{"type":"user","message":"epoch 3"}\n' * 2
+    t.write_bytes(
+        b'{"type":"assistant","message":"epoch 1"}\n' * 500 + _COMPACT_LINE
+        + b'{"type":"assistant","message":"epoch 2"}\n' * 500 + _COMPACT_LINE + tail)
+    assert resumable_tail_bytes(t) == len(_COMPACT_LINE) + len(tail)
+
+
+# --- dormant_history_confession learns to name resumability + the resume command ----------
+
+
+def test_dormant_history_confession_names_a_resumable_session(tmp_path: Path) -> None:
+    """Under the ceiling by raw size: resumable, with the exact command to run by hand
+    (task #135/#136's actual acceptance bar — `osiris launch` itself cannot resume through
+    `--bg`, proven; the next best thing is naming the command)."""
+    from src.ingest.sessions import _DORMANT_HISTORY_FLOOR_BYTES, dormant_history_confession
+
+    proj = tmp_path / "-home-x-.osiris-seats-ooblek"
+    proj.mkdir()
+    sid = "b5f04f84-707e-49cc-85f1-482fc70058c8"
+    (proj / f"{sid}.jsonl").write_bytes(b"x" * (_DORMANT_HISTORY_FLOOR_BYTES + 1))
+
+    info = dormant_history_confession(
+        "/home/x/.osiris/seats/ooblek", root=tmp_path, ceiling_bytes=8_000_000)
+    assert info is not None
+    assert info["session_id"] == sid
+    assert info["resumable"] is True
+    assert info["resume_command"] == f"claude --resume {sid}"
+
+
+def test_dormant_history_confession_rescues_a_large_transcript_with_a_small_tail(
+    tmp_path: Path,
+) -> None:
+    """THE SIZE FIX, through the confession, isolated: raw size is over the ceiling, but
+    the tail since the last compaction fits comfortably under it — correctly named
+    resumable BY SIZE, where the old raw-size check would have said not-resumable (exactly
+    Sekhmet's two real repro cases, imhotep XVIII and seshat XXIII). max_compactions=1
+    widens the separate compaction gate out of the way — that gate has its own test below."""
+    from src.ingest.sessions import dormant_history_confession
+
+    proj = tmp_path / "-home-x-.osiris-seats-ooblek"
+    proj.mkdir()
+    sid = "b5f04f84-707e-49cc-85f1-482fc70058c8"
+    body = (b'{"type":"assistant","message":"old"}\n' * 100_000 + _COMPACT_LINE
+            + b'{"type":"user","message":"new"}\n' * 3)
+    assert len(body) > 1000
+    (proj / f"{sid}.jsonl").write_bytes(body)
+
+    info = dormant_history_confession(
+        "/home/x/.osiris/seats/ooblek", root=tmp_path, ceiling_bytes=1000, max_compactions=1)
+    assert info is not None
+    assert info["resumable"] is True
+    assert info["resume_command"] == f"claude --resume {sid}"
+
+
+def test_dormant_history_confession_names_a_non_resumable_session(tmp_path: Path) -> None:
+    """Genuinely over ceiling even after the tail discount: named not-resumable, no
+    resume_command offered (there is nothing honest to hand back). max_compactions=1
+    isolates the size gate, matching the test above."""
+    from src.ingest.sessions import dormant_history_confession
+
+    proj = tmp_path / "-home-x-.osiris-seats-ooblek"
+    proj.mkdir()
+    sid = "b5f04f84-707e-49cc-85f1-482fc70058c8"
+    body = (b'{"type":"assistant","message":"old"}\n' * 100_000 + _COMPACT_LINE
+            + b'{"type":"user","message":"new"}\n' * 100_000)
+    (proj / f"{sid}.jsonl").write_bytes(body)
+
+    info = dormant_history_confession(
+        "/home/x/.osiris/seats/ooblek", root=tmp_path, ceiling_bytes=1000, max_compactions=1)
+    assert info is not None
+    assert info["resumable"] is False
+    assert "resume_command" not in info
+
+
+def test_dormant_history_confession_names_not_resumable_at_default_after_one_compaction(
+    tmp_path: Path,
+) -> None:
+    """The compaction gate, at its evidence-based default (0): a tail comfortably under the
+    ceiling is still named not-resumable once it has compacted even once, and the count
+    rides along in the receipt for the note's own upgrade-framed wording."""
+    from src.ingest.sessions import dormant_history_confession
+
+    proj = tmp_path / "-home-x-.osiris-seats-ooblek"
+    proj.mkdir()
+    sid = "b5f04f84-707e-49cc-85f1-482fc70058c8"
+    body = (b'{"type":"assistant","message":"old"}\n' * 100_000 + _COMPACT_LINE
+            + b'{"type":"user","message":"new"}\n' * 3)
+    (proj / f"{sid}.jsonl").write_bytes(body)
+
+    info = dormant_history_confession(
+        "/home/x/.osiris/seats/ooblek", root=tmp_path, ceiling_bytes=1_000_000_000)
+    assert info is not None
+    assert info["resumable"] is False
+    assert info["compactions"] == 1
+    assert "resume_command" not in info
+
+
+def test_dormant_history_note_names_the_resume_command_when_resumable() -> None:
+    from src.ingest.sessions import dormant_history_note
+
+    note = dormant_history_note({
+        "path": "/whatever.jsonl", "size_bytes": 20_300_000,
+        "last_touched": "2026-08-02T17:57:18+00:00",
+        "resumable": True, "resume_command": "claude --resume abc123",
+    })
+    assert "claude --resume abc123" in note
+    assert "It IS resumable" in note
+
+
+def test_dormant_history_note_names_not_resumable_when_over_ceiling() -> None:
+    from src.ingest.sessions import dormant_history_note
+
+    note = dormant_history_note({
+        "path": "/whatever.jsonl", "size_bytes": 20_300_000,
+        "last_touched": "2026-08-02T17:57:18+00:00",
+        "resumable": False,
+    })
+    assert "NOT resumable" in note
+    assert "It IS resumable" not in note
+
+
 def test_dormant_history_note_renders_size_and_timestamp() -> None:
     from src.ingest.sessions import dormant_history_note
 
