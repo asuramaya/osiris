@@ -3248,14 +3248,22 @@ async def correct_house(new_house: str, ctx: Context | None = None) -> dict[str,
     (derive_house): a head's anchor is a deliberate identity declaration, exactly like
     claim_name, so this is SELF-scoped and never operator-fenced. Refuses on a non-head
     (an active managed_by edge out means this seat derives its house through its manager
-    now — nothing here to correct) or a caller holding no seat."""
+    now — nothing here to correct) or a caller holding no seat. Patches every live cached
+    identity in your own lineage — the next orient() reflects it without a reconnect."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — house-correct is a seat's own act",
                 "why": _anchorless(ctx)}
+    pool = await _pool_get()
     from src.orchestrator.seats import correct_house as _correct_house
-    return await _correct_house(Actions(await _pool_get()), ident.agent_id, new_house,
-                                source=ident.agent_id)
+    result = await _correct_house(Actions(pool), ident.agent_id, new_house,
+                                  source=ident.agent_id)
+    if not result.get("error"):
+        base = _generation(ident.agent_id)[0]
+        for cached in _agents.values():
+            if _generation(cached.agent_id)[0] == base:
+                await _resolve_project_seat_first(pool, cached)
+    return result
 
 
 @mcp.tool()
@@ -3448,9 +3456,36 @@ async def invalidate_works_in(stale_project: str, because: str,
     if ident is None:
         return {"error": "mount first — invalidating a works_in edge is a deliberate "
                          "act on the record", "why": _anchorless(ctx)}
+    pool = await _pool_get()
     from src.orchestrator.agents import invalidate_works_in as _invalidate_works_in
-    return await _invalidate_works_in(Actions(await _pool_get()), ident.agent_id,
-                                      stale_project, because=because, actor=ident.agent_id)
+    result = await _invalidate_works_in(Actions(pool), ident.agent_id, stale_project,
+                                        because=because, actor=ident.agent_id)
+    if not result.get("error"):
+        # THE STALE-BANNER TRAP, generalized (rebind_seat's own docstring names it
+        # first): the DB write is real immediately, but a LIVE connection's cached
+        # AgentIdentity does not follow it — the gap that made John's own fix appear
+        # to take effect three steps late (thread 8640a625, decision 4001f6d1). Patch
+        # every live cached identity in this agent's own lineage in place, so the
+        # very next orient() on any of those connections sees the drop without a
+        # reconnect. Two-step, mirroring mount()'s own precedence: a SEATED identity
+        # re-derives from the seat's own house (the same call _resolve_project_seat_
+        # first runs at mount time — a no-op for an unseated one, same as there);
+        # only when that leaves the cache still pointing at the just-dropped project
+        # AND exactly one candidate remains unambiguous does the remaining works_in
+        # edge become the fallback — never guessed at when 2+ remain.
+        base = _generation(ident.agent_id)[0]
+        # canonicals are "repo:<name>"; AgentIdentity.project is always the bare name
+        # (agents.py itself builds the canonical as f"repo:{identity.project}") — strip
+        # the prefix before comparing against or assigning into a cached identity.
+        dropped = result["was_working_in"].removeprefix("repo:")
+        remaining = [p.removeprefix("repo:") for p in (result.get("still_working_in") or [])]
+        for cached in _agents.values():
+            if _generation(cached.agent_id)[0] != base:
+                continue
+            await _resolve_project_seat_first(pool, cached)
+            if cached.project == dropped and len(remaining) == 1:
+                cached.project = remaining[0]
+    return result
 
 
 @mcp.tool()

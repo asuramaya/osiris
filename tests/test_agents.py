@@ -1465,6 +1465,107 @@ async def test_invalidate_works_in_mcp_wrapper_refuses_before_mount(actions: Act
     assert "mount first" in out["error"]
 
 
+async def test_invalidate_works_in_mcp_wrapper_moves_orient_without_reconnecting(
+    actions: Actions,
+) -> None:
+    """THE ACCEPTANCE TEST (Thoth's own ruling, thread 8640a625 / decision 4001f6d1's own
+    finding — the gap John's fix appeared to close three steps late): a live session that
+    drops an edge whose project WAS the resolved winner must see orient() move WITHOUT
+    reconnecting. Not the DB row — the RESOLUTION. Same connection, same cached identity,
+    two orient() calls, one invalidate_works_in call between them, zero re-mounts.
+
+    A SEATED agent's own project is its seat's derived house, unconditionally — the seat's
+    house here is ALREADY "ballgemtest" (the fix landed before this test starts), but the
+    live cache still says "redmonthtest" (the stale mount-time snapshot, exactly John's own
+    shape) until the wrapper patches it."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.seats import bind_holder
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:iwiacc1aa", "test")
+    stale = await actions.create_or_find_object("SoftwareProject", "repo:redmonthtest", "test")
+    keep = await actions.create_or_find_object("SoftwareProject", "repo:ballgemtest", "test")
+    await actions.create_link(a, stale, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await actions.create_link(a, keep, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await bind_holder(actions, seat_id="seat:iwiacc1se", agent_id="agent:iwiacc1aa")
+    seat_oid = await actions.create_or_find_object("Seat", "seat:iwiacc1se", "test")
+    await actions.assert_property(seat_oid, "house", "ballgemtest", "test", now, 0.9,
+                                  evidence_class="self_declared")
+
+    ident = AgentIdentity(agent_id="agent:iwiacc1aa", session="iwiacc1", project="redmonthtest",
+                          model="claude-sonnet-5", cwd=None, model_method="job_dir",
+                          model_history=("claude-sonnet-5",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    key = srv._conn_key(ctx)
+    srv._agents[key] = ident
+    try:
+        before = await srv.orient(ctx=ctx)
+        assert before["project"] == "redmonthtest"          # the stale cache, before anything
+
+        out = await srv.invalidate_works_in("repo:redmonthtest", "fork residue", ctx=ctx)
+        assert out["invalidated"] == "agent:iwiacc1aa"
+
+        after = await srv.orient(ctx=ctx)                    # SAME ctx — no reconnect
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(key, None)
+    assert after["project"] == "ballgemtest"                 # RESOLUTION moved, not just the row
+
+
+async def test_invalidate_works_in_mcp_wrapper_falls_back_to_the_remaining_edge_unseated(
+    actions: Actions,
+) -> None:
+    """The sibling shape: an UNSEATED agent has no seat house to re-derive from (_resolve_
+    project_seat_first is a documented no-op there), so the cache patch falls back to the
+    one unambiguous remaining works_in edge instead — still no reconnect required."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:iwiacc2aa", "test")
+    stale = await actions.create_or_find_object("SoftwareProject", "repo:acc2stale", "test")
+    keep = await actions.create_or_find_object("SoftwareProject", "repo:acc2keep", "test")
+    await actions.create_link(a, stale, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await actions.create_link(a, keep, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    # deliberately no bind_holder call — this agent holds no seat
+
+    ident = AgentIdentity(agent_id="agent:iwiacc2aa", session="iwiacc2", project="acc2stale",
+                          model="claude-sonnet-5", cwd=None, model_method="job_dir",
+                          model_history=("claude-sonnet-5",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    key = srv._conn_key(ctx)
+    srv._agents[key] = ident
+    try:
+        before = await srv.orient(ctx=ctx)
+        assert before["project"] == "acc2stale"
+
+        await srv.invalidate_works_in("repo:acc2stale", "cleanup", ctx=ctx)
+        after = await srv.orient(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(key, None)
+    assert after["project"] == "acc2keep"
+
+
 async def test_correct_agent_house_heals_a_polluted_stamp_on_someone_else(
     actions: Actions,
 ) -> None:

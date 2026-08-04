@@ -290,7 +290,17 @@ def _tool_chars(t: Any) -> int:
 # graph_lint's own docstring addition (the new duplicate-works-in check) trimmed the same
 # way. 133,673 -> 135,077, +1,404. 100 -> 101 tools. Exact measured total via this file's
 # own `_measure_tool_contract`, not a round number.
-TOOL_CONTRACT_CEILING_CHARS = 135_077
+#
+# RAISED, the cache-coherence follow-on (2026-08-04, Thoth's own dispatch, thread
+# 8640a625/decision 4001f6d1): invalidate_works_in and correct_house now patch every live
+# cached identity in the caller's own lineage after a successful write, closing the gap
+# that made John's own fix appear to take effect three steps late (rebind_seat's own
+# docstring named the trap first; neither of these two followed it). One sentence added to
+# correct_house's own MCP-facing docstring (kept to the behavioral fact only — the
+# rebind_seat citation trimmed out, category rule). invalidate_works_in's own docstring
+# untouched; only its code grew, no ratchet cost there. 135,077 -> 135,189, +112. 101 -> 101
+# tools, no new tool. Exact measured total via this file's own `_measure_tool_contract`.
+TOOL_CONTRACT_CEILING_CHARS = 135_189
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
