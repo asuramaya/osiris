@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
 from src.actions.core import Actions
 from src.cli import (
     DEPLOY_UNITS,
@@ -26,15 +27,18 @@ from src.cli import (
     cmd_deploy,
     cmd_fold_project,
     cmd_launch,
+    cmd_merge,
     cmd_migrate,
     cmd_mint_seat,
     cmd_seed,
+    cmd_unmerge,
     commit_deployed_notes,
     composition_drift_notes,
     composition_gap_notes,
     composition_room_gap_notes,
     diff_tool_lists,
     dirty_tracked_src_files,
+    main,
     match_session,
     oneshot_deployed_scripts,
     resolve_model,
@@ -1571,7 +1575,8 @@ async def test_cmd_mint_seat_refuses_cross_house_without_operator_actor(
 
 
 async def test_cli_parser_accepts_mint_seat(actions: Actions) -> None:
-    """argparse wiring: handle positional, --manager/--actor required, the rest optional."""
+    """argparse wiring: handle positional required, everything else — including
+    --manager/--actor, both inferred since dispatch 3678/3681 — optional."""
     from src.cli import _build_parser
 
     args = _build_parser().parse_args(
@@ -1582,3 +1587,165 @@ async def test_cli_parser_accepts_mint_seat(actions: Actions) -> None:
     assert args.actor == "operator"
     assert args.project is None and args.house is None and args.model is None
     assert args.adopt is False and args.force is False
+
+
+async def test_cli_parser_defaults_actor_to_console_everywhere() -> None:
+    """dispatch 3678: a human at a raw terminal shouldn't have to type a value that is
+    always going to be the same one — every sanctioned-second-door command defaults
+    --actor to the console operator sentinel (src.orchestrator.seats._OPERATOR_ACTORS)."""
+    from src.cli import _build_parser
+
+    parser = _build_parser()
+    cases = [
+        ["fold-project", "a", "b", "--evidence", "e"],
+        ["merge", "a", "b", "--evidence", "e"],
+        ["unmerge", "a", "--because", "b"],
+        ["charter-for", "seat:x", "--repos", "r", "--because", "b"],
+        ["amend-practice", "ref", "amendment"],
+        ["annotate-thread", "ref", "note"],
+        ["amend-decision", "ref", "addendum"],
+        ["mint-seat", "NewWorker"],
+    ]
+    for argv in cases:
+        args = parser.parse_args(argv)
+        assert args.actor == "console", f"{argv[0]!r} did not default --actor to console"
+
+
+async def test_cli_parser_accepts_merge_and_unmerge() -> None:
+    from src.cli import _build_parser
+
+    parser = _build_parser()
+    m = parser.parse_args(["merge", "OldLabel", "NewLabel", "--evidence", "same repo"])
+    assert m.command == "merge" and m.dupe == "OldLabel" and m.into == "NewLabel"
+    u = parser.parse_args(["unmerge", "OldLabel", "--because", "wrong merge"])
+    assert u.command == "unmerge" and u.dupe == "OldLabel" and u.execute is False
+    u2 = parser.parse_args(["unmerge", "OldLabel", "--because", "wrong merge", "--execute"])
+    assert u2.execute is True
+
+
+async def test_cmd_merge_folds_a_software_project_pair(actions: Actions) -> None:
+    """cmd_merge dispatches to the SAME self-typing orchestrator.merge.merge the MCP tool
+    wraps — this is the replacement for the old cmd_fold_project, not a narrower rename."""
+    import io
+    from contextlib import redirect_stdout
+
+    await _cli_stub_project(actions, "repo:mergedupe1", "mergedupe1")
+    await _cli_stub_project(actions, "repo:mergeinto1", "mergeinto1")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_merge("mergedupe1", "mergeinto1", "both mint the same repo",
+                              actor="operator", pool=actions.pool)
+    assert out == 0
+    assert "folded repo:mergedupe1 into repo:mergeinto1" in buf.getvalue()
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:mergedupe1'")
+    assert row["status"] == "merged"
+
+
+async def test_cmd_fold_project_prints_a_deprecation_pointer(actions: Actions) -> None:
+    """dispatch 3683: fold-project is a hidden, working, DEPRECATED alias for merge — it
+    must say so on every call, not just quietly keep working forever unremarked."""
+    import io
+    from contextlib import redirect_stderr
+
+    await _cli_stub_project(actions, "repo:depdupe1", "depdupe1")
+    await _cli_stub_project(actions, "repo:depinto1", "depinto1")
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_fold_project("depdupe1", "depinto1", "same repo",
+                                     actor="operator", pool=actions.pool)
+    assert out == 0
+    assert "deprecated" in buf.getvalue().lower()
+    assert "osiris merge" in buf.getvalue()
+
+
+async def test_cmd_unmerge_dry_run_by_default(actions: Actions) -> None:
+    """Matches the MCP unmerge tool's own convention exactly: no --execute writes nothing."""
+    import io
+    from contextlib import redirect_stdout
+
+    await _cli_stub_project(actions, "repo:unmdupe1", "unmdupe1")
+    await _cli_stub_project(actions, "repo:unminto1", "unminto1")
+    await cmd_merge("unmdupe1", "unminto1", "same repo", actor="operator", pool=actions.pool)
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_unmerge("unmdupe1", "reconsidered", actor="operator",
+                                pool=actions.pool)
+    assert out == 0
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:unmdupe1'")
+    assert row["status"] == "merged"  # dry run: still merged, nothing executed
+    assert '"execute": false' in buf.getvalue().lower() or "false" in buf.getvalue().lower()
+
+
+async def test_cmd_mint_seat_infers_manager_from_the_sole_seat_in_house(
+    actions: Actions,
+) -> None:
+    """dispatch 3678: --manager omitted infers the ONE seat in the target --house."""
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator.seats import ensure_seat
+
+    manager = await ensure_seat(actions, house="soleseathouse", handle="OnlySeatHere",
+                                source="test")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_mint_seat(
+            "InferredWorker1", manager=None, project=None, house="soleseathouse",
+            model=None, actor="console", pool=actions.pool)
+    assert out == 0
+    text = buf.getvalue()
+    assert "inferred --manager='OnlySeatHere'" in text
+    assert f"manager: {manager['seat_id']} (linked)" in text
+
+
+async def test_cmd_mint_seat_refuses_to_infer_manager_with_no_seats_in_house(
+    actions: Actions,
+) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_mint_seat(
+            "InferredWorker2", manager=None, project=None, house="totallyemptyhouse",
+            model=None, actor="console", pool=actions.pool)
+    assert out == 1
+    assert "no seats exist in house 'totallyemptyhouse'" in buf.getvalue()
+
+
+async def test_cmd_mint_seat_refuses_to_infer_manager_with_several_seats_in_house(
+    actions: Actions,
+) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    from src.orchestrator.seats import ensure_seat
+
+    await ensure_seat(actions, house="crowdedhouse", handle="CrowdedA", source="test")
+    await ensure_seat(actions, house="crowdedhouse", handle="CrowdedB", source="test")
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_mint_seat(
+            "InferredWorker3", manager=None, project=None, house="crowdedhouse",
+            model=None, actor="console", pool=actions.pool)
+    assert out == 1
+    text = buf.getvalue()
+    assert "2 seats in house 'crowdedhouse'" in text
+    assert "CrowdedA" in text and "CrowdedB" in text
+
+
+def test_bare_osiris_shows_help_and_exits_2(capsys: pytest.CaptureFixture[str]) -> None:
+    """dispatch 3678/3681: bare `osiris` must HELP, never just error — but the exit code
+    (2, a real usage condition) stays exactly what it was before this build."""
+    out = main([])
+    assert out == 2
+    captured = capsys.readouterr()
+    assert "NEW WORKER, START TO FINISH" in captured.out
+    assert "COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO" in captured.out

@@ -3858,7 +3858,10 @@ async def mint_seat(
     (minting into someone else's org is a console act, deliberately absent here — alfred
     adopts Tantra himself, a manager adopts its own). Idempotent: a handle that already
     names a living Seat is ADOPTED (a missing edge/stamp asserted, nothing rewritten, no
-    new identity minted) rather than twinned. `house` omitted inherits YOUR house;
+    new identity minted) rather than twinned — automatic on an exact match, never a parameter here:
+    `osiris mint-seat`'s own --adopt/--force are deliberate console-only escape hatches
+    (refuse instead of minting fresh; force past a near-miss twin refusal), not something
+    an ordinary coordinator's mint should ever need. `house` omitted inherits YOUR house;
     crossing houses refuses unless the caller is the operator. Refuses loudly if you hold
     no seat of your own (claim_name first — an unclaimed lineage has no 'itself' to
     extend)."""
