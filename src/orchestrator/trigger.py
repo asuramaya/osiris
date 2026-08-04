@@ -935,6 +935,28 @@ async def _resident_disagrees(
         pool, job_dir_hint, transcript, base, seat_id=seat_id)
 
 
+async def _resume_guard(
+    pool: asyncpg.Pool, resume: tuple[str, str, float, str], base: str, *,
+    seat_id: str | None, st: Settings,
+) -> str | None:
+    """The crossed-registry identity gate (0100a35e) an already-found `_agent_resumable`
+    result must clear before ANY caller continues someone else's session — shared by
+    dispatch_dm's DM-resume branch and launch_seat's launch-resume branch so the check
+    cannot drift between them the way eebeb1f's byte-for-byte copy of the OLD ceiling check
+    did (Thoth's ruling, 2026-08-04, decision a829a15d: "reuse it, do not reimplement it").
+    None means the resume may proceed; a string names the refusal reason. The gate itself
+    (`_resident_disagrees`) is unchanged — this only spares each caller its own copy of the
+    root-path derivation and the wording."""
+    root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
+        else Path.home() / ".claude" / "projects"
+    if await _resident_disagrees(pool, root, resume[0], base, job_dir_hint=resume[3],
+                                 seat_id=seat_id):
+        return ("the registry's door for this addressee leads to a session whose own "
+                "signed testimony names a different mind (the crossed-registry class, "
+                "0100a35e)")
+    return None
+
+
 def _mail_envelope(msg_id: int, *, sender_label: str, addressee_label: str,
                    grade: str | None, preview: str) -> str:
     """The nudge as a CUTE LITTLE MAIL (operator, 2026-07-20: 'formatting is important so
@@ -1252,12 +1274,10 @@ async def dispatch_dm(
                 "detail": f"{who} has no resumable session ({miss_reason}) — a private "
                           "message is never handed to a fresh twin"}
     session_id, repo = resume[0], resume[1]
-    if await _resident_disagrees(pool, root, session_id, base,
-                                 job_dir_hint=resume[3], seat_id=seat_id):
+    refusal = await _resume_guard(pool, resume, base, seat_id=seat_id, st=st)
+    if refusal is not None:
         return {"mode": "pull-only",
-                "detail": "the registry's door for this addressee leads to a session whose "
-                          "own signed testimony names a different mind (the crossed-registry "
-                          "class, 0100a35e) — refusing both nudge and resume; the mail "
+                "detail": f"{refusal} — refusing both nudge and resume; the mail "
                           "stays pull-only until the identity is healed"}
     # the ledger row goes in UNDER AN ADVISORY LOCK, before the spawn: two dispatchers
     # (send's immediate leg + a concurrent tick) can both reach here for one message —
@@ -1608,6 +1628,7 @@ async def launch_seat(
     model: str | None = None, settings: Settings | None = None,
     manager: Any = None, windows: Any = None, substrate: str | None = None,
     spawn: Any = None, agents_json: Any = None, cost_reader: Any = None,
+    resume_spawn: Any = None,
 ) -> dict[str, Any]:
     """Give a seat a BODY. Downward-only, managed_by-gated (a manager bodies a seat it manages).
     Idempotent: a live window for the seat is RETURNED, never twinned. The receipt reports
@@ -1624,13 +1645,35 @@ async def launch_seat(
     (visible in `claude agents --json` BY CONSTRUCTION); 'pty' keeps the original osiris
     PTY-broker lane alive as an explicit, vendor-neutral fallback. `manager`/`windows` are
     injected for the PTY lane's tests; `spawn`/`agents_json`/`cost_reader` for the harness
-    lane's — either way, without a live daemon or a live `claude` binary."""
+    lane's — either way, without a live daemon or a live `claude` binary.
+
+    THE RESUME LANE (operator's own order, 2026-08-04, ruling via decision a829a15d + msg
+    3639 — reverses the "not built, deliberately" call in 315c3181): the harness lane, before
+    minting fresh, now checks whether the seat's own last holder left a resumable session
+    (`_agent_resumable`, the SAME compaction+ceiling gates dispatch_dm's mail-wake already
+    honors — resumable never means resume-everything) and, if so, CONTINUES it instead —
+    reusing dispatch_dm's own resume branch (`_resume_guard`, `_DM_RESUME_PROMPT`,
+    `_spawn_claude`'s `--resume` lane it already runs in production) rather than
+    reimplementing it, so the two can never drift apart the way a hand-copied gate check
+    already has once this reign (eebeb1f). ONE-SHOT, DELIBERATELY, not a standing window: a
+    `-p --resume` body runs its one turn and exits (confirmed live: `claude agents --json
+    --all` cannot retain it even when the body itself calls mount() mid-turn — a harness
+    fact, not ours to fix, decision a829a15d). This is not a downgrade from `--bg`'s
+    persistent window — it is RE-SUMMONABLE, not unreachable: dispatch_dm's own resume lane
+    wakes the same session again on the next mail, so a standing window here would be a
+    SECOND mechanism doing a job dispatch_dm's resume lane already does (38c71544's shape).
+    Whether `osiris launch` should ALSO offer a persistent resumed window is a real,
+    separate policy fork, named as thread (owner=operator) rather than decided here.
+    `resume_spawn` injects `_spawn_claude` (the `-p --resume` lane) for this branch's tests,
+    parallel to `spawn`/`agents_json`/`cost_reader` above."""
     pool = actions.pool
-    from src.orchestrator.agents import house_of
-    from src.orchestrator.seats import held_seat
+    from src.orchestrator.agents import _generation, house_of
+    from src.orchestrator.folds import wakeable_identity
+    from src.orchestrator.seats import held_seat, seat_receipt
     manager = manager or _manager_control
     windows = windows or _manager_windows
     spawn = spawn or _spawn_claude_bg
+    resume_spawn = resume_spawn or _spawn_claude
     agents_json = agents_json or _claude_agents_json
     cost_reader = cost_reader or _bg_session_cost
 
@@ -1800,6 +1843,53 @@ async def launch_seat(
             return {"status": "already-live", "window": live.get("name"), "seat": target_seat,
                     "body_exists": True, "can_receive": True, "attach": attach,
                     "detail": f"a live body already holds {handle} — not minting a twin"}
+
+        # THE RESUME LANE (this docstring's own "THE RESUME LANE" section explains the
+        # policy; this is just the mechanism). Checked BEFORE minting fresh: a resumable
+        # session for this seat's own last holder is dispatch_dm's exact resume shape,
+        # reused rather than reimplemented. `holder` (not `target_seat`) is the identity
+        # `_agent_resumable`/`_resume_guard` need — a Seat is never itself an Agent lineage.
+        holder = ((await seat_receipt(pool, target_seat)) or {}).get("holder")
+        wake_target = await wakeable_identity(pool, holder) if holder else None
+        resume = await _agent_resumable(pool, wake_target, st) if wake_target else None
+        if resume is not None and holder is not None and await _resume_guard(
+                pool, resume, _generation(holder)[0], seat_id=target_seat, st=st) is None:
+            session_id, repo = resume[0], resume[1]
+            # THE MESSAGE LANDS BEFORE THE SPAWN, deliberately unlike the fresh-mint lane
+            # below (which sends its brief AFTER spawning): a fresh `--bg` body takes
+            # seconds to boot, mount, and claim_name before its first inbox() call, so send-
+            # after-spawn there is safely ordered by the boot lag alone. A RESUMED body has
+            # no such lag — its first turn IS the inbox() check (_DM_RESUME_PROMPT) — so the
+            # mail row must exist first, the same "ledger before spawn" discipline
+            # dispatch_dm's own resume branch already follows for its wake ledger.
+            resume_brief_id: int | None = None
+            if message.strip():
+                sent = await send_message(
+                    pool, from_agent=caller, from_project=await house_of(pool, caller),
+                    to_agent=target_seat, body=message, grade="ask")
+                resume_brief_id = sent.get("id")
+            await resume_spawn(repo, _DM_RESUME_PROMPT, resume_session=session_id,
+                               model=argv_model, allowed_tools=st.osiris_wake_allowed_tools
+                               or None)
+            out = {
+                "status": "launched", "mode": "resumed", "seat": target_seat,
+                "session": session_id, "body_exists": True, "can_receive": True,
+                "spawned_model": argv_model, "attach": attach,
+                "detail": f"resumed the seat's own session ({session_id[:8]}) as a ONE-SHOT "
+                          "turn, the same shape dispatch_dm's mail-wake resume already uses "
+                          "in production — it runs the brief and exits; `claude agents "
+                          "--json` shows it only WHILE it runs, never after (a harness "
+                          "fact, not a bug: a further mail wake continues it, exactly like "
+                          "any other dormant addressee)",
+            }
+            if resume_brief_id is not None:
+                out["brief_message_id"] = resume_brief_id
+            stamped_model = facts.get("intended_model")
+            if stamped_model and argv_model != stamped_model:
+                out["model_mismatch"] = (
+                    f"spawned on {argv_model!r} but the seat's own stamped intended_model "
+                    f"is {stamped_model!r} — never silent (thread 20e4feb6)")
+            return out
 
         # IDENTITY, VIA THE SESSION'S OWN FIRST TURN, NOT ENV STAMPING (live finding,
         # 2026-07-27, replacing the original design): `--bg` claims a PRE-FORKED spare
