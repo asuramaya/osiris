@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import http.server
 import os
+import sys
 import threading
 from collections.abc import AsyncIterator, Iterator
 
@@ -138,6 +139,49 @@ _RESET_TABLES = (
 _CONTAINER: dict[str, PostgresContainer] = {}
 
 
+def _install_tool_contract_ceiling_merge_driver() -> None:
+    """Self-installs the merge driver for TOOL_CONTRACT_CEILING_CHARS (dispatch 26686b77,
+    Thoth msg 3658) into this repo's SHARED git config — `.gitattributes` alone names the
+    driver, but a custom driver's own COMMAND is local config only (`git config
+    merge.<name>.driver`), never version-controlled, so `.gitattributes` by itself is
+    silent machinery a stranger would never find. Worktrees share ONE `.git/config`
+    (confirmed: `git rev-parse --git-common-dir` is identical across every seat's own
+    worktree here), so registering it from any ONE worktree's first pytest run arms it
+    fleet-wide — exactly the discoverability gap a bare merge driver would otherwise have.
+
+    The registered command is deliberately WORKTREE-AGNOSTIC (no absolute path to this
+    checkout, no `sys.executable`): it `cd`s to `$(git rev-parse --show-toplevel)` first,
+    then runs a bare `python3` (stdlib-only script, no venv needed) against the
+    repo-relative script path — correct no matter which worktree's merge invokes it,
+    including one that didn't exist yet when this was registered.
+
+    Idempotent (only writes when the registered value differs) and never fails the test
+    run: a git-config write failure (e.g. read-only `.git`) degrades to a printed warning,
+    not a collection error — this is a merge-time safety net, not a test-time one, so its
+    own absence must never block the gate it doesn't touch.
+    """
+    import shlex
+    import subprocess
+
+    inner = (
+        'cd "$(git rev-parse --show-toplevel)" && '
+        'exec python3 scripts/reconcile_tool_contract_ceiling.py "$1" "$2" "$3" "$4"'
+    )
+    driver_cmd = f"sh -c {shlex.quote(inner)} -- %O %A %B %P"
+    try:
+        current = subprocess.run(
+            ["git", "config", "--local", "--get", "merge.tool_contract_ceiling.driver"],
+            capture_output=True, text=True,
+        ).stdout.strip()
+        if current != driver_cmd:
+            subprocess.run(
+                ["git", "config", "--local", "merge.tool_contract_ceiling.driver", driver_cmd],
+                check=True, capture_output=True,
+            )
+    except Exception as exc:  # pragma: no cover - defensive, see docstring
+        print(f"tool-contract-ceiling merge driver NOT installed: {exc}", file=sys.stderr)
+
+
 # AF_UNIX SOCKET PATH LENGTH (Sekhmet's find, msg 2261, task #119's gate): pytest's own
 # default basetemp is "/tmp/pytest-of-<user>/pytest-<N>/", N an EVER-GROWING counter
 # shared fleet-wide across every pytest invocation on this box (already past 270 the
@@ -161,6 +205,7 @@ def pytest_configure(config: pytest.Config) -> None:
     if hasattr(config, "workerinput"):
         return  # an xdist worker: the controller (or, outside xdist, this same
         # process, since it then takes this same branch itself) owns the container
+    _install_tool_contract_ceiling_merge_driver()
     pg = PostgresContainer("postgres:16", username="test", password="test", dbname="test")
     pg.start()
     _CONTAINER["pg"] = pg
