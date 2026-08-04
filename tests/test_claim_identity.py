@@ -37,7 +37,8 @@ async def test_first_claim_designates_then_a_later_claim_merges(
     client: httpx.AsyncClient, actions: Actions
 ) -> None:
     asura = await _dev(actions, "dakota.jm@gmail.com", "asuramaya")
-    hector = await _dev(actions, "priya.kowalski42@gmail.com", "hector")   # same person, no shared key
+    # same person, no shared key
+    hector = await _dev(actions, "priya.kowalski42@gmail.com", "hector")
 
     # first claim → this Person becomes the canonical self
     r1 = (await client.post(f"/objects/{asura}/claim-identity")).json()

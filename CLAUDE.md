@@ -1,8 +1,9 @@
 # CLAUDE.md — boot sector
 
 Osiris is the memory; this file is only the key to it. **Do not append history here.**
-The old build log is frozen at `docs/HISTORY.md` and lives in the graph as dated
-`ref:history-*` nodes; DESIGN.md lives as `ref:design-*`; the memory essays as canon.
+The old build log lives in the graph as dated `ref:history-*` nodes (frozen 2026-07-03,
+ruling 8c5772a7 — no file mirror ships, the graph is the only memory); DESIGN.md lives as
+`ref:design-*`; the memory essays as canon.
 A memory carried in full into every context is cargo — recall is a bounded query.
 
 ## What this is
@@ -22,7 +23,7 @@ model, SAY SO in your first reply. A rug-pull is confessed, never inherited blin
 - Orient: MCP `run_composition('briefing')` (socket in `.mcp.json`) — open threads,
   obligations, recent decisions. Design/ops questions: `consult_canon(q)` (canon + essays;
   try q="ops"). History: the dated `ref:history-*` nodes ARE queryable (consult_canon +
-  search, both doors); docs/HISTORY.md is the same record's frozen file form.
+  search, both doors) — no file mirror ships; the graph is the only copy.
 - Write back AS YOU GO: `record_decision` / `open_thread` (kind='obligation' for duties
   an action mints) / `resolve_thread`. A session can die at any instant; anything not
   written back does not exist. The session-miner backfills what you forget (DERIVED),

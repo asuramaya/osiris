@@ -3,10 +3,10 @@
 # Architecture
 
 This describes the **current shape** of Osiris. The build history, with rationale and
-dead-ends, is frozen in [`docs/HISTORY.md`](docs/HISTORY.md); the original design
-document lives in git history (`DESIGN.md`, removed 2026-07) and, like the history, as
-queryable `Reference` nodes inside the graph itself — Osiris is its own documentation
-store (`consult_canon` over MCP).
+dead-ends, lives as queryable `Reference` nodes inside the graph itself (`ref:history-*`,
+frozen 2026-07-03, ruling 8c5772a7 — the graph is the only memory, no file mirror ships);
+the original design document lives in git history only (`DESIGN.md`, removed 2026-07).
+Osiris is its own documentation store (`consult_canon` over MCP).
 
 ## The one idea
 

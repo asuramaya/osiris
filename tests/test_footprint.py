@@ -92,7 +92,7 @@ def test_email_handles_skips_common_names() -> None:
     assert {o.canonical for o in r.objects} == set()
     # a distinctive local part still derives handles
     r2 = parse_email_handles({}, _inp("Email", "dakota.jm@gmail.com"))
-    assert "asuramaya" in {o.canonical for o in r2.objects}
+    assert "dakota" in {o.canonical for o in r2.objects}
 
 
 async def test_phone_enrichment_rejects_invalid() -> None:
