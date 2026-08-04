@@ -290,7 +290,14 @@ def _tool_chars(t: Any) -> int:
 # graph_lint's own docstring addition (the new duplicate-works-in check) trimmed the same
 # way. 133,673 -> 135,077, +1,404. 100 -> 101 tools. Exact measured total via this file's
 # own `_measure_tool_contract`, not a round number.
-TOOL_CONTRACT_CEILING_CHARS = 135_077
+#
+# RAISED, succession_chain gains `session` (2026-08-04, ruling 7fa4b599's own named
+# additive step, task #135/#136 point 4): the operator asked how to reliably tell the
+# latest transcript; the record already existed (mount() asserts it on every generation's
+# own Agent object) and the walker just never read it — one subquery, no new tool, no new
+# table. 135,077 -> 135,292, +215. 101 -> 101 tools (no tool added or removed). Exact
+# measured total via this file's own `_measure_tool_contract`, not a round number.
+TOOL_CONTRACT_CEILING_CHARS = 135_292
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:

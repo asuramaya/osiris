@@ -1090,15 +1090,18 @@ async def dossier(object_ref: str) -> dict[str, Any]:
 @mcp.tool()
 async def succession_chain(ref: str, max_hops: int = 10) -> dict[str, Any]:
     """An agent's succession lineage, one entry per generation walked backward:
-    {agent_id, generation, minted_because, wrote_anything}. The bounded chain read task #64
-    (ruling ad19a779) named as missing — dossier() only gives one hop, so answering "for
-    generations xxiv/xxv/xxvi: succeeded_from + minted_because for each" used to cost one
-    dossier() call per hop; this is one call. `ref` accepts anything dossier does (UUID,
-    short id, canonical, name). Stops at a root (no predecessor) or `max_hops` (default 10)
-    — never widens into an unbounded search. Complementary to, not a replacement for,
-    `nearest_handoff_ancestor` (agents.py, backing orient()'s own succession-note block):
-    that JUMPS to the nearest ancestor with a real handoff for orient()'s internal use; this
-    WALKS and reports every hop for a caller asking to see the whole chain."""
+    {agent_id, generation, minted_because, wrote_anything, session}. The bounded chain read
+    task #64 (ruling ad19a779) named as missing — dossier() only gives one hop, so
+    answering "for generations xxiv/xxv/xxvi: succeeded_from + minted_because for each"
+    used to cost one dossier() call per hop; this is one call. `ref` accepts anything
+    dossier does (UUID, short id, canonical, name). Stops at a root (no predecessor) or
+    `max_hops` (default 10) — never widens into an unbounded search. `session` (7fa4b599)
+    is each generation's own mount()-asserted harness session id, the transcript filename's
+    stem — answers "which transcript is which generation's" without guessing from mtime.
+    Complementary to, not a replacement for, `nearest_handoff_ancestor` (agents.py, backing
+    orient()'s own succession-note block): that JUMPS to the nearest ancestor with a real
+    handoff for orient()'s internal use; this WALKS and reports every hop for a caller
+    asking to see the whole chain."""
     pool = await _pool_get()
     chain = await comp_succession.succession_chain(pool, ref, max_hops=max_hops)
     return {"ref": ref, "chain": chain} if chain else {"error": f"no agent matches {ref!r}"}
