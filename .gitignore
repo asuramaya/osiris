@@ -24,6 +24,7 @@ get-docker.sh
 
 # Session scratch / generated briefs
 scratchpad/
+.stranger-test-out/
 *.pdf
 .claude/worktrees/
 backups/
