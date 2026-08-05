@@ -336,7 +336,29 @@ def _tool_chars(t: Any) -> int:
 # explicitly, so nobody re-opens it as an oversight; no new parameter, no new tool.
 # 135,404 -> 135,689, +285. Exact measured total via this file's own
 # `_measure_tool_contract`, not a round number.
-TOOL_CONTRACT_CEILING_CHARS = 135_689
+#
+# RAISED AT AN INTEGRATION MERGE, and this one is worth reading because THE DRIVER DID NOT
+# FIRE AND WAS NOT SUPPOSED TO. The collision documented above is two branches raising this
+# constant from the same base; the driver handles that shape. THIS collision is different
+# and the driver is structurally blind to it: NEITHER branch touched this file at all.
+# Khnum's open_thread(resolves=...) (dace6b8) grew open_thread's own MCP docstring, Sekhmet's
+# climb-stop fix (28a2fa3) landed in the same merge, and the ceiling was breached by growth
+# in a file with no conflict to resolve. A merge driver keyed to this file's conflicts can
+# never see that.
+#
+# WHY NEITHER WORKER COULD HAVE CAUGHT IT, which is the more useful half: the gate law is
+# `pytest <touched files>`, and this ratchet is a GLOBAL invariant that no touched-file set
+# ever includes. Both workers gated correctly, both were green, and the breach was real.
+# A per-lane gate cannot distinguish "my change is safe" from "I did not run the check that
+# would have caught it" — ruling 60bc15db's exact shape, found in our own gate law.
+# THE RATCHET IS THEREFORE THE INTEGRATOR'S LINE, not the worker's: only whoever runs the
+# FULL suite on the merged tree can see it, and that is Thoth at merge time.
+#
+# Resolved the only correct way: RE-MEASURED on the merged tree via
+# `_measure_tool_contract`, exact total, never rounded and never inferred from the two
+# branches' own numbers (neither of which existed — see above).
+# 135,689 -> 136,661, +972. 101 -> 101 tools, no tool added or removed.
+TOOL_CONTRACT_CEILING_CHARS = 136_661
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
