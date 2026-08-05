@@ -943,7 +943,8 @@ ARCS = ("Identity-Succession", "Compaction-Resilience", "Model-Identity", "Token
 async def open_thread(
     actions: Actions, summary: str, *, repo: str | None = None, kind: str | None = None,
     owner: str | None = None, assignee: str | None = None, arc: str | None = None,
-    severity: str | None = None, source: str = _SOURCE,
+    severity: str | None = None, resolves: str | list[str] | None = None,
+    source: str = _SOURCE,
 ) -> uuid.UUID:
     """Open a thread at source — an unresolved question / next-step for the next session
     to inherit. Same shape as a mined Thread (props summary + status=open) so it appears in
@@ -981,11 +982,40 @@ async def open_thread(
     drift_alarms leg) names an alarm-shaped open in a real, filterable property instead
     of text-matching a summary for "DRIFT"/"CRITICAL". Deliberately UNLOCKED (unlike
     `arc`) — Thoth's ask was the property, not a whole new taxonomy; the first (and so
-    far only) real caller is `deploy_guard.alarm_schema_drift`, stamping `"alarm"`."""
+    far only) real caller is `deploy_guard.alarm_schema_drift`, stamping `"alarm"`.
+
+    `resolves` closes a PREDECESSOR thread this new one supersedes, in the same call —
+    decision 883bb3da's own diagnosed gap: record_decision's `supersedes` gets exercised
+    every reign on the Decision side, but nothing analogous ever ran on the Thread side,
+    so a lineage's own board-state/handoff threads accumulate forever, each superseded in
+    practice (a successor opened their own) but none ever marked so in the graph. A
+    successor opening their own board-state note passes their ancestor's own board-state
+    thread here — same shape record_decision's `resolves` already uses (UUID, canonical,
+    or 8-char short id ONLY, an addressing act that refuses rather than guesses; the list
+    form resolves each entry independently, a miss is skipped not fatal, matching
+    record_decision's own list behavior). Reuses resolve_thread's own existing artifact-
+    resolution path rather than re-implementing it (Thread is already a valid artifact
+    target per Thoth DM 2975's sibling-thread-closure shape) — no new edge type, no new
+    machinery: the new thread's own id becomes the resolved_by witness on whatever it
+    supersedes. Runs AFTER the new thread's own creation transaction commits (resolving a
+    DIFFERENT, already-existing object is not part of this thread's own atomic write)."""
     if arc is not None and arc not in ARCS:
         raise ValueError(f"arc must be one of {ARCS}, got {arc!r}")
     observed = datetime.now(UTC)
     effective_owner = assignee if assignee is not None else owner
+    to_resolve: list[uuid.UUID] = []
+    if isinstance(resolves, list):
+        for ref in resolves:
+            tid = await _find_thread(actions.pool, ref, require_identifier=True)
+            if tid is not None:
+                to_resolve.append(tid)
+    elif resolves:
+        single = await _find_thread(actions.pool, resolves, require_identifier=True)
+        if single is None:
+            raise ValueError(f"resolves matched no thread: {resolves!r} — quote its UUID, "
+                             "canonical, or 8-char short id (no prose match — an "
+                             "addressing act refuses rather than guesses)")
+        to_resolve.append(single)
     # ONE transaction (see record_decision): Thread + summary + status(+kind)(+repo) atomic —
     # never a status-less or summary-less thread husk from a mid-sequence death.
     async with actions.atomic() as a:
@@ -1008,6 +1038,13 @@ async def open_thread(
                                     _CONF, evidence_class=_EC)
         if repo:
             await link_repo(a, t, repo, observed, source=source, evidence_class=_EC)
+    for old_tid in to_resolve:
+        if old_tid == t:
+            continue  # never resolve yourself (idempotent re-open onto the same summary hash)
+        await resolve_thread(
+            actions, str(old_tid),
+            because=f"superseded by this lineage's own successor note: {summary[:200]}",
+            artifact=str(t), source=source)
     return t
 
 

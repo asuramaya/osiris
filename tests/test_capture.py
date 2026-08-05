@@ -2788,6 +2788,114 @@ async def test_record_decision_tool_single_string_still_errors_on_a_miss(
         "value #>> '{}' = 'a ruling that cites a ghost thread'") == 0
 
 
+# --- open_thread(resolves=...) closes a PREDECESSOR thread it supersedes (883bb3da) ------
+
+async def test_open_thread_resolves_closes_its_predecessor(actions: Actions) -> None:
+    """883bb3da's own diagnosed gap: record_decision's `supersedes` is exercised every
+    reign on the Decision side, but nothing analogous ever ran on the Thread side, so a
+    lineage's own board-state threads accumulate forever. A successor's own new note,
+    opened with `resolves=<ancestor's thread>`, closes the ancestor in the SAME call —
+    reusing resolve_thread's own existing Thread-as-artifact-target path (Thoth DM 2975),
+    so it mints resolved_by (not a new edge type), pointing at the SUCCESSOR's own id."""
+    ancestor_note = await open_thread(actions, "STATE OF THE BOARD — Khnum IV, settling")
+    successor_note = await open_thread(
+        actions, "STATE OF THE BOARD — Khnum V, settling", resolves=str(ancestor_note))
+
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        ancestor_note)
+    assert status == "resolved"
+    assert await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='resolved_by'",
+        ancestor_note) == successor_note
+    because = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='resolved_because' ORDER BY a.observed_at DESC LIMIT 1", ancestor_note)
+    assert "successor" in because
+    # the successor's own note stays open — only the ancestor's closed
+    successor_status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        successor_note)
+    assert successor_status == "open"
+
+
+async def test_open_thread_resolves_miscite_mints_nothing(actions: Actions) -> None:
+    """Same strictness as record_decision's own single-ref `resolves`: a thread that cannot
+    name what it supersedes has not superseded it, and must not land half-done — not even
+    the new thread itself gets minted."""
+    import pytest
+
+    with pytest.raises(ValueError, match="resolves matched no thread"):
+        await open_thread(actions, "STATE OF THE BOARD — a ghost ancestor",
+                          resolves="no-such-thread-anywhere")
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE name='summary' AND "
+        "value #>> '{}' = 'STATE OF THE BOARD — a ghost ancestor'") == 0
+
+
+async def test_open_thread_batch_resolves_a_miss_does_not_veto_the_rest(
+    actions: Actions,
+) -> None:
+    """The list form folds a whole set, same as record_decision's own batch resolves — one
+    typo among several ancestor threads must not sink the successor's own note, and the
+    entries that DO match still close."""
+    t1 = await open_thread(actions, "STATE OF THE BOARD — Imhotep IX, settling")
+    successor = await open_thread(
+        actions, "STATE OF THE BOARD — Imhotep X, settling",
+        resolves=[str(t1), "no-such-thread-whatsoever"])
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", t1)
+    assert status == "resolved"
+    assert successor is not None
+
+
+async def test_open_thread_tool_reports_batch_receipt_per_entry(actions: Actions) -> None:
+    """The MCP tool's response names each entry — what closed (id + summary) or that it
+    matched nothing — mirroring record_decision's own batch receipt shape exactly."""
+    from src import mcp_server as srv
+
+    t1 = await open_thread(actions, "STATE OF THE BOARD — Sekhmet II, settling")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.open_thread(
+            "STATE OF THE BOARD — Sekhmet III, settling",
+            resolves=[str(t1), "no-such-thread-anywhere"])
+    finally:
+        srv._pool = saved_pool
+    receipt = out["resolved_threads"]
+    assert len(receipt) == 2
+    hit = next(r for r in receipt if r["ref"] == str(t1))
+    assert hit["matched"] == "true" and hit["id"] == str(t1)[:8]
+    assert hit["summary"] == "STATE OF THE BOARD — Sekhmet II, settling"
+    miss = next(r for r in receipt if r["ref"] == "no-such-thread-anywhere")
+    assert miss["matched"] == "false" and "matched no thread" in miss["note"]
+    assert "resolved_thread" not in out
+
+
+async def test_open_thread_tool_single_string_resolves_still_errors_on_a_miss(
+    actions: Actions,
+) -> None:
+    """The single-string path keeps its all-or-nothing strictness at the tool layer too."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.open_thread(
+            "STATE OF THE BOARD — a ghost ancestor, tool layer",
+            resolves="not-a-real-thread")
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out and "resolves matched no thread" in out["error"]
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE name='summary' AND "
+        "value #>> '{}' = 'STATE OF THE BOARD — a ghost ancestor, tool layer'") == 0
+
+
 async def test_record_decision_tool_grounds_receipt_names_landed_and_skipped(
     actions: Actions,
 ) -> None:

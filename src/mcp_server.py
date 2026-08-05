@@ -4369,10 +4369,11 @@ async def ingest_reference(
 async def open_thread(
     summary: str, repo: str | None = None, kind: str | None = None,
     owner: str | None = None, assignee: str | None = None, arc: str | None = None,
+    resolves: str | list[str] | None = None,
     session_anchor: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Open a THREAD — an unresolved question or next-step you want the next session to pick
     up. Surfaces in run_composition('briefing') under open threads, beside mined ones. `repo`
     files it under a SoftwareProject. Idempotent on the summary — and, with `repo`, ALSO on a
@@ -4398,7 +4399,17 @@ async def open_thread(
     Compaction-Resilience, Model-Identity, Token-Cost, Surfaces-Roadmap-Docs,
     Fleet-Hygiene, Security) this thread belongs to — the roadmap screen's top grouping.
     Omit it for the common case; an unrecognized value refuses loudly rather than
-    fragmenting the taxonomy with a typo."""
+    fragmenting the taxonomy with a typo.
+    `resolves` closes a PREDECESSOR thread this new one supersedes, in the same call —
+    decision 883bb3da's own diagnosed gap: a lineage's own board-state/handoff threads
+    accumulate forever because nothing ever closed the ancestor's when the successor
+    opened their own. Pass your own predecessor's board-state thread here when you open
+    yours. Same addressing strictness as record_decision's own `resolves` (UUID,
+    canonical, or 8-char short id only, never a prose match); the list form resolves each
+    entry independently and reports per-entry in the receipt (`resolved_threads`) rather
+    than letting one miss veto the rest; the single-string form errors — and mints
+    nothing, not even the new thread — if it matches no thread, the same all-or-nothing
+    strictness record_decision's own single-ref form uses."""
     pool = await _pool_get()
     # AN UNFILED THREAD IS INVISIBLE TO ITS OWN PROJECT (Alfred V's succession repro,
     # thread 4ffe0eb9: IV's handoff, opened without repo=, hid from orient and the whisper
@@ -4409,7 +4420,7 @@ async def open_thread(
         repo = ident.project if ident else None
     dup = await capture.find_near_duplicate_open_thread(pool, summary, repo=repo)
     if dup is not None:
-        out: dict[str, str] = {"id": str(dup), "summary": summary, "status": "open",
+        out: dict[str, Any] = {"id": str(dup), "summary": summary, "status": "open",
                                "deduped": "true"}
         if assignee:
             holder = await capture._current_owner(pool, dup)
@@ -4423,16 +4434,46 @@ async def open_thread(
                 "parallel build (a double-assignment must be visible, not silent)"
             )
         return out
+    # resolve BEFORE recording, same discipline record_decision's own resolves= uses — for
+    # RECEIPT purposes only (what a caller sees closed in the SAME turn); the actual write
+    # happens inside capture.open_thread, which resolves `resolves` again itself so its own
+    # return type (a bare UUID, ~20 existing call sites) never has to change to carry this.
+    resolved_receipt: list[dict[str, str]] = []
+    single_resolved_summary: str | None = None
+    if isinstance(resolves, list):
+        for ref in resolves:
+            tid = await capture._find_thread(pool, ref, require_identifier=True)
+            if tid is None:
+                resolved_receipt.append({"ref": ref, "matched": "false",
+                                         "note": "matched no thread — quote its UUID, "
+                                                 "canonical, or 8-char short id"})
+                continue
+            summ = await capture._thread_summary(pool, tid)
+            resolved_receipt.append({"ref": ref, "matched": "true", "id": str(tid)[:8],
+                                     "summary": summ or ""})
+    elif resolves:
+        single = await capture._find_thread(pool, resolves, require_identifier=True)
+        if single is None:
+            return {"error": f"resolves matched no thread: {resolves!r} — quote its UUID, "
+                             "canonical, or 8-char short id (no prose match — an "
+                             "addressing act refuses rather than guesses)"}
+        single_resolved_summary = await capture._thread_summary(pool, single)
     try:
         t = await capture.open_thread(
             Actions(pool), summary, repo=repo, kind=kind, owner=owner, assignee=assignee,
-            arc=arc, source=await _actor_for(ctx, subagent_id, subagent_type)
+            arc=arc, resolves=resolves,
+            source=await _actor_for(ctx, subagent_id, subagent_type)
         )
     except ValueError as e:
         return {"error": str(e)}
     out = {"id": str(t), "summary": summary, "status": "open", "deduped": "false"}
     if assignee:
         out["assignee"] = assignee.strip()
+    if isinstance(resolves, list):
+        out["resolved_threads"] = resolved_receipt
+    elif resolves:
+        out["resolved_thread"] = str(resolves)
+        out["resolved_thread_summary"] = single_resolved_summary or ""
     return out
 
 
