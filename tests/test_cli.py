@@ -6,7 +6,9 @@ spawning a claude process is exactly what these tests must never risk doing by a
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -44,7 +46,7 @@ from src.cli import (
     oneshot_deployed_scripts,
     resolve_model,
 )
-from src.orchestrator.seats import ensure_seat
+from src.orchestrator.seats import bind_holder, ensure_seat
 
 # --- match_session: pure ----------------------------------------------------------------------
 
@@ -370,11 +372,15 @@ async def test_cmd_launch_harness_confesses_dormant_history_to_stderr(
             return []
         return [{"name": "[OS] ooblek-cli", "cwd": cwd, "sessionId": "sess-ooblek"}]
 
+    async def _resume_spawn(*a: Any, **k: Any) -> None:
+        raise AssertionError("should never be called — this seat has no holder to resume")
+
     buf = io.StringIO()
     with redirect_stderr(buf):
         out = await _cmd_launch_harness("ooblek-cli", model=None, pool=actions.pool,
                                         wake_default=None, spawn=_spawn,
-                                        agents_json=_agents_json)
+                                        agents_json=_agents_json,
+                                        resume_spawn=_resume_spawn)
     assert out == 0
     assert "20.3MB" in buf.getvalue()
     assert "2026-08-02T17:57:18+00:00" in buf.getvalue()
@@ -403,6 +409,9 @@ async def test_cmd_launch_harness_gives_up_honestly_when_never_visible(
     async def _no_sleep(secs: float) -> None:
         slept.append(secs)
 
+    async def _resume_spawn(*a: Any, **k: Any) -> None:
+        raise AssertionError("should never be called — this seat has no holder to resume")
+
     import io
     from contextlib import redirect_stdout
 
@@ -410,10 +419,164 @@ async def test_cmd_launch_harness_gives_up_honestly_when_never_visible(
     with redirect_stdout(buf):
         out = await _cmd_launch_harness("neverup", model=None, pool=actions.pool,
                                         wake_default=None, spawn=_spawn,
-                                        agents_json=_agents_json, sleep=_no_sleep)
+                                        agents_json=_agents_json, resume_spawn=_resume_spawn,
+                                        sleep=_no_sleep)
     assert out == 0
     assert len(slept) == 8  # the full bounded poll, never an indefinite wait
     assert "not yet visible" in buf.getvalue()
+
+
+# ═══ cmd_launch harness-native RESUME lane (task #136, 2026-08-05, decision 536de12f +
+# Thoth msg 3732 "GO — #136 LANE SWITCH"): mirrors launch_seat's own already-proven resume
+# branch exactly — _lineage_resume_candidate/_resume_guard/resume_spawn, reused verbatim,
+# never reimplemented (test_trigger.py's own identically-shaped fixtures already exhaust
+# the underlying gate logic — the guard, the compaction/ceiling math, the lineage walk —
+# so these tests only prove _cmd_launch_harness WIRES it correctly, not re-derive it).
+#
+# VISIBILITY RIDES OSIRIS'S OWN REGISTRY, NEVER `claude agents --json` (decision 536de12f,
+# confirming a829a15d, proven live twice, independently — a `-p --resume` body cannot
+# appear there even when it explicitly calls mount() mid-turn): a successful resume never
+# polls agents_json for it, so the fake below would raise if the code ever tried. ═══
+
+_RESUME_SID = "b5f04f84-0000-4000-8000-000000000000"
+
+
+async def _resumable_seat(
+    actions: Actions, tmp_path: Path, *, handle: str, agent_id: str,
+    anchor_cwd: str, compacted: bool = False, transcript_bytes: int = 16,
+) -> Path:
+    """A seat whose holder left a resumable session as a graph `session` property
+    (succession_chain's own shape — the ONLY record `_lineage_resume_candidate` trusts)
+    plus a real transcript on disk anchored to that session id. Returns the sense root to
+    pass as osiris_sense_sessions."""
+    import os
+    import time as _time
+
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-demo"
+    proj.mkdir(parents=True, exist_ok=True)
+    t = proj / f"{_RESUME_SID}.jsonl"
+    signed = ('{"type":"user","toolUseResult":'
+              '"{\\"sent\\":1,\\"from\\":\\"' + agent_id + '\\"}"}\n').encode()
+    body = (signed + (b'{"type":"system","subtype":"compact_boundary"}\n' if compacted else b"")
+            + b"x" * transcript_bytes)
+    t.write_bytes(body)
+    old = _time.time() - 3600
+    os.utime(t, (old, old))
+
+    seat = await ensure_seat(actions, house="osiris", handle=handle, anchor_cwd=anchor_cwd,
+                             source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=agent_id)
+    obj = await actions.create_or_find_object("Agent", agent_id, "test")
+    now = datetime(2026, 8, 5, tzinfo=UTC)
+    await actions.assert_property(obj, "seat_generation", "1", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(obj, "session", _RESUME_SID, "test", now, 0.9,
+                                  evidence_class="self_declared")
+    return sense
+
+
+def _resume_settings(sense: Path, *, max_compactions: int = 0) -> SimpleNamespace:
+    return SimpleNamespace(osiris_sense_sessions=str(sense), osiris_resume_ceiling_bytes=8_000_000,
+                           osiris_resume_max_compactions=max_compactions,
+                           osiris_wake_allowed_tools="mcp__osiris")
+
+
+async def test_cmd_launch_harness_resumes_a_stale_but_resumable_holder(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE PAYOFF: a seat whose holder left a resumable session is CONTINUED via
+    resume_spawn's own `-p --resume` lane, never minted fresh via `claude --bg` — and
+    never polled through `agents_json` either (that registry cannot retain it, proven
+    live; the fake below asserts it is never even asked)."""
+    from src.cli import _cmd_launch_harness
+
+    sense = await _resumable_seat(
+        actions, tmp_path, handle="cliresume", agent_id="agent:cliresume01",
+        anchor_cwd="/tmp/cliresume-office")
+
+    resumed: list[dict[str, Any]] = []
+
+    async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
+        resumed.append({"repo": repo, "prompt": prompt, **kw})
+
+    async def _boom_spawn(*a: Any, **k: Any) -> None:
+        raise AssertionError("a resumable holder must never be minted fresh via --bg")
+
+    async def _boom_agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        return []  # only ever asked once, for the pre-resume already-live check
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await _cmd_launch_harness(
+            "cliresume", model="claude-sonnet-5", pool=actions.pool, wake_default=None,
+            spawn=_boom_spawn, agents_json=_boom_agents_json, resume_spawn=_resume_spawn,
+            settings=_resume_settings(sense))
+
+    assert out == 0
+    assert len(resumed) == 1
+    call = resumed[0]
+    assert call["repo"] == "/tmp/cliresume-office"          # the seat's own launch_cwd
+    assert call.get("resume_session") == _RESUME_SID
+    assert "job_dir" not in call                             # a resume is not a birth
+    assert call.get("model") == "claude-sonnet-5"
+    assert "private" in call["prompt"] and "seat" in call["prompt"]  # _DM_RESUME_PROMPT itself
+    out_text = buf.getvalue()
+    assert "resumed session" in out_text and _RESUME_SID[:8] in out_text
+
+
+async def test_cmd_launch_harness_falls_through_with_a_named_reason_when_not_resumable(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE FALLBACK, proven too (Thoth's explicit bar — a fix that only works on the happy
+    path recreates the bug it replaced): a holder whose transcript compacted past the gate
+    is NOT auto-resumed — falls through to `claude --bg` exactly as before this lane
+    existed, with the refusal reason NAMED, never silent, and the (already-fixed)
+    dormant-history confession still firing unbypassed and undoubled."""
+    from src.cli import _cmd_launch_harness
+
+    sense = await _resumable_seat(
+        actions, tmp_path, handle="clicompact", agent_id="agent:clicompact01",
+        anchor_cwd="/tmp/clicompact-office", compacted=True)
+
+    spawned: list[dict[str, Any]] = []
+
+    async def _spawn(repo: str, *, name: str, model: str | None, prompt: str) -> None:
+        spawned.append({"repo": repo, "name": name, "model": model, "prompt": prompt})
+
+    async def _boom_resume(*a: Any, **k: Any) -> None:
+        raise AssertionError("a once-compacted transcript at max_compactions=0 must never "
+                             "be resumed")
+
+    poll_count = 0
+
+    async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        nonlocal poll_count
+        poll_count += 1
+        if poll_count < 2:  # call 1 = the pre-resume already-live check: nothing there yet
+            return []
+        return [{"name": "[OS] clicompact", "cwd": cwd, "sessionId": "sess-fresh"}]
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await _cmd_launch_harness(
+            "clicompact", model=None, pool=actions.pool, wake_default=None,
+            spawn=_spawn, agents_json=_agents_json, resume_spawn=_boom_resume,
+            settings=_resume_settings(sense))
+
+    assert out == 0
+    assert len(spawned) == 1  # the fresh spawn still happened — the fallback is not a dead end
+    out_text = buf.getvalue()
+    assert "not resumed" in out_text
+    assert "compacted 1 time" in out_text
+    assert "max_compactions=0" in out_text
+    assert "spawned" in out_text  # the pre-existing fresh-spawn confirmation still prints
 
 
 # ═══ tree_cwd (task #135/#136, 2026-08-03, ruling 983ec87a): `osiris launch` had drifted
