@@ -729,7 +729,19 @@ class OsirisKeyRead:
 def _read_osiris_key(cwd: str | None, key: str) -> OsirisKeyRead:
     """One key from the repo's `.osiris` file (TOML), walking up to the repo root. See
     `OsirisKeyRead` for the three-way no-file / found-but-unset / could-not-read
-    distinction this must keep tell-apart-able (Sekhmet's design, e3f4f159)."""
+    distinction this must keep tell-apart-able (Sekhmet's design, e3f4f159).
+
+    THE CLIMB DOES NOT STOP AT A WORKTREE OR SUBMODULE BOUNDARY (task #128, root-cause
+    finding, 2026-08-05): a git worktree's own `.git` is a FILE (a gitlink to
+    `<root>/.git/worktrees/<name>`), not a directory — `Path.exists()` is true for it
+    exactly as for a real repo root, so the old `.exists()` check stopped the climb one
+    layer too early, before it ever reached the true root's pin. Every seat's own code
+    checkout (`.claude/worktrees/<seat>`, the fleet's OWN mandated working location, ruling
+    bcfdfcc1) is exactly this shape and carries no `.osiris` of its own — so this climb-stop
+    silently fell back to the worktree's basename (the seat's own name) instead of the
+    governed project every single time a seated agent mounted from its own code checkout.
+    `.is_dir()` stops only at a REAL repo root; a gitlink file is transparent to the climb,
+    so it continues up to the enclosing repo's own pin."""
     if not cwd:
         return OsirisKeyRead(value=None)
     import tomllib
@@ -745,8 +757,8 @@ def _read_osiris_key(cwd: str | None, key: str) -> OsirisKeyRead:
         except (OSError, tomllib.TOMLDecodeError, ValueError) as exc:
             return OsirisKeyRead(value=None, error=f"{type(exc).__name__}: {exc}",
                                  path=str(f))
-        if (d / ".git").exists():  # the repo root — stop climbing
-            break
+        if (d / ".git").is_dir():  # the TRUE repo root — a worktree/submodule gitlink
+            break                  # (a FILE) never stops the climb, only a real root does
     return OsirisKeyRead(value=None)
 
 

@@ -261,6 +261,93 @@ def test_read_project_pin_distinguishes_all_three_no_project_shapes(
     assert out.path == str(malformed / ".osiris")
 
 
+def test_read_project_pin_climbs_past_a_worktree_gitlink_to_the_real_root(
+    tmp_path: Path,
+) -> None:
+    """THE ROOT CAUSE (task #128, 2026-08-05): a git worktree's own `.git` is a FILE (a
+    gitlink), not a directory. The old `.exists()` climb-stop treated that file exactly
+    like a real repo root and gave up one layer too early — so every seat's own code
+    checkout (`.claude/worktrees/<seat>`, no `.osiris` of its own) silently fell back to
+    its OWN directory name instead of ever seeing the real root's pin, on every single
+    mount. The climb must see straight through a gitlink file to the true root."""
+    from src.orchestrator.agents import read_project_pin
+
+    root = tmp_path / "osiris"
+    root.mkdir()
+    (root / ".git").mkdir()
+    (root / ".osiris").write_text('project = "osiris"\n')
+
+    worktree = root / ".claude" / "worktrees" / "sekhmet"
+    worktree.mkdir(parents=True)
+    (worktree / ".git").write_text("gitdir: /somewhere/.git/worktrees/sekhmet\n")
+
+    out = read_project_pin(str(worktree))
+    assert out.value == "osiris"
+    assert out.error is None
+
+
+def test_read_project_pin_still_stops_at_a_real_repo_root(tmp_path: Path) -> None:
+    """The other half of the same fix: a REAL `.git` directory must still stop the climb —
+    an unrelated ancestor's `.osiris` (a different repo entirely) must never leak in just
+    because the fix widened what counts as a boundary. Unchanged behavior, proven not to
+    have regressed."""
+    from src.orchestrator.agents import read_project_pin
+
+    grandparent = tmp_path / "unrelated-parent"
+    (grandparent / ".osiris").parent.mkdir(parents=True)
+    (grandparent / ".osiris").write_text('project = "wrong-project"\n')
+
+    repo = grandparent / "real-repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()  # a REAL root — no .osiris of its own
+
+    out = read_project_pin(str(repo))
+    assert out.value is None  # stops at repo's own real root, never sees the grandparent
+    assert out.error is None and out.path is None
+
+
+def test_resolve_identity_resolves_the_governed_project_from_a_seat_worktree(
+    tmp_path: Path,
+) -> None:
+    """End to end, at the layer register_agent actually reads: a seated agent's own code
+    worktree now resolves the ENCLOSING repo's governed project, not the worktree's own
+    directory name (which, for every seat in this fleet, IS the seat's own name — the
+    exact live specimen measured on sekhmet's and imhotep's own current identities)."""
+    root = tmp_path / "osiris"
+    root.mkdir()
+    (root / ".git").mkdir()
+    (root / ".osiris").write_text('project = "osiris"\n')
+
+    worktree = root / ".claude" / "worktrees" / "sekhmet"
+    worktree.mkdir(parents=True)
+    (worktree / ".git").write_text("gitdir: /somewhere/.git/worktrees/sekhmet\n")
+
+    ident = resolve_identity(cwd=str(worktree), job_dir="/j/jobs/worktree1")
+    assert ident.project == "osiris"          # not "sekhmet", the old basename guess
+    assert ident.project_pin_error is None
+    assert ident.project_pin_missing is False
+
+
+def test_resolve_identity_still_falls_back_to_basename_when_truly_unpinned_anywhere(
+    tmp_path: Path,
+) -> None:
+    """THE REFUSAL, TESTED NOT JUST THE SUCCESS (577988ed still governs): the climb widening
+    must not manufacture a pin out of nothing. A worktree of a repo that has NO `.osiris`
+    anywhere in its own climb — real root included — still honestly falls back to the
+    basename guess, unchanged from before this fix."""
+    root = tmp_path / "unpinned-repo"
+    root.mkdir()
+    (root / ".git").mkdir()  # a real root, but never pinned
+
+    worktree = root / ".claude" / "worktrees" / "someseat"
+    worktree.mkdir(parents=True)
+    (worktree / ".git").write_text("gitdir: /somewhere/.git/worktrees/someseat\n")
+
+    ident = resolve_identity(cwd=str(worktree), job_dir="/j/jobs/worktree2")
+    assert ident.project == "someseat"        # honest basename fallback, unbroken
+    assert ident.project_pin_missing is True
+
+
 def test_read_project_label_and_model_still_collapse_both_no_declaration_causes(
     tmp_path: Path,
 ) -> None:
