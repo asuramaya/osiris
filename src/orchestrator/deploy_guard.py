@@ -200,20 +200,38 @@ def _is_ancestor(repo_root: Path, older: str, newer: str) -> bool | None:
     return None
 
 
-async def check_diverged_since_last_deploy(pool: asyncpg.Pool) -> str | None:
+async def check_diverged_since_last_deploy(
+    pool: asyncpg.Pool, *, repo_root: Path | None = None,
+) -> str | None:
     """The IO half — same fail-open discipline as `check_unreviewed_boot`: any failure
     (git missing, not a checkout, the watermark unreadable) degrades to None, never a
     refusal. Deliberately NOT wired into service boot (unlike its two siblings above) —
     the race this exists to catch happens around `osiris deploy` time, when a human/agent
-    is about to trust whatever ref is currently checked out, not at a service restart."""
+    is about to trust whatever ref is currently checked out, not at a service restart.
+
+    `repo_root` MUST be the caller's own already-resolved deploy target when one is
+    running a deploy (live false positive, 2026-08-04, Thoth's own catch on the deploy
+    immediately before the second history rewrite): this house runs FIVE worktrees
+    permanently, each an independent checkout with its OWN copy of this module on disk.
+    `_REPO_ROOT` (module-level, derived from THIS FILE's own `__file__`) resolves to
+    whichever worktree Python happened to import this module from — not necessarily the
+    repo the deploy is actually acting on. Confirmed live: a deploy from the main
+    checkout warned that the watermark '09bbd7c' was no longer an ancestor of HEAD
+    '6af5eb3', when '6af5eb3' was Seshat's OWN worktree branch tip, not composer's —
+    `_REPO_ROOT` had resolved to her worktree. `cmd_deploy` already resolves the correct
+    `root` before this call (via `_find_repo_root()`/its own `repo_root` param); it must
+    pass it through, never let this function guess. Falls back to `_REPO_ROOT` ONLY for
+    a caller with no better answer (there is currently none — cmd_deploy always has one),
+    so the signature stays callable standalone without silently becoming a no-op."""
     try:
         from src.orchestrator.monitor import get_cursor
 
-        running = _git_head(_REPO_ROOT)
+        root = repo_root if repo_root is not None else _REPO_ROOT
+        running = _git_head(root)
         last_deployed = await get_cursor(pool, _DEPLOY_CURSOR_KEY)
         ancestor = None
         if running and last_deployed and running != last_deployed:
-            ancestor = _is_ancestor(_REPO_ROOT, last_deployed, running)
+            ancestor = _is_ancestor(root, last_deployed, running)
         return diverged_since_last_deploy(running, last_deployed, is_ancestor=ancestor)
     except Exception as exc:  # noqa: BLE001 — a check that can't complete is UNKNOWN, not a refusal
         _log.warning("diverged_since_last_deploy check failed, treating as unknown: %r", exc)

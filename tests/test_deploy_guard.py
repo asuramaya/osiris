@@ -530,7 +530,7 @@ async def test_check_diverged_is_clean_on_a_real_fast_forward(
 
 
 async def test_cmd_deploy_warns_but_never_refuses_on_a_real_divergence(
-    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, small_repo: Path,
+    actions: Actions, monkeypatch: pytest.MonkeyPatch, small_repo: Path,
 ) -> None:
     import io
     from contextlib import redirect_stdout
@@ -542,7 +542,14 @@ async def test_cmd_deploy_warns_but_never_refuses_on_a_real_divergence(
     a = _commit(small_repo, "a")
     _git(small_repo, "checkout", "-q", "--orphan", "unrelated")
     c = _commit(small_repo, "c")
-    monkeypatch.setattr(guard, "_REPO_ROOT", small_repo)
+    # _REPO_ROOT deliberately points somewhere ELSE (a live false positive, 2026-08-04:
+    # this house runs five worktrees, each its own copy of deploy_guard.py on disk, and
+    # _REPO_ROOT resolves to whichever one Python happened to import from — not
+    # necessarily the repo being deployed). The load-bearing fact this test pins is that
+    # `cmd_deploy` no longer trusts that ambient guess: it passes ITS OWN resolved
+    # `repo_root` (small_repo, below) through explicitly, so the divergence is still
+    # found even though _REPO_ROOT names a repo with no history at all.
+    monkeypatch.setattr(guard, "_REPO_ROOT", small_repo.parent / "not-the-deploy-target")
     await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, a)
 
     async def _restart(units: list[str]) -> tuple[int, str]:
@@ -550,7 +557,7 @@ async def test_cmd_deploy_warns_but_never_refuses_on_a_real_divergence(
 
     buf = io.StringIO()
     with redirect_stdout(buf):
-        out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [],
+        out = await cmd_deploy(repo_root=small_repo, git_status=lambda root: [],
                                restart=_restart, pool=actions.pool)
     assert "WARNING: HISTORY DIVERGED SINCE THE LAST DEPLOY" in buf.getvalue()
     assert a in buf.getvalue() and c in buf.getvalue()
@@ -558,6 +565,48 @@ async def test_cmd_deploy_warns_but_never_refuses_on_a_real_divergence(
     # a real divergence PRINTS, it does not change the exit code — restart still ran and the
     # deploy completed on its own ordinary merits, exactly as if the warning were absent.
     assert out in (0, 1)
+
+
+async def test_cmd_deploy_ignores_an_unrelated_repo_roots_ambient_head(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch, small_repo: Path, tmp_path: Path,
+) -> None:
+    """THE EXACT LIVE FALSE POSITIVE, pinned directly (Thoth's catch, 2026-08-04, the
+    deploy immediately before the second history rewrite): the module-level `_REPO_ROOT`
+    names a DIFFERENT repo whose HEAD has ALSO diverged from the ledger — if `cmd_deploy`
+    ever silently fell back to that ambient guess instead of its own resolved root, this
+    would warn on a deploy that is, on its OWN actual repo, a clean fast-forward."""
+    import io
+    from contextlib import redirect_stdout
+
+    import src.orchestrator.deploy_guard as guard
+    from src.cli import cmd_deploy
+    from src.orchestrator.monitor import set_cursor
+
+    # small_repo (the ACTUAL deploy target): a clean fast-forward, a -> b.
+    a = _commit(small_repo, "a")
+    _commit(small_repo, "b")
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, a)
+
+    # an UNRELATED repo that _REPO_ROOT happens to resolve to, itself genuinely
+    # diverged — if the guard reads THIS by accident, it would warn wrongly.
+    decoy = tmp_path / "decoy"
+    decoy.mkdir()
+    _git(decoy, "init", "-q")
+    _git(decoy, "config", "user.email", "test@test")
+    _git(decoy, "config", "user.name", "test")
+    _commit(decoy, "x")
+    _git(decoy, "checkout", "-q", "--orphan", "unrelated")
+    _commit(decoy, "y")
+    monkeypatch.setattr(guard, "_REPO_ROOT", decoy)
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        await cmd_deploy(repo_root=small_repo, git_status=lambda root: [],
+                         restart=_restart, pool=actions.pool)
+    assert "HISTORY DIVERGED" not in buf.getvalue()
 
 
 async def test_cmd_deploy_is_silent_on_a_normal_deploy(

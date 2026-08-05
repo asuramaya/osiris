@@ -1143,7 +1143,7 @@ async def cmd_deploy(
     try:
         from src.orchestrator.deploy_guard import check_diverged_since_last_deploy
 
-        diverged = await check_diverged_since_last_deploy(pool)
+        diverged = await check_diverged_since_last_deploy(pool, repo_root=root)
         if diverged:
             print(f"WARNING: {diverged}")
 
