@@ -596,7 +596,7 @@ def test_dormant_history_confession_none_below_the_trivial_floor(tmp_path: Path)
     'misfires on every ordinary relaunch' failure Thoth named (DM 3129)."""
     from src.ingest.sessions import dormant_history_confession
 
-    proj = tmp_path / "-home-x-.osiris-seats-ooblek"
+    proj = tmp_path / "-home-x--osiris-seats-ooblek"
     proj.mkdir()
     (proj / "c035336c-metadata.jsonl").write_text("x" * 100)
     assert dormant_history_confession("/home/x/.osiris/seats/ooblek", root=tmp_path) is None
@@ -609,7 +609,7 @@ def test_dormant_history_confession_fires_above_the_floor(tmp_path: Path) -> Non
 
     from src.ingest.sessions import _DORMANT_HISTORY_FLOOR_BYTES, dormant_history_confession
 
-    proj = tmp_path / "-home-x-.osiris-seats-ooblek"
+    proj = tmp_path / "-home-x--osiris-seats-ooblek"
     proj.mkdir()
     big = proj / "b5f04f84-live.jsonl"
     big.write_text("x" * (_DORMANT_HISTORY_FLOOR_BYTES + 1))
@@ -633,13 +633,13 @@ def test_dormant_history_confession_checks_extra_cwds_and_picks_the_freshest(
 
     from src.ingest.sessions import _DORMANT_HISTORY_FLOOR_BYTES, dormant_history_confession
 
-    office = tmp_path / "-home-x-.osiris-seats-imhotep"
+    office = tmp_path / "-home-x--osiris-seats-imhotep"
     office.mkdir()
     office_transcript = office / "e08c3850-old.jsonl"
     office_transcript.write_text("x" * (_DORMANT_HISTORY_FLOOR_BYTES + 1))
     os.utime(office_transcript, (1_700_000_000, 1_700_000_000))  # older
 
-    tree = tmp_path / "-home-x-code-osiris-.claude-worktrees-imhotep"
+    tree = tmp_path / "-home-x-code-osiris--claude-worktrees-imhotep"
     tree.mkdir()
     tree_transcript = tree / "aa0277bc-new.jsonl"
     tree_transcript.write_text("y" * (_DORMANT_HISTORY_FLOOR_BYTES + 2))
@@ -725,7 +725,7 @@ def test_dormant_history_confession_names_a_resumable_session(tmp_path: Path) ->
     `--bg`, proven; the next best thing is naming the command)."""
     from src.ingest.sessions import _DORMANT_HISTORY_FLOOR_BYTES, dormant_history_confession
 
-    proj = tmp_path / "-home-x-.osiris-seats-ooblek"
+    proj = tmp_path / "-home-x--osiris-seats-ooblek"
     proj.mkdir()
     sid = "b5f04f84-707e-49cc-85f1-482fc70058c8"
     (proj / f"{sid}.jsonl").write_bytes(b"x" * (_DORMANT_HISTORY_FLOOR_BYTES + 1))
@@ -748,7 +748,7 @@ def test_dormant_history_confession_rescues_a_large_transcript_with_a_small_tail
     widens the separate compaction gate out of the way — that gate has its own test below."""
     from src.ingest.sessions import dormant_history_confession
 
-    proj = tmp_path / "-home-x-.osiris-seats-ooblek"
+    proj = tmp_path / "-home-x--osiris-seats-ooblek"
     proj.mkdir()
     sid = "b5f04f84-707e-49cc-85f1-482fc70058c8"
     body = (b'{"type":"assistant","message":"old"}\n' * 100_000 + _COMPACT_LINE
@@ -769,7 +769,7 @@ def test_dormant_history_confession_names_a_non_resumable_session(tmp_path: Path
     isolates the size gate, matching the test above."""
     from src.ingest.sessions import dormant_history_confession
 
-    proj = tmp_path / "-home-x-.osiris-seats-ooblek"
+    proj = tmp_path / "-home-x--osiris-seats-ooblek"
     proj.mkdir()
     sid = "b5f04f84-707e-49cc-85f1-482fc70058c8"
     body = (b'{"type":"assistant","message":"old"}\n' * 100_000 + _COMPACT_LINE
@@ -791,7 +791,7 @@ def test_dormant_history_confession_names_not_resumable_at_default_after_one_com
     rides along in the receipt for the note's own upgrade-framed wording."""
     from src.ingest.sessions import dormant_history_confession
 
-    proj = tmp_path / "-home-x-.osiris-seats-ooblek"
+    proj = tmp_path / "-home-x--osiris-seats-ooblek"
     proj.mkdir()
     sid = "b5f04f84-707e-49cc-85f1-482fc70058c8"
     body = (b'{"type":"assistant","message":"old"}\n' * 100_000 + _COMPACT_LINE

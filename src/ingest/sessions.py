@@ -316,11 +316,23 @@ def locate_transcript_by_cwd(cwd: str, root: Path | None = None) -> Path | None:
     """The active session's transcript for a project, found by its cwd — the fallback when
     CLAUDE_JOB_DIR is absent (not every session has it set; a foreign agent surfaced this
     live, falling back to the anonymous `agent:unknown` bucket). Claude Code stores a
-    project's transcripts under ~/.claude/projects/<cwd-with-each-slash-as-a-dash>/; the
-    newest is the active session. Multi-session-per-project picks the hottest — best-effort,
-    but far better than no identity at all."""
+    project's transcripts under ~/.claude/projects/<cwd-slugged>/; the newest is the active
+    session. Multi-session-per-project picks the hottest — best-effort, but far better than
+    no identity at all.
+
+    THE SLUG IS `_harness_slug` (mounts.py), NOT a bare '/'->'-' replace (live root-cause,
+    2026-08-05, task #136): every real seat's office (~/.osiris/seats/<handle>) and every
+    tree_cwd (.../.claude/worktrees/<handle>) carries a dot component, which the harness's
+    OWN convention also folds to '-' (witnessed live, 2026-07-16, v2.1.211 — see
+    `_harness_slug`'s own docstring). A bare '/'->'-' replace is the deprecated
+    `_legacy_slug` shape and matches nothing real; this function was quietly using it,
+    which meant every caller here — the CLI's dormant-history confession and agents.py's
+    cwd-based session-id guess — has never once matched a real transcript. Confirmed
+    against all 36 real project dirs on the box before this fix, 0 matched; after, 36/36."""
+    from src.orchestrator.mounts import _harness_slug
+
     base = (root or (Path.home() / ".claude/projects")).expanduser()
-    d = base / str(cwd).rstrip("/").replace("/", "-")
+    d = base / _harness_slug(str(cwd).rstrip("/"))
     if not d.is_dir():
         return None
     files = [p for p in d.glob("*.jsonl") if p.is_file()]
