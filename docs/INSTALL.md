@@ -58,7 +58,11 @@ OSIRIS_MCP_TRANSPORT=streamable-http uv run python -m src.mcp_server
 
 Verify: `curl -s 127.0.0.1:8011/health` → `{"status":"ok"}`; console at
 <http://127.0.0.1:8011>, the read-only lens at <http://127.0.0.1:8011/membrane>; the MCP
-server listens at `http://127.0.0.1:8790/mcp`.
+server listens at `http://127.0.0.1:8790/mcp` — `curl -s -o /dev/null -w '%{http_code}\n'
+127.0.0.1:8790/mcp` should print `406`: a bare GET carries no `Accept: text/event-stream`
+header, which the streamable-http transport correctly rejects, so 406 means the server is
+up and enforcing the protocol, not that something is broken. `curl: (7) Connection refused`
+is the actual failure signal.
 
 ## 5. Keep them alive (systemd user units)
 

@@ -24,7 +24,7 @@ FastAPI, Alembic.
 Every change must keep all three green:
 
 ```bash
-ruff check src/ tests/
+uv run ruff check src tests
 uv run mypy --strict src/
 uv run pytest            # real Postgres/Redis via testcontainers — never SQLite, never mocks
 ```

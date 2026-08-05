@@ -137,7 +137,7 @@ dossier on Celsius Network."*
 cp .env.example .env && docker compose up -d && uv sync
 DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5432/osiris uv run alembic upgrade head
 uv run pytest            # real Postgres/Redis via testcontainers, never mocks
-ruff check src/ tests/ && uv run mypy --strict src/
+uv run ruff check src tests && uv run mypy --strict src/
 ```
 Python 3.12 (uv), async throughout (asyncpg, httpx, arq), FastAPI, Postgres 16 + Redis 7.
 See [`CONTRIBUTING.md`](CONTRIBUTING.md).
