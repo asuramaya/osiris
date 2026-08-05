@@ -111,11 +111,13 @@ from typing import Any
 
 import asyncpg
 
+from src.config.settings import Settings
 from src.manager.client import default_socket_path, manager_call
 
 ManagerCall = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 SpawnClaudeBg = Callable[..., Awaitable[None]]
 AgentsJson = Callable[..., Awaitable[list[dict[str, Any]]]]
+ResumeSpawn = Callable[..., Awaitable[None]]
 
 # dispatch 3678, the operator's own "make the cli friendly": every sanctioned-second-door
 # command below used to REQUIRE --actor, forcing a human at a raw terminal to type a value
@@ -456,7 +458,8 @@ async def _resolve_launch_target(pool: asyncpg.Pool, handle: str) -> dict[str, A
 
 async def _cmd_launch_harness(
     handle: str, *, model: str | None, pool: asyncpg.Pool, wake_default: str | None,
-    spawn: SpawnClaudeBg, agents_json: AgentsJson,
+    spawn: SpawnClaudeBg, agents_json: AgentsJson, resume_spawn: ResumeSpawn,
+    settings: Settings | None = None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> int:
     """THE DEFAULT LANE (task #72, following trigger.launch_seat's own flip, rulings 0fe36e59
@@ -473,8 +476,37 @@ async def _cmd_launch_harness(
     hardcoded to `office` and never reading `tree_cwd` at all, so it could not correctly
     body any tree-bound seat; it always spawned into the office, silently. Now mirrors
     launch_seat's own tree_cwd handling exactly: bound-but-missing refuses (osiris never
-    provisions a tree), unset falls back to `office` unchanged."""
-    from src.orchestrator.trigger import _bg_boot_prompt, _tree_exists
+    provisions a tree), unset falls back to `office` unchanged.
+
+    THE RESUME LANE (task #136, 2026-08-05, ruling via decision 536de12f + Thoth msg 3732 —
+    "GO — #136 LANE SWITCH"): before minting fresh, mirrors launch_seat's own already-proven
+    resume branch exactly — `_lineage_resume_candidate` + `_resume_guard` + `resume_spawn`
+    (trigger.py's `-p --resume` lane), reused verbatim, never a third bespoke implementation.
+    VISIBILITY RIDES OSIRIS'S OWN REGISTRY, NEVER `claude agents --json`, ON PURPOSE (decision
+    536de12f, confirming a829a15d): a resumed `-p --resume` body cannot appear in that roster
+    even when it explicitly calls mount() mid-turn — proven live, twice, independently — that
+    registry only ever lists sessions spawned with `--bg --name`, unrelated to osiris's own
+    bookkeeping by construction. So a successful resume here returns immediately, WITHOUT
+    polling `agents_json` for it — polling would just spin out to the same false "not yet
+    visible" message on every resume, every time, which is worse than not polling at all.
+
+    THE CONFESSION KEEPS FIRING, UNCHANGED, ON THE FALLBACK PATH ONLY (Thoth's explicit
+    requirement: "the confession path you just fixed must keep working... do not let the
+    lane switch quietly bypass or double it"): a successful resume never reaches
+    `dormant_history_confession` at all (nothing left to confess — the launch already acted
+    on it); every path that falls through to a fresh spawn still gets it, exactly as before
+    this lane existed. The resume attempt's own reason (`resume_log`) prints separately,
+    named every time win or lose — Thoth's own rule for launch_seat's identical receipt
+    ("a correct decision made silently is indistinguishable from a broken one")."""
+    from src.orchestrator.agents import _generation
+    from src.orchestrator.seats import seat_receipt
+    from src.orchestrator.trigger import (
+        _DM_RESUME_PROMPT,
+        _bg_boot_prompt,
+        _lineage_resume_candidate,
+        _resume_guard,
+        _tree_exists,
+    )
 
     facts = await _resolve_launch_target(pool, handle)
     if facts is None:
@@ -503,6 +535,47 @@ async def _cmd_launch_harness(
               f"Find it in `claude agents` as {live_name!r}.")
         return 0
 
+    resolved_model = resolve_model(model, facts["intended_model"], wake_default)
+
+    from src.config.settings import get_settings
+    st = settings or get_settings()
+    holder = ((await seat_receipt(pool, facts["seat_id"])) or {}).get("holder")
+    resume_outcome = await _lineage_resume_candidate(
+        pool, holder, st, repo=launch_cwd) if holder else ["no seat holder on record"]
+    resume_log = resume_outcome[1] if isinstance(resume_outcome, tuple) else resume_outcome
+    resume = resume_outcome[0] if isinstance(resume_outcome, tuple) else None
+    if resume is not None:
+        # holder is truthy whenever resume is set — resume_outcome only comes from
+        # _lineage_resume_candidate(holder, ...), never the bare-string branch, when
+        # holder was falsy. Asserted, not silently narrowed: a violated invariant here
+        # should be loud, never a quiet skip of the identity gate.
+        assert holder is not None
+        refusal = await _resume_guard(
+            pool, resume, _generation(holder)[0], seat_id=facts["seat_id"], st=st)
+        if refusal is not None:
+            resume_log = [*resume_log, f"crossed-registry guard refused it: {refusal}"]
+            resume = None
+    if resume is not None:
+        resumed_session_id, resumed_repo = resume[0], resume[1]
+        await resume_spawn(resumed_repo, _DM_RESUME_PROMPT, resume_session=resumed_session_id,
+                           model=resolved_model, allowed_tools=st.osiris_wake_allowed_tools
+                           or None)
+        print(f"osiris launch: resumed session {resumed_session_id[:8]} as a ONE-SHOT turn — "
+              f"walked {len(resume_log)} generation(s) back to find it "
+              f"({'; '.join(resume_log)}); it runs the brief and exits; `claude agents "
+              "--json` shows it only WHILE it runs, never after (a harness fact, not a bug: "
+              "a further mail wake continues it, exactly like any other dormant addressee).")
+        stamped_model = facts.get("intended_model")
+        if stamped_model and resolved_model != stamped_model:
+            print(f"  MODEL MISMATCH: spawned on {resolved_model!r} but the seat's own "
+                  f"stamped intended_model is {stamped_model!r} — never silent (thread "
+                  "20e4feb6).", file=sys.stderr)
+        return 0
+
+    print(f"osiris launch: {handle!r} not resumed — {'; '.join(resume_log)} (gate: "
+          f"max_compactions={st.osiris_resume_max_compactions}, ceiling="
+          f"{st.osiris_resume_ceiling_bytes}b)")
+
     from src.ingest.sessions import dormant_history_confession, dormant_history_note
 
     # BOTH SLUGS, ALWAYS (task #135/#136): office and tree_cwd are two DIFFERENT slugs by
@@ -515,7 +588,6 @@ async def _cmd_launch_harness(
         print(f"osiris launch: {handle!r}'s {dormant_history_note(dormant)}",
               file=sys.stderr)
 
-    resolved_model = resolve_model(model, facts["intended_model"], wake_default)
     name = f"[{_house_tag(facts['house'])}] {facts['handle']}"
     anchor = str(Path.home() / ".claude" / "jobs" / facts["seat_id"].replace(":", "-"))
     boot_prompt = _bg_boot_prompt(office=office, anchor=anchor, handle=facts["handle"])
@@ -628,19 +700,21 @@ async def cmd_launch(
     handle: str, *, model: str | None, pool: asyncpg.Pool | None = None,
     manager: ManagerCall = _default_manager, wake_default: str | None = None,
     debug: bool = False, spawn: SpawnClaudeBg | None = None,
-    agents_json: AgentsJson | None = None,
+    agents_json: AgentsJson | None = None, resume_spawn: ResumeSpawn | None = None,
+    settings: Settings | None = None,
 ) -> int:
     """Bodies a seat. DEFAULT LANE (task #72): harness-native `claude --bg`, following
     trigger.launch_seat's own flip (rulings 0fe36e59 + 33d6a2eb clause 3) — every body lands
     in the operator's own `claude agents` list by construction. `debug=True` (the CLI's
     `--debug`) keeps the original osiris PTY-broker lane alive as an explicit fallback for an
     incident or a build with no `claude --bg` — attachable via `osiris attach`, which the
-    default lane's body is not. `pool`/`manager`/`wake_default`/`spawn`/`agents_json` are all
-    injectable (mirrors launch_seat's own test seam) — production callers (main()) leave them
-    at their real defaults."""
-    from src.orchestrator.trigger import _claude_agents_json, _spawn_claude_bg
+    default lane's body is not. `pool`/`manager`/`wake_default`/`spawn`/`agents_json`/
+    `resume_spawn`/`settings` are all injectable (mirrors launch_seat's own test seam) —
+    production callers (main()) leave them at their real defaults."""
+    from src.orchestrator.trigger import _claude_agents_json, _spawn_claude, _spawn_claude_bg
     spawn = spawn or _spawn_claude_bg
     agents_json = agents_json or _claude_agents_json
+    resume_spawn = resume_spawn or _spawn_claude
 
     owns_pool = pool is None
     if pool is None:
@@ -649,7 +723,7 @@ async def cmd_launch(
         from src.db.pool import create_pool
 
         apply_dev_fallback()
-        settings = get_settings()
+        settings = settings or get_settings()
         wake_default = settings.osiris_wake_model
         try:
             pool = await create_pool(settings.database_url, min_size=1, max_size=2)
@@ -663,7 +737,8 @@ async def cmd_launch(
                                          wake_default=wake_default)
         return await _cmd_launch_harness(handle, model=model, pool=pool,
                                          wake_default=wake_default, spawn=spawn,
-                                         agents_json=agents_json)
+                                         agents_json=agents_json, resume_spawn=resume_spawn,
+                                         settings=settings)
     finally:
         if owns_pool:
             await pool.close()
