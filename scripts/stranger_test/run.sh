@@ -82,6 +82,10 @@ say "finding, not a harness bug to smooth over."
 step "3. schema + seed" \
   "cd /work/osiris && uv run alembic upgrade head && uv run python -m src.init"
 
+# The doc's own claim (docs/INSTALL.md's verify line, README/CONTRIBUTING's aren't this
+# specific) is that a bare GET here correctly returns 406, not that it returns 2xx — so
+# the check below asserts exactly 406, it does not use curl -f (which would treat 406 as
+# a failure, i.e. would flunk the documented-correct behavior).
 step "4. three surfaces + doc's own health verify" \
   "cd /work/osiris && \
    (uv run uvicorn --factory src.api.app:create_app --host 127.0.0.1 --port 8011 >/tmp/console.log 2>&1 &) && \
@@ -89,27 +93,38 @@ step "4. three surfaces + doc's own health verify" \
    (OSIRIS_MCP_TRANSPORT=streamable-http uv run python -m src.mcp_server >/tmp/mcp.log 2>&1 &) && \
    sleep 8 && \
    curl -sf 127.0.0.1:8011/health && echo && \
-   curl -sf -o /dev/null -w 'mcp http_code=%{http_code}\n' 127.0.0.1:8790/mcp"
+   mcp_code=\$(curl -s -o /dev/null -w '%{http_code}' 127.0.0.1:8790/mcp) && \
+   echo \"mcp http_code=\$mcp_code (expect 406 per docs/INSTALL.md)\" && \
+   [ \"\$mcp_code\" = 406 ]"
 say "--- surface logs (tails) ---"
 for f in /tmp/console.log /tmp/worker.log /tmp/mcp.log; do
   say "-- $f --"; tail -20 "$f" 2>/dev/null | tee -a "$LOG"
 done
 pkill -f uvicorn 2>/dev/null; pkill -f "arq src.workers" 2>/dev/null; pkill -f src.mcp_server 2>/dev/null
 
-# Step 7's exact invocation differs across the three docs that state it — README.md and
-# CONTRIBUTING.md say `ruff check src/ tests/` (no `uv run`) and CONTRIBUTING additionally
-# says `uv run mypy --strict src/`; INSTALL.md says `uv run ruff check src tests` and
-# `uv run mypy src` (no --strict). Run every documented spelling and let each fail or pass
-# on its own — the drift itself is the finding, not something to normalize away first.
 step "7a. pytest (all three docs agree on this one)" "cd /work/osiris && uv run pytest -q"
-step "7b. ruff, INSTALL.md wording (uv run, unslashed paths)" \
-  "cd /work/osiris && uv run ruff check src tests"
-step "7c. ruff, README/CONTRIBUTING wording (bare, slashed paths)" \
-  "cd /work/osiris && ruff check src/ tests/"
-step "7d. mypy --strict, README/CONTRIBUTING wording" \
-  "cd /work/osiris && uv run mypy --strict src/"
-step "7e. mypy, INSTALL.md wording (no --strict)" \
-  "cd /work/osiris && uv run mypy src"
+
+# The rest of step 7 is EXTRACTED from the checked-out docs at run time, not copied here
+# as a fixed string — a fixed copy is exactly what went stale the moment the docs were
+# fixed to agree with each other (this script used to hardcode three DIFFERENT ruff
+# invocations to catch cross-doc drift; once the drift was fixed, that comparison started
+# testing wording no doc contains anymore, which would have silently kept reporting
+# "walls" for a problem that no longer exists). Grepping the live files means a future
+# doc edit gets re-tested automatically — the whole point of "one command, re-run after
+# every fix."
+readme_line="$(grep -m1 'ruff check' /work/osiris/README.md)"
+contrib_ruff="$(grep -m1 'ruff check' /work/osiris/CONTRIBUTING.md)"
+contrib_mypy="$(grep -m1 'mypy' /work/osiris/CONTRIBUTING.md)"
+install_ruff="$(grep -m1 'ruff check' /work/osiris/docs/INSTALL.md)"
+install_mypy="$(grep -m1 'mypy' /work/osiris/docs/INSTALL.md)"
+
+if [ -z "$readme_line" ] || [ -z "$contrib_ruff" ] || [ -z "$contrib_mypy" ] || [ -z "$install_ruff" ] || [ -z "$install_mypy" ]; then
+  say "HARNESS FAILURE (not a doc finding): could not extract one of the five expected gate lines from README.md/CONTRIBUTING.md/docs/INSTALL.md — their structure changed and this script's grep patterns need updating"
+else
+  step "7b. README.md's own gate line" "cd /work/osiris && $readme_line"
+  step "7c. CONTRIBUTING.md's own gate lines" "cd /work/osiris && $contrib_ruff && $contrib_mypy"
+  step "7d. INSTALL.md's own gate lines" "cd /work/osiris && $install_ruff && $install_mypy"
+fi
 
 say ""
 say "=== SUMMARY ==="
