@@ -103,6 +103,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 import textwrap
 from collections.abc import Awaitable, Callable
@@ -456,6 +457,45 @@ async def _resolve_launch_target(pool: asyncpg.Pool, handle: str) -> dict[str, A
     return facts
 
 
+def _collapse_resume_log(log: list[str]) -> str:
+    """#153 (Thoth msg 3802, live specimen: `osiris launch metron` printing seven
+    near-identical refusal clauses for four distinct sessions): `_lineage_resume_
+    candidate` reports one entry PER GENERATION it walks, but the distinguishing fact
+    is per-SESSION — a lineage that compacted repeatedly inside one session reports the
+    identical verdict once per generation. Collapse RUNS of adjacent entries whose text
+    past their leading `gen N` is byte-identical (== the same session, same verdict)
+    into one `gens N-M (...) (kx)` line, then rank every entry that DIDN'T collapse —
+    a resumable hop, a crossed-registry refusal, anything genuinely distinct — ABOVE the
+    collapsed repeats, so the one line that actually matters is never buried under a
+    wall of near-duplicate prose ('a wall of near-duplicate prose IS a rune', #135)."""
+    gen_re = re.compile(r"^gen (\S+)(.*)$")
+    groups: list[tuple[list[str], str]] = []
+    for entry in log:
+        m = gen_re.match(entry)
+        if m is None:
+            groups.append(([], entry))
+            continue
+        gen, rest = m.group(1), m.group(2)
+        if groups and groups[-1][0] and groups[-1][1] == rest:
+            groups[-1][0].append(gen)
+        else:
+            groups.append(([gen], rest))
+    singles: list[str] = []
+    repeats: list[str] = []
+    for gens, rest in groups:
+        if not gens:
+            singles.append(rest)
+        elif len(gens) == 1:
+            singles.append(f"gen {gens[0]}{rest}")
+        else:
+            try:
+                lo, hi = sorted((gens[0], gens[-1]), key=int)
+            except ValueError:
+                lo, hi = gens[-1], gens[0]
+            repeats.append(f"gens {lo}-{hi}{rest} ({len(gens)}x)")
+    return "; ".join(singles + repeats)
+
+
 async def _cmd_launch_harness(
     handle: str, *, model: str | None, pool: asyncpg.Pool, wake_default: str | None,
     spawn: SpawnClaudeBg, agents_json: AgentsJson, resume_spawn: ResumeSpawn,
@@ -562,8 +602,8 @@ async def _cmd_launch_harness(
                            or None)
         print(f"osiris launch: resumed session {resumed_session_id[:8]} as a ONE-SHOT turn — "
               f"walked {len(resume_log)} generation(s) back to find it "
-              f"({'; '.join(resume_log)}); it runs the brief and exits; `claude agents "
-              "--json` shows it only WHILE it runs, never after (a harness fact, not a bug: "
+              f"({_collapse_resume_log(resume_log)}); it runs the brief and exits; `claude "
+              "agents --json` shows it only WHILE it runs, never after (a harness fact, not a bug: "
               "a further mail wake continues it, exactly like any other dormant addressee).")
         stamped_model = facts.get("intended_model")
         if stamped_model and resolved_model != stamped_model:
@@ -572,7 +612,7 @@ async def _cmd_launch_harness(
                   "20e4feb6).", file=sys.stderr)
         return 0
 
-    print(f"osiris launch: {handle!r} not resumed — {'; '.join(resume_log)} (gate: "
+    print(f"osiris launch: {handle!r} not resumed — {_collapse_resume_log(resume_log)} (gate: "
           f"max_compactions={st.osiris_resume_max_compactions}, ceiling="
           f"{st.osiris_resume_ceiling_bytes}b)")
 
@@ -585,7 +625,7 @@ async def _cmd_launch_harness(
     # now takes every candidate cwd it's given.
     dormant = dormant_history_confession(office, *([tree_cwd] if tree_cwd else []))
     if dormant is not None:
-        print(f"osiris launch: {handle!r}'s {dormant_history_note(dormant)}",
+        print(f"osiris launch: {handle!r} — {dormant_history_note(dormant)}",
               file=sys.stderr)
 
     name = f"[{_house_tag(facts['house'])}] {facts['handle']}"
