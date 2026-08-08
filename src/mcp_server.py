@@ -2875,6 +2875,29 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
 
 
 @mcp.tool()
+async def wake_preflight(target: str) -> dict[str, Any]:
+    """Answer wake()'s own gates BEFORE you attempt one (#156.4) — the compaction/ceiling/
+    no-anchor/crossed-registry checks that today only reveal themselves as a refusal AFTER
+    a real wake() call. `target` accepts anything wake()'s own does — a claimed handle,
+    `seat:<id>`, or `agent:<id>`.
+
+    Returns `{mode, status, detail}`. `status` is one of: `resumable` (every gate clears —
+    a real wake() would resume this addressee now), `no-live-body` (vacant, retired, or
+    never mounted — nothing to wait for), or `refused-<gate>` (compaction / ceiling /
+    no-anchor / crossed-registry / unknown — a mind exists, this specific gate is why a
+    resume would not return it). Read-only: checks nothing it cannot answer from the
+    graph and disk, sends nothing, spawns nothing."""
+    pool = await _pool_get()
+    from src.orchestrator.trigger import _resolve_wake_address, wake_gate_preflight
+
+    resolved = await _resolve_wake_address(pool, target)
+    if isinstance(resolved, dict):
+        return {**resolved, "status": "no-live-body"}
+    resolved_target, seat_id = resolved
+    return await wake_gate_preflight(pool, resolved_target, seat_id=seat_id)
+
+
+@mcp.tool()
 async def wake(target: str, message: str, subagent_id: str | None = None,
                subagent_type: str | None = None, session_anchor: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
