@@ -892,7 +892,7 @@ async def test_dispatch_dm_refusal_names_no_anchored_transcript_when_nothing_was
                           sender="agent:sender",
                           settings=_settings(enabled=True, sense=str(tmp_path / "nowhere")),
                           spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom)
-    assert d["mode"] == "pull-only"
+    assert d["mode"] == "resume-refused-no-anchor"
     assert "no anchored transcript at all" in d["detail"]
 
 
@@ -914,8 +914,69 @@ async def test_dispatch_dm_refusal_names_the_ceiling_when_a_real_session_is_too_
                           sender="agent:sender",
                           settings=_settings(enabled=True, sense=str(sense), ceiling=32),
                           spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom)
-    assert d["mode"] == "pull-only"
+    assert d["mode"] == "resume-refused-ceiling"
     assert "over the context ceiling" in d["detail"]
+
+
+# --- wake_gate_preflight (#156.4): the same four gates, answerable before an attempt ------
+
+async def test_wake_gate_preflight_reports_resumable_with_no_side_effects(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The happy path: every gate clears, and — unlike dispatch_dm — nothing is spawned,
+    resumed, or sent. It only answers the question."""
+    sense = await _stale_resumable_owner(actions, tmp_path, transcript_bytes=16)
+    d = await trigger_module.wake_gate_preflight(
+        actions.pool, "agent:abcd1234", settings=_settings(enabled=True, sense=str(sense)))
+    assert d["mode"] == "resumable"
+    assert d["status"] == "resumable"
+    assert "abcd1234" in d["detail"]
+
+
+async def test_wake_gate_preflight_names_the_ceiling_before_any_attempt(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The same specimen dispatch_dm's own ceiling test pins, read through the read-only
+    surface — must agree exactly, since both call the same underlying gate."""
+    sense = await _stale_resumable_owner(actions, tmp_path, transcript_bytes=64)
+    d = await trigger_module.wake_gate_preflight(
+        actions.pool, "agent:abcd1234",
+        settings=_settings(enabled=True, sense=str(sense), ceiling=32))
+    assert d["mode"] == "resume-refused-ceiling"
+    assert d["status"] == "refused-ceiling"
+    assert "over the context ceiling" in d["detail"]
+
+
+async def test_wake_gate_preflight_reports_never_mounted(actions: Actions) -> None:
+    """No agent_mounts row at all — nothing to wait for, ever."""
+    d = await trigger_module.wake_gate_preflight(
+        actions.pool, "agent:totally-unknown", settings=_settings(enabled=True))
+    assert d["mode"] == "never-mounted"
+    assert d["status"] == "no-live-body"
+
+
+async def test_wake_preflight_mcp_tool_resolves_a_seat_and_never_touches_dispatch(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The MCP surface: resolves target the same way wake()/dispatch_dm do, then answers
+    read-only — dispatch_dm itself must never be called."""
+    import src.mcp_server as srv
+
+    sense = await _stale_resumable_owner(actions, tmp_path, transcript_bytes=16)
+    monkeypatch.setattr(trigger_module, "get_settings",
+                        lambda: _settings(enabled=True, sense=str(sense)))
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("preflight must never dispatch a real wake")
+
+    monkeypatch.setattr(trigger_module, "dispatch_dm", _boom)
+    try:
+        d = await srv.wake_preflight("agent:abcd1234")
+    finally:
+        srv._pool = saved_pool
+    assert d["mode"] == "resumable"
 
 
 async def test_mid_turn_means_the_transcript_is_moving_NOT_the_heartbeat(
@@ -1832,7 +1893,7 @@ async def test_a_crossed_registry_never_leaks_the_envelope_or_the_resume(
                           sender="agent:sender",
                           settings=_settings(enabled=True, sense=str(sense)),
                           spawn=_boom, windows=_no_windows, jobs=_jobs, nudge=_boom)
-    assert d["mode"] == "pull-only" and "crossed" in d["detail"]
+    assert d["mode"] == "resume-refused-crossed-registry" and "crossed" in d["detail"]
     assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
 
 
@@ -2099,7 +2160,7 @@ async def test_dispatch_dm_still_refuses_when_deep_history_is_a_different_mind(
                           sender="agent:sender",
                           settings=_settings(enabled=True, sense=str(sense)),
                           spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom)
-    assert d["mode"] == "pull-only"
+    assert d["mode"] == "resume-refused-crossed-registry"
     assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
 
 
@@ -2122,7 +2183,11 @@ async def test_dispatch_dm_still_refuses_a_reassigned_door_end_to_end(
                           sender="agent:sender",
                           settings=_settings(enabled=True, sense=str(sense)),
                           spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom)
-    assert d["mode"] == "pull-only"
+    # the old identity's OWN mounts are gone (the door reassigned to newowner) — dispatch_dm
+    # never reaches the crossed-registry guard at all here, it stops one step earlier at
+    # wakeable_identity finding nothing for abcd1234 specifically (#156.2 clarified the
+    # label; the underlying refusal was already this, unchanged by that fix).
+    assert d["mode"] == "never-mounted"
     assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
 
 
@@ -2517,7 +2582,7 @@ async def test_wake_translates_pull_only_and_refused_budget(
         actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
 
     async def _pull_only(*a: Any, **kw: Any) -> dict[str, Any]:
-        return {"mode": "pull-only", "detail": "never mounted"}
+        return {"mode": "never-mounted", "detail": "never mounted"}
 
     monkeypatch.setattr(trigger_module, "dispatch_dm", _pull_only)
     d = await wake_worker(actions, caller="agent:sender", target=manager_seat, message="hey",
@@ -2531,6 +2596,74 @@ async def test_wake_translates_pull_only_and_refused_budget(
     d2 = await wake_worker(actions, caller="agent:sender", target=manager_seat, message="hey",
                            settings=_settings(enabled=True))
     assert d2["status"] == "refused-budget"
+
+
+async def test_wake_translates_the_named_gate_refusals_and_not_injectable(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#156.2: the third bucket — a body/session DOES exist but a NAMED gate refused it —
+    must say WHICH gate, never a bare 'refused' or the old 'no-live-body' lie (a mind
+    exists here; resuming it just isn't safe). And a system-config reason (the trigger
+    switched off) must never read as 'nobody home' either — the mail IS queued and WILL
+    be pulled, same as any other queued mode."""
+    worker_seat, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
+
+    for raw_mode, want_status in (
+        ("resume-refused-compaction", "refused-compaction"),
+        ("resume-refused-ceiling", "refused-ceiling"),
+        ("resume-refused-no-anchor", "refused-no-anchor"),
+        ("resume-refused-crossed-registry", "refused-crossed-registry"),
+        ("resume-refused-unknown", "refused-unknown"),
+        ("trigger-dark", "not-injectable"),
+        ("held", "not-injectable"),
+    ):
+        async def _mode(*a: Any, _m: str = raw_mode, **kw: Any) -> dict[str, Any]:
+            return {"mode": _m, "detail": f"detail for {_m}"}
+
+        monkeypatch.setattr(trigger_module, "dispatch_dm", _mode)
+        d = await wake_worker(actions, caller="agent:sender", target=manager_seat,
+                              message="hey", settings=_settings(enabled=True))
+        assert d["status"] == want_status, (raw_mode, d)
+        assert d["raw_mode"] == raw_mode
+
+
+async def test_dispatch_dm_never_mounted_is_distinct_from_no_anchor(
+    actions: Actions,
+) -> None:
+    """#156.2's own live specimen: an addressee with NO agent_mounts row at all ('nothing
+    to wait for, ever') must report 'never-mounted', never the same 'pull-only' bucket a
+    mounted-but-transcript-missing addressee gets (resume-refused-no-anchor, pinned
+    above) — the old shared mode string could not tell these apart."""
+    out = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                             to_agent="agent:totally-unknown", body="hello?")
+    msg_id = int(out["id"])
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("never-mounted means nothing to wake at all")
+
+    d = await dispatch_dm(actions.pool, addressee="agent:totally-unknown", msg_id=msg_id,
+                          sender="agent:sender", settings=_settings(enabled=True),
+                          spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom)
+    assert d["mode"] == "never-mounted"
+    assert "never mounted" in d["detail"]
+
+
+def test_gate_name_reads_the_same_prose_the_gates_already_produce() -> None:
+    """#156.2: a stable short token per named gate, read from the SAME sentences
+    `_resume_candidate_verdict`/`_resume_miss_reason`/`_resume_guard` already produce for
+    humans — never a second source of truth, and never a guess on unrecognized text."""
+    gate_name = trigger_module._gate_name
+    assert gate_name("found a candidate, but it has compacted 3 time(s) — a resume "
+                     "would return a compaction summary") == "compaction"
+    assert gate_name("found a candidate, but its resumable content is over the context "
+                     "ceiling") == "ceiling"
+    assert gate_name("no anchored transcript at all") == "no-anchor"
+    assert gate_name("retired — a deliberate close, never reanimated") == "retired"
+    assert gate_name("the registry's door for this addressee leads to a session whose "
+                     "own signed testimony names a different mind (the crossed-registry "
+                     "class, 0100a35e)") == "crossed-registry"
+    assert gate_name("something nobody wrote yet") == "unknown"
 
 
 async def test_wake_buckets_every_unnamed_mode_as_queued(

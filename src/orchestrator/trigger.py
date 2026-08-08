@@ -957,6 +957,82 @@ async def _resume_guard(
     return None
 
 
+def _gate_name(detail: str) -> str:
+    """A stable, short token for WHICH named gate refused a resume (#156.2, Thoth's own
+    ask: 'refused-by-<named-gate>', not a bare 'refused'). Reads the SAME prose
+    `_resume_candidate_verdict` / `_resume_miss_reason` / `_resume_guard` already produce
+    for humans — never a second source of truth to drift from. A string it doesn't
+    recognize names itself 'unknown' rather than guessing: the whole point of this
+    function is to never relabel a refusal as something it wasn't."""
+    if "crossed-registry" in detail:
+        return "crossed-registry"
+    if "compacted" in detail:
+        return "compaction"
+    if "context ceiling" in detail:
+        return "ceiling"
+    if "no anchored transcript" in detail:
+        return "no-anchor"
+    if detail.startswith("retired"):
+        return "retired"
+    return "unknown"
+
+
+async def wake_gate_preflight(
+    pool: asyncpg.Pool, target: str, *, seat_id: str | None = None,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Answer the FOUR RESUME GATES (compaction/ceiling/no-anchor/crossed-registry)
+    BEFORE an attempt, not discovered as a wall after (#156.4, Thoth msg 3823: '#153
+    fixed the rendering; this is the query'). Reuses the EXACT functions dispatch_dm's
+    own refusal path already calls (`_agent_resumable`, `_agent_resume_miss_reason`,
+    `_resume_guard`, `_gate_name`) — never a second copy of the gate logic, only a
+    read-only entry point into it, so this can never disagree with what a real wake
+    would find.
+
+    SCOPED TO THE RESUME GATES ON PURPOSE, not dispatch_dm's full mail-routing sequence
+    (vacant/paused/human-attended/awaiting-operator) — those are each a one-line graph
+    read already cheap enough to check directly (fleet(), dossier(), seat_receipt()).
+    The four gates here are the expensive ones: they walk a lineage and read real
+    transcripts off disk, which is the actual cost worth answering up front.
+
+    `target` must already be a RESOLVED agent id (a lineage head — e.g. from
+    succession_chain, dossier, or wakeable_identity) — this does not itself walk
+    seat -> holder -> living head the way dispatch_dm/wake_worker do; a caller that
+    only has a seat or handle should resolve first. `seat_id`, if known, sharpens the
+    crossed-registry check's unsigned-tail corroboration fallback (`_resume_guard`'s own
+    docstring) — omitting it narrows that one fallback path, never the other three
+    gates, and is disclosed here rather than silently changing the answer.
+
+    Returns the SAME vocabulary #156.2 built for wake() (no-live-body / refused-<gate>),
+    plus a state dispatch_dm itself never needs to say aloud: 'resumable' — every gate
+    clears, a real wake would resume this addressee now."""
+    from src.orchestrator.folds import wakeable_identity
+
+    st = settings or get_settings()
+    wake_target = await wakeable_identity(pool, target)
+    if wake_target is None:
+        return {"mode": "never-mounted", "status": "no-live-body",
+                "detail": f"{target} has never mounted — no session to resume"}
+    if await _retired(pool, target):
+        return {"mode": "retired", "status": "no-live-body",
+                "detail": f"{target} is retired — the trigger never reanimates a "
+                          "deliberate close; the estate carries the mail to the next mint"}
+    resume = await _agent_resumable(pool, wake_target, st)
+    if resume is None:
+        miss_reason = await _agent_resume_miss_reason(pool, wake_target, st)
+        gate = _gate_name(miss_reason)
+        return {"mode": f"resume-refused-{gate}", "status": f"refused-{gate}",
+                "detail": miss_reason}
+    from src.orchestrator.agents import _generation
+    refusal = await _resume_guard(
+        pool, resume, _generation(target)[0], seat_id=seat_id, st=st)
+    if refusal is not None:
+        return {"mode": "resume-refused-crossed-registry",
+                "status": "refused-crossed-registry", "detail": refusal}
+    return {"mode": "resumable", "status": "resumable",
+            "detail": f"resumable now — session {resume[0][:8]}, no gate refuses it"}
+
+
 async def _lineage_resume_candidate(
     pool: asyncpg.Pool, holder: str, st: Settings, *, repo: str,
 ) -> tuple[tuple[str, str, float, str], list[str]] | list[str]:
@@ -1048,6 +1124,34 @@ def _mail_envelope(msg_id: int, *, sender_label: str, addressee_label: str,
     )
 
 
+async def _resolve_wake_address(
+    pool: asyncpg.Pool, addressee: str,
+) -> tuple[str, str | None] | dict[str, str]:
+    """The address resolution dispatch_dm's own first hop shares with wake_gate_preflight's
+    MCP surface (#156.4): seat -> current holder -> living head (folds). Returns
+    (resolved_agent_id, seat_id) on success, or a terminal {mode, detail} dict on a vacant
+    seat — the one early-exit this resolution step can produce on its own, before any gate
+    runs. Extracted so the two callers can never independently drift on HOW an address
+    becomes a mind (38c71544's own class of bug, applied to itself)."""
+    from src.orchestrator.folds import canonical_agent, living_head
+    from src.orchestrator.seats import held_seat, seat_receipt
+
+    target = addressee
+    seat_id: str | None = None
+    if target.startswith("seat:"):
+        seat_id = target
+        sr = await seat_receipt(pool, target)
+        holder = (sr or {}).get("holder")
+        if not holder:
+            return {"mode": "seat-vacant",
+                    "detail": f"{target} is vacant — the mail waits for its next holder"}
+        target = str(holder)
+    target = await living_head(pool, await canonical_agent(pool, target))
+    if seat_id is None:
+        seat_id = ((await held_seat(pool, target)) or {}).get("seat_id")
+    return target, seat_id
+
+
 async def dispatch_dm(
     pool: asyncpg.Pool, *, addressee: str, msg_id: int, sender: str | None,
     settings: Settings | None = None, spawn: Any = None, windows: Any = None,
@@ -1092,7 +1196,7 @@ async def dispatch_dm(
         jobs = jobs or claude_daemon.job_for
         nudge = nudge or claude_daemon.reply
     if not st.osiris_trigger_enabled:
-        return {"mode": "pull-only", "detail": "the trigger is dark (osiris_trigger_enabled=0)"}
+        return {"mode": "trigger-dark", "detail": "the trigger is dark (osiris_trigger_enabled=0)"}
     mrow = await pool.fetchrow(
         "SELECT grade, left(body, 160) AS preview FROM fleet_messages WHERE id=$1", msg_id)
     grade = mrow["grade"] if mrow else None
@@ -1105,21 +1209,12 @@ async def dispatch_dm(
     # THE SEAT GAP this closes: name-addressed mail stores the SEAT id (B2), and the old DM
     # lane matched it against agent_mounts verbatim — so every seat-bound addressee (the
     # whole charter pattern) was silently pull-only.
-    from src.orchestrator.folds import canonical_agent, living_head, wakeable_identity
-    from src.orchestrator.seats import held_seat, seat_receipt
-    target = addressee
-    seat_id: str | None = None
-    if target.startswith("seat:"):
-        seat_id = target
-        sr = await seat_receipt(pool, target)
-        holder = (sr or {}).get("holder")
-        if not holder:
-            return {"mode": "pull-only",
-                    "detail": f"{target} is vacant — the mail waits for its next holder"}
-        target = str(holder)
-    target = await living_head(pool, await canonical_agent(pool, target))
-    if seat_id is None:
-        seat_id = ((await held_seat(pool, target)) or {}).get("seat_id")
+    from src.orchestrator.folds import wakeable_identity
+    from src.orchestrator.seats import held_seat
+    resolved = await _resolve_wake_address(pool, addressee)
+    if isinstance(resolved, dict):
+        return resolved
+    target, seat_id = resolved
     # THE HUMAN-ATTENDED GUARD (Thoth LIII 2026-07-21, ruling d8a77f80; the proxy REPLACED by
     # thread 96f62338). The daemon reply lane FORGES a human turn (the confirmed RCE), so a
     # nudge/poke into a session the operator drives lands in the operator's OWN input turn —
@@ -1151,7 +1246,7 @@ async def dispatch_dm(
                           f"{ask['since']}) and has been quiet since — awaiting the human's "
                           "word; peer mail queues rather than preempting it"}
     if await _retired(pool, target):
-        return {"mode": "pull-only",
+        return {"mode": "retired",
                 "detail": f"{target} is retired — the trigger never reanimates a deliberate "
                           "close; the estate carries the mail to the next mint"}
     # ALREADY SETTLED BY THE LINEAGE (the per-agent-id read-state class, bug 00378259 —
@@ -1195,7 +1290,7 @@ async def dispatch_dm(
     # which case `target` (the declared name) is still the honest thing to name below.
     wake_target = await wakeable_identity(pool, target)
     if wake_target is None:
-        return {"mode": "pull-only",
+        return {"mode": "never-mounted",
                 "detail": f"{target} has never mounted — no session to resume"}
     project = str(await pool.fetchval(
         "SELECT project FROM agent_mounts WHERE agent_id=$1 "
@@ -1340,13 +1435,13 @@ async def dispatch_dm(
         who = target if wake_target == target else (
             f"{target} (its own live mount, {wake_target}, checked too)")
         miss_reason = await _agent_resume_miss_reason(pool, wake_target, st)
-        return {"mode": "pull-only",
+        return {"mode": f"resume-refused-{_gate_name(miss_reason)}",
                 "detail": f"{who} has no resumable session ({miss_reason}) — a private "
                           "message is never handed to a fresh twin"}
     session_id, repo = resume[0], resume[1]
     refusal = await _resume_guard(pool, resume, base, seat_id=seat_id, st=st)
     if refusal is not None:
-        return {"mode": "pull-only",
+        return {"mode": f"resume-refused-{_gate_name(refusal)}",
                 "detail": f"{refusal} — refusing both nudge and resume; the mail "
                           "stays pull-only until the identity is healed"}
     # the ledger row goes in UNDER AN ADVISORY LOCK, before the spawn: two dispatchers
@@ -1546,14 +1641,29 @@ async def _verify_landed(
     return await asyncio.to_thread(_marker_landed_sync, root, sid_prefix, marker)
 
 
-# dispatch_dm's mode → wake()'s honest vocabulary. Anything not named here (queued-*, braked,
-# skipped-*, settled, held, window-busy) is a rate brake, a pause, or an in-flight wake already
-# covering it — all genuinely "queued", and `detail`/`raw_mode` carry the specific reason so
-# nothing is lost to the bucket.
+# dispatch_dm's mode → wake()'s honest vocabulary. THREE BUCKETS (#156.2, Thoth msg 3823):
+# not-injectable (push is unavailable for a SYSTEM/CONFIG reason — nothing wrong with the
+# addressee, the mail is queued and WILL be pulled), no-live-body (there is definitively
+# nobody to wake — vacant, retired, or never mounted), refused-<gate> (a body/session DOES
+# exist but a NAMED gate refused to use it). The OLD single "pull-only" -> "no-live-body"
+# mapping was a LIE for two of its six call sites (trigger-dark, held): mail filed there
+# WILL be pulled, nothing is missing — Alfred hit this live, concluded a reachable seat was
+# unreachable, escalated, then retracted after testing delivery instead of trusting the
+# string (60bc15db). Anything still not named here (queued-*, braked, skipped-*, settled,
+# window-busy) is a rate brake, a pause, or an in-flight wake already covering it — all
+# genuinely "queued" via the dict's own default — and `detail`/`raw_mode` carry the specific
+# reason so nothing is lost to the bucket.
 _WAKE_STATUS = {
     "nudged": "delivered", "resumed": "delivered", "poked": "delivered",
     "delivered": "mid-turn",  # dispatch_dm's own word for this means mid-turn, never delivered
-    "pull-only": "no-live-body",
+    "trigger-dark": "not-injectable", "held": "not-injectable",
+    "seat-vacant": "no-live-body", "retired": "no-live-body",
+    "never-mounted": "no-live-body",
+    "resume-refused-compaction": "refused-compaction",
+    "resume-refused-ceiling": "refused-ceiling",
+    "resume-refused-no-anchor": "refused-no-anchor",
+    "resume-refused-crossed-registry": "refused-crossed-registry",
+    "resume-refused-unknown": "refused-unknown",
     # a manager is a LIVE human body, not a missing one — the human-attended guard queues the
     # knock in its box (perceived by pull), it does not forge the human's live turn (d8a77f80).
     "queued-human": "queued-human-attended",

@@ -1096,7 +1096,7 @@ async def test_send_tool_echoes_the_per_hop_dispatch_receipt(actions: Actions) -
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
-    assert out["dispatch"]["mode"] == "pull-only"
+    assert out["dispatch"]["mode"] == "trigger-dark"
     assert "dark" in out["dispatch"]["detail"]
 
 
