@@ -358,6 +358,140 @@ async def fleet_occupancy(
     return out
 
 
+_ROSTER_CAVEATS = (
+    "chartered_repos and pin.declared are reported as-is, never certified canonical: minting "
+    "a SoftwareProject is cheap and mostly ungated, so a name resolving to a real graph object "
+    "proves the object exists, not that it is the current or correct name for a repo — near-"
+    "duplicate variants (the bytebye/byebyte history is the live example) can each "
+    "independently look valid here. Canonicalizing project names is task #137/#152's lane, "
+    "not this verb's — a caller that needs 'which of these names is right' asks there, not here.",
+    "pin is read from anchor_cwd's own .osiris only. A seat with a distinct tree_cwd (task "
+    "#103's office/tree split) may carry its own, possibly different, .osiris there — this "
+    "does not read it, and does not check the two agree.",
+    "office_exists is a plain directory-existence check on anchor_cwd, nothing more — it does "
+    "not mean the office's CLAUDE.md/charter.md content is actually being loaded by a live "
+    "session. That question is separate and, as of ruling on Imhotep's #141 scope (msg 3812, "
+    "2026-08-08), the office-content mechanism is mid-migration — a seat can read "
+    "office_exists=true with orphaned office content.",
+    "live_cwd (the current holder's own agent_mounts row, when occupied) can differ from both "
+    "anchor_cwd and tree_cwd with nothing wrong on the launch path — Imhotep's #141 scope found "
+    "khnum and sekhmet both bound to a tree_cwd while their live sessions sit at the office cwd. "
+    "The three are reported separately on purpose; none is silently treated as 'the' cwd.",
+)
+
+
+def _dir_exists(path: str | None) -> bool | None:
+    """A plain sync wrapper so `roster()` (async) never calls a blocking Path method inline
+    (ASYNC240) — None when there's no path to check, never a guess."""
+    return Path(path).is_dir() if path else None
+
+
+async def roster(
+    pool: asyncpg.Pool, *, repo: str | None = None, live_secs: int = _LIVE_SECS,
+) -> dict[str, Any]:
+    """THE ROSTER (task #140, Alfred's 2813da48): answers "which seat owns this repo" and
+    "is a seat's project pin still pointing at something" FROM THE GRAPH — no `ls
+    ~/.osiris/seats/*/.osiris` required. Built because Alfred read mount()'s LIVE-agent list
+    as the roster, found every seat in his house cold, and read COLD AS VACANT: he
+    misrouted mudra's work to kast's seat and separately declared gestalt ownerless and
+    edited it himself, both while the seat offices on disk held the correct answer the
+    whole time, one query this function now makes unnecessary to hand-run.
+
+    COLD IS NOT VACANT (the root cause, made structurally impossible to collapse here): each
+    row's `occupancy` is `seat_occupancy`'s own vacant/occupied/cold, unchanged — vacant means
+    no `holds` link has EVER existed for this seat; cold means held, now or in the past, but
+    nobody live this instant; occupied means a live body is in it right now. A caller reading
+    this dict cannot mistake the second for the first without discarding a field that is
+    right there.
+
+    Per seat: `chartered_repos` (charter_of's own `governs` links — self-declared, graph-
+    native) and `pin` (a live read of anchor_cwd's `.osiris`, reusing `read_project_pin`'s own
+    three-way declared/found-but-unset/could-not-read distinction rather than collapsing it).
+    Neither is certified canonical — see `_ROSTER_CAVEATS`, always returned alongside the
+    rows, because a roster that states its own blind spots is worth more than one that
+    reports a clean answer over a graph that IS wrong in six known places right now (#137/
+    #152, running in parallel). `office_exists` and `live_cwd` are separate, deliberately
+    uncollapsed axes — see the caveats for exactly what each does and does not mean.
+
+    `repo=None` returns every active seat's row. `repo=<name>` instead answers Alfred's exact
+    question — "who owns this" — by checking BOTH signals independently: a seat whose charter
+    OR current pin names `repo` is a match, tagged with WHICH signal(s) found it. Two seats
+    matching from different signals is `agreement="conflict"`, returned as two rows, never
+    silently resolved to one. Zero matches is `agreement="no-match"` — explicitly NOT the same
+    claim as "nobody owns this repo" (ruling 60bc15db, the third state): it means neither
+    signal this function reads found an owner, which is the honest boundary of what a
+    graph+pin read can say, not a verdict on the repo's actual ownership."""
+    from src.orchestrator.agents import read_project_pin
+    from src.orchestrator.charter import charter_of
+
+    seat_rows = await pool.fetch(
+        "SELECT o.canonical AS seat_id, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS handle "
+        "FROM objects o WHERE o.type='Seat' AND o.status='active' ORDER BY o.canonical")
+
+    rows: list[dict[str, Any]] = []
+    for sr in seat_rows:
+        seat_id = sr["seat_id"]
+        facts = await seat_facts(pool, seat_id)
+        occ = await seat_occupancy(pool, seat_id, live_secs=live_secs)
+        chartered = await charter_of(pool, seat_id)
+        anchor = facts["anchor_cwd"]
+        pin = read_project_pin(anchor)
+        if pin.error:
+            pin_state = "unreadable"
+        elif anchor is None:
+            pin_state = "no-office"
+        elif pin.path and pin.value is None:
+            pin_state = "unset"
+        elif pin.value:
+            pin_state = "declared"
+        else:
+            pin_state = "no-pin"
+        live_cwd = None
+        if occ["state"] == "occupied" and occ["holder"]:
+            live_cwd = await pool.fetchval(
+                "SELECT cwd FROM agent_mounts WHERE agent_id=$1 "
+                "ORDER BY last_seen DESC LIMIT 1", occ["holder"])
+        rows.append({
+            "seat": seat_id, "handle": facts["handle"], "house": facts["house"],
+            "occupancy": occ["state"], "holder": occ["holder"],
+            "anchor_cwd": anchor, "tree_cwd": facts["tree_cwd"], "live_cwd": live_cwd,
+            "office_exists": _dir_exists(anchor),
+            "chartered_repos": chartered,
+            "pin": {"declared": pin.value, "state": pin_state, "path": pin.path,
+                    "error": pin.error},
+        })
+
+    if repo is None:
+        return {"seats": rows, "caveats": list(_ROSTER_CAVEATS)}
+
+    name = repo.removeprefix("repo:").strip()
+    matches = [
+        {"seat": r["seat"], "handle": r["handle"], "occupancy": r["occupancy"],
+         "holder": r["holder"],
+         "via": [v for v, hit in (("charter", name in r["chartered_repos"]),
+                                  ("pin", r["pin"]["declared"] == name)) if hit]}
+        for r in rows
+        if name in r["chartered_repos"] or r["pin"]["declared"] == name
+    ]
+    if not matches:
+        agreement = "no-match"
+    elif len(matches) == 1:
+        agreement = "single-match"
+    else:
+        agreement = "conflict"
+    caveats = list(_ROSTER_CAVEATS)
+    if agreement == "no-match":
+        caveats.append(
+            "no-match means neither a seat's charter nor its current pin names this repo — "
+            "not that the repo has no owner. It may be owned by a seat whose pin this "
+            "function cannot read, chartered under a name this repo string doesn't exactly "
+            "match, or simply not yet declared anywhere this function looks.")
+    return {"repo": name, "matches": matches, "agreement": agreement, "caveats": caveats}
+
+
 async def reachability(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
     """Can this lineage be reached RIGHT NOW — the TRUTHFUL answer, consulted from the
     Claude harness daemon's own job state (ruling d739d486, Ra's clean repro): a mail

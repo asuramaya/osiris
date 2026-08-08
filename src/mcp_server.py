@@ -2721,6 +2721,38 @@ async def fleet(full: bool = False) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def roster(repo: str | None = None) -> dict[str, Any]:
+    """Which seat owns a repo, and is anybody home — FROM THE GRAPH, no `ls
+    ~/.osiris/seats/*/.osiris` required (task #140, Alfred's 2813da48: he read mount()'s
+    live-agent list as the roster, found his own house cold, read COLD AS VACANT, and
+    misrouted a repo's work to another seat's lineage while the seat offices on disk held
+    the right answer the whole time).
+
+    `repo=None` returns every active seat: `occupancy` (seat_occupancy's own vacant/
+    occupied/cold — vacant means never held, cold means held but nobody live THIS INSTANT,
+    the exact distinction Alfred's incident collapsed), `chartered_repos` (graph-native
+    `governs` links), `pin` (a live read of the seat's own `.osiris`, three-way declared/
+    unset/unreadable), `anchor_cwd`/`tree_cwd`/`live_cwd` kept SEPARATE on purpose (a live
+    holder's actual mount cwd can differ from both with nothing wrong on the launch path).
+
+    `repo=<name>` answers "who owns this" directly: a seat matches if its charter OR its
+    current pin names the repo, tagged with which signal(s) hit. Two seats matching from
+    different signals come back as a `conflict`, never silently picked one. Zero matches is
+    `no-match` — NOT a claim the repo has no owner, only that neither signal this function
+    reads found one (ruling 60bc15db, the third state).
+
+    NEITHER `chartered_repos` NOR `pin` IS CERTIFIED CANONICAL. Minting a SoftwareProject is
+    cheap and mostly ungated — a name resolving to a real object proves the object exists,
+    not that it is the current or correct name (the bytebye/byebyte spelling history is the
+    live example). Canonicalizing project names is task #137/#152's lane; `caveats` in every
+    response says so, along with this function's other named blind spots, rather than
+    reporting a clean answer over a graph six seats are currently wrong in."""
+    pool = await _pool_get()
+    from src.orchestrator.seats import roster as _roster
+    return await _roster(pool, repo=repo)
+
+
+@mcp.tool()
 async def send(body: str, to: str | None = None, to_agent: str | None = None,
                reply_to: int | None = None, desk: str | None = None,
                grade: str | None = None, require_seat: bool = False,
