@@ -2531,7 +2531,20 @@ async def _spawn_claude_bg(
     launch_seat now hands the session its own boot instruction there (mount + claim_name,
     with cwd/job_dir as literal strings in the text, needing no env passthrough at all) and
     idempotency matches on the seat's own office cwd instead of a session id (see
-    launch_seat's harness-lane comment)."""
+    launch_seat's harness-lane comment).
+
+    OWN PROCESS GROUP, ALWAYS (#156, Thoth's own ruling: 'ship it independently, it is
+    already a bug today'): `start_new_session=True` makes the spawned body its own
+    session/group leader (POSIX `setsid()`, `pgid == pid`) — the same discipline
+    `pty_broker.py`'s own children already carry, this lane just never had it. Without it,
+    a seat's Bash-tool children share OSIRIS'S OWN process group and can outlive their
+    parent with nobody owning them — the exact shape of the two leaked spares found and
+    killed by hand this afternoon (#156.5's own investigation; live proof, not a theory).
+    THE NAMED LIMIT: this only isolates bodies spawned AFTER this lands — every session
+    already alive when this code deploys was started without it and stays in the shared
+    group until it naturally cycles. A future group-based kill must check for this rather
+    than assume it; a kill verb that silently behaves differently for old and new bodies
+    is worse than one that refuses cleanly on the old ones."""
     env = os.environ.copy()
     # same anchor discipline as _spawn_claude: a spawner's own anchor must never leak into
     # the child (the anchor-collision class, 2294e95d) — inert for --bg today (env vars
@@ -2547,7 +2560,7 @@ async def _spawn_claude_bg(
     if prompt:
         cmd.append(prompt)
     proc = await asyncio.create_subprocess_exec(
-        *cmd, cwd=repo, env=env,
+        *cmd, cwd=repo, env=env, start_new_session=True,
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     _log.info("trigger: bg-spawned %s in %s (pid %s)", name or "(unnamed)", repo, proc.pid)
 

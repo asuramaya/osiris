@@ -3701,6 +3701,28 @@ async def test_spawn_claude_bg_issues_the_documented_bg_flags(monkeypatch: Any) 
     assert captured["args"][-1] == "mount and claim_name"  # the trailing positional prompt
 
 
+async def test_spawn_claude_bg_starts_its_own_process_group(monkeypatch: Any) -> None:
+    """#156 (Thoth's own ruling, independent of the kill verb — this is already a bug
+    today): without its own session/group, a body's Bash-tool children share OSIRIS'S OWN
+    process group and can outlive their parent with nobody owning them — the exact shape
+    of the leaked spares #156.5 found and killed by hand. Every new spawn must be its own
+    group leader, the same discipline pty_broker.py's own children already carry."""
+    from src.orchestrator import trigger
+
+    captured: dict[str, Any] = {}
+
+    class _Proc:
+        pid = 7
+
+    async def _fake_exec(*args: Any, **kwargs: Any) -> _Proc:
+        captured["kwargs"] = kwargs
+        return _Proc()
+
+    monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
+    await trigger._spawn_claude_bg("/repo/demo")
+    assert captured["kwargs"].get("start_new_session") is True
+
+
 async def test_spawn_claude_bg_never_leaks_the_spawners_own_anchor(monkeypatch: Any) -> None:
     """Same anchor discipline as _spawn_claude (the collision class, 2294e95d): the spawner's
     own CLAUDE_JOB_DIR must never reach the child — inert for --bg today (no env var reaches
