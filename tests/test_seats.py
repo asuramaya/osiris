@@ -1192,6 +1192,215 @@ async def test_fleet_occupancy_lists_every_active_seat_including_vacant(
     assert rows[occupied["seat_id"]]["holder"] == "agent:fo000001"
 
 
+# ═══ ROSTER (task #140, Alfred's 2813da48) — cold is not vacant, and a pin is not certified ═
+# canonical. Alfred read mount()'s live-agent list as the roster, found his own house cold,
+# read COLD AS VACANT, and misrouted a repo's work to another seat's lineage while the seat
+# offices on disk held the right answer the whole time. These tests prove roster() answers
+# "who owns this repo, and is anybody home" from the graph, without collapsing any of the
+# axes that bug depended on collapsing.
+
+async def _repo(actions: Actions, name: str) -> None:
+    """Pre-mint a SoftwareProject, matching test_charter.py's own helper — simulates the
+    graph already having independent evidence this repo is real."""
+    await actions.create_or_find_object("SoftwareProject", f"repo:{name}", "test")
+
+
+async def test_roster_tells_apart_vacant_cold_and_occupied(actions: Actions) -> None:
+    from src.orchestrator.seats import roster
+
+    vacant = await ensure_seat(actions, house="osiris", handle="Rvacant", source="test")
+    cold = await ensure_seat(actions, house="osiris", handle="Rcold", source="test")
+    await actions.create_or_find_object("Agent", "agent:rcold001", "test")
+    await bind_holder(actions, seat_id=cold["seat_id"], agent_id="agent:rcold001")
+    occupied = await ensure_seat(actions, house="osiris", handle="Roccup", source="test")
+    await actions.create_or_find_object("Agent", "agent:rlive001", "test")
+    await bind_holder(actions, seat_id=occupied["seat_id"], agent_id="agent:rlive001")
+    await save_mount(actions.pool, job_dir="/jobs/rlive001", agent_id="agent:rlive001",
+                     project="osiris", cwd="/w/osiris", model="claude-sonnet-5",
+                     session_key=None)
+
+    rows = {r["seat"]: r for r in (await roster(actions.pool))["seats"]}
+    assert rows[vacant["seat_id"]]["occupancy"] == "vacant"
+    assert rows[cold["seat_id"]]["occupancy"] == "cold"
+    assert rows[occupied["seat_id"]]["occupancy"] == "occupied"
+
+
+async def test_roster_pin_declared_from_a_real_osiris_file(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.seats import roster
+
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "coldspot"\n')
+    seat = await ensure_seat(actions, house="osiris", handle="Rpin1", source="test",
+                             anchor_cwd=str(office))
+
+    rows = {r["seat"]: r for r in (await roster(actions.pool))["seats"]}
+    row = rows[seat["seat_id"]]
+    assert row["pin"] == {"declared": "coldspot", "state": "declared",
+                          "path": None, "error": None}
+    assert row["office_exists"] is True
+
+
+async def test_roster_pin_unset_when_osiris_file_never_declares_project(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.seats import roster
+
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('model = "claude-fable-5"\n')
+    seat = await ensure_seat(actions, house="osiris", handle="Rpin2", source="test",
+                             anchor_cwd=str(office))
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["pin"]["state"] == "unset"
+    assert row["pin"]["declared"] is None
+
+
+async def test_roster_pin_unreadable_on_malformed_toml(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.seats import roster
+
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project: "brokentoml"\n')  # colon, not `=` — bad TOML
+    seat = await ensure_seat(actions, house="osiris", handle="Rpin3", source="test",
+                             anchor_cwd=str(office))
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["pin"]["state"] == "unreadable"
+    assert row["pin"]["error"] is not None
+
+
+async def test_roster_pin_is_no_office_with_no_anchor_cwd(actions: Actions) -> None:
+    from src.orchestrator.seats import roster
+
+    seat = await ensure_seat(actions, house="osiris", handle="Rpin4", source="test")
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["pin"]["state"] == "no-office"
+    assert row["office_exists"] is None
+
+
+async def test_roster_office_exists_is_false_for_a_vanished_path(actions: Actions) -> None:
+    from src.orchestrator.seats import roster
+
+    seat = await ensure_seat(actions, house="osiris", handle="Rpin5", source="test",
+                             anchor_cwd="/nonexistent/office/path/for/this/test")
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["office_exists"] is False
+
+
+async def test_roster_reports_chartered_repos_from_charter_of(actions: Actions) -> None:
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import roster
+
+    await _repo(actions, "gestalt")
+    seat = await ensure_seat(actions, house="osiris", handle="Rchart1", source="test")
+    await set_charter(actions, seat["seat_id"], ["gestalt"], actor="test")
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["chartered_repos"] == ["gestalt"]
+
+
+async def test_roster_live_cwd_only_populated_when_occupied(actions: Actions) -> None:
+    from src.orchestrator.seats import roster
+
+    cold = await ensure_seat(actions, house="osiris", handle="Rlive1", source="test")
+    await actions.create_or_find_object("Agent", "agent:rlv-cold", "test")
+    await bind_holder(actions, seat_id=cold["seat_id"], agent_id="agent:rlv-cold")
+    occupied = await ensure_seat(actions, house="osiris", handle="Rlive2", source="test")
+    await actions.create_or_find_object("Agent", "agent:rlv-live", "test")
+    await bind_holder(actions, seat_id=occupied["seat_id"], agent_id="agent:rlv-live")
+    await save_mount(actions.pool, job_dir="/jobs/rlv-live", agent_id="agent:rlv-live",
+                     project="osiris", cwd="/actual/live/cwd", model="claude-sonnet-5",
+                     session_key=None)
+
+    rows = {r["seat"]: r for r in (await roster(actions.pool))["seats"]}
+    assert rows[cold["seat_id"]]["live_cwd"] is None
+    assert rows[occupied["seat_id"]]["live_cwd"] == "/actual/live/cwd"
+
+
+async def test_roster_repo_lookup_single_match_via_charter(actions: Actions) -> None:
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import roster
+
+    await _repo(actions, "sutra")
+    seat = await ensure_seat(actions, house="alfred", handle="Rlk1", source="test")
+    await set_charter(actions, seat["seat_id"], ["sutra"], actor="test")
+
+    out = await roster(actions.pool, repo="sutra")
+    assert out["agreement"] == "single-match"
+    assert out["matches"] == [{"seat": seat["seat_id"], "handle": "Rlk1",
+                               "occupancy": "vacant", "holder": None, "via": ["charter"]}]
+
+
+async def test_roster_repo_lookup_single_match_via_pin(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.seats import roster
+
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "phanspeed"\n')
+    await ensure_seat(actions, house="alfred", handle="Rlk2", source="test",
+                      anchor_cwd=str(office))
+
+    out = await roster(actions.pool, repo="phanspeed")
+    assert out["agreement"] == "single-match"
+    assert out["matches"][0]["via"] == ["pin"]
+
+
+async def test_roster_repo_lookup_conflict_when_charter_and_pin_disagree(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The exact shape of Alfred's incident, generalized: two independent signals naming
+    different seats for the same repo must come back as BOTH, never silently one."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import roster
+
+    await _repo(actions, "mudra")
+    charter_seat = await ensure_seat(actions, house="alfred", handle="Rlk3a", source="test")
+    await set_charter(actions, charter_seat["seat_id"], ["mudra"], actor="test")
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "mudra"\n')
+    pin_seat = await ensure_seat(actions, house="alfred", handle="Rlk3b", source="test",
+                                 anchor_cwd=str(office))
+
+    out = await roster(actions.pool, repo="mudra")
+    assert out["agreement"] == "conflict"
+    seats_found = {m["seat"] for m in out["matches"]}
+    assert seats_found == {charter_seat["seat_id"], pin_seat["seat_id"]}
+
+
+async def test_roster_repo_lookup_no_match_is_not_no_owner(actions: Actions) -> None:
+    from src.orchestrator.seats import roster
+
+    out = await roster(actions.pool, repo="never-declared-anywhere")
+    assert out["agreement"] == "no-match"
+    assert out["matches"] == []
+    assert any("not that the repo has no owner" in c for c in out["caveats"])
+
+
+async def test_roster_always_returns_caveats(actions: Actions) -> None:
+    from src.orchestrator.seats import roster
+
+    out = await roster(actions.pool)
+    assert out["caveats"], (
+        "a roster with no stated blind spots is the exact failure mode it exists to avoid")
+    assert any("canonical" in c for c in out["caveats"])
+
+
 # ═══ REACHABILITY (ruling d739d486) — a TRUTHFUL "can I reach this lineage right now?" ═════
 # Ra's clean repro: a mail send-receipt refused a fresh successor ("no resumable session —
 # never handed to a fresh twin") while the daemon's own job_for on the same lineage held a

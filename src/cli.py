@@ -805,6 +805,23 @@ async def cmd_fleet(*, full: bool) -> int:
     return 0
 
 
+# --- roster ------------------------------------------------------------------------------------
+
+async def cmd_roster(*, repo: str | None) -> int:
+    import json
+
+    from src.orchestrator.mcp_client import call_mcp_tool
+
+    url = await _mcp_url()
+    result = await call_mcp_tool(url, "roster", {"repo": repo})
+    if isinstance(result, str):
+        print(f"osiris roster: {result} — is osiris-mcp running? "
+              "(systemctl --user status osiris-mcp)", file=sys.stderr)
+        return 1
+    print(json.dumps(result, indent=2, default=str))
+    return 0
+
+
 # --- deploy ----------------------------------------------------------------------------------
 
 DEPLOY_UNITS = ("osiris-mcp", "osiris-worker", "osiris-console")
@@ -1977,6 +1994,15 @@ def _build_parser() -> argparse.ArgumentParser:
                              epilog="example: osiris fleet\nexample: osiris fleet --full")
     p_fleet.add_argument("--full", action="store_true")
 
+    p_roster = sub.add_parser("roster", description=_d(
+        "which seat owns a repo, and is anybody home — the same roster() the MCP tool "
+        "answers, called over the wire. Without --repo: every active seat's occupancy "
+        "(vacant/occupied/cold — cold is NOT vacant), charter, and .osiris pin. With "
+        "--repo: which seat's charter or pin names it, flagged if they disagree"),
+        epilog="example: osiris roster\nexample: osiris roster --repo coldspot")
+    p_roster.add_argument("--repo", default=None,
+                          help="reverse-lookup: which seat owns this repo")
+
     p_migrate = sub.add_parser("migrate", description=_d(
         "env-correct `alembic upgrade head` (--check "
                                            "reports without applying)"),
@@ -2200,6 +2226,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_launch(args.handle, model=args.model, debug=args.debug))
     if args.command == "fleet":
         return asyncio.run(cmd_fleet(full=args.full))
+    if args.command == "roster":
+        return asyncio.run(cmd_roster(repo=args.repo))
     if args.command == "migrate":
         return asyncio.run(cmd_migrate(check=args.check))
     if args.command == "deploy":
