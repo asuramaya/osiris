@@ -15,6 +15,7 @@ import pytest
 from src.actions.core import Actions
 from src.cli import (
     DEPLOY_UNITS,
+    _collapse_resume_log,
     _composition_gaps,
     _find_repo_root,
     _wait_for_health,
@@ -116,6 +117,51 @@ def test_resolve_model_none_when_nothing_is_set() -> None:
 def test_resolve_model_treats_empty_strings_as_unset() -> None:
     """An empty-string seat stamp (never asserted) must fall through, not win as ''."""
     assert resolve_model("", "", "claude-haiku-4-5") == "claude-haiku-4-5"
+
+
+def test_collapse_resume_log_passes_through_all_distinct_entries() -> None:
+    log = ["gen 3: minted but never mounted, no session to check",
+           "gen 2 (session aaaaaaaa, 2MB): resumable, 1 hop(s) back"]
+    assert _collapse_resume_log(log) == "; ".join(log)
+
+
+def test_collapse_resume_log_collapses_a_run_sharing_one_session() -> None:
+    """#153 live specimen: several generations sharing a session must report ONCE,
+    naming the generation range and a repeat count, not once per generation."""
+    log = ["gen 28 (session 4d9c6a03, 1MB): NOT resumable — over the ceiling",
+           "gen 27 (session 4d9c6a03, 1MB): NOT resumable — over the ceiling"]
+    assert (_collapse_resume_log(log) ==
+            "gens 27-28 (session 4d9c6a03, 1MB): NOT resumable — over the ceiling (2x)")
+
+
+def test_collapse_resume_log_ranks_distinct_entries_above_collapsed_repeats() -> None:
+    """The Thoth msg 3802 shape: two sessions each repeated across generations, then the
+    one line that actually matters (a crossed-registry refusal). The refusal must lead,
+    not sit lost after a wall of repeats."""
+    log = [
+        "gen 28 (session 4d9c6a03, 1MB): NOT resumable — over the ceiling",
+        "gen 27 (session 4d9c6a03, 1MB): NOT resumable — over the ceiling",
+        "gen 25 (session 65f67b32, 1MB): NOT resumable — over the ceiling",
+        "gen 24 (session 65f67b32, 1MB): NOT resumable — over the ceiling",
+        "gen 23 (session 65f67b32, 1MB): NOT resumable — over the ceiling",
+        "gen 22 (session 65f67b32, 1MB): NOT resumable — over the ceiling",
+        "gen 21 (session 03a4a2d5, 1MB): resumable, 6 hop(s) back",
+        "crossed-registry guard refused it: the registry's door for this addressee leads "
+        "to a session whose own signed testimony names a different mind",
+    ]
+    collapsed = _collapse_resume_log(log)
+    parts = collapsed.split("; ")
+    assert parts[0] == "gen 21 (session 03a4a2d5, 1MB): resumable, 6 hop(s) back"
+    assert parts[1].startswith("crossed-registry guard refused it:")
+    assert parts[2] == ("gens 27-28 (session 4d9c6a03, 1MB): NOT resumable — over the "
+                        "ceiling (2x)")
+    assert parts[3] == ("gens 22-25 (session 65f67b32, 1MB): NOT resumable — over the "
+                        "ceiling (4x)")
+    assert len(parts) == 4
+
+
+def test_collapse_resume_log_empty_is_empty() -> None:
+    assert _collapse_resume_log([]) == ""
 
 
 # --- cmd_attach: fake manager, no real daemon ---------------------------------------------------
