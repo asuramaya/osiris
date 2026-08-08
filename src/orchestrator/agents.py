@@ -1563,6 +1563,21 @@ async def mint_heir(
     ancestor_seat = await held_seat(actions.pool, ancestor_id)
     house = (ancestor_seat["house"] if ancestor_seat and ancestor_seat.get("house")
             else await house_of(actions.pool, ancestor_id))
+    # THE FALLBACK RETIRES ONCE A CHARTER EXISTS (task #143, decision 4607637a — resolving
+    # bac81acd): works_in means exactly ONE thing now, the session's live/current project;
+    # the seat's durable role-house lives on `governs` (re-keyed onto the Seat itself,
+    # ruling 1db1ff41), not on this edge. `governs` is NOT written here to replace it —
+    # set_charter declares the WHOLE charter each call ("these are the repos this seat
+    # rules now, not an increment"), so auto-firing it from every mint with just `house`
+    # would silently HEAL AWAY the rest of a real multi-repo charter (alfred's is six
+    # repos, charter.py's own example) the moment his lineage next compacted. charter_of
+    # is read-only and additive-safe: once a seat has declared ANY charter, this fallback
+    # has nothing left to do (governs already durably answers "which house"), so it stops
+    # firing for that seat; a seat that has never declared one keeps today's behavior
+    # unchanged (charter_of's own docs: "works_in still names its home" until it does).
+    from src.orchestrator.charter import charter_of
+    chartered = (bool(await charter_of(actions.pool, ancestor_seat["seat_id"]))
+                if ancestor_seat else False)
     # THE MINT_HEIR EDGE LEAK, CLOSED (thread 20af2c95, measured 906 of 6,245 fleet-wide,
     # 2026-08-03): mint_heir minted a fresh works_in edge for the heir below but NEVER
     # touched the ancestor's own — so every past generation of a lineage that ever
@@ -1580,8 +1595,10 @@ async def mint_heir(
     # timestamp is WHY the duplicate lands byte-identical rather than merely close. `house`
     # is only ever the sole source of truth for the heir's project when nothing else is:
     # skip it the moment either move_agent_project_links found something live to carry
-    # forward, or the caller already knows a fresher project is coming right behind it.
-    if house and not moved and not upcoming_project:
+    # forward, or the caller already knows a fresher project is coming right behind it —
+    # or (task #143) the seat has since declared a charter, so `house` is stale legacy
+    # inference and governs is the fact of record instead.
+    if house and not moved and not upcoming_project and not chartered:
         await actions.assert_property(a, "project", house, heir, now, _CONF, evidence_class=_EC)
         proj = await actions.create_or_find_object("SoftwareProject", f"repo:{house}", heir)
         await _link_once(actions, a, proj, "works_in", heir, now)

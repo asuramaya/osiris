@@ -1344,6 +1344,89 @@ async def test_mint_heir_skips_the_house_relink_when_a_fresher_project_is_alread
     assert stamped is None, "no house-derived 'project' stamp either — same deferral"
 
 
+# ═══ task #143 (decision 4607637a, resolving bac81acd): works_in narrows to ONE meaning —
+# the session's live/current project — and the seat's durable role-house lives on `governs`
+# instead. The house-relink fallback above is legacy inference; once a seat has declared a
+# real charter, governs already answers "which house" and the fallback has nothing left to
+# do. It is NOT redirected to write governs itself: set_charter replaces the WHOLE charter
+# each call, so auto-firing it here with just `house` would heal away the rest of a real
+# multi-repo charter the moment the lineage next compacted. ═══
+
+
+async def test_mint_heir_skips_the_house_relink_once_the_seat_has_declared_a_charter(
+    actions: Actions,
+) -> None:
+    """THE FIX: a seat that has declared ANY charter no longer gets a house-derived
+    works_in edge on mint — governs is the fact of record now, and re-stamping works_in
+    from `house` would be exactly the stale-role-meaning leak task #143 exists to close."""
+    from src.orchestrator.agents import claim_name, mint_heir
+    from src.orchestrator.charter import charter_of, set_charter
+    from src.orchestrator.seats import held_seat
+
+    now = datetime.now(UTC)
+    ancestor_id = "agent:chartered01"
+    a = await actions.create_or_find_object("Agent", ancestor_id, "test")
+    await actions.assert_property(a, "project", "osiris", "test", now, 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    claimed = await claim_name(actions, ancestor_id, "Chartered", source="test")
+    assert claimed.get("error") is None  # seat's derived house now reads 'osiris'
+
+    seat = await held_seat(actions.pool, ancestor_id)
+    assert seat is not None
+    # a DIFFERENT repo than `house` — proves this is charter-existence gating, not a
+    # value match, and doubles as the reason auto-writing governs here would be unsafe:
+    # set_charter's own call is never made by this fix, so this repo is untouched by it
+    await actions.create_or_find_object("SoftwareProject", "repo:bytebye", "test")
+    await set_charter(actions, seat["seat_id"], ["bytebye"], actor="agent:steward")
+
+    heir, heir_oid = await mint_heir(actions, ancestor_id, a, because="compaction",
+                                     succession=None)
+
+    live = await actions.pool.fetch(
+        "SELECT t.canonical FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='works_in' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", heir_oid)
+    assert live == [], "chartered — the house-relink must not fire onto works_in at all"
+    stamped = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='project' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        heir_oid)
+    assert stamped is None, "no house-derived 'project' stamp either — governs speaks now"
+    # the charter itself must be untouched — this fix never calls set_charter
+    assert await charter_of(actions.pool, seat["seat_id"]) == ["bytebye"]
+
+
+async def test_mint_heir_still_relinks_the_house_when_the_seat_has_no_charter(
+    actions: Actions,
+) -> None:
+    """THE REFUSAL, TESTED NOT JUST THE SUCCESS (577988ed still governs — this sits on the
+    succession path every seat traverses): a seat that has NEVER declared a charter must
+    keep today's behavior exactly as it was. charter_of's own docs say it plainly — 'works_in
+    still names its home' until a charter exists — so the gate must default to firing, not
+    to silence, or a majority of seats (undeclared, per ruling 5's own count) would go blind
+    on their role-house with no replacement fact anywhere in the graph."""
+    from src.orchestrator.agents import claim_name, mint_heir
+
+    now = datetime.now(UTC)
+    ancestor_id = "agent:uncharted01"
+    a = await actions.create_or_find_object("Agent", ancestor_id, "test")
+    await actions.assert_property(a, "project", "osiris", "test", now, 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    claimed = await claim_name(actions, ancestor_id, "Uncharted", source="test")
+    assert claimed.get("error") is None  # a seat exists, but no charter is ever declared
+
+    heir, heir_oid = await mint_heir(actions, ancestor_id, a, because="compaction",
+                                     succession=None)
+
+    live = await actions.pool.fetchval(
+        "SELECT t.canonical FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='works_in' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", heir_oid)
+    assert live == "repo:osiris", (
+        "unchartered — the legacy house-relink must still fire, unchanged, or an "
+        "undeclared seat's role-house silently vanishes with nothing to replace it")
+
+
 async def test_register_agent_mint_does_not_duplicate_works_in_on_a_stale_house(
     actions: Actions,
 ) -> None:
