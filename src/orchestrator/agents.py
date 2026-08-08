@@ -2158,8 +2158,33 @@ async def register_agent(
                                       evidence_class=_EC)
         proj = await actions.create_or_find_object(
             "SoftwareProject", f"repo:{identity.project}", src)
-        await actions.assert_property(proj, "name", identity.project, src, now, _CONF,
-                                      evidence_class=_EC)
+        # THE PROJECT-NAME CLOBBER (task #137/#152, Thoth DM 3801): this used to reassert
+        # `name` from the caller's own pin/identity.project UNCONDITIONALLY, at the SAME
+        # self_declared confidence a deliberate rename_project/correct_project_name write
+        # uses — current_assertions' tie-break (confidence DESC, observed_at DESC) then
+        # falls through to pure recency, so any later, uninformed mount silently overturns
+        # an earlier, reasoned rename. LIVE, MEASURED: repo:xxit's declared name
+        # "handlingtheloop" (decision 8766acd7, 2026-07-31/08-02) was reverted to "xxit"
+        # by five ordinary metron/deckard mounts between 2026-08-07 and 2026-08-08 —
+        # the byebyte disease (9550e980) recurring through a far more common trigger than
+        # disk-census: this line, on every mount of a seat with a stale pin. FIX: only
+        # write at full confidence when there is no existing declared name yet, or the
+        # difference is case/whitespace-only (the already-delegated-safe exception,
+        # ruling 1db1ff41 / decision 8cf283f4). A genuine difference is never silently
+        # dropped — still recorded, so nothing is hidden from history or from
+        # project_identity_evidence's own audit — but at DERIVED-tier confidence, so a
+        # routine, uninformed mount can never outrank a declared rename on recency alone.
+        existing_name = await actions.pool.fetchval(
+            "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+            "AND name='name' ORDER BY confidence DESC, observed_at DESC LIMIT 1", proj)
+        if (existing_name is None
+                or existing_name.strip().casefold() == identity.project.strip().casefold()):
+            await actions.assert_property(proj, "name", identity.project, src, now, _CONF,
+                                          evidence_class=_EC)
+        else:
+            do = EvidenceClass.DERIVED
+            await actions.assert_property(proj, "name", identity.project, src, now,
+                                          confidence_for(do), evidence_class=do.value)
         await _link_once(actions, a, proj, "works_in", src, now)
     if identity.cwd:  # the repo path — lets the trigger-hook resolve a project → where to wake
         await actions.assert_property(a, "cwd", identity.cwd, src, now, _CONF, evidence_class=_EC)
