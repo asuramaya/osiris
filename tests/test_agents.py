@@ -18,7 +18,12 @@ from src.actions.core import Actions
 from src.ingest.harness import ModelReading
 from src.ingest.harness.claude_jsonl import ClaudeJsonlAdapter
 from src.ingest.transcript_store import _reading_from_turns
-from src.orchestrator.agents import AgentIdentity, register_agent, resolve_identity
+from src.orchestrator.agents import (
+    AgentIdentity,
+    _resolve_or_mint_project,
+    register_agent,
+    resolve_identity,
+)
 from src.orchestrator.capture import open_thread, record_decision
 from src.parsers.base import EvidenceClass
 
@@ -154,7 +159,85 @@ async def test_register_agent_mount_still_heals_case_whitespace_drift(actions: A
         proj)
     assert row["v"] == "RAMstein"
     assert row["confidence"] > 0.8  # full self_declared confidence, not derived-tier
-    assert row["confidence"] > 0.8  # full self_declared confidence, not derived-tier
+
+
+# --- _resolve_or_mint_project — a case-differing pin must FIND the existing SoftwareProject,
+# never mint a twin (thread 69911d0c, Thoth dispatch 3824). NEVER lowercase-normalizes:
+# cassandra's own "Like-Us" is genuine upstream truth, so this is about matching
+# case-insensitively, not about which casing wins. Measured live: till carries exactly one
+# pre-existing twin today (repo:RAMstein / repo:ramstein) out of 81 SoftwareProjects
+# fleet-wide — this guards both the fix (no NEW twins) and the refusal (no over-merge, and a
+# pre-existing twin is never silently arbitrated by a mint-time guess). ---
+
+
+async def test_resolve_or_mint_project_finds_existing_object_case_insensitively(
+    actions: Actions,
+) -> None:
+    first = await _resolve_or_mint_project(actions, "handlingtheloop", "test")
+    second = await _resolve_or_mint_project(actions, "HandlingTheLoop", "test")
+    assert first == second
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' "
+        "AND lower(canonical) = lower('repo:handlingtheloop')") == 1
+
+
+async def test_resolve_or_mint_project_never_lowercase_normalizes(actions: Actions) -> None:
+    """cassandra's own counter-example: the FIRST case seen wins the canonical, whichever
+    it is — this function must never coerce it to lowercase on its own authority."""
+    proj = await _resolve_or_mint_project(actions, "Like-Us", "test")
+    canonical = await actions.pool.fetchval("SELECT canonical FROM objects WHERE id=$1", proj)
+    assert canonical == "repo:Like-Us"
+
+
+async def test_resolve_or_mint_project_lets_a_genuinely_different_project_mint_separately(
+    actions: Actions,
+) -> None:
+    """The refusal case Thoth asked for explicitly: over-merging two REAL, distinct
+    projects would be a worse bug than the one being fixed."""
+    a = await _resolve_or_mint_project(actions, "conker", "test")
+    b = await _resolve_or_mint_project(actions, "conker-detect", "test")
+    assert a != b
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' "
+        "AND canonical IN ('repo:conker', 'repo:conker-detect')") == 2
+
+
+async def test_resolve_or_mint_project_never_arbitrates_a_pre_existing_twin(
+    actions: Actions,
+) -> None:
+    """till's own live shape: TWO objects already exist for one casefold-equal label
+    (a pre-existing twin, not created by this function). This must never pick a winner
+    (that's fold_project's job, thread 689d22a2) and must never mint a THIRD."""
+    a = await actions.create_or_find_object("SoftwareProject", "repo:RAMstein", "test")
+    b = await actions.create_or_find_object("SoftwareProject", "repo:ramstein", "test")
+    assert a != b
+    got = await _resolve_or_mint_project(actions, "RAMstein", "test")
+    assert got == a  # the literal, exact match — unchanged, pre-existing behavior
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' "
+        "AND lower(canonical) = lower('repo:RAMstein')") == 2  # still exactly 2, never 3
+
+
+async def test_register_agent_mount_with_case_variant_pin_reuses_the_existing_project(
+    actions: Actions,
+) -> None:
+    """The integration-level proof, matching till's own live shape exactly: two seats
+    whose PINS were simply always case-variants of each other (no rename involved at
+    all — rename_project never touches `canonical`, so a renamed object's canonical
+    stays the pre-rename string forever; that is a different scenario from this one).
+    Both mounts must land on ONE SoftwareProject and ONE works_in edge target each —
+    not two objects."""
+    ident1 = resolve_identity(cwd="/w/RAMstein", session="sess-f", model="claude-fable-5")
+    a1 = await register_agent(actions, ident1, actor="analyst:operator")
+    ident2 = resolve_identity(cwd="/w/ramstein", session="sess-g", model="claude-fable-5")
+    a2 = await register_agent(actions, ident2, actor="analyst:operator")
+    proj_ids = await actions.pool.fetch(
+        "SELECT DISTINCT o.id FROM links l JOIN objects o ON o.id=l.to_id "
+        "WHERE l.from_id = ANY($1::uuid[]) AND l.type='works_in'", [a1, a2])
+    assert len(proj_ids) == 1, "a case-variant pin minted a second SoftwareProject object"
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' "
+        "AND lower(canonical) = lower('repo:RAMstein')") == 1
 
 
 async def test_two_agents_are_distinguishable_on_the_same_decision(actions: Actions) -> None:
