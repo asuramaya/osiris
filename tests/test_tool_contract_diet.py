@@ -358,7 +358,20 @@ def _tool_chars(t: Any) -> int:
 # `_measure_tool_contract`, exact total, never rounded and never inferred from the two
 # branches' own numbers (neither of which existed — see above).
 # 135,689 -> 136,661, +972. 101 -> 101 tools, no tool added or removed.
-TOOL_CONTRACT_CEILING_CHARS = 136_661
+#
+# RAISED FOR A GENUINELY NEW TOOL — `roster` (task #140, Seshat, 25bf570): the graph-level
+# "who owns this repo" a coordinator never had. Alfred XIII misrouted work to two different
+# seats in one session because mount()'s LIVE co-agents was the only roster-shaped thing on
+# offer and he read cold as vacant; the authoritative seat->repo map lived only in
+# ~/.osiris/seats/*/.osiris ON DISK, which contradicted our own ad19a779 (the graph must be
+# navigable by cheap MCP calls). roster costs 2,096 chars — the single largest deliberate
+# addition since the ratchet was armed, and worth it.
+#
+# BOTH HALVES OF THE GUARD FIRED THIS TIME, which is the point of having two: the ceiling
+# AND the tool-count assertion below (101 -> 102). A ceiling raise alone would have hidden a
+# tool appearing; the count alone would have hidden docstring growth. Neither is redundant.
+# 136,661 -> 138,757, +2,096. 101 -> 102 tools, exactly one added.
+TOOL_CONTRACT_CEILING_CHARS = 138_757
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -414,6 +427,9 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     read-receipt redesign). Neither author could see the other's branch; this file is again
     the only place the combined surface exists.
     100 -> 101 (2026-08-03, task #128 piece 4): invalidate_works_in — a live agent's own
-    repair door for a duplicate works_in edge, thread 8640a625's own toolkit hole."""
+    repair door for a duplicate works_in edge, thread 8640a625's own toolkit hole.
+    101 -> 102 (2026-08-08, task #140): roster — the graph-level "who owns this repo".
+    A coordinator had no such call, so mount()'s LIVE co-agent list was read as the roster
+    and cold seats read as vacant; two real misroutes followed (Alfred XIII, 2813da48)."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 101
+    assert len(per_tool) == 102
