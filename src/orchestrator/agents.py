@@ -1430,6 +1430,37 @@ async def invalidate_works_in(
             "still_working_in": remaining, "because": because}
 
 
+async def _resolve_or_mint_project(actions: Actions, project: str, actor: str) -> uuid.UUID:
+    """Find-or-create a SoftwareProject CASE-INSENSITIVELY on its bare label (thread
+    69911d0c): both mint_heir and register_agent used to call
+    `create_or_find_object("SoftwareProject", f"repo:{label}", ...)` directly, a LITERAL,
+    case-SENSITIVE canonical lookup — so a case-differing pin (metron's own "xxit" vs an
+    upstream "Xxit", till's "RAMstein" vs "ramstein") did not compete over the `name`
+    property (task #137's own fix, agents.py's `if identity.project:` block), it MINTED A
+    WHOLE SEPARATE OBJECT. Measured live: till carries exactly this twin today —
+    repo:RAMstein (2026-07-14, till's own pin, not even a git checkout) and repo:ramstein
+    (2026-08-03, a real git repo, remote-verified) — 81 active+retired SoftwareProjects
+    fleet-wide, exactly one twin group.
+
+    NEVER lowercase-normalizes — cassandra's own "Like-Us" is genuine upstream truth (the
+    git remote itself is mixed-case), so folding every match onto one canonical CASING
+    would be exactly the wrong fix; this only finds an EXISTING object regardless of case,
+    it never rewrites which case wins.
+
+    Exactly ONE case-insensitive match: reuse it — a genuinely new project is never
+    blocked (zero matches falls through to the ordinary literal create). TWO OR MORE
+    existing matches (a PRE-EXISTING twin, till's own shape): not this function's call to
+    arbitrate which one is "real" — that is fold_project's deliberate, evidence-gated job
+    (thread 689d22a2), not a mint-time guess. Falls through to the literal, unchanged
+    lookup so an already-ambiguous population is never silently collapsed onto a random
+    pick."""
+    matches = await actions.pool.fetch(
+        "SELECT canonical FROM objects WHERE type='SoftwareProject' AND status='active' "
+        "AND lower(canonical) = lower($1)", f"repo:{project}")
+    canonical = matches[0]["canonical"] if len(matches) == 1 else f"repo:{project}"
+    return await actions.create_or_find_object("SoftwareProject", canonical, actor)
+
+
 async def mint_heir(
     actions: Actions, ancestor_id: str, ancestor_oid: uuid.UUID, *,
     because: str, succession: str | None, now: datetime | None = None,
@@ -1600,7 +1631,7 @@ async def mint_heir(
     # inference and governs is the fact of record instead.
     if house and not moved and not upcoming_project and not chartered:
         await actions.assert_property(a, "project", house, heir, now, _CONF, evidence_class=_EC)
-        proj = await actions.create_or_find_object("SoftwareProject", f"repo:{house}", heir)
+        proj = await _resolve_or_mint_project(actions, house, heir)
         await _link_once(actions, a, proj, "works_in", heir, now)
     # SEAT INHERITANCE (phase 2): the heir inherits the ancestor's human name — the seat
     # passes down the lineage, the generation (roman) ticks up. 'Anna' → 'Anna II'.
@@ -2173,8 +2204,7 @@ async def register_agent(
     if identity.project:
         await actions.assert_property(a, "project", identity.project, src, now, _CONF,
                                       evidence_class=_EC)
-        proj = await actions.create_or_find_object(
-            "SoftwareProject", f"repo:{identity.project}", src)
+        proj = await _resolve_or_mint_project(actions, identity.project, src)
         # THE PROJECT-NAME CLOBBER (task #137/#152, Thoth DM 3801): this used to reassert
         # `name` from the caller's own pin/identity.project UNCONDITIONALLY, at the SAME
         # self_declared confidence a deliberate rename_project/correct_project_name write
