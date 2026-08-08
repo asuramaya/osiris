@@ -371,7 +371,15 @@ def _tool_chars(t: Any) -> int:
 # AND the tool-count assertion below (101 -> 102). A ceiling raise alone would have hidden a
 # tool appearing; the count alone would have hidden docstring growth. Neither is redundant.
 # 136,661 -> 138,757, +2,096. 101 -> 102 tools, exactly one added.
-TOOL_CONTRACT_CEILING_CHARS = 138_757
+#
+# RAISED AGAIN, SAME DAY, SECOND NEW TOOL — `wake_preflight` (task #156.4, Imhotep,
+# b325a26): answers WHICH GATES WOULD REFUSE A WAKE *before* the attempt, read-only,
+# reusing dispatch_dm's own gate functions verbatim rather than restating them. Built
+# because the operator's `osiris launch metron` discovered eight refusals only by reading
+# a wall of them afterwards; a pre-flight answer is the difference between a gate and an
+# ambush. Costs 1,028 chars — the cheapest tool added since the ratchet was armed.
+# 138,757 -> 139,785, +1,028. 102 -> 103 tools, exactly one added.
+TOOL_CONTRACT_CEILING_CHARS = 139_785
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -430,6 +438,8 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     repair door for a duplicate works_in edge, thread 8640a625's own toolkit hole.
     101 -> 102 (2026-08-08, task #140): roster — the graph-level "who owns this repo".
     A coordinator had no such call, so mount()'s LIVE co-agent list was read as the roster
-    and cold seats read as vacant; two real misroutes followed (Alfred XIII, 2813da48)."""
+    and cold seats read as vacant; two real misroutes followed (Alfred XIII, 2813da48).
+    102 -> 103 (2026-08-08, task #156.4): wake_preflight — which gates would refuse a wake,
+    asked BEFORE the attempt instead of discovered as a wall of refusals after."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 102
+    assert len(per_tool) == 103
