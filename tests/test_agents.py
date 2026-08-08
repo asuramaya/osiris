@@ -78,6 +78,84 @@ async def test_register_agent_mints_the_org_chart(actions: Actions) -> None:
         "SELECT count(*) FROM links WHERE from_id=$1 AND type='works_in'", a) == 1
 
 
+# --- register_agent must never let a routine mount clobber a DECLARED rename (#137/#152,
+# Thoth DM 3801) — measured live: repo:xxit's declared "handlingtheloop" (decision 8766acd7)
+# was silently reverted to "xxit" by five ordinary metron/deckard mounts, because this write
+# path used to reassert `name` from the caller's own stale pin at the SAME confidence a
+# deliberate rename uses, and current_assertions' tie-break falls through to pure recency. ---
+
+
+async def test_register_agent_mount_never_clobbers_a_declared_rename(actions: Actions) -> None:
+    from src.orchestrator.project_identity import rename_project
+
+    # first mount under the pre-rename label — the ordinary, first-ever-registration path
+    ident = resolve_identity(cwd="/w/xxit", session="sess-a", model="claude-fable-5")
+    a = await register_agent(actions, ident, actor="analyst:operator")
+    row = await actions.pool.fetchrow(
+        "SELECT o.id FROM objects o WHERE o.type='SoftwareProject' AND o.canonical=$1",
+        "repo:xxit")
+    proj = row["id"]
+    assert await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='name'",
+        proj) == "xxit"
+
+    # a deliberate, declared rename lands (rename_project, the graph-only verb)
+    out = await rename_project(actions, project="xxit", new_name="handlingtheloop",
+                               because="operator-approved #110 rename", actor="Thoth")
+    assert out["new_name"] == "handlingtheloop"
+
+    # a LATER, ordinary mount from a seat whose pin was never updated — the metron/deckard
+    # shape — must NOT silently revert the declared name back to "xxit"
+    ident2 = resolve_identity(cwd="/w/xxit", session="sess-b", model="claude-fable-5")
+    await register_agent(actions, ident2, actor="analyst:operator")
+    winning = await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='name' "
+        "ORDER BY confidence DESC, observed_at DESC LIMIT 1", proj)
+    assert winning == "handlingtheloop", (
+        "a routine mount reverted a declared rename — the exact bug this test guards")
+    # the mismatch is still ON THE RECORD, never silently dropped — just outranked
+    assert "xxit" in {r["v"] for r in await actions.pool.fetch(
+        "SELECT value#>>'{}' AS v FROM current_assertions WHERE object_id=$1 AND name='name'",
+        proj)}
+    # and the works_in edge still lands on the SAME (renamed) object either way
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND to_id=$2 AND type='works_in' "
+        "AND (valid_until IS NULL OR valid_until > now())", a, proj) == 1
+
+
+async def test_register_agent_mount_still_heals_case_whitespace_drift(actions: Actions) -> None:
+    """The delegated-safe exception (ruling 1db1ff41/decision 8cf283f4) must keep working:
+    a case-only difference is NOT a genuine rename, so an ordinary mount may still settle
+    it at full confidence — only a REAL rename is protected from being overwritten.
+
+    NOTE: register_agent resolves/creates the SoftwareProject by the LITERAL canonical
+    `repo:{identity.project}` — case-sensitive, so "RAMstein" and "ramstein" pins mint TWO
+    DIFFERENT objects (confirmed live: till's own repo:RAMstein and repo:ramstein are two
+    separate SoftwareProjects today) — a real, separate #137 finding, not this fix's
+    concern. This test exercises the exception the way it can actually fire: some OTHER
+    writer (correct_project_name, a manual assert) case-normalizes the object's `name`
+    property; a later mount from a pin matching the object's own canonical basename must
+    still be free to settle it back at full confidence."""
+    ident = resolve_identity(cwd="/w/RAMstein", session="sess-c", model="claude-fable-5")
+    await register_agent(actions, ident, actor="analyst:operator")
+    proj = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
+        "repo:RAMstein")
+    now = datetime.now(UTC)
+    await actions.assert_property(proj, "name", "ramstein", "correct_project_name:test", now,
+                                  0.9, evidence_class=EvidenceClass.SELF_DECLARED.value)
+
+    ident2 = resolve_identity(cwd="/w/RAMstein", session="sess-e", model="claude-fable-5")
+    await register_agent(actions, ident2, actor="analyst:operator")
+    row = await actions.pool.fetchrow(
+        "SELECT value#>>'{}' AS v, confidence FROM current_assertions "
+        "WHERE object_id=$1 AND name='name' ORDER BY confidence DESC, observed_at DESC LIMIT 1",
+        proj)
+    assert row["v"] == "RAMstein"
+    assert row["confidence"] > 0.8  # full self_declared confidence, not derived-tier
+    assert row["confidence"] > 0.8  # full self_declared confidence, not derived-tier
+
+
 async def test_two_agents_are_distinguishable_on_the_same_decision(actions: Actions) -> None:
     """The whole point: on the shared server, two instances recording the SAME ruling dedup
     to one object but each keeps its OWN provenance — you can see both agreed, and who."""
