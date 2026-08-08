@@ -779,6 +779,55 @@ def read_project_model(cwd: str | None) -> str | None:
     return _read_osiris_key(cwd, "model").value
 
 
+def _write_model_pin_sync(office: Path, model: str) -> bool:
+    """THE SYNCHRONOUS HALF (task #146, operator's own complaint: "my /model confuses
+    everything, it should be authoritative and automatically handle updating .osiris").
+    Writes to the SEAT'S OWN OFFICE specifically — never `identity.cwd` as given, which may
+    be a code worktree or a repo root several directories up the climb (#128) that other
+    seats' sessions also read: a pin write must never become a cross-seat side effect.
+    `_scaffold_office`'s own convention (office/.osiris carrying project AND model together)
+    is preserved, not forked into a second file — reads `project` back out if a pin already
+    exists so this never drops it, then rewrites both keys. Idempotent: returns False
+    (nothing written) when the file already reads exactly this model, so an unchanged
+    /model choice does not churn the disk on every subsequent mount.
+
+    Never called with anything but a harness-OBSERVED model string (`SwapVerdict.to_model`,
+    always a `deliberate` — a WITNESSED /model transition, ruling f2ae6346's own gate) — a
+    bare alias a human might type (ptah's "sonnet") never reaches this function, only what
+    the harness itself reported running. Still refuses a value that cannot be a real model
+    id (empty, or containing a quote/newline that would corrupt the TOML) as a defensive
+    floor, never a validated allowlist — model ids change over time and this file has no
+    business hard-coding them."""
+    if not model or '"' in model or "\n" in model:
+        return False
+    import tomllib
+    pin = office / ".osiris"
+    project: str | None = None
+    if pin.is_file():
+        try:
+            existing = tomllib.loads(pin.read_text())
+        except (OSError, tomllib.TOMLDecodeError, ValueError):
+            existing = {}
+        if existing.get("model") == model:
+            return False  # already correct — no churn
+        project = existing.get("project")
+    office.mkdir(parents=True, exist_ok=True)
+    lines = ([f'project = "{project}"'] if project else []) + [f'model = "{model}"']
+    pin.write_text("\n".join(lines) + "\n")
+    return True
+
+
+async def write_model_pin(seat_handle: str, model: str) -> bool:
+    """THE WRITE SIDE (task #146): update the seat's own `.osiris` pin so it becomes a CACHE
+    of the operator's last /model decision rather than a competing, silently-stale claim —
+    the gap named directly: nothing in this codebase ever wrote the model pin before this;
+    `.osiris`'s `model =` key was read at launch and hand-edited only. Runs on a thread —
+    `_stamp_alive`'s own convention for filesystem I/O inside an async miner/handler."""
+    import asyncio
+    office = _DEFAULT_OFFICE_ROOT / seat_handle.lower()
+    return await asyncio.to_thread(_write_model_pin_sync, office, model)
+
+
 def read_project_pin(cwd: str | None) -> OsirisKeyRead:
     """The FULL `project`-key read behind `read_project_label` — value plus, when a
     `.osiris` file exists but failed to parse/read, the path and error a banner can act on
@@ -2150,7 +2199,15 @@ async def register_agent(
                                 deliberate=identity.model_deliberate)
         await actions.assert_property(a, "model_intent", expected_model, src, now, _CONF,
                                       evidence_class=_EC)
-        if verdict.swapped:
+        if verdict.swapped and not verdict.deliberate:
+            # RE-SCOPED (task #146, operator's own words: "a rug pull ... vs a direct /model
+            # swap on my part is different"): `model_swapped` is the EXACT property the
+            # digest's danger map reads (sessions.py's own miner docstring) — stamping it for
+            # a WITNESSED, deliberate /model is a false positive on that map, indistinguishable
+            # from the harness's silent danger-demotion this property exists to catch. The
+            # confession is for the harness changing the model WITHOUT the operator; an
+            # operator /model is recorded durably below instead (intended_model + the pin),
+            # never as a danger sighting.
             do = EvidenceClass.DIRECT_OBSERVATION
             await actions.assert_property(a, "model_swapped", swap_marker(verdict), src, now,
                                           confidence_for(do), evidence_class=do.value)
@@ -2170,6 +2227,14 @@ async def register_agent(
                 soid = await actions.create_or_find_object("Seat", seat["seat_id"], src)
                 await actions.assert_property(soid, "intended_model", verdict.to_model, src,
                                               now, _CONF, evidence_class=_EC)
+                # THE PIN BECOMES A CACHE, NOT A COMPETING CLAIM (task #146): the graph stamp
+                # above is durable but invisible to `_expected_model`'s FIRST-checked source
+                # (the .osiris file itself) and to a fresh `osiris launch` on a box that never
+                # talks to this graph. Writing the file closes both gaps in one act — no other
+                # reader needs to change, since read_project_model/_expected_model already
+                # check the file before anything else.
+                if seat.get("handle"):
+                    await write_model_pin(str(seat["handle"]), verdict.to_model)
     if identity.project:
         await actions.assert_property(a, "project", identity.project, src, now, _CONF,
                                       evidence_class=_EC)

@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
 from src.actions.core import Actions
 from src.ingest.harness import ModelReading
 from src.ingest.harness.claude_jsonl import ClaudeJsonlAdapter
@@ -384,6 +385,51 @@ def test_read_project_pin_still_stops_at_a_real_repo_root(tmp_path: Path) -> Non
     assert out.error is None and out.path is None
 
 
+async def test_write_model_pin_creates_and_is_idempotent(tmp_path: Path,
+                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unit-level proof of the write helper itself, isolated from register_agent's own
+    plumbing: creates a fresh pin when none exists, updates an existing one in place while
+    preserving `project`, and writes NOTHING on a second call with the same value — the
+    idempotency `_link_once`/set_charter's own callers all rely on, applied to a filesystem
+    write instead of a graph one."""
+    from src.orchestrator import agents as agents_mod
+    from src.orchestrator.agents import write_model_pin
+
+    office_root = tmp_path / "offices"
+    monkeypatch.setattr(agents_mod, "_DEFAULT_OFFICE_ROOT", office_root)
+    pin = office_root / "freshseat" / ".osiris"
+
+    wrote = await write_model_pin("FreshSeat", "claude-sonnet-5")
+    assert wrote is True
+    assert pin.read_text() == 'model = "claude-sonnet-5"\n'
+
+    again = await write_model_pin("FreshSeat", "claude-sonnet-5")
+    assert again is False, "an unchanged value must not churn the disk"
+    assert pin.read_text() == 'model = "claude-sonnet-5"\n'   # byte-identical, not just equal
+
+    changed = await write_model_pin("FreshSeat", "claude-opus-5")
+    assert changed is True
+    assert pin.read_text() == 'model = "claude-opus-5"\n'
+
+
+async def test_write_model_pin_refuses_a_value_that_would_corrupt_the_toml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defensive floor, never a validated allowlist (model ids change; this file has no
+    business hard-coding them) — but a value containing a quote or newline would corrupt
+    the TOML it's embedded in, so those are refused outright rather than trusted."""
+    from src.orchestrator import agents as agents_mod
+    from src.orchestrator.agents import write_model_pin
+
+    office_root = tmp_path / "offices"
+    monkeypatch.setattr(agents_mod, "_DEFAULT_OFFICE_ROOT", office_root)
+
+    assert await write_model_pin("Injecto", 'claude"; evil = "yes') is False
+    assert await write_model_pin("Injecto", "claude-sonnet-5\nmalicious = true") is False
+    assert await write_model_pin("Injecto", "") is False
+    assert not (office_root / "injecto" / ".osiris").exists()
+
+
 def test_resolve_identity_resolves_the_governed_project_from_a_seat_worktree(
     tmp_path: Path,
 ) -> None:
@@ -660,6 +706,122 @@ async def test_an_unexplained_swap_never_overwrites_the_standing_choice(
     await register_agent(actions, ident, actor="analyst:operator", expected_model="claude-fable-5")
 
     assert await _seat_intended_model(actions, seat["seat_id"]) == "claude-sonnet-5"  # untouched
+
+
+# ═══ task #146 (/model MUST BE AUTHORITATIVE, the operator's own complaint): the graph-side
+# intended_model stamp above already existed, but nothing durable ever fed back into the
+# .osiris file itself — the ONE thing launch()'s own precedence and the swap-divergence
+# banner both actually read first. And model_swapped fired for a WITNESSED, deliberate
+# /model exactly like a harness rug-pull — a false positive on the danger map the property
+# exists to serve. Both close here. ═══
+
+
+async def test_a_deliberate_swap_writes_the_seats_osiris_pin(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE WRITE (task #146): the operator's own /model command on the record now updates
+    the seat's `.osiris` file, not just the graph's intended_model stamp — the pin becomes a
+    CACHE of the decision instead of a hand-edited, permanently-stale competing claim.
+    Existing `project` in the pin must survive untouched — this writes model, never invents
+    a project the seat never declared."""
+    from src.orchestrator import agents as agents_mod
+    from src.orchestrator.agents import claim_name
+    from src.orchestrator.seats import held_seat
+
+    office_root = tmp_path / "offices"
+    monkeypatch.setattr(agents_mod, "_DEFAULT_OFFICE_ROOT", office_root)
+
+    proj = tmp_path / "-home-x-code-osiris"
+    proj.mkdir()
+    lines = [
+        json.dumps({"type": "assistant", "message": {"model": "claude-fable-5", "content": []}}),
+        json.dumps({"type": "user", "message": {
+            "role": "user", "content": "<command-name>/model</command-name>\n"
+                                       "<command-message>model</command-message>"}}),
+        json.dumps({"type": "assistant",
+                    "message": {"model": "claude-haiku-4-5", "content": []}}),
+    ]
+    (proj / "deadbeef-1111-2222-3333-444455556666.jsonl").write_text("\n".join(lines) + "\n")
+    ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef",
+                             store_reading=_store_reading(tmp_path, "/j/jobs/deadbeef"))
+    assert ident.model_deliberate is True
+
+    await register_agent(actions, ident, actor="analyst:operator")
+    await claim_name(actions, ident.agent_id, "Pinwriter", source=ident.agent_id)
+    seat = await held_seat(actions.pool, ident.agent_id)
+    assert seat is not None
+    pin = office_root / str(seat["handle"]).lower() / ".osiris"
+    pin.parent.mkdir(parents=True)
+    pin.write_text('project = "osiris"\n')  # a real pin already declares the project
+
+    await register_agent(actions, ident, actor="analyst:operator", expected_model="claude-fable-5")
+
+    text = pin.read_text()
+    assert 'model = "claude-haiku-4-5"' in text
+    assert 'project = "osiris"' in text, "an existing project declaration must survive"
+
+
+async def test_an_unexplained_swap_never_touches_the_pin_file(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE REFUSAL, TESTED NOT JUST THE SUCCESS (577988ed still governs — this sits on the
+    mount path every seat traverses): a harness rug-pull (no /model on the record) must
+    never touch the pin file, exactly as it must never overwrite the graph's intended_model
+    (the sibling test above it). No pin, before or after — the fallback writes nothing."""
+    from src.orchestrator import agents as agents_mod
+    from src.orchestrator.agents import claim_name
+    from src.orchestrator.seats import held_seat
+
+    office_root = tmp_path / "offices"
+    monkeypatch.setattr(agents_mod, "_DEFAULT_OFFICE_ROOT", office_root)
+
+    proj = tmp_path / "-home-x-code-osiris"
+    proj.mkdir()
+    _transcript_lines(proj, "claude-fable-5", "claude-opus-4-8")   # no /model command
+    ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef",
+                             store_reading=_store_reading(tmp_path, "/j/jobs/deadbeef"))
+    assert ident.model_deliberate is False
+
+    await register_agent(actions, ident, actor="analyst:operator")
+    await claim_name(actions, ident.agent_id, "Rugpuller2", source=ident.agent_id)
+    seat = await held_seat(actions.pool, ident.agent_id)
+    assert seat is not None
+
+    await register_agent(actions, ident, actor="analyst:operator", expected_model="claude-fable-5")
+
+    pin = office_root / str(seat["handle"]).lower() / ".osiris"
+    assert not pin.exists(), "a harness swap must never mint or touch the seat's pin"
+
+
+async def test_a_deliberate_swap_does_not_stamp_model_swapped(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """RE-SCOPED (task #146, the operator's own words: "a rug pull ... vs a direct /model
+    swap on my part is different"): model_swapped is the digest's danger-map signal — a
+    WITNESSED, deliberate /model must never trip it. The choice is recorded durably
+    elsewhere (intended_model + the pin); it is not a danger sighting."""
+    proj = tmp_path / "-home-x-code-osiris"
+    proj.mkdir()
+    lines = [
+        json.dumps({"type": "assistant", "message": {"model": "claude-fable-5", "content": []}}),
+        json.dumps({"type": "user", "message": {
+            "role": "user", "content": "<command-name>/model</command-name>\n"
+                                       "<command-message>model</command-message>"}}),
+        json.dumps({"type": "assistant",
+                    "message": {"model": "claude-haiku-4-5", "content": []}}),
+    ]
+    (proj / "deadbeef-1111-2222-3333-444455556666.jsonl").write_text("\n".join(lines) + "\n")
+    ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef",
+                             store_reading=_store_reading(tmp_path, "/j/jobs/deadbeef"))
+    assert ident.model_deliberate is True
+
+    a = await register_agent(actions, ident, actor="analyst:operator",
+                             expected_model="claude-fable-5")
+
+    swapped = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='model_swapped'", a)
+    assert swapped is None, "a witnessed, deliberate /model must never read as a rug-pull"
 
 
 def _anchored(model: str, *, history: tuple[str, ...] | None = None) -> AgentIdentity:
