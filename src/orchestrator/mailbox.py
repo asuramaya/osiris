@@ -228,6 +228,15 @@ async def send_message(
     resolved target carries no claimed handle — no message row is written; the ValueError
     names what was tried and what it resolved to.
 
+    REPLY ROUTING FOLLOWS THE LINEAGE (Thoth msg 3880/3882, 2026-08-09): an IMPLICIT
+    reply_to address (no explicit to_agent=/to=) resolves to the referenced message's
+    sender's/recipient's current LINEAGE HEAD, not the raw id stamped on that older
+    message — measured live, 90 of 1727 reply DMs across a month had already been
+    superseded by the time the reply was sent. `redirected_from` names the pre-redirect id
+    when this fires, never silent. This does NOT apply to explicit to_agent=<raw id>
+    addressing, which keeps the grave rule above unchanged — naming a specific generation's
+    id by hand remains an act of intent reply_to's implicit routing never has.
+
     THE ADDRESSING REFUSAL (rulings 1a64ae9a/aee67e6d, DM 2360 — John XV/XVI, resolved
     live): a DM addressed by NAME whose unique Seat exists but whose only active holder is
     marked retired/false_mint used to fall through resolve_seat's own un-seated-lineage
@@ -302,6 +311,9 @@ async def send_message(
         if resolved["agent"] is None:
             raise ValueError(f"no agent named '{to_agent}' — check the name or DM by agent id")
         to_agent = resolved.get("seat_id") or resolved["agent"]
+    via_reply_routing = False  # set True only where `to_a` is copied from `ref`, below —
+    # never for explicit to_agent=/to=, whose staleness stays an act of intent (see the
+    # REPLY ROUTING FOLLOWS THE LINEAGE comment further down)
     if to_agent or to_project:  # explicit addressing wins
         to_a = to_agent
         to_p = _norm(to_project) if to_project else None
@@ -330,6 +342,7 @@ async def send_message(
                     f"no inbox() call would ever see this broadcast{hint}")
     elif ref is not None and await _addressed_to_me(pool, ref["to_agent"], from_agent):
         to_a, to_p = ref["from_agent"], ref["from_project"]  # a DM to me → DM back to its sender
+        via_reply_routing = True
     elif (ref is not None and ref["to_agent"] is not None
           and await _addressed_to_me(pool, ref["from_agent"], from_agent)):
         # REPLYING TO MY OWN DM CONTINUES THAT SAME DM (thread 7d670c74, 2026-08-03): `ref`
@@ -344,6 +357,7 @@ async def send_message(
         # watching). Continuing the SAME DM is the only sensible reading of "replying to my
         # own outgoing message" when that message was itself a DM.
         to_a, to_p = ref["to_agent"], ref["to_project"]
+        via_reply_routing = True
     elif ref is not None:  # a broadcast/own message → project routing (supersession lane)
         own = from_project and _norm(ref["from_project"] or "") == _norm(from_project)
         if own:
@@ -398,6 +412,38 @@ async def send_message(
         canon = await canonical_agent(pool, to_a)
         if canon != to_a:
             folded_from, to_a = to_a, await living_head(pool, canon)
+    # REPLY ROUTING FOLLOWS THE LINEAGE, NOT THE STAMP (Thoth msg 3880/3882, 2026-08-09):
+    # the two `via_reply_routing` branches above used to copy ref["from_agent"]/
+    # ref["to_agent"] VERBATIM — the raw id stamped on the REFERENCED message at ITS send
+    # time. That id can be superseded (mint_heir / a compaction succession) between the
+    # original message and this reply — measured live against fleet_messages: 90 of 1727
+    # reply DMs (5.2%, msg 188 through msg 3884, spanning the whole month, not a papercut)
+    # landed on a `to_agent` already superseded before the reply was even sent.
+    # `lineage_head` is computed a few lines below for every agent-id `to_a` regardless —
+    # it was ALWAYS being fetched, for the eligibility gate and the receipt echo, just
+    # never fed back into what actually got WRITTEN as the delivery target. Scoped to
+    # `via_reply_routing` ONLY: explicit to_agent=<raw id> addressing keeps its existing,
+    # deliberately-unredirected law (test_a_raw_id_send_reveals_a_stale_generation_via_
+    # lineage_head, tests/test_mailbox.py) — a human who names a specific ancestor id may
+    # mean THAT generation, an act of intent this function must never second-guess.
+    # reply_to has no such excuse: nobody CHOOSES who a reply goes back to, so "back to
+    # whoever I'm actually talking to now" is the only sensible reading — the same reading
+    # `_addressed_to_me`'s own lineage rollup already gives the PERCEPTION side of this
+    # exact question. The receipt NAMES the redirect (`redirected_from`) rather than
+    # silently rerouting, same discipline `folded_from` above already keeps for a merge.
+    # A dead/retired/false_mint head is NOT a new case to handle here — the eligibility
+    # gate just below already runs on `lineage_head(to_a)` regardless of how `to_a` was
+    # set, so it already refused delivery to a since-retired head before this change (the
+    # stale `to_agent` this fix corrects was never what protected against that grave; it
+    # only ever protected the receipt's `lineage_head` echo, which was already computed
+    # correctly). This redirect and that gate are independent fixes for independent halves
+    # of the same underlying gap.
+    redirected_from: str | None = None
+    if via_reply_routing and to_a and to_a.startswith("agent:"):
+        from src.orchestrator.agents import lineage_head
+        head = await lineage_head(pool, to_a)
+        if head != to_a:
+            redirected_from, to_a = to_a, head
     # THE ECHO + THE GATE (dd47c1da) — resolved BEFORE any write, so a require_seat refusal
     # never leaves a row behind. `to_a` may be a name already resolved above, OR a raw agent id
     # that skipped resolution entirely (alfred's gap): either way, lineage_head reveals whether
@@ -505,6 +551,7 @@ async def send_message(
                 **({"seat": seat, "lineage_head": lineage} if to_a else {}),
                 **({"holder": holder} if to_a and to_a.startswith("seat:") else {}),
                 **({"folded_from": folded_from} if folded_from else {}),
+                **({"redirected_from": redirected_from} if redirected_from else {}),
                 **({"threads_stamped": stamped} if stamped else {})}
     mid = await pool.fetchval(
         "INSERT INTO fleet_messages (from_agent, from_project, to_project, to_agent, body, "
@@ -516,6 +563,7 @@ async def send_message(
             **({"seat": seat, "lineage_head": lineage} if to_a else {}),
             **({"holder": holder} if to_a and to_a.startswith("seat:") else {}),
             **({"folded_from": folded_from} if folded_from else {}),
+            **({"redirected_from": redirected_from} if redirected_from else {}),
             **({"threads_stamped": stamped} if stamped else {})}
 
 
