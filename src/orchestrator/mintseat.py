@@ -49,7 +49,8 @@ from typing import Any
 
 from src.actions.core import Actions
 from src.orchestrator.boot_compiler import compile_managed_body, template_version, wrap_managed
-from src.orchestrator.offices import _CHARTER_TEMPLATE, _DEFAULT_OFFICE_ROOT
+from src.orchestrator.charter import charter_of
+from src.orchestrator.offices import _CHARTER_TEMPLATE, _CHARTER_UNDECLARED, _DEFAULT_OFFICE_ROOT
 from src.orchestrator.seats import (
     _OPERATOR_ACTORS,
     bind_seat_tree,
@@ -366,6 +367,14 @@ async def mint_seat(
                "next mount; no outside hand needed",
     }[occ["state"]]
 
+    # TASK #157 PIECE 1 (operator's own words "fix the slop"): a fresh mint can never yet
+    # have a charter (charter() needs the Seat object this call just minted); an ADOPTED
+    # seat may already carry one. Either way the receipt now SAYS SO — establish_office's
+    # own honest text, one door over, reused verbatim (_CHARTER_UNDECLARED) rather than a
+    # second string invented here, exactly the "if it picks, it is wrong" discipline this
+    # arc has run on all night.
+    repos = await charter_of(actions.pool, worker_seat_id)
+
     return {
         "seat_id": worker_seat_id, "handle": handle, "house": worker_house,
         "seat_minted": seat_minted,
@@ -374,6 +383,7 @@ async def mint_seat(
         "intended_model_stamped": stamped_model,
         "manager_seat_id": manager_seat_id,
         "managed_by": "linked" if linked_now else "already linked",
+        "charter": repos or _CHARTER_UNDECLARED,
         "occupancy": occ["state"], "holder": occ["holder"], "next_step": next_step,
     }
 

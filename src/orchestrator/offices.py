@@ -107,6 +107,13 @@ IN-PROGRESS state a typed object can't hold on its own.
 (anything else worth carrying forward that doesn't fit the graph's typed objects)
 """
 
+# THE ONE UNDECLARED SENTINEL (task #157 piece 1, operator's own words "fix the slop"): the
+# GRAPH declaration (a Seat's own `governs` edges, charter_of's own read) never had a single
+# word for "nothing there yet" — mint_seat's receipt said nothing at all about it while this
+# ceremony, one door over, already spoke plainly. Centralized so every caller that reports
+# charter state says the SAME thing, not a copy that can drift the moment one side is edited.
+_CHARTER_UNDECLARED = "UNDECLARED — the standing orders instruct the seat to declare"
+
 
 async def _handle_of(pool: asyncpg.Pool, agent_id: str) -> str | None:
     """The lineage's claimed handle (freshest generation's assertion), or None — an office
@@ -191,7 +198,7 @@ async def _establish_pure_seat_office(
         "office": str(office), "handle": handle, "house": house,
         "office_deed": "n/a — no claimed occupant yet to deed an office to",
         "seat": seat_id,
-        "charter": repos or "UNDECLARED — the standing orders instruct the seat to declare",
+        "charter": repos or _CHARTER_UNDECLARED,
         "standing_orders": orders_state,
         "charter_file": charter_file_state,
         "rebind": rebind,
@@ -347,7 +354,7 @@ async def establish_office(
         "office": str(office), "handle": handle, "house": house,
         "office_deed": "filed" if deeded else "already on the lineage's record",
         "seat": bound["seat_id"] if bound else None,
-        "charter": repos or "UNDECLARED — the standing orders instruct the seat to declare",
+        "charter": repos or _CHARTER_UNDECLARED,
         "standing_orders": orders_state,
         "charter_file": charter_file_state,
         "rebind": rebind,

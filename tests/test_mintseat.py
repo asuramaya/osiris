@@ -49,6 +49,11 @@ async def test_a_fresh_mint_creates_seat_office_model_and_edge(
     assert out["intended_model_stamped"] is True
     assert out["managed_by"] == "linked"
     assert out["manager_seat_id"] == manager
+    # TASK #157 PIECE 1: a fresh mint can never yet have a charter (charter() needs the
+    # Seat object this call just minted) — the receipt says so plainly now, establish_office's
+    # own text reused verbatim, rather than staying silent about it (the exact gap that let
+    # 26 of 33 live seats go unchartered with nothing on record ever having said so).
+    assert out["charter"] == "UNDECLARED — the standing orders instruct the seat to declare"
 
     office = offices / "vajra"
     assert office.is_dir()
@@ -139,6 +144,26 @@ async def test_b_re_minting_adopts_never_twins(actions: Actions, tmp_path: Path)
         "SELECT count(*) FROM links WHERE type='managed_by'") == 1
     # the hand-edit survived — a re-mint never touches an existing office's files
     assert "MY OWN HAND-WRITTEN" in (offices / "vajra" / "CLAUDE.md").read_text()
+
+
+async def test_b_re_minting_an_already_chartered_seat_reports_the_real_charter(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """TASK #157 PIECE 1: the ADOPT path (an already-living, possibly already-chartered
+    seat) must not report UNDECLARED just because a fresh mint always would — the receipt
+    reads the seat's real charter_of() state, not a hardcoded assumption."""
+    from src.orchestrator.charter import set_charter
+
+    await _seat(actions, "Steward", "osiris")
+    offices = tmp_path / "seats"
+    first = await mint_seat(actions, manager="Steward", handle="Vajra", office_root=offices)
+    await actions.create_or_find_object("SoftwareProject", "repo:osiris", "test")
+    charter_out = await set_charter(actions, first["seat_id"], ["osiris"], actor="agent:steward")
+    assert charter_out["charter"] == ["osiris"]  # the fixture landed before trusting the receipt
+
+    again = await mint_seat(actions, manager="Steward", handle="Vajra", office_root=offices)
+
+    assert again["charter"] == ["osiris"]
 
 
 # ═══════════ (c) TANTRA-SHAPED ADOPT — no new identity minted ═══════════

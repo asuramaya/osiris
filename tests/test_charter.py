@@ -459,6 +459,59 @@ async def test_orient_tool_surfaces_the_seats_charter(actions: Actions) -> None:
     assert out.get("charter") == ["osiris"]
 
 
+async def test_orient_tool_names_an_undeclared_charter_instead_of_staying_silent(
+    actions: Actions,
+) -> None:
+    """TASK #157 PIECE 2, specimen 14 of ruling 60bc15db: orient() used to fold the charter
+    key in with `if charter else {}` — copied from swap/pin_warn, where falsy means fine and
+    omission is correct. For charter, falsy IS the alarm, so the same idiom silently rendered
+    'chartered, all fine' and 'never declared' as the identical missing key. A SEATED agent
+    with no charter now gets told plainly, once, never a repeated banner."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    seat_id = await _seated(actions, "agent:oriundeclared1", "Oriundeclared1")
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:oriundeclared1", session="oriund1", project="oriundproj",
+        model=None, cwd=None)
+    try:
+        out = await srv.orient(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out.get("charter") == "UNDECLARED — the standing orders instruct the seat to declare"
+    assert seat_id  # the seat exists and IS what orient() is being honest about
+
+
+async def test_orient_tool_stays_silent_on_charter_for_a_seatless_identity(
+    actions: Actions,
+) -> None:
+    """The other half of the same fix: a session holding NO seat at all has nothing to
+    charter, and must not be told UNDECLARED as if it were a seat that skipped a step — that
+    would turn one alarm into universal noise, exactly the failure Thoth's own build
+    instruction warned against ('honest, not noisy'). Gated on charter_seat is not None, not
+    on charter truthiness."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    await _agent(actions, "agent:oriseatless1")
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:oriseatless1", session="oriseatless1", project="oriseatlessproj",
+        model=None, cwd=None)
+    try:
+        out = await srv.orient(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "charter" not in out
+
+
 # ═══ charter_for — the manager-invoked sibling (thread 2446): a seat may declare its own
 # charter, its manager may declare for it, the operator is every seat's ultimate manager. ═══
 
