@@ -2800,16 +2800,24 @@ async def tree_ledger(limit: int | None = None, offset: int = 0) -> dict[str, An
     rows, that its population is TODAY's `agent_mounts` table only (measured: 32 distinct
     cwd — a live/recent registry, NOT a historical ledger, that EVICTS old rows; a phantom
     whose originating sessions already ended and were evicted never appears here, only in
-    `project_ledger`). Each cwd carries `resolved_today` (what a fresh mount computes now:
-    the pin, else the basename fallback, refusing at the bare seats container) versus
-    `graph_believes` (live `works_in` targets of every agent this cwd currently names).
-    `resolved_today` answers the COLD/BOOTSTRAP question only — a SEATED agent's real
-    mount() resolves seat-first and never touches this path (roster()'s own law). Five
-    `agreement` states, not collapsed: `no-graph-yet` / `graph-only` (live evidence of the
-    same bug class 13af22fc found historically) / `match` / `partial-match` (today's
-    resolution is correct but the graph also carries other, likely-stale beliefs for this
-    cwd — worth a look, not urgent) / `mismatch` (today's resolution matches NONE of the
-    graph's beliefs — a live misresolution risk, measured live on two seats tonight).
+    `project_ledger`). Each cwd carries `directory_exists` — checked FIRST, before the pin
+    is trusted at all: the canonical `.osiris` reader climbs parent directories without
+    ever checking whether `cwd` itself still exists, so a DELETED office silently reads the
+    enclosing container's own pin as if it were its own (found live: two retired seats,
+    flip68real/resumelanecheck). `resolved_today` (what a fresh mount computes now: the
+    pin, else the basename fallback, refusing at the bare seats container, forced to `None`
+    whenever `directory_exists` is False — nothing can mount at a directory that isn't
+    there) versus `graph_believes` (live `works_in` targets of every agent this cwd
+    currently names). `resolved_today` answers the COLD/BOOTSTRAP question only — a SEATED
+    agent's real mount() resolves seat-first and never touches this path (roster()'s own
+    law). SIX `agreement` states, not collapsed: `no-graph-yet` / `ghost` (the office is
+    GONE but the graph still believes something — the soul outlived the body, a worse and
+    different finding than a misresolution risk) / `graph-only` (the bare seats container
+    itself, still real on disk, deliberately refuses resolution by design — 13af22fc) /
+    `match` / `partial-match` (today's resolution is correct but the graph also carries
+    other, likely-stale beliefs for this cwd — worth a look, not urgent) / `mismatch`
+    (today's resolution matches NONE of the graph's beliefs while the directory IS real —
+    the live misresolution risk).
 
     `caveats` names exactly what this instrument cannot see (a tree that never accumulated
     a works_in edge; a phantom whose live_cwd_ledger evidence has already been evicted) —

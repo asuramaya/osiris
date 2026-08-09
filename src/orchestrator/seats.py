@@ -587,6 +587,14 @@ _TREE_LEDGER_CAVEATS = (
     "note that nothing else does either.",
     "READ-ONLY: this reports disagreements and phantom suspicions, it never repairs, folds, "
     "or merges anything — repo:code's disposition is Sekhmet's design, not this verb's.",
+    "A GAP IN THE CANONICAL READER ITSELF, FLAGGED NOT FIXED (Thoth's catch, msg 3928): "
+    "`_read_osiris_key` (agents.py, used unmodified by this report and by every other "
+    "caller — roster(), resolve_identity, project_identity_evidence) climbs `cwd` and its "
+    "parents for `.osiris` but never checks whether `cwd` ITSELF exists, so a query against "
+    "a DELETED directory silently returns whatever an ancestor's pin says instead — this "
+    "instrument works around it locally (`directory_exists`, checked before trusting the "
+    "pin) but the canonical reader's own three-state model (OsirisKeyRead) is still missing "
+    "a fourth state for this, everywhere else it's called too.",
 )
 
 
@@ -687,7 +695,13 @@ async def project_ledger(pool: asyncpg.Pool, *, limit: int = 200, offset: int = 
                 "name-shape test (msg 3906) that survives the originating cwd being long "
                 "gone, not a replacement for her looking at one directly. undetermined "
                 "means neither test fired — a real disagreement for a human, never a "
-                "confirmation the project is legitimate."),
+                "confirmation the project is legitimate. `declared` IS ALSO NOT A REALNESS "
+                "CHECK (Thoth's own catch, msg 3928, live specimens climintworker1/"
+                "inferredworker1's own pins declaring cliproj1/soleseathouse — debugging "
+                "artifacts, correctly self-declared): this bucket answers 'does some seat's "
+                "own declaration claim this name', never 'is this a genuine, intentional "
+                "project' — a fake project that correctly declares itself is "
+                "indistinguishable from a real one by declaration alone."),
     }
 
 
@@ -709,18 +723,33 @@ async def live_cwd_ledger(pool: asyncpg.Pool) -> dict[str, Any]:
     resolve to here right now", the exact question 13af22fc's carve-out is about — not a
     prediction for whoever already lives there.
 
-    `agreement`, FIVE states, measured live and deliberately not collapsed to four: a first
-    cut that only distinguished match/conflict buried a real severity difference (measured:
-    'osiris' worktrees correctly resolve today but the graph ALSO carries older, believable-
-    but-stale beliefs from past generations — residue, not an active risk — while two seats
-    resolve to a name the graph shows NO trace of at all — a live misresolution risk, the
-    same shape as 13af22fc's own bug, just not written down yet). `no-graph-yet` (nothing to
-    cross-check — benign), `graph-only` (a fresh mount would refuse or basename-guess
-    NOTHING here today, yet the graph believes something — 13af22fc's own historical
-    signature, now visible live), `match` (the graph's ONE belief agrees with today's
-    resolution), `partial-match` (today's resolution IS one of the graph's beliefs, but the
-    graph also carries OTHER beliefs for this same cwd — worth a look, not urgent), `mismatch`
-    (today's resolution matches NONE of the graph's beliefs — the live risk)."""
+    `directory_exists` is checked FIRST, BEFORE the pin is trusted at all (Thoth's own
+    catch, msg 3928, a live 60bc15db specimen IN the instrument built to detect that class):
+    `_read_osiris_key` — the canonical reader, used unmodified — climbs `cwd` and every one
+    of `cwd.parents` looking for `.osiris`, but never checks whether `cwd` ITSELF exists.
+    For a DELETED office (flip68real, resumelanecheck — both real, now-retired Seats whose
+    directories are gone), the climb silently lands on the enclosing seats-container's OWN
+    pin and reports it as if it belonged to the deleted office — collapsing "this office is
+    gone" into "this office exists, pin unset," two conditions with OPPOSITE dispositions
+    (one wants a pin written, the other wants the graph's belief reaped). This is a real gap
+    in the canonical reader itself, not only this call site — flagged to Thoth, not
+    silently patched here; `_read_osiris_key` is unchanged. What IS fixed here is LOCAL:
+    `directory_exists=False` short-circuits `pin_state` to `missing-directory` before the
+    climb's result is trusted for anything, and `resolved_today` is forced to `None` — "a
+    fresh mount would basename-fallback here" is meaningless when nothing can even `cd`
+    there (Thoth's own words).
+
+    `agreement`, SIX states now, not five: `ghost` is new — `directory_exists=False` AND the
+    graph still believes something. THE SOUL OUTLIVED THE BODY: the office is gone, but
+    nothing reconciles the graph's belief — a worse, DIFFERENT finding than a live
+    misresolution risk, not a variant of one. Distinct from `graph-only` (the bare seats
+    CONTAINER itself — which IS real on disk, `directory_exists=True` — deliberately
+    refusing resolution by design, ruling 13af22fc). The other five, unchanged: `no-graph-
+    yet` (nothing to cross-check — benign, covers a ghost with no belief either, since
+    there's nothing to reconcile), `graph-only`, `match`, `partial-match` (today's
+    resolution IS one of the graph's beliefs, but the graph also carries OTHER, likely-
+    stale beliefs — worth a look, not urgent), `mismatch` (today's resolution matches NONE
+    of the graph's beliefs while the directory IS real — the live misresolution risk)."""
     rows = await pool.fetch(
         "SELECT cwd, count(DISTINCT agent_id) AS n_agents, "
         "array_agg(DISTINCT agent_id) AS agents FROM agent_mounts GROUP BY cwd "
@@ -731,8 +760,11 @@ async def live_cwd_ledger(pool: asyncpg.Pool) -> dict[str, Any]:
     cwds: list[dict[str, Any]] = []
     for r in rows:
         cwd = r["cwd"]
+        directory_exists = _dir_exists(cwd)
         pin = read_project_pin(cwd)
-        if pin.error:
+        if not directory_exists:
+            pin_state = "missing-directory"
+        elif pin.error:
             pin_state = "unreadable"
         elif pin.path and pin.value is None:
             pin_state = "unset"
@@ -740,8 +772,10 @@ async def live_cwd_ledger(pool: asyncpg.Pool) -> dict[str, Any]:
             pin_state = "declared"
         else:
             pin_state = "no-pin"
-        if pin.value:
-            resolved_today: str | None = pin.value
+        if not directory_exists:
+            resolved_today: str | None = None
+        elif pin.value:
+            resolved_today = pin.value
         elif is_bare_office_root(cwd):
             resolved_today = None
         else:
@@ -755,6 +789,8 @@ async def live_cwd_ledger(pool: asyncpg.Pool) -> dict[str, Any]:
         graph_believes = sorted(row["canonical"].removeprefix("repo:") for row in believes_rows)
         if not graph_believes:
             agreement = "no-graph-yet"
+        elif not directory_exists:
+            agreement = "ghost"
         elif resolved_today is None:
             agreement = "graph-only"
         elif resolved_today not in graph_believes:
@@ -764,7 +800,7 @@ async def live_cwd_ledger(pool: asyncpg.Pool) -> dict[str, Any]:
         else:
             agreement = "partial-match"
         cwds.append({
-            "cwd": cwd, "agents_mounted": r["n_agents"],
+            "cwd": cwd, "agents_mounted": r["n_agents"], "directory_exists": directory_exists,
             "pin": {"declared": pin.value, "state": pin_state, "path": pin.path,
                     "error": pin.error},
             "resolved_today": resolved_today,

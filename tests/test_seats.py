@@ -1656,6 +1656,38 @@ async def test_live_cwd_graph_only_at_the_bare_office_root(
     assert row["agreement"] == "graph-only"
 
 
+async def test_live_cwd_ghost_when_the_office_directory_is_gone(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thoth's own catch (msg 3928), reproduced exactly: flip68real/resumelanecheck's
+    directories were DELETED, not merely unpinned. The canonical `.osiris` reader climbs
+    past a missing cwd to its PARENT's own pin without ever checking `cwd` itself exists —
+    collapsing 'office is gone' into 'office exists, pin unset', two conditions with
+    OPPOSITE dispositions (one wants a pin written, the other wants the graph's belief
+    reaped). This proves the fix: a nonexistent cwd with a real parent pin must read
+    directory_exists=False, pin_state='missing-directory', resolved_today=None,
+    agreement='ghost' — never 'unset'/'mismatch', this instrument's own first-draft bug."""
+    from src.orchestrator.seats import live_cwd_ledger
+
+    container = tmp_path / "seats"
+    container.mkdir()
+    (container / ".osiris").write_text('kind = "container"\n')
+    ghost_office = container / "deletedseat"  # never created — the office is GONE
+
+    await _agent_works_in(actions, "agent:ledgerghost1", "osiris")
+    await save_mount(actions.pool, job_dir="/jobs/ledgerghost1",
+                     agent_id="agent:ledgerghost1", project="osiris",
+                     cwd=str(ghost_office), model="claude-sonnet-5", session_key=None)
+
+    out = await live_cwd_ledger(actions.pool)
+    row = next(c for c in out["cwds"] if c["cwd"] == str(ghost_office))
+    assert row["directory_exists"] is False
+    assert row["pin"]["state"] == "missing-directory"
+    assert row["resolved_today"] is None
+    assert row["graph_believes"] == ["osiris"]
+    assert row["agreement"] == "ghost"
+
+
 async def test_tree_ledger_combines_both_sections_and_caveats(actions: Actions) -> None:
     from src.orchestrator.seats import tree_ledger
 
