@@ -1783,6 +1783,141 @@ async def test_register_agent_mint_does_not_duplicate_works_in_on_a_stale_house(
         "never the stale house's edge too")
 
 
+# ═══ task #144, rule 1 of de3dfc18 ("where this lineage's work actually landed"): ported
+# from project_identity.py's own _write_attribution (#110) — the SAME query — for the live
+# mount path. THE ACCEPTANCE CONDITION (Thoth, msg 3854): "if it picks, it is wrong, however
+# good the pick." This reports agreement/disagreement HONESTLY and never overwrites
+# `identity.project` or the graph's own project/works_in write — a later, separately-scoped
+# build decides whether rule 1 ever gets to WIN. ═══
+
+
+async def test_write_attribution_reports_no_signal_with_no_history(actions: Actions) -> None:
+    """A lineage that has never filed an in_repo edge anywhere gets an honest "no-signal" —
+    never a guess, never silence that reads as agreement."""
+    ident = AgentIdentity(agent_id="agent:wa1nosig0", session="wa1nosig0",
+                          project="freshproj", model="claude-fable-5", cwd=None,
+                          model_method="job_dir", model_observed_at=datetime.now(UTC))
+    await register_agent(actions, ident, actor="test")
+
+    assert ident.write_attribution_agreement == "no-signal"
+    assert ident.write_attribution_top is None
+    assert ident.write_attribution_total == 0
+    assert ident.project == "freshproj", "no-signal must never touch the resolved project"
+
+
+async def test_write_attribution_confirms_when_the_lineage_agrees(actions: Actions) -> None:
+    """The healthy case: this lineage's own in_repo edges already point at the same project
+    resolve_identity independently resolved — confirms, no drama."""
+    now = datetime.now(UTC)
+    base = "agent:wa2conf00"
+    await actions.create_or_find_object("Agent", base, "test")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:confproj", "test")
+    thread = await actions.create_or_find_object("Thread", "thread:wa2conf01", "test")
+    await actions.create_link(thread, proj, "in_repo", base, now, 0.9)
+
+    ident = AgentIdentity(agent_id=base, session="wa2conf00", project="confproj",
+                          model="claude-fable-5", cwd=None, model_method="job_dir",
+                          model_observed_at=now)
+    await register_agent(actions, ident, actor="test")
+
+    assert ident.write_attribution_agreement == "confirms"
+    assert ident.write_attribution_top == "confproj"
+    assert ident.write_attribution_total == 1
+
+
+async def test_write_attribution_disagrees_without_ever_overriding_project(
+    actions: Actions,
+) -> None:
+    """THE ACCEPTANCE CONDITION, tested directly: this lineage's own writes land almost
+    entirely in `oldproj`, but the session resolved `newproj` (a real, legitimate case — a
+    seat can genuinely move to a new repo). The signal must say "disagrees" — and `project`,
+    the actual graph write, must be `newproj`, completely untouched by the disagreement.
+    A naive port that silently picked oldproj (or refused to write newproj) would fail this
+    test even though its answer might look "smarter"."""
+    now = datetime.now(UTC)
+    base = "agent:wa3disa00"
+    await actions.create_or_find_object("Agent", base, "test")
+    old_proj = await actions.create_or_find_object("SoftwareProject", "repo:oldproj", "test")
+    for i in range(4):
+        t = await actions.create_or_find_object("Thread", f"thread:wa3disa0{i}", "test")
+        await actions.create_link(t, old_proj, "in_repo", base, now, 0.9)
+
+    ident = AgentIdentity(agent_id=base, session="wa3disa00", project="newproj",
+                          model="claude-fable-5", cwd=None, model_method="job_dir",
+                          model_observed_at=now)
+    a = await register_agent(actions, ident, actor="test")
+
+    assert ident.write_attribution_agreement == "disagrees"
+    assert ident.write_attribution_top == "oldproj"
+    assert ident.write_attribution_total == 4
+    assert ident.project == "newproj", "the pick constraint: disagreement never overrides"
+
+    written = await actions.pool.fetchval(
+        "SELECT a2.value #>> '{}' FROM current_assertions a2 WHERE a2.object_id=$1 "
+        "AND a2.name='project' ORDER BY a2.confidence DESC, a2.observed_at DESC LIMIT 1", a)
+    assert written == "newproj", "the graph's own project stamp is untouched by the signal"
+    live_works_in = await actions.pool.fetch(
+        "SELECT t.canonical FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='works_in' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", a)
+    assert {r["canonical"] for r in live_works_in} == {"repo:newproj"}, (
+        "works_in follows the session's own resolution, never the lineage's history")
+
+
+async def test_write_attribution_disagreement_is_stamped_durably(actions: Actions) -> None:
+    """The disagreement is worth more than a one-time banner — a later dossier() read (no
+    live mount() to have caught the confession) must be able to see it too. DERIVED evidence
+    (an inference from write history), never SELF_DECLARED — weaker than a real declaration,
+    on purpose."""
+    now = datetime.now(UTC)
+    base = "agent:wa4stmp00"
+    await actions.create_or_find_object("Agent", base, "test")
+    old_proj = await actions.create_or_find_object("SoftwareProject", "repo:stampold", "test")
+    thread = await actions.create_or_find_object("Thread", "thread:wa4stmp01", "test")
+    await actions.create_link(thread, old_proj, "in_repo", base, now, 0.9)
+
+    ident = AgentIdentity(agent_id=base, session="wa4stmp00", project="stampnew",
+                          model="claude-fable-5", cwd=None, model_method="job_dir",
+                          model_observed_at=now)
+    a = await register_agent(actions, ident, actor="test")
+
+    row = await actions.pool.fetchrow(
+        "SELECT value #>> '{}' AS v, evidence_class FROM current_assertions "
+        "WHERE object_id=$1 AND name='write_attribution_disagreement'", a)
+    assert row is not None
+    assert "stampold" in row["v"] and "stampnew" in row["v"]
+    assert row["evidence_class"] == EvidenceClass.DERIVED.value
+
+
+async def test_write_attribution_degrades_when_the_check_itself_fails(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """577988ed, tested directly on this exact addition: a broken write-attribution query
+    must degrade to an honest "could not determine," never block the mount it sits on. This
+    is the diagnostic signal's OWN refusal proof, distinct from the disagreement tests above
+    proving the signal doesn't act — this proves the signal doesn't break anything either."""
+    from src.orchestrator import project_identity as pi_mod
+
+    async def _boom(pool: object, bases: list[str]) -> dict[str, object]:
+        raise RuntimeError("simulated DB hiccup")
+
+    monkeypatch.setattr(pi_mod, "_write_attribution", _boom)
+
+    ident = AgentIdentity(agent_id="agent:wa5boom00", session="wa5boom00",
+                          project="survives", model="claude-fable-5", cwd=None,
+                          model_method="job_dir", model_observed_at=datetime.now(UTC))
+    a = await register_agent(actions, ident, actor="test")   # must not raise
+
+    assert ident.write_attribution_agreement is None
+    assert ident.write_attribution_top is None
+    assert ident.write_attribution_total == 0
+    assert ident.project == "survives", "the mount itself must complete untouched"
+    written = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='project'",
+        a)
+    assert written == "survives"
+
+
 async def test_backfill_agent_project_links_dry_run_writes_nothing(actions: Actions) -> None:
     """The one-time repair for the 906/907 edges that already existed before the write-
     side fixes landed — a genuinely OLD-shaped leak (an ancestor's edge, never moved,

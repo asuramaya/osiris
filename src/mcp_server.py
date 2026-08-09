@@ -1820,6 +1820,14 @@ async def mount(
     # repo is the one blindness that costs unrecoverable work (a stomped commit)
     co_agents = (await _co_agents(pool, ident.project, ident.agent_id)
                 if ident.project else None)
+    # RULE 1 OF de3dfc18 (task #144): confessed, never acted on — "if it picks, it is
+    # wrong, however good the pick" (Thoth, msg 3854). A disagreement is worth a look, not
+    # an override.
+    wa_warn = (
+        f"⚠ this lineage's own writes mostly land in {ident.write_attribution_top!r} "
+        f"({ident.write_attribution_total} in_repo edge(s) checked), but this session "
+        f"resolved project={ident.project!r} — worth a look; nothing was overridden."
+        if ident.write_attribution_agreement == "disagrees" else None)
     out: dict[str, Any] = {"agent": ident.agent_id, "project": ident.project or "?",
            "model": ident.model or "unknown",
            **({"co_agents": co_agents} if co_agents else {}),
@@ -1833,6 +1841,7 @@ async def mount(
                     f"{unread} unread — call inbox()") if unread else "none",
            **({"cwd_corrected": cwd_note} if cwd_note else {}),
            **({"project_pin_error": pin_warn} if pin_warn else {}),
+           **({"write_attribution_disagreement": wa_warn} if wa_warn else {}),
            "note": "linked — writes now attributed to you; call orient() next"}
     if op_unread:  # the fleet plays secretary: any session the human drives can relay this
         out["operator_mail"] = (f"{op_unread} of your briefs await the operator's eye — "

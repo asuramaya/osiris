@@ -117,6 +117,17 @@ class AgentIdentity:
     # key). Never set for the bare seat-office root (ruling 577988ed's carve-out) or when
     # there is no cwd to climb from at all — those stay silent by design, not "missing".
     project_pin_missing: bool = False
+    # SET BY register_agent (task #144, rule 1 of de3dfc18 — "where this lineage's work
+    # actually landed"): the majority in_repo target across this agent's OWN lineage,
+    # reported HONESTLY, never used to overwrite `project` above. `write_attribution_agreement`
+    # is one of "no-signal" (this lineage has never filed an in_repo edge anywhere) /
+    # "confirms" (the majority target matches `project`) / "disagrees" (it doesn't) — never
+    # a fourth, silent "picked its own answer" state; mount() confesses "disagrees", it never
+    # acts on it. None/0/None when the DB check itself couldn't run (a degrade, never a block
+    # — 577988ed governs the mount path this sits on).
+    write_attribution_agreement: str | None = None
+    write_attribution_top: str | None = None
+    write_attribution_total: int = 0
 
 
 # Roman generations for successor ids (a sibling's grammar: agent:a8c15486-ii). The alphabet
@@ -2266,6 +2277,47 @@ async def register_agent(
                 # check the file before anything else.
                 if seat.get("handle"):
                     await write_model_pin(str(seat["handle"]), verdict.to_model)
+    # RULE 1 OF de3dfc18 (task #144): "where this lineage's work actually landed" — ported
+    # from project_identity.py's own _write_attribution (task #110), the SAME query, reused
+    # rather than re-derived. Bases = this agent's OWN lineage only (not a seat's holder
+    # history — resolve_identity/register_agent run before any seat necessarily exists, so
+    # the agent's own generation-stripped id is the one lineage key guaranteed on hand).
+    #
+    # THE ACCEPTANCE CONDITION (Thoth's own words, msg 3854): "if it picks, it is wrong,
+    # however good the pick." This NEVER overwrites `identity.project` — it reports
+    # agreement/disagreement HONESTLY and stops. A later, separately-scoped build decides
+    # whether/when rule 1 gets to WIN a disagreement; this lane only makes the disagreement
+    # visible, which nothing before it could do at all.
+    #
+    # DEGRADES, NEVER BLOCKS (577988ed — this sits on the mount path every session in the
+    # fleet traverses): a failed query here must never be the reason a mount fails. None/0/
+    # None (the dataclass defaults) is an honest "could not determine", not a wrong answer.
+    try:
+        from src.orchestrator.project_identity import _write_attribution
+        wa = await _write_attribution(actions.pool, [_generation(identity.agent_id)[0]])
+    except Exception as exc:  # noqa: BLE001 — a DB hiccup on a diagnostic signal must
+                               # never be the thing that blocks a mount (577988ed)
+        logger.warning("write-attribution check failed for %s: %r", identity.agent_id, exc)
+        wa = None
+    if wa is not None:
+        identity.write_attribution_top = wa["top"]
+        identity.write_attribution_total = wa["total"]
+        if wa["total"] == 0:
+            identity.write_attribution_agreement = "no-signal"
+        elif wa["top"] == identity.project:
+            identity.write_attribution_agreement = "confirms"
+        else:
+            identity.write_attribution_agreement = "disagrees"
+            # a DISAGREEMENT is the actionable case — durable, so a later audit (or a human
+            # skimming dossier()) can see it without having caught the live mount() banner.
+            # DERIVED evidence (an inference from write history, not a declaration): weaker
+            # than the SELF_DECLARED properties around it, on purpose.
+            do_ec = EvidenceClass.DERIVED
+            await actions.assert_property(
+                a, "write_attribution_disagreement",
+                f"lineage writes mostly to {wa['top']!r} ({wa['breakdown'].get(wa['top'], 0)}"
+                f"/{wa['total']}) but this session resolved {identity.project!r}",
+                src, now, confidence_for(do_ec), evidence_class=do_ec.value)
     if identity.project:
         await actions.assert_property(a, "project", identity.project, src, now, _CONF,
                                       evidence_class=_EC)
