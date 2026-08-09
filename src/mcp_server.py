@@ -1269,6 +1269,7 @@ async def focus_object(object_ref: str, ctx: Context | None = None) -> dict[str,
 async def run_composition(
     name: str, subject: str | None = None,
     fields: list[str] | None = None, take: int | None = None, depth: int | None = None,
+    offset: int | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Run a saved composition, optionally against a subject object (UUID or name), AND light
@@ -1281,13 +1282,15 @@ async def run_composition(
     levels (a roadmap's own section→arc→owner) get walked before collapsing to a count.
     Omit all three for the full result, unchanged — a roadmap-sized composition (61K chars
     unbounded) can now be asked for narrow and small in one call: run_composition("roadmap",
-    subject="osiris", fields=["id","summary"], take=5, depth=2)."""
+    subject="osiris", fields=["id","summary"], take=5, depth=2).
+    `offset` pages PAST the first `take` (`take=50, offset=50` = page 2 of the same
+    stable ordering) — `take` alone could only ever show the first N, forever."""
     pool = await _pool_get()
     ident = await _ident_for(ctx)
     sid = await _resolve(pool, subject) if subject else None
     res = await comp.run_composition(pool, name, sid,
                                      caller=(ident.agent_id if ident else None),
-                                     fields=fields, take=take, depth=depth)
+                                     fields=fields, take=take, depth=depth, offset=offset)
     # drive the front end: show this composition (and its subject, so a subject-lens reproduces)
     await _set_console(pool, by="claude", composition=name,
                        **({"focused_object_id": sid} if sid else {}))
@@ -4012,6 +4015,19 @@ async def bootstrap(cwd: str, ctx: Context | None = None) -> dict[str, Any]:
 
 # --- write-back: the prosthesis (capture what you decided / what's still open) ---
 
+# THE FAIL-OPEN PROMISE, ENFORCED (task #149, Imhotep's 300s record_decision timeouts,
+# thread 9f08b027): record_decision's and record_practice's own prior-art search has
+# always been documented "fail-open: a search hiccup must never block recording the
+# decision itself" — but the try/except around it only ever caught a RAISED exception,
+# never a HANG, so the promise was true for errors and false for silence. semantics.py's
+# own fix (Model2VecEmbedder's bounded, sticky load) closes the specific hang that was
+# actually measured live; this is the outer, whole-call bound as defense in depth — any
+# OTHER slow step in the fused search pipeline (DB contention under fleet load, a lexical
+# door with no supporting index) gets the same honest, fast fail-open instead of riding
+# out an external 300s timeout with no diagnosis.
+_PRIOR_ART_SEARCH_TIMEOUT_S = 15.0
+
+
 @mcp.tool()
 async def record_decision(
     summary: str, kind: str = "ruling", rationale: str | None = None,
@@ -4071,6 +4087,10 @@ async def record_decision(
     `ack_prior_art` = when this call's own `prior_art_flag` fires and none of supersedes/
     implements/confirms/grounds already answers it, pass True to record the dismissal as a
     graph event instead of a shrug that leaves no trace.
+    `content_landed` — present when `rationale`/`protocol` was passed: a READ-BACK
+    confirming your text is now the CURRENT value (a different assertion can silently win
+    the tie-break on the same object despite a success response). A `false` entry names
+    itself in `content_landed_note` and points at amend_decision.
     ANY ERROR ON THIS CALL — including a dropped connection or a timeout with NO response
     at all — IS SAFE TO RETRY WITH THE SAME `summary`: the same failure string covers
     both "written, you just didn't hear back" and "never written," and a caller cannot
@@ -4182,6 +4202,40 @@ async def record_decision(
     except ValueError as e:  # task #107: e.g. a path-shaped repo — refuse clean, no traceback
         return {"error": str(e)}
     out: dict[str, Any] = {"id": str(d), "kind": kind, "summary": summary}
+    # CONTENT-LANDED, MEASURED NOT INFERRED (task #149, thread 20145def): a READ-BACK, not
+    # a guess from the pre-write dup-check below — that check can only ever say WHICH
+    # object a call landed on, never whether THIS call's own rationale/protocol actually
+    # became the CURRENT value on it (a different source's assertion can still win the
+    # confidence/recency tie-break on the SAME object, silently, and the old receipt shape
+    # had no way to say so). Four specimens in one session: Thoth's own "reused_existing_
+    # decision:true with a note ambiguous enough I had to go READ the object" (it HAD
+    # landed — the receipt just couldn't say); Sekhmet's #146 write going to background
+    # with a mis-set field she could not correct until it landed; a decision this house's
+    # own prior_art guard once caught reusing a near-duplicate silently. Ruling 60bc15db's
+    # own prescription applied directly: don't infer success from "no error raised" — READ
+    # the fact you just tried to establish and report what it actually says.
+    if rationale is not None or protocol is not None:
+        landed: dict[str, bool] = {}
+        if rationale is not None:
+            current_rationale = await pool.fetchval(
+                "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+                "AND name='rationale' ORDER BY confidence DESC, observed_at DESC LIMIT 1", d)
+            landed["rationale"] = current_rationale == rationale
+        if protocol is not None:
+            current_protocol = await pool.fetchval(
+                "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+                "AND name='protocol' ORDER BY confidence DESC, observed_at DESC LIMIT 1", d)
+            landed["protocol"] = current_protocol == protocol
+        out["content_landed"] = landed
+        if not all(landed.values()):
+            not_landed = [f for f, ok in landed.items() if not ok]
+            out["content_landed_note"] = (
+                f"your {' and '.join(not_landed)} did NOT become decision {str(d)[:8]}'s "
+                "current value — a different assertion is currently winning the "
+                f"confidence/recency tie-break on this object. Re-recording with the same "
+                "summary is likely to repeat this outcome; use "
+                f"amend_decision(ref={str(d)[:8]!r}, addendum=...) instead — it always "
+                "lands as new content, never contends a tie-break.")
     if dup_before is not None and str(dup_before) == str(d):
         out["reused_existing_decision"] = True
         out["prior_content"] = prior_content
@@ -4206,15 +4260,16 @@ async def record_decision(
     # failure: 636a8648 minted in direct contradiction of naming-v3/a882b334 with zero
     # friction). Fail-open: a search hiccup must never block recording the decision itself.
     try:
-        search_out = await comp.run_spec(
+        search_out = await asyncio.wait_for(comp.run_spec(
             pool, {"op": "function", "name": "search",
                    "args": {"q": f"{summary} {rationale or ''}"[:300], "limit": 15,
                             "caller": actor}},
-            None, name="search", caller=actor)
+            None, name="search", caller=actor), timeout=_PRIOR_ART_SEARCH_TIMEOUT_S)
         prior = capture.prior_art_from_hits(
             search_out["items"]["hits"], exclude={d} | ({old} if old else set()),
             kinds=capture.UNIFIED_PRIOR_ART_KINDS)
-    except Exception:  # noqa: BLE001 — never block a ruling on a search-side failure
+    except Exception:  # noqa: BLE001 — never block a ruling on a search-side failure or
+                        # hang (TimeoutError is an Exception subclass, caught here too)
         prior = []
     strong = capture.prior_art_is_strong(prior)
     if prior:
@@ -4393,14 +4448,15 @@ async def record_practice(
     if receipt:
         out["witnesses_resolution"] = receipt
     try:
-        search_out = await comp.run_spec(
+        search_out = await asyncio.wait_for(comp.run_spec(
             pool, {"op": "function", "name": "search",
                    "args": {"q": f"{statement} {failure_prevented or ''}"[:300], "limit": 15,
                             "caller": actor}},
-            None, name="search", caller=actor)
+            None, name="search", caller=actor), timeout=_PRIOR_ART_SEARCH_TIMEOUT_S)
         prior = capture.prior_art_from_hits(
             search_out["items"]["hits"], exclude={p}, kinds=capture.UNIFIED_PRIOR_ART_KINDS)
-    except Exception:  # noqa: BLE001 — never block a record on a search-side failure
+    except Exception:  # noqa: BLE001 — never block a record on a search-side failure or
+                        # hang (TimeoutError is an Exception subclass, caught here too)
         prior = []
     strong = capture.prior_art_is_strong(prior)
     if prior:

@@ -479,6 +479,40 @@ async def test_take_caps_a_flat_list_and_reports_the_real_total(actions: Actions
     assert res["_projected"]["dropped"]["(root)"] == {"shown": 1, "of": 3}
 
 
+# --- offset: `take` alone can only ever show a list's FIRST N, forever — task #149
+# (Thoth DM 3847, "NO take/offset/cursor") names this as the real gap behind the
+# workaround of hand-building dozens of narrower compositions just to see past a trim. ---
+
+
+async def test_offset_pages_past_the_first_take_with_no_overlap(actions: Actions) -> None:
+    await _filings(actions)
+    spec = {"op": "order", "by": "id", "dir": "asc",
+            "from": {"op": "select", "object_type": "Organization"}}
+    name = await _save(actions, "offset-flat", spec)
+
+    page1 = await run_composition(actions.pool, name, take=1)
+    page2 = await run_composition(actions.pool, name, take=1, offset=1)
+    page3 = await run_composition(actions.pool, name, take=1, offset=2)
+
+    ids = [page1["items"][0]["id"], page2["items"][0]["id"], page3["items"][0]["id"]]
+    assert len(set(ids)) == 3  # three DIFFERENT rows, not the same one three times
+    assert page2["_projected"]["dropped"]["(root)"] == {"shown": 1, "of": 3, "offset": 1}
+    # the SAME stable ordering the op-tree produced, just walked further — page2 picks up
+    # exactly where page1 left off, matching a plain take=2 read from the start
+    whole = await run_composition(actions.pool, name, take=2)
+    assert [r["id"] for r in whole["items"]] == ids[:2]
+
+
+async def test_offset_past_the_end_reports_zero_shown_not_an_error(actions: Actions) -> None:
+    await _filings(actions)
+    spec = {"op": "select", "object_type": "Organization"}
+    name = await _save(actions, "offset-overrun", spec)
+
+    res = await run_composition(actions.pool, name, take=5, offset=10)
+    assert res["items"] == []
+    assert res["_projected"]["dropped"]["(root)"] == {"shown": 0, "of": 3, "offset": 10}
+
+
 async def test_fields_keeps_only_the_named_columns_per_row(actions: Actions) -> None:
     await _filings(actions)
     spec = {"op": "table", "from": {"op": "select", "object_type": "Organization"},

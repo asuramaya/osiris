@@ -446,6 +446,65 @@ async def test_record_decision_tool_names_an_exact_retry_as_a_safe_repeat(
     assert "safe repeat" in second["note"] and "false positive" not in second["note"]
 
 
+# --- content_landed: a READ-BACK, not an inference (task #149, thread 20145def) — the
+# receipt must say plainly whether THIS call's own rationale/protocol became the object's
+# CURRENT value, since a different source's assertion can silently win the confidence/
+# recency tie-break on the SAME object even though the call itself reports success. ---
+
+
+async def test_record_decision_tool_confirms_content_landed_on_the_normal_path(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.record_decision(
+            "content-landed normal-path specimen", rationale="the reasoning",
+            protocol="the exact command line")
+    finally:
+        srv._pool = saved_pool
+    assert out["content_landed"] == {"rationale": True, "protocol": True}
+    assert "content_landed_note" not in out
+
+
+async def test_record_decision_tool_confesses_when_rationale_loses_the_tie_break(
+    actions: Actions,
+) -> None:
+    """The specimen this guards (Thoth's own account, DM 3847): a call reports success,
+    the receipt says nothing is obviously wrong, yet the caller's own text is NOT what a
+    reader finds on the object — because a different, higher-confidence assertion from
+    another source is what's actually winning the read. Simulated directly rather than
+    racing real concurrency: pre-seed a higher-confidence rationale from a different actor
+    on the SAME object, then confirm the honest call names the loss and points at
+    amend_decision."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        first = await srv.record_decision(
+            "content-landed tie-break-loss specimen", rationale="the original reasoning")
+        d = uuid.UUID(first["id"])
+        # a higher-confidence, differently-sourced assertion that will win every future
+        # tie-break on this object's own `rationale` field
+        await actions.assert_property(
+            d, "rationale", "a higher-confidence rival rationale from another source",
+            "agent:rival", datetime.now(UTC), 0.99, evidence_class="direct_observation")
+
+        second = await srv.record_decision(
+            "content-landed tie-break-loss specimen",
+            rationale="my own new reasoning, which will lose the tie-break")
+    finally:
+        srv._pool = saved_pool
+
+    assert second["id"] == first["id"]
+    assert second["content_landed"]["rationale"] is False
+    assert "amend_decision" in second["content_landed_note"]
+    assert str(d)[:8] in second["content_landed_note"]
+
+
 async def test_find_near_duplicate_decision_excludes_a_given_id(actions: Actions) -> None:
     """Direct unit test of `exclude` (Thoth's catch, msg 1903, thread af77073a), independent
     of any similarity-score luck: an exact restatement dedups to `d` with no exclusion, and

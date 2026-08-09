@@ -9,9 +9,11 @@ lexical search with nothing false said.
 """
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
+import pytest
 import pytest_asyncio
 from src.actions.core import Actions
 from src.orchestrator import semantics
@@ -47,6 +49,35 @@ async def fake_embedder() -> AsyncIterator[FakeEmbedder]:
     semantics.set_embedder_for_tests(fe)
     yield fe
     semantics.set_embedder_for_tests(None)  # leave the door force-closed for other tests
+
+
+# --- Model2VecEmbedder's own load must be BOUNDED and STICKY (task #149, Imhotep's 300s
+# record_decision timeouts, thread 9f08b027): a hung first-load never raises, so no
+# try/except anywhere in the search pipeline could ever have caught it — only a timeout
+# can. Measured live before this fix: StaticModel.from_pretrained() exceeded 120s with no
+# exception at all. These tests never touch model2vec or the network — they prove the
+# wrapper's own timeout/latch behavior in isolation. ---
+
+
+async def test_model2vec_embedder_embed_bounds_a_hung_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(semantics, "_LOAD_TIMEOUT_S", 0.05)
+    embedder = semantics.Model2VecEmbedder("fake/hangs")
+    monkeypatch.setattr(embedder, "_load", lambda: time.sleep(2))
+
+    t0 = time.monotonic()
+    with pytest.raises(TimeoutError):
+        await embedder.embed(["anything"])
+    assert time.monotonic() - t0 < 1.0  # bounded near 0.05s, not the simulated 2s hang
+    assert embedder._load_failed is True
+
+
+async def test_model2vec_embedder_load_refuses_fast_once_latched() -> None:
+    """The specimen this guards: three record_decision calls in a row each independently
+    hung — this is what stops call 2 and 3 from re-running the same doomed fetch."""
+    embedder = semantics.Model2VecEmbedder("fake/model")
+    embedder._load_failed = True
+    with pytest.raises(RuntimeError, match="previously failed to load"):
+        embedder._load()
 
 
 async def _decision(actions: Actions, canonical: str, summary: str) -> None:

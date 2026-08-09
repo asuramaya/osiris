@@ -4175,6 +4175,7 @@ def _count_leaves(node: Any) -> int:
 
 def _bound_items(
     items: Any, *, fields: list[str] | None, take: int | None, depth: int | None,
+    offset: int | None = None,
 ) -> tuple[Any, dict[str, dict[str, int]]]:
     """THE LENS doing its own job (ruling ad19a779, task #64) instead of leaning on
     `budget.fit()`'s blind backstop — a caller who KNOWS they want 3 rows of 2 fields
@@ -4184,8 +4185,21 @@ def _bound_items(
     nesting (a `group`'s own section/arc/owner keys) is walked, never filtered by `fields`
     — `fields` only ever prunes a LEAF row's own columns; `depth` collapses everything
     below the requested level to its honest count rather than silently rendering it flat
-    (a caller who asked for depth=1 must not be quietly handed depth=3)."""
+    (a caller who asked for depth=1 must not be quietly handed depth=3).
+
+    `offset` (task #149, Thoth DM 3847 — "NO take/offset/cursor"): `take` alone can only
+    ever show the FIRST N of a list, on every call, forever — there is no way to ask for
+    the NEXT N. Measured live: a 603-item open-threads composition, asked for with no
+    lens at all, correctly reported `_bounded: shown 37 of 603` (the generic backstop
+    DOES announce itself) but offered no way to see items 38-603 short of building ~20
+    separate narrower, hand-partitioned compositions (owner-by-owner, keyword-by-keyword)
+    — the actual workaround this task's own dispatch named. `offset` skips N before
+    taking, so `take=50, offset=50` is page 2 of the same ordering the composition's own
+    op-tree already produced (rank/order runs inside the op-tree; this never re-sorts,
+    same law `take` alone already held) — one simple, honest counter, not a stateful
+    cursor token, because the ordering itself is already stable per spec."""
     dropped: dict[str, dict[str, int]] = {}
+    start = offset or 0
 
     def walk(node: Any, path: tuple[str, ...], remaining_depth: int | None) -> Any:
         if isinstance(node, dict):
@@ -4196,9 +4210,13 @@ def _bound_items(
             next_depth = None if remaining_depth is None else remaining_depth - 1
             return {k: walk(v, (*path, str(k)), next_depth) for k, v in node.items()}
         if isinstance(node, list):
-            kept = node[:take] if take is not None else node
-            if take is not None and len(node) > take:
-                dropped[".".join(path) or "(root)"] = {"shown": len(kept), "of": len(node)}
+            end = start + take if take is not None else None
+            kept = node[start:end]
+            if start or (take is not None and len(node) > start + len(kept)):
+                entry = {"shown": len(kept), "of": len(node)}
+                if start:
+                    entry["offset"] = start
+                dropped[".".join(path) or "(root)"] = entry
             return [_bound_row(x, fields) for x in kept]
         return node
 
@@ -4215,6 +4233,7 @@ async def run_spec(
     pool: asyncpg.Pool, spec: dict[str, Any], subject: uuid.UUID | None = None,
     name: str = "(spec)", caller: str | None = None,
     *, fields: list[str] | None = None, take: int | None = None, depth: int | None = None,
+    offset: int | None = None,
 ) -> dict[str, Any]:
     """Evaluate an op-tree and package the Result for the generic renderer. The inline
     composer (W4) runs an EPHEMERAL working spec through here as you edit chips — no save.
@@ -4229,7 +4248,13 @@ async def run_spec(
     `depth` caps how many nested dict levels (a `group`'s own section/arc/owner structure)
     get walked before collapsing to an honest count. None (the default, every existing
     caller) is a complete no-op — untouched items, unchanged shape, byte-identical to before
-    this ruling existed."""
+    this ruling existed.
+
+    `offset` (task #149) skips N items before `take` — `take` alone can only ever show a
+    list's FIRST N, forever; `take=50, offset=50` is page 2 of the SAME stable ordering the
+    op-tree already produced. A 603-item composition used to force a caller into building
+    dozens of hand-partitioned narrower compositions just to see past item 37 — this is the
+    plain counter that replaces that workaround."""
     token = _ACL_CALLER.set(caller) if caller is not None else None
     try:
         res = await _eval(pool, spec, subject)
@@ -4240,8 +4265,9 @@ async def run_spec(
     count = len(items) if isinstance(items, list | dict) else 1
     out: dict[str, Any] = {"composition": name, "kind": res.kind, "count": count,
                            "items": items, "spec": spec}
-    if fields or take is not None or depth is not None:
-        out["items"], dropped = _bound_items(items, fields=fields, take=take, depth=depth)
+    if fields or take is not None or depth is not None or offset is not None:
+        out["items"], dropped = _bound_items(items, fields=fields, take=take, depth=depth,
+                                             offset=offset)
         if dropped:
             # `_projected`, never `_bounded` — `budget.fit()` (the LATER, generic backstop
             # every MCP tool result passes through, mcp_server.BoundedMCP.call_tool) writes
@@ -4257,17 +4283,19 @@ async def run_composition(
     pool: asyncpg.Pool, ref: str, subject: uuid.UUID | None = None,
     caller: str | None = None,
     *, fields: list[str] | None = None, take: int | None = None, depth: int | None = None,
+    offset: int | None = None,
 ) -> dict[str, Any]:
     """Execute a saved composition (by name or id), optionally against a subject.
     `caller` = who is reading (the reflection ACL's input — see run_spec). `fields`/`take`/
-    `depth` — see run_spec; a roadmap-sized composition (task #64's own proof case: 61K
-    chars, 53 threads, unbounded) can now be asked for narrow and small in one call instead
-    of shipping whole and getting post-processed by hand."""
+    `depth`/`offset` — see run_spec; a roadmap-sized composition (task #64's own proof
+    case: 61K chars, 53 threads, unbounded) can now be asked for narrow and small in one
+    call instead of shipping whole and getting post-processed by hand — and `offset` pages
+    past the first `take` instead of forcing a hand-partitioned rebuild per page."""
     spec = await _spec_of(pool, ref)
     if spec is None:
         return {"error": f"no composition {ref!r}"}
     return await run_spec(pool, spec, subject, name=ref, caller=caller,
-                          fields=fields, take=take, depth=depth)
+                          fields=fields, take=take, depth=depth, offset=offset)
 
 
 # --- default compositions (templates — the engine's opinions, now forkable) --
