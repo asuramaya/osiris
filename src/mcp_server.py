@@ -44,7 +44,16 @@ from src.ontology.resolution import (
     reclassify_mistyped_entities,
     resolve_cross_base,
 )
-from src.orchestrator import capture, census, digest, handshake, mailbox, mounts, resource_lease
+from src.orchestrator import (
+    capture,
+    census,
+    digest,
+    handshake,
+    mailbox,
+    mounts,
+    resource_lease,
+    task_sync,
+)
 from src.orchestrator import compositions as comp
 from src.orchestrator import dispose as dispose_seam
 from src.orchestrator import succession as comp_succession
@@ -5408,6 +5417,43 @@ async def hold_memory(
         source=await _actor_for(ctx, subagent_id, subagent_type),
     )
     return {"kept": str(r), "as": "reflection — remembered, never actionable"}
+
+
+@mcp.tool()
+async def task_sync_reconcile(
+    tasks: list[dict[str, Any]], write: bool = False, thread_kind_field: str = "task",
+) -> dict[str, Any]:
+    """Reconcile a harness TaskList against the graph — task_sync.py's own promised on-ramp,
+    finally built.
+
+    `tasks`: rows in the harness tool's own TaskList/TaskGet shape ({"id", "subject",
+    "description", "status", ...}). Tag each with its own `_store` (that store's session
+    id) once you mix more than one store — a bare task id repeats across stores. This tool
+    never reads ~/.claude/tasks itself and never enumerates other sessions' stores — you
+    gather the rows, this only reconciles them.
+
+    Report-only by default: the six-bucket report (bound/bound_partial/cited_unresolvable/
+    uncited/disagreement/thread_side_orphans, plus `counts`). No writes.
+
+    `write=True` additionally executes the safe half ONLY: Tier 1 (one
+    `harness_task_citation` property per resolved citation — additive, reversible) and
+    Tier 2 (one obligation Thread per real disagreement or thread-side-orphan, grouped by
+    the disputed THREAD). Writes land only in THIS graph — there is no write-back to the
+    harness's own task store (TaskUpdate has no non-destructive removal verb, so no such
+    executor exists here). Recurrence is your call each time you pass write=True — never
+    scheduled by this tool itself."""
+    pool = await _pool_get()
+    report = await task_sync.reconcile(pool, tasks, thread_kind_field=thread_kind_field)
+    out: dict[str, Any] = {"report": report}
+    if write:
+        actions = Actions(pool)
+        observed_at = datetime.now(UTC)
+        tier1 = await task_sync.write_tier1_correlations(actions, report, observed_at=observed_at)
+        mints = task_sync.tier2_mints(report)
+        tier2 = await task_sync.mint_tier2_threads(actions, mints)
+        out["tier1_written"] = tier1
+        out["tier2_minted"] = tier2
+    return out
 
 
 @mcp.custom_route("/automount", methods=["POST"])
