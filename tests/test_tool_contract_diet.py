@@ -379,7 +379,19 @@ def _tool_chars(t: Any) -> int:
 # a wall of them afterwards; a pre-flight answer is the difference between a gate and an
 # ambush. Costs 1,028 chars — the cheapest tool added since the ratchet was armed.
 # 138,757 -> 139,785, +1,028. 102 -> 103 tools, exactly one added.
-TOOL_CONTRACT_CEILING_CHARS = 139_785
+#
+# RAISED A THIRD TIME, NO NEW TOOL — two EXISTING tools grew a genuinely new capability
+# each (task #149, Thoth DM 3847): record_decision's `content_landed` (a post-write
+# read-back so a caller can tell "your rationale landed" from "it silently lost a
+# tie-break," the specimen behind thread 20145def and Thoth's own "I had to go READ the
+# object to find out" account) and run_composition's `offset` (real pagination — `take`
+# alone could only ever show a list's first N, forever; the actual workaround was ~20
+# hand-built narrower compositions, confirmed live against the 603-item open-threads
+# composition). Trimmed the added prose twice before raising this (141,048 -> 140,373);
+# the remainder is the `offset` parameter's own inputSchema field plus the minimal text
+# either new field needs to be discoverable at all — load-bearing, not reflex.
+# 139,785 -> 140,373, +588. 103 -> 103 tools, none added — two tools' own contracts grew.
+TOOL_CONTRACT_CEILING_CHARS = 140_373
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:

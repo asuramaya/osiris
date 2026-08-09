@@ -15,8 +15,13 @@ fingerprint moves. Backfill is incremental by construction: each row carries the
 the text it embedded; unchanged text is never re-embedded (the watermark discipline).
 
 Degradation is graceful and HONEST: no model on disk / import failure → embedder() is
-None → fn_search runs its lexical doors only and says nothing false. Tests inject a fake
-via `set_embedder_for_tests` — CI never downloads a model.
+None → fn_search runs its lexical doors only and says nothing false. A THIRD failure mode
+(task #149): the first load can HANG rather than error — StaticModel.from_pretrained()
+reaching HF's CDN with no local cache — which no try/except ever catches, since a hang
+never raises. Model2VecEmbedder bounds that load with a timeout and latches the failure
+(never re-attempted mid-process), so this door closes within seconds instead of the
+caller waiting out an external 300s timeout with no diagnosis. Tests inject a fake via
+`set_embedder_for_tests` — CI never downloads a model.
 """
 from __future__ import annotations
 
@@ -45,16 +50,43 @@ class EmbedClient(Protocol):
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
 
 
+_LOAD_TIMEOUT_S = 8.0  # a ~30MB local model loads in low single digits on a healthy
+# network. This bounds a HUNG first-load (task #149, Imhotep's 300s record_decision
+# timeouts, thread 9f08b027) — StaticModel.from_pretrained() reaches out to HF's CDN for
+# the actual weight files, and that fetch can hang with NO exception raised at all
+# (measured live: it exceeded 120s with zero output past the file-listing step). Every
+# existing "fail closed" guard in this module and in fn_search's semantic door
+# (semantic_candidates's own `except Exception: return []`) only helps once something
+# actually RAISES — a hang is silence, not an error, and silence was never caught. This is
+# the class ruling 60bc15db names: a mechanism that cannot tell "no" from "I don't know
+# yet" is not the same defect as "the answer is slow"; the fix is a bound on I-don't-know,
+# not a retry on no.
+
+
 class Model2VecEmbedder:
     """Static-embedding backend (minishlab/model2vec). Lazy: the model loads on FIRST
     embed (never at import — CI installs the package but must never touch the network).
-    Load failure raises; resolve_embedder turns that into a clean None ONCE."""
+    Load failure raises; resolve_embedder turns that into a clean None ONCE.
+
+    THE LOAD ITSELF IS NOW BOUNDED AND STICKY (task #149): `_load_failed` latches the
+    moment a load times out or errors, so a caller three calls in a row (Imhotep's own
+    specimen) fails fast on calls 2 and 3 instead of re-attempting — and re-hanging — the
+    same doomed fetch each time. The underlying thread is NOT killed on timeout (Python
+    cannot forcibly kill a thread) — it may still finish loading later in the background,
+    but this embedder never trusts that late result once it has already reported closed;
+    consistency over opportunism, the same discipline resolve_embedder's own ONE-time
+    ImportError cache already holds."""
 
     def __init__(self, model_name: str) -> None:
         self.model = model_name
         self._m: Any = None
+        self._load_failed = False
 
     def _load(self) -> Any:
+        if self._load_failed:
+            raise RuntimeError(f"{self.model} previously failed to load (timed out or "
+                               "errored) — the semantic door stays closed for this "
+                               "process; never re-attempted per call")
         if self._m is None:
             from model2vec import StaticModel  # import here: the dep is optional at runtime
 
@@ -65,7 +97,11 @@ class Model2VecEmbedder:
         def _run() -> list[list[float]]:
             m = self._load()
             return [v.tolist() for v in m.encode(texts)]
-        return await asyncio.to_thread(_run)
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(_run), timeout=_LOAD_TIMEOUT_S)
+        except TimeoutError:
+            self._load_failed = True
+            raise
 
 
 _resolved: tuple[EmbedClient | None] | None = None  # 1-tuple: "resolved, possibly to None"
