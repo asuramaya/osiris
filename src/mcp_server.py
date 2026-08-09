@@ -2332,7 +2332,26 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
     # DISSOLVES the old set_charter limitation named at Lane C (decision 1913683e): a
     # successor re-declaring now heals the SAME from_id an ancestor generation used — there is
     # no ancestor/successor distinction left to trip over, one seat, one link.
+    #
+    # TASK #157 PIECE 2, SPECIMEN 14 OF 60bc15db (operator's own words "fix the slop"):
+    # the render below used to fold this key in with `if charter else {}` — an idiom copied
+    # from swap/pin_warn, where falsy means "nothing wrong" and omission is correct. For
+    # charter, falsy ([]) IS the alarm state, so the SAME idiom silently rendered "chartered,
+    # all fine" and "never declared" as the identical silence, on the one surface every seat
+    # reads every session (confirmed live on this seat's own reign: 26 of 33 active seats
+    # read `charter` absent from their own orient(), including this one). Gated on
+    # `charter_seat is not None` now, not on `charter` truthiness — a session holding no seat
+    # at all has nothing to charter and stays silent (this is not a seat-only alarm turned
+    # into a universal one); a session that DOES hold a seat gets told the truth either way,
+    # stated once and plainly (`_CHARTER_UNDECLARED`, the same text mint_seat's and
+    # establish_office's own receipts already use), never a repeated `⚠` banner. NOTE, named
+    # rather than quietly assumed: `charter_of` cannot currently distinguish "never declared"
+    # from "declared as governing zero repos" (`set_charter(repos=[])` heals every existing
+    # edge and leaves no trace it was ever called) — both read back as the identical empty
+    # list, so both render as UNDECLARED here. That is an honest limit of the data model, not
+    # a bug this piece introduces or is scoped to fix.
     from src.orchestrator.charter import charter_of
+    from src.orchestrator.offices import _CHARTER_UNDECLARED
     from src.orchestrator.seats import held_seat
     charter_seat = await held_seat(pool, ident.agent_id) if ident else None
     charter = await charter_of(pool, charter_seat["seat_id"]) if charter_seat else []
@@ -2481,7 +2500,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             "mail": mail,
             **({"fleet_pulse": pulse} if pulse else {}),
             **op_mail,
-            **({"charter": charter} if charter else {}),
+            **({"charter": charter or _CHARTER_UNDECLARED} if charter_seat is not None else {}),
             **({"swap": swap} if swap else {}),
             **({"project_pin_error": pin_warn} if pin_warn else {}),
             **sweep_receipt,
@@ -2550,7 +2569,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         "mail": mail,
         **({"fleet_pulse": pulse} if pulse else {}),
         **op_mail,
-        **({"charter": charter} if charter else {}),
+        **({"charter": charter or _CHARTER_UNDECLARED} if charter_seat is not None else {}),
         **({"swap": swap} if swap else {}),
         **({"project_pin_error": pin_warn} if pin_warn else {}),
         **({"succession_note": inheritance} if inheritance else {}),
