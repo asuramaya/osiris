@@ -1668,6 +1668,32 @@ async def test_tree_ledger_combines_both_sections_and_caveats(actions: Actions) 
     assert any("agent_mounts" in c for c in out["caveats"])
 
 
+async def test_project_ledger_surfaces_the_generic_basename_list_in_the_output(
+    actions: Actions,
+) -> None:
+    """Thoth's own instruction (msg 3920): a hidden deny-list is an unfalsifiable claim —
+    the editable phantom-suspect basis must be VISIBLE in the data a caller actually reads,
+    not just documented in a docstring or a private module constant."""
+    from src.orchestrator.seats import _GENERIC_PATH_BASENAMES, project_ledger
+
+    out = await project_ledger(actions.pool)
+    assert out["phantom_verdict_basis"]["phantom-suspect"] == sorted(_GENERIC_PATH_BASENAMES)
+    assert "mechanical" in out["note"].lower()
+
+
+async def test_live_cwd_ledger_states_its_own_non_durability_in_section(
+    actions: Actions,
+) -> None:
+    """Thoth's own instruction (msg 3920): 'nobody reads the bottom' — the caveat belongs
+    where a reader hits it, inside this section's own output, not only in the report-level
+    caveats list."""
+    from src.orchestrator.seats import live_cwd_ledger
+
+    out = await live_cwd_ledger(actions.pool)
+    assert "agent_mounts" in out["note"]
+    assert "evict" in out["note"].lower()
+
+
 # ═══ REACHABILITY (ruling d739d486) — a TRUTHFUL "can I reach this lineage right now?" ═════
 # Ra's clean repro: a mail send-receipt refused a fresh successor ("no resumable session —
 # never handed to a fresh twin") while the daemon's own job_for on the same lineage held a

@@ -571,16 +571,15 @@ _TREE_LEDGER_CAVEATS = (
     "graph state — but by construction can only see a phantom that accumulated at least "
     "one works_in edge; a tree that mounted, produced nothing, and left is invisible to "
     "this whole class of instrument, not just this one field.",
-    "live_cwd_ledger's population is TODAY's agent_mounts table only (32 distinct cwd, "
-    "measured live) — an ephemeral, recent-sessions registry, NOT a historical ledger. A "
-    "phantom whose originating sessions have already ended and been evicted from "
-    "agent_mounts never appears there, only in project_ledger.",
-    "phantom_verdict is a JUDGMENT, not a proof, ported from Sekhmet's own rule (msg 3906): "
-    "'declared' trusts any seat's pin OR a Seat-origin governs edge — an Agent-origin "
-    "governs edge never counts (thread 20af2c95's succession-leak class is evidence FOR "
-    "phantom, not against it); 'phantom-suspect' matches _GENERIC_PATH_BASENAMES, an "
-    "explicit list that will always be incomplete; 'undetermined' means neither test fired, "
-    "never a confirmation that the project is legitimate.",
+    "live_cwd_ledger's own non-durability caveat (agent_mounts is a live/recent registry, "
+    "not history) is stated in ITS OWN section, not only here (Thoth's instruction, msg "
+    "3920 — 'nobody reads the bottom'); see its `note` field, not just this list.",
+    "phantom_verdict is a JUDGMENT, not a proof, ported from Sekhmet's own rule (msg 3906) "
+    "— 'declared' trusts any seat's pin OR a Seat-origin governs edge, never an Agent-"
+    "origin one (thread 20af2c95's succession-leak class is evidence FOR phantom, not "
+    "against it). project_ledger's own `phantom_verdict_basis`/`note` fields carry the "
+    "editable basename list and the mechanical-vs-hand-judgment distinction directly — see "
+    "those, not just this line.",
     "the pin's own seat/house/kind fields (Imhotep's schema addition, ruling 719ed5b1) read "
     "almost universally absent as of this build — his migration/writer is still landing "
     "(msg 3909/3915). That is the honest starting state, not a defect in this report's "
@@ -638,7 +637,16 @@ async def project_ledger(pool: asyncpg.Pool, *, limit: int = 200, offset: int = 
 
     `limit`/`offset` (default 200/0, capped 2000, `total` always reported) — the no-silent-
     caps law, though 58 active SoftwareProjects exist today (measured), comfortably inside
-    one page."""
+    one page.
+
+    `phantom_verdict_basis` and `note` are returned WITH the rows, not left to a docstring a
+    caller may never read (Thoth's own instruction, msg 3920, on the first cut of this
+    build): `phantom-suspect` is a MECHANICAL, WEAKER stand-in for Sekhmet's own hand-
+    verified name-shape judgment — she looked at the actual originating cwd; this cannot,
+    because agent_mounts evicts it long before a phantom accumulates enough content to be
+    this report's business (see `live_cwd_ledger`). A reader must be able to tell a
+    mechanically-derived suspicion from her verified one at a glance, in the data, not by
+    tracing back to this function's source."""
     limit = max(1, min(limit, 2000))
     offset = max(0, offset)
     total = await pool.fetchval(
@@ -667,7 +675,20 @@ async def project_ledger(pool: asyncpg.Pool, *, limit: int = 200, offset: int = 
             "declared_by": declared_by,
             "phantom_verdict": _phantom_verdict(name, declared_by),
         })
-    return {"projects": projects, "total": total, "limit": limit, "offset": offset}
+    return {
+        "projects": projects, "total": total, "limit": limit, "offset": offset,
+        "phantom_verdict_basis": {
+            "test-fixture": sorted(_KNOWN_TEST_FIXTURE_PROJECTS),
+            "phantom-suspect": sorted(_GENERIC_PATH_BASENAMES),
+        },
+        "note": ("phantom-suspect is MECHANICAL and WEAKER than a hand-verified judgment: "
+                "it fires only when a project's name matches the editable list above AND "
+                "no seat declares it — it is an operationalization of Sekhmet's own "
+                "name-shape test (msg 3906) that survives the originating cwd being long "
+                "gone, not a replacement for her looking at one directly. undetermined "
+                "means neither test fired — a real disagreement for a human, never a "
+                "confirmation the project is legitimate."),
+    }
 
 
 async def live_cwd_ledger(pool: asyncpg.Pool) -> dict[str, Any]:
@@ -750,7 +771,17 @@ async def live_cwd_ledger(pool: asyncpg.Pool) -> dict[str, Any]:
             "graph_believes": graph_believes,
             "agreement": agreement,
         })
-    return {"cwds": cwds, "total": len(cwds)}
+    return {
+        "cwds": cwds, "total": len(cwds),
+        "note": ("NOT A HISTORICAL LEDGER (Thoth's own instruction, msg 3920: this belongs "
+                "where a reader hits it, not at the bottom): this section's population is "
+                "TODAY's agent_mounts table only, a live/recent registry keyed on job_dir "
+                "that EVICTS old rows (measured live: 37 total rows / 32 distinct cwd "
+                "against thousands of historical agents). A phantom whose originating "
+                "sessions have already ended and been evicted from agent_mounts will NEVER "
+                "appear here — only in project_ledger, which reads durable graph state "
+                "instead."),
+    }
 
 
 async def tree_ledger(pool: asyncpg.Pool, *, limit: int = 200, offset: int = 0) -> dict[str, Any]:

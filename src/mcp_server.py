@@ -2786,14 +2786,19 @@ async def tree_ledger(limit: int | None = None, offset: int = 0) -> dict[str, An
     name, named not scored), `declared` (some seat's own pin or Seat-origin `governs` edge
     claims it — Agent-origin governs edges never count, the exact succession-leak class
     that legitimized repo:code's own bogus edge), `phantom-suspect` (its name matches an
-    explicit, editable list of generic path-segment words — seats/code/tmp/etc — and
-    nothing declares it), or `undetermined` (neither fired — a real disagreement for a
-    human, never a confident phantom call either way). `triage_bucket` reused verbatim from
-    the same machinery `roster()`'s pin field already calls. `limit`/`offset` (default
-    200/0, capped 2000, `total` always reported) page it, though 58 fits one page today.
+    explicit list of generic path-segment words — seats/code/tmp/etc — and nothing declares
+    it), or `undetermined` (neither fired — a real disagreement for a human, never a
+    confident phantom call either way). The response's own `phantom_verdict_basis` field
+    carries that editable list VISIBLY (a hidden deny-list is an unfalsifiable claim), and
+    `note` states plainly that `phantom-suspect` is a MECHANICAL, WEAKER stand-in for a
+    hand-verified name-shape judgment — never treat the two as the same confidence.
+    `triage_bucket` reused verbatim from the same machinery `roster()`'s pin field already
+    calls. `limit`/`offset` (default 200/0, capped 2000, `total` always reported) page it,
+    though 58 fits one page today.
 
-    `live_cwd_ledger` — every DISTINCT cwd `agent_mounts` holds RIGHT NOW (measured: 32
-    rows today — this table is a live/recent registry, NOT a historical ledger; a phantom
+    `live_cwd_ledger` — its own `note` field states, where a reader hits it before the
+    rows, that its population is TODAY's `agent_mounts` table only (measured: 32 distinct
+    cwd — a live/recent registry, NOT a historical ledger, that EVICTS old rows; a phantom
     whose originating sessions already ended and were evicted never appears here, only in
     `project_ledger`). Each cwd carries `resolved_today` (what a fresh mount computes now:
     the pin, else the basename fallback, refusing at the bare seats container) versus
