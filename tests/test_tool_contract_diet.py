@@ -399,7 +399,31 @@ def _tool_chars(t: Any) -> int:
 # branches (sekhmet-resolver, seshat-broadcast, imhotep-bootdelivery) grew docstrings he
 # could not see. No author can measure a surface that does not exist until the merge.
 # 140,373 -> 141,044. 103 -> 103 tools, no tool added or removed.
-TOOL_CONTRACT_CEILING_CHARS = 141_044
+# RAISED AT AN EIGHT-BRANCH MERGE, AND THIS IS THE FOURTH PROOF OF 45e72476 IN A SINGLE DAY.
+# TWO NEW TOOLS, both load-bearing, both the direct repayment of debts this house measured
+# the same evening:
+#   task_sync_reconcile (~1,692) — the DOOR onto task_sync.py, 503 loc of implementation and
+#     471 loc of tests that had run live exactly once (2026-08-01, 41 obligation threads
+#     minted) and then had no caller at all. Khnum trimmed its docstring under the category
+#     rule BEFORE handing me the number (143,577 -> 142,736): provenance and dated citations
+#     cut, behaviour/refusals/returns kept. That trim order is the standing one.
+#   tree_ledger (~4,144) — the audit instrument that, with zero prior knowledge encoded,
+#     independently flagged repo:seats and repo:code as phantom-suspect (the exact two found
+#     by eye that night) AND found two nobody had reached. Its contract is heavy because it
+#     declares its own verdict vocabulary and its own blind spots; that text is the honesty,
+#     not the fat.
+# The remainder (~730) is Seshat's triage docstring correction — the `contradicted` bucket was
+# implemented and documented in compositions.py and ABSENT from the tool contract an agent
+# actually reads, which is why this house hand-rolled SQL for a question triage was already
+# answering — plus receipt text from the mount-identity and charter work.
+# AND THE PROOF ITSELF: Khnum measured 142,736/104 on khnum-task-sync-verb and handed me the
+# number instead of raising the line. Correct for his branch. WRONG FOR main BY +4,874,
+# because seshat-measure added a whole tool and two more branches grew receipts he could not
+# see. Third author in a row to decline this line correctly; third time the author's honest
+# number could not have been right. No author can measure a surface that does not exist
+# until the merge.
+# 141,044 -> 147,610. 103 -> 105 tools, two added.
+TOOL_CONTRACT_CEILING_CHARS = 147_610
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -462,4 +486,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     102 -> 103 (2026-08-08, task #156.4): wake_preflight — which gates would refuse a wake,
     asked BEFORE the attempt instead of discovered as a wall of refusals after."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 103
+    assert len(per_tool) == 105
