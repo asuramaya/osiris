@@ -790,6 +790,38 @@ def read_project_model(cwd: str | None) -> str | None:
     return _read_osiris_key(cwd, "model").value
 
 
+def read_house_label(cwd: str | None) -> str | None:
+    """A tree's DECLARED house (TOML: house = "..." in `.osiris`) — the governing org anchor,
+    ruling 719ed5b1's pin-schema build. Distinct from `project`: a seat's own office pins
+    house == project (577988ed), but a code checkout governed by that seat can legitimately
+    declare a different `project` (its own repo's label) while `house` still names who governs
+    it — the split this key exists to make offline-readable instead of graph-only. None → no
+    house declared here (never a basename guess; unlike `project`, there is no folder-name
+    fallback that means anything for an org anchor)."""
+    return _read_osiris_key(cwd, "house").value
+
+
+def read_seat_handle(cwd: str | None) -> str | None:
+    """The HANDLE of the seat this tree belongs to (TOML: seat = "..." in `.osiris`), ruling
+    719ed5b1: "the .osiris pin has no seat field — the declaration of record cannot declare
+    who lives there." A handle, not a seat:uuid — matches how the fleet already addresses
+    seats everywhere (mail, fleet(), roster()); a rename drifts this the same way it drifts
+    any handle-keyed reference, detectable and re-syncable by the migration verb, never a
+    silent corruption. None → no seat declared (a bare code checkout nobody's office is)."""
+    return _read_osiris_key(cwd, "seat").value
+
+
+def read_tree_kind(cwd: str | None) -> str | None:
+    """What KIND of tree this is (TOML: kind = "..." in `.osiris`) — one of office | worktree |
+    repo | container, ruling 719ed5b1: "nothing distinguishes an OFFICE from a WORKTREE from a
+    plain REPO from a CONTAINER, so every consumer re-guesses from path shape." `container` is
+    the data-level replacement for the hardcoded path-equality carve-outs
+    (`offices.is_bare_office_root` et al.) — read here, not yet consumed by them (that fold-in
+    is separate, deliberate follow-up work, not this key's own landing). None → undeclared;
+    callers keep whatever path-shape guess they used before this key existed."""
+    return _read_osiris_key(cwd, "kind").value
+
+
 def _write_model_pin_sync(office: Path, model: str) -> bool:
     """THE SYNCHRONOUS HALF (task #146, operator's own complaint: "my /model confuses
     everything, it should be authoritative and automatically handle updating .osiris").

@@ -389,6 +389,41 @@ def test_read_project_model_declares_the_repo_intent(tmp_path: Path) -> None:
     assert read_project_model(str(tmp_path)) is None                    # undeclared → default
 
 
+def test_read_house_seat_kind_are_additive_parallel_reads(tmp_path: Path) -> None:
+    """Ruling 719ed5b1's pin-schema build: house/seat/kind are new keys read through the SAME
+    `_read_osiris_key` helper as project/model, not a new mechanism — so a pin that only ever
+    declared project/model (every pin on disk today) answers None for all three without error,
+    and a pin that declares them reads back exactly what it wrote. Proves the additive claim:
+    old two-key pins need no migration to keep working."""
+    from src.orchestrator.agents import (
+        read_house_label,
+        read_project_label,
+        read_seat_handle,
+        read_tree_kind,
+    )
+
+    old_style = tmp_path / "legacy"
+    old_style.mkdir()
+    (old_style / ".osiris").write_text('project = "osiris"\nmodel = "claude-sonnet-5"\n')
+    assert read_house_label(str(old_style)) is None
+    assert read_seat_handle(str(old_style)) is None
+    assert read_tree_kind(str(old_style)) is None
+
+    full = tmp_path / "office"
+    full.mkdir()
+    (full / ".osiris").write_text(
+        'project = "osiris"\nhouse = "osiris"\nseat = "imhotep"\nkind = "office"\n')
+    assert read_house_label(str(full)) == "osiris"
+    assert read_seat_handle(str(full)) == "imhotep"
+    assert read_tree_kind(str(full)) == "office"
+
+    container = tmp_path / "container"
+    container.mkdir()
+    (container / ".osiris").write_text('kind = "container"\n')
+    assert read_tree_kind(str(container)) == "container"
+    assert read_project_label(str(container)) is None  # no project here — the whole point
+
+
 def test_read_project_pin_distinguishes_all_three_no_project_shapes(
     tmp_path: Path,
 ) -> None:
