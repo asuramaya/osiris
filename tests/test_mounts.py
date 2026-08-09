@@ -223,6 +223,47 @@ async def test_mount_confesses_a_broken_osiris_pin(
         srv._pool = saved_pool
 
 
+async def test_mount_preserves_a_declared_pin_across_the_recollection_override(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RULING 13af22fc: the stale-recollection guard corrects `cwd` to the registry's own
+    address for transcript-addressing purposes — right, since the harness's own transcript
+    location is the ground truth for where a session actually lives. But it used to also
+    silently discard whatever project pin sat at the DECLARED cwd, letting the CORRECTED
+    cwd's own (often unpinned) directory win identity resolution instead. Live case: Thoth
+    declared his own office (`.../seats/thoth`, pinned "osiris") from a session whose
+    registry row remembered the bare seat-office container (unpinned) — the container won,
+    and the office's own declared pin vanished unread, one step from a basename phantom.
+    `stale_recollection` is monkeypatched to fire (not fabricating real transcript JSONL
+    files) — its own evidence rule is separately proven by
+    test_stale_recollection_trusts_the_transcripts_address in test_rebind.py; this test is
+    about what mount() does with the verdict, not how the verdict is reached."""
+    from src import mcp_server as srv
+
+    office = tmp_path / "seats" / "thoth"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "osiris"\n')
+    container = tmp_path / "seats"
+
+    job_dir = str(tmp_path / "jobs" / "recollect01")
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:recollect01",
+                            project="seats", cwd=str(container), model=None,
+                            session_key="sid:recollect01")
+    monkeypatch.setattr(mounts, "stale_recollection", lambda *a, **k: True)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(office), job_dir=job_dir)
+        assert out["project"] == "osiris", (
+            f"the declared office's own pin was discarded by the recollection override: {out}")
+        note = out.get("cwd_corrected")
+        assert note is not None, f"mount() never confessed the correction: {out}"
+        assert note["declared"] == str(office) and note["kept"] == str(container)
+        assert note.get("declared_pin_kept_for_identity") == "osiris"
+    finally:
+        srv._pool = saved_pool
+
+
 async def test_mount_warns_on_a_valid_pin_that_never_sets_project(
     actions: Actions, tmp_path: Path,
 ) -> None:
