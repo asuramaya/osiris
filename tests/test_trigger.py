@@ -979,6 +979,37 @@ async def test_wake_preflight_mcp_tool_resolves_a_seat_and_never_touches_dispatc
     assert d["mode"] == "resumable"
 
 
+async def test_wake_preflight_mcp_tool_resolves_a_bare_claimed_handle(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Live-fire regression (2026-08-08): this tool's own first real run against a bare
+    handle ('metron') silently answered 'never-mounted' for a seat that had actually
+    mounted many times — _resolve_wake_address only ever understood 'seat:'/'agent:'
+    prefixes; dispatch_dm's own addressee always arrives PRE-RESOLVED via wake_worker's
+    _seat_for_target call, so this gap was invisible until something called the MCP tool
+    directly with a plain name, the same way a human or a fleet agent actually would."""
+    import src.mcp_server as srv
+
+    sense = await _stale_resumable_owner(actions, tmp_path, transcript_bytes=16)
+    seat = (await ensure_seat(actions, house="demo", handle="Nefertari",
+                              source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=seat, agent_id="agent:abcd1234")
+    monkeypatch.setattr(trigger_module, "get_settings",
+                        lambda: _settings(enabled=True, sense=str(sense)))
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("preflight must never dispatch a real wake")
+
+    monkeypatch.setattr(trigger_module, "dispatch_dm", _boom)
+    try:
+        d = await srv.wake_preflight("Nefertari")
+    finally:
+        srv._pool = saved_pool
+    assert d["mode"] == "resumable", d
+
+
 async def test_mid_turn_means_the_transcript_is_moving_NOT_the_heartbeat(
     actions: Actions, tmp_path: Path
 ) -> None:

@@ -2888,9 +2888,21 @@ async def wake_preflight(target: str) -> dict[str, Any]:
     resume would not return it). Read-only: checks nothing it cannot answer from the
     graph and disk, sends nothing, spawns nothing."""
     pool = await _pool_get()
-    from src.orchestrator.trigger import _resolve_wake_address, wake_gate_preflight
+    from src.orchestrator.trigger import (
+        _resolve_wake_address,
+        _seat_for_target,
+        wake_gate_preflight,
+    )
 
-    resolved = await _resolve_wake_address(pool, target)
+    # A BARE HANDLE MUST RESOLVE, THE SAME WAY wake() ITSELF DOES (live-fire finding,
+    # 2026-08-08: this tool's own first real run against 'metron' silently answered
+    # 'never-mounted' — _resolve_wake_address only ever understood 'seat:'/'agent:'
+    # prefixes, exactly like dispatch_dm's own addressee, which always arrives PRE-
+    # RESOLVED via wake_worker's _seat_for_target call before dispatch_dm ever sees it.
+    # This tool has no such upstream resolver of its own, so it must run the SAME one
+    # wake_worker does — never a second, narrower guess at what a handle means).
+    seat = await _seat_for_target(Actions(pool), target)
+    resolved = await _resolve_wake_address(pool, seat or target)
     if isinstance(resolved, dict):
         return {**resolved, "status": "no-live-body"}
     resolved_target, seat_id = resolved
