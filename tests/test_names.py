@@ -320,12 +320,18 @@ def test_resolve_identity_never_invents_a_project_from_the_bare_office_root(
     itself): the old basename fallback would have minted the literal string 'seats' as a
     phantom project. resolve_identity stays honestly unresolved from cwd (None) rather than
     inventing it — a location-independent identity finds its project through its SEAT
-    instead (mount()'s seat-first resolution), not by guessing from where it's sitting."""
+    instead (mount()'s seat-first resolution), not by guessing from where it's sitting.
+
+    Patches `offices._DEFAULT_OFFICE_ROOT`: resolve_identity now calls the shared
+    `is_bare_office_root()` (offices.py) instead of a private duplicate of the same
+    path-equality check (the 38c71544 dedup, ruling 719ed5b1) — the module that OWNS the
+    comparison is the one whose global must move for the test to see it."""
     from src.orchestrator import agents as agents_mod
+    from src.orchestrator import offices as offices_mod
 
     fake_root = tmp_path / ".osiris" / "seats"
     fake_root.mkdir(parents=True)
-    monkeypatch.setattr(agents_mod, "_DEFAULT_OFFICE_ROOT", fake_root)
+    monkeypatch.setattr(offices_mod, "_DEFAULT_OFFICE_ROOT", fake_root)
 
     ident = agents_mod.resolve_identity(cwd=str(fake_root))
     assert ident.project is None
