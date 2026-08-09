@@ -391,7 +391,15 @@ def _tool_chars(t: Any) -> int:
 # the remainder is the `offset` parameter's own inputSchema field plus the minimal text
 # either new field needs to be discoverable at all — load-bearing, not reflex.
 # 139,785 -> 140,373, +588. 103 -> 103 tools, none added — two tools' own contracts grew.
-TOOL_CONTRACT_CEILING_CHARS = 140_373
+# RAISED AT A FOUR-BRANCH MERGE, AND THIS IS THE THIRD AND CLEANEST PROOF THAT THIS LINE
+# BELONGS TO THE INTEGRATOR, NOT THE AUTHOR (45e72476). Khnum raised it to 140,373 on
+# khnum-receipt-honesty — correctly, for his branch: he trimmed his own prose twice first
+# (141,048 -> 140,373) and raised only for the load-bearing remainder, exactly the discipline
+# this file asks for. HIS NUMBER WAS STILL WRONG FOR main, by +671, because three other
+# branches (sekhmet-resolver, seshat-broadcast, imhotep-bootdelivery) grew docstrings he
+# could not see. No author can measure a surface that does not exist until the merge.
+# 140,373 -> 141,044. 103 -> 103 tools, no tool added or removed.
+TOOL_CONTRACT_CEILING_CHARS = 141_044
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
