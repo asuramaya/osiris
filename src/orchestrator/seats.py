@@ -377,6 +377,11 @@ _ROSTER_CAVEATS = (
     "anchor_cwd and tree_cwd with nothing wrong on the launch path — Imhotep's #141 scope found "
     "khnum and sekhmet both bound to a tree_cwd while their live sessions sit at the office cwd. "
     "The three are reported separately on purpose; none is silently treated as 'the' cwd.",
+    "pin.triage_bucket only ever looks up repo:<pin.declared> — it inherits every one of "
+    "pin's own blind spots above (not certified canonical, anchor_cwd-only) plus one more: "
+    "a bucket reflects a single triage snapshot taken once per roster() call, not a live "
+    "join, so it can go stale the instant something else in the graph changes after this "
+    "call returns.",
 )
 
 
@@ -384,6 +389,35 @@ def _dir_exists(path: str | None) -> bool | None:
     """A plain sync wrapper so `roster()` (async) never calls a blocking Path method inline
     (ASYNC240) — None when there's no path to check, never a guess."""
     return Path(path).is_dir() if path else None
+
+
+async def _triage_bucket_map(pool: asyncpg.Pool) -> dict[str, str]:
+    """canonical -> bucket for every active SoftwareProject, ONE call shared across every
+    row roster() builds (task #158's cross-reference, thread 251443ff — Khnum's read, msg
+    3886) rather than a per-seat re-scan. Goes through `compositions.run_spec`, the same
+    public entrypoint mcp_server.py's own `triage()` tool uses — never the module's private
+    `_fn_triage`/`_triage_buckets` directly.
+
+    FUNCTION-LOCAL IMPORT, DELIBERATELY (Khnum's read): compositions.py imports this module
+    at ITS OWN top (`_OPERATOR_ACTORS`); a top-of-file import back from here would be a real
+    cycle — Python would hit a partially-initialized module on whichever side loads first,
+    breaking at process start, not at a call site. By the time this function actually runs,
+    mcp_server.py has already finished importing both modules, so this is a plain
+    `sys.modules` lookup — the same pattern mailbox.py already leans on ~10 times for this
+    exact shape (folds.py/agents.py/seats.py/capture.py, all function-local there).
+
+    58 active SoftwareProject objects exist today (measured live) — comfortably under the
+    limit=2000 page this asks for, so this is exhaustive in practice, not a silent
+    truncation. If that ever stops being true, the caller (roster) would start seeing
+    `no-such-project` for a real, merely-unpaged project — the honest failure mode of a
+    page-based read outgrowing its own page, not a wrong answer."""
+    from src.orchestrator import compositions
+
+    spec = {"op": "function", "name": "triage",
+            "args": {"mode": "buckets", "object_type": "SoftwareProject",
+                     "status": "active", "limit": 2000}}
+    out = await compositions.run_spec(pool, spec, None, name="triage")
+    return {row["canonical"]: row["bucket"] for row in out["items"] if "canonical" in row}
 
 
 async def roster(
@@ -413,6 +447,16 @@ async def roster(
     #152, running in parallel). `office_exists` and `live_cwd` are separate, deliberately
     uncollapsed axes — see the caveats for exactly what each does and does not mean.
 
+    `pin.triage_bucket` (task #158's cross-reference, thread 251443ff) is a THIRD state, not
+    two: `None` when there's nothing declared to look up (`pin.state` isn't `declared`);
+    `"no-such-project"` when a project IS declared but no active SoftwareProject object
+    named `repo:<pin.declared>` exists in the graph (a dangling pin, not a triage verdict);
+    otherwise the real bucket triage's own buckets mode computed for that object —
+    `contradicted`/`duplicate_suspect`/`bulk_import`/`orphan`/`hub`/`stale`/`thin`/`normal`.
+    Reuses triage verbatim (via `_triage_bucket_map`) rather than inventing a second
+    project-health notion — the operator's own complaint ("triage didn't help at all here")
+    was a discoverability gap, not a missing capability (5c3dbce5, three weeks unpaid).
+
     `repo=None` returns every active seat's row. `repo=<name>` instead answers Alfred's exact
     question — "who owns this" — by checking BOTH signals independently: a seat whose charter
     OR current pin names `repo` is a match, tagged with WHICH signal(s) found it. Two seats
@@ -424,6 +468,7 @@ async def roster(
     from src.orchestrator.agents import read_project_pin
     from src.orchestrator.charter import charter_of
 
+    bucket_map = await _triage_bucket_map(pool)
     seat_rows = await pool.fetch(
         "SELECT o.canonical AS seat_id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -449,6 +494,9 @@ async def roster(
             pin_state = "declared"
         else:
             pin_state = "no-pin"
+        triage_bucket = None
+        if pin_state == "declared" and pin.value:
+            triage_bucket = bucket_map.get(f"repo:{pin.value}", "no-such-project")
         live_cwd = None
         if occ["state"] == "occupied" and occ["holder"]:
             live_cwd = await pool.fetchval(
@@ -461,7 +509,7 @@ async def roster(
             "office_exists": _dir_exists(anchor),
             "chartered_repos": chartered,
             "pin": {"declared": pin.value, "state": pin_state, "path": pin.path,
-                    "error": pin.error},
+                    "error": pin.error, "triage_bucket": triage_bucket},
         })
 
     if repo is None:

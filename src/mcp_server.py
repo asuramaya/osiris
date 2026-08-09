@@ -2750,6 +2750,12 @@ async def roster(repo: str | None = None) -> dict[str, Any]:
     unset/unreadable), `anchor_cwd`/`tree_cwd`/`live_cwd` kept SEPARATE on purpose (a live
     holder's actual mount cwd can differ from both with nothing wrong on the launch path).
 
+    `pin.triage_bucket` (task #158's cross-reference) is a third state: `None` when nothing
+    is declared to look up, `"no-such-project"` when the pin names a project that isn't a
+    real SoftwareProject object, else triage's own bucket for it (`contradicted`,
+    `duplicate_suspect`, `orphan`, `hub`, `stale`, `thin`, or `normal`) — reused verbatim
+    from `triage`, not a second project-health notion.
+
     `repo=<name>` answers "who owns this" directly: a seat matches if its charter OR its
     current pin names the repo, tagged with which signal(s) hit. Two seats matching from
     different signals come back as a `conflict`, never silently picked one. Zero matches is

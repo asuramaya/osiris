@@ -1239,7 +1239,8 @@ async def test_roster_pin_declared_from_a_real_osiris_file(
     rows = {r["seat"]: r for r in (await roster(actions.pool))["seats"]}
     row = rows[seat["seat_id"]]
     assert row["pin"] == {"declared": "coldspot", "state": "declared",
-                          "path": None, "error": None}
+                          "path": None, "error": None,
+                          "triage_bucket": "no-such-project"}
     assert row["office_exists"] is True
 
 
@@ -1390,6 +1391,39 @@ async def test_roster_repo_lookup_no_match_is_not_no_owner(actions: Actions) -> 
     assert out["agreement"] == "no-match"
     assert out["matches"] == []
     assert any("not that the repo has no owner" in c for c in out["caveats"])
+
+
+async def test_roster_pin_triage_bucket_none_when_nothing_declared(actions: Actions) -> None:
+    from src.orchestrator.seats import roster
+
+    seat = await ensure_seat(actions, house="osiris", handle="Rtri1", source="test")
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["pin"]["state"] == "no-office"
+    assert row["pin"]["triage_bucket"] is None
+
+
+async def test_roster_pin_triage_bucket_reuses_triages_own_verdict(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thread 251443ff's whole point: roster does not invent a second project-health
+    notion, it asks triage's own buckets mode and reports the answer verbatim — a fresh
+    zero-link SoftwareProject reads 'orphan' by triage's own priority order, same as it
+    would from triage(mode='buckets') directly."""
+    from src.orchestrator.seats import roster
+
+    await _repo(actions, "orphanproj")
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "orphanproj"\n')
+    seat = await ensure_seat(actions, house="osiris", handle="Rtri2", source="test",
+                             anchor_cwd=str(office))
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["pin"]["state"] == "declared"
+    assert row["pin"]["triage_bucket"] == "orphan"
 
 
 async def test_roster_always_returns_caveats(actions: Actions) -> None:
