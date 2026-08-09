@@ -38,19 +38,20 @@ async def test_a_timeout_then_success_reports_slow_not_a_clean_line(
     lands must flag `slow=True` — the caller renders "graph slow", not silence."""
     budgets: list[float] = []
 
-    async def fake_counts(project: str, session_id: str, model_id: str = "",
+    async def fake_counts(project_hint: str, session_id: str, model_id: str = "",
                           model_raw: str = "", window_size: int | None = None,
-                          *, connect_timeout: float = 1.0) -> tuple[int, ...]:
+                          *, intent_hint: str | None = None,
+                          connect_timeout: float = 1.0) -> tuple[int, ...]:
         budgets.append(connect_timeout)
         if len(budgets) == 1:
             raise TimeoutError
-        return (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0))
+        return (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None)
 
     monkeypatch.setattr(sl, "_counts", fake_counts)
     counts, slow = await sl._fetch_counts("proj", "deadbeef", "claude-fable-5",
-                                          "claude-fable-5", None)
+                                          "claude-fable-5", None, intent_hint=None)
     assert slow is True
-    assert counts == (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0))
+    assert counts == (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None)
     assert budgets == [1.0, 2.5]   # the retry's own, wider budget — never a repeat of the first
 
 
@@ -64,7 +65,8 @@ async def test_two_timeouts_still_propagate_so_the_caller_says_unreachable(
 
     monkeypatch.setattr(sl, "_counts", always_times_out)
     with pytest.raises(TimeoutError):
-        await sl._fetch_counts("proj", "deadbeef", "claude-fable-5", "claude-fable-5", None)
+        await sl._fetch_counts("proj", "deadbeef", "claude-fable-5", "claude-fable-5", None,
+                               intent_hint=None)
 
 
 async def test_a_non_timeout_failure_is_never_retried(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -79,7 +81,8 @@ async def test_a_non_timeout_failure_is_never_retried(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(sl, "_counts", refused)
     with pytest.raises(ConnectionRefusedError):
-        await sl._fetch_counts("proj", "deadbeef", "claude-fable-5", "claude-fable-5", None)
+        await sl._fetch_counts("proj", "deadbeef", "claude-fable-5", "claude-fable-5", None,
+                               intent_hint=None)
     assert calls == 1   # no second knock
 
 
@@ -139,13 +142,60 @@ async def test_counts_maps_the_shared_segments_into_its_own_tuple_shape(
                     "VALUES ('test', 'x', 1.23, now())")
 
     (desk, mail, dm, flight, live, wakes, owed, owed_here, sick,
-     (spent, cap, blind)) = await sl._counts(
+     (spent, cap, blind), resolved_project, resolved_intent) = await sl._counts(
         "proj", session_id, "claude-fable-5", "claude-fable-5", None)
 
     assert desk == 1 and mail == 1 and dm == 1 and flight == 0
     assert live == 1 and wakes == 2 and owed == 2 and owed_here == 1
     assert sick == ["stuck"]
     assert spent == 1.23 and blind == 0 and cap == 10.0
+    # identity (msg 3949/3951): the reader holds no Seat here, so the seat fallback never
+    # fires — the passed-in hint (from a climb main() already did) rides straight through.
+    assert resolved_project == "proj"
+    assert resolved_intent is None
+
+
+async def test_counts_resolves_identity_through_the_seat_when_the_climb_hint_is_empty(
+    actions: Actions, pg_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE ACTUAL FIX (Thoth's catch, msg 3949/3951): standing at the bare seat-office
+    container, a `.osiris` CLIMB answers nothing — the office is a CHILD directory, and a
+    climb only ever looks upward. `read_project_label('/home/asuramaya/.osiris/seats')`
+    (main()'s hint) comes back None; this proves what `_counts` does about it: an agent
+    HOLDING a live seat resolves through that seat's own house (never a raw basename) and
+    its own office pin's declared model (never the removed EXPECTED constant) — "through
+    the pin, then the seat" exactly as Thoth specified, reproduced against a real Postgres,
+    not mocked."""
+    from src.orchestrator.mounts import save_mount
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    monkeypatch.setattr(sl, "DSN", pg_dsn)
+    monkeypatch.setattr("src.ingest.providers.spend_is_metered", lambda s=None: False)
+    p = actions.pool
+    agent = "agent:seatfall01"
+
+    office = tmp_path / "seats" / "seatfaller"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "osiris"\nmodel = "claude-opus-5"\n')
+    seat = await ensure_seat(actions, house="osiris", handle="Seatfaller", source="test")
+    assert seat.get("error") is None
+    await actions.assert_property(
+        await actions.create_or_find_object("Seat", seat["seat_id"], "test"),
+        "anchor_cwd", str(office), "test", datetime.now(UTC), 0.9)
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=agent, source="test")
+
+    session_id = "5ea7fa11-0000-0000-0000-000000000000"
+    await save_mount(p, job_dir="/x/jobs/5ea7fa11", agent_id=agent, project=None,
+                     cwd=str(tmp_path / "seats"), model=None, session_key=None)
+
+    # project_hint="" / intent_hint=None: exactly what main() passes when read_project_label/
+    # read_project_model on the bare container ('/home/.../seats', kind="container" only)
+    # both come back None today — main() coerces the label hint to "" before this call.
+    result = await sl._counts("", session_id, "claude-sonnet-5", "claude-sonnet-5", None,
+                              intent_hint=None)
+    resolved_project, resolved_intent = result[-2], result[-1]
+    assert resolved_project == "osiris", "the seat's own HOUSE, not a raw directory basename"
+    assert resolved_intent == "claude-opus-5", "the seat's OWN office pin, not a constant"
 
 
 def test_a_dm_alone_rings_the_doorbell(
@@ -157,7 +207,7 @@ def test_a_dm_alone_rings_the_doorbell(
     async def fake_fetch(
         *a: object, **k: object,
     ) -> tuple[tuple[int, int, int, int, int, int, int, int, list[str]], bool]:
-        return (0, 0, 7, 0, 16, 0, 25, 0, [], (1.2, 10.0, 0)), False
+        return (0, 0, 7, 0, 16, 0, 25, 0, [], (1.2, 10.0, 0), "x", None), False
 
     monkeypatch.setattr(sl, "_fetch_counts", fake_fetch)
     monkeypatch.setattr(
@@ -182,7 +232,7 @@ def _strip_for(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[st
     monkeypatch.setattr("src.ingest.providers.spend_is_metered", lambda s=None: metered)
 
     async def fake_fetch(*a: object, **k: object) -> tuple[tuple, bool]:
-        return (0, 0, 0, 0, 1, 0, 0, 0, [], ceil), False
+        return (0, 0, 0, 0, 1, 0, 0, 0, [], ceil, "x", None), False
 
     monkeypatch.setattr(sl, "_fetch_counts", fake_fetch)
     monkeypatch.setattr(
@@ -247,11 +297,13 @@ def test_warm_cache_skips_the_second_fetch_entirely(monkeypatch: pytest.MonkeyPa
     async def fake_fetch(*a: object, **k: object) -> tuple[tuple, bool]:
         nonlocal calls
         calls += 1
-        return (1, 2, 3, 0, 4, 5, 6, 7, [], (0.0, 10.0, 0)), False
+        return (1, 2, 3, 0, 4, 5, 6, 7, [], (0.0, 10.0, 0), "proj", None), False
 
     monkeypatch.setattr(sl, "_fetch_counts", fake_fetch)
-    first = sl._counts_cached("proj", "session-a", "claude-fable-5", "claude-fable-5", None)
-    second = sl._counts_cached("proj", "session-a", "claude-fable-5", "claude-fable-5", None)
+    first = sl._counts_cached("proj", "session-a", "claude-fable-5", "claude-fable-5", None,
+                              intent_hint=None)
+    second = sl._counts_cached("proj", "session-a", "claude-fable-5", "claude-fable-5", None,
+                               intent_hint=None)
     assert calls == 1
     assert first == second
 
@@ -267,7 +319,7 @@ def test_two_renders_via_main_share_one_live_fetch(
     async def fake_counts(*a: object, **k: object) -> tuple[int, ...]:
         nonlocal calls
         calls += 1
-        return (0, 0, 7, 0, 16, 0, 25, 0, [], (1.2, 10.0, 0))
+        return (0, 0, 7, 0, 16, 0, 25, 0, [], (1.2, 10.0, 0), "x", None)
 
     monkeypatch.setattr(sl, "_counts", fake_counts)
     payload = json.dumps({"workspace": {"current_dir": "/tmp/x"}, "session_id": "session-g",
@@ -296,7 +348,7 @@ def test_seventeen_concurrent_renders_make_exactly_one_connect(
         with calls_lock:
             calls += 1
         await asyncio.sleep(0.1)  # widen the race window so all 17 threads pile up together
-        return (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0)), False
+        return (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None), False
 
     monkeypatch.setattr(sl, "_fetch_counts", fake_fetch)
     results: list[Any] = [None] * 17
@@ -305,7 +357,8 @@ def test_seventeen_concurrent_renders_make_exactly_one_connect(
         start.wait()
         try:
             results[i] = sl._counts_cached(
-                "proj", "session-b", "claude-fable-5", "claude-fable-5", None)
+                "proj", "session-b", "claude-fable-5", "claude-fable-5", None,
+                intent_hint=None)
         except sl._StatuslineDegrade:
             results[i] = "degraded"
 
@@ -325,7 +378,7 @@ def test_stale_cache_served_when_a_sibling_holds_the_refresh_lock(
     elsewhere), must still answer from the stale value — never block, never duplicate the
     query underneath a sibling that's already making one."""
     monkeypatch.setenv("OSIRIS_STATUSLINE_CACHE_TTL", "0")
-    stale = (9, 9, 9, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0))
+    stale = (9, 9, 9, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None)
     cache_path = sl._cache_dir() / f"{sl._cache_key('session-c')}.json"
     sl._cache_write(cache_path, stale, False)
     import time
@@ -340,7 +393,7 @@ def test_stale_cache_served_when_a_sibling_holds_the_refresh_lock(
 
         monkeypatch.setattr(sl, "_fetch_counts", should_not_be_called)
         result = sl._counts_cached(
-            "proj", "session-c", "claude-fable-5", "claude-fable-5", None)
+            "proj", "session-c", "claude-fable-5", "claude-fable-5", None, intent_hint=None)
         assert result == (stale, False)
     finally:
         fcntl.flock(lock_fh, fcntl.LOCK_UN)
@@ -363,7 +416,8 @@ def test_no_cache_and_lock_busy_degrades_quietly(monkeypatch: pytest.MonkeyPatch
 
         monkeypatch.setattr(sl, "_fetch_counts", should_not_be_called)
         with pytest.raises(sl._StatuslineDegrade):
-            sl._counts_cached("proj", "session-d", "claude-fable-5", "claude-fable-5", None)
+            sl._counts_cached("proj", "session-d", "claude-fable-5", "claude-fable-5", None,
+                              intent_hint=None)
     finally:
         fcntl.flock(lock_fh, fcntl.LOCK_UN)
         lock_fh.close()
@@ -377,11 +431,12 @@ def test_corrupt_cache_file_is_just_a_miss(monkeypatch: pytest.MonkeyPatch) -> N
     cache_path.write_text("not json{{{")
 
     async def fake_fetch(*a: object, **k: object) -> tuple[tuple, bool]:
-        return (1, 1, 1, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0)), False
+        return (1, 1, 1, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None), False
 
     monkeypatch.setattr(sl, "_fetch_counts", fake_fetch)
-    result = sl._counts_cached("proj", "session-e", "claude-fable-5", "claude-fable-5", None)
-    assert result == ((1, 1, 1, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0)), False)
+    result = sl._counts_cached("proj", "session-e", "claude-fable-5", "claude-fable-5", None,
+                               intent_hint=None)
+    assert result == ((1, 1, 1, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None), False)
 
 
 def test_no_session_id_never_touches_the_cache(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -392,9 +447,9 @@ def test_no_session_id_never_touches_the_cache(monkeypatch: pytest.MonkeyPatch) 
     async def fake_fetch(*a: object, **k: object) -> tuple[tuple, bool]:
         nonlocal calls
         calls += 1
-        return (0, 0, 0, 0, 0, 0, 0, 0, [], (0.0, 10.0, 0)), False
+        return (0, 0, 0, 0, 0, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None), False
 
     monkeypatch.setattr(sl, "_fetch_counts", fake_fetch)
-    sl._counts_cached("proj", "", "claude-fable-5", "claude-fable-5", None)
-    sl._counts_cached("proj", "", "claude-fable-5", "claude-fable-5", None)
+    sl._counts_cached("proj", "", "claude-fable-5", "claude-fable-5", None, intent_hint=None)
+    sl._counts_cached("proj", "", "claude-fable-5", "claude-fable-5", None, intent_hint=None)
     assert calls == 2
