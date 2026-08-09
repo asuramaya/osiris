@@ -559,6 +559,57 @@ def test_read_project_pin_climbs_past_a_worktree_gitlink_to_the_real_root(
     assert out.error is None
 
 
+def test_read_project_pin_climbs_past_a_worktree_pin_that_never_sets_project(
+    tmp_path: Path,
+) -> None:
+    """THE LIVE REGRESSION (caught and reverted the same minute, ruling 719ed5b1's schema
+    rollout): a worktree pin declaring seat/house/kind (never project/model) sits BELOW its
+    repo root's own project/model pin — the first LAYERED declaration this reader was ever
+    exercised against. Before the fix, the worktree's OWN `.osiris` existing at all stopped
+    the climb outright (`f.is_file()` was treated as terminal regardless of whether it
+    answered `project`), so `read_project_label` silently went from the root's real value to
+    None the instant a worktree pin was written — this is the exact live specimen (imhotep's
+    own worktree), reproduced here rather than only described in a decision."""
+    from src.orchestrator.agents import read_project_label, read_project_model
+
+    root = tmp_path / "osiris"
+    root.mkdir()
+    (root / ".git").mkdir()
+    (root / ".osiris").write_text('project = "osiris"\nmodel = "claude-sonnet-5"\n')
+
+    worktree = root / ".claude" / "worktrees" / "imhotep"
+    worktree.mkdir(parents=True)
+    (worktree / ".git").write_text("gitdir: /somewhere/.git/worktrees/imhotep\n")
+    (worktree / ".osiris").write_text('house = "osiris"\nkind = "worktree"\nseat = "imhotep"\n')
+
+    assert read_project_label(str(worktree)) == "osiris"
+    assert read_project_model(str(worktree)) == "claude-sonnet-5"
+
+
+def test_read_project_pin_reports_the_nearest_unset_file_when_no_ancestor_sets_it_either(
+    tmp_path: Path,
+) -> None:
+    """The heinrich diagnostic survives climb-continuation: when NEITHER the near file nor
+    any ancestor ever sets the key, the NEAREST found-but-unset file's path is still what's
+    reported — proof this isn't just "keep climbing and forget," the closest real answer to
+    "why did this fall back to a basename guess" is preserved."""
+    from src.orchestrator.agents import read_project_pin
+
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / ".git").mkdir()
+    (root / ".osiris").write_text('model = "claude-opus-5"\n')  # never sets project either
+
+    child = root / "nested"
+    child.mkdir()
+    (child / ".osiris").write_text('model = "claude-sonnet-5"\n')  # nearest, never sets it
+
+    out = read_project_pin(str(child))
+    assert out.value is None
+    assert out.error is None
+    assert out.path == str(child / ".osiris"), "the NEAREST unset file, not the root's"
+
+
 def test_read_project_pin_still_stops_at_a_real_repo_root(tmp_path: Path) -> None:
     """The other half of the same fix: a REAL `.git` directory must still stop the climb —
     an unrelated ancestor's `.osiris` (a different repo entirely) must never leak in just

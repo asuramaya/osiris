@@ -789,13 +789,31 @@ def _read_osiris_key(cwd: str | None, key: str) -> OsirisKeyRead:
     silently fell back to the worktree's basename (the seat's own name) instead of the
     governed project every single time a seated agent mounted from its own code checkout.
     `.is_dir()` stops only at a REAL repo root; a gitlink file is transparent to the climb,
-    so it continues up to the enclosing repo's own pin."""
+    so it continues up to the enclosing repo's own pin.
+
+    THE CLIMB DOES NOT STOP AT A FILE THAT EXISTS BUT DOESN'T DECLARE THIS KEY, EITHER
+    (live regression, caught and reverted the same minute it happened, ruling 719ed5b1's
+    schema rollout): a worktree pin newly declaring `seat`/`house`/`kind` sits BELOW its
+    repo root's own pin declaring `project`/`model` — a LAYERED declaration this function
+    was never exercised against before. The old code treated `f.is_file()` as a hard stop
+    regardless of whether the file answered the key being asked, so writing house/seat/kind
+    into a worktree that relied on climbing to its root for `project` silently broke
+    `project` resolution the instant the file existed — `read_project_label('.../worktrees/
+    imhotep')` went from `"osiris"` to `None` mid-session, for every live agent in that
+    worktree. Now: a file found without the key is REMEMBERED (the nearest one, for the
+    heinrich-shape diagnostic) but the climb CONTINUES past it — only a real VALUE, a
+    parse/read ERROR, or reaching the true repo root without ever finding the key
+    terminates it. A single-level pin that simply never sets a key (REPOS/heinrich) still
+    reports that file's own path when nothing further up sets it either — unchanged for
+    every caller that never stacks declarations across levels; only the layered case
+    behaves differently now, and correctly."""
     if not cwd:
         return OsirisKeyRead(value=None)
     p = Path(cwd)
     if not p.is_dir():
         return OsirisKeyRead(value=None, cwd_missing=True)
     import tomllib
+    found_but_unset: str | None = None  # nearest file that exists but never sets `key`
     for d in (p, *p.parents):
         f = d / ".osiris"
         try:
@@ -803,13 +821,14 @@ def _read_osiris_key(cwd: str | None, key: str) -> OsirisKeyRead:
                 value = tomllib.loads(f.read_text()).get(key)
                 if value:
                     return OsirisKeyRead(value=str(value).strip())
-                return OsirisKeyRead(value=None, path=str(f))  # found, valid, key absent
+                if found_but_unset is None:  # keep the NEAREST — an ancestor may still set it
+                    found_but_unset = str(f)
         except (OSError, tomllib.TOMLDecodeError, ValueError) as exc:
             return OsirisKeyRead(value=None, error=f"{type(exc).__name__}: {exc}",
                                  path=str(f))
         if (d / ".git").is_dir():  # the TRUE repo root — a worktree/submodule gitlink
             break                  # (a FILE) never stops the climb, only a real root does
-    return OsirisKeyRead(value=None)
+    return OsirisKeyRead(value=None, path=found_but_unset)
 
 
 def read_project_label(cwd: str | None) -> str | None:
