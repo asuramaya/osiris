@@ -457,6 +457,100 @@ async def test_a_raw_id_send_reveals_a_stale_generation_via_lineage_head(
     assert dm["lineage_head"] != dm["to_agent"]
 
 
+async def test_replying_to_a_dm_whose_sender_superseded_itself_since_sending(
+        actions: Actions) -> None:
+    """THE LIVE SPECIMEN (Thoth msg 3880/3882, 2026-08-09): worker sends a DM report, then
+    compacts into a new generation before the reply lands. Measured live against the real
+    fleet_messages history: 90 of 1727 reply DMs (5.2%, msg 188 through msg 3884, spanning
+    a full month — not a papercut) landed on a `to_agent` already superseded by the time
+    the reply was sent, because reply_to's implicit routing copied `ref["from_agent"]`
+    VERBATIM — the raw id stamped on the ORIGINAL message — even though this same function
+    already computes `lineage_head` for that id moments later, for the eligibility gate and
+    the receipt echo. The fix threads that already-computed knowledge back into what
+    actually gets WRITTEN, and confesses it via `redirected_from` rather than silently
+    rerouting. Unlike explicit `to_agent=` addressing (test_a_raw_id_send_reveals_a_stale_
+    generation_via_lineage_head, just above) reply_to's routing was never an act of intent
+    about a SPECIFIC generation — nobody chooses who a reply goes back to."""
+    from src.orchestrator.agents import mint_heir
+
+    worker = "agent:0ld0001"
+    boss_oid = await actions.create_or_find_object("Agent", worker, worker)
+    report = await send_message(actions.pool, from_agent=worker, from_project="alpha",
+                                to_agent="agent:boss", body="task done, here's the brief")
+    # the worker compacts/supersedes itself AFTER sending, BEFORE the reply lands
+    heir, _ = await mint_heir(actions, worker, boss_oid, because="test-succession",
+                              succession=None)
+    reply = await send_message(actions.pool, from_agent="agent:boss", from_project="alpha",
+                               reply_to=report["id"], body="approved")
+    assert reply["lineage_head"] == heir           # the code KNOWS who's actually live...
+    assert reply["to_agent"] == heir               # ...and now DELIVERS there, not the ghost
+    assert reply["redirected_from"] == worker       # ...and CONFESSES the redirect, never silent
+
+
+async def test_replying_to_a_still_current_sender_never_reports_a_redirect(
+        actions: Actions) -> None:
+    """The common case (no succession happened) must stay exactly as it always has —
+    `redirected_from` only appears when a redirect actually fired."""
+    p = actions.pool
+    await _seed(p, "alpha")
+    ask = await send_message(p, from_agent="agent:asker", from_project="alpha",
+                             to_agent="agent:answerer", body="status?")
+    reply = await send_message(p, from_agent="agent:answerer", from_project="alpha",
+                               reply_to=ask["id"], body="green")
+    assert reply["to_agent"] == "agent:asker"
+    assert "redirected_from" not in reply
+
+
+async def test_explicit_to_agent_with_a_stale_id_never_redirects_even_via_reply_to(
+        actions: Actions) -> None:
+    """EDGE CASE 2, ruled explicitly (Thoth msg 3882): a caller who passes an EXPLICIT
+    to_agent= alongside reply_to is exercising intent about that exact id — even when a
+    reply_to ref is also present, explicit addressing wins (`if to_agent or to_project:`
+    is the first branch checked) and must never be redirected. Only reply_to's OWN implicit
+    routing (no to_agent passed) gets the lineage redirect."""
+    from src.orchestrator.agents import mint_heir
+
+    worker = "agent:0ld0002"
+    oid = await actions.create_or_find_object("Agent", worker, worker)
+    report = await send_message(actions.pool, from_agent=worker, from_project="alpha",
+                                to_agent="agent:boss2", body="report")
+    heir, _ = await mint_heir(actions, worker, oid, because="test-succession", succession=None)
+    assert heir != worker
+    # explicit to_agent=worker, even though reply_to references a message whose implicit
+    # route would also land on worker — the explicit address must win, unredirected
+    explicit = await send_message(actions.pool, from_agent="agent:boss2", from_project="alpha",
+                                  to_agent=worker, reply_to=report["id"], body="explicit")
+    assert explicit["to_agent"] == worker
+    assert "redirected_from" not in explicit
+    assert explicit["lineage_head"] == heir  # staleness still visible in the echo, unacted-on
+
+
+async def test_reply_to_a_dm_whose_lineage_head_is_since_retired_still_refuses(
+        actions: Actions) -> None:
+    """EDGE CASE 1, ruled explicitly (Thoth msg 3882): the redirect must never deliver into
+    a grave and report success. This was ALREADY true before the redirect fix — the
+    eligibility gate runs on `lineage_head(to_a)` regardless of what `to_a` started as, so
+    a since-retired head was always refused; the stale `to_agent` this fix corrects was
+    never what stood between a reply and a phantom lane. Asserted explicitly here so it
+    stays proven, not assumed, now that `to_a` and `lineage_head` are the same value for
+    the reply-routing path."""
+    from datetime import UTC, datetime
+
+    from src.orchestrator.agents import mint_heir
+
+    worker = "agent:0ld0003"
+    oid = await actions.create_or_find_object("Agent", worker, worker)
+    report = await send_message(actions.pool, from_agent=worker, from_project="alpha",
+                                to_agent="agent:boss3", body="report")
+    heir, heir_oid = await mint_heir(actions, worker, oid, because="test-succession",
+                                     succession=None)
+    await actions.assert_property(heir_oid, "retired", True, heir, datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+    with pytest.raises(ValueError, match=f"{heir}.*retired"):
+        await send_message(actions.pool, from_agent="agent:boss3", from_project="alpha",
+                           reply_to=report["id"], body="into the void")
+
+
 # --- THE ADDRESSING REFUSAL (rulings 1a64ae9a/aee67e6d, DM 2360 — John XV/XVI, resolved
 # live): a DM by NAME whose unique seat's only holder is marked used to fall through to a
 # raw handle-assertion search and land on a DEAD PREDECESSOR, reported with the confidence
