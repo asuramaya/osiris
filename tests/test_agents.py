@@ -458,6 +458,82 @@ def test_read_project_pin_distinguishes_all_three_no_project_shapes(
     assert out.path == str(malformed / ".osiris")
 
 
+def test_read_project_pin_never_climbs_past_a_deleted_cwd_into_a_real_ancestors_pin(
+    tmp_path: Path,
+) -> None:
+    """THE FOURTH SHAPE (Thoth's catch, msg 3928/thread 3937): flip68real/resumelanecheck
+    were real, now-retired Seats whose office directories were DELETED, not merely
+    unpinned. Before this fix, querying a nonexistent cwd climbed straight past it to the
+    enclosing container's own pin and reported THAT as the deleted office's own state —
+    exactly the shape reproduced here: a real container with its own `.osiris`, and a
+    `deletedseat` subdirectory that is NEVER created. The queried path's own nonexistence
+    must be the answer, never a borrowed ancestor's declaration."""
+    from src.orchestrator.agents import read_project_pin
+
+    container = tmp_path / "seats"
+    container.mkdir()
+    (container / ".osiris").write_text('kind = "container"\n')
+    ghost_office = container / "deletedseat"  # never created — the office is GONE
+
+    out = read_project_pin(str(ghost_office))
+    assert out.cwd_missing is True
+    assert out.value is None
+    assert out.path is None, "must never report the container's own file as this path's pin"
+    assert out.error is None
+
+
+def test_read_project_pin_cwd_missing_is_false_for_a_real_but_unpinned_directory(
+    tmp_path: Path,
+) -> None:
+    """The fourth state must never leak into the ordinary case: a real directory with no
+    pin anywhere in its climb still reads cwd_missing=False — only a query against a
+    directory that does not exist at all sets it."""
+    from src.orchestrator.agents import read_project_pin
+
+    real = tmp_path / "realbutunpinned"
+    real.mkdir()
+    out = read_project_pin(str(real))
+    assert out.cwd_missing is False
+    assert out.value is None and out.error is None and out.path is None
+
+
+def test_resolve_identity_keeps_pin_missing_and_cwd_missing_disjoint(
+    tmp_path: Path,
+) -> None:
+    """A deleted office and an unpinned-but-real office are opposite dispositions (one
+    wants the graph's stale belief reaped, the other wants a pin written) — resolve_identity
+    must never report both flags true for the same identity, and the deleted-office case
+    must report project_pin_cwd_missing, never project_pin_missing (the pre-fix collapse)."""
+    container = tmp_path / "seats"
+    container.mkdir()
+    (container / ".osiris").write_text('kind = "container"\n')
+    ghost = container / "deletedseat"
+
+    ident = resolve_identity(cwd=str(ghost), job_dir="/j/jobs/ghost0001")
+    assert ident.project_pin_cwd_missing is True
+    assert ident.project_pin_missing is False
+    assert ident.project == "deletedseat"  # the basename guess still fires, unchanged
+
+    real_unpinned = tmp_path / "realoffice"
+    real_unpinned.mkdir()
+    ident2 = resolve_identity(cwd=str(real_unpinned), job_dir="/j/jobs/real0001")
+    assert ident2.project_pin_missing is True
+    assert ident2.project_pin_cwd_missing is False
+
+
+def test_project_pin_banner_names_a_deleted_cwd_distinctly(tmp_path: Path) -> None:
+    from src.orchestrator.agents import project_pin_banner
+
+    container = tmp_path / "seats"
+    container.mkdir()
+    ghost = container / "deletedseat"
+    ident = resolve_identity(cwd=str(ghost), job_dir="/j/jobs/ghost0002")
+    banner = project_pin_banner(ident)
+    assert banner is not None
+    assert "DOES NOT EXIST ON DISK" in banner
+    assert str(ghost) in banner
+
+
 def test_read_project_pin_climbs_past_a_worktree_gitlink_to_the_real_root(
     tmp_path: Path,
 ) -> None:

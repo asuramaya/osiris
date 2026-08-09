@@ -114,9 +114,19 @@ class AgentIdentity:
     project_pin_path: str | None = None
     # TRUE ONLY WHEN NO `.osiris` EXISTS ANYWHERE IN THE CLIMB AT ALL — the third leg of the
     # three-way split wave 2 needs (no pin · unparseable pin · parseable pin missing the
-    # key). Never set for the bare seat-office root (ruling 577988ed's carve-out) or when
-    # there is no cwd to climb from at all — those stay silent by design, not "missing".
+    # key). Never set for the bare seat-office root (ruling 577988ed's carve-out), when
+    # there is no cwd to climb from at all, or when `cwd` itself doesn't exist (see
+    # `project_pin_cwd_missing` below — a DIFFERENT, disjoint state) — those stay silent by
+    # design, not "missing".
     project_pin_missing: bool = False
+    # `cwd` ITSELF DOES NOT EXIST ON DISK (Thoth's catch, msg 3928, thread 3937) — set only
+    # when `_read_osiris_key`'s leaf check fails before any climb even starts. Deliberately
+    # DISJOINT from `project_pin_missing`: a deleted office and an unpinned-but-real office
+    # are opposite dispositions (one wants the graph's stale belief reaped, the other wants
+    # a pin written), and folding them into one flag is the exact 60bc15db this fixes.
+    # `project` still falls back to a basename guess either way (unchanged) — this only
+    # makes the WHY honest.
+    project_pin_cwd_missing: bool = False
     # SET BY register_agent (task #144, rule 1 of de3dfc18 — "where this lineage's work
     # actually landed"): the majority in_repo target across this agent's OWN lineage,
     # reported HONESTLY, never used to overwrite `project` above. `write_attribution_agreement`
@@ -710,11 +720,27 @@ async def agent_seat(pool: asyncpg.Pool, agent_id: str) -> str | None:
 @dataclass(frozen=True)
 class OsirisKeyRead:
     """One key's lookup result in a `.osiris` file (Sekhmet's design, e3f4f159; widened for
-    task #128 wave 2, 2026-08-03): THREE tell-apart-able states, not two — collapsing any
-    pair of them hid a real bug or a real gap behind a shared `None`.
+    task #128 wave 2, 2026-08-03; widened again for the missing-cwd gap, Thoth's catch msg
+    3928/thread 3937): FOUR tell-apart-able states, not three — collapsing any pair of them
+    hid a real bug or a real gap behind a shared `None`.
 
-    NO `.osiris` ANYWHERE IN THE CLIMB — genuinely nothing declared, ever: `value=None,
-    error=None, path=None`. This is the plain "never pinned" case.
+    THE QUERIED DIRECTORY DOES NOT EXIST AT ALL — `cwd_missing=True`, `value=None,
+    error=None, path=None`. Checked BEFORE any climb: a deleted office (flip68real,
+    resumelanecheck — real, now-retired Seats whose directories are gone) must never
+    silently inherit an ANCESTOR's declaration. Without this state, a query against a
+    deleted `~/.osiris/seats/flip68real` climbed straight past it to the enclosing
+    seats-container's own pin and reported that as flip68real's OWN state — collapsing
+    "this office is gone" into "this office exists, pin unset," two conditions with
+    OPPOSITE dispositions (one wants a pin written, the other wants the graph's belief
+    reaped). This is the single leaf check, never re-applied per ancestor: once `cwd`
+    itself is confirmed real, every entry in `cwd.parents` is necessarily real too (a
+    filesystem cannot have an existing child under a nonexistent parent).
+
+    NO `.osiris` ANYWHERE IN THE CLIMB — `cwd` itself is real, genuinely nothing declared,
+    ever: `value=None, error=None, path=None, cwd_missing=False`. The plain "never pinned"
+    case — tell apart from the missing-directory state above ONLY by `cwd_missing`; every
+    other field looks identical, which is exactly why collapsing them was invisible for as
+    long as it was.
 
     FOUND, VALID, BUT NEVER SETS THIS KEY — e.g. REPOS/heinrich: a valid TOML file that
     declares `model` and never `project`. NOT a couldn't-read (it parses fine) and NOT the
@@ -729,18 +755,29 @@ class OsirisKeyRead:
     failed. Tell apart from the previous state by `error` being set.
 
     A caller that only wants the plain fallback-to-basename value uses `.value` and never
-    needs to know which of the three produced it; `project_pin_banner` is where the
-    distinction becomes three different messages."""
+    needs to know which of the four produced it; `project_pin_banner` is where the
+    distinction becomes four different messages."""
 
     value: str | None
     error: str | None = None
     path: str | None = None
+    cwd_missing: bool = False
 
 
 def _read_osiris_key(cwd: str | None, key: str) -> OsirisKeyRead:
     """One key from the repo's `.osiris` file (TOML), walking up to the repo root. See
-    `OsirisKeyRead` for the three-way no-file / found-but-unset / could-not-read
-    distinction this must keep tell-apart-able (Sekhmet's design, e3f4f159).
+    `OsirisKeyRead` for the four-way missing-directory / no-file / found-but-unset /
+    could-not-read distinction this must keep tell-apart-able (Sekhmet's design, e3f4f159;
+    widened msg 3928).
+
+    `cwd` ITSELF MUST EXIST BEFORE ANY CLIMB BEGINS (Thoth's catch, msg 3928): a query
+    against a directory that was never created or has since been deleted must never
+    silently return an ANCESTOR's declaration as if it belonged to the queried path — the
+    climb answers "what does an existing address near here declare", and a nonexistent
+    address has no "near here" that means anything. Checked ONCE, on `cwd` alone: every
+    entry in `cwd.parents` is guaranteed to exist once `cwd` itself does (a filesystem
+    cannot have a real child under a nonexistent parent), so no per-level re-check is
+    needed once this leaf check passes.
 
     THE CLIMB DOES NOT STOP AT A WORKTREE OR SUBMODULE BOUNDARY (task #128, root-cause
     finding, 2026-08-05): a git worktree's own `.git` is a FILE (a gitlink to
@@ -755,8 +792,10 @@ def _read_osiris_key(cwd: str | None, key: str) -> OsirisKeyRead:
     so it continues up to the enclosing repo's own pin."""
     if not cwd:
         return OsirisKeyRead(value=None)
-    import tomllib
     p = Path(cwd)
+    if not p.is_dir():
+        return OsirisKeyRead(value=None, cwd_missing=True)
+    import tomllib
     for d in (p, *p.parents):
         f = d / ".osiris"
         try:
@@ -891,12 +930,23 @@ def project_pin_banner(ident: AgentIdentity) -> str | None:
     resolve". Silent for the bare seat-office root (577988ed's carve-out, unchanged) and
     when a real pin was found and used (the common, healthy case).
 
-    THREE DISTINCT MESSAGES, because they are three distinct repairs (b3a1f987's own
-    finding: a check keyed on "has a pin" would never catch the middle one):
+    FOUR DISTINCT MESSAGES now, not three — each a distinct repair (b3a1f987's own finding:
+    a check keyed on "has a pin" would never catch the middle two; msg 3928 found the
+    canonical reader itself was blind to a fourth):
+      CWD DOES NOT EXIST (msg 3928) — the address itself is a ghost; no pin write repairs
+        this, only reaping the graph's stale belief about it does.
       NO .osiris ANYWHERE — write one.
       FOUND, VALID, NEVER DECLARES `project` (the heinrich shape: a deliberately-written
         file answering a different question) — add the missing key, keep the rest.
       COULD NOT BE READ (broken TOML) — fix the syntax error named in the message."""
+    if ident.project_pin_cwd_missing:
+        return (
+            f"⚠ {ident.cwd} DOES NOT EXIST ON DISK — nothing can be read here, and no "
+            f"ancestor's declaration should be borrowed for it either (msg 3928: the old "
+            f"climb silently did exactly that). Your project fell back to a BASENAME GUESS "
+            f"({ident.project!r}) for an address that is not real. If this office was "
+            "retired, the fix is reaping its stale graph beliefs, never writing a pin here."
+        )
     if ident.project_pin_error:
         return (
             f"⚠ .osiris AT {ident.project_pin_path} COULD NOT BE READ "
@@ -966,10 +1016,13 @@ def resolve_identity(
     # split — genuinely nothing declared anywhere, as opposed to a broken file (pin_read.error)
     # or a valid file that just never sets `project` (pin_read.path with no error). Silent for
     # the bare seat-office root (577988ed's own carve-out) and when there is no cwd at all —
-    # neither is a directory anyone could write a pin into.
+    # neither is a directory anyone could write a pin into. ALSO silent when cwd itself
+    # doesn't exist (msg 3928's fourth leg, project_pin_cwd_missing below) — a deleted
+    # office is not "missing a pin", it's not there to pin at all; the two must stay
+    # disjoint, never folded into one flag (the exact defect this fixes).
     pin_missing = (
         pinned is None and pin_read.error is None and pin_read.path is None
-        and not bare_root and cwd is not None
+        and not bare_root and cwd is not None and not pin_read.cwd_missing
     )
     sid = session or _job_id(job_dir)
     confident = sid is not None  # a session/job_dir ANCHOR; the cwd-locate below is only a GUESS
@@ -1040,7 +1093,8 @@ def resolve_identity(
                          model_divergent=divergent, model_history=tuple(history),
                          model_deliberate=deliberate, model_observed_at=observed_at,
                          resolved=resolved, project_pin_error=pin_read.error,
-                         project_pin_path=pin_read.path, project_pin_missing=pin_missing)
+                         project_pin_path=pin_read.path, project_pin_missing=pin_missing,
+                         project_pin_cwd_missing=pin_read.cwd_missing)
 
 
 async def _link_once(
