@@ -1239,7 +1239,8 @@ async def test_roster_pin_declared_from_a_real_osiris_file(
     rows = {r["seat"]: r for r in (await roster(actions.pool))["seats"]}
     row = rows[seat["seat_id"]]
     assert row["pin"] == {"declared": "coldspot", "state": "declared",
-                          "path": None, "error": None}
+                          "path": None, "error": None,
+                          "triage_bucket": "no-such-project"}
     assert row["office_exists"] is True
 
 
@@ -1392,6 +1393,39 @@ async def test_roster_repo_lookup_no_match_is_not_no_owner(actions: Actions) -> 
     assert any("not that the repo has no owner" in c for c in out["caveats"])
 
 
+async def test_roster_pin_triage_bucket_none_when_nothing_declared(actions: Actions) -> None:
+    from src.orchestrator.seats import roster
+
+    seat = await ensure_seat(actions, house="osiris", handle="Rtri1", source="test")
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["pin"]["state"] == "no-office"
+    assert row["pin"]["triage_bucket"] is None
+
+
+async def test_roster_pin_triage_bucket_reuses_triages_own_verdict(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thread 251443ff's whole point: roster does not invent a second project-health
+    notion, it asks triage's own buckets mode and reports the answer verbatim — a fresh
+    zero-link SoftwareProject reads 'orphan' by triage's own priority order, same as it
+    would from triage(mode='buckets') directly."""
+    from src.orchestrator.seats import roster
+
+    await _repo(actions, "orphanproj")
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "orphanproj"\n')
+    seat = await ensure_seat(actions, house="osiris", handle="Rtri2", source="test",
+                             anchor_cwd=str(office))
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["pin"]["state"] == "declared"
+    assert row["pin"]["triage_bucket"] == "orphan"
+
+
 async def test_roster_always_returns_caveats(actions: Actions) -> None:
     from src.orchestrator.seats import roster
 
@@ -1399,6 +1433,297 @@ async def test_roster_always_returns_caveats(actions: Actions) -> None:
     assert out["caveats"], (
         "a roster with no stated blind spots is the exact failure mode it exists to avoid")
     assert any("canonical" in c for c in out["caveats"])
+
+
+# ═══ TREE LEDGER (task #158, dispatch msg 3900) — the pin-vs-graph disagreement report. ═══
+# Off Sekhmet's live repo:seats/repo:code phantom catch (rulings 719ed5b1/13af22fc): every
+# active SoftwareProject judged against the fleet's own declared-name index (`declared_by`),
+# and every cwd agent_mounts holds right now cross-checked against what the graph currently
+# believes. Live-measured against the real dev graph before these were written: the
+# instrument independently re-found both known phantoms (repo:seats, repo:code) as
+# phantom-suspect with zero prior knowledge of them baked in.
+
+async def _agent_works_in(actions: Actions, agent_id: str, project: str) -> None:
+    """Mint an Agent and a live `works_in` edge to `project` — same pattern
+    test_agents.py's own mint_heir tests use for wiring an agent's graph attribution."""
+    aoid = await actions.create_or_find_object("Agent", agent_id, "test")
+    poid = await actions.create_or_find_object("SoftwareProject", f"repo:{project}", "test")
+    await actions.create_link(aoid, poid, "works_in", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+
+
+async def test_phantom_verdict_names_a_known_test_fixture(actions: Actions) -> None:
+    from src.orchestrator.seats import project_ledger
+
+    await _repo(actions, "smoketest")
+
+    out = await project_ledger(actions.pool)
+    row = next(p for p in out["projects"] if p["project"] == "repo:smoketest")
+    assert row["phantom_verdict"] == "test-fixture"
+
+
+async def test_phantom_verdict_is_declared_when_a_seat_pins_it(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.seats import project_ledger
+
+    await _repo(actions, "arealproject")
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "arealproject"\n')
+    seat = await ensure_seat(actions, house="osiris", handle="Tled1", source="test",
+                             anchor_cwd=str(office))
+
+    out = await project_ledger(actions.pool)
+    row = next(p for p in out["projects"] if p["project"] == "repo:arealproject")
+    assert row["phantom_verdict"] == "declared"
+    assert row["declared_by"] == [seat["seat_id"]]
+
+
+async def test_phantom_verdict_is_declared_via_seat_origin_charter(actions: Actions) -> None:
+    """Sekhmet's own calibration (msg 3906): only a Seat-origin governs edge counts as a
+    real charter. set_charter always mints Seat-origin edges (charter_of: l.from_id=seat),
+    so this proves the declared path fires through it without any extra code of its own —
+    an Agent-origin edge (the class that legitimized repo:code's own bogus edge) is never
+    reachable through charter_of at all."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import project_ledger
+
+    await _repo(actions, "charteredproj")
+    seat = await ensure_seat(actions, house="osiris", handle="Tled2", source="test")
+    await set_charter(actions, seat["seat_id"], ["charteredproj"], actor="test")
+
+    out = await project_ledger(actions.pool)
+    row = next(p for p in out["projects"] if p["project"] == "repo:charteredproj")
+    assert row["phantom_verdict"] == "declared"
+
+
+async def test_phantom_verdict_suspects_a_generic_basename_with_no_declaration(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import project_ledger
+
+    await _repo(actions, "tmp")
+
+    out = await project_ledger(actions.pool)
+    row = next(p for p in out["projects"] if p["project"] == "repo:tmp")
+    assert row["phantom_verdict"] == "phantom-suspect"
+    assert row["declared_by"] == []
+
+
+async def test_phantom_verdict_is_undetermined_when_neither_test_fires(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import project_ledger
+
+    await _repo(actions, "myrealproject")
+
+    out = await project_ledger(actions.pool)
+    row = next(p for p in out["projects"] if p["project"] == "repo:myrealproject")
+    assert row["phantom_verdict"] == "undetermined"
+
+
+async def test_project_ledger_reuses_triage_bucket_verbatim(actions: Actions) -> None:
+    from src.orchestrator.seats import project_ledger
+
+    await _repo(actions, "orphanledger")
+
+    out = await project_ledger(actions.pool)
+    row = next(p for p in out["projects"] if p["project"] == "repo:orphanledger")
+    assert row["triage_bucket"] == "orphan"
+
+
+async def test_project_ledger_pagination_is_honest(actions: Actions) -> None:
+    from src.orchestrator.seats import project_ledger
+
+    await _repo(actions, "pageone")
+    await _repo(actions, "pagetwo")
+
+    out = await project_ledger(actions.pool, limit=1, offset=0)
+    assert len(out["projects"]) == 1
+    assert out["total"] >= 2
+    assert out["limit"] == 1
+
+
+async def test_live_cwd_no_graph_yet_when_nothing_works_in_it(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.seats import live_cwd_ledger
+
+    office = tmp_path / "office"
+    office.mkdir()
+    await actions.create_or_find_object("Agent", "agent:ledgerbare1", "test")
+    await save_mount(actions.pool, job_dir="/jobs/ledgerbare1", agent_id="agent:ledgerbare1",
+                     project=None, cwd=str(office), model="claude-sonnet-5",
+                     session_key=None)
+
+    out = await live_cwd_ledger(actions.pool)
+    row = next(c for c in out["cwds"] if c["cwd"] == str(office))
+    assert row["agreement"] == "no-graph-yet"
+
+
+async def test_live_cwd_matches_when_pin_and_graph_agree(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.seats import live_cwd_ledger
+
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "ledgermatch"\n')
+    await _agent_works_in(actions, "agent:ledgermatch1", "ledgermatch")
+    await save_mount(actions.pool, job_dir="/jobs/ledgermatch1",
+                     agent_id="agent:ledgermatch1", project="ledgermatch",
+                     cwd=str(office), model="claude-sonnet-5", session_key=None)
+
+    out = await live_cwd_ledger(actions.pool)
+    row = next(c for c in out["cwds"] if c["cwd"] == str(office))
+    assert row["resolved_today"] == "ledgermatch"
+    assert row["graph_believes"] == ["ledgermatch"]
+    assert row["agreement"] == "match"
+
+
+async def test_live_cwd_partial_match_when_graph_carries_extra_stale_belief(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The residue class, measured live tonight on osiris's own worktrees: today's
+    resolution is correct, but the graph ALSO carries an older belief for the same cwd —
+    worth a look, not urgent, and must not read the same as a genuine mismatch."""
+    from src.orchestrator.seats import live_cwd_ledger
+
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "ledgerpartial"\n')
+    await _agent_works_in(actions, "agent:ledgerpartial1", "ledgerpartial")
+    await _agent_works_in(actions, "agent:ledgerpartial2", "stalebelief")
+    await save_mount(actions.pool, job_dir="/jobs/ledgerpartial1",
+                     agent_id="agent:ledgerpartial1", project="ledgerpartial",
+                     cwd=str(office), model="claude-sonnet-5", session_key=None)
+    await save_mount(actions.pool, job_dir="/jobs/ledgerpartial2",
+                     agent_id="agent:ledgerpartial2", project="stalebelief",
+                     cwd=str(office), model="claude-sonnet-5", session_key=None)
+
+    out = await live_cwd_ledger(actions.pool)
+    row = next(c for c in out["cwds"] if c["cwd"] == str(office))
+    assert row["agreement"] == "partial-match"
+    assert set(row["graph_believes"]) == {"ledgerpartial", "stalebelief"}
+
+
+async def test_live_cwd_mismatch_when_resolution_and_graph_fully_disagree(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The live risk this instrument exists to catch: a currently-unpinned tree that would
+    basename-fallback to a NEW name today, while the graph believes something else
+    entirely — the exact shape measured live on two real seats tonight (flip68real,
+    resumelanecheck)."""
+    from src.orchestrator.seats import live_cwd_ledger
+
+    office = tmp_path / "mismatchtree"
+    office.mkdir()
+    await _agent_works_in(actions, "agent:ledgermismatch1", "elsewhere")
+    await save_mount(actions.pool, job_dir="/jobs/ledgermismatch1",
+                     agent_id="agent:ledgermismatch1", project="elsewhere",
+                     cwd=str(office), model="claude-sonnet-5", session_key=None)
+
+    out = await live_cwd_ledger(actions.pool)
+    row = next(c for c in out["cwds"] if c["cwd"] == str(office))
+    assert row["resolved_today"] == "mismatchtree"
+    assert row["graph_believes"] == ["elsewhere"]
+    assert row["agreement"] == "mismatch"
+
+
+async def test_live_cwd_graph_only_at_the_bare_office_root(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """13af22fc's own historical signature (repo:seats), reproduced live: today's code
+    correctly REFUSES to resolve anything at the bare seats container
+    (resolved_today=None), while the graph still carries a belief there from before the
+    fix — exactly what should stay visible, not silently absent."""
+    from src.orchestrator import offices
+    from src.orchestrator.seats import live_cwd_ledger
+
+    fake_root = tmp_path / "seats"
+    fake_root.mkdir()
+    monkeypatch.setattr(offices, "_DEFAULT_OFFICE_ROOT", fake_root)
+    await _agent_works_in(actions, "agent:ledgerbareroot1", "seats")
+    await save_mount(actions.pool, job_dir="/jobs/ledgerbareroot1",
+                     agent_id="agent:ledgerbareroot1", project="seats",
+                     cwd=str(fake_root), model="claude-sonnet-5", session_key=None)
+
+    out = await live_cwd_ledger(actions.pool)
+    row = next(c for c in out["cwds"] if c["cwd"] == str(fake_root))
+    assert row["resolved_today"] is None
+    assert row["graph_believes"] == ["seats"]
+    assert row["agreement"] == "graph-only"
+
+
+async def test_live_cwd_ghost_when_the_office_directory_is_gone(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thoth's own catch (msg 3928), reproduced exactly: flip68real/resumelanecheck's
+    directories were DELETED, not merely unpinned. The canonical `.osiris` reader climbs
+    past a missing cwd to its PARENT's own pin without ever checking `cwd` itself exists —
+    collapsing 'office is gone' into 'office exists, pin unset', two conditions with
+    OPPOSITE dispositions (one wants a pin written, the other wants the graph's belief
+    reaped). This proves the fix: a nonexistent cwd with a real parent pin must read
+    directory_exists=False, pin_state='missing-directory', resolved_today=None,
+    agreement='ghost' — never 'unset'/'mismatch', this instrument's own first-draft bug."""
+    from src.orchestrator.seats import live_cwd_ledger
+
+    container = tmp_path / "seats"
+    container.mkdir()
+    (container / ".osiris").write_text('kind = "container"\n')
+    ghost_office = container / "deletedseat"  # never created — the office is GONE
+
+    await _agent_works_in(actions, "agent:ledgerghost1", "osiris")
+    await save_mount(actions.pool, job_dir="/jobs/ledgerghost1",
+                     agent_id="agent:ledgerghost1", project="osiris",
+                     cwd=str(ghost_office), model="claude-sonnet-5", session_key=None)
+
+    out = await live_cwd_ledger(actions.pool)
+    row = next(c for c in out["cwds"] if c["cwd"] == str(ghost_office))
+    assert row["directory_exists"] is False
+    assert row["pin"]["state"] == "missing-directory"
+    assert row["resolved_today"] is None
+    assert row["graph_believes"] == ["osiris"]
+    assert row["agreement"] == "ghost"
+
+
+async def test_tree_ledger_combines_both_sections_and_caveats(actions: Actions) -> None:
+    from src.orchestrator.seats import tree_ledger
+
+    out = await tree_ledger(actions.pool)
+    assert "projects" in out["project_ledger"]
+    assert "cwds" in out["live_cwd_ledger"]
+    assert out["caveats"], (
+        "an instrument with no stated blind spots is the exact failure mode it exists to "
+        "prevent")
+    assert any("agent_mounts" in c for c in out["caveats"])
+
+
+async def test_project_ledger_surfaces_the_generic_basename_list_in_the_output(
+    actions: Actions,
+) -> None:
+    """Thoth's own instruction (msg 3920): a hidden deny-list is an unfalsifiable claim —
+    the editable phantom-suspect basis must be VISIBLE in the data a caller actually reads,
+    not just documented in a docstring or a private module constant."""
+    from src.orchestrator.seats import _GENERIC_PATH_BASENAMES, project_ledger
+
+    out = await project_ledger(actions.pool)
+    assert out["phantom_verdict_basis"]["phantom-suspect"] == sorted(_GENERIC_PATH_BASENAMES)
+    assert "mechanical" in out["note"].lower()
+
+
+async def test_live_cwd_ledger_states_its_own_non_durability_in_section(
+    actions: Actions,
+) -> None:
+    """Thoth's own instruction (msg 3920): 'nobody reads the bottom' — the caveat belongs
+    where a reader hits it, inside this section's own output, not only in the report-level
+    caveats list."""
+    from src.orchestrator.seats import live_cwd_ledger
+
+    out = await live_cwd_ledger(actions.pool)
+    assert "agent_mounts" in out["note"]
+    assert "evict" in out["note"].lower()
 
 
 # ═══ REACHABILITY (ruling d739d486) — a TRUTHFUL "can I reach this lineage right now?" ═════

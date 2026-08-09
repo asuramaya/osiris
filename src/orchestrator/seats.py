@@ -377,6 +377,11 @@ _ROSTER_CAVEATS = (
     "anchor_cwd and tree_cwd with nothing wrong on the launch path — Imhotep's #141 scope found "
     "khnum and sekhmet both bound to a tree_cwd while their live sessions sit at the office cwd. "
     "The three are reported separately on purpose; none is silently treated as 'the' cwd.",
+    "pin.triage_bucket only ever looks up repo:<pin.declared> — it inherits every one of "
+    "pin's own blind spots above (not certified canonical, anchor_cwd-only) plus one more: "
+    "a bucket reflects a single triage snapshot taken once per roster() call, not a live "
+    "join, so it can go stale the instant something else in the graph changes after this "
+    "call returns.",
 )
 
 
@@ -384,6 +389,35 @@ def _dir_exists(path: str | None) -> bool | None:
     """A plain sync wrapper so `roster()` (async) never calls a blocking Path method inline
     (ASYNC240) — None when there's no path to check, never a guess."""
     return Path(path).is_dir() if path else None
+
+
+async def _triage_bucket_map(pool: asyncpg.Pool) -> dict[str, str]:
+    """canonical -> bucket for every active SoftwareProject, ONE call shared across every
+    row roster() builds (task #158's cross-reference, thread 251443ff — Khnum's read, msg
+    3886) rather than a per-seat re-scan. Goes through `compositions.run_spec`, the same
+    public entrypoint mcp_server.py's own `triage()` tool uses — never the module's private
+    `_fn_triage`/`_triage_buckets` directly.
+
+    FUNCTION-LOCAL IMPORT, DELIBERATELY (Khnum's read): compositions.py imports this module
+    at ITS OWN top (`_OPERATOR_ACTORS`); a top-of-file import back from here would be a real
+    cycle — Python would hit a partially-initialized module on whichever side loads first,
+    breaking at process start, not at a call site. By the time this function actually runs,
+    mcp_server.py has already finished importing both modules, so this is a plain
+    `sys.modules` lookup — the same pattern mailbox.py already leans on ~10 times for this
+    exact shape (folds.py/agents.py/seats.py/capture.py, all function-local there).
+
+    58 active SoftwareProject objects exist today (measured live) — comfortably under the
+    limit=2000 page this asks for, so this is exhaustive in practice, not a silent
+    truncation. If that ever stops being true, the caller (roster) would start seeing
+    `no-such-project` for a real, merely-unpaged project — the honest failure mode of a
+    page-based read outgrowing its own page, not a wrong answer."""
+    from src.orchestrator import compositions
+
+    spec = {"op": "function", "name": "triage",
+            "args": {"mode": "buckets", "object_type": "SoftwareProject",
+                     "status": "active", "limit": 2000}}
+    out = await compositions.run_spec(pool, spec, None, name="triage")
+    return {row["canonical"]: row["bucket"] for row in out["items"] if "canonical" in row}
 
 
 async def roster(
@@ -413,6 +447,16 @@ async def roster(
     #152, running in parallel). `office_exists` and `live_cwd` are separate, deliberately
     uncollapsed axes — see the caveats for exactly what each does and does not mean.
 
+    `pin.triage_bucket` (task #158's cross-reference, thread 251443ff) is a THIRD state, not
+    two: `None` when there's nothing declared to look up (`pin.state` isn't `declared`);
+    `"no-such-project"` when a project IS declared but no active SoftwareProject object
+    named `repo:<pin.declared>` exists in the graph (a dangling pin, not a triage verdict);
+    otherwise the real bucket triage's own buckets mode computed for that object —
+    `contradicted`/`duplicate_suspect`/`bulk_import`/`orphan`/`hub`/`stale`/`thin`/`normal`.
+    Reuses triage verbatim (via `_triage_bucket_map`) rather than inventing a second
+    project-health notion — the operator's own complaint ("triage didn't help at all here")
+    was a discoverability gap, not a missing capability (5c3dbce5, three weeks unpaid).
+
     `repo=None` returns every active seat's row. `repo=<name>` instead answers Alfred's exact
     question — "who owns this" — by checking BOTH signals independently: a seat whose charter
     OR current pin names `repo` is a match, tagged with WHICH signal(s) found it. Two seats
@@ -424,6 +468,7 @@ async def roster(
     from src.orchestrator.agents import read_project_pin
     from src.orchestrator.charter import charter_of
 
+    bucket_map = await _triage_bucket_map(pool)
     seat_rows = await pool.fetch(
         "SELECT o.canonical AS seat_id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -449,6 +494,9 @@ async def roster(
             pin_state = "declared"
         else:
             pin_state = "no-pin"
+        triage_bucket = None
+        if pin_state == "declared" and pin.value:
+            triage_bucket = bucket_map.get(f"repo:{pin.value}", "no-such-project")
         live_cwd = None
         if occ["state"] == "occupied" and occ["holder"]:
             live_cwd = await pool.fetchval(
@@ -461,7 +509,7 @@ async def roster(
             "office_exists": _dir_exists(anchor),
             "chartered_repos": chartered,
             "pin": {"declared": pin.value, "state": pin_state, "path": pin.path,
-                    "error": pin.error},
+                    "error": pin.error, "triage_bucket": triage_bucket},
         })
 
     if repo is None:
@@ -490,6 +538,309 @@ async def roster(
             "function cannot read, chartered under a name this repo string doesn't exactly "
             "match, or simply not yet declared anywhere this function looks.")
     return {"repo": name, "matches": matches, "agreement": agreement, "caveats": caveats}
+
+
+# A CASE-FOLDED DENY-LIST, NOT A DETECTOR (Sekhmet's own list, msg 3906 — 8 project-string
+# values she found in a fresh agent-project-distribution sweep that look like deliberate
+# test/security-research fixtures, not real fleet work): a phantom_verdict must name this
+# class explicitly rather than either scoring it a false phantom or silently dropping it
+# from the report (ruling 60bc15db's third state, applied to a list this time, not a field).
+_KNOWN_TEST_FIXTURE_PROJECTS = frozenset({
+    "cc-test-auto", "v218-evil-repo", "rce-disclosure-kit", "cc-clean", "rc-test",
+    "nonexistent-probe", "smoketest", "resume_probe",
+})
+
+# THE OPERATIONALIZATION OF "NAME-SHAPE", SEKHMET'S JUDGMENT (msg 3906, thread 3892/3900):
+# her actual test was eyeballing whether a project's name reads as a directory basename
+# (generic, filesystem-y) versus a deliberately chosen one — a call she made by hand against
+# the ACTUAL originating cwd. That cwd is usually long gone by the time a phantom is this
+# report's business (agent_mounts is a live/recent registry, not history — measured live,
+# 32 distinct cwd today against thousands of historical agents), so the only honest
+# mechanical stand-in left is this explicit, editable list of generic path-segment names.
+# IT WILL ALWAYS BE INCOMPLETE — a reader who disagrees with an entry, or is missing one,
+# is disagreeing with THIS LIST, not with some hidden ground truth (requirement #3, msg
+# 3900: "phantom is a judgement, so make it one... let a reader disagree with the
+# definition").
+_GENERIC_PATH_BASENAMES = frozenset({
+    "seats", "code", "tmp", "temp", "src", "repo", "repos", "workspace", "projects",
+    "project", "worktrees", "worktree", "container", "root", "home", "office", "scratch",
+})
+
+_TREE_LEDGER_CAVEATS = (
+    "project_ledger covers every ACTIVE SoftwareProject (58 today, measured) — durable "
+    "graph state — but by construction can only see a phantom that accumulated at least "
+    "one works_in edge; a tree that mounted, produced nothing, and left is invisible to "
+    "this whole class of instrument, not just this one field.",
+    "live_cwd_ledger's own non-durability caveat (agent_mounts is a live/recent registry, "
+    "not history) is stated in ITS OWN section, not only here (Thoth's instruction, msg "
+    "3920 — 'nobody reads the bottom'); see its `note` field, not just this list.",
+    "phantom_verdict is a JUDGMENT, not a proof, ported from Sekhmet's own rule (msg 3906) "
+    "— 'declared' trusts any seat's pin OR a Seat-origin governs edge, never an Agent-"
+    "origin one (thread 20af2c95's succession-leak class is evidence FOR phantom, not "
+    "against it). project_ledger's own `phantom_verdict_basis`/`note` fields carry the "
+    "editable basename list and the mechanical-vs-hand-judgment distinction directly — see "
+    "those, not just this line.",
+    "the pin's own seat/house/kind fields (Imhotep's schema addition, ruling 719ed5b1) read "
+    "almost universally absent as of this build — his migration/writer is still landing "
+    "(msg 3909/3915). That is the honest starting state, not a defect in this report's "
+    "first pass; nothing here consumes those fields for a verdict yet, matching his own "
+    "note that nothing else does either.",
+    "READ-ONLY: this reports disagreements and phantom suspicions, it never repairs, folds, "
+    "or merges anything — repo:code's disposition is Sekhmet's design, not this verb's.",
+    "A GAP IN THE CANONICAL READER ITSELF, FLAGGED NOT FIXED (Thoth's catch, msg 3928): "
+    "`_read_osiris_key` (agents.py, used unmodified by this report and by every other "
+    "caller — roster(), resolve_identity, project_identity_evidence) climbs `cwd` and its "
+    "parents for `.osiris` but never checks whether `cwd` ITSELF exists, so a query against "
+    "a DELETED directory silently returns whatever an ancestor's pin says instead — this "
+    "instrument works around it locally (`directory_exists`, checked before trusting the "
+    "pin) but the canonical reader's own three-state model (OsirisKeyRead) is still missing "
+    "a fourth state for this, everywhere else it's called too.",
+)
+
+
+async def _declared_project_index(pool: asyncpg.Pool) -> dict[str, list[str]]:
+    """Every project name ANY active seat's pin or Seat-origin `governs` edge (charter_of,
+    already Seat-origin-only — an Agent-origin governs edge never reaches this index)
+    currently declares, keyed to the seat(s) declaring it. THE fleet-wide half of Sekhmet's
+    phantom test (msg 3906): a candidate is legitimate if SOME seat's own declaration
+    claims it, not only the tree currently under judgment — Alfred's own calibration case
+    (a basename-shaped handle, 'alfred', made legitimate purely by his own deliberate pin).
+    Reuses roster() rather than re-querying pins/charters a second way."""
+    ros = await roster(pool)
+    index: dict[str, list[str]] = {}
+    for row in ros["seats"]:
+        for name in row["chartered_repos"]:
+            index.setdefault(name, []).append(row["seat"])
+        if row["pin"]["state"] == "declared" and row["pin"]["declared"]:
+            index.setdefault(row["pin"]["declared"], []).append(row["seat"])
+    return index
+
+
+def _phantom_verdict(name: str, declared_by: list[str]) -> str:
+    """Sekhmet's rule (msg 3906), in order: a known test fixture is named as one, never
+    silently scored either way; a project ANY seat's own declaration claims is `declared`
+    regardless of how generic its name looks (pin/charter overrides name-shape, not the
+    other way — her Alfred calibration); failing that, a name matching
+    `_GENERIC_PATH_BASENAMES` is a `phantom-suspect`; anything else is `undetermined` — a
+    real disagreement worth a human's eye, not a confident phantom call either way."""
+    if name.lower() in _KNOWN_TEST_FIXTURE_PROJECTS:
+        return "test-fixture"
+    if declared_by:
+        return "declared"
+    if name.lower() in _GENERIC_PATH_BASENAMES:
+        return "phantom-suspect"
+    return "undetermined"
+
+
+async def project_ledger(pool: asyncpg.Pool, *, limit: int = 200, offset: int = 0,
+                         ) -> dict[str, Any]:
+    """THE DURABLE HALF of the pin-vs-graph disagreement report (task #158's instrument,
+    dispatched msg 3900 off Sekhmet's live repo:seats/repo:code catch, rulings 719ed5b1/
+    13af22fc): every ACTIVE SoftwareProject, cross-checked against the fleet-wide declared-
+    name index (`_declared_project_index`) and given a `phantom_verdict`
+    (`_phantom_verdict`) — never a repair, only a report. `triage_bucket` is reused
+    verbatim from the same `_triage_bucket_map` roster()'s pin field already calls, so a
+    project's health reads identically whether reached through a seat's pin or through this
+    fleet-wide sweep.
+
+    `limit`/`offset` (default 200/0, capped 2000, `total` always reported) — the no-silent-
+    caps law, though 58 active SoftwareProjects exist today (measured), comfortably inside
+    one page.
+
+    `phantom_verdict_basis` and `note` are returned WITH the rows, not left to a docstring a
+    caller may never read (Thoth's own instruction, msg 3920, on the first cut of this
+    build): `phantom-suspect` is a MECHANICAL, WEAKER stand-in for Sekhmet's own hand-
+    verified name-shape judgment — she looked at the actual originating cwd; this cannot,
+    because agent_mounts evicts it long before a phantom accumulates enough content to be
+    this report's business (see `live_cwd_ledger`). A reader must be able to tell a
+    mechanically-derived suspicion from her verified one at a glance, in the data, not by
+    tracing back to this function's source."""
+    limit = max(1, min(limit, 2000))
+    offset = max(0, offset)
+    total = await pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' AND status='active'")
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS name "
+        "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active' "
+        "ORDER BY o.canonical LIMIT $1 OFFSET $2", limit, offset)
+    bucket_map = await _triage_bucket_map(pool)
+    declared_index = await _declared_project_index(pool)
+    projects: list[dict[str, Any]] = []
+    for r in rows:
+        name = r["name"] or r["canonical"].removeprefix("repo:")
+        agent_count = await pool.fetchval(
+            "SELECT count(DISTINCT l.from_id) FROM links l WHERE l.to_id=$1 "
+            "AND l.type='works_in' AND (l.valid_until IS NULL OR l.valid_until > now())",
+            r["id"])
+        declared_by = sorted(set(declared_index.get(name, [])))
+        projects.append({
+            "project": r["canonical"], "name": name,
+            "triage_bucket": bucket_map.get(r["canonical"]),
+            "agent_count": agent_count,
+            "declared_by": declared_by,
+            "phantom_verdict": _phantom_verdict(name, declared_by),
+        })
+    return {
+        "projects": projects, "total": total, "limit": limit, "offset": offset,
+        "phantom_verdict_basis": {
+            "test-fixture": sorted(_KNOWN_TEST_FIXTURE_PROJECTS),
+            "phantom-suspect": sorted(_GENERIC_PATH_BASENAMES),
+        },
+        "note": ("phantom-suspect is MECHANICAL and WEAKER than a hand-verified judgment: "
+                "it fires only when a project's name matches the editable list above AND "
+                "no seat declares it — it is an operationalization of Sekhmet's own "
+                "name-shape test (msg 3906) that survives the originating cwd being long "
+                "gone, not a replacement for her looking at one directly. undetermined "
+                "means neither test fired — a real disagreement for a human, never a "
+                "confirmation the project is legitimate. `declared` IS ALSO NOT A REALNESS "
+                "CHECK (Thoth's own catch, msg 3928, live specimens climintworker1/"
+                "inferredworker1's own pins declaring cliproj1/soleseathouse — debugging "
+                "artifacts, correctly self-declared): this bucket answers 'does some seat's "
+                "own declaration claim this name', never 'is this a genuine, intentional "
+                "project' — a fake project that correctly declares itself is "
+                "indistinguishable from a real one by declaration alone."),
+    }
+
+
+async def live_cwd_ledger(pool: asyncpg.Pool) -> dict[str, Any]:
+    """THE LIVE HALF of the pin-vs-graph disagreement report (task #158, dispatch msg 3900):
+    every DISTINCT `cwd` `agent_mounts` holds RIGHT NOW (measured live: 32 rows today — an
+    ephemeral, recent-sessions registry, never a historical ledger; see `_TREE_LEDGER_
+    CAVEATS`) cross-checked against what a fresh mount would resolve there today
+    (`resolved_today`: the declared pin, else the basename fallback ruling 13af22fc named,
+    refusing at the bare seats container exactly as `resolve_project` already does) versus
+    what the graph currently believes (`graph_believes`: live `works_in` targets of every
+    agent this cwd's rows name).
+
+    `resolved_today` ANSWERS ONE SPECIFIC QUESTION, NOT "what will this cwd's occupant see
+    next" — it is the COLD/BOOTSTRAP resolution (pin, else basename) only. A SEATED agent's
+    REAL mount() resolves seat-first (`_seated_house`/`derive_house`) and never consults
+    this path at all (roster()'s own docstring: "a SEATED agent's project is its seat's
+    derived house — UNCONDITIONALLY"). This field answers "what would an UNKNOWN agent
+    resolve to here right now", the exact question 13af22fc's carve-out is about — not a
+    prediction for whoever already lives there.
+
+    `directory_exists` is checked FIRST, BEFORE the pin is trusted at all (Thoth's own
+    catch, msg 3928, a live 60bc15db specimen IN the instrument built to detect that class):
+    `_read_osiris_key` — the canonical reader, used unmodified — climbs `cwd` and every one
+    of `cwd.parents` looking for `.osiris`, but never checks whether `cwd` ITSELF exists.
+    For a DELETED office (flip68real, resumelanecheck — both real, now-retired Seats whose
+    directories are gone), the climb silently lands on the enclosing seats-container's OWN
+    pin and reports it as if it belonged to the deleted office — collapsing "this office is
+    gone" into "this office exists, pin unset," two conditions with OPPOSITE dispositions
+    (one wants a pin written, the other wants the graph's belief reaped). This is a real gap
+    in the canonical reader itself, not only this call site — flagged to Thoth, not
+    silently patched here; `_read_osiris_key` is unchanged. What IS fixed here is LOCAL:
+    `directory_exists=False` short-circuits `pin_state` to `missing-directory` before the
+    climb's result is trusted for anything, and `resolved_today` is forced to `None` — "a
+    fresh mount would basename-fallback here" is meaningless when nothing can even `cd`
+    there (Thoth's own words).
+
+    `agreement`, SIX states now, not five: `ghost` is new — `directory_exists=False` AND the
+    graph still believes something. THE SOUL OUTLIVED THE BODY: the office is gone, but
+    nothing reconciles the graph's belief — a worse, DIFFERENT finding than a live
+    misresolution risk, not a variant of one. Distinct from `graph-only` (the bare seats
+    CONTAINER itself — which IS real on disk, `directory_exists=True` — deliberately
+    refusing resolution by design, ruling 13af22fc). The other five, unchanged: `no-graph-
+    yet` (nothing to cross-check — benign, covers a ghost with no belief either, since
+    there's nothing to reconcile), `graph-only`, `match`, `partial-match` (today's
+    resolution IS one of the graph's beliefs, but the graph also carries OTHER, likely-
+    stale beliefs — worth a look, not urgent), `mismatch` (today's resolution matches NONE
+    of the graph's beliefs while the directory IS real — the live misresolution risk)."""
+    rows = await pool.fetch(
+        "SELECT cwd, count(DISTINCT agent_id) AS n_agents, "
+        "array_agg(DISTINCT agent_id) AS agents FROM agent_mounts GROUP BY cwd "
+        "ORDER BY cwd")
+    from src.orchestrator.agents import read_project_pin
+    from src.orchestrator.offices import is_bare_office_root
+
+    cwds: list[dict[str, Any]] = []
+    for r in rows:
+        cwd = r["cwd"]
+        directory_exists = _dir_exists(cwd)
+        pin = read_project_pin(cwd)
+        if not directory_exists:
+            pin_state = "missing-directory"
+        elif pin.error:
+            pin_state = "unreadable"
+        elif pin.path and pin.value is None:
+            pin_state = "unset"
+        elif pin.value:
+            pin_state = "declared"
+        else:
+            pin_state = "no-pin"
+        if not directory_exists:
+            resolved_today: str | None = None
+        elif pin.value:
+            resolved_today = pin.value
+        elif is_bare_office_root(cwd):
+            resolved_today = None
+        else:
+            resolved_today = Path(cwd).name or None
+        believes_rows = await pool.fetch(
+            "SELECT DISTINCT p.canonical FROM objects a "
+            "JOIN links l ON l.from_id=a.id AND l.type='works_in' "
+            "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
+            "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+            "WHERE a.canonical = ANY($1::text[])", list(r["agents"]))
+        graph_believes = sorted(row["canonical"].removeprefix("repo:") for row in believes_rows)
+        if not graph_believes:
+            agreement = "no-graph-yet"
+        elif not directory_exists:
+            agreement = "ghost"
+        elif resolved_today is None:
+            agreement = "graph-only"
+        elif resolved_today not in graph_believes:
+            agreement = "mismatch"
+        elif len(graph_believes) == 1:
+            agreement = "match"
+        else:
+            agreement = "partial-match"
+        cwds.append({
+            "cwd": cwd, "agents_mounted": r["n_agents"], "directory_exists": directory_exists,
+            "pin": {"declared": pin.value, "state": pin_state, "path": pin.path,
+                    "error": pin.error},
+            "resolved_today": resolved_today,
+            "graph_believes": graph_believes,
+            "agreement": agreement,
+        })
+    return {
+        "cwds": cwds, "total": len(cwds),
+        "note": ("NOT A HISTORICAL LEDGER (Thoth's own instruction, msg 3920: this belongs "
+                "where a reader hits it, not at the bottom): this section's population is "
+                "TODAY's agent_mounts table only, a live/recent registry keyed on job_dir "
+                "that EVICTS old rows (measured live: 37 total rows / 32 distinct cwd "
+                "against thousands of historical agents). A phantom whose originating "
+                "sessions have already ended and been evicted from agent_mounts will NEVER "
+                "appear here — only in project_ledger, which reads durable graph state "
+                "instead."),
+    }
+
+
+async def tree_ledger(pool: asyncpg.Pool, *, limit: int = 200, offset: int = 0) -> dict[str, Any]:
+    """THE PIN-VS-GRAPH DISAGREEMENT REPORT (task #158, Thoth's dispatch msg 3900, off
+    Sekhmet's live repo:seats/repo:code catch — rulings 719ed5b1/13af22fc): "the instrument
+    that should have found tonight's two phantoms without a human noticing." Read-only,
+    fleet-wide, two sections because the durable-history half and the live-right-now half
+    genuinely need different populations (see each function's own docstring):
+
+    `project_ledger` — every active SoftwareProject, judged against the fleet's own
+    declared-name index, `phantom_verdict` named explicitly (a judgment, not a proof).
+    `live_cwd_ledger` — every cwd `agent_mounts` holds right now, cross-checked against
+    what a fresh mount resolves there today versus what the graph currently believes.
+
+    `caveats` (`_TREE_LEDGER_CAVEATS`) is always returned alongside both, naming exactly
+    what this instrument cannot see (requirement #2, msg 3900) rather than reporting a
+    clean sweep over a coverage boundary it never states. NEVER REPAIRS: this names
+    disagreements and phantom suspicions; disposing of one (a fold, a rename, a merge) is
+    always a separate, deliberate, evidence-gated verb's job, never this one's."""
+    projects = await project_ledger(pool, limit=limit, offset=offset)
+    cwds = await live_cwd_ledger(pool)
+    return {"project_ledger": projects, "live_cwd_ledger": cwds,
+            "caveats": list(_TREE_LEDGER_CAVEATS)}
 
 
 async def reachability(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:

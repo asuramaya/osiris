@@ -844,15 +844,19 @@ async def triage(mode: str = "census", object_type: str | None = None, status: s
 
     'buckets' — `object_type` required (a note names every real type when it's missing or
     unknown). One row per object of that type+`status` (default "active"), each carrying
-    exactly one `bucket`, by priority: `duplicate_suspect` (a same-type+status object
-    shares its basename), `bulk_import` (`cohort_min` or more objects — default 3 — born
-    the same calendar second with an IDENTICAL live-link fingerprint, same types AND same
-    counts per type, not just the same total — one script's insert loop, machine-detected),
-    `orphan` (zero live links), `hub` (live links at/above the type's own 95th percentile,
-    floor 10), `stale` (linked but untouched past `stale_days`, default 30), `thin` (1-2
-    live links), or `normal`. Every object in scope is listed, not only flagged ones — this
-    doubles as a plain browse. `limit`/`offset` (default 200/0, capped 2000) page it;
-    `census` already carries the true count per type, so this never needs to.
+    exactly one `bucket`, by priority: `contradicted` (this object has a property with more
+    than one DISTINCT live value from different sources, neither superseding the other —
+    carries `contradicted_on`, the property names in conflict; MARKS, never resolves) >
+    `duplicate_suspect` (a same-type+status object shares its basename — case-folded, so
+    e.g. two SoftwareProjects differing only in case both land here), `bulk_import`
+    (`cohort_min` or more objects — default 3 — born the same calendar second with an
+    IDENTICAL live-link fingerprint, same types AND same counts per type, not just the same
+    total — one script's insert loop, machine-detected), `orphan` (zero live links), `hub`
+    (live links at/above the type's own 95th percentile, floor 10), `stale` (linked but
+    untouched past `stale_days`, default 30), `thin` (1-2 live links), or `normal`. Every
+    object in scope is listed, not only flagged ones — this doubles as a plain browse.
+    `limit`/`offset` (default 200/0, capped 2000) page it; `census` already carries the
+    true count per type, so this never needs to.
 
     `object_type='Type'` — THE CATALOG'S OWN GAP SURFACE: a different bucket set, since a
     Type row doesn't participate in `links` the way an
@@ -2799,6 +2803,12 @@ async def roster(repo: str | None = None) -> dict[str, Any]:
     unset/unreadable), `anchor_cwd`/`tree_cwd`/`live_cwd` kept SEPARATE on purpose (a live
     holder's actual mount cwd can differ from both with nothing wrong on the launch path).
 
+    `pin.triage_bucket` (task #158's cross-reference) is a third state: `None` when nothing
+    is declared to look up, `"no-such-project"` when the pin names a project that isn't a
+    real SoftwareProject object, else triage's own bucket for it (`contradicted`,
+    `duplicate_suspect`, `orphan`, `hub`, `stale`, `thin`, or `normal`) — reused verbatim
+    from `triage`, not a second project-health notion.
+
     `repo=<name>` answers "who owns this" directly: a seat matches if its charter OR its
     current pin names the repo, tagged with which signal(s) hit. Two seats matching from
     different signals come back as a `conflict`, never silently picked one. Zero matches is
@@ -2814,6 +2824,62 @@ async def roster(repo: str | None = None) -> dict[str, Any]:
     pool = await _pool_get()
     from src.orchestrator.seats import roster as _roster
     return await _roster(pool, repo=repo)
+
+
+@mcp.tool()
+async def tree_ledger(limit: int | None = None, offset: int = 0) -> dict[str, Any]:
+    """THE PIN-VS-GRAPH DISAGREEMENT REPORT (task #158, off Sekhmet's live repo:seats/
+    repo:code phantom catch — rulings 719ed5b1/13af22fc): "the instrument that should have
+    found tonight's two phantoms without a human noticing." Read-only, fleet-wide, TWO
+    sections because the durable-history half and the live-right-now half need different
+    populations:
+
+    `project_ledger` — every ACTIVE SoftwareProject (58 today), each carrying
+    `phantom_verdict`: `test-fixture` (a known deliberate test/security-research project
+    name, named not scored), `declared` (some seat's own pin or Seat-origin `governs` edge
+    claims it — Agent-origin governs edges never count, the exact succession-leak class
+    that legitimized repo:code's own bogus edge), `phantom-suspect` (its name matches an
+    explicit list of generic path-segment words — seats/code/tmp/etc — and nothing declares
+    it), or `undetermined` (neither fired — a real disagreement for a human, never a
+    confident phantom call either way). The response's own `phantom_verdict_basis` field
+    carries that editable list VISIBLY (a hidden deny-list is an unfalsifiable claim), and
+    `note` states plainly that `phantom-suspect` is a MECHANICAL, WEAKER stand-in for a
+    hand-verified name-shape judgment — never treat the two as the same confidence.
+    `triage_bucket` reused verbatim from the same machinery `roster()`'s pin field already
+    calls. `limit`/`offset` (default 200/0, capped 2000, `total` always reported) page it,
+    though 58 fits one page today.
+
+    `live_cwd_ledger` — its own `note` field states, where a reader hits it before the
+    rows, that its population is TODAY's `agent_mounts` table only (measured: 32 distinct
+    cwd — a live/recent registry, NOT a historical ledger, that EVICTS old rows; a phantom
+    whose originating sessions already ended and were evicted never appears here, only in
+    `project_ledger`). Each cwd carries `directory_exists` — checked FIRST, before the pin
+    is trusted at all: the canonical `.osiris` reader climbs parent directories without
+    ever checking whether `cwd` itself still exists, so a DELETED office silently reads the
+    enclosing container's own pin as if it were its own (found live: two retired seats,
+    flip68real/resumelanecheck). `resolved_today` (what a fresh mount computes now: the
+    pin, else the basename fallback, refusing at the bare seats container, forced to `None`
+    whenever `directory_exists` is False — nothing can mount at a directory that isn't
+    there) versus `graph_believes` (live `works_in` targets of every agent this cwd
+    currently names). `resolved_today` answers the COLD/BOOTSTRAP question only — a SEATED
+    agent's real mount() resolves seat-first and never touches this path (roster()'s own
+    law). SIX `agreement` states, not collapsed: `no-graph-yet` / `ghost` (the office is
+    GONE but the graph still believes something — the soul outlived the body, a worse and
+    different finding than a misresolution risk) / `graph-only` (the bare seats container
+    itself, still real on disk, deliberately refuses resolution by design — 13af22fc) /
+    `match` / `partial-match` (today's resolution is correct but the graph also carries
+    other, likely-stale beliefs for this cwd — worth a look, not urgent) / `mismatch`
+    (today's resolution matches NONE of the graph's beliefs while the directory IS real —
+    the live misresolution risk).
+
+    `caveats` names exactly what this instrument cannot see (a tree that never accumulated
+    a works_in edge; a phantom whose live_cwd_ledger evidence has already been evicted) —
+    stated, never silently absent. READ-ONLY: reports disagreements, never repairs, folds,
+    or merges — disposing of a confirmed phantom is always a separate, evidence-gated
+    verb's job."""
+    pool = await _pool_get()
+    from src.orchestrator.seats import tree_ledger as _tree_ledger
+    return await _tree_ledger(pool, limit=limit if limit is not None else 200, offset=offset)
 
 
 @mcp.tool()
