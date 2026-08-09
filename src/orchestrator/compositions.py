@@ -3394,6 +3394,32 @@ async def _props(pool: asyncpg.Pool, oid: uuid.UUID) -> dict[str, str]:
     return {r["name"]: r["v"] for r in rows}
 
 
+async def _props_batch(
+    pool: asyncpg.Pool, oids: list[uuid.UUID],
+) -> dict[uuid.UUID, dict[str, str]]:
+    """BATCHED sibling of `_props` (task #164, dispatch msg 3982): `winning_props`'s own
+    signature already takes an array — `object_items` (line ~4130) already calls it this
+    way — but the `select` op's inner loop called `_props` once PER OBJECT instead, a
+    singleton-array round trip repeated N times. Measured live: 2947 active Threads,
+    ~3.07ms/call, LIVE_DESK's two Thread-scanning sections paying it twice — 2 × 2947 ×
+    3.07ms = 18.1s projected against 16-17s measured on the console's own `/` route. This
+    is the SAME resolution rule as `_props` (constitution #5, winning_props' own ordering),
+    batched — never a second definition of "winning." `_props` itself is UNCHANGED and
+    still used by every other call site (`collect`/`focus`/etc.) — this fixes only the
+    `select` op's own N+1, per Thoth's explicit scope: batch the read, do not rewrite the
+    op. Every requested id gets an entry (possibly empty), so a caller can `.get(oid)`
+    without a fallback for 'never asked'."""
+    if not oids:
+        return {}
+    rows = await pool.fetch(
+        "SELECT object_id, name, value #>> '{}' AS v FROM winning_props($1::uuid[])", oids,
+    )
+    out: dict[uuid.UUID, dict[str, str]] = {oid: {} for oid in oids}
+    for r in rows:
+        out[r["object_id"]][r["name"]] = r["v"]
+    return out
+
+
 def _distinct[T](values: list[T]) -> list[T]:
     seen: set[T] = set()
     out: list[T] = []
@@ -3485,9 +3511,13 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         hoods: dict[Any, dict[str, Any]] = {}
         if any(c.get("property") == NEIGHBORHOOD for c in where):
             hoods = await neighborhoods_of(pool, [r["id"] for r in rows])
+        # BATCHED, not one winning_props round trip per row (task #164, msg 3982): the
+        # console's own `/` route measured 16-17s from exactly this shape, LIVE_DESK
+        # scanning ~2947 active Threads twice at ~3ms/call. See `_props_batch`.
+        props_by_id = await _props_batch(pool, [r["id"] for r in rows])
         out: list[uuid.UUID] = []
         for r in rows:
-            facts = await _props(pool, r["id"])
+            facts = props_by_id.get(r["id"], {})
             if hoods or any(c.get("property") == NEIGHBORHOOD for c in where):
                 facts[NEIGHBORHOOD] = (hoods.get(r["id"]) or {}).get("name", "(no tree)")
             if all(match_condition(facts.get(c.get("property")), c.get("op", "contains"),
