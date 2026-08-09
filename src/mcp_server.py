@@ -87,7 +87,6 @@ from src.orchestrator.monitor import health_banner, organ_health
 from src.orchestrator.smoke import smoke as run_smoke
 from src.orchestrator.sources import as_dicts, suggest
 from src.orchestrator.swaps import classify_swap, swap_banner
-from src.orchestrator.trigger import wake_status
 
 
 class BoundedMCP(FastMCP):
@@ -2788,6 +2787,14 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     'ask' (needs a reply or an act from them) | 'fyi' (a notice; an ack settles it). Graded
     asks are NAMED in the recipient's mount/orient unread count, so a seat can see "1 asks
     something of you" without paying to read everything. Ungraded mail is never guessed.
+    A BROADCAST NOW DISPATCHES ON ARRIVAL, same as a DM (task #151): the receipt's
+    `dispatch` field says what actually happened — `queued-fyi` (an fyi never wakes anyone,
+    it settles at each reader's own next turn), `poked`/`resumed`/`woke` (someone was
+    actually reached, and how), or one of the brake modes (`poke-only-held`, `skipped-*`,
+    `scoped-out`) naming exactly why nobody was. Before this, `to`=<project> only FILED and
+    a caller had no way to tell "filed, nobody woken" from "filed, N woken" — the worker
+    sweep was the only push, up to ~60s later, and never at all under the standing poke-only
+    arm with no open window for that project.
     A DM's receipt ECHOES the resolution — `dm_to` is the id it actually reached, `seat` its
     claimed handle (or null, anonymous), `lineage_head` where that id's OWN succession chain
     currently ends; compare it against `dm_to` to catch a stale address before trusting the
@@ -2853,14 +2860,29 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
             out["warning"] = ("the addressee is an ephemeral SPAWN — it cannot be woken and "
                               "may never read this; if the work is for its lineage, DM the "
                               "parent seat instead (see the spawn's spawned_by link)")
-    else:  # a broadcast — the project channel: who's live, will the trigger wake them, the queue
+    else:  # a broadcast — the project channel: who's live, is anyone actually being woken
         dest = res["to"]
         last_seen = await mounts.project_last_seen(pool, dest)
         out["to"] = dest
         out["listener"] = {"live": bool(last_seen and datetime.now(UTC)
                            - datetime.fromisoformat(last_seen) < timedelta(minutes=15)),
                            "last_seen": last_seen}
-        out["wake"] = await wake_status(pool, dest, st)
+        # THE IMMEDIATE LEG, extended from the DM lane to broadcasts (task #151, ruling
+        # 60bc15db in the mail layer): a broadcast used to file and return a bare "sent" —
+        # a caller reasonably read that as delivered when it meant filed, and the only push
+        # was the worker sweep, up to ~60s later, NONE at all under poke-only with no open
+        # window. dispatch_broadcast fires ON ARRIVAL now, same as a DM; the worker tick
+        # stays the backstop. A dispatch failure must never fail the send: the message is
+        # already committed, the sweep retries, and the receipt says so honestly.
+        if not res["dedup"]:
+            try:
+                from src.orchestrator.trigger import dispatch_broadcast
+                out["dispatch"] = await dispatch_broadcast(
+                    pool, project=dest, msg_id=res["id"], sender=actor)
+            except Exception as exc:  # noqa: BLE001 — the send already committed; confess
+                out["dispatch"] = {"mode": "deferred",
+                                   "detail": f"immediate dispatch failed ({exc}) — the "
+                                             "worker sweep is the backstop"}
         out["backlog"] = await mailbox.project_deliverable_count(
             pool, dest, lease_secs=st.osiris_mail_lease_secs)
     # THE CROSSED-MAIL WARNING (Anubis VIII's #1 grievance, msg 236: four in-flight

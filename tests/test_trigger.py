@@ -23,6 +23,7 @@ from src.orchestrator.seats import bind_holder, ensure_seat, set_seat_attended
 from src.orchestrator.trigger import (
     _WAKE_PROMPT,
     _wake_marker,
+    dispatch_broadcast,
     dispatch_dm,
     should_wake,
     trigger_mail_tick,
@@ -1566,6 +1567,90 @@ async def test_an_fyi_dm_never_wakes(actions: Actions, tmp_path: Path) -> None:
     rep = await trigger_mail_tick(actions, settings=st, spawn=_boom)
     assert rep.get("dm_queued") == 1 and rep["woke"] == 0
     assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
+
+
+# ═══ BROADCAST DISPATCH (task #151) — the same grammar as a DM's, applied to the surface it
+# was missing from. Before this, send(to=<project>) filed a message and computed wake_status
+# (a status STRING, no dispatch) — the only push was the worker sweep, up to ~60s later, and
+# NONE at all under poke-only with no open window. Thoth LXXII's commit-freeze broadcast
+# reached nobody the night of the second history rewrite for exactly this reason.
+
+async def test_an_fyi_broadcast_never_wakes(actions: Actions) -> None:
+    """The DM lane's own loop terminator, extended to broadcasts: grade='fyi' never wakes
+    anyone. Before this, grade had ZERO effect on broadcast dispatch — confirmed empirically
+    (not assumed) before building on it — it only ever reached mount()/orient()'s unread
+    count."""
+    a = await actions.create_or_find_object("Agent", "agent:demo", "session")
+    await actions.assert_property(a, "project", "demo", "session", NOW, 0.9)
+    await save_mount(actions.pool, job_dir="/test/seed/demo", agent_id="agent:seed-demo",
+                     project="demo", cwd="/test", model=None, session_key=None, alive=False)
+    out = await send_message(actions.pool, from_agent="agent:other", from_project="other",
+                             to_project="demo", body="fyi: filed for the record",
+                             grade="fyi")
+
+    async def _boom(repo: str, prompt: str, **kw: Any) -> None:
+        raise AssertionError("an fyi broadcast minted a turn — the terminator failed")
+
+    st = _settings(enabled=True)
+    d = await dispatch_broadcast(actions.pool, project="demo", msg_id=int(out["id"]),
+                                 sender="agent:other", settings=st, spawn=_boom,
+                                 windows=_no_windows)
+    assert d["mode"] == "queued-fyi"
+    # and the backstop sweep holds the same line — two callers, one law, no drift
+    rep = await trigger_mail_tick(actions, settings=st, spawn=_boom)
+    assert rep["fyi_queued"] == 1 and rep["woke"] == 0
+    assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
+
+
+async def test_dispatch_broadcast_pokes_an_open_window_immediately(actions: Actions) -> None:
+    """The IMMEDIATE LEG (send()'s own call, simulated here directly): an 'ask'-graded
+    broadcast pokes a manager-hosted open window on arrival, not up to ~60s later at the
+    sweep's own pace — the exact latency gap task #151 exists to close."""
+    await _agent_with_mail(actions)
+    await save_mount(actions.pool, job_dir="/x/jobs/beefcafe", agent_id="agent:demo",
+                     project="demo", cwd="/repo/demo", model=None,
+                     session_key="whisper:beefcafe", alive=False)
+    wins = [{"name": "w-demo", "alive": True, "idle_seconds": 999.0,
+             "job_dir": "/x/jobs/beefcafe"}]
+    pokes: list[tuple[str, str]] = []
+
+    async def _windows() -> list[dict[str, Any]]:
+        return wins
+
+    async def _poke(name: str, text: str, *, dedup: str, min_idle: int) -> dict[str, Any]:
+        pokes.append((name, dedup))
+        return {"poked": name}
+
+    msg_id = await actions.pool.fetchval(
+        "SELECT id FROM fleet_messages WHERE to_project='demo' ORDER BY id DESC LIMIT 1")
+    d = await dispatch_broadcast(actions.pool, project="demo", msg_id=msg_id,
+                                 sender="agent:other", settings=_settings(enabled=True),
+                                 windows=_windows, poke=_poke)
+    assert d["mode"] == "poked"
+    assert pokes[0][0] == "w-demo" and pokes[0][1] == f"msg:{msg_id}"
+    assert await actions.pool.fetchval(
+        "SELECT mode FROM agent_wakes ORDER BY id DESC LIMIT 1") == "poke"
+    # the sweep, arriving after, finds the SAME cause already poked (shared dedup key,
+    # msg:<id>, between the immediate leg and the backstop) — it does not double-poke, but
+    # the message is STILL unsettled, so the pre-poke ladder escalates past the window to
+    # mint, exactly as it already did before this refactor (unchanged behavior, preserved)
+    async def _poke_deduped(name: str, text: str, *, dedup: str,
+                            min_idle: int) -> dict[str, Any]:
+        return {"poked": name, "deduped": True}
+
+    spawned: list[str] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        spawned.append(repo)
+
+    rep = await trigger_mail_tick(actions, settings=_settings(enabled=True, sense=""),
+                                  spawn=_spawn, windows=_windows, poke=_poke_deduped)
+    assert rep["poked"] == 0 and rep["woke"] == 1  # escalated to the mint rung
+    assert spawned == ["/repo/demo"]
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM agent_wakes WHERE mode='poke'") == 1
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM agent_wakes WHERE mode='mint'") == 1
 
 
 async def test_a_paused_seat_queues_and_release_drains(

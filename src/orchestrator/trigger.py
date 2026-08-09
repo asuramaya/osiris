@@ -2611,6 +2611,174 @@ async def _bg_session_cost(
     return {"priced": False, "reason": "session not found in claude agents --json"}
 
 
+async def dispatch_broadcast(
+    pool: asyncpg.Pool, *, project: str, msg_id: int, sender: str | None,
+    settings: Settings | None = None, spawn: Any = None, windows: Any = None,
+    poke: Any = None, hourly_wakes: int | None = None,
+) -> dict[str, str]:
+    """Dispatch ONE broadcast to its project — dispatch_dm's own grammar, finally applied to
+    the surface it was missing from (task #151; ruling 60bc15db, the mail layer's own
+    specimen). Before this, send(to=<project>) filed a message and computed wake_status (a
+    STATUS STRING, no dispatch) — the only push a broadcast ever got was the worker tick's
+    sweep, up to ~60s later, and under the standing osiris_trigger_poke_only arm a project
+    with no open manager window got NONE, ever. That is how Thoth LXXII's commit-freeze
+    broadcast reached nobody the night of the second history rewrite (Imhotep, msg 3707:
+    "sent individual DMs since the freeze broadcast never reached anyone") — four agents
+    held live worktrees and the channel built for reaching all of them at once was silent.
+
+    Shared verbatim by send()'s immediate leg and the worker tick's backstop sweep — two
+    callers, one law, no drift (dispatch_dm's own principle: "(The DM lane already knew
+    this... The broadcast lane simply never learned it.)"). Returns the per-hop RECEIPT
+    {mode, detail}:
+
+      queued-fyi      — grade='fyi' never wakes: the DM lane's own loop terminator (line
+                        ~1204 above), extended here rather than re-invented. CONFIRMED, not
+                        assumed, that grade previously had zero effect on broadcast dispatch
+                        before this — it only ever reached mount()/orient()'s unread count.
+      delivered       — the project's own owner is live right now; reads its own box
+      poked           — typed into a manager-hosted OPEN window holding this project
+      window-busy     — that window is mid-turn; the mail waits, nothing spent
+      resumed         — an owner's own session was continued with the mail as its next turn
+      woke            — no live/resumable owner; a fresh session was minted
+      poke-only-held  — the ladder ends at poke (osiris_trigger_poke_only=1, the operator's
+                        standing arm): no resume, no mint, ever. Held mail stays pull-only.
+      skipped-*       — the fleet's own brakes (rate-capped / budget-* / wake-grace)
+      abandoned       — failed its lifetime attempt limit; escalated to the human, the
+                        trigger stops trying rather than loop forever
+      no-repo         — no known repo to spawn into; stays pull-only
+      trigger-dark / scoped-out — the kill switch, or a scoped re-arm naming other projects
+
+    `hourly_wakes` lets the sweep pass its OWN running total (hourly DB count + wakes already
+    fired earlier in the SAME tick) so a burst of messages in one tick can't each read a
+    stale pre-burst count and collectively blow past the hourly budget — the exact correction
+    the sweep's inline loop already made before this was extracted. `None` (send()'s
+    immediate leg, a single isolated call) reads a fresh count.
+
+    THE RACE THIS FUNCTION MUST NOT LOSE: with two callers, a message arriving at the same
+    moment the sweep is mid-tick could be dispatched by both. The poke step trusts `poke`'s
+    own dedup (`dedup=f"msg:{msg_id}"`, the same guarantee the old sweep-only code already
+    relied on); resume/mint claim the ledger row under an advisory transaction lock BEFORE
+    spawning, exactly as dispatch_dm's own resume arm does — the second caller finds the row
+    already there and stops rather than double-spawning."""
+    st = settings or get_settings()
+    spawn = spawn or _spawn_claude
+    windows = windows or _manager_windows
+    poke = poke or _poke_window
+    mrow = await pool.fetchrow(
+        "SELECT grade, extract(epoch FROM (now() - created_at)) AS age_secs "
+        "FROM fleet_messages WHERE id=$1", msg_id)
+    grade = mrow["grade"] if mrow else None
+    age = float(mrow["age_secs"] or 0) if mrow else 0.0
+    if grade == "fyi":
+        return {"mode": "queued-fyi",
+                "detail": "an fyi broadcast never wakes — it settles at each reader's own "
+                          "next turn (the DM lane's own loop terminator, extended here)"}
+    if not st.osiris_trigger_enabled:
+        return {"mode": "trigger-dark",
+                "detail": "the trigger is dark (osiris_trigger_enabled=0)"}
+    allow = {p.strip() for p in st.osiris_trigger_projects.split(",") if p.strip()}
+    if allow and project not in allow:
+        return {"mode": "scoped-out",
+                "detail": f"this re-arm names only: {', '.join(sorted(allow))}"}
+    if await _owner_live(pool, project, st.osiris_owner_live_secs):
+        return {"mode": "delivered",
+                "detail": "the project's own owner is live right now — reads its own box"}
+    urgent = (sender or "").startswith("operator") or age >= _URGENT_AGE_SECS
+    hourly = hourly_wakes if hourly_wakes is not None else int(await pool.fetchval(
+        "SELECT count(*) FROM agent_wakes WHERE woke_at > now() - interval '1 hour'") or 0)
+    attempts = await _attempts_on(pool, msg_id)
+    reason = should_wake(
+        enabled=True,
+        recent_wakes=await _recent_wakes(pool, project, st.osiris_trigger_window_secs),
+        rate_cap=st.osiris_trigger_rate_cap,
+        within_grace=await _woken_within(pool, project, st.osiris_trigger_grace_secs),
+        hourly_wakes=hourly, hourly_budget=st.osiris_wake_hourly_budget,
+        urgent=urgent, attempts=attempts, attempt_limit=st.osiris_wake_message_attempts)
+    if reason == "unsettleable":
+        await _abandon(pool, project, msg_id, sender, attempts)
+        return {"mode": "abandoned",
+                "detail": f"failed its lifetime attempt limit ({attempts}) — escalated to "
+                          "the human; the trigger stops trying rather than loop forever"}
+    if reason is not None:
+        return {"mode": "skipped-" + reason,
+                "detail": f"the fleet's own brakes held it ({reason}) — the backstop sweep "
+                          "runs every ~60s and retries once it clears"}
+    wins = await windows()
+    if wins:
+        sids = {Path(r["job_dir"]).name[:8] for r in await pool.fetch(
+            "SELECT job_dir FROM agent_mounts WHERE project=$1 AND job_dir IS NOT NULL",
+            project)}
+        wname = _window_for(wins, sids)
+        if wname is not None:
+            res = await poke(wname, _POKE_PROMPT, dedup=f"msg:{msg_id}",
+                             min_idle=st.osiris_poke_min_idle_secs)
+            if res.get("poked") and not res.get("deduped"):
+                await pool.execute(
+                    "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+                    "VALUES ($1,$2,$3,'poke')", project, sender, msg_id)
+                return {"mode": "poked",
+                        "detail": f"typed into the open window {wname} as its next turn"}
+            if res.get("busy"):
+                return {"mode": "window-busy",
+                        "detail": "the window is streaming a turn — mail waits, nothing "
+                                  "spent"}
+            if res.get("deduped") and await _last_wake_mode(pool, project, msg_id) != "poke":
+                await pool.execute(
+                    "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+                    "VALUES ($1,$2,$3,'poke')", project, sender, msg_id)
+                return {"mode": "poked",
+                        "detail": "already poked (ledger healed after a lost record)"}
+    if st.osiris_trigger_poke_only:
+        return {"mode": "poke-only-held",
+                "detail": "the ladder ends at poke (osiris_trigger_poke_only=1, the "
+                          "operator's standing arm) — no resume, no mint, ever; held mail "
+                          "stays pull-only"}
+    # THE LOCK IS FOR THE RACE, NOT FOR MEMORY: unlike a DM (one resume attempt EVER — a
+    # resume that didn't settle it is not looped), a broadcast RETRIES across ticks up to
+    # `attempt_limit`, already enforced above via _attempts_on/should_wake. This lock only
+    # keeps two near-simultaneous dispatchers (send()'s immediate leg + a sweep tick landing
+    # in the same instant) from both reading "not yet resumed this tick" and both spawning —
+    # it must never become a second, broader "already woke, ever" gate, or attempt_limit's
+    # own retry ladder breaks (measured live: an earlier draft of this check did exactly
+    # that and silently capped every retry at one, killing the abandon-after-N-attempts path
+    # the ghost-farm fix depends on).
+    async with pool.acquire() as conn, conn.transaction():
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended('osiris-bc-' || $1, 7445))",
+            str(msg_id))
+        resume = None
+        mint_repo_path: str | None = None
+        if await _last_wake_mode(pool, project, msg_id) != "resume":
+            resume = await _resumable_owner(pool, project, st)
+        if resume is not None:
+            await conn.execute(
+                "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+                "VALUES ($1,$2,$3,'resume')", project, sender, msg_id)
+        else:
+            mint_repo_path = await _repo_path(pool, project)
+            if mint_repo_path is None:
+                return {"mode": "no-repo",
+                        "detail": "no known repo to spawn into — stays pull-only"}
+            await conn.execute(
+                "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+                "VALUES ($1,$2,$3,'mint')", project, sender, msg_id)
+    if resume is not None:
+        session_id, repo = resume[0], resume[1]
+        await spawn(repo, _RESUME_PROMPT, resume_session=session_id,
+                    model=st.osiris_wake_model or None,
+                    allowed_tools=st.osiris_wake_allowed_tools or None)
+        return {"mode": "resumed",
+                "detail": f"continued the owner's own session ({session_id[:8]})"}
+    assert mint_repo_path is not None  # the no-repo branch above already returned otherwise
+    repo_path = mint_repo_path
+    wake_anchor = _wake_job_dir(project)
+    await spawn(repo_path, _WAKE_PROMPT.format(repo=repo_path, job_dir=wake_anchor),
+                job_dir=wake_anchor, model=st.osiris_wake_model or None,
+                allowed_tools=st.osiris_wake_allowed_tools or None,
+                spawn_parent=await _room_parent(pool, project))
+    return {"mode": "woke", "detail": f"minted a fresh session in {repo_path}"}
+
+
 async def trigger_mail_tick(
     actions: Actions, *, settings: Settings | None = None, spawn: Any = _spawn_claude,
     windows: Any = None, poke: Any = None,
@@ -2627,9 +2795,8 @@ async def trigger_mail_tick(
     st = settings or get_settings()
     pool = actions.pool
     report = {"woke": 0, "resumed": 0, "poked": 0, "window_busy": 0, "skipped": 0,
-              "owner_live": 0, "abandoned": 0, "scoped_out": 0, "poke_only_held": 0}
-    # the re-arm scope: a non-empty allowlist names the ONLY projects this trigger may touch
-    allow = {p.strip() for p in st.osiris_trigger_projects.split(",") if p.strip()}
+              "owner_live": 0, "abandoned": 0, "scoped_out": 0, "poke_only_held": 0,
+              "fyi_queued": 0}
 
     # THE CEILING — and this is the producer it was built for. A wake is not a token, it is an
     # entire Claude session with tools, in a repo, on the operator's card. 463 of them were minted
@@ -2647,119 +2814,47 @@ async def trigger_mail_tick(
     # the fleet-wide hourly spend — the SAME number the chrome renders as 'wakes N/h'
     hourly = await pool.fetchval(
         "SELECT count(*) FROM agent_wakes WHERE woke_at > now() - interval '1 hour'")
-    # the manager's window roster, once per tick ([] when the daemon is dark — fail-open).
     # None defaults resolve LATE (module attribute, not a bound default) so tests can
     # darken the manager for the whole module with one monkeypatch.
     windows = windows or _manager_windows
     poke = poke or _poke_window
-    wins = await windows() if st.osiris_trigger_enabled else []
-    for project, msg_id, sender, age in await _projects_with_unread(
+    # THE BROADCAST LANE (task #151, dispatch_broadcast's own docstring has the full ladder
+    # and the incident that demanded it): this loop is now the BACKSTOP sweep, the exact
+    # role the DM lane below already had — send()'s immediate leg dispatches on arrival
+    # through the very same dispatch_broadcast, this drains what arrived gated or ran before
+    # the trigger was armed. Two callers, one law, no drift.
+    for project, msg_id, sender, _age in await _projects_with_unread(
             pool, st.osiris_mail_lease_secs):
         if not st.osiris_trigger_enabled:
             report["skipped"] += 1
             continue
-        if allow and project not in allow:
-            # a scoped re-arm touches ONLY its named subjects — unread mail elsewhere waits
-            # for its own re-arm (or a live reader), it is never a licence to wake
-            report["scoped_out"] += 1
-            continue
-        if await _owner_live(pool, project, st.osiris_owner_live_secs):
-            report["owner_live"] += 1  # deliver: the awake owner reads its own box
-            continue
-        recent = await _recent_wakes(pool, project, st.osiris_trigger_window_secs)
-        within_grace = await _woken_within(pool, project, st.osiris_trigger_grace_secs)
-        # urgent = the operator's own word, or mail deferred long enough that another
-        # deferral is starvation (the economics never silently orphan a message)
-        urgent = (sender or "").startswith("operator") or age >= _URGENT_AGE_SECS
-        # THE TOTAL, not the rate — the bound every other guard here forgot to keep.
-        attempts = await _attempts_on(pool, msg_id)
-        reason = should_wake(enabled=True, recent_wakes=recent,
-                             rate_cap=st.osiris_trigger_rate_cap,
-                             within_grace=within_grace,
-                             hourly_wakes=int(hourly or 0) + report["woke"],
-                             hourly_budget=st.osiris_wake_hourly_budget,
-                             urgent=urgent,
-                             attempts=attempts,
-                             attempt_limit=st.osiris_wake_message_attempts)
-        if reason == "unsettleable":
-            # we have tried and failed enough times to know that trying again is not a plan.
-            # Stop forever, and tell the human — the only reader who can actually act.
-            if await _abandon(pool, project, msg_id, sender, attempts):
-                report["abandoned"] += 1
-            continue
-        if reason is not None:
-            report["skipped"] += 1
-            continue
-        # THE POKE LANE (the wake law, Phase 2): a manager-hosted window already holding a
-        # session of this project gets the mail AS A TURN — typed into the open window —
-        # instead of a second process resuming a session whose window is still live. The
-        # daemon owns the idle gate (never type into a streaming turn or over the
-        # operator's shoulder) and the dedup (one cause types at most once per window).
-        if wins:
-            sids = {Path(r["job_dir"]).name[:8] for r in await pool.fetch(
-                "SELECT job_dir FROM agent_mounts WHERE project=$1 "
-                "AND job_dir IS NOT NULL", project)}
-            wname = _window_for(wins, sids)
-            if wname is not None:
-                res = await poke(wname, _POKE_PROMPT, dedup=f"msg:{msg_id}",
-                                 min_idle=st.osiris_poke_min_idle_secs)
-                if res.get("poked") and not res.get("deduped"):
-                    await pool.execute(
-                        "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
-                        "VALUES ($1,$2,$3,'poke')", project, sender, msg_id)
-                    report["poked"] += 1
-                    report["woke"] += 1
-                    continue
-                if res.get("busy"):
-                    # an ACTIVE window: its mail waits for the next tick (or its own next
-                    # osiris call) — never a wake recorded, because nothing was spent
-                    report["window_busy"] += 1
-                    continue
-                if res.get("deduped"):
-                    if await _last_wake_mode(pool, project, msg_id) != "poke":
-                        # the poke typed once but a crash lost its record — heal the
-                        # ledger instead of double-typing or double-spending
-                        await pool.execute(
-                            "INSERT INTO agent_wakes (to_project, from_agent, message_id, "
-                            "mode) VALUES ($1,$2,$3,'poke')", project, sender, msg_id)
-                        report["poked"] += 1
-                        continue
-                    # already poked for this cause and still unsettled — escalate past the
-                    # window (fall through to resume/mint, the pre-poke ladder)
-        if st.osiris_trigger_poke_only:
-            # THE POKE-ONLY ARM (operator, 2026-07-19): the ladder ends here — no resume,
-            # no mint, no new process. Held mail stays pull-only; the counter says so.
-            report["poke_only_held"] += 1
-            continue
-        resume = None
-        if await _last_wake_mode(pool, project, msg_id) != "resume":  # alternation guard
-            resume = await _resumable_owner(pool, project, st)
-        if resume is not None:
-            session_id, repo = resume[0], resume[1]
-            await pool.execute(
-                "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
-                "VALUES ($1,$2,$3,'resume')", project, sender, msg_id)
-            await spawn(repo, _RESUME_PROMPT, resume_session=session_id,
-                        model=st.osiris_wake_model or None,
-                        allowed_tools=st.osiris_wake_allowed_tools or None)
+        d = await dispatch_broadcast(
+            pool, project=project, msg_id=msg_id, sender=sender, settings=st,
+            spawn=spawn, windows=windows, poke=poke,
+            hourly_wakes=int(hourly or 0) + report["woke"])
+        mode = d["mode"]
+        if mode == "queued-fyi":
+            report["fyi_queued"] += 1
+        elif mode == "delivered":
+            report["owner_live"] += 1
+        elif mode == "poked":
+            report["poked"] += 1
+            report["woke"] += 1
+        elif mode == "window-busy":
+            report["window_busy"] += 1
+        elif mode == "resumed":
             report["resumed"] += 1
             report["woke"] += 1
-            continue
-        repo_path = await _repo_path(pool, project)
-        if repo_path is None:  # no known repo → can't spawn; the mail stays pull-only
+        elif mode == "woke":
+            report["woke"] += 1
+        elif mode == "poke-only-held":
+            report["poke_only_held"] += 1
+        elif mode == "abandoned":
+            report["abandoned"] += 1
+        elif mode == "scoped-out":
+            report["scoped_out"] += 1
+        else:  # trigger-dark / skipped-* / no-repo / skipped-once-per-message
             report["skipped"] += 1
-            continue
-        await pool.execute(  # the wake is RECORDED before it is fired — a spawn we can't count
-            "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
-            "VALUES ($1,$2,$3,'mint')", project, sender, msg_id)
-        # the anchor goes into the PROMPT as a literal path — a woken agent has no shell to
-        # expand $CLAUDE_JOB_DIR with, which is why 463 mints never once used the stable anchor
-        wake_anchor = _wake_job_dir(project)
-        await spawn(repo_path, _WAKE_PROMPT.format(repo=repo_path, job_dir=wake_anchor),
-                    job_dir=wake_anchor, model=st.osiris_wake_model or None,
-                    allowed_tools=st.osiris_wake_allowed_tools or None,
-                    spawn_parent=await _room_parent(pool, project))
-        report["woke"] += 1
 
     # THE DM LANE — the background-session adapter's BACKSTOP sweep (ruling 6c4d0b62):
     # send() dispatches each DM on arrival through the very same dispatch_dm; this loop
