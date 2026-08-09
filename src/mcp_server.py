@@ -54,6 +54,7 @@ from src.orchestrator.agents import (
     nearest_handoff_ancestor,
     project_pin_banner,
     read_project_model,
+    read_project_pin,
     register_agent,
     resolve_identity,
     seat_bearings,
@@ -1698,13 +1699,36 @@ async def mount(
     # the transcript evidence says the registry's cwd is where this session actually lives
     # and the declared one is not, the harness's observation outranks the mind's memory.
     cwd_note = None
+    declared_project_label: str | None = None
     if (bound is not None and bound.cwd and bound.cwd != cwd
             and mounts.stale_recollection(job_dir or "", cwd, bound.cwd)):
+        # THE OVERRIDE MUST NOT DISCARD A MORE-SPECIFIC DECLARED PIN (ruling 13af22fc,
+        # Thoth's live repro: mount(cwd='.../seats/thoth') from a session launched at the
+        # bare container came back cwd_corrected{kept: the container} — his own declared,
+        # correct, more-specific office was replaced by the session's launch directory, and
+        # a basename guess was one step from being derived off what was left). The
+        # correction below is right for what it was built for — the harness's own
+        # transcript location is the ground truth for WHERE THIS SESSION LIVES, and a
+        # resumed mind's memory of a demolished former home must not win that question
+        # (90f0cb3a). But a project pin sitting at the DECLARED cwd is a different question
+        # entirely: reading it is not the spoofing stale_recollection guards against, it is
+        # a cheap, direct fact the declaring session already had in hand. Read it BEFORE
+        # `cwd` is corrected below, and if the declared cwd names a real project, it wins
+        # identity resolution even though `cwd` itself still corrects for every other
+        # purpose (transcript addressing, the session store, the durable registry).
+        declared_pin = read_project_pin(cwd)
+        if declared_pin.value:
+            declared_project_label = declared_pin.value
         cwd_note = {
             "declared": cwd, "kept": bound.cwd,
+            **({"declared_pin_kept_for_identity": declared_project_label}
+               if declared_project_label else {}),
             "note": ("your declared cwd is a STALE MEMORY of a former home — this session's "
                      "transcript lives at the kept path (it moved; your history did not). "
-                     "Mounted at the kept path; update your bearings (90f0cb3a)"),
+                     "Mounted at the kept path; update your bearings (90f0cb3a)"
+                     + (f" — its own project pin ({declared_project_label!r}) still won "
+                        "identity resolution; only the transcript/session address was "
+                        "corrected (ruling 13af22fc)" if declared_project_label else "")),
         }
         cwd = bound.cwd
     # THE HARNESS-AGNOSTIC TRANSCRIPT STORE (ruling be741d3e; sole model lane since the
@@ -1714,7 +1738,8 @@ async def mount(
     store_reading = await identity_reading(pool, cwd=cwd, job_dir=job_dir)
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model,
                              claimed=claimed, fallback_seed=key,
-                             store_reading=store_reading)
+                             store_reading=store_reading,
+                             project_label=declared_project_label)
     # THE BARE-ROOT REFUSAL WAS THE WRONG FIX (operator ruling 577988ed, correcting mount-
     # guard #6): the operator LAUNCHES agents from the bare seat-office root ON PURPOSE — that
     # IS the intended pattern, and the whole point of a seat is that identity is LOCATION-
