@@ -32,7 +32,7 @@ import asyncpg
 from src.actions.core import Actions
 from src.config.settings import Settings, get_settings
 from src.ingest.providers import spend_is_metered
-from src.ingest.sessions import locate_current_transcript, resume_diagnostics
+from src.ingest.sessions import locate_current_transcript, resume_verdict
 from src.orchestrator.bodies import BodyProvider, LocalProvider
 from src.orchestrator.ceiling import may_spend
 from src.orchestrator.mailbox import OPERATOR_ADDR, send_message
@@ -471,7 +471,7 @@ async def _agent_resumable(
         else Path.home() / ".claude" / "projects"
     return await asyncio.to_thread(
         _pick_resumable_sync, cands, root, st.osiris_resume_ceiling_bytes,
-        st.osiris_resume_max_compactions)
+        st.osiris_resume_min_tail_bytes)
 
 
 async def _agent_resume_miss_reason(pool: asyncpg.Pool, agent_id: str, st: Settings) -> str:
@@ -495,7 +495,7 @@ async def _agent_resume_miss_reason(pool: asyncpg.Pool, agent_id: str, st: Setti
         else Path.home() / ".claude" / "projects"
     return await asyncio.to_thread(
         _resume_miss_reason, cands, root, st.osiris_resume_ceiling_bytes,
-        st.osiris_resume_max_compactions)
+        st.osiris_resume_min_tail_bytes)
 
 
 async def _owner_live(pool: asyncpg.Pool, project: str, within_secs: int) -> bool:
@@ -517,55 +517,30 @@ async def _retired(pool: asyncpg.Pool, agent_canonical: str) -> bool:
     return bool(v == "true")
 
 
-def _resume_candidate_verdict(t: Path, ceiling_bytes: int, max_compactions: int) -> str | None:
-    """None iff `t` is genuinely resumable under BOTH gates; otherwise the reason it is
-    not. The ONE computation `_pick_resumable_sync` (the hot path) and `_resume_miss_
-    reason` (the refusal-message path) both read from, so the two can never
-    independently drift — closed by construction, not by two hand-synchronized copies.
-    That drift already happened once: eebeb1f (Sekhmet's #136) shipped a byte-for-byte
-    duplicate of this function's OLD raw-size check, explicitly to never disagree with
-    it, and would have silently gone stale the moment this fix landed without also
-    touching that copy (Thoth's ruling, 2026-08-03 — "that is 38c71544 exactly"). Raises
-    OSError on an unreadable transcript; both callers handle it the same way (skip this
-    candidate).
+def _resume_candidate_verdict(t: Path, ceiling_bytes: int, min_tail_bytes: int) -> str | None:
+    """The dispatch-layer's thin wrapper over `sessions.resume_verdict` — kept here (not
+    just calling that function directly at every site) because THIS is where Settings
+    already lives and every caller in this file already imports from here. The verdict
+    ITSELF (#156's rebuild, 2026-08-09, the operator's own correction: "closed at exactly
+    the compaction seam is a rare special case" — a minimum-tail-bytes floor replaces the
+    old compaction-COUNT gate; see `resume_diagnostics`'s own docstring in
+    src/ingest/sessions.py for the full finding, including sekhmet's live specimen the old
+    gate got wrong) lives in ONE place so `_pick_resumable_sync` (the hot path) and
+    `_resume_miss_reason` (the refusal-message path) can never independently drift —
+    closed by construction. That drift already happened once: eebeb1f (Sekhmet's #136)
+    shipped a byte-for-byte duplicate of this function's OLD raw-size check (Thoth's
+    ruling, 2026-08-03 — "that is 38c71544 exactly"). Raises OSError on an unreadable
+    transcript; both callers handle it the same way (skip this candidate).
 
-    BOTH GATES MUST PASS, CHECKED INDEPENDENTLY (Thoth's ruling, refining the original
-    size-only fix, same thread 771366d1): don't reanimate a generation that already
+    BOTH GATES MUST PASS, CHECKED INDEPENDENTLY: don't reanimate a generation that already
     retired via legitimate succession is ALREADY `_retired()`'s job, checked first by
     every caller here, authoritatively — not this function's concern. This function
-    answers a narrower question: would a resume return something worth having.
-
-    COMPACTION COUNT FIRST: a small tail after many compactions and a small tail after
-    zero are opposite cases, not similar ones — the first compaction is the moment a
-    resume stops returning "the mind that did the work" and starts returning "a lossy
-    summary of it" (ruling 7fa4b599's own mechanism: that summary is approximately what a
-    fresh mind's own orient()+handoff+dispatch-brief ritual already delivers, from an
-    audited source, not a lossy one — falling through to fresh is an upgrade, not a
-    denial). Default threshold 0, evidence-based: measured across every real transcript
-    on this box over the trivial-shell floor (767 candidates, 2026-08-03) — 85.4% have
-    NEVER compacted (a clean, natural boundary), and of the 37 that compacted exactly
-    once, 35 already pass the byte ceiling below — meaning this gate does real,
-    orthogonal work the size gate alone would miss for the large majority of once-
-    drifted sessions. Full measurement in `resume_diagnostics`'s own docstring
-    (src/ingest/sessions.py).
-
-    THEN THE RESUMABLE-TAIL CEILING, NOT RAW FILE SIZE (the original fix, same thread):
-    raw file size measures a session's cumulative lifetime, not what a resume actually
-    hydrates — verified live on two real specimens (72MB/103MB transcripts) that only
-    2-3% of the file, the content since the LAST compaction, is what a resume needs."""
-    count, tail = resume_diagnostics(t)
-    if count > max_compactions:
-        return (f"found a candidate, but it has compacted {count} time(s) — a resume "
-                f"would return a compaction summary, not the mind that did the work; a "
-                f"fresh mind's own orient()+handoff is the better, audited summary "
-                f"already (ruling 7fa4b599)")
-    if tail > ceiling_bytes:
-        return "found a candidate, but its resumable content is over the context ceiling"
-    return None
+    answers a narrower question: would a resume return something worth having."""
+    return resume_verdict(t, ceiling_bytes=ceiling_bytes, min_tail_bytes=min_tail_bytes)
 
 
 def _pick_resumable_sync(
-    cands: list[tuple[str, str]], root: Path, ceiling_bytes: int, max_compactions: int = 0,
+    cands: list[tuple[str, str]], root: Path, ceiling_bytes: int, min_tail_bytes: int = 0,
 ) -> tuple[str, str, float, str] | None:
     """The disk half of resume-resolution (sync — called via to_thread): for each candidate
     (job_dir, cwd), anchor its transcript and run `_resume_candidate_verdict`. Returns
@@ -580,7 +555,7 @@ def _pick_resumable_sync(
             continue
         try:
             st = t.stat()
-            if _resume_candidate_verdict(t, ceiling_bytes, max_compactions) is not None:
+            if _resume_candidate_verdict(t, ceiling_bytes, min_tail_bytes) is not None:
                 continue
         except OSError:
             continue
@@ -589,7 +564,7 @@ def _pick_resumable_sync(
 
 
 def _resume_miss_reason(
-    cands: list[tuple[str, str]], root: Path, ceiling_bytes: int, max_compactions: int = 0,
+    cands: list[tuple[str, str]], root: Path, ceiling_bytes: int, min_tail_bytes: int = 0,
 ) -> str:
     """Why _pick_resumable_sync came back empty for these SAME candidates — the two
     opposite shapes dispatch_dm's refusal message used to collapse into one identical
@@ -607,7 +582,7 @@ def _resume_miss_reason(
         if t is None:
             continue
         try:
-            reason = _resume_candidate_verdict(t, ceiling_bytes, max_compactions)
+            reason = _resume_candidate_verdict(t, ceiling_bytes, min_tail_bytes)
         except OSError:
             continue
         if reason is not None:
@@ -634,7 +609,7 @@ async def _resumable_owner(
         else Path.home() / ".claude" / "projects"
     return await asyncio.to_thread(
         _pick_resumable_sync, cands, root, st.osiris_resume_ceiling_bytes,
-        st.osiris_resume_max_compactions)
+        st.osiris_resume_min_tail_bytes)
 
 
 async def _last_wake_mode(pool: asyncpg.Pool, project: str, message_id: int) -> str | None:
@@ -966,7 +941,7 @@ def _gate_name(detail: str) -> str:
     function is to never relabel a refusal as something it wasn't."""
     if "crossed-registry" in detail:
         return "crossed-registry"
-    if "compacted" in detail:
+    if "seam itself" in detail:
         return "compaction"
     if "context ceiling" in detail:
         return "ceiling"
@@ -1093,7 +1068,7 @@ async def _lineage_resume_candidate(
             continue
         verdict = await asyncio.to_thread(
             _resume_candidate_verdict, t, st.osiris_resume_ceiling_bytes,
-            st.osiris_resume_max_compactions)
+            st.osiris_resume_min_tail_bytes)
         if verdict is not None:
             log.append(f"gen {gen} (session {session[:8]}, {size_mb:.0f}MB): {verdict}")
             continue
@@ -2137,7 +2112,7 @@ async def launch_seat(
         dormant = dormant_history_confession(
             office, *([tree_cwd] if tree_cwd else []),
             ceiling_bytes=st.osiris_resume_ceiling_bytes,
-            max_compactions=st.osiris_resume_max_compactions)
+            min_tail_bytes=st.osiris_resume_min_tail_bytes)
 
         try:
             await spawn(launch_cwd, name=name, model=argv_model, prompt=boot_prompt)
@@ -2160,8 +2135,8 @@ async def launch_seat(
         # one"). `resume_log` carries WHY this booted fresh instead — numbers, not
         # adjectives (transcript size, compaction count, the gate's own threshold), one
         # line a human reads instead of re-running succession_chain by hand.
-        booted_why = (f"booted fresh — {'; '.join(resume_log)} (gate: max_compactions="
-                      f"{st.osiris_resume_max_compactions}, ceiling="
+        booted_why = (f"booted fresh — {'; '.join(resume_log)} (gate: min_tail_bytes="
+                      f"{st.osiris_resume_min_tail_bytes}, ceiling="
                       f"{st.osiris_resume_ceiling_bytes}b)")
         out = {
             "status": "launched", "window": name, "seat": target_seat,

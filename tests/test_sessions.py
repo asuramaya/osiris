@@ -744,7 +744,7 @@ def test_dormant_history_confession_rescues_a_large_transcript_with_a_small_tail
     """THE SIZE FIX, through the confession, isolated: raw size is over the ceiling, but
     the tail since the last compaction fits comfortably under it — correctly named
     resumable BY SIZE, where the old raw-size check would have said not-resumable (exactly
-    Sekhmet's two real repro cases, imhotep XVIII and seshat XXIII). max_compactions=1
+    Sekhmet's two real repro cases, imhotep XVIII and seshat XXIII). min_tail_bytes=1
     widens the separate compaction gate out of the way — that gate has its own test below."""
     from src.ingest.sessions import dormant_history_confession
 
@@ -757,7 +757,7 @@ def test_dormant_history_confession_rescues_a_large_transcript_with_a_small_tail
     (proj / f"{sid}.jsonl").write_bytes(body)
 
     info = dormant_history_confession(
-        "/home/x/.osiris/seats/ooblek", root=tmp_path, ceiling_bytes=1000, max_compactions=1)
+        "/home/x/.osiris/seats/ooblek", root=tmp_path, ceiling_bytes=1000, min_tail_bytes=1)
     assert info is not None
     assert info["resumable"] is True
     assert info["resume_command"] == f"claude --resume {sid}"
@@ -765,7 +765,7 @@ def test_dormant_history_confession_rescues_a_large_transcript_with_a_small_tail
 
 def test_dormant_history_confession_names_a_non_resumable_session(tmp_path: Path) -> None:
     """Genuinely over ceiling even after the tail discount: named not-resumable, no
-    resume_command offered (there is nothing honest to hand back). max_compactions=1
+    resume_command offered (there is nothing honest to hand back). min_tail_bytes=1
     isolates the size gate, matching the test above."""
     from src.ingest.sessions import dormant_history_confession
 
@@ -777,18 +777,21 @@ def test_dormant_history_confession_names_a_non_resumable_session(tmp_path: Path
     (proj / f"{sid}.jsonl").write_bytes(body)
 
     info = dormant_history_confession(
-        "/home/x/.osiris/seats/ooblek", root=tmp_path, ceiling_bytes=1000, max_compactions=1)
+        "/home/x/.osiris/seats/ooblek", root=tmp_path, ceiling_bytes=1000, min_tail_bytes=1)
     assert info is not None
     assert info["resumable"] is False
     assert "resume_command" not in info
 
 
-def test_dormant_history_confession_names_not_resumable_at_default_after_one_compaction(
+def test_dormant_history_confession_resumable_after_one_compaction_with_real_tail_work(
     tmp_path: Path,
 ) -> None:
-    """The compaction gate, at its evidence-based default (0): a tail comfortably under the
-    ceiling is still named not-resumable once it has compacted even once, and the count
-    rides along in the receipt for the note's own upgrade-framed wording."""
+    """#156's rebuild (2026-08-09, the operator's own correction): a tail comfortably
+    under the ceiling, carrying REAL work since the last compaction, is resumable —
+    compacting once and then doing real work is the common case, not a disqualifier. The
+    OLD gate refused this transcript purely for having compacted at all; that was the bug
+    (sekhmet's own live specimen: 12 compactions, 4.07MB of real work after the last one,
+    refused anyway — factually wrong about her transcript, not a policy this house held)."""
     from src.ingest.sessions import dormant_history_confession
 
     proj = tmp_path / "-home-x--osiris-seats-ooblek"
@@ -801,9 +804,35 @@ def test_dormant_history_confession_names_not_resumable_at_default_after_one_com
     info = dormant_history_confession(
         "/home/x/.osiris/seats/ooblek", root=tmp_path, ceiling_bytes=1_000_000_000)
     assert info is not None
+    assert info["resumable"] is True
+    assert info["compactions"] == 1
+    assert info["resume_command"] == f"claude --resume {sid}"
+
+
+def test_dormant_history_confession_not_resumable_when_the_tail_is_empty(
+    tmp_path: Path,
+) -> None:
+    """The operator's own "rare special case": a session closed AT the seam itself,
+    nothing after the last compaction boundary — genuinely nothing to resume into, the
+    ONE shape the new minimum-tail floor still refuses."""
+    from src.ingest.sessions import dormant_history_confession
+
+    proj = tmp_path / "-home-x--osiris-seats-ooblek"
+    proj.mkdir()
+    sid = "b5f04f84-707e-49cc-85f1-482fc70058c8"
+    body = b'{"type":"assistant","message":"old"}\n' * 100_000 + _COMPACT_LINE
+    (proj / f"{sid}.jsonl").write_bytes(body)
+
+    # the boundary marker line itself is the only thing in the tail — nothing followed it
+    info = dormant_history_confession(
+        "/home/x/.osiris/seats/ooblek", root=tmp_path, ceiling_bytes=1_000_000_000,
+        min_tail_bytes=len(_COMPACT_LINE) + 1)
+    assert info is not None
     assert info["resumable"] is False
     assert info["compactions"] == 1
+    assert info["tail_bytes"] == len(_COMPACT_LINE)
     assert "resume_command" not in info
+    assert "seam itself" in info["not_resumable_reason"]
 
 
 def test_dormant_history_note_names_the_resume_command_when_resumable() -> None:

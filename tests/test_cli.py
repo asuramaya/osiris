@@ -522,9 +522,9 @@ async def _resumable_seat(
     return sense
 
 
-def _resume_settings(sense: Path, *, max_compactions: int = 0) -> SimpleNamespace:
+def _resume_settings(sense: Path, *, min_tail_bytes: int = 0) -> SimpleNamespace:
     return SimpleNamespace(osiris_sense_sessions=str(sense), osiris_resume_ceiling_bytes=8_000_000,
-                           osiris_resume_max_compactions=max_compactions,
+                           osiris_resume_min_tail_bytes=min_tail_bytes,
                            osiris_wake_allowed_tools="mcp__osiris")
 
 
@@ -594,8 +594,7 @@ async def test_cmd_launch_harness_falls_through_with_a_named_reason_when_not_res
         spawned.append({"repo": repo, "name": name, "model": model, "prompt": prompt})
 
     async def _boom_resume(*a: Any, **k: Any) -> None:
-        raise AssertionError("a once-compacted transcript at max_compactions=0 must never "
-                             "be resumed")
+        raise AssertionError("a tail closed at the seam itself must never be resumed")
 
     poll_count = 0
 
@@ -614,14 +613,14 @@ async def test_cmd_launch_harness_falls_through_with_a_named_reason_when_not_res
         out = await _cmd_launch_harness(
             "clicompact", model=None, pool=actions.pool, wake_default=None,
             spawn=_spawn, agents_json=_agents_json, resume_spawn=_boom_resume,
-            settings=_resume_settings(sense))
+            settings=_resume_settings(sense, min_tail_bytes=1000))
 
     assert out == 0
     assert len(spawned) == 1  # the fresh spawn still happened — the fallback is not a dead end
     out_text = buf.getvalue()
     assert "not resumed" in out_text
-    assert "compacted 1 time" in out_text
-    assert "max_compactions=0" in out_text
+    assert "seam itself" in out_text
+    assert "min_tail_bytes=1000" in out_text
     assert "spawned" in out_text  # the pre-existing fresh-spawn confirmation still prints
 
 
