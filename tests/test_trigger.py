@@ -36,7 +36,7 @@ NOW = datetime(2026, 7, 6, tzinfo=UTC)
 
 def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
               lease: int = 900, grace: int = 0, live: int = 900,
-              ceiling: int = 8_000_000, max_compactions: int = 0, sense: str = "",
+              ceiling: int = 8_000_000, min_tail_bytes: int = 0, sense: str = "",
               wake_model: str = "", attempts: int = 0,
               daily_usd: float = -1.0, projects: str = "",
               poke_only: bool = False, dm_resume: bool = True,
@@ -57,7 +57,7 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
                            osiris_trigger_window_secs=window, osiris_mail_lease_secs=lease,
                            osiris_trigger_grace_secs=grace, osiris_owner_live_secs=live,
                            osiris_resume_ceiling_bytes=ceiling,
-                           osiris_resume_max_compactions=max_compactions,
+                           osiris_resume_min_tail_bytes=min_tail_bytes,
                            osiris_sense_sessions=sense,
                            osiris_wake_model=wake_model,
                            osiris_wake_hourly_budget=0,  # unmetered: economics has its own tests
@@ -596,7 +596,7 @@ def test_pick_resumable_sync_rescues_a_large_transcript_with_a_small_tail(
     """THE SIZE FIX, isolated: raw size is well over the ceiling, but everything since the
     last compaction fits comfortably under it — now correctly resumable BY SIZE, where the
     old raw-size check would have refused it (exactly Sekhmet's two real repro cases,
-    imhotep XVIII and seshat XXIII). max_compactions=1 widens the OTHER gate out of the
+    imhotep XVIII and seshat XXIII). min_tail_bytes=1 widens the OTHER gate out of the
     way on purpose — this test is about the size fix alone; the compaction gate has its
     own tests below, since Thoth's ruling (2026-08-03) made the two independent."""
     root = tmp_path / "projects"
@@ -606,7 +606,7 @@ def test_pick_resumable_sync_rescues_a_large_transcript_with_a_small_tail(
     assert len(body) > 1_000_000  # comfortably over the small ceiling used below
     _write_transcript(proj / f"{FULL_SID}.jsonl", body)
     out = trigger_module._pick_resumable_sync(
-        [("jobs/abcd1234", "/repo/demo")], root, ceiling_bytes=1000, max_compactions=1)
+        [("jobs/abcd1234", "/repo/demo")], root, ceiling_bytes=1000, min_tail_bytes=1)
     assert out is not None and out[0] == FULL_SID
 
 
@@ -614,7 +614,7 @@ def test_pick_resumable_sync_still_refuses_when_the_tail_itself_is_over_ceiling(
     tmp_path: Path,
 ) -> None:
     """The size fix narrows the false-refusal, it does not remove the ceiling: a transcript
-    whose LIVE tail is genuinely large stays refused. max_compactions=1 isolates this from
+    whose LIVE tail is genuinely large stays refused. min_tail_bytes=1 isolates this from
     the separate compaction gate, same reasoning as the test above."""
     root = tmp_path / "projects"
     proj = root / "-repo-demo"
@@ -622,24 +622,25 @@ def test_pick_resumable_sync_still_refuses_when_the_tail_itself_is_over_ceiling(
             + b'{"type":"user","message":"new"}\n' * 100_000)
     _write_transcript(proj / f"{FULL_SID}.jsonl", body)
     out = trigger_module._pick_resumable_sync(
-        [("jobs/abcd1234", "/repo/demo")], root, ceiling_bytes=1000, max_compactions=1)
+        [("jobs/abcd1234", "/repo/demo")], root, ceiling_bytes=1000, min_tail_bytes=1)
     assert out is None
 
 
-# --- the compaction gate, INDEPENDENT of tail size (Thoth's ruling, 2026-08-03, refining
-# the size-only fix): "a small tail after 17 compactions and a small tail after zero are
-# opposite cases, not similar ones." Default threshold 0, evidence-based — measured across
-# 767 real transcripts on this box: 85.4% never compact; of the 37 that compacted exactly
-# once, 35 already pass the byte ceiling alone, proving this gate does real, orthogonal
-# work (see resume_diagnostics's own docstring for the full measurement). -----------------
+# --- the minimum-tail floor, INDEPENDENT of the ceiling (#156's rebuild, 2026-08-09, the
+# operator's own correction, replacing the old compaction-COUNT gate): "closed at exactly
+# the compaction seam is a rare special case." A tail with real work after the last
+# boundary is resumable REGARDLESS of how many times it compacted; only a tail at or near
+# zero (the session closed AT the seam) refuses. Measured live on sekhmet: 12 compactions,
+# 4.07MB of real work after the last one — the old gate refused her anyway, factually
+# wrong about her own transcript (see resume_diagnostics's own docstring). ----------------
 
 
-def test_pick_resumable_sync_refuses_a_small_tail_that_has_compacted_even_once(
+def test_pick_resumable_sync_allows_a_compacted_transcript_with_real_tail_work(
     tmp_path: Path,
 ) -> None:
-    """THE EXACT CASE THE SIZE FIX ALONE COULD NOT DISTINGUISH: a small tail (well under
-    the ceiling) that nonetheless carries one compaction is refused by the compaction gate
-    at the default threshold — a resume of it would return a summary, not the mind."""
+    """THE EXACT CASE THE OLD COMPACTION-COUNT GATE GOT WRONG: a small tail (well under the
+    ceiling) that carries real work since the last compaction boundary IS resumable now,
+    however many times it compacted — sekhmet's own live specimen, in miniature."""
     root = tmp_path / "projects"
     proj = root / "-repo-demo"
     body = (b'{"type":"assistant","message":"old"}\n' * 100_000 + _COMPACT_LINE
@@ -647,37 +648,38 @@ def test_pick_resumable_sync_refuses_a_small_tail_that_has_compacted_even_once(
     _write_transcript(proj / f"{FULL_SID}.jsonl", body)
     out = trigger_module._pick_resumable_sync(
         [("jobs/abcd1234", "/repo/demo")], root, ceiling_bytes=1_000_000_000,
-        max_compactions=0)
-    assert out is None
+        min_tail_bytes=1)
+    assert out is not None and out[0] == FULL_SID
 
 
 def test_pick_resumable_sync_allows_a_never_compacted_transcript_at_default_threshold(
     tmp_path: Path,
 ) -> None:
-    """The common case (85.4% of real transcripts, measured): zero compactions passes the
-    default threshold cleanly — this gate must not misfire on ordinary short sessions."""
+    """The common case (85.4% of real transcripts, measured): a never-compacted transcript
+    passes the floor cleanly — this gate must not misfire on ordinary short sessions."""
     root = tmp_path / "projects"
     proj = root / "-repo-demo"
     _write_transcript(proj / f"{FULL_SID}.jsonl", b'{"type":"user","message":"hi"}\n' * 5)
     out = trigger_module._pick_resumable_sync(
         [("jobs/abcd1234", "/repo/demo")], root, ceiling_bytes=1_000_000_000,
-        max_compactions=0)
+        min_tail_bytes=1)
     assert out is not None and out[0] == FULL_SID
 
 
-def test_pick_resumable_sync_now_always_scans_for_compaction_count(
+def test_pick_resumable_sync_refuses_a_tail_closed_at_the_seam_itself(
     tmp_path: Path,
 ) -> None:
-    """Superseding the old size-only optimization (which skipped the scan entirely for a
-    file already under the ceiling by raw size): the compaction gate must fire even for a
-    SMALL file, since count is independent of size and small files are cheap to scan
-    anyway — a small-but-once-compacted transcript is refused, not waved through."""
+    """The operator's own "rare special case": nothing at all after the last compaction
+    boundary — the session closed AT the seam, genuinely nothing to resume into. The ONE
+    shape the new floor still refuses, however cheap the file is to scan (superseding the
+    old size-only optimization, which used to skip the scan entirely for a file already
+    under the ceiling by raw size)."""
     root = tmp_path / "projects"
     proj = root / "-repo-demo"
     _write_transcript(proj / f"{FULL_SID}.jsonl", _COMPACT_LINE)
     out = trigger_module._pick_resumable_sync(
         [("jobs/abcd1234", "/repo/demo")], root, ceiling_bytes=1_000_000_000,
-        max_compactions=0)
+        min_tail_bytes=len(_COMPACT_LINE) + 1)
     assert out is None
 
 
@@ -686,7 +688,7 @@ async def test_trigger_resumes_a_large_transcript_with_a_small_tail_end_to_end(
 ) -> None:
     """End-to-end through trigger_mail_tick, not just the pure/unit layer: a transcript over
     the raw ceiling but with a small post-compaction tail is now RESUMED, not minted.
-    max_compactions=1 isolates the size gate — the compaction gate has its own end-to-end
+    min_tail_bytes=1 isolates the size gate — the compaction gate has its own end-to-end
     coverage via test_ceiling_transcript_mints_instead's sibling below."""
     await _agent_with_mail(actions)
     sense = tmp_path / "projects"
@@ -713,19 +715,20 @@ async def test_trigger_resumes_a_large_transcript_with_a_small_tail_end_to_end(
 
     rep = await trigger_mail_tick(
         actions, settings=_settings(enabled=True, sense=str(sense), ceiling=1000,
-                                    max_compactions=1),
+                                    min_tail_bytes=1),
         spawn=_spawn)
     assert rep["resumed"] == 1   # "woke" is a superset counter incremented alongside resumed
     assert calls[0].get("resume_session") == FULL_SID
 
 
-async def test_trigger_mints_instead_of_resuming_a_once_compacted_small_transcript(
+async def test_trigger_resumes_a_once_compacted_small_transcript_with_real_tail_work(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """End-to-end sibling of the size-fix test above, for the compaction gate: a transcript
-    with a tail comfortably under the ceiling, but that has compacted once, mints a fresh
-    twin at the default threshold — Thoth's own point that falling through to fresh here
-    is an upgrade (ruling 7fa4b599), not a denial."""
+    """End-to-end sibling of the size-fix test above, for the minimum-tail floor (#156's
+    rebuild, 2026-08-09, the operator's own correction): a transcript with a tail
+    comfortably under the ceiling, carrying real work since its one compaction, is RESUMED
+    — the old gate minted a fresh twin here purely for having compacted at all, which was
+    the bug (sekhmet's own live specimen)."""
     await _agent_with_mail(actions)
     sense = tmp_path / "projects"
     proj = sense / "-repo-demo"
@@ -750,10 +753,11 @@ async def test_trigger_mints_instead_of_resuming_a_once_compacted_small_transcri
         calls.append(kw)
 
     rep = await trigger_mail_tick(
-        actions, settings=_settings(enabled=True, sense=str(sense), ceiling=1_000_000_000),
+        actions, settings=_settings(enabled=True, sense=str(sense), ceiling=1_000_000_000,
+                                    min_tail_bytes=1),
         spawn=_spawn)
-    assert rep["resumed"] == 0 and rep["woke"] == 1
-    assert calls[0].get("resume_session") is None or "resume_session" not in calls[0]
+    assert rep["resumed"] == 1 and rep["woke"] == 1
+    assert calls[0].get("resume_session") == FULL_SID
 
 
 async def test_ceiling_transcript_mints_instead(actions: Actions, tmp_path: Path) -> None:
@@ -2770,8 +2774,9 @@ def test_gate_name_reads_the_same_prose_the_gates_already_produce() -> None:
     `_resume_candidate_verdict`/`_resume_miss_reason`/`_resume_guard` already produce for
     humans — never a second source of truth, and never a guess on unrecognized text."""
     gate_name = trigger_module._gate_name
-    assert gate_name("found a candidate, but it has compacted 3 time(s) — a resume "
-                     "would return a compaction summary") == "compaction"
+    assert gate_name("found a candidate, but its tail after the last compaction boundary "
+                     "is only 12 byte(s) (1 line(s)) — it closed at or near the seam "
+                     "itself, with nothing real to resume into") == "compaction"
     assert gate_name("found a candidate, but its resumable content is over the context "
                      "ceiling") == "ceiling"
     assert gate_name("no anchored transcript at all") == "no-anchor"
@@ -3510,16 +3515,16 @@ async def test_launch_harness_lane_falls_through_to_mint_when_nothing_is_resumab
     assert len(spawned) == 1
 
 
-async def test_launch_harness_lane_never_resumes_past_the_compaction_gate(
+async def test_launch_harness_lane_never_resumes_a_tail_closed_at_the_seam(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thoth's explicit condition (msg 3639, reaffirmed live in msg 3691's own build order,
-    point 3 — 'do NOT loosen the compaction gate to make this case resume, it was right to
-    refuse'): a holder whose transcript compacted even once, at the default
-    max_compactions=0, falls through to mint fresh exactly like the no-history case, never
-    resumed. The receipt still NAMES the refusal with real numbers (Thoth's own worked
-    example: 'gen 11's transcript is 32MB, 12 compactions, gate is 0 — booting fresh'),
-    not a silent fall-through."""
+    """#156's rebuild (2026-08-09, the operator's own correction): the floor still refuses
+    a transcript whose tail since its last compaction is genuinely tiny — the seam-itself
+    case, the operator's own "rare special case" — falling through to mint fresh exactly
+    like the no-history case. The receipt still NAMES the refusal with real numbers, not a
+    silent fall-through. (Compacting once and then doing real work is now RESUMED, not
+    refused — see the sibling test right after this one; the fixture here deliberately
+    leaves only 16 raw bytes after the boundary, well under the floor set below.)"""
     sense = await _lineage_holder_with_session(
         actions, tmp_path, agent_id="agent:abcd1234", compacted=True)
     worker_seat, _manager_seat = await _managed_pair(
@@ -3529,12 +3534,11 @@ async def test_launch_harness_lane_never_resumes_past_the_compaction_gate(
     spawned: list[dict[str, Any]] = []
 
     async def _boom(*a: Any, **kw: Any) -> None:
-        raise AssertionError("a once-compacted transcript at max_compactions=0 must never "
-                             "be resumed")
+        raise AssertionError("a tail closed at the seam itself must never be resumed")
 
     d = await trigger_module.launch_seat(
         actions, caller="agent:hm-compact", target=worker_seat, substrate="harness",
-        settings=_settings(enabled=True, sense=str(sense), max_compactions=0),
+        settings=_settings(enabled=True, sense=str(sense), min_tail_bytes=1000),
         spawn=_fake_spawn(spawned), resume_spawn=_boom, agents_json=_fake_agents_json([[]]))
 
     assert d["status"] == "launched" and "mode" not in d
@@ -3544,8 +3548,38 @@ async def test_launch_harness_lane_never_resumes_past_the_compaction_gate(
     assert len(d["resume_check"]) == 1
     reason = d["resume_check"][0]
     assert "gen 1" in reason and f"session {FULL_SID[:8]}" in reason
-    assert "compacted 1 time" in reason
-    assert "max_compactions=0" in d["detail"]
+    assert "seam itself" in reason
+    assert "min_tail_bytes=1000" in d["detail"]
+
+
+async def test_launch_harness_lane_resumes_a_compacted_transcript_with_real_tail_work(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The sibling and the whole point of #156's rebuild: a holder whose transcript
+    compacted once but carries real work since that boundary IS resumed, not minted fresh
+    — sekhmet's own live specimen (12 compactions, 4.07MB of real work after the last
+    one), in miniature."""
+    sense = await _lineage_holder_with_session(
+        actions, tmp_path, agent_id="agent:abcd1234", compacted=True)
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:abcd1234", manager_agent="agent:hm-compact-2",
+        worker_handle="Compacted-Test-2", house="osiris")
+    await _office(actions, worker_seat, "/tmp/compacted-test-2")
+    resumed: list[dict[str, Any]] = []
+
+    async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
+        resumed.append(kw)
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a tail with real post-compaction work must never mint fresh")
+
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm-compact-2", target=worker_seat, substrate="harness",
+        settings=_settings(enabled=True, sense=str(sense), min_tail_bytes=1),
+        spawn=_boom, resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "launched" and d.get("mode") == "resumed"
+    assert resumed and resumed[0].get("resume_session") == FULL_SID
 
 
 # ═══ tree_cwd (task #103's re-scope, ff3bdc37, Thoth DM 2794) — the office/code split. ═══

@@ -613,7 +613,7 @@ async def _cmd_launch_harness(
         return 0
 
     print(f"osiris launch: {handle!r} not resumed — {_collapse_resume_log(resume_log)} (gate: "
-          f"max_compactions={st.osiris_resume_max_compactions}, ceiling="
+          f"min_tail_bytes={st.osiris_resume_min_tail_bytes}, ceiling="
           f"{st.osiris_resume_ceiling_bytes}b)")
 
     from src.ingest.sessions import dormant_history_confession, dormant_history_note

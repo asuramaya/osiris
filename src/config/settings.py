@@ -180,20 +180,25 @@ class Settings(BaseSettings):
     # auto-compaction, 2-3% of the total file. `resumable_tail_bytes`
     # (src/ingest/sessions.py) now checks that tail, not cumulative lifetime size.
     osiris_resume_ceiling_bytes: int = 8_000_000
-    # THE COMPACTION GATE, INDEPENDENT OF SIZE (Thoth's ruling, same thread, refining the
-    # size-only fix above): a small tail after 17 compactions and a small tail after zero
-    # are opposite cases, not similar ones — the FIRST compaction is the moment a resume
-    # stops returning "the mind that did the work" and starts returning "a lossy summary of
-    # it" (ruling 7fa4b599's own mechanism — that summary is approximately what a fresh
-    # mind's own orient()+handoff+dispatch-brief ritual already delivers, from an audited
-    # source, not a lossy one). Default 0 — evidence-based, not guessed: measured across
-    # every real transcript on this box over the trivial-shell floor (767 candidates,
-    # 2026-08-03), 85.4% have NEVER compacted (a clean, natural boundary), and of the 37
-    # that compacted exactly once, 35 already carry a tail under the byte ceiling above —
-    # meaning this gate does REAL, ORTHOGONAL work the size ceiling alone would miss for
-    # the large majority of once-drifted sessions. Full measurement in
-    # `resume_diagnostics`'s own docstring.
-    osiris_resume_max_compactions: int = 0
+    # THE MINIMUM-TAIL FLOOR, REPLACING THE OLD COMPACTION-COUNT GATE (#156's rebuild,
+    # 2026-08-09 — the operator's own correction, verbatim: "osiris launch should do the
+    # equivalent of `claude --resume [latest transcript] as is` continuity with when it
+    # was closed, closed at exactly the compaction seam is a rare special case." The old
+    # gate asked "has this lineage EVER compacted?" (osiris_resume_max_compactions=0 — any
+    # compaction at all refused). Measured live on sekhmet, 2026-08-09: 12 compactions,
+    # but 1,492 lines / 4.07MB of real work after the LAST one — refused anyway, factually
+    # wrong about her own transcript, not a policy disagreement. A seat that compacts once
+    # and then does fifty more turns closes with its post-compaction context fully intact;
+    # a compaction-COUNT gate excludes exactly the seats worth resuming. The REPLACEMENT
+    # checks `tail_bytes` (the same number the ceiling above already checks) against a
+    # MINIMUM floor instead: a tail at or near zero means the session closed AT the seam
+    # itself — the operator's own "rare special case", genuinely nothing to resume into.
+    # Default picked, not measured the way the old gate's 767-transcript study was — small
+    # enough to pass any transcript with real post-boundary activity (sekhmet's 4.07MB
+    # clears it by four orders of magnitude), large enough to exclude a truly-empty tail. A
+    # one-constant change if evidence says otherwise; raised, not decided, per Thoth's own
+    # instruction on this rebuild.
+    osiris_resume_min_tail_bytes: int = 200
     osiris_owner_live_secs: int = 900
     # Wake ECONOMICS (operator, 2026-07-08): most wakes are triage-shaped (read, reply,
     # settle) — pin them to a cheaper model and let the PROMPT escalate real work back to a

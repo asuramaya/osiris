@@ -351,11 +351,17 @@ _DORMANT_HISTORY_FLOOR_BYTES = 50_000
 _COMPACT_BOUNDARY_MARKERS = (b'"type":"system"', b'"subtype":"compact_boundary"')
 
 
-def resume_diagnostics(transcript: Path) -> tuple[int, int]:
-    """(compaction_count, tail_bytes) in ONE sequential pass — the two facts the resume
-    gate needs about a transcript, computed together so a caller needing both never scans
-    twice. `tail_bytes` (thread 771366d1, task #135/#136, 2026-08-03): the bytes a RESUME
-    would actually have to hydrate, not the file's cumulative lifetime size. Claude Code
+def resume_diagnostics(transcript: Path) -> tuple[int, int, int]:
+    """(compaction_count, tail_bytes, tail_lines) in ONE sequential pass — the transcript
+    facts the resume gate needs, computed together so a caller needing several never scans
+    twice. THE TRANSCRIPT VERB (task #158's urgent half, folded in here per Thoth msg
+    3866 — "#156 cannot be built honestly without it"): the operator's own live
+    diagnosis, 2026-08-09, of the fleet running this by hand ("all the one off sql and
+    measuring needs tools, triage didn't help at all here") — this function is that verb's
+    core, not a script.
+
+    `tail_bytes` (thread 771366d1, task #135/#136, 2026-08-03): the bytes a RESUME would
+    actually have to hydrate, not the file's cumulative lifetime size. Claude Code
     auto-compacts a long session repeatedly — verified live against two real specimens:
     imhotep XVIII's 72MB transcript carries 17 `compact_boundary` events and only 2.29MB
     (3.2%) of content after the LAST one; seshat XXIII's 103MB carries 20 and only 2.23MB
@@ -364,35 +370,40 @@ def resume_diagnostics(transcript: Path) -> tuple[int, int]:
     tool outputs, file reads) already folded into that boundary's own summary. `tail_bytes`
     is the byte offset of the LAST compact_boundary line through EOF; the WHOLE file size
     if no boundary exists yet (a session that never compacted has no smaller live state to
-    discount to — the raw size IS its live size).
+    discount to — the raw size IS its live size). `tail_lines` (2026-08-09, the operator's
+    own correction, thread carried in #156's rebuild) is the SAME span in lines, the unit
+    "is there real work here at all" is measured in, distinct from "how much would a
+    resume have to hydrate" (bytes, still the ceiling's own unit).
 
-    `compaction_count` (Thoth's ruling, 2026-08-03, refining the tail-size fix): tail size
-    ALONE cannot tell a 2.29MB tail after 17 compactions from a 2.29MB tail after zero —
-    opposite cases, not similar ones. Measured live across every real transcript on this
-    box over the trivial-shell floor (767 candidates, 2026-08-03): 655 (85.4%) have NEVER
-    compacted; of the 112 that have, 37 have compacted exactly once, and of THOSE, 35
-    already carry a tail under 8MB — meaning the compaction count is doing REAL,
-    ORTHOGONAL work the size check alone would miss for the large majority of once-
-    compacted sessions. Every 0-compaction transcript measured tops out at 4.88MB, well
-    under any reasonable ceiling — the count gate, not the size gate, is what actually
-    excludes a once-drifted session. Mechanism, not cost (Thoth's own framing): "a resume
-    returns the last compaction summary plus recent turns" the instant even one compaction
-    has fired — that is the graph's own orient()+handoff+dispatch-brief ritual's job,
-    already proven to work (ruling 7fa4b599), and a strictly BETTER, audited source than a
-    lossy summary. Sequential single-pass read, no line held in memory beyond the current
-    one — lives here, not in trigger.py, because it is a transcript-file fact like
-    `locate_current_transcript`, not a dispatch decision."""
+    `compaction_count` is now REPORTED, not a gate on its own (the operator refuted that
+    premise, verbatim: "closed at exactly the compaction seam is a rare special case" — a
+    seat that compacts once and then does fifty more turns closes with its post-compaction
+    context fully intact; a compaction-COUNT gate excludes exactly the seats worth
+    resuming, measured live on sekhmet: 12 compactions, 1,492 lines / 4.07MB of real work
+    after the last one, refused anyway under the old gate). The REPLACEMENT gate
+    (`resume_verdict`, below) checks `tail_bytes` against a MINIMUM floor instead — see its
+    own docstring. `compaction_count` stays in this tuple because it is still a genuine,
+    useful fact about a transcript (how many seams it has crossed), just no longer a
+    pass/fail decision on its own. Sequential single-pass read, no line held in memory
+    beyond the current one — lives here, not in trigger.py, because it is a transcript-file
+    fact like `locate_current_transcript`, not a dispatch decision."""
     total = 0
     count = 0
-    last_boundary: int | None = None
+    lines_total = 0
+    last_boundary_bytes: int | None = None
+    last_boundary_lines: int | None = None
     with transcript.open("rb") as f:
         for line in f:
             if all(marker in line for marker in _COMPACT_BOUNDARY_MARKERS):
                 count += 1
-                last_boundary = total
+                last_boundary_bytes = total
+                last_boundary_lines = lines_total
             total += len(line)
-    tail = total - last_boundary if last_boundary is not None else total
-    return count, tail
+            lines_total += 1
+    tail_bytes = total - last_boundary_bytes if last_boundary_bytes is not None else total
+    tail_lines = (lines_total - last_boundary_lines if last_boundary_lines is not None
+                  else lines_total)
+    return count, tail_bytes, tail_lines
 
 
 def resumable_tail_bytes(transcript: Path) -> int:
@@ -402,9 +413,45 @@ def resumable_tail_bytes(transcript: Path) -> int:
     return resume_diagnostics(transcript)[1]
 
 
+def resume_verdict(
+    transcript: Path, *, ceiling_bytes: int, min_tail_bytes: int,
+) -> str | None:
+    """None iff `transcript` is genuinely resumable under BOTH gates; otherwise the reason
+    it is not. THE ONE VERDICT (#156's rebuild, 2026-08-09): shared by `trigger.py`'s
+    `_resume_candidate_verdict` (the dispatch-decision wrapper, kept there because the
+    dispatch layer owns Settings) and `dormant_history_confession` below, which used to
+    carry its OWN separate `count <= max_compactions` reimplementation — the exact
+    two-hand-synchronized-copies drift this house has already been burned by once
+    (eebeb1f, #136) and the reason THIS function exists at all rather than a third copy.
+
+    A MINIMUM FLOOR, NOT A COUNT (the operator's own correction, verbatim: "closed at
+    exactly the compaction seam is a rare special case" — see `resume_diagnostics`'s own
+    docstring for the full finding and sekhmet's live specimen). `min_tail_bytes` names how
+    much real work after the last boundary counts as worth resuming — a tail at or near
+    zero means the session closed AT the seam, the operator's own "rare special case",
+    genuinely nothing to hand back. A default is picked and defended in Settings
+    (`osiris_resume_min_tail_bytes`), not here — this function only enforces whatever floor
+    it is given.
+
+    THEN THE RESUMABLE-TAIL CEILING, NOT RAW FILE SIZE (unchanged from the original fix,
+    thread 771366d1): raw file size measures a session's cumulative lifetime, not what a
+    resume actually hydrates — verified live on two real specimens (72MB/103MB
+    transcripts) that only 2-3% of the file, the content since the LAST compaction, is
+    what a resume needs. Checked against `tail_bytes`, the SAME number the floor above
+    checks — one measurement, two-sided range, not two unrelated gates."""
+    _count, tail_bytes, tail_lines = resume_diagnostics(transcript)
+    if tail_bytes < min_tail_bytes:
+        return (f"found a candidate, but its tail after the last compaction boundary is "
+                f"only {tail_bytes} byte(s) ({tail_lines} line(s)) — it closed at or near "
+                f"the seam itself, with nothing real to resume into")
+    if tail_bytes > ceiling_bytes:
+        return "found a candidate, but its resumable content is over the context ceiling"
+    return None
+
+
 def dormant_history_confession(
     cwd: str, *extra_cwds: str, root: Path | None = None, ceiling_bytes: int = 8_000_000,
-    max_compactions: int = 0,
+    min_tail_bytes: int = 1,
 ) -> dict[str, Any] | None:
     """None when every candidate cwd's newest transcript is absent or below the trivial
     floor. Otherwise {"path", "size_bytes", "last_touched", "session_id", "resumable",
@@ -430,19 +477,14 @@ def dormant_history_confession(
     still true and useful: whether a human (or another lane entirely) COULD resume it by
     hand, and the exact command.
 
-    RESUMABLE MEANS TWO INDEPENDENT GATES, BOTH MUST PASS (Thoth's ruling, 2026-08-03,
-    refining the original size-only fix): `resumable_tail_bytes`'s corrected ceiling check
-    (thread 771366d1) rather than raw file size — so a large-but-recently-compacted
-    transcript is not wrongly told 'not resumable' by SIZE alone — AND `max_compactions`:
-    tail size cannot tell a small tail after 17 compactions from a small tail after zero,
-    and those are opposite cases (a resume of the former returns a lossy summary; the
-    latter returns the identical mind that did the work). Default 0, evidence-based, not
-    guessed: measured across every real transcript on this box over the trivial-shell
-    floor (767 candidates, 2026-08-03) — 85.4% have NEVER compacted (a clean, natural
-    category boundary, not an arbitrary cutoff), and of the 37 that have compacted exactly
-    once, 35 already carry a tail under 8MB — meaning the compaction gate is doing real
-    work the size gate alone would miss for the large majority of once-drifted sessions.
-    See `resume_diagnostics`'s own docstring for the full measurement.
+    RESUMABLE MEANS TWO INDEPENDENT GATES, BOTH MUST PASS, via `resume_verdict` (shared
+    with trigger.py's own resume path — one decision, never two hand-synchronized copies,
+    38c71544): the corrected ceiling check (thread 771366d1) against `tail_bytes`, not raw
+    file size, AND a MINIMUM floor on that same `tail_bytes` (2026-08-09, the operator's
+    own correction, replacing the old compaction-COUNT gate — "closed at exactly the
+    compaction seam is a rare special case"; see `resume_diagnostics`'s own docstring for
+    the full finding, including sekhmet's live specimen the old count-based gate got
+    wrong: 12 compactions, 4.07MB of real work after the last one, refused anyway).
 
     A REFUSAL keyed on "any history exists" would misfire on every ordinary relaunch in
     this house — a seat's office is durable by design (never moves, reused across every
@@ -463,8 +505,9 @@ def dormant_history_confession(
     size = best.stat().st_size
     if size < _DORMANT_HISTORY_FLOOR_BYTES:
         return None
-    count, tail = resume_diagnostics(best)
-    resumable = count <= max_compactions and tail <= ceiling_bytes
+    count, tail_bytes, tail_lines = resume_diagnostics(best)
+    verdict = resume_verdict(best, ceiling_bytes=ceiling_bytes, min_tail_bytes=min_tail_bytes)
+    resumable = verdict is None
     out: dict[str, Any] = {
         "path": str(best),
         "size_bytes": size,
@@ -472,9 +515,13 @@ def dormant_history_confession(
         "session_id": best.stem,
         "resumable": resumable,
         "compactions": count,
+        "tail_bytes": tail_bytes,
+        "tail_lines": tail_lines,
     }
     if resumable:
         out["resume_command"] = f"claude --resume {best.stem}"
+    else:
+        out["not_resumable_reason"] = verdict
     return out
 
 
@@ -503,15 +550,15 @@ def dormant_history_note(info: dict[str, Any]) -> str:
                 f"--bg` silently ignores --resume/--continue, a proven harness seam, not "
                 f"osiris's to fix): run `{info['resume_command']}` by hand to bring back "
                 f"that mind instead of a stranger wearing its name.")
-    compactions = info.get("compactions", 0)
-    if compactions:
-        return (f"{base} NOT resumable, and that is an UPGRADE, not a denial: it has "
-                f"compacted {compactions} time(s), so a resume would return a compaction "
-                f"summary, not the mind that did the work — a fresh mind's own graph-based "
-                f"orient()+handoff already IS approximately that same summary, from an "
-                f"audited source instead of a lossy one (ruling 7fa4b599).")
-    return (f"{base} NOT resumable — its content is over the context ceiling even though it "
-            f"has never compacted, a real cost concern on its own.")
+    reason = info.get("not_resumable_reason") or ""
+    if "seam itself" in reason:
+        return (f"{base} NOT resumable, and that is an UPGRADE, not a denial: it closed "
+                f"at or near its own last compaction boundary — a resume would return a "
+                f"compaction summary, not the mind that did the work — a fresh mind's own "
+                f"graph-based orient()+handoff already IS approximately that same summary, "
+                f"from an audited source instead of a lossy one (ruling 7fa4b599).")
+    return (f"{base} NOT resumable — its content since the last compaction boundary is "
+            f"over the context ceiling, a real cost concern on its own.")
 
 
 def locate_current_transcript(
