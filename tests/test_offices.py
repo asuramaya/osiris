@@ -9,7 +9,12 @@ from pathlib import Path
 
 from src.actions.core import Actions
 from src.orchestrator.mounts import save_mount
-from src.orchestrator.offices import establish_office, plan_pin_migration
+from src.orchestrator.offices import (
+    establish_office,
+    plan_pin_migration,
+    revert_pin_write,
+    write_pin_additions,
+)
 
 
 async def _seat_fixture(actions: Actions, tmp_path: Path, *, handle: str | None) -> str:
@@ -382,3 +387,131 @@ async def test_plan_pin_migration_infers_worktree_kind_from_path_shape(
     office_entry = next(e for e in out["plan"] if e["path"] == str(office))
     assert office_entry["proposed"]["kind"] == "office"
     assert not (tree / ".osiris").exists()      # plan is dry-run only — nothing written
+
+
+# ═══ write_pin_additions / revert_pin_write (Thoth's three constraints, msg 3929) ═══
+
+def test_write_pin_additions_creates_a_fresh_pin(tmp_path: Path) -> None:
+    office = tmp_path / "freshoffice"
+    office.mkdir()
+    out = write_pin_additions(str(office), {"seat": "Fresh", "house": "freshhouse",
+                                            "kind": "office"})
+    assert out["written"] is True
+    assert out["added"] == ["house", "kind", "seat"]
+    assert out["skipped"] == []
+    text = (office / ".osiris").read_text()
+    assert 'seat = "Fresh"' in text
+    assert 'house = "freshhouse"' in text
+    assert 'kind = "office"' in text
+    # the backup captures the PRE-write state — no file existed, so it's empty
+    assert (office / ".osiris.bak").read_text() == ""
+
+
+def test_write_pin_additions_never_touches_an_existing_key_constraint_1(
+    tmp_path: Path,
+) -> None:
+    """Constraint 1, ADDITIVE ONLY: a pin that already says `project = "Like-Us"` keeps
+    saying exactly that — even when the caller's own `proposed` dict disagrees. This proves
+    the writer refuses to resolve a disagreement by overwriting, not merely that it happens
+    not to today."""
+    office = tmp_path / "existingoffice"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "Like-Us"\nhouse = "wronghouse"\n')
+
+    out = write_pin_additions(str(office), {"seat": "Newcomer", "house": "correcthouse",
+                                            "kind": "office"})
+    assert out["written"] is True
+    assert out["added"] == ["kind", "seat"]           # house was already declared — skipped
+    assert out["skipped"] == ["house"]
+    text = (office / ".osiris").read_text()
+    assert 'house = "wronghouse"' in text             # UNTOUCHED, even though it disagrees
+    assert 'project = "Like-Us"' in text               # untouched, never this writer's key
+    assert 'seat = "Newcomer"' in text
+    assert 'kind = "office"' in text
+
+
+def test_write_pin_additions_is_idempotent_byte_identical_on_second_call(
+    tmp_path: Path,
+) -> None:
+    """Constraint 2, PROVEN BY TEST: two calls with the same `proposed` leave the file
+    byte-identical after the second, and the second call reports written=False."""
+    office = tmp_path / "idempotentoffice"
+    office.mkdir()
+    proposed = {"seat": "Twice", "house": "twicehouse", "kind": "office"}
+
+    first = write_pin_additions(str(office), proposed)
+    assert first["written"] is True
+    bytes_after_first = (office / ".osiris").read_bytes()
+
+    second = write_pin_additions(str(office), proposed)
+    assert second == {"written": False, "added": [], "skipped": ["house", "kind", "seat"],
+                      "path": str(office / ".osiris")}
+    bytes_after_second = (office / ".osiris").read_bytes()
+    assert bytes_after_second == bytes_after_first, (
+        "a second call with the same proposal must leave the file byte-identical")
+
+
+def test_write_pin_additions_refuses_broken_toml(tmp_path: Path) -> None:
+    office = tmp_path / "brokenoffice"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "unterminated\n')
+
+    out = write_pin_additions(str(office), {"seat": "Nope"})
+    assert "error" in out
+    assert "not valid TOML" in out["error"]
+    assert not (office / ".osiris.bak").exists(), (
+        "a refusal must write nothing, including no backup")
+
+
+def test_write_pin_additions_appends_after_a_trailing_comment(tmp_path: Path) -> None:
+    """A pin with a trailing comment (no newline convention broken) still gets its addition
+    appended cleanly, and the comment survives untouched — proof this never re-serializes the
+    whole file through tomllib (which would silently drop it, `_write_osiris_file`'s own
+    documented limit)."""
+    office = tmp_path / "commentoffice"
+    office.mkdir()
+    (office / ".osiris").write_text('# a hand-written note\nproject = "commented"\n')
+
+    out = write_pin_additions(str(office), {"seat": "Commented"})
+    assert out["written"] is True
+    text = (office / ".osiris").read_text()
+    assert "# a hand-written note" in text
+    assert 'project = "commented"' in text
+    assert 'seat = "Commented"' in text
+
+
+def test_revert_pin_write_restores_the_pre_write_state(tmp_path: Path) -> None:
+    """Constraint 3, REVERSIBLE: a revert after a write restores the exact pre-write bytes."""
+    office = tmp_path / "revertoffice"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "revertme"\n')
+    original = (office / ".osiris").read_bytes()
+
+    write_pin_additions(str(office), {"seat": "Reverted", "house": "reverthouse"})
+    assert (office / ".osiris").read_bytes() != original
+
+    out = revert_pin_write(str(office))
+    assert out["reverted"] is True
+    assert (office / ".osiris").read_bytes() == original
+
+
+def test_revert_pin_write_deletes_a_pin_that_did_not_exist_before(tmp_path: Path) -> None:
+    """A revert after a write that CREATED the file (empty backup) must delete it, not leave
+    a stray empty `.osiris` behind — true absence restored, not a hollow file."""
+    office = tmp_path / "createdoffice"
+    office.mkdir()
+
+    write_pin_additions(str(office), {"seat": "Created"})
+    assert (office / ".osiris").exists()
+
+    out = revert_pin_write(str(office))
+    assert out["reverted"] is True
+    assert not (office / ".osiris").exists()
+
+
+def test_revert_pin_write_refuses_when_no_backup_exists(tmp_path: Path) -> None:
+    office = tmp_path / "neverwrittenoffice"
+    office.mkdir()
+    out = revert_pin_write(str(office))
+    assert "error" in out
+    assert "no backup" in out["error"]

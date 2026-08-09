@@ -14,6 +14,7 @@ rows, the transcripts with their re-addressing, the Seat object's anchor).
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -158,6 +159,78 @@ async def plan_pin_migration(pool: asyncpg.Pool) -> dict[str, Any]:
             *data["caveats"],
         ],
     }
+
+
+def write_pin_additions(path: str, proposed: dict[str, str]) -> dict[str, Any]:
+    """THE WRITER — ruling 719ed5b1's five-key schema, applying one `plan_pin_migration` entry's
+    `changes` at a time (Thoth's own staged rollout, msg 3929: her office alone first, then the
+    rest only after it lands clean — this function is what both stages call, never a bulk
+    driver that hides the boundary between them). Three constraints, msg 3929, none negotiable:
+
+    (1) ADDITIVE ONLY. Appends a key ONLY when `path/.osiris` does not already declare it —
+    never rewrites, reorders, or reformats an existing line, even to correct a value that
+    disagrees with `proposed` (that disagreement is `plan_pin_migration`'s own `changes` dict
+    to surface; resolving it by silent overwrite is exactly the drift-vs-truth conflation this
+    whole build exists to end). Re-reads the file itself at write time rather than trusting a
+    caller's possibly-stale plan snapshot — a stale DIAGNOSIS is a lesser bug than a stale CURE.
+
+    (2) IDEMPOTENT, PROVEN BY TEST, NOT ASSUMED. A key already present — from an earlier call
+    to this function, a hand edit, or any other writer — is skipped, so two calls with the same
+    `proposed` leave the file byte-identical after the second (`written: False`).
+
+    (3) REVERSIBLE. `~/.osiris` carries no git history and no undo but the one built here:
+    before the FIRST byte changes, the file's exact current bytes (or the empty string, if it
+    doesn't exist yet) are copied to `path/.osiris.bak` — overwritten on every real write, so
+    it always holds "immediately before the most recent touch" — and never written on a no-op
+    call. `revert_pin_write` restores from it.
+
+    Refuses (an error dict, nothing written) when the file exists but is not valid TOML —
+    appending onto a broken file would make a bad file worse and harder to diagnose, not better.
+
+    Returns `written` (bool), `added` (the keys actually appended, a strict subset of
+    `proposed`), `skipped` (keys already present, left untouched), and `backup` (only when a
+    write happened)."""
+    import tomllib
+
+    p = Path(path) / ".osiris"
+    existing_text = p.read_text() if p.is_file() else ""
+    try:
+        existing = tomllib.loads(existing_text) if existing_text else {}
+    except (tomllib.TOMLDecodeError, ValueError) as exc:
+        return {"error": f"{p} is not valid TOML ({type(exc).__name__}: {exc}) — refusing to "
+                         "append onto a broken file"}
+
+    to_add = {k: v for k, v in proposed.items() if k not in existing}
+    skipped = sorted(set(proposed) - set(to_add))
+    if not to_add:
+        return {"written": False, "added": [], "skipped": skipped, "path": str(p)}
+
+    backup = p.with_name(".osiris.bak")
+    backup.write_text(existing_text)
+    new_lines = [f"{k} = {json.dumps(v)}" for k, v in sorted(to_add.items())]
+    sep = "\n" if existing_text and not existing_text.endswith("\n") else ""
+    p.write_text(existing_text + sep + "\n".join(new_lines) + "\n")
+    return {"written": True, "added": sorted(to_add), "skipped": skipped,
+            "path": str(p), "backup": str(backup)}
+
+
+def revert_pin_write(path: str) -> dict[str, Any]:
+    """The reversibility half of `write_pin_additions`'s constraint 3: restore `path/.osiris`
+    from the backup it took immediately before its most recent real write. Refuses (an error
+    dict, nothing touched) when no backup exists — never invents a prior state to revert to.
+    An EMPTY backup means the file didn't exist before that write: revert DELETES the current
+    file, restoring true absence, rather than leaving a stray empty `.osiris` behind."""
+    p = Path(path) / ".osiris"
+    backup = p.with_name(".osiris.bak")
+    if not backup.is_file():
+        return {"error": f"no backup at {backup} — nothing to revert to"}
+    content = backup.read_text()
+    if content:
+        p.write_text(content)
+    elif p.exists():
+        p.unlink()
+    return {"reverted": True, "path": str(p), "from_backup": str(backup)}
+
 
 # THE PEER ADDENDUM (ruling d74492ee, spec e6636c7e — LEGIBILITY leg 2, seats.py): rendered
 # INTO house_law.md's `{peer_block}` slot (boot_compiler.compile_managed_body) only when the
