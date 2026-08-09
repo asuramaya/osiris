@@ -61,19 +61,51 @@ def test_a_witnessed_operator_swap_still_speaks_plainly() -> None:
 
 
 def test_succession_pointer_resolves_by_query_not_a_copied_id() -> None:
-    """d80621a7 piece 4: point a freshly minted heir at the charter file and the newest
-    OPEN OBLIGATION the SERVER just resolved by query (owner+kind, newest at read
-    time) — never an id baked into this script."""
+    """d80621a7 piece 4: point a freshly minted heir at the newest OPEN OBLIGATION the
+    SERVER just resolved by query (owner+kind, newest at read time) — never an id baked
+    into this script. The charter file itself now rides identity_anchor (#155),
+    unconditional — see the identity_anchor tests below."""
     out = _base(minted="agent:ad1a1cb0-g40-xiii", succession={
-        "charter_file": "/home/asuramaya/.osiris/seats/thoth/CLAUDE.md",
         "thread_id": "12a58447",
         "thread_summary": "HANDOFF — Thoth L to LI",
     })
     text = render_whisper(out, cwd="/x", env_job="")
     assert "MINTED as this lineage's successor" in text
-    assert "Your charter file is /home/asuramaya/.osiris/seats/thoth/CLAUDE.md" in text
     assert "[12a58447] HANDOFF — Thoth L to LI" in text
     assert "then orient()" in text
+
+
+def test_identity_anchor_names_charter_file_unconditionally() -> None:
+    """#155: the charter file must reach EVERY boot, not only a freshly minted one —
+    gating identity delivery on succession was the bug (Thoth's own ruling, msg 3853).
+    No "minted" key at all here — this must still render."""
+    out = _base(identity_anchor={
+        "charter_file": "/home/asuramaya/.osiris/seats/thoth/charter.md",
+    })
+    text = render_whisper(out, cwd="/x", env_job="")
+    assert "MINTED" not in text
+    assert "Identity anchor, cwd-independent" in text
+    assert "your charter file is /home/asuramaya/.osiris/seats/thoth/charter.md" in text
+
+
+def test_identity_anchor_names_the_compiled_office_too() -> None:
+    """#155's own reason for existing: the boot compiler's managed section (role, gates,
+    first-breath, review loop, practices) has no cwd-independent delivery path once a
+    seat's tree_cwd wins launch_cwd — this pointer is that path."""
+    out = _base(identity_anchor={
+        "charter_file": "/home/asuramaya/.osiris/seats/imhotep/charter.md",
+        "compiled_office": "/home/asuramaya/.osiris/seats/imhotep/CLAUDE.md",
+    })
+    text = render_whisper(out, cwd="/x", env_job="")
+    assert "your compiled standing orders" in text
+    assert "/home/asuramaya/.osiris/seats/imhotep/CLAUDE.md" in text
+    assert "role, manager, gates" in text
+
+
+def test_no_identity_anchor_means_no_anchor_line() -> None:
+    out = _base()  # no "identity_anchor" key at all
+    text = render_whisper(out, cwd="/x", env_job="")
+    assert "Identity anchor" not in text
 
 
 def test_succession_pointer_never_overclaims_the_kind_of_thread_it_found() -> None:

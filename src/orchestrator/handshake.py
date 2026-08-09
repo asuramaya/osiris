@@ -676,13 +676,67 @@ async def automount(
                 obligations = shown[:3]
         except Exception:  # noqa: BLE001 — the whisper must never break on this
             obligations = []
-    # SUCCESSION STEERING (d80621a7 piece 4): a freshly minted heir's summary-steering
-    # anchor is the CHARTER FILE — charter.md when the office has one (the seat's own
-    # hand-maintained live state, assignment 3), else CLAUDE.md (the standing orders,
-    # which never rot but also never change) — plus the newest OPEN OBLIGATION the
-    # project owns, found BY QUERY (owner + kind, newest at read time) —
-    # never an id some ancestor copied into a file once. Ids rot; queries don't (Anubis
-    # VIII's ask #4: 'search for the retirement letter by its natural name found nothing').
+    # THE IDENTITY ANCHOR, UNCONDITIONAL (#155, ruling via Thoth msg 3853: gating identity
+    # delivery on succession WAS ITSELF THE BUG — this used to compute charter_file only
+    # `if ident.succeeded_from`, so only a freshly-minted successor's first breath ever saw
+    # it. A seat's own standing state (charter.md) is not succession news; every boot needs
+    # it, not only the boot where something was minted. THE COMPILED HALF (#141's own
+    # stranded finding): the boot compiler's managed section — role, manager, gates,
+    # first-breath, review loop, standing practices (boot_compiler.py, task #53) — writes
+    # ONLY to CLAUDE.md and is NEVER auto-loaded by the harness once a seat's tree_cwd wins
+    # launch_cwd (#103) — four of five seats in this fleet, checked live. This is the
+    # cwd-independent door it was missing: a POINTER (never inlined content — 74fad683's
+    # own injection-ledger law: every successor pays whatever rides here forever, and this
+    # sits on every boot for 4/5 seats, not a rare one), read via boot_compiler's OWN
+    # `locate_managed_section()` — never a second hand-parsed copy of the marker regex
+    # (38c71544) — so there is exactly ONE writer (reissue_office) and this is only ever a
+    # reader. FAILS OPEN (577988ed): an uncompiled or hand-mangled office just gets no
+    # pointer this breath — the whisper must never break on this path every session crosses.
+    identity_anchor: dict[str, Any] | None = None
+    base = _generation(ident.agent_id)[0]
+    try:
+        office_path = await actions.pool.fetchval(
+            "SELECT d.value #>> '{}' FROM current_assertions d "
+            "JOIN objects o ON o.id = d.object_id AND o.status = 'active' "
+            "WHERE d.name = 'office' AND (o.canonical = $1 OR o.canonical LIKE $1 || '-%') "
+            "ORDER BY d.observed_at DESC LIMIT 1", base)
+        # PREFER THE CHARTER FILE (assignment 3, d80621a7 piece 3): a seat's charter.md
+        # is its own hand-maintained live state — the offload target, richer and fresher
+        # than the standing orders. automount runs on the SAME host as the office it
+        # names, so a disk check is a legitimate witness (never a network/DB round-trip)
+        # — off the event loop via to_thread, never a blocking stat() inline. An office
+        # scaffolded before this piece landed has no charter.md yet, so the fallback to
+        # CLAUDE.md stays live for every pre-existing office.
+        charter_path = None
+        compiled_office = None
+        if office_path:
+            has_charter = await asyncio.to_thread(
+                os.path.exists, f"{office_path}/charter.md")
+            charter_path = (f"{office_path}/charter.md" if has_charter
+                            else f"{office_path}/CLAUDE.md")
+            claude_md_path = f"{office_path}/CLAUDE.md"
+            try:
+                claude_md_text = await asyncio.to_thread(Path(claude_md_path).read_text)
+                from src.orchestrator.boot_compiler import MarkerError, locate_managed_section
+                locate_managed_section(claude_md_text)  # raises if absent/malformed
+                compiled_office = claude_md_path
+            except OSError:
+                compiled_office = None  # no CLAUDE.md at this office at all
+            except MarkerError:
+                compiled_office = None  # never compiled, or a hand-mangled marker pair
+        if charter_path or compiled_office:
+            identity_anchor = {
+                **({"charter_file": charter_path} if charter_path else {}),
+                **({"compiled_office": compiled_office} if compiled_office else {}),
+            }
+    except Exception:  # noqa: BLE001 — the whisper must never break on this
+        identity_anchor = None
+    # SUCCESSION STEERING (d80621a7 piece 4): the newest OPEN OBLIGATION the project owns,
+    # found BY QUERY (owner + kind, newest at read time) — never an id some ancestor copied
+    # into a file once. Ids rot; queries don't (Anubis VIII's ask #4: 'search for the
+    # retirement letter by its natural name found nothing'). GENUINELY SUCCESSION-SCOPED,
+    # unlike identity_anchor above: 'what happened while you were away' and 'your
+    # predecessor's parting words' are questions only a JUST-MINTED heir is asking.
     # NEVER LABEL THE RESULT A 'SUCCESSION THREAD' (Thoth LI's amend, msg 861): the query
     # finds the newest open obligation, not specifically a handoff — asserting more than
     # the query witnessed is exactly the false-seam class fixed above. The render side
@@ -690,12 +744,6 @@ async def automount(
     succession: dict[str, Any] | None = None
     if ident.succeeded_from:
         try:
-            base = _generation(ident.agent_id)[0]
-            office_path = await actions.pool.fetchval(
-                "SELECT d.value #>> '{}' FROM current_assertions d "
-                "JOIN objects o ON o.id = d.object_id AND o.status = 'active' "
-                "WHERE d.name = 'office' AND (o.canonical = $1 OR o.canonical LIKE $1 || '-%') "
-                "ORDER BY d.observed_at DESC LIMIT 1", base)
             # THE OWNER MATCH: 'owned by this project' includes a SPECIFIC incarnation
             # ('agent:ad1a1cb0-g40-xiii'), not only the bare project name or the bare
             # lineage base — real obligations are filed that way. A wide SQL prefilter
@@ -730,19 +778,6 @@ async def automount(
             newest = next(
                 (r for r in candidates if r["owner"] == ident.project
                  or _generation(r["owner"])[0] == base), None)
-            # PREFER THE CHARTER FILE (assignment 3, d80621a7 piece 3): a seat's charter.md
-            # is its own hand-maintained live state — the offload target, richer and fresher
-            # than the standing orders. automount runs on the SAME host as the office it
-            # names, so a disk check is a legitimate witness (never a network/DB round-trip)
-            # — off the event loop via to_thread, never a blocking stat() inline. An office
-            # scaffolded before this piece landed has no charter.md yet, so the fallback to
-            # CLAUDE.md stays live for every pre-existing office.
-            charter_path = None
-            if office_path:
-                has_charter = await asyncio.to_thread(
-                    os.path.exists, f"{office_path}/charter.md")
-                charter_path = (f"{office_path}/charter.md" if has_charter
-                                else f"{office_path}/CLAUDE.md")
             # THE HANDOFF, SPECIFICALLY (thread e749036e, 2026-07-27): the newest-obligation
             # steering above is deliberately NOT a handoff claim (Thoth LI's amend, msg 861)
             # — this is the OTHER half, the same bounded chain-walk orient()'s succession-note
@@ -758,9 +793,8 @@ async def automount(
                           "notes": [{"kind": r["type"].lower(), "id": str(r["id"])[:8],
                                      "text": r["summary"][:800]}
                                     for r in handoff_picks]}
-            if charter_path or (newest and newest["summary"]) or handoff:
+            if (newest and newest["summary"]) or handoff:
                 succession = {
-                    **({"charter_file": charter_path} if charter_path else {}),
                     **({"thread_id": str(newest["id"])[:8],
                         "thread_summary": newest["summary"]}
                        if newest and newest["summary"] else {}),
@@ -811,7 +845,11 @@ async def automount(
         # the top of the project's obligations wall (thread a3a3d512) — empty when there's
         # nothing owed or the project is unresolved
         **({"obligations": obligations} if obligations else {}),
-        # a freshly minted heir's steering anchor: charter file + newest succession thread,
+        # EVERY BOOT's own standing state: charter file + the compiled office (role, gates,
+        # first-breath, review loop, practices), cwd-independent, never gated on succession
+        # (#155 — gating this on minted status was itself the bug)
+        **({"identity_anchor": identity_anchor} if identity_anchor else {}),
+        # a freshly minted heir's steering anchor: the newest succession-owned obligation,
         # resolved BY QUERY, not a copied id (d80621a7 piece 4)
         **({"succession": succession} if succession else {}),
         # the attach ceremony's verdict (None: no spawner-exported seat in this environment)

@@ -1048,18 +1048,21 @@ async def test_automount_points_a_fresh_heir_at_charter_and_newest_succession_th
     assert reborn["minted"] == ident.agent_id
     succ = reborn.get("succession")
     assert succ is not None
-    assert succ["charter_file"] == f"{office}/CLAUDE.md"
     assert "the actual handoff" in succ["thread_summary"]
+    # #155: charter_file now rides identity_anchor, unconditional — not succession
+    anchor = reborn.get("identity_anchor")
+    assert anchor is not None
+    assert anchor["charter_file"] == f"{office}/CLAUDE.md"
 
 
 async def test_succession_pointer_prefers_charter_md_over_claude_md(
     actions: Actions, tmp_path: Path
 ) -> None:
     """Assignment 3, piece (iii): when the office has a charter.md (the seat's own
-    hand-maintained live state, assignment 3's scaffold), the succession pointer prefers
-    it over CLAUDE.md (the standing orders, which never change). automount runs on the
-    same host as the office it names, so a disk check is a legitimate witness. An office
-    with no charter.md (the case above) keeps falling back to CLAUDE.md."""
+    hand-maintained live state, assignment 3's scaffold), the identity anchor (#155)
+    prefers it over CLAUDE.md (the standing orders, which never change). automount runs
+    on the same host as the office it names, so a disk check is a legitimate witness. An
+    office with no charter.md (the case above) keeps falling back to CLAUDE.md."""
     from src.orchestrator.agents import claim_name, register_agent, resolve_identity
 
     root = tmp_path / "projects"
@@ -1081,9 +1084,73 @@ async def test_succession_pointer_prefers_charter_md_over_claude_md(
                              actor="analyst:operator", root=root,
                              jobs_home=tmp_path / "jobs", office_root=offices,
                              source="compact")
-    succ = reborn.get("succession")
-    assert succ is not None
-    assert succ["charter_file"] == f"{office}/charter.md"
+    # #155: charter_file now rides identity_anchor, unconditional — not succession
+    anchor = reborn.get("identity_anchor")
+    assert anchor is not None
+    assert anchor["charter_file"] == f"{office}/charter.md"
+
+
+async def test_identity_anchor_fires_on_an_ordinary_mount_never_gated_on_succession(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """#155's whole point, live: gating identity delivery on succession WAS the bug
+    (Thoth's own ruling, msg 3853 — she had generalized from her own most-compacted-seat-
+    in-the-fleet experience). A single ordinary mount (source='startup', nothing minted)
+    must still carry the identity anchor, including the compiled office pointer, which is
+    exactly what a tree-bound seat's harness never auto-loads (#141)."""
+    from src.orchestrator.agents import claim_name, register_agent, resolve_identity
+    from src.orchestrator.boot_compiler import wrap_managed
+
+    root = tmp_path / "projects"
+    offices = tmp_path / "seats"
+    office = offices / "sentinel"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "sentinelhouse"\n')
+    (office / "CLAUDE.md").write_text(
+        "# sentinel — seat office\n\n" + wrap_managed("role: WORKER", "abc123"))
+    _transcript(root, str(office))
+
+    ident = resolve_identity(cwd=str(office), job_dir=str(tmp_path / "jobs" / SID[:8]), root=root)
+    await register_agent(actions, ident, actor="analyst:operator")
+    await claim_name(actions, ident.agent_id, "Sentinel", source=ident.agent_id)
+
+    out = await automount(actions, session_id=SID, cwd=str(office), actor="analyst:operator",
+                          root=root, jobs_home=tmp_path / "jobs", office_root=offices,
+                          source="startup")
+    assert not out.get("minted")  # gen 1, first breath, nothing succeeded
+    anchor = out.get("identity_anchor")
+    assert anchor is not None, "identity_anchor must fire on an ordinary mount too"
+    assert anchor["charter_file"] == f"{office}/CLAUDE.md"
+    assert anchor["compiled_office"] == f"{office}/CLAUDE.md"
+
+
+async def test_identity_anchor_compiled_office_fails_open_when_never_compiled(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A scaffolded office whose CLAUDE.md has no osiris:compiled markers at all (never
+    reissue_office'd) must still carry charter_file — compiled_office is simply absent,
+    never an exception that breaks the whisper (577988ed)."""
+    from src.orchestrator.agents import claim_name, register_agent, resolve_identity
+
+    root = tmp_path / "projects"
+    offices = tmp_path / "seats"
+    office = offices / "outrider"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "outriderhouse"\n')
+    (office / "CLAUDE.md").write_text("# outrider — seat office\n\nplain, never compiled.\n")
+    _transcript(root, str(office))
+
+    ident = resolve_identity(cwd=str(office), job_dir=str(tmp_path / "jobs" / SID[:8]), root=root)
+    await register_agent(actions, ident, actor="analyst:operator")
+    await claim_name(actions, ident.agent_id, "Outrider", source=ident.agent_id)
+
+    out = await automount(actions, session_id=SID, cwd=str(office), actor="analyst:operator",
+                          root=root, jobs_home=tmp_path / "jobs", office_root=offices,
+                          source="startup")
+    anchor = out.get("identity_anchor")
+    assert anchor is not None
+    assert anchor["charter_file"] == f"{office}/CLAUDE.md"
+    assert "compiled_office" not in anchor
 
 
 async def test_succession_owner_match_finds_a_specific_incarnation_never_a_rebase_decoy(
