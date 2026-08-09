@@ -157,6 +157,29 @@ async def test_fold_seat_execute_folds_mints_the_seat_and_briefs_after(
     assert not again["will_fold"]
 
 
+async def test_seat_roster_reads_house_through_the_canonical_pin_reader(
+        actions: Actions, tmp_path: Path) -> None:
+    """seat_roster() used to hand-parse `.osiris` itself (a line-split on `project =`) instead
+    of going through agents.py's `_read_osiris_key`/`read_project_label` — a second, independent
+    reader of the same file (the 38c71544 class: two hand-synced copies of one answer, ruling
+    719ed5b1's pin-schema build). Proof, not assertion, that it now delegates: a pin that is
+    valid TOML but never declares `project` (Sekhmet's own OsirisKeyRead design names this the
+    "heinrich shape" — a deliberately-written file answering a different question) must resolve
+    `house=None`, the same three-way "found, valid, key absent" state the canonical reader gives
+    every other caller — not a crash, not a guess, and not dependent on line-splitting quirks
+    (quoting, whitespace) the hand-rolled version was exposed to."""
+    offices = tmp_path / "offices"
+    _office(offices, "khnum", "riverhouse")
+    unset = offices / "modelonly"
+    unset.mkdir(parents=True)
+    (unset / ".osiris").write_text('model = "claude-sonnet-5"\n')
+
+    roster = await seat_roster(actions.pool, office_root=offices)
+    by_handle = {r["handle"]: r for r in roster}
+    assert by_handle["khnum"]["house"] == "riverhouse"
+    assert by_handle["modelonly"]["house"] is None
+
+
 async def test_fold_seat_never_folds_a_cross_seat_base(
         actions: Actions, tmp_path: Path) -> None:
     offices, projects = tmp_path / "offices", tmp_path / "projects"

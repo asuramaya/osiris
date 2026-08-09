@@ -685,12 +685,17 @@ def test_resolve_identity_never_flags_project_pin_missing_at_the_bare_seat_root(
 ) -> None:
     """Ruling 577988ed's own carve-out, through the real resolution path: the bare seat-
     office container has no pin and no single project of its own — project stays None AND
-    project_pin_missing stays False, so no wave-2 banner ever fires there."""
-    from src.orchestrator import agents as agents_mod
+    project_pin_missing stays False, so no wave-2 banner ever fires there.
+
+    Patches `offices._DEFAULT_OFFICE_ROOT` (not agents.py's own imported name): resolve_identity
+    now calls the shared `is_bare_office_root()` (offices.py) instead of a private duplicate of
+    the same path-equality check (the 38c71544 dedup, ruling 719ed5b1's pin-schema build) — the
+    module that OWNS the comparison is the one whose global must move for the test to see it."""
+    from src.orchestrator import offices as offices_mod
 
     seats_root = tmp_path / "seats"
     seats_root.mkdir()
-    monkeypatch.setattr(agents_mod, "_DEFAULT_OFFICE_ROOT", seats_root)
+    monkeypatch.setattr(offices_mod, "_DEFAULT_OFFICE_ROOT", seats_root)
     ident = resolve_identity(cwd=str(seats_root), job_dir="/j/jobs/bareroot1")
     assert ident.project is None
     assert ident.project_pin_missing is False

@@ -41,7 +41,7 @@ from src.ingest.sessions import (
     locate_transcript_by_cwd,
     model_of_transcript,
 )
-from src.orchestrator.offices import _DEFAULT_OFFICE_ROOT
+from src.orchestrator.offices import _DEFAULT_OFFICE_ROOT, is_bare_office_root
 from src.orchestrator.swaps import classify_swap, swap_marker
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
@@ -927,7 +927,7 @@ def resolve_identity(
     # own .osiris file, never fabricated for an override that never touched one.
     pin_read = OsirisKeyRead(value=project_label) if project_label else read_project_pin(cwd)
     pinned = pin_read.value
-    bare_root = cwd and Path(cwd) == _DEFAULT_OFFICE_ROOT
+    bare_root = is_bare_office_root(cwd)
     project = None if (pinned is None and bare_root) else (pinned or
              (Path(cwd).name if cwd else None))
     # task #128 wave 2: the THIRD leg of the "why did this fall back to a basename guess"

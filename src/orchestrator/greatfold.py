@@ -37,6 +37,7 @@ from typing import Any
 import asyncpg
 
 from src.actions.core import Actions
+from src.orchestrator.agents import read_project_label
 
 _log = logging.getLogger("osiris.greatfold")
 
@@ -103,12 +104,7 @@ async def seat_roster(pool: asyncpg.Pool, *, office_root: Path | None = None,
         for d in sorted(root.iterdir()):
             if not d.is_dir():
                 continue
-            house = None
-            pin = d / ".osiris"
-            if pin.is_file():
-                for ln in pin.read_text(errors="replace").splitlines():
-                    if ln.split("=")[0].strip() == "project":
-                        house = ln.split("=", 1)[1].strip().strip('"').strip("'")
+            house = read_project_label(str(d))
             by_handle[d.name.lower()] = {"handle": d.name.lower(), "house": house,
                                          "office": str(d), "seat_id": None}
     rows = await pool.fetch(
