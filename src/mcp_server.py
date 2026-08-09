@@ -2774,6 +2774,49 @@ async def roster(repo: str | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def tree_ledger(limit: int | None = None, offset: int = 0) -> dict[str, Any]:
+    """THE PIN-VS-GRAPH DISAGREEMENT REPORT (task #158, off Sekhmet's live repo:seats/
+    repo:code phantom catch — rulings 719ed5b1/13af22fc): "the instrument that should have
+    found tonight's two phantoms without a human noticing." Read-only, fleet-wide, TWO
+    sections because the durable-history half and the live-right-now half need different
+    populations:
+
+    `project_ledger` — every ACTIVE SoftwareProject (58 today), each carrying
+    `phantom_verdict`: `test-fixture` (a known deliberate test/security-research project
+    name, named not scored), `declared` (some seat's own pin or Seat-origin `governs` edge
+    claims it — Agent-origin governs edges never count, the exact succession-leak class
+    that legitimized repo:code's own bogus edge), `phantom-suspect` (its name matches an
+    explicit, editable list of generic path-segment words — seats/code/tmp/etc — and
+    nothing declares it), or `undetermined` (neither fired — a real disagreement for a
+    human, never a confident phantom call either way). `triage_bucket` reused verbatim from
+    the same machinery `roster()`'s pin field already calls. `limit`/`offset` (default
+    200/0, capped 2000, `total` always reported) page it, though 58 fits one page today.
+
+    `live_cwd_ledger` — every DISTINCT cwd `agent_mounts` holds RIGHT NOW (measured: 32
+    rows today — this table is a live/recent registry, NOT a historical ledger; a phantom
+    whose originating sessions already ended and were evicted never appears here, only in
+    `project_ledger`). Each cwd carries `resolved_today` (what a fresh mount computes now:
+    the pin, else the basename fallback, refusing at the bare seats container) versus
+    `graph_believes` (live `works_in` targets of every agent this cwd currently names).
+    `resolved_today` answers the COLD/BOOTSTRAP question only — a SEATED agent's real
+    mount() resolves seat-first and never touches this path (roster()'s own law). Five
+    `agreement` states, not collapsed: `no-graph-yet` / `graph-only` (live evidence of the
+    same bug class 13af22fc found historically) / `match` / `partial-match` (today's
+    resolution is correct but the graph also carries other, likely-stale beliefs for this
+    cwd — worth a look, not urgent) / `mismatch` (today's resolution matches NONE of the
+    graph's beliefs — a live misresolution risk, measured live on two seats tonight).
+
+    `caveats` names exactly what this instrument cannot see (a tree that never accumulated
+    a works_in edge; a phantom whose live_cwd_ledger evidence has already been evicted) —
+    stated, never silently absent. READ-ONLY: reports disagreements, never repairs, folds,
+    or merges — disposing of a confirmed phantom is always a separate, evidence-gated
+    verb's job."""
+    pool = await _pool_get()
+    from src.orchestrator.seats import tree_ledger as _tree_ledger
+    return await _tree_ledger(pool, limit=limit if limit is not None else 200, offset=offset)
+
+
+@mcp.tool()
 async def send(body: str, to: str | None = None, to_agent: str | None = None,
                reply_to: int | None = None, desk: str | None = None,
                grade: str | None = None, require_seat: bool = False,
