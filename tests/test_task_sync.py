@@ -469,3 +469,54 @@ def test_archive_eligible_targets_is_scoped_by_store_not_bare_task_id() -> None:
     assert archive_eligible_targets(report, tasks) == [
         {"task_id": "1", "store": "storeA", "thread_ids": ["aaa"]},
     ]
+
+
+# ── task_sync_reconcile (the MCP tool, task #160 — the on-ramp task_sync.py's own docstring
+# promised and never got) — report-only by default, Tier 1/2 write gated behind write=True,
+# never touching the harness's own task store either way. ────────────────────────────────
+
+async def test_mcp_tool_is_report_only_by_default(actions: Actions) -> None:
+    import src.mcp_server as srv
+    from src.mcp_server import task_sync_reconcile
+
+    tid = await open_thread(actions, "cited cleanly, no write requested", kind="task",
+                            source="agent:me")
+    tasks = [_task("1", f"thread {str(tid)[:8]}", status="completed")]
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await task_sync_reconcile(tasks)
+    finally:
+        srv._pool = saved_pool
+    assert out["report"]["counts"]["bound"] == 1
+    assert "tier1_written" not in out
+    assert "tier2_minted" not in out
+    # no write actually landed — the citation property was never asserted
+    rows = await _property_rows(actions, tid, "harness_task_citation")
+    assert rows == []
+
+
+async def test_mcp_tool_write_true_executes_both_safe_tiers(actions: Actions) -> None:
+    import src.mcp_server as srv
+    from src.mcp_server import task_sync_reconcile
+
+    bound = await open_thread(actions, "cited and agreeing", kind="task", source="agent:me")
+    disputed = await open_thread(actions, "cited but disagreeing", kind="task",
+                                 source="agent:me")
+    tasks = [
+        _task("1", f"thread {str(bound)[:8]}", status="pending"),
+        _task("2", f"thread {str(disputed)[:8]}", status="completed"),
+    ]
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await task_sync_reconcile(tasks, write=True)
+    finally:
+        srv._pool = saved_pool
+    assert len(out["tier1_written"]) == 2  # one correlation per bound citation
+    assert len(out["tier2_minted"]) == 1   # one obligation thread, for the disagreement
+    # verified against the graph, not just the receipt
+    rows = await _property_rows(actions, bound, "harness_task_citation")
+    assert len(rows) == 1
+    minted_summary = out["tier2_minted"][0]["summary"]
+    assert "DISAGREEMENT" in minted_summary
