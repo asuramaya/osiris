@@ -9,7 +9,12 @@ from pathlib import Path
 
 from src.actions.core import Actions
 from src.orchestrator.mounts import save_mount
-from src.orchestrator.offices import establish_office
+from src.orchestrator.offices import (
+    establish_office,
+    plan_pin_migration,
+    revert_pin_write,
+    write_pin_additions,
+)
 
 
 async def _seat_fixture(actions: Actions, tmp_path: Path, *, handle: str | None) -> str:
@@ -260,4 +265,253 @@ async def test_establish_office_refuses_a_live_seat(
 
     assert "error" in out
     assert "LIVE right now" in out["error"]
-    assert not (tmp_path / "seats").exists()            # a refusal writes NOTHING
+
+
+# ═══ plan_pin_migration (ruling 719ed5b1's five-key schema — DRY RUN, never writes) ═══
+
+async def _seat_with_office(
+    actions: Actions, tmp_path: Path, *, seat_id: str, handle: str, house: str | None,
+    office_dir: str, tree_dir: str | None = None,
+) -> None:
+    """A Seat object with the facts `roster()`/`derive_house` actually read: handle, an
+    optional own `house` stamp (a HEAD, no managed_by edge — derive_house returns exactly
+    this), anchor_cwd, and an optional distinct tree_cwd. Mirrors test_seats.py's own
+    bind_seat_tree fixture shape rather than inventing a new one."""
+    from datetime import UTC, datetime
+
+    seat = await actions.create_or_find_object("Seat", seat_id, "test")
+    await actions.assert_property(seat, "handle", handle, "test", datetime.now(UTC), 0.9)
+    await actions.assert_property(seat, "anchor_cwd", office_dir, "test",
+                                  datetime.now(UTC), 0.9)
+    if house:
+        await actions.assert_property(seat, "house", house, "test", datetime.now(UTC), 0.9)
+    if tree_dir:
+        from src.orchestrator.seats import bind_seat_tree
+        out = await bind_seat_tree(actions, seat_id=seat_id, tree_cwd=tree_dir,
+                                   actor="operator", because="test fixture")
+        assert out.get("error") is None, out  # operator is in _OPERATOR_ACTORS — must succeed
+
+
+async def test_plan_pin_migration_proposes_seat_house_kind_for_a_fresh_office(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The ordinary case: a seat with a derivable house and an unpinned office proposes all
+    three new keys, none of them written (this is dry-run only)."""
+    office = tmp_path / "seats" / "planalpha"
+    office.mkdir(parents=True)
+    await _seat_with_office(actions, tmp_path, seat_id="seat:plan0001", handle="Planalpha",
+                            house="planhouse", office_dir=str(office))
+
+    out = await plan_pin_migration(actions.pool)
+    entry = next(e for e in out["plan"] if e["path"] == str(office))
+    assert entry["current"] == {"house": None, "seat": None, "kind": None}
+    assert entry["proposed"] == {"seat": "Planalpha", "house": "planhouse", "kind": "office"}
+    assert entry["changes"] == entry["proposed"]  # nothing on disk yet — the whole diff is new
+    assert entry["unknown"] == []
+    assert not office.joinpath(".osiris").exists(), "plan must never write a file"
+
+
+async def test_plan_pin_migration_is_idempotent_against_an_already_correct_pin(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A pin already carrying the right values proposes no changes — the no-churn discipline
+    every existing writer keeps, proven for the read side too."""
+    office = tmp_path / "seats" / "planbeta"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text(
+        'project = "planhouse"\nhouse = "planhouse"\nseat = "Planbeta"\nkind = "office"\n')
+    await _seat_with_office(actions, tmp_path, seat_id="seat:plan0002", handle="Planbeta",
+                            house="planhouse", office_dir=str(office))
+
+    out = await plan_pin_migration(actions.pool)
+    assert not any(e["path"] == str(office) for e in out["plan"]), (
+        "an already-correct pin must propose nothing, not even an empty no-op entry")
+
+
+async def test_plan_pin_migration_reports_an_underivable_house_as_a_gap_not_a_guess(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A seat with no own `house` stamp and no manager to derive one from: derive_house
+    honestly returns None, and the plan must name that as a gap for `house` while still
+    proposing `seat`/`kind`, which do not depend on it — never silently drop the whole entry,
+    never guess a house into the gap."""
+    office = tmp_path / "seats" / "plangamma"
+    office.mkdir(parents=True)
+    await _seat_with_office(actions, tmp_path, seat_id="seat:plan0003", handle="Plangamma",
+                            house=None, office_dir=str(office))
+
+    out = await plan_pin_migration(actions.pool)
+    entry = next(e for e in out["plan"] if e["path"] == str(office))
+    assert entry["proposed"] == {"seat": "Plangamma", "kind": "office"}
+    assert "house" not in entry["proposed"]
+    assert any("house" in u for u in entry["unknown"])
+
+
+async def test_plan_pin_migration_never_picks_a_seat_when_two_claim_the_same_path(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Two Seat objects naming the same anchor_cwd (a graph bug, not a legitimate shape):
+    `seat` must never be silently resolved to either one — the whole point of the pin outranking
+    inference fails the moment it can confidently state a coin-flip. house/kind still propose
+    since both claimants agree on them."""
+    office = tmp_path / "seats" / "plandelta"
+    office.mkdir(parents=True)
+    await _seat_with_office(actions, tmp_path, seat_id="seat:plan0004a", handle="Plandelta",
+                            house="samehouse", office_dir=str(office))
+    await _seat_with_office(actions, tmp_path, seat_id="seat:plan0004b", handle="Plandelta2",
+                            house="samehouse", office_dir=str(office))
+
+    out = await plan_pin_migration(actions.pool)
+    entry = next(e for e in out["plan"] if e["path"] == str(office))
+    assert "seat" not in entry["proposed"]
+    assert any("conflicting claims" in u for u in entry["unknown"])
+    assert entry["proposed"]["house"] == "samehouse"  # both claimants agree — still proposed
+
+
+async def test_plan_pin_migration_infers_worktree_kind_from_path_shape(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """tree_cwd distinct from anchor_cwd: kind is read from PATH SHAPE, not the graph — a
+    `.claude/worktrees/` path proposes kind="worktree", never "office" (that's reserved for
+    anchor_cwd alone)."""
+    office = tmp_path / "seats" / "planepsilon"
+    office.mkdir(parents=True)
+    tree = tmp_path / ".claude" / "worktrees" / "planepsilon"
+    tree.mkdir(parents=True)
+    await _seat_with_office(actions, tmp_path, seat_id="seat:plan0005", handle="Planepsilon",
+                            house="planhouse", office_dir=str(office), tree_dir=str(tree))
+
+    out = await plan_pin_migration(actions.pool)
+    tree_entry = next(e for e in out["plan"] if e["path"] == str(tree))
+    assert tree_entry["proposed"]["kind"] == "worktree"
+    office_entry = next(e for e in out["plan"] if e["path"] == str(office))
+    assert office_entry["proposed"]["kind"] == "office"
+    assert not (tree / ".osiris").exists()      # plan is dry-run only — nothing written
+
+
+# ═══ write_pin_additions / revert_pin_write (Thoth's three constraints, msg 3929) ═══
+
+def test_write_pin_additions_creates_a_fresh_pin(tmp_path: Path) -> None:
+    office = tmp_path / "freshoffice"
+    office.mkdir()
+    out = write_pin_additions(str(office), {"seat": "Fresh", "house": "freshhouse",
+                                            "kind": "office"})
+    assert out["written"] is True
+    assert out["added"] == ["house", "kind", "seat"]
+    assert out["skipped"] == []
+    text = (office / ".osiris").read_text()
+    assert 'seat = "Fresh"' in text
+    assert 'house = "freshhouse"' in text
+    assert 'kind = "office"' in text
+    # the backup captures the PRE-write state — no file existed, so it's empty
+    assert (office / ".osiris.bak").read_text() == ""
+
+
+def test_write_pin_additions_never_touches_an_existing_key_constraint_1(
+    tmp_path: Path,
+) -> None:
+    """Constraint 1, ADDITIVE ONLY: a pin that already says `project = "Like-Us"` keeps
+    saying exactly that — even when the caller's own `proposed` dict disagrees. This proves
+    the writer refuses to resolve a disagreement by overwriting, not merely that it happens
+    not to today."""
+    office = tmp_path / "existingoffice"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "Like-Us"\nhouse = "wronghouse"\n')
+
+    out = write_pin_additions(str(office), {"seat": "Newcomer", "house": "correcthouse",
+                                            "kind": "office"})
+    assert out["written"] is True
+    assert out["added"] == ["kind", "seat"]           # house was already declared — skipped
+    assert out["skipped"] == ["house"]
+    text = (office / ".osiris").read_text()
+    assert 'house = "wronghouse"' in text             # UNTOUCHED, even though it disagrees
+    assert 'project = "Like-Us"' in text               # untouched, never this writer's key
+    assert 'seat = "Newcomer"' in text
+    assert 'kind = "office"' in text
+
+
+def test_write_pin_additions_is_idempotent_byte_identical_on_second_call(
+    tmp_path: Path,
+) -> None:
+    """Constraint 2, PROVEN BY TEST: two calls with the same `proposed` leave the file
+    byte-identical after the second, and the second call reports written=False."""
+    office = tmp_path / "idempotentoffice"
+    office.mkdir()
+    proposed = {"seat": "Twice", "house": "twicehouse", "kind": "office"}
+
+    first = write_pin_additions(str(office), proposed)
+    assert first["written"] is True
+    bytes_after_first = (office / ".osiris").read_bytes()
+
+    second = write_pin_additions(str(office), proposed)
+    assert second == {"written": False, "added": [], "skipped": ["house", "kind", "seat"],
+                      "path": str(office / ".osiris")}
+    bytes_after_second = (office / ".osiris").read_bytes()
+    assert bytes_after_second == bytes_after_first, (
+        "a second call with the same proposal must leave the file byte-identical")
+
+
+def test_write_pin_additions_refuses_broken_toml(tmp_path: Path) -> None:
+    office = tmp_path / "brokenoffice"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "unterminated\n')
+
+    out = write_pin_additions(str(office), {"seat": "Nope"})
+    assert "error" in out
+    assert "not valid TOML" in out["error"]
+    assert not (office / ".osiris.bak").exists(), (
+        "a refusal must write nothing, including no backup")
+
+
+def test_write_pin_additions_appends_after_a_trailing_comment(tmp_path: Path) -> None:
+    """A pin with a trailing comment (no newline convention broken) still gets its addition
+    appended cleanly, and the comment survives untouched — proof this never re-serializes the
+    whole file through tomllib (which would silently drop it, `_write_osiris_file`'s own
+    documented limit)."""
+    office = tmp_path / "commentoffice"
+    office.mkdir()
+    (office / ".osiris").write_text('# a hand-written note\nproject = "commented"\n')
+
+    out = write_pin_additions(str(office), {"seat": "Commented"})
+    assert out["written"] is True
+    text = (office / ".osiris").read_text()
+    assert "# a hand-written note" in text
+    assert 'project = "commented"' in text
+    assert 'seat = "Commented"' in text
+
+
+def test_revert_pin_write_restores_the_pre_write_state(tmp_path: Path) -> None:
+    """Constraint 3, REVERSIBLE: a revert after a write restores the exact pre-write bytes."""
+    office = tmp_path / "revertoffice"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "revertme"\n')
+    original = (office / ".osiris").read_bytes()
+
+    write_pin_additions(str(office), {"seat": "Reverted", "house": "reverthouse"})
+    assert (office / ".osiris").read_bytes() != original
+
+    out = revert_pin_write(str(office))
+    assert out["reverted"] is True
+    assert (office / ".osiris").read_bytes() == original
+
+
+def test_revert_pin_write_deletes_a_pin_that_did_not_exist_before(tmp_path: Path) -> None:
+    """A revert after a write that CREATED the file (empty backup) must delete it, not leave
+    a stray empty `.osiris` behind — true absence restored, not a hollow file."""
+    office = tmp_path / "createdoffice"
+    office.mkdir()
+
+    write_pin_additions(str(office), {"seat": "Created"})
+    assert (office / ".osiris").exists()
+
+    out = revert_pin_write(str(office))
+    assert out["reverted"] is True
+    assert not (office / ".osiris").exists()
+
+
+def test_revert_pin_write_refuses_when_no_backup_exists(tmp_path: Path) -> None:
+    office = tmp_path / "neverwrittenoffice"
+    office.mkdir()
+    out = revert_pin_write(str(office))
+    assert "error" in out
+    assert "no backup" in out["error"]

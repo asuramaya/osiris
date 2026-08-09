@@ -389,6 +389,41 @@ def test_read_project_model_declares_the_repo_intent(tmp_path: Path) -> None:
     assert read_project_model(str(tmp_path)) is None                    # undeclared → default
 
 
+def test_read_house_seat_kind_are_additive_parallel_reads(tmp_path: Path) -> None:
+    """Ruling 719ed5b1's pin-schema build: house/seat/kind are new keys read through the SAME
+    `_read_osiris_key` helper as project/model, not a new mechanism — so a pin that only ever
+    declared project/model (every pin on disk today) answers None for all three without error,
+    and a pin that declares them reads back exactly what it wrote. Proves the additive claim:
+    old two-key pins need no migration to keep working."""
+    from src.orchestrator.agents import (
+        read_house_label,
+        read_project_label,
+        read_seat_handle,
+        read_tree_kind,
+    )
+
+    old_style = tmp_path / "legacy"
+    old_style.mkdir()
+    (old_style / ".osiris").write_text('project = "osiris"\nmodel = "claude-sonnet-5"\n')
+    assert read_house_label(str(old_style)) is None
+    assert read_seat_handle(str(old_style)) is None
+    assert read_tree_kind(str(old_style)) is None
+
+    full = tmp_path / "office"
+    full.mkdir()
+    (full / ".osiris").write_text(
+        'project = "osiris"\nhouse = "osiris"\nseat = "imhotep"\nkind = "office"\n')
+    assert read_house_label(str(full)) == "osiris"
+    assert read_seat_handle(str(full)) == "imhotep"
+    assert read_tree_kind(str(full)) == "office"
+
+    container = tmp_path / "container"
+    container.mkdir()
+    (container / ".osiris").write_text('kind = "container"\n')
+    assert read_tree_kind(str(container)) == "container"
+    assert read_project_label(str(container)) is None  # no project here — the whole point
+
+
 def test_read_project_pin_distinguishes_all_three_no_project_shapes(
     tmp_path: Path,
 ) -> None:
@@ -423,6 +458,82 @@ def test_read_project_pin_distinguishes_all_three_no_project_shapes(
     assert out.path == str(malformed / ".osiris")
 
 
+def test_read_project_pin_never_climbs_past_a_deleted_cwd_into_a_real_ancestors_pin(
+    tmp_path: Path,
+) -> None:
+    """THE FOURTH SHAPE (Thoth's catch, msg 3928/thread 3937): flip68real/resumelanecheck
+    were real, now-retired Seats whose office directories were DELETED, not merely
+    unpinned. Before this fix, querying a nonexistent cwd climbed straight past it to the
+    enclosing container's own pin and reported THAT as the deleted office's own state —
+    exactly the shape reproduced here: a real container with its own `.osiris`, and a
+    `deletedseat` subdirectory that is NEVER created. The queried path's own nonexistence
+    must be the answer, never a borrowed ancestor's declaration."""
+    from src.orchestrator.agents import read_project_pin
+
+    container = tmp_path / "seats"
+    container.mkdir()
+    (container / ".osiris").write_text('kind = "container"\n')
+    ghost_office = container / "deletedseat"  # never created — the office is GONE
+
+    out = read_project_pin(str(ghost_office))
+    assert out.cwd_missing is True
+    assert out.value is None
+    assert out.path is None, "must never report the container's own file as this path's pin"
+    assert out.error is None
+
+
+def test_read_project_pin_cwd_missing_is_false_for_a_real_but_unpinned_directory(
+    tmp_path: Path,
+) -> None:
+    """The fourth state must never leak into the ordinary case: a real directory with no
+    pin anywhere in its climb still reads cwd_missing=False — only a query against a
+    directory that does not exist at all sets it."""
+    from src.orchestrator.agents import read_project_pin
+
+    real = tmp_path / "realbutunpinned"
+    real.mkdir()
+    out = read_project_pin(str(real))
+    assert out.cwd_missing is False
+    assert out.value is None and out.error is None and out.path is None
+
+
+def test_resolve_identity_keeps_pin_missing_and_cwd_missing_disjoint(
+    tmp_path: Path,
+) -> None:
+    """A deleted office and an unpinned-but-real office are opposite dispositions (one
+    wants the graph's stale belief reaped, the other wants a pin written) — resolve_identity
+    must never report both flags true for the same identity, and the deleted-office case
+    must report project_pin_cwd_missing, never project_pin_missing (the pre-fix collapse)."""
+    container = tmp_path / "seats"
+    container.mkdir()
+    (container / ".osiris").write_text('kind = "container"\n')
+    ghost = container / "deletedseat"
+
+    ident = resolve_identity(cwd=str(ghost), job_dir="/j/jobs/ghost0001")
+    assert ident.project_pin_cwd_missing is True
+    assert ident.project_pin_missing is False
+    assert ident.project == "deletedseat"  # the basename guess still fires, unchanged
+
+    real_unpinned = tmp_path / "realoffice"
+    real_unpinned.mkdir()
+    ident2 = resolve_identity(cwd=str(real_unpinned), job_dir="/j/jobs/real0001")
+    assert ident2.project_pin_missing is True
+    assert ident2.project_pin_cwd_missing is False
+
+
+def test_project_pin_banner_names_a_deleted_cwd_distinctly(tmp_path: Path) -> None:
+    from src.orchestrator.agents import project_pin_banner
+
+    container = tmp_path / "seats"
+    container.mkdir()
+    ghost = container / "deletedseat"
+    ident = resolve_identity(cwd=str(ghost), job_dir="/j/jobs/ghost0002")
+    banner = project_pin_banner(ident)
+    assert banner is not None
+    assert "DOES NOT EXIST ON DISK" in banner
+    assert str(ghost) in banner
+
+
 def test_read_project_pin_climbs_past_a_worktree_gitlink_to_the_real_root(
     tmp_path: Path,
 ) -> None:
@@ -446,6 +557,57 @@ def test_read_project_pin_climbs_past_a_worktree_gitlink_to_the_real_root(
     out = read_project_pin(str(worktree))
     assert out.value == "osiris"
     assert out.error is None
+
+
+def test_read_project_pin_climbs_past_a_worktree_pin_that_never_sets_project(
+    tmp_path: Path,
+) -> None:
+    """THE LIVE REGRESSION (caught and reverted the same minute, ruling 719ed5b1's schema
+    rollout): a worktree pin declaring seat/house/kind (never project/model) sits BELOW its
+    repo root's own project/model pin — the first LAYERED declaration this reader was ever
+    exercised against. Before the fix, the worktree's OWN `.osiris` existing at all stopped
+    the climb outright (`f.is_file()` was treated as terminal regardless of whether it
+    answered `project`), so `read_project_label` silently went from the root's real value to
+    None the instant a worktree pin was written — this is the exact live specimen (imhotep's
+    own worktree), reproduced here rather than only described in a decision."""
+    from src.orchestrator.agents import read_project_label, read_project_model
+
+    root = tmp_path / "osiris"
+    root.mkdir()
+    (root / ".git").mkdir()
+    (root / ".osiris").write_text('project = "osiris"\nmodel = "claude-sonnet-5"\n')
+
+    worktree = root / ".claude" / "worktrees" / "imhotep"
+    worktree.mkdir(parents=True)
+    (worktree / ".git").write_text("gitdir: /somewhere/.git/worktrees/imhotep\n")
+    (worktree / ".osiris").write_text('house = "osiris"\nkind = "worktree"\nseat = "imhotep"\n')
+
+    assert read_project_label(str(worktree)) == "osiris"
+    assert read_project_model(str(worktree)) == "claude-sonnet-5"
+
+
+def test_read_project_pin_reports_the_nearest_unset_file_when_no_ancestor_sets_it_either(
+    tmp_path: Path,
+) -> None:
+    """The heinrich diagnostic survives climb-continuation: when NEITHER the near file nor
+    any ancestor ever sets the key, the NEAREST found-but-unset file's path is still what's
+    reported — proof this isn't just "keep climbing and forget," the closest real answer to
+    "why did this fall back to a basename guess" is preserved."""
+    from src.orchestrator.agents import read_project_pin
+
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / ".git").mkdir()
+    (root / ".osiris").write_text('model = "claude-opus-5"\n')  # never sets project either
+
+    child = root / "nested"
+    child.mkdir()
+    (child / ".osiris").write_text('model = "claude-sonnet-5"\n')  # nearest, never sets it
+
+    out = read_project_pin(str(child))
+    assert out.value is None
+    assert out.error is None
+    assert out.path == str(child / ".osiris"), "the NEAREST unset file, not the root's"
 
 
 def test_read_project_pin_still_stops_at_a_real_repo_root(tmp_path: Path) -> None:
@@ -685,12 +847,17 @@ def test_resolve_identity_never_flags_project_pin_missing_at_the_bare_seat_root(
 ) -> None:
     """Ruling 577988ed's own carve-out, through the real resolution path: the bare seat-
     office container has no pin and no single project of its own — project stays None AND
-    project_pin_missing stays False, so no wave-2 banner ever fires there."""
-    from src.orchestrator import agents as agents_mod
+    project_pin_missing stays False, so no wave-2 banner ever fires there.
+
+    Patches `offices._DEFAULT_OFFICE_ROOT` (not agents.py's own imported name): resolve_identity
+    now calls the shared `is_bare_office_root()` (offices.py) instead of a private duplicate of
+    the same path-equality check (the 38c71544 dedup, ruling 719ed5b1's pin-schema build) — the
+    module that OWNS the comparison is the one whose global must move for the test to see it."""
+    from src.orchestrator import offices as offices_mod
 
     seats_root = tmp_path / "seats"
     seats_root.mkdir()
-    monkeypatch.setattr(agents_mod, "_DEFAULT_OFFICE_ROOT", seats_root)
+    monkeypatch.setattr(offices_mod, "_DEFAULT_OFFICE_ROOT", seats_root)
     ident = resolve_identity(cwd=str(seats_root), job_dir="/j/jobs/bareroot1")
     assert ident.project is None
     assert ident.project_pin_missing is False

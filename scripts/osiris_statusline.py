@@ -30,7 +30,12 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/osiris")
-EXPECTED = os.environ.get("OSIRIS_EXPECTED_MODEL", "claude-fable-5")
+# NO `EXPECTED`/OSIRIS_EXPECTED_MODEL HERE ANYMORE (Thoth's catch, msg 3951): a hardcoded
+# "claude-fable-5" ambient fallback painted the operator's own live, correct /model choice
+# red every ten seconds whenever `_project_intent`'s climb found no declared model — that
+# constant is a swap-DETECTOR's own expectation about one harness (ruling f2ae6346), not
+# any operator's declared choice or the fleet's default. `_project_intent` now returns None
+# when nothing is declared, and `main()` renders silence for that state, never an alarm.
 CONSOLE = os.environ.get("OSIRIS_CONSOLE_URL", "http://127.0.0.1:8011")
 SUCCESSION = os.environ.get("OSIRIS_SUCCESSION_URL", "http://127.0.0.1:8790/succession")
 LINKS = os.environ.get("OSIRIS_STATUSLINE_LINKS", "1") != "0"  # kill switch if a terminal balks
@@ -46,26 +51,6 @@ RESET = "\033[0m"
 
 def _short(model_id: str) -> str:
     return model_id.removeprefix("claude-")
-
-
-def _project_intent(cwd: str) -> str:
-    """The repo's DECLARED model intent (.osiris: model = "…"), walking up to the repo root —
-    the operator's per-project standing choice; the box default only as fallback. A fleet of
-    onboarded repos does not all run fable, and the chrome must not paint the operator's own
-    choice red every turn (complaint, 2026-07-10)."""
-    try:
-        import tomllib
-        p = Path(cwd)
-        for d in (p, *p.parents):
-            f = d / ".osiris"
-            if f.is_file():
-                v = tomllib.loads(f.read_text()).get("model")
-                return str(v).strip() if v else EXPECTED
-            if (d / ".git").exists():
-                break
-    except Exception:  # noqa: BLE001 — the chrome never breaks on a config file
-        pass
-    return EXPECTED
 
 
 def _operator_swap(transcript_path: str, session_id: str, model_id: str) -> bool:
@@ -172,10 +157,11 @@ def _link(text: str, anchor: str) -> str:
 
 
 async def _counts(
-    project: str, session_id: str, model_id: str = "", model_raw: str = "",
-    window_size: int | None = None, *, connect_timeout: float = 1.0,
+    project_hint: str, session_id: str, model_id: str = "", model_raw: str = "",
+    window_size: int | None = None, *, intent_hint: str | None = None,
+    connect_timeout: float = 1.0,
 ) -> tuple[int, int, int, int, int, int, int, int, list[str],
-           tuple[float, float, int]]:
+           tuple[float, float, int], str | None, str | None]:
     import asyncpg
 
     conn = await asyncpg.connect(DSN, timeout=connect_timeout)
@@ -210,6 +196,35 @@ async def _counts(
             if agent and bare and stored and stored.split("[", 1)[0].strip() != bare:
                 agent = _succession(session_id, bare) or agent
         agent = agent or ""
+
+        # THE SEAT FALLBACK (Thoth's catch, msg 3949/3951): a `.osiris` CLIMB from `cwd`
+        # answers nothing for the bare seat-office container — it's a CHILD directory (the
+        # office) that would answer, never an ancestor, and a climb only ever looks upward.
+        # "resolve the displayed identity the way everything else is supposed to — through
+        # the pin, THEN the seat, then the graph": the pin already ran (project_hint/
+        # intent_hint, computed by the caller before this call); this is the SEAT leg, run
+        # ONLY when the pin left a gap, on the SAME connection this call already opened —
+        # no separate query budget spent for the common case where the climb already
+        # answered. `house` (not the seat's own handle) fills `resolved_project`
+        # deliberately: house IS project for a seat-derived identity (ruling 577988ed), so
+        # the label and the numbers beside it stay about the SAME thing, never a silent mix
+        # of a seat's name against a different project's counts.
+        resolved_project = project_hint or None
+        resolved_intent = intent_hint
+        if agent and (resolved_project is None or resolved_intent is None):
+            from src.orchestrator.seats import held_seat, seat_facts
+
+            seat = await held_seat(conn, agent)
+            if seat:
+                if resolved_project is None:
+                    resolved_project = seat.get("house")
+                if resolved_intent is None and seat.get("seat_id"):
+                    facts = await seat_facts(conn, seat["seat_id"])
+                    anchor = facts.get("anchor_cwd")
+                    if anchor:
+                        from src.orchestrator.agents import read_project_model
+                        resolved_intent = read_project_model(anchor)
+
         # ONE AUTHORITY PER FACT, and now one AUTHORITY PER RULE too (ruling e9ef7373,
         # thread 109b6c48 — the render analog of the write-verb receipt law): this script
         # owns no fact-SQL and no presentation rule (thresholds/gates/severity) anymore —
@@ -217,22 +232,24 @@ async def _counts(
         # until-it-matters/metered-gate/dm-lights-alone rule comes from.
         from src.orchestrator import surface
 
-        seg = await surface.fetch(conn, project=project, agent=agent or None,
+        seg = await surface.fetch(conn, project=resolved_project or "", agent=agent or None,
                                   lease_secs=LEASE_SECS)
         return (seg.briefs_mine.data["briefs"], seg.mail.data["mail"], seg.mail.data["dm"],
                 seg.mail.data["flight"], seg.live.data["souls"], seg.wakes.data["wakes"],
                 seg.owed.data["owed"], seg.owed_here.data["owed_here"],
                 seg.sensing.data["sick"],
                 (seg.spend.data.get("spent", 0.0), seg.spend.data.get("cap", 0.0),
-                 seg.spend.data.get("blind", 0)))
+                 seg.spend.data.get("blind", 0)),
+                resolved_project, resolved_intent)
     finally:
         await conn.close()
 
 
 async def _fetch_counts(
-    project: str, session_id: str, model_id: str, model_raw: str, window_size: int | None,
+    project_hint: str, session_id: str, model_id: str, model_raw: str,
+    window_size: int | None, *, intent_hint: str | None,
 ) -> tuple[tuple[int, int, int, int, int, int, int, int, list[str],
-                 tuple[float, float, int]], bool]:
+                 tuple[float, float, int], str | None, str | None], bool]:
     """SLOW IS NOT DOWN (field-witnessed tonight: the 1.0s connect timeout flapped "graph
     unreachable" under load while the graph was very much up). One retry, a wider budget,
     on a TIMEOUT ONLY — a refused connection, a DNS failure, a real Postgres error is
@@ -242,11 +259,12 @@ async def _fetch_counts(
     "unreachable" when both attempts fail (the retry's own exception propagates)."""
     try:
         return await asyncio.wait_for(
-            _counts(project, session_id, model_id, model_raw, window_size), timeout=1.5), False
+            _counts(project_hint, session_id, model_id, model_raw, window_size,
+                    intent_hint=intent_hint), timeout=1.5), False
     except TimeoutError:
         return await asyncio.wait_for(
-            _counts(project, session_id, model_id, model_raw, window_size,
-                    connect_timeout=2.5), timeout=3.0), True
+            _counts(project_hint, session_id, model_id, model_raw, window_size,
+                    intent_hint=intent_hint, connect_timeout=2.5), timeout=3.0), True
 
 
 # THE FORK STORM (Ra's diagnosis, msg 958: load 20.5 on 20 vcpus, 17 concurrent
@@ -276,13 +294,13 @@ def _cache_key(session_id: str) -> str:
 
 
 def _encode_counts(counts: tuple[Any, ...]) -> list[Any]:
-    *head, spend = counts
-    return [*head, list(spend)]
+    *head, spend, resolved_project, resolved_intent = counts
+    return [*head, list(spend), resolved_project, resolved_intent]
 
 
 def _decode_counts(obj: list[Any]) -> tuple[Any, ...]:
-    *head, spend = obj
-    return (*head, tuple(spend))
+    *head, spend, resolved_project, resolved_intent = obj
+    return (*head, tuple(spend), resolved_project, resolved_intent)
 
 
 def _cache_read(path: Path) -> tuple[tuple[Any, ...], bool, float] | None:
@@ -314,16 +332,20 @@ class _StatuslineDegrade(Exception):
 
 
 def _counts_cached(
-    project: str, session_id: str, model_id: str, model_raw: str, window_size: int | None,
+    project_hint: str, session_id: str, model_id: str, model_raw: str,
+    window_size: int | None, *, intent_hint: str | None,
 ) -> tuple[tuple[Any, ...], bool]:
     """Warm path never imports asyncpg — the cold-start cost Ra measured: a render within
     CACHE_TTL_SECS of this SAME session's last one reads a JSON file instead of opening a
     connection. Cold path is unchanged (one connection, the existing retry law) except the
     first pane through the door writes the answer down for whoever renders next, and every
     OTHER pane racing it (`flock` nonblocking) serves the stale answer rather than piling
-    onto Postgres too."""
+    onto Postgres too. The resolved identity (project/model intent, msg 3949/3951's seat
+    fallback) rides the SAME cache entry as the counts — it is only as fresh as they are,
+    which is the existing, already-accepted staleness tolerance, not a new one."""
     if not session_id:  # nothing to key a cache on — exactly today's behavior
-        return asyncio.run(_fetch_counts(project, session_id, model_id, model_raw, window_size))
+        return asyncio.run(_fetch_counts(project_hint, session_id, model_id, model_raw,
+                                         window_size, intent_hint=intent_hint))
     cache_path = _cache_dir() / f"{_cache_key(session_id)}.json"
     cached = _cache_read(cache_path)
     if cached is not None and cached[2] <= CACHE_TTL_SECS:
@@ -332,7 +354,8 @@ def _counts_cached(
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         lock_fh = open(cache_path.with_suffix(".lock"), "a+")
     except OSError:
-        return asyncio.run(_fetch_counts(project, session_id, model_id, model_raw, window_size))
+        return asyncio.run(_fetch_counts(project_hint, session_id, model_id, model_raw,
+                                         window_size, intent_hint=intent_hint))
     try:
         import fcntl
         try:
@@ -346,7 +369,8 @@ def _counts_cached(
                 "refresh in flight elsewhere, no cache to serve meanwhile") from None
         try:
             counts, slow = asyncio.run(
-                _fetch_counts(project, session_id, model_id, model_raw, window_size))
+                _fetch_counts(project_hint, session_id, model_id, model_raw, window_size,
+                              intent_hint=intent_hint))
         finally:
             fcntl.flock(lock_fh, fcntl.LOCK_UN)
     finally:
@@ -362,7 +386,20 @@ def main() -> None:
         payload = {}
     ws = payload.get("workspace") or {}
     cwd = ws.get("current_dir") or ws.get("project_dir") or os.getcwd()
-    project = Path(cwd).name
+    # THE IDENTITY FIX (Thoth's catch, msg 3949/3951): `Path(cwd).name` used to be the WHOLE
+    # resolution — a raw directory basename wearing identity's clothes, "seats" instead of
+    # "thoth" from the bare seat-office container, next to numbers computed for something
+    # else entirely. Now: the SAME canonical pin-climb every other resolver uses
+    # (read_project_label/read_project_model, no hand-rolled duplicate), with a SEAT
+    # fallback (via _counts_cached, only reached when the climb itself answers nothing —
+    # `project_hint`/`intent_hint` are None exactly then) for the one shape a climb can
+    # never solve: an office is a CHILD of the container, and a climb only looks upward.
+    try:
+        from src.orchestrator.agents import read_project_label, read_project_model
+        project_hint = read_project_label(cwd)
+        intent_hint = read_project_model(cwd)
+    except Exception:  # noqa: BLE001 — the chrome never breaks on a resolver import/read
+        project_hint = intent_hint = None
     model_raw = str((payload.get("model") or {}).get("id") or "")
     model_id = model_raw.split("[", 1)[0].strip()
     session_id = str(payload.get("session_id") or "")
@@ -378,10 +415,16 @@ def main() -> None:
     window_size = cw.get("context_window_size") if isinstance(cw, dict) else None
     window_size = int(window_size) if isinstance(window_size, (int, float)) else None
 
+    resolved_intent = intent_hint
     try:
         ((desk, mail, dm, flight, live, wakes, owed, owed_here, sick,
-          (spent, cap, blind)), slow) = _counts_cached(
-            project, session_id, model_id, model_raw, window_size)
+          (spent, cap, blind), resolved_project, resolved_intent), slow) = _counts_cached(
+            project_hint or "", session_id, model_id, model_raw, window_size,
+            intent_hint=intent_hint)
+        # NEVER A WRONG BASENAME (Thoth's constraint 1, msg 3949): the pin climb and the
+        # seat fallback both ran (inside _counts_cached) and STILL found nothing — an
+        # explicit unresolved marker, never Path(cwd).name wearing identity's clothes.
+        project = resolved_project or "?"
         # THE DEBT, NOT THE DOORBELL — and only the debt HERE (operator ruling, 2026-07-16:
         # the fleet-wide total 'can disappear'). A number you can do nothing about from this
         # directory is not an alarm, it is wallpaper, and wallpaper that is always red stops
@@ -435,6 +478,9 @@ def main() -> None:
             *([_link(f"{AMBER}graph slow{RESET}", "fleet")] if slow else []),
         ]
     except Exception:  # noqa: BLE001 — the graph being down is information, not an error
+        # the graph never answered — no seat fallback was possible, so this is the BEST
+        # local, offline answer (the pin climb alone), never a raw basename guess either.
+        project = project_hint or "?"
         parts = [f"◈ {project}", f"{DIM}graph unreachable{RESET}"]
 
     # THE SECOND LINE — the AGENT's own vitals (ctx, budget, model), below the Osiris line
@@ -465,15 +511,24 @@ def main() -> None:
             color = GREEN if worst < 60 else (AMBER if worst < 85 else RED)
             vitals.append(color + " · ".join(f"{t} {v}%" for t, v in vals) + RESET)
 
-    if model_id:  # the ambient model-identity check — against the REPO's intent, not the box's
-        intent = _project_intent(cwd)
-        if model_id == intent:
+    if model_id:  # the ambient model-identity check — against the SEAT's/repo's OWN intent
+        # THREE STATES, KEPT DISTINCT (Thoth's constraint 3, msg 3951 — the worst 60bc15db
+        # she found tonight, pointed at the human): "declared X, running Y" is a real
+        # warning; "nothing declared anywhere" is SILENCE, never a red alarm over a
+        # decision nobody made; a harness-DETECTOR's own expectation (ruling f2ae6346) is a
+        # different statement again and no longer feeds this line at all (the removed
+        # EXPECTED constant). Collapsing the first two into one red line is exactly what
+        # painted the operator's own deliberate /model choice as if it were wrong.
+        if resolved_intent is None:
+            pass
+        elif model_id == resolved_intent:
             vitals.append(f"{GREEN}{_short(model_id)}{RESET}")
         elif _operator_swap(transcript, session_id, model_id):
             # the operator's own /model is on the record: a choice, acknowledged — never an error
             vitals.append(f"{AMBER}⇄ {_short(model_id)} (your /model){RESET}")
         else:
-            vitals.append(f"{RED}⚠ {_short(model_id)} (intent: {_short(intent)}){RESET}")
+            vitals.append(
+                f"{RED}⚠ {_short(model_id)} (declared: {_short(resolved_intent)}){RESET}")
 
     print(f" {DIM}│{RESET} ".join(parts))
     if vitals:

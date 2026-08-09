@@ -799,7 +799,11 @@ async def test_mount_never_refuses_a_session_from_the_bare_root(
 
     fake_root = tmp_path / ".osiris" / "seats"
     fake_root.mkdir(parents=True)
-    monkeypatch.setattr("src.orchestrator.agents._DEFAULT_OFFICE_ROOT", fake_root)
+    # offices._DEFAULT_OFFICE_ROOT, not agents.py's own imported name: resolve_identity now
+    # calls the shared is_bare_office_root() (offices.py) instead of duplicating the same
+    # path-equality check (the 38c71544 dedup, ruling 719ed5b1) — patch the module that owns
+    # the comparison.
+    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", fake_root)
 
     saved_pool = srv._pool
     srv._pool = actions.pool
