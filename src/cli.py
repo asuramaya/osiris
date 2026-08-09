@@ -1209,6 +1209,8 @@ async def _real_record_deploy(pool: asyncpg.Pool, repo_root: Path) -> str | None
 
 
 RecordDeploy = Callable[[asyncpg.Pool, Path], Awaitable[str | None]]
+WaitForHealth = Callable[[], Awaitable[tuple[bool, float]]]
+WaitForSmoke = Callable[[], Awaitable[tuple[list[str], float]]]
 
 
 async def cmd_deploy(
@@ -1218,6 +1220,8 @@ async def cmd_deploy(
     migration_state: MigrationState = _real_migration_state,
     run_migrations: MigrateRunner = _real_run_migrations,
     record_deploy: RecordDeploy = _real_record_deploy,
+    wait_for_health: WaitForHealth = _wait_for_health,
+    wait_for_smoke: WaitForSmoke = _wait_for_smoke,
 ) -> int:
     """The deploy ritual as one verb (thread e51a841c): a live near-miss held batch 3 because
     src/orchestrator/handshake.py carried another agent's uncommitted WIP and the three
@@ -1237,7 +1241,14 @@ async def cmd_deploy(
     exactly which verbs are arriving rather than leaving that to be discovered by accident.
     (6) records the deployed HEAD (thread 489a39d0) — the ground truth the reboot-is-a-deploy
     boot guard confesses against; a raw restart or a reboot never calls this, so the ledger
-    and reality staying in sync is itself evidence the deploy went through this ritual."""
+    and reality staying in sync is itself evidence the deploy went through this ritual.
+
+    `wait_for_health`/`wait_for_smoke` default to the REAL bounded pollers (120s/30s
+    ceilings, real network round-trips against the live console/MCP) — injectable for the
+    same reason every other side-effecting dependency here is: a test exercising cmd_deploy's
+    own control flow (order of operations, what it prints, what it returns) has no reason to
+    also pay for a live round-trip against production services it isn't testing (task #165,
+    2026-08-09 — seven tests were doing exactly that, unmocked, 565s of a 1160s suite)."""
     root = repo_root if repo_root is not None else _find_repo_root()
     if root is None:
         print("osiris deploy: not inside a git repository — cd into the osiris checkout "
@@ -1297,7 +1308,7 @@ async def cmd_deploy(
         print(f"deploy ledger: recorded {deployed_head}" if deployed_head else
               "deploy ledger: HEAD unknown — not recorded (repo_root isn't a git checkout)")
 
-        health_ready, health_waited = await _wait_for_health()
+        health_ready, health_waited = await wait_for_health()
         if health_ready:
             print(f"health: up after {health_waited:.0f}s" if health_waited
                   else "health: up immediately")
@@ -1306,7 +1317,7 @@ async def cmd_deploy(
                   "console did not come up; this is a real startup failure, not a "
                   "smoke-timing false-alarm")
 
-        fails, waited = await _wait_for_smoke()
+        fails, waited = await wait_for_smoke()
         if fails:
             print(f"SMOKE FAILURES (after waiting {waited:.0f}s for the restart to come up):")
             for f in fails:
