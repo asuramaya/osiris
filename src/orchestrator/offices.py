@@ -39,6 +39,126 @@ def is_bare_office_root(cwd: str | Path | None) -> bool:
     job (seats.resolve_project), not this pure, cwd-only guard's."""
     return cwd is not None and Path(cwd) == _DEFAULT_OFFICE_ROOT
 
+
+_WORKTREE_MARKER = "/.claude/worktrees/"
+
+
+def _infer_tree_kind(path: str) -> str | None:
+    """office | worktree | repo | container from PATH SHAPE alone, ruling 719ed5b1's
+    kind key — no graph query, no I/O beyond a `.git` existence check. `container` has its
+    own exact-match caller (`is_bare_office_root`) and `office` is decided by the caller
+    (a seat's `anchor_cwd`, never inferred from shape); this only ever returns worktree,
+    repo, or None for anything else. None is deliberate, not a bug: a directory whose shape
+    matches neither a worktree path nor a real repo root gets no `kind` proposal — the
+    migration this feeds names it as a gap rather than guessing (Thoth's own constraint,
+    msg 3919: 'a pin that confidently states a wrong seat is worse than a bare pin')."""
+    if _WORKTREE_MARKER in path.replace("\\", "/"):
+        return "worktree"
+    if (Path(path) / ".git").exists():
+        return "repo"
+    return None
+
+
+def _dir_exists(path: str | None) -> bool:
+    """A plain sync wrapper so `plan_pin_migration` (async) never calls a blocking Path
+    method inline (ASYNC240) — the same convention `seats.roster`'s own `_dir_exists`
+    already keeps, kept local here rather than importing a private helper cross-module."""
+    return path is not None and Path(path).is_dir()
+
+
+async def plan_pin_migration(pool: asyncpg.Pool) -> dict[str, Any]:
+    """DRY RUN ONLY — never writes a byte (ruling 719ed5b1's five-key schema; Thoth's own two
+    added constraints, msg 3919). (1) A gap the graph cannot answer confidently is NAMED and
+    left unwritten, never guessed into a declaration — a pin that confidently states a wrong
+    seat is worse than a bare one, because the whole point of this build is to make the pin
+    outrank inference. (2) Every path's diff is computed and returned here, in full, BEFORE a
+    single file changes — 35 seats' identity files is the largest on-disk write this house has
+    made in one act, and there is no undo but git, which does not cover `~/.osiris`.
+
+    Walks `roster()`'s own seat rows — the graph's EXISTING single source for handle/house/
+    anchor_cwd/tree_cwd, invents no new resolution path — and for every real directory
+    (`anchor_cwd`, and `tree_cwd` when it names a distinct, existing path) proposes:
+      seat  — the row's own handle. Skipped entirely for a seat with no handle on record.
+      house — `derive_house`'s own answer. None IS the honest "I don't know" (already built
+              into that function's cycle/hop-limit handling, ruling ff6148b0) — reported as a
+              gap, never defaulted to anything.
+      kind  — "office" for `anchor_cwd`; `_infer_tree_kind`'s path-shape read for `tree_cwd`.
+
+    A path CLAIMED BY MORE THAN ONE SEAT (two rows naming the same anchor_cwd or tree_cwd —
+    should not happen, asserted rather than assumed) drops `seat` for that path and reports
+    the conflict instead of picking one; `house`/`kind` still propose if every claimant agrees
+    on them, since those aren't identity-bearing the way `seat` is.
+
+    `project`/`model` are untouched entirely — this plans only the three new keys, and only
+    ever proposes ADDING/CORRECTING them (never invents or removes anything else in a pin,
+    matching every existing writer's own preserve-what-I-don't-own discipline, `_write_osiris_
+    file`'s own convention). `changes` is the actual diff (current != proposed, so a pin
+    already correct proposes nothing there — idempotent by construction, the same no-churn
+    discipline `_write_model_pin_sync` already keeps for `model`)."""
+    from src.orchestrator.agents import read_house_label, read_seat_handle, read_tree_kind
+    from src.orchestrator.seats import roster
+
+    data = await roster(pool)
+    claims: dict[str, list[tuple[str, str]]] = {}       # path -> [(seat_id, handle), ...]
+    kind_of: dict[str, str | None] = {}                  # path -> proposed kind
+    house_of_path: dict[str, list[str | None]] = {}      # path -> every claimant's house answer
+
+    for row in data["seats"]:
+        handle = row["handle"]
+        if not handle:
+            continue  # no handle on record — nothing to declare `seat` as, anywhere
+        seat_id = row["seat"]
+        house = row["house"]
+        anchor, tree = row["anchor_cwd"], row["tree_cwd"]
+        for path, is_office in ((anchor, True), (tree, False) if tree != anchor else (None, False)):
+            if not _dir_exists(path):
+                continue
+            assert path is not None  # narrowed by _dir_exists above; mypy can't see through it
+            claims.setdefault(path, []).append((seat_id, handle))
+            kind_of[path] = "office" if is_office else _infer_tree_kind(path)
+            house_of_path.setdefault(path, []).append(house)
+
+    plan: list[dict[str, Any]] = []
+    for path, claimants in sorted(claims.items()):
+        distinct_handles = {h for _sid, h in claimants}
+        current = {"house": read_house_label(path), "seat": read_seat_handle(path),
+                   "kind": read_tree_kind(path)}
+        proposed: dict[str, str] = {}
+        unknown: list[str] = []
+        if len(distinct_handles) > 1:
+            unknown.append(f"seat: conflicting claims from {sorted(distinct_handles)} — "
+                           "writing nothing")
+        else:
+            proposed["seat"] = next(iter(distinct_handles))
+        houses = {h for h in house_of_path[path] if h}
+        if len(houses) == 1:
+            proposed["house"] = next(iter(houses))
+        elif len(houses) > 1:
+            unknown.append(f"house: claimants disagree ({sorted(houses)}) — writing nothing")
+        else:
+            unknown.append("house: derive_house found nothing (unmanaged head with no "
+                           "stamp, or a managed_by cycle) — writing nothing")
+        kind = kind_of.get(path)
+        if kind:
+            proposed["kind"] = kind
+        else:
+            unknown.append("kind: path shape matches neither office, worktree, nor repo — "
+                           "writing nothing")
+        changes = {k: v for k, v in proposed.items() if current.get(k) != v}
+        if changes or unknown:
+            plan.append({"path": path, "current": current, "proposed": proposed,
+                         "changes": changes, "unknown": unknown})
+    return {
+        "plan": plan, "seats_scanned": len(data["seats"]), "paths_with_changes_or_gaps": len(plan),
+        "caveats": [
+            "READ-ONLY: no file is touched by this function. A separate writer verb applies "
+            "`changes` one path at a time, only after this plan is reviewed.",
+            "kind is derived from PATH SHAPE alone, never the graph — a directory that "
+            "doesn't clearly read as office/worktree/repo gets no kind proposal, not a guess.",
+            *data["caveats"],
+        ],
+    }
+
 # THE PEER ADDENDUM (ruling d74492ee, spec e6636c7e — LEGIBILITY leg 2, seats.py): rendered
 # INTO house_law.md's `{peer_block}` slot (boot_compiler.compile_managed_body) only when the
 # seat carries an active peer_of edge at establish_office's OWN call time (never at

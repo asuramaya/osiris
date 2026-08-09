@@ -9,7 +9,7 @@ from pathlib import Path
 
 from src.actions.core import Actions
 from src.orchestrator.mounts import save_mount
-from src.orchestrator.offices import establish_office
+from src.orchestrator.offices import establish_office, plan_pin_migration
 
 
 async def _seat_fixture(actions: Actions, tmp_path: Path, *, handle: str | None) -> str:
@@ -260,4 +260,125 @@ async def test_establish_office_refuses_a_live_seat(
 
     assert "error" in out
     assert "LIVE right now" in out["error"]
-    assert not (tmp_path / "seats").exists()            # a refusal writes NOTHING
+
+
+# ═══ plan_pin_migration (ruling 719ed5b1's five-key schema — DRY RUN, never writes) ═══
+
+async def _seat_with_office(
+    actions: Actions, tmp_path: Path, *, seat_id: str, handle: str, house: str | None,
+    office_dir: str, tree_dir: str | None = None,
+) -> None:
+    """A Seat object with the facts `roster()`/`derive_house` actually read: handle, an
+    optional own `house` stamp (a HEAD, no managed_by edge — derive_house returns exactly
+    this), anchor_cwd, and an optional distinct tree_cwd. Mirrors test_seats.py's own
+    bind_seat_tree fixture shape rather than inventing a new one."""
+    from datetime import UTC, datetime
+
+    seat = await actions.create_or_find_object("Seat", seat_id, "test")
+    await actions.assert_property(seat, "handle", handle, "test", datetime.now(UTC), 0.9)
+    await actions.assert_property(seat, "anchor_cwd", office_dir, "test",
+                                  datetime.now(UTC), 0.9)
+    if house:
+        await actions.assert_property(seat, "house", house, "test", datetime.now(UTC), 0.9)
+    if tree_dir:
+        from src.orchestrator.seats import bind_seat_tree
+        out = await bind_seat_tree(actions, seat_id=seat_id, tree_cwd=tree_dir,
+                                   actor="operator", because="test fixture")
+        assert out.get("error") is None, out  # operator is in _OPERATOR_ACTORS — must succeed
+
+
+async def test_plan_pin_migration_proposes_seat_house_kind_for_a_fresh_office(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The ordinary case: a seat with a derivable house and an unpinned office proposes all
+    three new keys, none of them written (this is dry-run only)."""
+    office = tmp_path / "seats" / "planalpha"
+    office.mkdir(parents=True)
+    await _seat_with_office(actions, tmp_path, seat_id="seat:plan0001", handle="Planalpha",
+                            house="planhouse", office_dir=str(office))
+
+    out = await plan_pin_migration(actions.pool)
+    entry = next(e for e in out["plan"] if e["path"] == str(office))
+    assert entry["current"] == {"house": None, "seat": None, "kind": None}
+    assert entry["proposed"] == {"seat": "Planalpha", "house": "planhouse", "kind": "office"}
+    assert entry["changes"] == entry["proposed"]  # nothing on disk yet — the whole diff is new
+    assert entry["unknown"] == []
+    assert not office.joinpath(".osiris").exists(), "plan must never write a file"
+
+
+async def test_plan_pin_migration_is_idempotent_against_an_already_correct_pin(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A pin already carrying the right values proposes no changes — the no-churn discipline
+    every existing writer keeps, proven for the read side too."""
+    office = tmp_path / "seats" / "planbeta"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text(
+        'project = "planhouse"\nhouse = "planhouse"\nseat = "Planbeta"\nkind = "office"\n')
+    await _seat_with_office(actions, tmp_path, seat_id="seat:plan0002", handle="Planbeta",
+                            house="planhouse", office_dir=str(office))
+
+    out = await plan_pin_migration(actions.pool)
+    assert not any(e["path"] == str(office) for e in out["plan"]), (
+        "an already-correct pin must propose nothing, not even an empty no-op entry")
+
+
+async def test_plan_pin_migration_reports_an_underivable_house_as_a_gap_not_a_guess(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A seat with no own `house` stamp and no manager to derive one from: derive_house
+    honestly returns None, and the plan must name that as a gap for `house` while still
+    proposing `seat`/`kind`, which do not depend on it — never silently drop the whole entry,
+    never guess a house into the gap."""
+    office = tmp_path / "seats" / "plangamma"
+    office.mkdir(parents=True)
+    await _seat_with_office(actions, tmp_path, seat_id="seat:plan0003", handle="Plangamma",
+                            house=None, office_dir=str(office))
+
+    out = await plan_pin_migration(actions.pool)
+    entry = next(e for e in out["plan"] if e["path"] == str(office))
+    assert entry["proposed"] == {"seat": "Plangamma", "kind": "office"}
+    assert "house" not in entry["proposed"]
+    assert any("house" in u for u in entry["unknown"])
+
+
+async def test_plan_pin_migration_never_picks_a_seat_when_two_claim_the_same_path(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Two Seat objects naming the same anchor_cwd (a graph bug, not a legitimate shape):
+    `seat` must never be silently resolved to either one — the whole point of the pin outranking
+    inference fails the moment it can confidently state a coin-flip. house/kind still propose
+    since both claimants agree on them."""
+    office = tmp_path / "seats" / "plandelta"
+    office.mkdir(parents=True)
+    await _seat_with_office(actions, tmp_path, seat_id="seat:plan0004a", handle="Plandelta",
+                            house="samehouse", office_dir=str(office))
+    await _seat_with_office(actions, tmp_path, seat_id="seat:plan0004b", handle="Plandelta2",
+                            house="samehouse", office_dir=str(office))
+
+    out = await plan_pin_migration(actions.pool)
+    entry = next(e for e in out["plan"] if e["path"] == str(office))
+    assert "seat" not in entry["proposed"]
+    assert any("conflicting claims" in u for u in entry["unknown"])
+    assert entry["proposed"]["house"] == "samehouse"  # both claimants agree — still proposed
+
+
+async def test_plan_pin_migration_infers_worktree_kind_from_path_shape(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """tree_cwd distinct from anchor_cwd: kind is read from PATH SHAPE, not the graph — a
+    `.claude/worktrees/` path proposes kind="worktree", never "office" (that's reserved for
+    anchor_cwd alone)."""
+    office = tmp_path / "seats" / "planepsilon"
+    office.mkdir(parents=True)
+    tree = tmp_path / ".claude" / "worktrees" / "planepsilon"
+    tree.mkdir(parents=True)
+    await _seat_with_office(actions, tmp_path, seat_id="seat:plan0005", handle="Planepsilon",
+                            house="planhouse", office_dir=str(office), tree_dir=str(tree))
+
+    out = await plan_pin_migration(actions.pool)
+    tree_entry = next(e for e in out["plan"] if e["path"] == str(tree))
+    assert tree_entry["proposed"]["kind"] == "worktree"
+    office_entry = next(e for e in out["plan"] if e["path"] == str(office))
+    assert office_entry["proposed"]["kind"] == "office"
+    assert not (tree / ".osiris").exists()      # plan is dry-run only — nothing written
