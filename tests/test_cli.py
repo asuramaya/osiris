@@ -1060,6 +1060,19 @@ def test_diff_tool_lists_composes_all_three_kinds_in_thoths_own_example_shape() 
 
 
 # --- cmd_deploy: fake git_status/restart, a real pool for the seeder/migration comparison ------
+# wait_for_health/wait_for_smoke default to REAL bounded pollers (120s/30s ceilings, real
+# network round-trips against the live console/MCP) — every test whose restart succeeds and
+# falls through to that stage injects these fast fakes instead. cmd_deploy's own control flow
+# (order of calls, what it prints, what it returns) is what's under test here; the wait
+# LOGIC itself already has its own dedicated, correctly-mocked unit tests below.
+
+async def _fake_wait_for_health() -> tuple[bool, float]:
+    return True, 0.0
+
+
+async def _fake_wait_for_smoke() -> tuple[list[str], float]:
+    return [], 0.0
+
 
 async def test_cmd_deploy_refuses_on_a_dirty_src_tree(actions: Actions, tmp_path: Path) -> None:
     def _dirty(root: Path) -> list[tuple[str, str]]:
@@ -1103,7 +1116,9 @@ async def test_cmd_deploy_restarts_and_reports_smoke_and_gaps(
     buf = io.StringIO()
     with redirect_stdout(buf):
         out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
-                               pool=actions.pool, list_tools=_list_tools)
+                               pool=actions.pool, list_tools=_list_tools,
+                               wait_for_health=_fake_wait_for_health,
+                               wait_for_smoke=_fake_wait_for_smoke)
     assert calls == [list(DEPLOY_UNITS)]
     # a blank test DB has no compositions/alembic_version rows seeded — this exercises the
     # gap-reporting path without asserting exact names (that's composition_gap_notes' own
@@ -1141,7 +1156,9 @@ async def test_cmd_deploy_records_the_deployed_head_on_a_successful_restart(
     buf = io.StringIO()
     with redirect_stdout(buf):
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
-                         pool=actions.pool, record_deploy=_record_deploy)
+                         pool=actions.pool, record_deploy=_record_deploy,
+                         wait_for_health=_fake_wait_for_health,
+                         wait_for_smoke=_fake_wait_for_smoke)
     assert calls == [(actions.pool, tmp_path)]
     assert "deploy ledger: recorded deadbeef" in buf.getvalue()
 
@@ -1175,7 +1192,8 @@ async def test_cmd_deploy_reports_head_unknown_off_a_non_git_root(
     buf = io.StringIO()
     with redirect_stdout(buf):
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
-                         pool=actions.pool)
+                         pool=actions.pool, wait_for_health=_fake_wait_for_health,
+                         wait_for_smoke=_fake_wait_for_smoke)
     assert "deploy ledger: HEAD unknown — not recorded" in buf.getvalue()
 
 
@@ -1288,7 +1306,9 @@ async def test_cmd_deploy_applies_pending_migrations_before_restarting(
     buf = io.StringIO()
     with redirect_stdout(buf):
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
-                         pool=actions.pool, migration_state=_state, run_migrations=_run)
+                         pool=actions.pool, migration_state=_state, run_migrations=_run,
+                         wait_for_health=_fake_wait_for_health,
+                         wait_for_smoke=_fake_wait_for_smoke)
     assert order == ["migrate", "restart"]
     assert "0037" in buf.getvalue() and "0038" in buf.getvalue() and "applied" in buf.getvalue()
 

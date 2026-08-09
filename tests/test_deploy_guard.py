@@ -527,6 +527,16 @@ async def test_check_diverged_is_clean_on_a_real_fast_forward(
 
 
 # --- wiring: osiris deploy actually calls the ref-race detector (src/cli.py) ---------------
+# wait_for_health/wait_for_smoke default to REAL bounded pollers (120s/30s ceilings, real
+# network round-trips against the live console/MCP) — these tests are exercising the
+# divergence-guard wiring, not that wait, so a restart-succeeds path injects fast fakes.
+
+async def _fake_wait_for_health() -> tuple[bool, float]:
+    return True, 0.0
+
+
+async def _fake_wait_for_smoke() -> tuple[list[str], float]:
+    return [], 0.0
 
 
 async def test_cmd_deploy_warns_but_never_refuses_on_a_real_divergence(
@@ -558,7 +568,9 @@ async def test_cmd_deploy_warns_but_never_refuses_on_a_real_divergence(
     buf = io.StringIO()
     with redirect_stdout(buf):
         out = await cmd_deploy(repo_root=small_repo, git_status=lambda root: [],
-                               restart=_restart, pool=actions.pool)
+                               restart=_restart, pool=actions.pool,
+                               wait_for_health=_fake_wait_for_health,
+                               wait_for_smoke=_fake_wait_for_smoke)
     assert "WARNING: HISTORY DIVERGED SINCE THE LAST DEPLOY" in buf.getvalue()
     assert a in buf.getvalue() and c in buf.getvalue()
     # THE LOAD-BEARING ASSERTION (577988ed: never refuse on a check that can false-positive):
@@ -605,7 +617,9 @@ async def test_cmd_deploy_ignores_an_unrelated_repo_roots_ambient_head(
     buf = io.StringIO()
     with redirect_stdout(buf):
         await cmd_deploy(repo_root=small_repo, git_status=lambda root: [],
-                         restart=_restart, pool=actions.pool)
+                         restart=_restart, pool=actions.pool,
+                         wait_for_health=_fake_wait_for_health,
+                         wait_for_smoke=_fake_wait_for_smoke)
     assert "HISTORY DIVERGED" not in buf.getvalue()
 
 
@@ -625,7 +639,8 @@ async def test_cmd_deploy_is_silent_on_a_normal_deploy(
     buf = io.StringIO()
     with redirect_stdout(buf):
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
-                         pool=actions.pool)
+                         pool=actions.pool, wait_for_health=_fake_wait_for_health,
+                         wait_for_smoke=_fake_wait_for_smoke)
     assert "HISTORY DIVERGED" not in buf.getvalue()
 
 

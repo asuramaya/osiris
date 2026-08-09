@@ -87,6 +87,19 @@ disable_error_code = ["type-arg"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+# task #165 (2026-08-09): the bare `pytest` command CLAUDE.md prescribes becomes the
+# correct one, zero flag to remember (decision c63f5bd9's own proposal, 2026-08-01,
+# never landed until now). Fixed cap, not `-n auto` (20 cores): under real multi-agent
+# fleet load — routinely 4-5 concurrent seats, confirmed live tonight — uncapped auto
+# would multiply the exact shared-Postgres/MCP-pool contention this exists to reduce
+# (c63f5bd9's own named, unmeasured-at-the-time risk). -n 4 measured against the
+# now-honest suite (task #165's cmd_deploy fix landed first, removing the ~565s of
+# unrelated network-contention cost that would have inflated any cap chosen against
+# the old number): full suite 174.94s (was ~1160s serial pre-fix), 2978 passed/1
+# skipped/0 failed. Confirmed a small targeted run (the CLAUDE.md-prescribed dev-loop
+# hot path) is not slower or more ceremonial under this default: tests/test_semantics.py
+# alone, 10.83s without vs 11.20s with -n 4 — noise, not a real cost.
+addopts = "-n 4"
 
 [tool.uv]
 package = true
