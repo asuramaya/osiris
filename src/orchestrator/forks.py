@@ -166,15 +166,21 @@ def _candidates(path: Path, root: Path) -> list[Path]:
     return out
 
 
-def _parent(path: Path, root: Path) -> Path | None:
-    """The session this one was forked from, or None if it is nobody's child."""
+def _parent(path: Path, root: Path) -> tuple[Path | None, bool]:
+    """The session this one was forked from, or None if it is nobody's child — paired with
+    whether a real search actually ran (`determined`). `first_uuid` returning nothing at
+    session birth (the transcript may not be fully flushed yet) is NOT the same fact as
+    searching every candidate and finding no match (60bc15db specimen 4, decision
+    01e0c69a): the first case never even attempted the search, so it must never be cached
+    as a genuine negative by the caller. `determined` is only False for the never-searched
+    case — every other exit (a match, or an exhausted search) is a real answer."""
     u = first_uuid(path)
     if not u:
-        return None
+        return None, False
     for cand in _candidates(path, root):
         if _emitted(cand, u):
-            return cand
-    return None
+            return cand, True
+    return None, True
 
 
 def _find(root: Path, sid: str) -> Path | None:
@@ -190,10 +196,16 @@ async def resolve_parent(
 ) -> str | None:
     """The sid this session was forked FROM — ONE hop. None if it is nobody's child.
 
-    Memoized in `watermarks` under `fork:<sid>`. A session's ancestry is IMMUTABLE, so the scan
-    runs once for a given session and never again; `_NONE` is a real cached ANSWER ("we looked,
-    and it is nobody's child"), not a hole to be re-dug on every mount — which is precisely how a
-    cheap check turns back into a crawl.
+    Memoized in `watermarks` under `fork:<sid>`. A session's ancestry is IMMUTABLE, so a
+    DETERMINED scan runs once for a given session and never again; `_NONE` is a real
+    cached ANSWER ("we looked, and it is nobody's child"), not a hole to be re-dug on
+    every mount — which is precisely how a cheap check turns back into a crawl. But an
+    UNDETERMINED scan (this session's own first_uuid could not be read yet — plausible at
+    birth, before the transcript is fully flushed) is never cached at all: caching "I
+    don't know" as if it were "no" would freeze a transient condition into a permanent
+    wrong answer, in the one file whose job is preventing exactly that kind of twin-seat
+    mistake (60bc15db specimen 4, decision 01e0c69a). An undetermined call returns None
+    for THIS call only — the next mount gets a fresh, real attempt.
     """
     sid = sid_of(path)
     key = fork_key(sid)
@@ -201,8 +213,10 @@ async def resolve_parent(
         got = await pool.fetchval("SELECT cursor FROM watermarks WHERE key=$1", key)
         if got is not None:
             return None if got == _NONE else str(got)
-    found = await asyncio.to_thread(_parent, path, root)
+    found, determined = await asyncio.to_thread(_parent, path, root)
     parent = sid_of(found) if found is not None else None
+    if not determined:
+        return None
     await pool.execute(
         "INSERT INTO watermarks (key, cursor, updated_at) VALUES ($1,$2,now()) "
         "ON CONFLICT (key) DO UPDATE SET cursor=EXCLUDED.cursor, updated_at=now()",
