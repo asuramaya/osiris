@@ -337,8 +337,21 @@ async def register_spawn(
         await prop("session", session)
     if project:
         await prop("project", project)
-        proj = await actions.create_or_find_object("SoftwareProject", f"repo:{project}", _SOURCE)
-        await _link_once(actions, a, proj, "works_in", now)
+        # task #107's choke point (capture.py), reused verbatim rather than re-validated here
+        # (thread db14d8be): this was the only SoftwareProject-mint site in the codebase
+        # without it — safe today only because every live caller already passes a clean
+        # label, never enforced AT the mint itself. A malformed `project` (a raw cwd, a
+        # placeholder) still stamps the agent's own `project` property above — that's a
+        # claim about the caller, harmless as text — but mints no phantom SoftwareProject.
+        from src.orchestrator.capture import _validate_repo_name
+        try:
+            _validate_repo_name(project, project)
+        except ValueError:
+            pass
+        else:
+            proj = await actions.create_or_find_object(
+                "SoftwareProject", f"repo:{project}", _SOURCE)
+            await _link_once(actions, a, proj, "works_in", now)
     model: str | None = None
     if transcript is not None:
         def _read_model(path: Path = transcript) -> str | None:

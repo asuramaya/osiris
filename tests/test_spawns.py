@@ -67,6 +67,29 @@ async def test_register_spawn_wires_child_parent_and_authority(actions: Actions)
         "WHERE c.canonical=$1 AND l.type='spawned_by'", child) == 1
 
 
+async def test_register_spawn_refuses_a_path_shaped_project_but_still_registers_the_child(
+    actions: Actions,
+) -> None:
+    """task #162/thread db14d8be: register_spawn used to mint a SoftwareProject from
+    whatever `project` it was handed, with none of task #107's guard (capture.py's
+    `_validate_repo_name`) — the only mint site in the codebase without it. A raw cwd or
+    placeholder minted a phantom. The child registration itself must still succeed and the
+    caller's claim stays on the record (the `project` property), only the phantom mint is
+    refused."""
+    child = await register_spawn(
+        Actions(actions.pool), "agent-kid00003", agent_type="Explore",
+        parent_agent="agent:par00002", project="/home/asuramaya/code/REPOS/coldspot")
+    assert child == "agent:kid00003"
+    assert await _prop(actions, child, "project") == "/home/asuramaya/code/REPOS/coldspot"
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='SoftwareProject' AND "
+        "canonical='repo:/home/asuramaya/code/REPOS/coldspot'") is None
+    edges = await actions.pool.fetch(
+        "SELECT l.type FROM links l JOIN objects c ON c.id=l.from_id WHERE c.canonical=$1",
+        child)
+    assert "works_in" not in {r["type"] for r in edges}
+
+
 async def test_register_spawn_stop_reads_the_childs_own_model(
     actions: Actions, tmp_path: Path
 ) -> None:
