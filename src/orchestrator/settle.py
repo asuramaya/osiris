@@ -39,6 +39,7 @@ class _Fetchable(Protocol):
 
 async def settle_boxes(
     conn_or_pool: _Fetchable, *, agent_id: str, mounted_at: datetime, cwd: str | None,
+    seat_id: str | None = None,
 ) -> dict[str, bool | None]:
     """The boxes this session's own life should have checked, best-effort per box — a box
     this query could not evaluate is None and never counts as missing (fail open per-box,
@@ -46,7 +47,11 @@ async def settle_boxes(
 
     Decisions/threads are 'this session's' when their defining assertion's source_id is this
     EXACT agent_id (the identity that mounted this job_dir) at or after `mounted_at` — the
-    session's own first-mount stamp, set once at INSERT, never touched by a re-attach."""
+    session's own first-mount stamp, set once at INSERT, never touched by a re-attach.
+
+    `seat_id` (Thoth's ruling 205668ec) feeds the CHARTERED box below — the caller already
+    resolves `held_seat` for the standing-orders cwd fix (mcp_server.py/osiris_stophook.py
+    both do), so this is a pass-through, not a second lookup."""
     boxes: dict[str, bool | None] = {}
     try:
         boxes["decisions recorded this session"] = bool(await conn_or_pool.fetchval(
@@ -62,7 +67,13 @@ async def settle_boxes(
             "AND a.source_id = $1 AND a.observed_at >= $2 LIMIT 1", agent_id, mounted_at))
     except Exception:  # noqa: BLE001
         boxes["threads trued this session (opened or resolved)"] = None
-    boxes["charter.md touched this session"] = charter_touched(cwd, mounted_at)
+    boxes["standing orders touched this session"] = standing_orders_touched(cwd, mounted_at)
+    # RULING 205668ec: two things were both called "charter" — the graph DECLARATION
+    # (governs edges, charter_of/set_charter, the thing with authority) and the on-disk
+    # FILE (prose, still literally charter.md, the Boot Compiler's own "standing orders"
+    # output). The box above asks the file question, honestly named now. This one asks
+    # the declaration question — SEPARATE and INDEPENDENT, never folded together again.
+    boxes["seat is chartered (governs a repo)"] = await seat_chartered(conn_or_pool, seat_id)
     # a live succession/handoff note — ONLY asked of a session whose own agent object was
     # itself born by a mint (minted_because stamped at birth, permanent on that exact
     # generation): a fresh heir owes its OWN heir at least one obligation left behind, not
@@ -186,10 +197,16 @@ async def closure_edge_coverage(
     return {"resolved_this_session": len(thread_ids), "with_closure_edge": edged}
 
 
-def charter_touched(cwd: str | None, mounted_at: datetime) -> bool | None:
-    """None (can't evaluate, fails open) when this cwd has no charter.md at all — a session
-    working in an ordinary repo, not an office, is never punished for a file that was never
-    scaffolded here. Present: mtime at or after session start."""
+def standing_orders_touched(cwd: str | None, mounted_at: datetime) -> bool | None:
+    """None (can't evaluate, fails open) when this cwd has no standing-orders file at all —
+    a session working in an ordinary repo, not an office, is never punished for a file that
+    was never scaffolded here. Present: mtime at or after session start.
+
+    Checks the ON-DISK FILE (ruling 205668ec: two things were both called "charter" — this
+    is the prose one, the Boot Compiler's own "standing orders" output). Still literally
+    named charter.md on disk — the RENAME is a held migration (35 offices, a boot-injection
+    pointer, a compiler that writes it), not authorized here; only the box's own label and
+    this function's name changed, matching what they actually check."""
     if not cwd:
         return None
     from pathlib import Path
@@ -199,6 +216,27 @@ def charter_touched(cwd: str | None, mounted_at: datetime) -> bool | None:
             return None
         return charter.stat().st_mtime >= mounted_at.timestamp()
     except OSError:
+        return None
+
+
+async def seat_chartered(conn_or_pool: _Fetchable, seat_id: str | None) -> bool | None:
+    """The DECLARATION half of ruling 205668ec's split — does this seat currently govern
+    any repo at all (a live `governs` edge), independent of whether its standing-orders
+    file was touched this session. None (fails open) when there is no seat to ask — an
+    unseated session has no charter to hold, same convention every box in this module
+    follows. Not session-scoped like its siblings above (a charter is a standing fact, not
+    something written THIS session) — reads the SAME governs-edge shape charter_of()
+    (charter.py) does, inlined rather than imported so this module keeps serving both a
+    Pool and a bare Connection (charter_of is typed against asyncpg.Pool alone)."""
+    if not seat_id:
+        return None
+    try:
+        return bool(await conn_or_pool.fetchval(
+            "SELECT 1 FROM links l JOIN objects s ON s.id=l.from_id AND s.type='Seat' "
+            "AND s.canonical=$1 JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+            "WHERE l.type='governs' AND (l.valid_until IS NULL OR l.valid_until > now()) "
+            "LIMIT 1", seat_id))
+    except Exception:  # noqa: BLE001 — fail open, same law as every box above
         return None
 
 
@@ -214,10 +252,10 @@ def unevaluated_boxes(boxes: dict[str, bool | None]) -> list[str]:
     from missing (False) or satisfied (True), and deliberately never folded into either
     (Thoth DM 3076): a check that silently never runs and a check that genuinely ran and
     found nothing satisfied must never collapse onto the same signal —
-    the exact SHAPE C defect (#117) that let charter_touched's own #128 cwd bug hide
+    the exact SHAPE C defect (#117) that let standing_orders_touched's own #128 cwd bug hide
     behind `complete:true` for eleven days of a real, untouched charter.md. Fog-of-war
     stays non-blocking (a box that is structurally inapplicable — e.g. an unseated session
-    with no charter.md to check — must not permanently red every settle it will ever
+    with no standing-orders file to check — must not permanently red every settle it will ever
     call), but it must never again be invisible: a caller SEES this list, distinctly from
     `missing_boxes`, whether or not it changes what they decide to do about it."""
     return [label for label, ok in boxes.items() if ok is None]

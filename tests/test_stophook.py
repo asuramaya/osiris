@@ -34,12 +34,12 @@ def test_a_above_alarm_and_unwritten_blocks_naming_the_boxes() -> None:
     v = stophook._offload_verdict(
         pct=85, window_assumed=False, already_blocked=False,
         boxes={"decisions recorded this session": False,
-               "charter.md touched this session": True})
+               "standing orders touched this session": True})
     assert v is not None and v["decision"] == "block"
     assert "decisions recorded this session" in v["reason"]
     assert "charter.md" in v["reason"]  # points at the offload target regardless
     # a SATISFIED box is never named as missing
-    assert "charter.md touched this session:" not in v["reason"]
+    assert "standing orders touched this session:" not in v["reason"]
 
 
 def test_b_a_second_stop_this_session_is_always_allowed() -> None:
@@ -134,7 +134,7 @@ def test_marker_needs_a_trustworthy_session_id(
 
 
 # ═══════════ THE CHARTER-FILE WITNESS — moved to tests/test_settle.py (ruling c5b184cd):
-# charter_touched now lives in src.orchestrator.settle, promoted out of this hook so /settle
+# standing_orders_touched now lives in src.orchestrator.settle, promoted out of this hook so /settle
 # and the Stop hook read one implementation. ═══════════
 
 
@@ -203,7 +203,7 @@ async def test_offload_boxes_detects_decisions_threads_charter_and_succession(
     assert boxes is not None
     assert boxes["decisions recorded this session"] is False
     assert boxes["threads trued this session (opened or resolved)"] is False
-    assert boxes["charter.md touched this session"] is None  # no such file here
+    assert boxes["standing orders touched this session"] is None  # no such file here
     assert boxes["a live succession/handoff note (this lineage was minted)"] is False
 
     # now the session writes everything back
@@ -216,7 +216,7 @@ async def test_offload_boxes_detects_decisions_threads_charter_and_succession(
     assert boxes2 is not None
     assert boxes2["decisions recorded this session"] is True
     assert boxes2["threads trued this session (opened or resolved)"] is True
-    assert boxes2["charter.md touched this session"] is True
+    assert boxes2["standing orders touched this session"] is True
     assert boxes2["a live succession/handoff note (this lineage was minted)"] is True
 
 
@@ -228,7 +228,7 @@ async def test_offload_boxes_resolves_the_seat_office_over_a_corrected_mount_cwd
     MCP settle() call site (Khnum, commit 17b20e0, Thoth DM 3076/3096) — reproduced here for
     THIS call site: a seated agent's mount cwd reads as the bare office CONTAINER, not this
     agent's real office at <container>/<handle>. Before this fix, _offload_boxes passed that
-    corrupted cwd straight to settle_boxes, charter_touched found no charter.md at the
+    corrupted cwd straight to settle_boxes, standing_orders_touched found no charter.md at the
     container root, and returned None (fog-of-war) — even with a real, 11-day-stale
     charter.md sitting in the seat's actual office the whole time. The offload ritual fires
     unattended at every turn-end above the alarm line, nobody watching to notice a silent
@@ -260,7 +260,7 @@ async def test_offload_boxes_resolves_the_seat_office_over_a_corrected_mount_cwd
     boxes = await stophook._offload_boxes(sid, str(container))  # the hook's own payload cwd
 
     assert boxes is not None
-    assert boxes["charter.md touched this session"] is False, boxes  # not None
+    assert boxes["standing orders touched this session"] is False, boxes  # not None
 
 
 async def test_offload_boxes_a_non_minted_session_carries_no_succession_box(

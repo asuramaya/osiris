@@ -5279,15 +5279,15 @@ async def settle(
     identity_coherence: dict[str, Any] | None = None
     closure_coverage: dict[str, Any] | None = None
     if mounted is not None and mounted["mounted_at"]:
-        # DEFECT 1 (Thoth DM 3076): charter_touched checks `ident.cwd`,
+        # DEFECT 1 (Thoth DM 3076): standing_orders_touched checks `ident.cwd`,
         # but a SEAT-OFFICE agent's mount cwd can read as the bare container
         # (~/.osiris/seats, not .../seats/<handle>) after a #128-class cwd correction — the
         # exact live case that hid Thoth's own 11-day-stale charter.md behind a silent
         # None for the box's entire life. The SEAT BINDING knows where the office actually
         # is; do not trust cwd for a seat that has one. Resolved here (not inside
-        # settle_boxes/charter_touched, which stay pure and shared with the Stop hook's
-        # own bare-Connection call site — that call site inherits this SAME exposure and is
-        # NOT fixed by this change; named explicitly in this commit's own report, not
+        # settle_boxes/standing_orders_touched, which stay pure and shared with the Stop
+        # hook's own bare-Connection call site — that call site inherits this SAME exposure
+        # and is NOT fixed by this change; named explicitly in this commit's own report, not
         # silently left for someone to rediscover).
         from src.orchestrator.offices import _DEFAULT_OFFICE_ROOT
         from src.orchestrator.seats import held_seat
@@ -5297,7 +5297,8 @@ async def settle(
         if seat and seat.get("handle"):
             charter_cwd = str(_DEFAULT_OFFICE_ROOT / seat["handle"].lower())
         boxes = await settle_boxes(pool, agent_id=ident.agent_id,
-                                   mounted_at=mounted["mounted_at"], cwd=charter_cwd)
+                                   mounted_at=mounted["mounted_at"], cwd=charter_cwd,
+                                   seat_id=seat["seat_id"] if seat else None)
         missing = missing_boxes(boxes)
         # DEFECT 1(b): a box that could not be evaluated (None) is a DIFFERENT state from
         # satisfied or missing and must be VISIBLE to a reader, not silently indistinguishable
@@ -5320,7 +5321,7 @@ async def settle(
         # (Thoth DM 3076 defect 3): `project` here comes from `ident.project`, which for a
         # SEATED agent is ALREADY the seat's own derived house, UNCONDITIONALLY (seats.
         # resolve_project's own seated-override, applied at mount time) — never raw cwd, so
-        # this check does NOT share charter_touched's #128 exposure. Confirmed by reading
+        # this check does NOT share standing_orders_touched's #128 exposure. Confirmed by reading
         # the actual override code, not assumed from the shared "cwd bug" framing.
         identity_coherence = await filed_under_check(
             pool, agent_id=ident.agent_id, mounted_at=mounted["mounted_at"],

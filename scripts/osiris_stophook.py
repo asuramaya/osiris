@@ -148,10 +148,10 @@ async def _offload_boxes(
     THE SAME #128-CLASS cwd EXPOSURE mcp_server.py's settle() just fixed (Khnum, commit
     17b20e0, Thoth DM 3076), inherited here and closed the same way: a seat-office agent's
     mount cwd can read as the bare container (~/.osiris/seats, not .../seats/<handle>),
-    which has no charter.md at all — charter_touched then fails OPEN to None (fog-of-war)
-    even when the seat's REAL office holds a genuinely stale charter.md that should read
-    False. This call site is the higher-stakes twin (fires unattended, every turn-end,
-    above the alarm line, nobody watching) — resolved via held_seat before calling
+    which has no charter.md at all — standing_orders_touched then fails OPEN to None
+    (fog-of-war) even when the seat's REAL office holds a genuinely stale charter.md that
+    should read False. This call site is the higher-stakes twin (fires unattended, every
+    turn-end, above the alarm line, nobody watching) — resolved via held_seat before calling
     settle_boxes, exactly like the MCP wrapper; settle_boxes itself stays pure and
     unchanged, shared unmodified with that call site."""
     import asyncpg
@@ -171,7 +171,8 @@ async def _offload_boxes(
         if seat and seat.get("handle"):
             charter_cwd = str(_DEFAULT_OFFICE_ROOT / seat["handle"].lower())
         return await settle_boxes(conn, agent_id=str(row["agent_id"]),
-                                  mounted_at=row["mounted_at"], cwd=charter_cwd)
+                                  mounted_at=row["mounted_at"], cwd=charter_cwd,
+                                  seat_id=seat["seat_id"] if seat else None)
     finally:
         await conn.close()
 
