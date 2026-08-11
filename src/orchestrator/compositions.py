@@ -3792,9 +3792,23 @@ async def _table(
     separate, closed dispatch table) is what actually enforces which actions and args are
     real — this function has no opinion on that, same discipline as everywhere else in this
     dispatcher (a Function/op computes DATA, it never decides what's SAFE to write)."""
+    # OBJECT COLUMNS (canonical/type/status), not assertions — `_props`/`winning_props`
+    # only ever reads `current_assertions`, so a column asking for one of these by name
+    # would silently resolve to None without this (task #138/#163's arc: caught live
+    # wiring `canonical` into the `projects` composition — the same _OBJ_COLS whitelist
+    # `_rollup`'s own `of:"first"` already trusts, reused here rather than re-declared).
+    obj_cols_needed = {str(c["property"]) for c in columns
+                      if "property" in c and str(c["property"]) in _OBJ_COLS}
+    obj_cols: dict[uuid.UUID, dict[str, Any]] = {}
+    if obj_cols_needed and objects:
+        cols_sql = ", ".join(sorted(obj_cols_needed))
+        obj_cols = {r["id"]: dict(r) for r in await pool.fetch(
+            f"SELECT id, {cols_sql} FROM objects WHERE id = ANY($1::uuid[])", objects)}
     rows: list[dict[str, Any]] = []
     for oid in objects:
         facts = await _props(pool, oid)
+        if oid in obj_cols:
+            facts = {**facts, **{k: v for k, v in obj_cols[oid].items() if k != "id"}}
         row: dict[str, Any] = {}
         for col in columns:
             name = str(col.get("name") or col.get("property") or "col")
@@ -4678,6 +4692,11 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     # the developer project browser — DECOMPOSED: no longer a hardcoded Function, a pure op-tree
     # the user owns. `select` the repos → `table` with rollup columns (Notion database+rollups)
     # → `order` by last-touched. This is what "everything is composed" means in practice.
+    # task #138/#163's arc: this WAS the enumeration door already, but `name` alone isn't
+    # addressable (no canonical/id to act on) and gave no way to tell a real repo from the
+    # zero-commit/zero-file registry noise #152 named — `canonical` and `on_disk_path` are
+    # both plain object columns / assertion properties already, so this is wiring, not
+    # construction (measured live: 60 active SoftwareProjects, most 0 commits/0 files).
     "projects": {
         "op": "order", "by": "last_touched", "dir": "desc",
         "from": {
@@ -4685,6 +4704,8 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
             "from": {"op": "select", "object_type": "SoftwareProject"},
             "columns": [
                 {"name": "project", "property": "name"},
+                {"name": "canonical", "property": "canonical"},
+                {"name": "on_disk_path", "property": "on_disk_path"},
                 {"name": "commits", "rollup": {"direction": "in", "link_type": "in_repo",
                                                "object_type": "Commit", "of": "count"}},
                 {"name": "files", "rollup": {"direction": "in", "link_type": "in_repo",

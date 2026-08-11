@@ -474,3 +474,116 @@ async def test_unfork_project_refuses_when_nothing_to_unfork(actions: Actions) -
     out = await unfork_project(actions, project="neverforked1", fork_into="neverforked2",
                                because="x", actor="agent:test")
     assert "nothing to unfork" in out["error"]
+
+
+# --- MCP surface (task #163's arc: this whole module existed, tested, and had ZERO ------
+# MCP wiring until now — grep against src/mcp_server.py before this change: zero hits) ---
+
+async def test_mcp_rename_project_surfaces_evidence_by_governing_seat(
+    actions: Actions, tmp_path,
+) -> None:
+    """The MCP `rename_project` tool wires project_identity_evidence in as a PRE-WRITE
+    CHECK (task #163's arc, #137's own root-cause fix): every Seat currently GOVERNING
+    the project being renamed gets its own evidence report attached to the receipt, so a
+    caller sees — in the SAME turn — whether that seat's pin/charter/write-attribution
+    still disagrees with the new name. NOT A TIER RULING: this never refuses and never
+    picks a winner on it; the rename itself always proceeds regardless."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import rename_project as rename_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "oldname"\n')
+    seat = await ensure_seat(actions, house="osiris", handle="Renameseat",
+                             anchor_cwd=str(office), source="test")
+    await _mk_agent(actions, "agent:re0001ab")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:re0001ab")
+    proj = await _mk_project(actions, "oldname")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:renamer1", session="renamer1", project="rename-land",
+        model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await rename_tool(project="oldname", new_name="newname",
+                                because="test rename", ctx=ctx)
+        assert out["new_name"] == "newname"
+        assert seat["seat_id"] in out["evidence_by_governing_seat"]
+        seat_evidence = out["evidence_by_governing_seat"][seat["seat_id"]]
+        assert seat_evidence["seat_id"] == seat["seat_id"]
+        assert "candidates" in seat_evidence
+        # the pin still says the OLD name — exactly the #137 disagreement this must
+        # surface, not hide, since the rename never touches the seat's own .osiris file
+        assert "oldname" in seat_evidence["candidates"]
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
+async def test_mcp_project_identity_evidence_and_fork_doors(
+    actions: Actions, tmp_path,
+) -> None:
+    """Smoke test for the three other doors this arc wired: project_identity_evidence,
+    fork_project, unfork_project — each already existed and was tested via direct import,
+    but nothing outside a Python import could ever reach them."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import fork_project as fork_tool
+    from src.mcp_server import project_identity_evidence as pie_tool
+    from src.mcp_server import unfork_project as unfork_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    office = tmp_path / "office2"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="osiris", handle="Forkseat",
+                             anchor_cwd=str(office), source="test")
+    ancestor = await _mk_project(actions, "ancestorproj")
+    successor = await _mk_project(actions, "successorproj")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:forker1", session="forker1", project="fork-land",
+        model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        evidence = await pie_tool(seat_id=seat["seat_id"], ctx=ctx)
+        assert evidence["seat_id"] == seat["seat_id"]
+        assert "candidates" in evidence
+
+        forked = await fork_tool(project="ancestorproj", fork_into="successorproj",
+                                 because="test fork", ctx=ctx)
+        assert forked["forked_from"] == "repo:ancestorproj"
+        assert forked["into"] == "repo:successorproj"
+        edge = await actions.pool.fetchval(
+            "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='forked_from' "
+            "AND (valid_until IS NULL OR valid_until > now())", successor, ancestor)
+        assert edge == 1
+
+        unforked = await unfork_tool(project="ancestorproj", fork_into="successorproj",
+                                     because="test unfork", ctx=ctx)
+        assert unforked["unforked"] == "repo:ancestorproj"
+        edge_after = await actions.pool.fetchval(
+            "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='forked_from' "
+            "AND (valid_until IS NULL OR valid_until > now())", successor, ancestor)
+        assert edge_after is None
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
