@@ -346,8 +346,13 @@ async def register_spawn(
         from src.orchestrator.capture import _validate_repo_name
         try:
             _validate_repo_name(project, project)
-        except ValueError:
-            pass
+        except ValueError as exc:
+            # CONFESSION, NOT SILENT REFUSAL (Thoth's ruling, msg 4023, the 60bc15db shape):
+            # a skip that says nothing is indistinguishable from a clean pass. register_spawn
+            # returns only the child's id, so there is no receipt field to carry this on — a
+            # warning is the honest surface until one exists.
+            _log.warning("register_spawn(%s): refusing to mint a SoftwareProject from "
+                        "project=%r — %s", child, project, exc)
         else:
             proj = await actions.create_or_find_object(
                 "SoftwareProject", f"repo:{project}", _SOURCE)
