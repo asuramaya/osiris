@@ -1505,6 +1505,38 @@ async def mint_implements(
     return True
 
 
+async def mint_rediscovers(
+    actions: Actions, from_decision: uuid.UUID, to_decision: uuid.UUID, source: str = _SOURCE,
+) -> bool:
+    """This (later) Decision independently arrived at a finding an earlier one already
+    recorded (task #163, ruling 5ecaf8d9: 1973d46f and ff9feacb were each rediscovered a
+    week after they were first named, and nothing in the graph could say so). Points FROM
+    the later finding TO the earlier one it re-derives.
+
+    BURIES NEITHER SIDE — the earlier decision keeps its own standing untouched (no
+    superseded_by, no graying in orient's recent list), unlike `supersedes`; and unlike
+    `implements`, the later decision is not a specific execution of the earlier one's
+    plan, it is an independent arrival at the same conclusion. Distinct from a near-
+    duplicate reword (`find_near_duplicate_decision` already merges those at write time,
+    silently, into one object): a rediscovery's WORDING differs — that is exactly why the
+    prior-art guard's lexical/semantic match can miss it — while the FINDING is the same.
+
+    Idempotent: returns whether a NEW link was minted.
+
+    WHAT THIS DOES NOT DO: it records a rediscovery after the fact; it does not prevent
+    one. Catching a rediscovery before it is written down is a retrieval-quality question
+    (task #163 piece 3, deliberately left separate and unbuilt: the same prior-art search
+    that should have surfaced 1973d46f for 5ecaf8d9 returned five hits and missed it)."""
+    exists = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='rediscovers'",
+        from_decision, to_decision)
+    if exists:
+        return False
+    await actions.create_link(from_decision, to_decision, "rediscovers", source,
+                              datetime.now(UTC), _CONF, evidence_class=_EC)
+    return True
+
+
 async def acknowledge_prior_art(
     actions: Actions, decision_id: uuid.UUID, prior_art_id: str, source: str = _SOURCE,
 ) -> None:

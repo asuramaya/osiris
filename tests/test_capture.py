@@ -3423,6 +3423,76 @@ async def test_record_decision_implements_and_ack_prior_art(actions: Actions) ->
         _agents.pop(_conn_key(ctx), None)
 
 
+async def test_record_decision_rediscovers_links_without_burying_either_side(
+    actions: Actions,
+) -> None:
+    """`rediscovers` mints a Decision->Decision edge from a later, independent finding
+    back to the earlier one it re-derives (task #163, ruling 5ecaf8d9 — the specimen: two
+    earlier decisions cited by short-id under `confirms=`, which only resolves against
+    Practices and refused both). It buries neither side (unlike `supersedes`) and is not
+    an execution of the earlier plan (unlike `implements`). A list resolves each entry
+    independently — one bad ref must not veto the ones that DID match — mirroring
+    `confirms`'s own best-effort shape."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import record_decision as rd_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:thaw3", session="thaw3", project="thaw-land-3", model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        earlier_one = await rd_tool(
+            "THE TASKLIST RECONCILER ALREADY EXISTS, IS TESTED, IS CORRECT — AND HAS "
+            "ZERO CALLERS", kind="ruling", ctx=ctx)
+        earlier_two = await rd_tool(
+            "THE DOORLESS VERB — the first rung of a three-rung unreachability ladder",
+            kind="ruling", ctx=ctx)
+        out = await rd_tool(
+            "the house discovers and forgets the discovery — tonight's headline findings "
+            "were already found a week ago", kind="ruling",
+            rediscovers=[earlier_one["id"], earlier_two["id"]], ctx=ctx)
+        ids = {r["id"] for r in out["rediscovers"]}
+        assert ids == {earlier_one["id"][:8], earlier_two["id"][:8]}
+        assert all(r["new_link"] for r in out["rediscovers"])
+        for target in (earlier_one, earlier_two):
+            edge = await actions.pool.fetchval(
+                "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='rediscovers'",
+                uuid.UUID(out["id"]), uuid.UUID(target["id"]))
+            assert edge == 1
+        # neither earlier decision was buried — no superseded_by, still current
+        for target in (earlier_one, earlier_two):
+            superseded = await actions.pool.fetchval(
+                "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+                "AND name='superseded_by'", uuid.UUID(target["id"]))
+            assert not superseded
+
+        # idempotent: recording the same rediscovery again mints no duplicate link
+        again = await rd_tool(
+            "the house discovers and forgets the discovery — tonight's headline findings "
+            "were already found a week ago", kind="ruling",
+            rediscovers=[earlier_one["id"]], ctx=ctx)
+        assert again["rediscovers"][0]["new_link"] is False
+
+        # one bad ref among good ones is reported, never fatal to the rest
+        mixed = await rd_tool(
+            "a decision rediscovering one real thing and one fake thing", kind="decision",
+            rediscovers=[earlier_one["id"], "not-a-real-decision-xyz"], ctx=ctx)
+        matched = {r["ref"]: r["matched"] for r in mixed["rediscovers_resolution"]}
+        assert matched[earlier_one["id"]] == "true"
+        assert matched["not-a-real-decision-xyz"] == "false"
+        assert len(mixed["rediscovers"]) == 1
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
 async def test_record_decision_tool_refuses_a_bare_local_task_number_everywhere(
     actions: Actions,
 ) -> None:

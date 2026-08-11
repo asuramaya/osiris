@@ -399,6 +399,14 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "since it takes References, not Decisions). Same general-to-specific edge "
              "family as `witnesses`.",
              ("Decision",), ("Decision",)),
+    LinkType("rediscovers", "This (later) Decision independently arrived at a finding an "
+             "earlier one already recorded (task #163, ruling 5ecaf8d9: 1973d46f and "
+             "ff9feacb were each rediscovered a week later and nothing could say so). "
+             "Points FROM the later finding TO the earlier. Buries neither side, unlike "
+             "supersedes; unlike implements, the later decision does not execute the "
+             "earlier one's plan, it re-derives its conclusion independently. Minted by "
+             "record_decision(rediscovers=…).",
+             ("Decision",), ("Decision",)),
     LinkType("managed_by", "THE ORG CHART (task #50, ruling cabc28f5): a worker Seat's "
              "manager of record — the seat that minted it, or the seat it was adopted "
              "under. The org chart's FIRST real link type: Seat-to-Seat, distinct from "

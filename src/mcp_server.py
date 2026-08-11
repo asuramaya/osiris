@@ -4155,7 +4155,8 @@ async def record_decision(
     resolves: str | list[str] | None = None,
     obsoletes: list[str] | None = None,
     confirms: list[str] | None = None, refutes: str | None = None,
-    implements: str | None = None, ack_prior_art: bool = False,
+    implements: str | None = None, rediscovers: list[str] | None = None,
+    ack_prior_art: bool = False,
     subagent_id: str | None = None,
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None,
@@ -4203,9 +4204,20 @@ async def record_decision(
     `supersedes`: a target matching nothing errors and NOTHING is recorded.
     `implements` = a standing Decision this one is a SPECIFIC EXECUTION of — the parent stays
     alive, unlike `supersedes`. Same strictness as `supersedes`.
+    `rediscovers` = the earlier Decision(s) this one INDEPENDENTLY ARRIVED AT AGAIN (task #163,
+    ruling 5ecaf8d9 — the ruling this parameter exists to fix: it cited two earlier decisions
+    it re-derived by short-id as if `confirms` would link them, and `confirms` only resolves
+    against Practices). Points FROM this later finding TO each earlier one. Buries NEITHER:
+    the earlier decision's standing is untouched — no superseded_by, no graying out of
+    orient's recent list, unlike `supersedes`; and unlike `implements`, this decision isn't
+    executing the earlier one's plan, it reached the same conclusion on its own. Resolves like
+    `confirms`: each entry independent (UUID/canonical/short-id only), a miss reported in
+    `rediscovers_resolution` rather than aborting the rest. WHAT IT DOES NOT DO: it records a
+    rediscovery, it does not prevent one — catching one before it's written down is a
+    retrieval-quality question, deliberately not this parameter's job (task #163 piece 3).
     `ack_prior_art` = when this call's own `prior_art_flag` fires and none of supersedes/
-    implements/confirms/grounds already answers it, pass True to record the dismissal as a
-    graph event instead of a shrug that leaves no trace.
+    implements/rediscovers/confirms/grounds already answers it, pass True to record the
+    dismissal as a graph event instead of a shrug that leaves no trace.
     `content_landed` — present when `rationale`/`protocol` was passed: a READ-BACK
     confirming your text is now the CURRENT value (a different assertion can silently win
     the tie-break on the same object despite a success response). A `false` entry names
@@ -4296,6 +4308,20 @@ async def record_decision(
             continue
         confirm_ids.append(pid)
         confirm_receipt.append({"ref": ref, "matched": "true", "id": str(pid)[:8]})
+    # rediscovers resolves the same best-effort way as confirms — one bad ref must not
+    # veto the earlier decisions that DID match (task #163)
+    rediscover_ids: list[uuid.UUID] = []
+    rediscover_receipt: list[dict[str, str]] = []
+    for ref in rediscovers or []:
+        rdid = await capture._find_decision(pool, ref, require_identifier=True)
+        if rdid is None:
+            rediscover_receipt.append({"ref": ref, "matched": "false",
+                                       "note": "matched no decision — quote its UUID, "
+                                               "canonical, or 8-char short id (no longer a "
+                                               "prose match)"})
+            continue
+        rediscover_ids.append(rdid)
+        rediscover_receipt.append({"ref": ref, "matched": "true", "id": str(rdid)[:8]})
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     # NEAR-DUP RECEIPT HONESTY (task #117, thread ed9f73ce, Seshat's live specimen): the
     # SAME lookup `capture.record_decision` runs internally to decide whether to reuse an
@@ -4432,7 +4458,9 @@ async def record_decision(
                 out["prior_art_flag"] = (
                     f"a standing ruling ({top['id']}) covers this ground — supersede it "
                     "explicitly (supersedes=...), cite it (grounds=...), name this as what "
-                    "it executes (implements=...), or acknowledge it (ack_prior_art=True)")
+                    "it executes (implements=...), name this as an independent "
+                    "rediscovery of it (rediscovers=[...]) if you reached the same "
+                    "conclusion on your own, or acknowledge it (ack_prior_art=True)")
         # INSTRUMENT IT (THE THAW piece 6): every strong hit is a MEASURED re-derivation
         # event, logged regardless of whether the caller acts on it — the population,
         # aggregated over time, IS the fleet's re-derivation ratchet metric.
@@ -4471,6 +4499,14 @@ async def record_decision(
         out["confirmed_practices"] = witnessed
     if confirm_receipt:
         out["confirms_resolution"] = confirm_receipt
+    if rediscover_ids:
+        rediscovered = []
+        for rdid in rediscover_ids:
+            minted = await capture.mint_rediscovers(Actions(pool), d, rdid, actor)
+            rediscovered.append({"id": str(rdid)[:8], "new_link": minted})
+        out["rediscovers"] = rediscovered
+    if rediscover_receipt:
+        out["rediscovers_resolution"] = rediscover_receipt
     if refute_id is not None:
         converted = await capture.refute_practice(
             Actions(pool), str(refute_id), killed_by=str(d), repo=repo, source=actor)
