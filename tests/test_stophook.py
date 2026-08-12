@@ -184,7 +184,7 @@ async def test_offload_boxes_detects_decisions_threads_charter_and_succession(
     mounted_at = now - timedelta(minutes=10)
     agent = "agent:0ffab001-ii"
     a = await actions.create_or_find_object("Agent", agent, agent)
-    # a minted heir — the fourth box (the succession/handoff note) applies to it
+    # a minted heir — the fourth box (the obligation-opened-this-session note) applies to it
     await actions.assert_property(a, "minted_because", "compaction", agent, now, 0.9,
                                   evidence_class="self_declared")
     office = tmp_path / "office"
@@ -204,7 +204,7 @@ async def test_offload_boxes_detects_decisions_threads_charter_and_succession(
     assert boxes["decisions recorded this session"] is False
     assert boxes["threads trued this session (opened or resolved)"] is False
     assert boxes["standing orders touched this session"] is None  # no such file here
-    assert boxes["a live succession/handoff note (this lineage was minted)"] is False
+    assert boxes["an obligation opened this session (this lineage was minted)"] is False
 
     # now the session writes everything back
     await record_decision(actions, "a real ruling this session", source=agent)
@@ -217,7 +217,7 @@ async def test_offload_boxes_detects_decisions_threads_charter_and_succession(
     assert boxes2["decisions recorded this session"] is True
     assert boxes2["threads trued this session (opened or resolved)"] is True
     assert boxes2["standing orders touched this session"] is True
-    assert boxes2["a live succession/handoff note (this lineage was minted)"] is True
+    assert boxes2["an obligation opened this session (this lineage was minted)"] is True
 
 
 async def test_offload_boxes_resolves_the_seat_office_over_a_corrected_mount_cwd(
@@ -279,7 +279,7 @@ async def test_offload_boxes_a_non_minted_session_carries_no_succession_box(
     sid = "1eaf0001-0000-4000-8000-000000000000"
     boxes = await stophook._offload_boxes(sid, str(office))
     assert boxes is not None
-    assert "a live succession/handoff note (this lineage was minted)" not in boxes
+    assert "an obligation opened this session (this lineage was minted)" not in boxes
 
 
 async def test_offload_boxes_unresolvable_session_returns_none(

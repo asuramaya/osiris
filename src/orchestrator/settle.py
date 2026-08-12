@@ -74,11 +74,31 @@ async def settle_boxes(
     # output). The box above asks the file question, honestly named now. This one asks
     # the declaration question — SEPARATE and INDEPENDENT, never folded together again.
     boxes["seat is chartered (governs a repo)"] = await seat_chartered(conn_or_pool, seat_id)
-    # a live succession/handoff note — ONLY asked of a session whose own agent object was
+    # an obligation opened this session — ONLY asked of a session whose own agent object was
     # itself born by a mint (minted_because stamped at birth, permanent on that exact
     # generation): a fresh heir owes its OWN heir at least one obligation left behind, not
     # just mail settled. No content-classifier — the primitive is 'opened an obligation',
     # not 'looks like a handoff'.
+    #
+    # THE KEY NAMES THE PREDICATE, NOT THE INTENTION (Thoth's ruling, DM 4099; renamed from
+    # "a live succession/handoff note (this lineage was minted)"). This is the SAME ruling
+    # 205668ec applies to the two boxes above — two things called one name — reached
+    # independently on a different box in the same batch. The old name described what the
+    # box is FOR while the query below tests something narrower and exact: a
+    # Thread, of kind 'obligation', authored by THIS agent, since mounted_at. Four agents
+    # across two lineages independently inferred a rule from the old name and encoded the
+    # WRONG MECHANISM as standing practice in their office files — "satisfy it with a thread
+    # carrying is_handoff:true" (practice 1637763e, confirmed 4x; decision c605fa74 is
+    # another lineage's independent confirmation of the same wrong attribute). `is_handoff`
+    # appears nowhere in this query. A thread opened with kind='handoff' AND is_handoff:true
+    # does NOT clear this box; only kind='obligation' does. The code was never ambiguous —
+    # nobody read it, because the receipt's own name answered the question first and wrongly.
+    # Ruling 60bc15db, one layer above code: a name that describes an intention while the
+    # predicate tests something else teaches every reader a false mechanism.
+    #
+    # Whether settle SHOULD ALSO check for a handoff marker is a SEPARATE question and gets
+    # its own thread, never a widened query here (same ruling shape as charter/standing-
+    # orders, 205668ec — two questions, two names).
     try:
         minted: bool | None = bool(await conn_or_pool.fetchval(
             "SELECT 1 FROM current_assertions a JOIN objects o ON o.id = a.object_id "
@@ -91,18 +111,18 @@ async def settle_boxes(
         minted = None
     if minted:
         try:
-            boxes["a live succession/handoff note (this lineage was minted)"] = bool(
+            boxes["an obligation opened this session (this lineage was minted)"] = bool(
                 await conn_or_pool.fetchval(
                     "SELECT 1 FROM assertions a JOIN objects o ON o.id = a.object_id "
                     "WHERE o.type = 'Thread' AND a.name = 'kind' "
                     "AND a.value #>> '{}' = 'obligation' AND a.source_id = $1 "
                     "AND a.observed_at >= $2 LIMIT 1", agent_id, mounted_at))
         except Exception:  # noqa: BLE001
-            boxes["a live succession/handoff note (this lineage was minted)"] = None
+            boxes["an obligation opened this session (this lineage was minted)"] = None
     elif minted is None:
         # fog-of-war on whether the box even applies is itself fog-of-war on the box —
         # surfaced via unevaluated_boxes, never silently omitted like a genuine non-mint.
-        boxes["a live succession/handoff note (this lineage was minted)"] = None
+        boxes["an obligation opened this session (this lineage was minted)"] = None
     return boxes
 
 
