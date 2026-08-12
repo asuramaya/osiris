@@ -113,15 +113,20 @@ class BoundedMCP(FastMCP):
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         ctx = self.get_context()
         await _nudge_tool_list_refresh(ctx)
-        result = await self._tool_manager.call_tool(
-            name, arguments, context=ctx, convert_result=False)
-        if isinstance(result, dict) and "context" not in result:
-            note = await _seam_field(ctx)
-            if note is not None:
-                result["context"] = note
-        tool = self._tool_manager.get_tool(name)
-        assert tool is not None  # call_tool already raised if the name were unknown
-        return tool.fn_metadata.convert_result(fit(result, tool=name))
+        _ensure_tool_stats_flush_task()
+        t0 = time.monotonic()
+        try:
+            result = await self._tool_manager.call_tool(
+                name, arguments, context=ctx, convert_result=False)
+            if isinstance(result, dict) and "context" not in result:
+                note = await _seam_field(ctx)
+                if note is not None:
+                    result["context"] = note
+            tool = self._tool_manager.get_tool(name)
+            assert tool is not None  # call_tool already raised if the name were unknown
+            return tool.fn_metadata.convert_result(fit(result, tool=name))
+        finally:
+            _record_tool_call(name, (time.monotonic() - t0) * 1000)
 
 
 # TOOL-LIST REFRESH (thread 6a78e64b leg 1, operator-directed: "three verbs deployed today
@@ -157,6 +162,84 @@ async def _nudge_tool_list_refresh(ctx: Context | None) -> None:
         await ctx.session.send_tool_list_changed()
     except Exception:  # noqa: BLE001 — ambient, never load-bearing
         pass
+
+
+# TOOL-CALL TELEMETRY (task #167, dispatch msg 4029/4034): WHICH MCP TOOL IS EXPENSIVE — the
+# thing tonight's 363k-scans/sec investigation (decision 978962ad) needed and couldn't get,
+# forcing a one-off hand-bracketed measurement instead of a real number. `search_log`/
+# `llm_usage` already do exactly this per-call telemetry shape for ONE tool each (search, the
+# inference seam) and were never generalized — this extends that shape rather than inventing
+# one; see migration 0046. The hot path only ever touches the in-memory dict below — a
+# background task (started lazily, same pattern as `_pool_get`'s lazy global pool) flushes it
+# to Postgres every 60s, decoupled from any individual call, so the thing being measured never
+# pays for being measured. try/finally in BoundedMCP.call_tool counts failures too — a
+# counter that only saw successes would report the expensive calls as cheap.
+_TOOL_STATS_FLUSH_INTERVAL_S = 60
+_tool_call_stats: dict[str, dict[str, float]] = {}
+_tool_stats_flush_task: asyncio.Task[None] | None = None
+_tool_stats_window_start: datetime | None = None
+# WHAT THIS CANNOT SEE — lives in tool_traffic()'s own output (`blind_spots`), not only in a
+# decision, per Thoth's explicit rule (msg 4034): a clean total over an unstated scope is how
+# the next reader gets misled. Checked live via `systemctl --user list-units`, not assumed:
+# osiris-console (:8011) is a SEPARATE process from osiris-mcp (:8790) — task #164's own
+# console slowdown lived entirely on a surface this counter cannot see. osiris-worker (arq
+# cron), osiris-pulse (heartbeat), and osiris-manager (the hands daemon) are likewise separate
+# processes calling orchestrator functions directly, never through MCP. This answers "which
+# MCP TOOL is expensive," never "which SURFACE is expensive."
+_TOOL_STATS_BLIND_SPOTS = (
+    "osiris-console (:8011, a separate uvicorn process) — not counted; "
+    "task #164's own console slowdown lived entirely here",
+    "osiris-worker (arq cron: drain_cascade/evaluate_watch/sweep_doors/trigger_mail) — "
+    "not counted, calls orchestrator functions directly",
+    "osiris-pulse (heartbeat) — not counted, calls orchestrator functions directly",
+    "osiris-manager (the hands daemon) — not counted, calls orchestrator functions directly",
+    "direct Postgres access (scripts, psql, one-off measurement runs like this task's own) — "
+    "not counted, and never can be by an application-level counter",
+)
+
+
+def _record_tool_call(name: str, ms: float) -> None:
+    row = _tool_call_stats.setdefault(name, {"count": 0.0, "total_ms": 0.0})
+    row["count"] += 1
+    row["total_ms"] += ms
+
+
+def _ensure_tool_stats_flush_task() -> None:
+    global _tool_stats_flush_task, _tool_stats_window_start
+    if _tool_stats_flush_task is None:
+        _tool_stats_window_start = datetime.now(UTC)
+        _tool_stats_flush_task = asyncio.create_task(_flush_tool_stats_loop())
+
+
+async def _flush_tool_stats_loop() -> None:
+    while True:
+        await asyncio.sleep(_TOOL_STATS_FLUSH_INTERVAL_S)
+        await _flush_tool_stats_once()
+
+
+async def _flush_tool_stats_once() -> None:
+    """Swap the live dict out (new calls keep counting into a fresh one) and write the
+    snapshot — never hold the dict empty across an `await`, or a call landing mid-flush
+    would increment a row that's about to be discarded."""
+    global _tool_call_stats, _tool_stats_window_start
+    if not _tool_call_stats:
+        _tool_stats_window_start = datetime.now(UTC)
+        return
+    batch, _tool_call_stats = _tool_call_stats, {}
+    window_end = datetime.now(UTC)
+    window_start = _tool_stats_window_start or (window_end - timedelta(seconds=60))
+    _tool_stats_window_start = window_end
+    try:
+        pool = await _pool_get()
+        await pool.executemany(
+            "INSERT INTO mcp_tool_stats (tool_name, window_start, window_end, "
+            "call_count, total_ms) VALUES ($1, $2, $3, $4, $5)",
+            [(tool, window_start, window_end, int(v["count"]), v["total_ms"])
+             for tool, v in batch.items()],
+        )
+    except Exception:  # noqa: BLE001 — telemetry must never break serving
+        import logging
+        logging.getLogger("osiris.mcp").warning("tool-stats flush failed", exc_info=True)
 
 
 # THE AMBIENT SEAM WHISPER (alfred's pitch, written at his own 70% seam — decision d80621a7
@@ -333,6 +416,40 @@ def _create_init_options_with_tools_changed(
 mcp._mcp_server.create_initialization_options = (  # type: ignore[method-assign]
     _create_init_options_with_tools_changed)
 _pool: asyncpg.Pool | None = None
+
+
+@mcp.tool()
+async def tool_traffic(window_minutes: int = 60) -> dict[str, Any]:
+    """WHICH MCP TOOL IS EXPENSIVE (task #167) — per-tool call count + total/avg wall-clock
+    time, newest-cost-first. Two sources, both returned: `persisted` (flushed 60s windows
+    from `mcp_tool_stats`, going back `window_minutes`) and `current_unflushed_window` (the
+    live in-memory counters since the last flush — may be a partial window). Failures count
+    too (BoundedMCP.call_tool times/counts in a try/finally), so a broken tool doesn't read
+    as cheap. `blind_spots` names what this can never see — read it before trusting a total."""
+    pool = await _pool_get()
+    since = datetime.now(UTC) - timedelta(minutes=window_minutes)
+    rows = await pool.fetch(
+        "SELECT tool_name, sum(call_count) AS calls, sum(total_ms) AS total_ms "
+        "FROM mcp_tool_stats WHERE window_start >= $1 "
+        "GROUP BY tool_name ORDER BY total_ms DESC", since,
+    )
+    persisted = [
+        {"tool": r["tool_name"], "calls": r["calls"], "total_ms": round(r["total_ms"], 1),
+         "avg_ms": round(r["total_ms"] / r["calls"], 2) if r["calls"] else None}
+        for r in rows
+    ]
+    live = [
+        {"tool": name, "calls": int(v["count"]), "total_ms": round(v["total_ms"], 1),
+         "avg_ms": round(v["total_ms"] / v["count"], 2) if v["count"] else None}
+        for name, v in sorted(_tool_call_stats.items(), key=lambda kv: -kv[1]["total_ms"])
+    ]
+    return {
+        "window_minutes": window_minutes,
+        "persisted": persisted,
+        "current_unflushed_window": live,
+        "measures": "MCP tool calls on this one shared osiris-mcp process only",
+        "blind_spots": list(_TOOL_STATS_BLIND_SPOTS),
+    }
 
 
 # The fleet registry: each connected agent's identity, keyed by its client session. On the
