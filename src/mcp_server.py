@@ -2802,6 +2802,13 @@ async def roster(repo: str | None = None) -> dict[str, Any]:
     `governs` links), `pin` (a live read of the seat's own `.osiris`, three-way declared/
     unset/unreadable), `anchor_cwd`/`tree_cwd`/`live_cwd` kept SEPARATE on purpose (a live
     holder's actual mount cwd can differ from both with nothing wrong on the launch path).
+    When `anchor_cwd` isn't recorded, one extra probe of the conventional
+    `~/.osiris/seats/<handle>/` path runs before concluding anything — a hit surfaces via
+    `probed_anchor_cwd` (kept separate from `anchor_cwd`: a reader always sees what the
+    graph recorded vs what convention found) and `pin`/`office_exists` read from it; a miss
+    is `pin.state="unknown-office"`, never the old `no-office` (Alfred's third live-
+    reproduced defect, thread 3806, msg 4066 — 7 real, furnished seats read as officeless
+    and were invisible to Imhotep's plan_pin_migration count because of it).
 
     `pin.triage_bucket` (task #158's cross-reference) is a third state: `None` when nothing
     is declared to look up, `"no-such-project"` when the pin names a project that isn't a
