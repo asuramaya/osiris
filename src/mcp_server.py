@@ -60,6 +60,7 @@ from src.orchestrator import succession as comp_succession
 from src.orchestrator.agents import (
     AgentIdentity,
     _generation,
+    lineage_root,
     nearest_handoff_ancestor,
     project_pin_banner,
     read_project_model,
@@ -5064,11 +5065,11 @@ async def ack_handoff(
 
     Refuses rather than guesses: unresolvable ref ("no handoff matches"); already
     acknowledged or never a handoff ("already acknowledged or not a handoff" — a duplicate
-    ack is a clean error, not a second write); caller isn't a lineage descendant of the
-    handoff's own author (`_generation()` root match, same test `rank_open_threads.
-    whose_move` uses — "not your lineage's handoff to ack"). That last check is defense in
-    depth: delivery alone never burns a baton, but a MISTAKEN ack (a copy-pasted ref from
-    another lineage) would permanently retire someone else's live handoff, so it's refused.
+    ack is a clean error, not a second write); caller isn't in the handoff's own author's
+    lineage ("not your lineage's handoff to ack") — checked via `lineage_root`, a
+    succeeded_from edge-walk (decision 61cb1f02: replaces a string-parsed check that went
+    blind across an id-format change). Defense in depth: a MISTAKEN ack (a copy-pasted ref
+    from another lineage) would permanently retire someone else's live handoff, refused.
 
     PER-OBJECT not per-reader (first ack wins, retires for everyone). FINAL not a lease — an
     ack does not reopen if that generation goes on to produce zero further turns, the same
@@ -5077,7 +5078,6 @@ async def ack_handoff(
 
     Never deleted, never inaccessible — recall()/search() see it exactly as before; only
     succession_note and the open_threads/recent_decisions cap-exemption change."""
-    from src.orchestrator.agents import _generation
     from src.orchestrator.capture import RefAmbiguous, _find_decision, _find_thread
 
     pool = await _pool_get()
@@ -5101,7 +5101,9 @@ async def ack_handoff(
         "FROM objects o WHERE o.id=$1", oid)
     if row is None or row["is_handoff"] != "true":
         return {"error": f"{str(oid)[:8]} is already acknowledged or is not a handoff"}
-    if row["author"] is None or _generation(row["author"])[0] != _generation(actor)[0]:
+    if row["author"] is None:
+        return {"error": f"{str(oid)[:8]} is not your lineage's handoff to ack"}
+    if await lineage_root(pool, row["author"]) != await lineage_root(pool, actor):
         return {"error": f"{str(oid)[:8]} is not your lineage's handoff to ack"}
     now = datetime.now(UTC)
     await Actions(pool).assert_property(

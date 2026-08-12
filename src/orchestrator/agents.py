@@ -1180,6 +1180,42 @@ async def lineage_head(pool: asyncpg.Pool, canonical: str) -> str:
     return head
 
 
+async def _succeeded_from_of(pool: asyncpg.Pool, canonical: str) -> str | None:
+    """The immediate predecessor `canonical` succeeded, per its own `succeeded_from`
+    property assertion — one hop. The shared primitive under both the ancestor-walk
+    (nearest_handoff_ancestor, below) and lineage_root (ack_handoff's own lineage check) —
+    one mechanism, not two copies drifting (60bc15db, decision 61cb1f02)."""
+    val = await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='succeeded_from' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", canonical)
+    return str(val) if val else None
+
+
+async def lineage_root(pool: asyncpg.Pool, canonical: str, *, max_hops: int = 64) -> str:
+    """The ORIGIN of this canonical's own succession chain, walked via succeeded_from EDGES
+    — never `_generation()`'s string parse (60bc15db specimen, decision 61cb1f02): two
+    generations of the SAME lineage share this root even when the id FORMAT itself changes
+    across a renumbering. Live specimen that motivated this: agent:ad1a1cb0-g40-g40 and
+    agent:ad1a1cb0-g40-xxxix are six real succeeded_from hops apart and share nothing as
+    STRINGS (the "g40" suffix isn't a roman numeral, so `_generation()` roots the first one
+    at itself) — but they walk to the identical lineage origin. ack_handoff's own "is this
+    my lineage's handoff" guard uses this, replacing its old string-parse check; the cross-
+    lineage refusal itself is UNCHANGED (different root, refused, always) — only the
+    substrate computing "root" is more reliable now.
+
+    Bounded like every other succeeded_from walk in this file (mint_heir, the ancestor-walk
+    just below); a lineage longer than max_hops returns however far the walk reached, never
+    hangs on a cycle."""
+    cur = canonical
+    for _ in range(max_hops):
+        nxt = await _succeeded_from_of(pool, cur)
+        if nxt is None:
+            return cur
+        cur = nxt
+    return cur
+
+
 async def nearest_handoff_ancestor(
     pool: asyncpg.Pool, start_id: str, *, max_hops: int = 5, respect_ack: bool = True,
 ) -> tuple[str, list[dict[str, Any]]] | None:
@@ -1251,13 +1287,10 @@ async def nearest_handoff_ancestor(
         picks = sorted(rows, key=lambda r: r["observed_at"], reverse=True)[:2]
         if picks:
             return cur, [dict(r) for r in picks]
-        nxt = await pool.fetchval(
-            "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
-            "WHERE o.canonical=$1 AND a.name='succeeded_from' "
-            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", cur)
-        if not nxt:
+        nxt = await _succeeded_from_of(pool, cur)
+        if nxt is None:
             return None
-        cur = str(nxt)
+        cur = nxt
     return None
 
 

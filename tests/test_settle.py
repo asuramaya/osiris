@@ -826,6 +826,19 @@ async def _is_handoff_value(pool: Any, short_id: str) -> str | None:
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", short_id)
 
 
+async def _succeed(actions: Actions, heir: str, predecessor: str) -> None:
+    """Record a REAL succeeded_from property (heir -> predecessor), the same shape
+    register_agent's own real minting path writes — needed since ack_handoff's lineage
+    check now walks succeeded_from EDGES (60bc15db, decision 61cb1f02) instead of
+    comparing id STRINGS, so a test fixture that only shares a naming convention (ackone /
+    ackone-ii) with no recorded edge is no longer 'the same lineage' as far as the tool is
+    concerned — exactly the gap the fix closes. Mirrors
+    test_nearest_handoff_ancestor_walks_past_silence_within_the_bound's own convention."""
+    oid = await actions.create_or_find_object("Agent", heir, heir)
+    await actions.assert_property(oid, "succeeded_from", predecessor, heir,
+                                  datetime.now(UTC), 0.9, evidence_class="direct_observation")
+
+
 async def _ack_as(pool: Any, agent_id: str, ref: str) -> dict[str, Any]:
     """Mount `agent_id` on a throwaway ctx, call ack_handoff(ref), release the ctx — same
     pattern as `_settle_as`."""
@@ -870,6 +883,7 @@ async def test_ack_handoff_retires_a_same_lineage_handoff(actions: Actions) -> N
                    "is_handoff": True}])
     d1 = gen1["accepted"]["decisions"][0]["id"]
     assert await _is_handoff_value(actions.pool, d1) == "true"
+    await _succeed(actions, "agent:ackone-ii", "agent:ackone")
 
     out = await _ack_as(actions.pool, "agent:ackone-ii", d1)
     assert out == {"id": d1, "acknowledged": True}
@@ -888,12 +902,55 @@ async def test_ack_handoff_refuses_a_different_lineage(actions: Actions) -> None
     assert await _is_handoff_value(actions.pool, da) == "true"  # untouched, refused
 
 
+async def test_ack_handoff_succeeds_across_an_id_format_change(actions: Actions) -> None:
+    """60bc15db specimen (decision 61cb1f02), live-reproduced against Thoth herself before
+    this fix: the OLD lineage check compared `_generation()`'s STRING-parsed root, which
+    goes blind the moment a generation's own id-SUFFIX stops looking like a roman numeral
+    (a real renumbering shape: agent:ackformat-g40-g40 succeeds agent:ackformat-g40-xxxix,
+    six real hops apart in this test's own analogue, sharing NOTHING as strings — "g40" is
+    not a roman numeral, so the old check rooted the heir at itself and refused its own
+    predecessor's handoff). The new lineage_root check walks the REAL succeeded_from
+    chain instead and must succeed here, where the old check would have refused it."""
+    gen1 = await _settle_as(
+        actions.pool, "agent:ackformat",
+        decisions=[{"summary": "ackformat's own state of the board", "kind": "choice",
+                   "is_handoff": True}])
+    d1 = gen1["accepted"]["decisions"][0]["id"]
+    # a chain of ordinary roman-numeral generations, THEN a renumbered id shape at the end —
+    # exactly Thoth's own live specimen (agent:ad1a1cb0-g40-g40 succeeding ...-g40-xxxix)
+    await _succeed(actions, "agent:ackformat-ii", "agent:ackformat")
+    await _succeed(actions, "agent:ackformat-iii", "agent:ackformat-ii")
+    await _succeed(actions, "agent:ackformat-g40-g40", "agent:ackformat-iii")
+
+    out = await _ack_as(actions.pool, "agent:ackformat-g40-g40", d1)
+    assert out == {"id": d1, "acknowledged": True}
+    assert await _is_handoff_value(actions.pool, d1) == "false"
+
+
+async def test_lineage_root_walks_edges_not_id_strings(actions: Actions) -> None:
+    """Direct unit coverage of the primitive ack_handoff's fix is built on: two format-
+    changed generations of the SAME lineage resolve to the identical root, while two
+    genuinely unrelated agents that merely share NOTHING (no succeeded_from at all) each
+    root at themselves."""
+    from src.orchestrator.agents import lineage_root
+
+    await _succeed(actions, "agent:lrootB", "agent:lrootA")
+    await _succeed(actions, "agent:lroot-g40-g40", "agent:lrootB")
+    assert (await lineage_root(actions.pool, "agent:lroot-g40-g40")
+           == await lineage_root(actions.pool, "agent:lrootA") == "agent:lrootA")
+
+    # no edge asserted between these two -- each is its own root, never coincidentally equal
+    assert (await lineage_root(actions.pool, "agent:lrootstranger1")
+           != await lineage_root(actions.pool, "agent:lrootstranger2"))
+
+
 async def test_ack_handoff_refuses_a_second_ack(actions: Actions) -> None:
     gen1 = await _settle_as(
         actions.pool, "agent:ackdup",
         decisions=[{"summary": "ackdup's own state of the board", "kind": "choice",
                    "is_handoff": True}])
     d1 = gen1["accepted"]["decisions"][0]["id"]
+    await _succeed(actions, "agent:ackdup-ii", "agent:ackdup")
     first = await _ack_as(actions.pool, "agent:ackdup-ii", d1)
     assert first["acknowledged"] is True
 
@@ -915,6 +972,7 @@ async def test_ack_handoff_works_across_decision_and_thread_types(actions: Actio
         threads_open=[{"summary": "ackcross's own thread-shaped handoff",
                        "kind": "obligation", "is_handoff": True}])
     t1 = gen1["accepted"]["threads_opened"][0]["id"]
+    await _succeed(actions, "agent:ackcross-ii", "agent:ackcross")
     out = await _ack_as(actions.pool, "agent:ackcross-ii", t1)
     assert out["acknowledged"] is True
     assert await _is_handoff_value(actions.pool, t1) == "false"
@@ -924,6 +982,7 @@ async def test_ack_handoff_works_across_decision_and_thread_types(actions: Actio
         decisions=[{"summary": "ackcross-ii's own decision-shaped handoff", "kind": "choice",
                    "is_handoff": True}])
     d2 = gen2["accepted"]["decisions"][0]["id"]
+    await _succeed(actions, "agent:ackcross-iii", "agent:ackcross-ii")
     out2 = await _ack_as(actions.pool, "agent:ackcross-iii", d2)
     assert out2["acknowledged"] is True
     assert await _is_handoff_value(actions.pool, d2) == "false"
@@ -939,6 +998,7 @@ async def test_ack_handoff_leaves_the_record_fully_readable(actions: Actions) ->
         decisions=[{"summary": "ackread's own state of the board, still fully readable",
                    "kind": "choice", "is_handoff": True}])
     d1 = gen1["accepted"]["decisions"][0]["id"]
+    await _succeed(actions, "agent:ackread-ii", "agent:ackread")
     await _ack_as(actions.pool, "agent:ackread-ii", d1)
 
     rec = await recall(actions.pool, d1)
@@ -992,6 +1052,7 @@ async def test_settle_handoff_survives_whole_across_repeated_unacked_orients(
     row2 = next(r for r in second["recent_decisions"] if r["summary"].startswith("thirteen"))
     assert row2["summary"] == long_handoff
 
+    await _succeed(actions, "agent:bleedheir1-ii", "agent:bleedheir1")
     ack = await _ack_as(actions.pool, "agent:bleedheir1-ii", d1)
     assert ack["acknowledged"] is True
 
