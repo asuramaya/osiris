@@ -3391,3 +3391,49 @@ async def test_nearest_handoff_ancestor_surfaces_the_object_id(actions: Actions)
     found = await nearest_handoff_ancestor(actions.pool, "agent:nhaid0001")
     assert found is not None
     assert str(found[1][0]["id"]) == str(did)
+
+
+# ═══ RESOLVE_HANDLE / THE INELIGIBLE-HOLDER GUARD (task #142 punch-list item 3, Thoth's
+# dispatch DM 4097) — resolve_handle wraps resolve_seat for establish_office/rebind_seat,
+# both of which already have a correct "resolve to nothing -> use the Seat object directly"
+# fallback. Before this fix, a name whose unique seat's only holder was ineligible fell
+# through to resolve_seat's un-seated-lineage fallback and could return an OLDER, unmarked
+# generation instead of None — the same grave-delivery shape rulings 1a64ae9a/aee67e6d
+# named for send(), reached through this wrapper instead. ═══════════════════════════════
+
+
+async def test_resolve_handle_returns_none_when_the_seats_only_holder_is_ineligible(
+    actions: Actions,
+) -> None:
+    """John's exact live shape (DM 2360), reproduced against resolve_handle instead of
+    send(): a unique seat, one active holder marked false_mint, and an OLDER generation
+    still carrying the same `handle` assertion — the ancestor the old fallback would have
+    silently returned. resolve_handle must say None, not the ancestor's agent id."""
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="RhGhost", source="test")
+    now = datetime.now(UTC)
+    ancestor = await actions.create_or_find_object(
+        "Agent", "agent:rhghost-old", "agent:rhghost-old")
+    await actions.assert_property(ancestor, "handle", "RhGhost", "agent:rhghost-old", now, 0.9,
+                                  evidence_class="self_declared")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:rhghost-old")
+    heir = await actions.create_or_find_object("Agent", "agent:rhghost-new", "agent:rhghost-new")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:rhghost-new")
+    await actions.assert_property(heir, "false_mint", "true", "agent:rhghost-new", now, 0.9,
+                                  evidence_class="self_declared")
+
+    from src.orchestrator.agents import resolve_handle
+
+    assert await resolve_handle(actions, "RhGhost") is None
+
+
+async def test_resolve_handle_still_resolves_an_eligible_holder(actions: Actions) -> None:
+    """REGRESSION PROOF: the ordinary, working case is unaffected by the new check."""
+    from src.orchestrator.agents import resolve_handle
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="RhClean", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:rhclean0001")
+
+    assert await resolve_handle(actions, "RhClean") == "agent:rhclean0001"

@@ -87,6 +87,38 @@ async def test_unknown_handle_is_unresolved(actions: Actions) -> None:
     assert out == {"ref": "NobodyByThisName", "resolved": False, "matches": []}
 
 
+async def test_handle_with_only_an_ineligible_holder_names_why_instead_of_a_wrong_match(
+    actions: Actions,
+) -> None:
+    """task #142 punch-list item 3 (Thoth's dispatch DM 4097): John's exact live shape,
+    reproduced against doors() — a unique seat, one active holder marked false_mint, and an
+    older generation still carrying the same `handle` assertion. doors() never refuses (it's
+    read-only), so this is DISTINGUISH not ESCALATE: zero matches plus a note naming why,
+    never a confident match on the wrong generation."""
+    from datetime import UTC, datetime
+
+    from src.orchestrator.seats import ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="DoorGhost", source="test")
+    now = datetime.now(UTC)
+    ancestor = await actions.create_or_find_object(
+        "Agent", "agent:doorghost-old", "agent:doorghost-old")
+    await actions.assert_property(ancestor, "handle", "DoorGhost", "agent:doorghost-old",
+                                  now, 0.9, evidence_class="self_declared")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:doorghost-old")
+    heir = await actions.create_or_find_object(
+        "Agent", "agent:doorghost-new", "agent:doorghost-new")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:doorghost-new")
+    await actions.assert_property(heir, "false_mint", "true", "agent:doorghost-new", now, 0.9,
+                                  evidence_class="self_declared")
+
+    out = await doors(actions.pool, "DoorGhost")
+    assert out["resolved"] is False
+    assert out["matches"] == []
+    assert seat["seat_id"] in out["note"]
+    assert "agent:doorghost-new" in out["note"]
+
+
 async def test_cwd_ref_lists_every_distinct_soul_that_has_mounted_there(
     actions: Actions,
 ) -> None:

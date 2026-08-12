@@ -103,7 +103,17 @@ async def doors(pool: asyncpg.Pool, ref: str) -> dict[str, Any]:
     else:
         from src.actions.core import Actions
         from src.orchestrator.agents import resolve_seat
+        from src.orchestrator.seats import seat_holder_ineligible
 
+        # THE SAME GUARD send() USES (task #142 punch-list item 3): a name whose unique seat
+        # has only ineligible holders would otherwise fall to resolve_seat's un-seated-
+        # lineage fallback and confidently return some OTHER, older, unmarked generation —
+        # a wrong-but-real-looking match for a pure lookup tool, worse than an honest miss.
+        # doors() never refuses (it's read-only), so this DISTINGUISHES rather than escalates:
+        # zero matches, plus a note naming exactly why, instead of a fabricated "resolved".
+        ineligible = await seat_holder_ineligible(pool, ref)
+        if ineligible is not None:
+            return {"ref": ref, "resolved": False, "matches": [], "note": ineligible}
         found = await resolve_seat(Actions(pool), ref)
         if found["agent"]:
             matches = [await _record(pool, found["agent"], resolved_via="handle")]

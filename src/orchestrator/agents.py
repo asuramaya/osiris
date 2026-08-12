@@ -692,7 +692,23 @@ async def resolve_seat(actions: Actions, name: str) -> dict[str, Any]:
 async def resolve_handle(actions: Actions, name: str) -> str | None:
     """A human name → the LIVE seat of that lineage.
 
-    See resolve_seat — that word does a great deal of work."""
+    See resolve_seat — that word does a great deal of work.
+
+    ONE MORE DISTINCTION resolve_seat's own bare `agent` field can't make (task #142 punch-
+    list item 3, Thoth's dispatch): when `name` is a unique Seat whose only holder(s) are all
+    ineligible (retired/false_mint/visitor), `binding_of_handle` returns None and resolve_seat
+    falls to its un-seated-lineage fallback — which, by its own WHERE clause, ALSO excludes
+    that ineligible holder, so it can resolve to some OTHER, older, unmarked generation of the
+    same lineage instead: the exact grave-delivery shape rulings 1a64ae9a/aee67e6d named,
+    just reached through this wrapper instead of send(). Both of `resolve_handle`'s own
+    callers (establish_office, rebind_seat) already have a correct "resolve to nothing → use
+    the Seat object directly" fallback for exactly this situation — they only need
+    `resolve_handle` to actually SAY nothing rather than hand them a wrong-but-real-looking
+    agent id. `seat_holder_ineligible` returning non-None IS that distinction: return None
+    instead of trusting the fallback's guess."""
+    from src.orchestrator.seats import seat_holder_ineligible
+    if await seat_holder_ineligible(actions.pool, name) is not None:
+        return None
     return (await resolve_seat(actions, name))["agent"]  # type: ignore[no-any-return]
 
 
