@@ -587,3 +587,68 @@ async def test_mcp_project_identity_evidence_and_fork_doors(
     finally:
         srv._pool = saved_pool
         _agents.pop(_conn_key(ctx), None)
+
+
+async def test_rename_project_migrates_edges_never_orphans_them(
+    actions: Actions, tmp_path,
+) -> None:
+    """ADVERSARIAL TEST (Thoth's ask, msg 4083 — Alfred's charter rides on the answer):
+    rename a project carrying a `governs` edge from one Seat AND a `works_in` edge from a
+    DIFFERENT-source Agent, then confirm both still resolve from the renamed object and
+    no second object with the old canonical survives. `rename_project` never calls
+    create_or_find_object at all (confirmed by re-reading it end to end for this
+    question) — it resolves the EXISTING row, then `assert_property`s `name` on that SAME
+    `id`; `canonical` is never rewritten. So there is nothing to migrate: every edge was
+    always keyed on the object's immutable `id`, never on its name or canonical, and stays
+    correct automatically. This proves it against a live object rather than trusting the
+    docstring's own claim."""
+    office = tmp_path / "governing_office"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="osiris", handle="Governseat",
+                             anchor_cwd=str(office), source="test")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    agent_oid = await _mk_agent(actions, "agent:worksin0001")
+    proj = await _mk_project(actions, "beforename")
+
+    now = datetime.now(UTC)
+    await actions.create_link(seat_oid, proj, "governs", "test", now, 0.9)
+    await actions.create_link(agent_oid, proj, "works_in", "test", now, 0.9)
+
+    old_canonical = await actions.pool.fetchval(
+        "SELECT canonical FROM objects WHERE id=$1", proj)
+
+    out = await rename_project(actions, project="beforename", new_name="aftername",
+                               because="adversarial edge-migration test", actor="agent:test")
+    assert out["new_name"] == "aftername"
+    assert out["project"] == old_canonical  # canonical is UNCHANGED — the receipt's own
+                                            # "project" key IS the canonical, by contract
+
+    # the object's own id and canonical are byte-identical to before the rename
+    new_canonical = await actions.pool.fetchval(
+        "SELECT canonical FROM objects WHERE id=$1", proj)
+    assert new_canonical == old_canonical
+
+    # BOTH edges still resolve FROM THE SAME object id — nothing needed to migrate because
+    # nothing ever pointed at name/canonical to begin with
+    governs_live = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='governs' "
+        "AND (valid_until IS NULL OR valid_until > now())", seat_oid, proj)
+    works_in_live = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='works_in' "
+        "AND (valid_until IS NULL OR valid_until > now())", agent_oid, proj)
+    assert governs_live == 1
+    assert works_in_live == 1
+
+    # no second object minted under any name — exactly one SoftwareProject answers to
+    # either the old or the new label
+    count = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' AND canonical=$1",
+        old_canonical)
+    assert count == 1
+
+    # the NEW name resolves to the SAME object (never a twin) via the live name property
+    from src.orchestrator.projects import _resolve_software_project
+    resolved_new = await _resolve_software_project(actions.pool, "aftername")
+    assert resolved_new is not None
+    assert resolved_new["id"] == proj
