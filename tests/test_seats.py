@@ -1384,6 +1384,100 @@ async def test_roster_repo_lookup_conflict_when_charter_and_pin_disagree(
     assert seats_found == {charter_seat["seat_id"], pin_seat["seat_id"]}
 
 
+async def test_roster_repo_lookup_governed_when_charter_seat_manages_pin_seat(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Alfred's live review (thread 3806, finding 3): a coordinator's charter and a worker
+    it manages pinning the SAME repo is the normal, correctly-configured shape (his own
+    house: 8 repos, each governed by him and pinned by a different worker) — not a
+    `conflict`, which trained readers to skip the word."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import roster
+
+    await _repo(actions, "kast")
+    coordinator = await ensure_seat(actions, house="alfred", handle="Rlk4a", source="test")
+    await set_charter(actions, coordinator["seat_id"], ["kast"], actor="test")
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "kast"\n')
+    worker = await ensure_seat(actions, house="alfred", handle="Rlk4b", source="test",
+                               anchor_cwd=str(office))
+    worker_oid = await actions.create_or_find_object("Seat", worker["seat_id"], "test")
+    coordinator_oid = await actions.create_or_find_object(
+        "Seat", coordinator["seat_id"], "test")
+    await actions.create_link(worker_oid, coordinator_oid, "managed_by", "test",
+                              datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    out = await roster(actions.pool, repo="kast")
+    assert out["agreement"] == "governed"
+    seats_found = {m["seat"] for m in out["matches"]}
+    assert seats_found == {coordinator["seat_id"], worker["seat_id"]}
+
+
+async def test_roster_repo_lookup_stays_conflict_when_the_manager_edge_points_the_other_way(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """`governed` requires the CHARTER-seat to manage the PIN-seat specifically — the
+    reverse (pin-seat manages charter-seat) is not the shape Alfred named and stays a real
+    `conflict`, same as two genuinely unrelated seats."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import roster
+
+    await _repo(actions, "sutra2")
+    charter_seat = await ensure_seat(actions, house="alfred", handle="Rlk5a", source="test")
+    await set_charter(actions, charter_seat["seat_id"], ["sutra2"], actor="test")
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "sutra2"\n')
+    pin_seat = await ensure_seat(actions, house="alfred", handle="Rlk5b", source="test",
+                                 anchor_cwd=str(office))
+    charter_oid = await actions.create_or_find_object("Seat", charter_seat["seat_id"], "test")
+    pin_oid = await actions.create_or_find_object("Seat", pin_seat["seat_id"], "test")
+    await actions.create_link(charter_oid, pin_oid, "managed_by", "test",
+                              datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    out = await roster(actions.pool, repo="sutra2")
+    assert out["agreement"] == "conflict"
+
+
+async def test_roster_repo_lookup_near_misses_on_case_and_separator_mismatch(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Alfred live-reproduced this exact shape (thread 3806, finding 2): the operator
+    renamed a repo family-wide (`RAMstein` -> `ramstein`) while a seat's pin still carried
+    the old spelling. A bare `no-match` gave no evidence; near_misses does."""
+    from src.orchestrator.seats import roster
+
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "RAMstein"\n')
+    seat = await ensure_seat(actions, house="alfred", handle="Rlk6", source="test",
+                             anchor_cwd=str(office))
+
+    out = await roster(actions.pool, repo="ramstein")
+    assert out["agreement"] == "no-match"
+    assert out["matches"] == []
+    assert out["near_misses"] == [
+        {"repo": "RAMstein", "seat": seat["seat_id"], "via": ["pin"], "differs_by": "case"}]
+
+
+async def test_roster_repo_lookup_near_misses_empty_when_agreement_is_not_no_match(
+    actions: Actions,
+) -> None:
+    """The extra scan only ever runs on a bare no-match (Alfred's own scoping: "costs one
+    extra pass on the miss path only") — a real match never pays for it."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import roster
+
+    await _repo(actions, "gestalt")
+    seat = await ensure_seat(actions, house="alfred", handle="Rlk7", source="test")
+    await set_charter(actions, seat["seat_id"], ["gestalt"], actor="test")
+
+    out = await roster(actions.pool, repo="gestalt")
+    assert out["agreement"] == "single-match"
+    assert out["near_misses"] == []
+
+
 async def test_roster_repo_lookup_no_match_is_not_no_owner(actions: Actions) -> None:
     from src.orchestrator.seats import roster
 

@@ -2810,10 +2810,17 @@ async def roster(repo: str | None = None) -> dict[str, Any]:
     from `triage`, not a second project-health notion.
 
     `repo=<name>` answers "who owns this" directly: a seat matches if its charter OR its
-    current pin names the repo, tagged with which signal(s) hit. Two seats matching from
-    different signals come back as a `conflict`, never silently picked one. Zero matches is
-    `no-match` — NOT a claim the repo has no owner, only that neither signal this function
-    reads found one (ruling 60bc15db, the third state).
+    current pin names the repo, tagged with which signal(s) hit. Two seats matching is
+    `governed` when the charter-seat actually MANAGES the pin-seat (a real `managed_by`
+    edge) — a coordinator governing a repo its own worker sits in is the normal shape, not a
+    warning (Alfred's live review, thread 3806: calling this `conflict` trained readers to
+    skip the word). Anything else two-seats-matching stays `conflict`, never silently picked
+    one. Zero matches is `no-match` — NOT a claim the repo has no owner, only that neither
+    signal this function reads found one (ruling 60bc15db, the third state) — paired with
+    `near_misses`: on a bare `no-match` only, one extra case/separator-insensitive pass names
+    what WAS found without promoting it to a match (Alfred live-reproduced the exact case a
+    standing "might not match exactly" caveat couldn't catch: a repo renamed `RAMstein` ->
+    `ramstein` family-wide while two seats' charter/pin still carried the old spelling).
 
     NEITHER `chartered_repos` NOR `pin` IS CERTIFIED CANONICAL. Minting a SoftwareProject is
     cheap and mostly ungated — a name resolving to a real object proves the object exists,

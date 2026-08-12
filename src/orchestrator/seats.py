@@ -29,6 +29,7 @@ mint_heir), so the SEAT is the address that stops churning precisely because min
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 import uuid
 from collections.abc import AsyncIterator
@@ -459,12 +460,34 @@ async def roster(
 
     `repo=None` returns every active seat's row. `repo=<name>` instead answers Alfred's exact
     question — "who owns this" — by checking BOTH signals independently: a seat whose charter
-    OR current pin names `repo` is a match, tagged with WHICH signal(s) found it. Two seats
-    matching from different signals is `agreement="conflict"`, returned as two rows, never
-    silently resolved to one. Zero matches is `agreement="no-match"` — explicitly NOT the same
-    claim as "nobody owns this repo" (ruling 60bc15db, the third state): it means neither
-    signal this function reads found an owner, which is the honest boundary of what a
-    graph+pin read can say, not a verdict on the repo's actual ownership."""
+    OR current pin names `repo` is a match, tagged with WHICH signal(s) found it. Zero matches
+    is `agreement="no-match"` — explicitly NOT the same claim as "nobody owns this repo"
+    (ruling 60bc15db, the third state): it means neither signal this function reads found an
+    owner, which is the honest boundary of what a graph+pin read can say, not a verdict on
+    the repo's actual ownership.
+
+    TWO SEATS MATCHING (Alfred's live review, thread 3806, findings 2 and 3 — both reproduced
+    against his own house before this function saw them):
+    - the CHARTER-seat MANAGES the PIN-seat (a real `managed_by` edge, checked via
+      `manager_of_seat`) is `agreement="governed"` — a coordinator governing a repo its own
+      worker sits in is the NORMAL, correctly-configured shape (Alfred's house: 8 repos, each
+      chartered by him and pinned by a different worker), not a warning. Calling this
+      `conflict` trained readers to skip the word — the one time it means two seats genuinely
+      claiming the same repo by the same signal, it would get skipped too.
+    - anything else (two charters, two pins, or an unrelated charter+pin pair) stays
+      `agreement="conflict"`, returned as both rows, never silently resolved to one — now a
+      word that means something.
+
+    NO LITERAL MATCH is a real answer, but the caveat below is a standing disclaimer printed
+    on every no-match — Alfred's point exactly: a caveat that's always printed carries no
+    information on the call where it's actually true (ruling 60bc15db, one level up — the
+    verb KNOWS a near-miss is possible and didn't used to look). So on `no-match` only, one
+    extra pass re-checks every seat's charter/pin case- and separator-insensitively (strip
+    non-alphanumerics, lowercase) and returns `near_misses` — evidence, never promoted to a
+    match: `{"repo": <as actually stored>, "seat", "via", "differs_by": "case"|"separator"}`.
+    Live-reproduced: the operator renamed a repo `RAMstein` -> `ramstein` family-wide; two
+    seats' charter/pin still carried the old spelling, so `roster(repo='ramstein')` returned
+    a bare, uninformative `no-match` until this existed."""
     from src.orchestrator.agents import read_project_pin
     from src.orchestrator.charter import charter_of
 
@@ -528,8 +551,17 @@ async def roster(
         agreement = "no-match"
     elif len(matches) == 1:
         agreement = "single-match"
+    elif len(matches) == 2:
+        charter_seat = next((m["seat"] for m in matches if "charter" in m["via"]), None)
+        pin_seat = next((m["seat"] for m in matches if "pin" in m["via"]), None)
+        agreement = "conflict"
+        if charter_seat and pin_seat and charter_seat != pin_seat:
+            if await manager_of_seat(pool, pin_seat) == charter_seat:
+                agreement = "governed"
     else:
         agreement = "conflict"
+
+    near_misses: list[dict[str, Any]] = []
     caveats = list(_ROSTER_CAVEATS)
     if agreement == "no-match":
         caveats.append(
@@ -537,7 +569,26 @@ async def roster(
             "not that the repo has no owner. It may be owned by a seat whose pin this "
             "function cannot read, chartered under a name this repo string doesn't exactly "
             "match, or simply not yet declared anywhere this function looks.")
-    return {"repo": name, "matches": matches, "agreement": agreement, "caveats": caveats}
+
+        def _norm(s: str) -> str:
+            return re.sub(r"[^a-z0-9]", "", s.lower())
+
+        target = _norm(name)
+        found: dict[tuple[str, str], set[str]] = {}
+        for r in rows:
+            candidates = [("charter", c) for c in r["chartered_repos"]]
+            if r["pin"]["declared"]:
+                candidates.append(("pin", r["pin"]["declared"]))
+            for via, candidate in candidates:
+                if candidate != name and _norm(candidate) == target:
+                    found.setdefault((r["seat"], candidate), set()).add(via)
+        for (seat, candidate), vias in sorted(found.items()):
+            differs = "case" if candidate.lower() == name.lower() else "separator"
+            near_misses.append({"repo": candidate, "seat": seat, "via": sorted(vias),
+                                 "differs_by": differs})
+
+    return {"repo": name, "matches": matches, "agreement": agreement, "caveats": caveats,
+            "near_misses": near_misses}
 
 
 # A CASE-FOLDED DENY-LIST, NOT A DETECTOR (Sekhmet's own list, msg 3906 — 8 project-string
