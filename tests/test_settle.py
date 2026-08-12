@@ -944,6 +944,39 @@ async def test_lineage_root_walks_edges_not_id_strings(actions: Actions) -> None
            != await lineage_root(actions.pool, "agent:lrootstranger2"))
 
 
+async def test_retire_stale_handoffs_survives_an_id_format_change(actions: Actions) -> None:
+    """_retire_stale_handoffs carried the identical string-parse defect ack_handoff's own
+    lineage guard did (decision 61cb1f02's sibling check) -- fixed the same way, same
+    specimen shape: a format-changed heir's own backfill run must still retire its real
+    predecessor's stale handoff, and must still leave an unrelated lineage's alone."""
+    import uuid as uuid_mod
+    from datetime import UTC, datetime
+
+    from src import mcp_server as srv
+
+    old = await _settle_as(
+        actions.pool, "agent:retireformat",
+        decisions=[{"summary": "retireformat's own state of the board", "kind": "choice",
+                   "is_handoff": True}])
+    old_id = old["accepted"]["decisions"][0]["id"]
+    assert await _is_handoff_value(actions.pool, old_id) == "true"
+
+    stranger = await _settle_as(
+        actions.pool, "agent:retirestranger",
+        decisions=[{"summary": "an unrelated lineage's own state of the board",
+                   "kind": "choice", "is_handoff": True}])
+    stranger_id = stranger["accepted"]["decisions"][0]["id"]
+
+    await _succeed(actions, "agent:retireformat-g40-g40", "agent:retireformat")
+
+    retired = await srv._retire_stale_handoffs(
+        actions.pool, "agent:retireformat-g40-g40", uuid_mod.UUID(int=0), datetime.now(UTC))
+    assert old_id in retired
+    assert stranger_id not in retired
+    assert await _is_handoff_value(actions.pool, old_id) == "false"
+    assert await _is_handoff_value(actions.pool, stranger_id) == "true"  # untouched
+
+
 async def test_ack_handoff_refuses_a_second_ack(actions: Actions) -> None:
     gen1 = await _settle_as(
         actions.pool, "agent:ackdup",

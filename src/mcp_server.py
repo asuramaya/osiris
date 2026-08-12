@@ -5008,10 +5008,15 @@ async def _retire_stale_handoffs(
     live call path — a fresh is_handoff write no longer retires anything automatically.
 
     Retires every is_handoff='true' record from `actor`'s own LINEAGE — same seat, any
-    earlier OR same generation, Decision or Thread alike, `_generation()`'s root match, the
-    identical test `rank_open_threads.whose_move` already uses for 'mine to act' — except
-    `keep`. Cross-lineage records are NEVER touched: Khnum's handoff is never retired by a
-    Sekhmet-actor's backfill run.
+    earlier OR same generation, Decision or Thread alike, `lineage_root`'s succeeded_from
+    edge-walk (decision 61cb1f02: this carried the identical string-parse defect
+    ack_handoff's own lineage guard did, same fix applied here for the same reason) —
+    except `keep`. Cross-lineage records are NEVER touched: Khnum's handoff is never
+    retired by a Sekhmet-actor's backfill run. `rank_open_threads.whose_move` still
+    compares `_generation()` STRING roots for its own, unrelated "mine to act" ranking
+    question — a display-ordering concern on a documented PURE function, not this
+    function's own retirement guard; left alone deliberately, not silently inconsistent
+    (decision — see the sibling check this fix was built alongside).
 
     Resolves each candidate's CURRENT is_handoff value the same way every other property-
     read in this codebase does (confidence DESC, observed_at DESC LIMIT 1) rather than a
@@ -5026,9 +5031,7 @@ async def _retire_stale_handoffs(
     Returns the short ids of every record retired, for the caller's own receipt — a silent
     mutation behind an already-silent bleed would just be a quieter version of the same
     disease."""
-    from src.orchestrator.agents import _generation
-
-    root = _generation(actor)[0]
+    root = await lineage_root(pool, actor)
     rows = await pool.fetch(
         "SELECT o.id AS object_id, "
         "(SELECT a.source_id FROM current_assertions a WHERE a.object_id=o.id "
@@ -5043,7 +5046,7 @@ async def _retire_stale_handoffs(
     retired: list[str] = []
     actions = Actions(pool)
     for r in rows:
-        if _generation(r["source_id"])[0] == root:
+        if await lineage_root(pool, r["source_id"]) == root:
             await actions.assert_property(r["object_id"], "is_handoff", "false", actor, now,
                                           0.9, evidence_class="self_declared")
             retired.append(str(r["object_id"])[:8])
