@@ -61,6 +61,7 @@ from src.orchestrator.agents import (
     AgentIdentity,
     _generation,
     lineage_root,
+    misfiled_by_lineage,
     nearest_handoff_ancestor,
     project_pin_banner,
     read_project_model,
@@ -2421,6 +2422,12 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
                         "stays live and keeps costing every future orient() in this "
                         "project, not just yours.",
             }
+    # #145's DISCOVERY HALF (decision b89477a0/61cb1f02): a lineage-scoped, not project-
+    # scoped, misfiling finder — where identity_coherence (settle.py) can only ever see
+    # THIS session's own writes, this can see every generation's, so a correctly-filed
+    # successor can find an ancestor's misfiled work. Report-only, never a gate.
+    misfiled = (await misfiled_by_lineage(pool, ident.agent_id, proj)
+               if ident and proj else None)
     # CO-AGENT AWARENESS (Deckard XXVI, msg 258: a live sibling shared his exact worktree
     # and the graph never said so — he re-derived 'never git add -A' from a local file
     # while osiris KNEW). One query: other live mounts on THIS project, named at orient.
@@ -2519,6 +2526,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             **({"project_pin_error": pin_warn} if pin_warn else {}),
             **sweep_receipt,
             **({"succession_note": inheritance} if inheritance else {}),
+            **({"misfiled_elsewhere": misfiled} if misfiled else {}),
             **({"co_agents": co_agents} if co_agents else {}),
             **({"peer": peer} if peer else {}),
             **({"while_you_were_away": away} if away else {}),
@@ -2587,6 +2595,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         **({"swap": swap} if swap else {}),
         **({"project_pin_error": pin_warn} if pin_warn else {}),
         **({"succession_note": inheritance} if inheritance else {}),
+        **({"misfiled_elsewhere": misfiled} if misfiled else {}),
         **({"co_agents": co_agents} if co_agents else {}),
         **({"peer": peer} if peer else {}),
         **({"while_you_were_away": away} if away else {}),

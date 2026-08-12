@@ -977,6 +977,116 @@ async def test_retire_stale_handoffs_survives_an_id_format_change(actions: Actio
     assert await _is_handoff_value(actions.pool, stranger_id) == "true"  # untouched
 
 
+# ═══ misfiled_by_lineage — #145's discovery half (decision b89477a0/61cb1f02) ═══
+# identity_coherence (filed_under_check, above) only ever checks THIS session's own
+# writes forward from its own mounted_at; this walks the whole lineage, all of history.
+
+
+async def test_misfiled_by_lineage_none_when_project_unknown(actions: Actions) -> None:
+    from src.orchestrator.agents import misfiled_by_lineage
+
+    assert await misfiled_by_lineage(actions.pool, "agent:mbl00", None) is None
+
+
+async def test_misfiled_by_lineage_earned_silence_when_clean_and_chain_complete(
+    actions: Actions,
+) -> None:
+    """Nothing misfiled AND the chain terminated within max_hops -- a real, complete
+    answer, allowed to render as silence (None), same discipline as filed_under_check's
+    own None-means-nothing-to-report convention."""
+    from src.orchestrator.agents import misfiled_by_lineage
+
+    await record_decision(actions, "mbl01's own ruling, correctly filed",
+                          repo="mblproj", source="agent:mbl01")
+    out = await misfiled_by_lineage(actions.pool, "agent:mbl01", "mblproj")
+    assert out is None
+
+
+async def test_misfiled_by_lineage_finds_an_ancestors_misfiled_write(actions: Actions) -> None:
+    """The real #145 shape: a PREDECESSOR's write landed under a different project than
+    the CURRENT, correctly-filed generation's own. filed_under_check (scoped to one
+    session) could never see this; this must."""
+    from src.orchestrator.agents import misfiled_by_lineage
+
+    await record_decision(actions, "mbl02's ruling, written while mounted elsewhere",
+                          repo="wrongproj", source="agent:mbl02")
+    await _succeed(actions, "agent:mbl02-ii", "agent:mbl02")
+
+    out = await misfiled_by_lineage(actions.pool, "agent:mbl02-ii", "mblproj")
+    assert out is not None
+    assert out["filed_under"] == "mblproj"
+    assert out["misfiled_count"] == 1
+    assert out["misfiled"][0]["filed_under"] == "wrongproj"
+    assert out["chain_hops_walked"] == 1
+    assert out["chain_may_be_incomplete"] is False
+
+
+async def test_misfiled_by_lineage_survives_an_id_format_change(actions: Actions) -> None:
+    """The exact live specimen shape this whole night has been about: the CURRENT
+    generation's id format changed (…-g40-g40 style) but the succeeded_from chain is
+    real, so the ancestor's misfiled write is still found."""
+    from src.orchestrator.agents import misfiled_by_lineage
+
+    await record_decision(actions, "mbl03's ruling, filed under the wrong project",
+                          repo="wrongproj", source="agent:mbl03")
+    await _succeed(actions, "agent:mbl03-g40-g40", "agent:mbl03")
+
+    out = await misfiled_by_lineage(actions.pool, "agent:mbl03-g40-g40", "mblproj")
+    assert out is not None
+    assert out["misfiled_count"] == 1
+
+
+async def test_misfiled_by_lineage_never_hides_an_incomplete_chain_behind_a_clean_answer(
+    actions: Actions,
+) -> None:
+    """Thoth's own explicit constraint (DM 4114): a short/empty misfiled list must never
+    render identically to a fully-verified clean one. Force max_hops below the real chain
+    length -- nothing misfiled among what WAS reached, but the walk did not terminate, so
+    the caveat must survive rather than collapsing to None."""
+    from src.orchestrator.agents import misfiled_by_lineage
+
+    await _succeed(actions, "agent:mbl04-ii", "agent:mbl04")
+    await _succeed(actions, "agent:mbl04-iii", "agent:mbl04-ii")
+
+    out = await misfiled_by_lineage(actions.pool, "agent:mbl04-iii", "mblproj", max_hops=1)
+    assert out is not None
+    assert out["misfiled_count"] == 0
+    assert out["chain_hops_walked"] == 1
+    assert out["chain_may_be_incomplete"] is True
+
+
+async def test_orient_surfaces_misfiled_elsewhere_for_a_correctly_filed_successor(
+    actions: Actions,
+) -> None:
+    """The real #145 acceptance case, through orient() itself: a correctly-filed
+    successor's own orient() call must surface an ANCESTOR's misfiled write -- something
+    identity_coherence (settle-time, this-session-only) could never do."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.compositions import seed_default_compositions
+
+    await seed_default_compositions(actions.pool)
+    await record_decision(actions, "mblorient's ruling, filed under the wrong project",
+                          repo="wrongproj", source="agent:mblorient")
+    await _succeed(actions, "agent:mblorient-ii", "agent:mblorient")
+
+    ctx = _FakeCtx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:mblorient-ii", session="mblorient-ii", project="mblorientproj",
+        model=None, cwd=None)
+    try:
+        out = await srv.orient(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert "misfiled_elsewhere" in out
+    assert out["misfiled_elsewhere"]["misfiled_count"] == 1
+    assert out["misfiled_elsewhere"]["misfiled"][0]["filed_under"] == "wrongproj"
+
+
 async def test_ack_handoff_refuses_a_second_ack(actions: Actions) -> None:
     gen1 = await _settle_as(
         actions.pool, "agent:ackdup",
