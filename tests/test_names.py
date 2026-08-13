@@ -404,6 +404,30 @@ async def test_claim_name_still_mints_fresh_for_a_genuinely_new_handle(
     assert bound is not None and bound["handle"] == "Nebula"
 
 
+async def test_claim_name_confesses_a_seat_world_mint_failure_instead_of_omitting_it(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """60bc15db, specimen #5 of decision 01e0c69a: ensure_seat's own error used to be
+    silently dropped, and the receipt's `seat_id` key just wasn't there — indistinguishable
+    from "no seat needed yet". The claim itself must still succeed (the assertion world
+    doesn't depend on the seat world binding), but the receipt now says WHY seat_id is
+    missing via a `seat_error` key instead of omitting it wordlessly."""
+    import src.orchestrator.seats as seats_mod
+
+    async def _failing_ensure_seat(actions: Actions, **kw: object) -> dict[str, object]:
+        return {"error": "synthetic seat-world failure"}
+
+    monkeypatch.setattr(seats_mod, "ensure_seat", _failing_ensure_seat)
+    await _agent(actions, "agent:seaterrorcase", project="handlingtheloop")
+
+    claimed = await claim_name(actions, "agent:seaterrorcase", "Errorbound",
+                               source="agent:seaterrorcase")
+
+    assert claimed.get("error") is None, "the name claim itself must still succeed"
+    assert "seat_id" not in claimed
+    assert claimed.get("seat_error") == "synthetic seat-world failure"
+
+
 async def test_claim_name_live_check_is_unconditional_not_gated_by_house_scoped_holders(
     actions: Actions,
 ) -> None:
