@@ -422,8 +422,9 @@ def _tool_chars(t: Any) -> int:
 # see. Third author in a row to decline this line correctly; third time the author's honest
 # number could not have been right. No author can measure a surface that does not exist
 # until the merge.
-# 154,558 -> 155,345. 109 -> 110 tools; tool_traffic (#167) added the 110th.
-TOOL_CONTRACT_CEILING_CHARS = 155_345
+# 155,345 -> 155,414. Still 110 tools; open_thread gained branch/files_touched
+# (held-work surface, #168's one surviving leg) — structural inputSchema, not prose.
+TOOL_CONTRACT_CEILING_CHARS = 155_414
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
