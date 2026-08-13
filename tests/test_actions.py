@@ -54,6 +54,25 @@ async def test_assert_property_supersedes_within_source_but_keeps_set(
     assert {v["value"] for v in vals} == {"Namecheap", "MarkMonitor"}
 
 
+async def test_assert_property_flips_is_current_on_the_exact_row_it_supersedes(
+    actions: Actions, case_id: str,
+) -> None:
+    """migration 0047/thread 2a280e07: is_current is the maintained flag current_assertions'
+    view now reads instead of re-deriving the anti-join on every call. Same-source supersede
+    must flip false on the superseded row only — never the other source's row (#102's own
+    coexistence rule, unaffected by this being a flag instead of a live NOT EXISTS)."""
+    obj = await actions.create_or_find_object("Domain", "corp.com", "analyst:test", case_id)
+    first = await actions.assert_property(obj, "registrar", "GoDaddy", "helper:rdap", NOW, 0.9)
+    other_source = await actions.assert_property(
+        obj, "registrar", "MarkMonitor", "helper:whois", NOW, 0.7)
+    second = await actions.assert_property(obj, "registrar", "Namecheap", "helper:rdap", NOW, 0.9)
+
+    rows = {r["id"]: r["is_current"] for r in await actions.pool.fetch(
+        "SELECT id, is_current FROM assertions WHERE id = ANY($1::bigint[])",
+        [first, other_source, second])}
+    assert rows == {first: False, other_source: True, second: True}
+
+
 async def test_create_link(actions: Actions, case_id: str) -> None:
     a = await actions.create_or_find_object("Email", "a@x.com", "analyst:test", case_id)
     b = await actions.create_or_find_object("Account", "github:a", "analyst:test", case_id)
@@ -244,6 +263,12 @@ async def test_supersede_assertion_retires_a_different_sources_row(
     assert {v["value"] for v in vals} == {"Namecheap"}  # the wrong row is gone from current
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM audit_log WHERE action='supersede_assertion'") == 1
+    # migration 0047/thread 2a280e07: the cross-source retirement flips is_current too,
+    # same discipline as assert_property's own same-source flip
+    assert await actions.pool.fetchval(
+        "SELECT is_current FROM assertions WHERE id=$1", wrong) is False
+    assert await actions.pool.fetchval(
+        "SELECT is_current FROM assertions WHERE id=$1", new_id) is True
 
 
 async def test_supersede_assertion_guards(actions: Actions, case_id: str) -> None:
