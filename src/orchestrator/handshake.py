@@ -526,6 +526,7 @@ async def automount(
     # credentialed-birth class as the seat token: a declared identity is never a
     # stranger's greeting.
     spawn_child: str | None = None
+    spawn_error: str | None = None
     if (not lived and viewed is None and not (seat_id and attach_token) and spawned_by):
         from src.orchestrator.lineage import register_spawn
         try:
@@ -533,8 +534,13 @@ async def automount(
                 actions, session_id[:8], agent_type=spawn_type or "wake-triage",
                 parent_agent=spawned_by, project=ident.project, session=session_id,
                 witnessed=True)  # the spawner's own declaration, not a harness announcement
-        except Exception:  # noqa: BLE001 — a failed child registration degrades to visitor
-            spawn_child = None
+        except Exception as e:  # noqa: BLE001 — a failed child registration still degrades
+            # to visitor (identity binding stays conservative), but must CONFESS rather
+            # than silently omit the receipt (60bc15db specimen 2, decision 01e0c69a) —
+            # same shape as attach/transcripts_healed two blocks below, which already
+            # populate an explicit "...FAILED..." value on their own failures.
+            spawn_error = (f"CHILD REGISTRATION FAILED — {str(e)[:200]}; the mount "
+                          "stands, unparented")
         if spawn_child:
             ident.agent_id = spawn_child
     if lived or viewed is not None or (seat_id and attach_token):
@@ -876,7 +882,8 @@ async def automount(
             "child_note": "you are a DECLARED CHILD — registered spawned_by your parent "
                           "at birth (roman.arabic denomination); your writes are your "
                           "own, the seat and its succession are your parent's"}
-           if spawn_child else {}),
+           if spawn_child else
+           {"child_of": spawned_by, "child_note": spawn_error} if spawn_error else {}),
     }
 
 

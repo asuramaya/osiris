@@ -69,11 +69,15 @@ async def settle_boxes(
     # just mail settled. No content-classifier — the primitive is 'opened an obligation',
     # not 'looks like a handoff'.
     try:
-        minted = bool(await conn_or_pool.fetchval(
+        minted: bool | None = bool(await conn_or_pool.fetchval(
             "SELECT 1 FROM current_assertions a JOIN objects o ON o.id = a.object_id "
             "WHERE o.canonical = $1 AND a.name = 'minted_because' LIMIT 1", agent_id))
-    except Exception:  # noqa: BLE001
-        minted = False
+    except Exception:  # noqa: BLE001 — could not determine, NEVER the same as a
+        # confirmed "not minted": the gate below must not silently drop the box the way a
+        # bare `minted = False` would (60bc15db specimen 1 — the outer gate collapsing
+        # "don't know" into "not applicable" one level above where the inner try already
+        # gets this right).
+        minted = None
     if minted:
         try:
             boxes["a live succession/handoff note (this lineage was minted)"] = bool(
@@ -84,6 +88,10 @@ async def settle_boxes(
                     "AND a.observed_at >= $2 LIMIT 1", agent_id, mounted_at))
         except Exception:  # noqa: BLE001
             boxes["a live succession/handoff note (this lineage was minted)"] = None
+    elif minted is None:
+        # fog-of-war on whether the box even applies is itself fog-of-war on the box —
+        # surfaced via unevaluated_boxes, never silently omitted like a genuine non-mint.
+        boxes["a live succession/handoff note (this lineage was minted)"] = None
     return boxes
 
 

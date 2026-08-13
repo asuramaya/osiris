@@ -399,6 +399,38 @@ async def test_a_declared_child_is_born_denominated(actions: Actions,
         "AND canonical='agent:39fb22a2'") == 1
 
 
+async def test_a_failed_child_registration_confesses_rather_than_omitting(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """60bc15db specimen 2 (decision 01e0c69a): a spawner DID declare parentage, but
+    register_spawn itself failed — this must never render identically to "no spawner
+    declared parentage at all" (the genuine, correctly-silent case). The mount still
+    degrades to a plain visitor (identity binding stays conservative), but the receipt
+    must confess, matching attach/transcripts_healed's own "...FAILED..." shape two
+    blocks away in the same function."""
+    import src.orchestrator.lineage as lineage_mod
+
+    async def _raise(*args: object, **kwargs: object) -> str:
+        raise RuntimeError("simulated registration failure")
+
+    monkeypatch.setattr(lineage_mod, "register_spawn", _raise)
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/wakehouse2")
+    parent = await actions.create_or_find_object("Agent", "agent:dad0beef2", "agent:dad0beef2")
+    await actions.assert_property(parent, "handle", "Sower2", "agent:dad0beef2",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    out = await automount(actions, session_id=SID, cwd="/w/wakehouse2",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
+                          spawned_by="agent:dad0beef2", spawn_type="wake-triage")
+
+    assert out["child_of"] == "agent:dad0beef2"       # confessed, not omitted
+    assert out["child_note"] is not None and "FAILED" in out["child_note"]
+    # identity binding stayed conservative — never rebound to a phantom child
+    assert out["agent"] != "agent:dad0beef2"
+
+
 async def test_automount_survives_a_sessionless_stranger(actions: Actions,
                                                          tmp_path: Path) -> None:
     # no transcript, junk session id → still a valid (unresolved) mount, never a crash:

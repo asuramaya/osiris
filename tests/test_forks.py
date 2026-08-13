@@ -175,6 +175,30 @@ async def test_the_answer_is_memoized_and_NEVER_RESCANNED(
         "a negative answer must be CACHED, not re-dug forever"
 
 
+async def test_an_undetermined_first_uuid_is_never_cached_as_a_negative(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """60bc15db specimen 4 (decision 01e0c69a): a session whose transcript is not yet
+    flushed (first_uuid can't even determine its own join key — plausible at the exact
+    moment SessionStart fires) is NOT the same fact as a real search that ran to
+    completion and found nobody. Caching the first as if it were the second would freeze
+    a transient condition into a permanent "nobody's child" — precisely the twin-seat
+    mistake this module exists to prevent. Proven by writing the real content only AFTER
+    the first call: the retry must still find the true parent, unlike the sibling test
+    above where a genuine negative stays cached even after its evidence is deleted."""
+    _write(tmp_path, "-repo", "aaaaaaaa", [_turn("u1"), _turn("u2")])
+    fork = _write(tmp_path, "-repo", "eeeeeeee", [])  # not yet flushed at birth
+
+    assert await resolve_parent(actions.pool, fork, root=tmp_path) is None
+    assert await actions.pool.fetchval(
+        "SELECT cursor FROM watermarks WHERE key=$1", fork_key("eeeeeeee")) is None, \
+        "an undetermined result must never be persisted"
+
+    fork.write_text("".join(json.dumps(r) + "\n" for r in [_turn("u1"), _turn("u9")]))
+    assert await resolve_parent(actions.pool, fork, root=tmp_path) == "aaaaaaaa", \
+        "the retry, now with real content, finds the real parent"
+
+
 async def test_a_CYCLE_cannot_spin_the_walk(actions: Actions, tmp_path: Path) -> None:
     """Two transcripts that each emitted the other's first uuid (a state that should be
     impossible, which is exactly why it must be survivable). Stand still rather than loop."""

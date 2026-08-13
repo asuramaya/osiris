@@ -134,6 +134,43 @@ async def test_settle_boxes_a_non_minted_agent_carries_no_succession_box(
     assert "a live succession/handoff note (this lineage was minted)" not in boxes
 
 
+class _RaisingOnMintedCheck:
+    """Delegates every query to the real pool EXCEPT the outer `minted_because` check,
+    which always raises — reproducing 60bc15db specimen 1: the outer gate's own query
+    failing must never be indistinguishable from a confirmed non-mint (60bc15db,
+    decision 01e0c69a)."""
+
+    def __init__(self, pool: Any) -> None:
+        self._pool = pool
+
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        if "minted_because" in query:
+            raise RuntimeError("simulated transient failure")
+        return await self._pool.fetchval(query, *args)
+
+    async def fetch(self, query: str, *args: Any) -> Any:
+        return await self._pool.fetch(query, *args)
+
+
+async def test_settle_boxes_outer_minted_check_failure_is_unevaluated_not_missing(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The bug: the outer `minted` gate used to swallow its own query failure to `False`,
+    which SKIPPED the box entirely — a query that could not run was indistinguishable
+    from a confirmed non-mint. Both must stay honest: a genuine non-mint still carries no
+    key at all (unchanged, see the test above); a failed determination must surface as
+    `None` (unevaluated_boxes), never silently drop the box."""
+    agent = "agent:se77le03"
+    await actions.create_or_find_object("Agent", agent, agent)
+    boxes = await settle_boxes(_RaisingOnMintedCheck(actions.pool), agent_id=agent,
+                               mounted_at=datetime.now(UTC), cwd=str(tmp_path))
+    assert boxes["a live succession/handoff note (this lineage was minted)"] is None
+    assert ("a live succession/handoff note (this lineage was minted)"
+           in unevaluated_boxes(boxes))
+    assert ("a live succession/handoff note (this lineage was minted)"
+           not in missing_boxes(boxes))
+
+
 # ═══ filed_under_check — settle verifies WHAT you wrote, never WHO can read it ═══
 # (Thoth's Lane 4 finding, 2026-07-31): report-only, never folded into missing_boxes.
 
