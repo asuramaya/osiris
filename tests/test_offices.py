@@ -10,6 +10,7 @@ from pathlib import Path
 from src.actions.core import Actions
 from src.orchestrator.mounts import save_mount
 from src.orchestrator.offices import (
+    correct_pin_value,
     establish_office,
     plan_pin_migration,
     revert_pin_write,
@@ -507,6 +508,102 @@ def test_revert_pin_write_deletes_a_pin_that_did_not_exist_before(tmp_path: Path
     out = revert_pin_write(str(office))
     assert out["reverted"] is True
     assert not (office / ".osiris").exists()
+
+
+# ═══ correct_pin_value (task #152's khepri repair — the named exception to additive-only) ═══
+
+def test_correct_pin_value_rewrites_an_existing_key(tmp_path: Path) -> None:
+    office = tmp_path / "correctoffice"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "tony"\nseat = "khepri"\n')
+
+    out = correct_pin_value(str(office), "project", "cultural-infrastructure",
+                            reason="task #152: repo:tony was renamed, khepri's pin never followed")
+    assert out["written"] is True
+    assert out["old_value"] == "tony"
+    assert out["new_value"] == "cultural-infrastructure"
+    text = (office / ".osiris").read_text()
+    assert 'project = "cultural-infrastructure"' in text
+    assert 'seat = "khepri"' in text                  # untouched, a different key
+
+
+def test_correct_pin_value_refuses_a_missing_key(tmp_path: Path) -> None:
+    """This function corrects an EXISTING declaration only — a missing key is
+    write_pin_additions' job, and blurring the two would blur their audit trails."""
+    office = tmp_path / "missingkeyoffice"
+    office.mkdir()
+    (office / ".osiris").write_text('seat = "khepri"\n')
+
+    out = correct_pin_value(str(office), "project", "cultural-infrastructure", reason="x")
+    assert "error" in out
+    assert "not declared" in out["error"]
+    assert not (office / ".osiris.bak").exists()
+
+
+def test_correct_pin_value_refuses_an_empty_reason(tmp_path: Path) -> None:
+    """A correction with no reason is exactly the silent overwrite 719ed5b1 rules against —
+    this function's entire justification for existing is auditability, so an empty reason
+    is refused outright rather than accepted and hoped-for."""
+    office = tmp_path / "noreasonoffice"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "tony"\n')
+
+    out = correct_pin_value(str(office), "project", "cultural-infrastructure", reason="   ")
+    assert "error" in out
+    assert "silent overwrite" in out["error"]
+    text = (office / ".osiris").read_text()
+    assert 'project = "tony"' in text                 # nothing written
+
+
+def test_correct_pin_value_is_a_noop_when_the_value_already_matches(tmp_path: Path) -> None:
+    office = tmp_path / "alreadycorrectoffice"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "cultural-infrastructure"\n')
+
+    out = correct_pin_value(str(office), "project", "cultural-infrastructure", reason="x")
+    assert out == {"written": False, "old_value": "cultural-infrastructure",
+                   "path": str(office / ".osiris")}
+    assert not (office / ".osiris.bak").exists()
+
+
+def test_correct_pin_value_refuses_broken_toml(tmp_path: Path) -> None:
+    office = tmp_path / "brokencorrectoffice"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "unterminated\n')
+
+    out = correct_pin_value(str(office), "project", "fixed", reason="x")
+    assert "error" in out
+    assert "not valid TOML" in out["error"]
+    assert not (office / ".osiris.bak").exists()
+
+
+def test_correct_pin_value_preserves_other_lines_and_comments(tmp_path: Path) -> None:
+    office = tmp_path / "preserveoffice"
+    office.mkdir()
+    (office / ".osiris").write_text(
+        '# a hand-written note\nproject = "tony"\nmodel = "claude-fable-5"\n')
+
+    out = correct_pin_value(str(office), "project", "cultural-infrastructure",
+                            reason="task #152")
+    assert out["written"] is True
+    text = (office / ".osiris").read_text()
+    assert "# a hand-written note" in text
+    assert 'model = "claude-fable-5"' in text
+    assert 'project = "cultural-infrastructure"' in text
+
+
+def test_correct_pin_value_is_reversible_via_revert_pin_write(tmp_path: Path) -> None:
+    office = tmp_path / "revertcorrectoffice"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "tony"\n')
+    original = (office / ".osiris").read_bytes()
+
+    correct_pin_value(str(office), "project", "cultural-infrastructure", reason="x")
+    assert (office / ".osiris").read_bytes() != original
+
+    out = revert_pin_write(str(office))
+    assert out["reverted"] is True
+    assert (office / ".osiris").read_bytes() == original
 
 
 def test_revert_pin_write_refuses_when_no_backup_exists(tmp_path: Path) -> None:

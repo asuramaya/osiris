@@ -1426,6 +1426,57 @@ async def test_roster_pin_triage_bucket_reuses_triages_own_verdict(
     assert row["pin"]["triage_bucket"] == "orphan"
 
 
+async def test_roster_duplicate_suspect_names_its_siblings_never_a_winner(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Task #152 Build 2 (Thoth's dispatch, msg 4215): a seat's own pin can resolve to a
+    real, populated object that STILL reads duplicate_suspect because an unrelated,
+    unpopulated near-duplicate exists elsewhere — the exact werner/maat/till/aegis shape
+    (maat/till/aegis confirmed live). `duplicate_siblings` must name the OTHER object(s) and
+    their own agent_count so a reader can judge the collision themselves; it must NEVER pick
+    a winner (#102, ruling 8cdf905) — the seat's own bucket stays exactly whatever triage
+    already computed, unchanged."""
+    from src.orchestrator.seats import roster
+
+    real = await actions.create_or_find_object("SoftwareProject", "repo:RAMstein", "test")
+    await actions.create_or_find_object("SoftwareProject", "repo:ramstein", "test")
+    agent = await actions.create_or_find_object("Agent", "agent:rdup0001", "test")
+    await actions.create_link(agent, real, "works_in", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "RAMstein"\n')
+    seat = await ensure_seat(actions, house="alfred", handle="Rdup1", source="test",
+                             anchor_cwd=str(office))
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["pin"]["triage_bucket"] == "duplicate_suspect"   # untouched, no winner picked
+    assert row["pin"]["duplicate_siblings"] == [
+        {"canonical": "repo:ramstein", "agent_count": 0}]
+
+
+async def test_roster_duplicate_siblings_absent_outside_duplicate_suspect(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The field must not appear at all (not even as an empty list) for any other bucket —
+    computing it costs a real query, so it is never paid on the common, unflagged path."""
+    from src.orchestrator.seats import roster
+
+    await _repo(actions, "orphanproj")
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "orphanproj"\n')
+    seat = await ensure_seat(actions, house="osiris", handle="Rdup2", source="test",
+                             anchor_cwd=str(office))
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["pin"]["triage_bucket"] == "orphan"
+    assert "duplicate_siblings" not in row["pin"]
+
+
 async def test_roster_always_returns_caveats(actions: Actions) -> None:
     from src.orchestrator.seats import roster
 
@@ -2886,6 +2937,63 @@ async def test_correct_house_refuses_a_caller_with_no_seat(actions: Actions) -> 
 
     out = await correct_house(actions, "agent:ch4unseated", "somehouse", source="test")
     assert "holds no seat" in out["error"]
+
+
+# ═══ resync_seat_house_third_party (task #152's Seat.house repair, the third-party sibling
+# of correct_house — a rename_project that never propagates to the seat's own house) ═══
+
+async def test_resync_seat_house_third_party_writes_a_new_value(actions: Actions) -> None:
+    from src.orchestrator.seats import resync_seat_house_third_party, seat_facts
+
+    seat = await actions.create_or_find_object("Seat", "seat:rs1khepr", "test")
+    await actions.assert_property(seat, "house", "tony", "test", datetime.now(UTC), 0.9)
+
+    out = await resync_seat_house_third_party(
+        actions, "seat:rs1khepr", "cultural-infrastructure", source="test",
+        reason="task #152: repo:tony was renamed, khepri's Seat.house never followed")
+    assert out == {"written": True, "seat_id": "seat:rs1khepr",
+                   "house": "cultural-infrastructure", "was": "tony",
+                   "reason": "task #152: repo:tony was renamed, khepri's Seat.house never "
+                             "followed"}
+    facts = await seat_facts(actions.pool, "seat:rs1khepr")
+    assert facts["house"] == "cultural-infrastructure"
+
+
+async def test_resync_seat_house_third_party_is_a_noop_when_already_correct(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import resync_seat_house_third_party
+
+    seat = await actions.create_or_find_object("Seat", "seat:rs2match0", "test")
+    await actions.assert_property(seat, "house", "xxit", "test", datetime.now(UTC), 0.9)
+
+    out = await resync_seat_house_third_party(
+        actions, "seat:rs2match0", "xxit", source="test", reason="x")
+    assert out == {"written": False, "seat_id": "seat:rs2match0", "house": "xxit"}
+
+
+async def test_resync_seat_house_third_party_refuses_an_empty_reason(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import resync_seat_house_third_party
+
+    seat = await actions.create_or_find_object("Seat", "seat:rs3noreas", "test")
+    await actions.assert_property(seat, "house", "tony", "test", datetime.now(UTC), 0.9)
+
+    out = await resync_seat_house_third_party(
+        actions, "seat:rs3noreas", "cultural-infrastructure", source="test", reason="  ")
+    assert "silent overwrite" in out["error"]
+    from src.orchestrator.seats import seat_facts
+    facts = await seat_facts(actions.pool, "seat:rs3noreas")
+    assert facts["house"] == "tony"                   # nothing written
+
+
+async def test_resync_seat_house_third_party_refuses_an_empty_house(actions: Actions) -> None:
+    from src.orchestrator.seats import resync_seat_house_third_party
+
+    out = await resync_seat_house_third_party(
+        actions, "seat:rs4empty0", "   ", source="test", reason="x")
+    assert "needs a name" in out["error"]
 
 
 async def test_correct_house_mcp_wrapper_moves_orient_without_reconnecting(

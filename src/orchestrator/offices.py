@@ -214,6 +214,64 @@ def write_pin_additions(path: str, proposed: dict[str, str]) -> dict[str, Any]:
             "path": str(p), "backup": str(backup)}
 
 
+def correct_pin_value(path: str, key: str, value: str, *, reason: str) -> dict[str, Any]:
+    """THE NAMED EXCEPTION TO write_pin_additions' ADDITIVE-ONLY LAW (ruling 719ed5b1/msg
+    3929) — NOT a change to that function, NOT a bulk driver, and NOT interchangeable with
+    it. write_pin_additions refuses to overwrite an existing key so that a disagreement
+    between a declared pin and reality stays VISIBLE as `plan_pin_migration`'s own diagnosed
+    `changes`, never silently resolved by a migration tool guessing at intent. This function
+    exists for the opposite, narrower situation: a SPECIFIC, ALREADY-DIAGNOSED, individually
+    authorized correction (task #152's khepri repair — a rename the graph itself already
+    confirmed, decision 6602d39d/188df76a-class findings) where silence would be the actual
+    dishonesty, not the cure. Every call is a deliberate, one-seat-at-a-time act with a
+    `reason` that MUST land in the caller's own decision record — this function does not
+    itself write to the graph, it only makes the correction auditable at the call site.
+
+    Same backup discipline as write_pin_additions (`.osiris.bak` captures the exact pre-write
+    bytes, overwritten each real write): a caller who mis-corrects can revert_pin_write same
+    as any other write here. Refuses on invalid TOML, exactly like write_pin_additions, for
+    the same reason (a bad file made worse is never a fix). Refuses if `key` is not already
+    present — this function corrects an EXISTING declaration, it does not mint a new one;
+    write_pin_additions is the tool for a genuinely missing key, and calling this for that
+    case would blur the two verbs' distinct audit trails."""
+    import tomllib
+
+    p = Path(path) / ".osiris"
+    existing_text = p.read_text() if p.is_file() else ""
+    try:
+        existing = tomllib.loads(existing_text) if existing_text else {}
+    except (tomllib.TOMLDecodeError, ValueError) as exc:
+        return {"error": f"{p} is not valid TOML ({type(exc).__name__}: {exc}) — refusing to "
+                         "correct a broken file"}
+    if key not in existing:
+        return {"error": f"{key!r} is not declared in {p} — correct_pin_value only rewrites "
+                         "an EXISTING key; use write_pin_additions to add a missing one"}
+    old_value = existing[key]
+    if old_value == value:
+        return {"written": False, "old_value": old_value, "path": str(p)}
+    if not reason.strip():
+        return {"error": "a correction with no reason is exactly the silent overwrite "
+                         "719ed5b1 rules against — refusing"}
+
+    backup = p.with_name(".osiris.bak")
+    backup.write_text(existing_text)
+    lines = existing_text.splitlines(keepends=True)
+    rewritten = False
+    prefix = f"{key} ="
+    for i, line in enumerate(lines):
+        if line.split("=", 1)[0].strip() == key:
+            eol = "\n" if line.endswith("\n") else ""
+            lines[i] = f"{prefix} {json.dumps(value)}{eol}"
+            rewritten = True
+            break
+    if not rewritten:  # defensive — tomllib parsed the key but the line-scan missed it
+        return {"error": f"{key!r} parsed by tomllib but its line could not be located in "
+                         f"{p} — refusing rather than guessing at the file's shape"}
+    p.write_text("".join(lines))
+    return {"written": True, "old_value": old_value, "new_value": value,
+            "reason": reason, "path": str(p), "backup": str(backup)}
+
+
 def revert_pin_write(path: str) -> dict[str, Any]:
     """The reversibility half of `write_pin_additions`'s constraint 3: restore `path/.osiris`
     from the backup it took immediately before its most recent real write. Refuses (an error
