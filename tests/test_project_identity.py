@@ -479,51 +479,66 @@ async def test_unfork_project_refuses_when_nothing_to_unfork(actions: Actions) -
 
 # --- rename_evidence_verdict (#137's arc, operator ruling: DO NOT CROWN A TIER) --------
 # a NAMED signal against a SPECIFIC new_name, distinct from project_identity_evidence's
-# own "agreement" field (which only says whether a seat's tiers agree with EACH OTHER).
+# own "agreement" field (which only says whether a seat's tiers agree with EACH OTHER) —
+# though the verdict function reuses that exact field rather than re-deriving it.
 
-def _evidence(candidates: dict[str, dict[str, object]]) -> dict[str, object]:
-    """A minimal project_identity_evidence-shaped dict — only the field the verdict
-    function reads, so these tests pin its contract without a live seat/DB round trip."""
-    return {"candidates": candidates}
+def _evidence(candidates: dict[str, dict[str, object]], agreement: str) -> dict[str, object]:
+    """A minimal project_identity_evidence-shaped dict — only the fields the verdict
+    function reads, so these tests pin its contract without a live seat/DB round trip.
+    `agreement` must be supplied explicitly (never recomputed here) so each test states
+    the exact input the real function would have produced, rather than a second copy of
+    its ranking logic drifting alongside these tests."""
+    return {"candidates": candidates, "agreement": agreement}
 
 
 def test_rename_evidence_verdict_no_signal_on_empty_candidates() -> None:
-    assert rename_evidence_verdict(_evidence({}), "anything") == "no-signal"
+    assert rename_evidence_verdict(_evidence({}, "no-signal"), "anything") == "no-signal"
 
 
-def test_rename_evidence_verdict_confirms_when_new_name_carries_real_signal() -> None:
+def test_rename_evidence_verdict_confirms_when_new_name_is_the_sole_strong_candidate() -> None:
     ev = _evidence({"newname": {"declared_charter": True, "pin_match": False,
-                                "remote_agrees": None}})
+                                "remote_agrees": None}}, "single-candidate")
     assert rename_evidence_verdict(ev, "newname") == "confirms"
     ev2 = _evidence({"newname": {"declared_charter": False, "pin_match": True,
-                                 "remote_agrees": None}})
+                                 "remote_agrees": None}}, "single-candidate")
     assert rename_evidence_verdict(ev2, "newname") == "confirms"
     ev3 = _evidence({"newname": {"declared_charter": False, "pin_match": False,
-                                 "remote_agrees": True}})
+                                 "remote_agrees": True}}, "single-candidate")
     assert rename_evidence_verdict(ev3, "newname") == "confirms"
 
 
-def test_rename_evidence_verdict_disagrees_when_a_different_candidate_is_strong() -> None:
-    # new_name never even surfaced as a candidate — a rival did
+def test_rename_evidence_verdict_disagrees_when_the_sole_strong_candidate_is_not_new_name() -> None:
     ev = _evidence({"oldname": {"declared_charter": True, "pin_match": True,
-                                "remote_agrees": None}})
+                                "remote_agrees": None}}, "single-candidate")
     assert rename_evidence_verdict(ev, "newname") == "disagrees"
-    # new_name IS a candidate but only via weak write-attribution-only presence, while a
-    # rival carries real signal — still a disagreement, never upgraded to confirms
-    ev2 = _evidence({
-        "newname": {"declared_charter": False, "pin_match": False, "remote_agrees": None},
-        "oldname": {"declared_charter": True, "pin_match": False, "remote_agrees": None},
-    })
-    assert rename_evidence_verdict(ev2, "newname") == "disagrees"
 
 
-def test_rename_evidence_verdict_no_signal_when_no_candidate_is_strong() -> None:
-    # candidates exist (e.g. incidental write-attribution mentions) but NONE carry real
-    # signal — nothing decisive either way, never misread as a disagreement
-    ev = _evidence({
-        "newname": {"declared_charter": False, "pin_match": False, "remote_agrees": None},
-        "oldname": {"declared_charter": False, "pin_match": False, "remote_agrees": False},
-    })
+def test_rename_evidence_verdict_disagrees_on_internal_disagreement_even_if_new_name_wins() -> None:
+    """LIVE-VERIFIED SPECIMEN, run against production data 2026-08-13 (Thoth's dispatch
+    msg 4213, requirement 3): seat:ddafff44 (khepri, governs repo:tony). remote_agrees
+    AND write_attribution both back "cultural-infrastructure" (the current declared
+    name) — the STRONGER case by any tiebreak — while the seat's own PIN still says
+    "tony". A verdict that only asked "does new_name have real signal" would have
+    called this "confirms" and buried exactly the stale-pin disagreement #137 exists to
+    catch. Reusing `agreement == "disagree"` directly (rather than re-deriving a
+    per-name "is it the strongest" comparison) is what catches it: ambiguity itself is
+    the finding, and new_name having a stronger case among the rivals does not resolve
+    it — that would be crowning a tier by magnitude instead of by name, the same
+    mistake the operator's ruling forbids."""
+    live_shape = _evidence({
+        "cultural-infrastructure": {"declared_charter": False, "pin_match": False,
+                                    "remote_agrees": True},
+        "tony": {"declared_charter": False, "pin_match": True, "remote_agrees": False},
+    }, "disagree")
+    assert rename_evidence_verdict(live_shape, "cultural-infrastructure") == "disagrees"
+
+
+def test_rename_evidence_verdict_no_signal_when_agreement_says_so() -> None:
+    # project_identity_evidence itself only ever computes "no-signal" when candidates is
+    # empty, but the verdict function still honors an explicit no-signal agreement value
+    # defensively rather than assuming that invariant holds forever unchecked.
+    ev = _evidence({"newname": {"declared_charter": False, "pin_match": False,
+                                "remote_agrees": False}}, "no-signal")
     assert rename_evidence_verdict(ev, "newname") == "no-signal"
 
 
