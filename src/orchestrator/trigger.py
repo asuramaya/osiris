@@ -1042,11 +1042,16 @@ async def wake_gate_preflight(
         return {"mode": f"resume-refused-{gate}", "status": f"refused-{gate}",
                 "detail": miss_reason}
     from src.orchestrator.agents import _generation
-    gate, refusal = await _resume_guard(
+    # a DISTINCT name from `gate` above (never the same variable retyped): that one is a
+    # refusal gate `_gate_name` guarantees is always `str`; this one is a guard verdict
+    # that is legitimately `str | None` — mypy caught the two uses colliding on one name
+    # at the merge point (Thoth's finding), and widening `gate`'s type to fix it would
+    # have let a genuine absence leak into a path that currently guarantees a name.
+    guard_gate, refusal = await _resume_guard(
         pool, resume, _generation(target)[0], seat_id=seat_id, st=st)
-    if gate is not None:
-        return {"mode": f"resume-refused-{gate}",
-                "status": f"refused-{gate}", "detail": refusal}
+    if guard_gate is not None:
+        return {"mode": f"resume-refused-{guard_gate}",
+                "status": f"refused-{guard_gate}", "detail": refusal}
     return {"mode": "resumable", "status": "resumable",
             "detail": f"resumable now — session {resume[0][:8]}, no gate refuses it"}
 
