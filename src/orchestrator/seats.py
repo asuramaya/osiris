@@ -382,6 +382,15 @@ _ROSTER_CAVEATS = (
     "a bucket reflects a single triage snapshot taken once per roster() call, not a live "
     "join, so it can go stale the instant something else in the graph changes after this "
     "call returns.",
+    "pin.triage_bucket=='duplicate_suspect' is a PER-OBJECT condition (#102, ruling 8cdf905 "
+    "— pure marks, no winner ever picked), not a verdict on the SEAT's own pin: it fires "
+    "whenever ANY object shares this one's case-folded basename, even when the seat's own "
+    "declared object is the real, populated one and the sibling is an empty, unrelated "
+    "phantom (task #152's werner/maat/till/aegis specimens — maat/till/aegis confirmed this "
+    "shape live). `pin.duplicate_siblings` (present only on this bucket) lists each "
+    "colliding object's own canonical and agent_count SO A READER CAN JUDGE THE COLLISION "
+    "THEMSELVES — it never picks a winner among them, it only stops attributing a sibling's "
+    "emptiness to a seat whose own pin may be perfectly fine.",
 )
 
 
@@ -418,6 +427,44 @@ async def _triage_bucket_map(pool: asyncpg.Pool) -> dict[str, str]:
                      "status": "active", "limit": 2000}}
     out = await compositions.run_spec(pool, spec, None, name="triage")
     return {row["canonical"]: row["bucket"] for row in out["items"] if "canonical" in row}
+
+
+_BASENAME_FOLD_SQL = (
+    "lower(CASE WHEN o.canonical LIKE '%/%' THEN regexp_replace(o.canonical, '^.*/', '') "
+    "WHEN o.canonical LIKE '%:%' THEN regexp_replace(o.canonical, '^[^:]*:', '') "
+    "ELSE o.canonical END)"
+)
+
+
+async def _duplicate_suspect_siblings(pool: asyncpg.Pool, canonical: str,
+                                      ) -> list[dict[str, Any]]:
+    """Task #152's Build 2 (Thoth's dispatch, msg 4215): the OTHER active SoftwareProject
+    objects sharing `canonical`'s own case-folded basename — the exact collision
+    `_triage_buckets`' `duplicate_suspect` bucket fires on (compositions.py's `per_object`
+    CTE, same fold, reproduced here rather than imported to avoid a real import cycle —
+    seats.py is already function-local-importing compositions elsewhere in this same file
+    for the identical reason, `_triage_bucket_map`'s own docstring explains it). Each
+    sibling's own `agent_count` rides along (the same `works_in`-edge count
+    `project_ledger` already reports per project, #102-compliant: this NAMES a fact about
+    each object independently, it never compares them to crown one canonical). Only called
+    when a bucket is ALREADY `duplicate_suspect` — never a blind per-row cost on the common
+    (non-flagged) path."""
+    rows = await pool.fetch(
+        f"WITH target AS ("
+        f"  SELECT {_BASENAME_FOLD_SQL} AS basename FROM objects o "
+        f"  WHERE o.canonical=$1 AND o.type='SoftwareProject' AND o.status='active') "
+        f"SELECT o.id, o.canonical FROM objects o, target t "
+        f"WHERE o.type='SoftwareProject' AND o.status='active' AND o.canonical != $1 "
+        f"AND {_BASENAME_FOLD_SQL} = t.basename",
+        canonical)
+    siblings: list[dict[str, Any]] = []
+    for r in rows:
+        agent_count = await pool.fetchval(
+            "SELECT count(DISTINCT l.from_id) FROM links l WHERE l.to_id=$1 "
+            "AND l.type='works_in' AND (l.valid_until IS NULL OR l.valid_until > now())",
+            r["id"])
+        siblings.append({"canonical": r["canonical"], "agent_count": agent_count})
+    return sorted(siblings, key=lambda s: s["canonical"])
 
 
 async def roster(
@@ -495,8 +542,12 @@ async def roster(
         else:
             pin_state = "no-pin"
         triage_bucket = None
+        duplicate_siblings = None
         if pin_state == "declared" and pin.value:
             triage_bucket = bucket_map.get(f"repo:{pin.value}", "no-such-project")
+            if triage_bucket == "duplicate_suspect":
+                duplicate_siblings = await _duplicate_suspect_siblings(
+                    pool, f"repo:{pin.value}")
         live_cwd = None
         if occ["state"] == "occupied" and occ["holder"]:
             live_cwd = await pool.fetchval(
@@ -509,7 +560,9 @@ async def roster(
             "office_exists": _dir_exists(anchor),
             "chartered_repos": chartered,
             "pin": {"declared": pin.value, "state": pin_state, "path": pin.path,
-                    "error": pin.error, "triage_bucket": triage_bucket},
+                    "error": pin.error, "triage_bucket": triage_bucket,
+                    **({"duplicate_siblings": duplicate_siblings}
+                       if duplicate_siblings is not None else {})},
         })
 
     if repo is None:
@@ -1689,6 +1742,39 @@ async def correct_house(actions: Actions, agent_id: str, new_house: str, *, sour
         actions.pool, subject_canonical=seat_id, field="house", new_value=new_house,
         actor=source)
     return {"seat_id": seat_id, "house": new_house, "was": was, **prior_art_bits}
+
+
+async def resync_seat_house_third_party(
+    actions: Actions, seat_id: str, new_house: str, *, source: str, reason: str,
+) -> dict[str, Any]:
+    """THE THIRD-PARTY SIBLING OF `correct_house` — task #152's khepri/deckard/metron repair
+    (decision 6602d39d): `correct_house` is deliberately SELF-scoped (a head correcting its
+    OWN identity declaration, ruling 87953278), but a stale Seat.house left behind by a
+    `rename_project` that never propagates to the seat itself (ruling 719ed5b1's own five-
+    key schema was silent on this exact property — `Seat.house` written once at
+    `ensure_seat` mint time, never resynced by anything since) is not the seat's own act to
+    make; it is an individually-diagnosed, individually-authorized correction landed BY
+    someone else, on the same explicit-reason audit-trail discipline as
+    `offices.correct_pin_value`. Refuses on an empty house or an empty reason for the exact
+    same cause that function refuses an empty reason: a correction with no stated reason is
+    the silent overwrite this house rules against, not a fix. Does NOT check headship or
+    caller identity — this is explicitly a third-party act, unlike `correct_house`, and
+    callers are responsible for the authorization this docstring cannot enforce."""
+    new_house = (new_house or "").strip()
+    if not new_house:
+        return {"error": "a house needs a name"}
+    if not reason.strip():
+        return {"error": "a correction with no reason is exactly the silent overwrite "
+                         "719ed5b1 rules against — refusing"}
+    facts = await seat_facts(actions.pool, seat_id)
+    was = facts.get("house")
+    if was == new_house:
+        return {"written": False, "seat_id": seat_id, "house": was}
+    seat_obj = await actions.create_or_find_object("Seat", seat_id, source)
+    await actions.assert_property(seat_obj, "house", new_house, source, datetime.now(UTC),
+                                  _CONF, evidence_class=_EC)
+    return {"written": True, "seat_id": seat_id, "house": new_house, "was": was,
+            "reason": reason}
 
 
 async def _move_seat_estate(
