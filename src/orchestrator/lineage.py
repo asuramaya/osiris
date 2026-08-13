@@ -337,8 +337,26 @@ async def register_spawn(
         await prop("session", session)
     if project:
         await prop("project", project)
-        proj = await actions.create_or_find_object("SoftwareProject", f"repo:{project}", _SOURCE)
-        await _link_once(actions, a, proj, "works_in", now)
+        # task #107's choke point (capture.py), reused verbatim rather than re-validated here
+        # (thread db14d8be): this was the only SoftwareProject-mint site in the codebase
+        # without it — safe today only because every live caller already passes a clean
+        # label, never enforced AT the mint itself. A malformed `project` (a raw cwd, a
+        # placeholder) still stamps the agent's own `project` property above — that's a
+        # claim about the caller, harmless as text — but mints no phantom SoftwareProject.
+        from src.orchestrator.capture import _validate_repo_name
+        try:
+            _validate_repo_name(project, project)
+        except ValueError as exc:
+            # CONFESSION, NOT SILENT REFUSAL (Thoth's ruling, msg 4023, the 60bc15db shape):
+            # a skip that says nothing is indistinguishable from a clean pass. register_spawn
+            # returns only the child's id, so there is no receipt field to carry this on — a
+            # warning is the honest surface until one exists.
+            _log.warning("register_spawn(%s): refusing to mint a SoftwareProject from "
+                        "project=%r — %s", child, project, exc)
+        else:
+            proj = await actions.create_or_find_object(
+                "SoftwareProject", f"repo:{project}", _SOURCE)
+            await _link_once(actions, a, proj, "works_in", now)
     model: str | None = None
     if transcript is not None:
         def _read_model(path: Path = transcript) -> str | None:
