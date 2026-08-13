@@ -3816,6 +3816,14 @@ async def rename_project(project: str, new_name: str, because: str,
             for seat, ev in evidence_by_seat.items()
         }
         out["rename_evidence"] = rename_evidence
+        out["rename_evidence_note"] = (
+            "a verdict is SELF-CONSISTENCY, not independent verification: \"confirms\" "
+            "means this seat's own non-remote tiers (charter/pin/write-attribution) all "
+            "agree with new_name, never that new_name is objectively correct — remote is "
+            "deliberately non-authoritative here, so it can dissent alone and still read "
+            "\"confirms\"; and #137's own mechanism can corrupt a seat's pin itself, not "
+            "only the graph's name property, in which case every non-remote tier already "
+            "carries the same drift and this check reads clean")
         disagreeing = [s for s, v in rename_evidence.items() if v["verdict"] == "disagrees"]
         if disagreeing:
             out["evidence_disagrees"] = True

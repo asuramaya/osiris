@@ -602,6 +602,11 @@ async def test_mcp_rename_project_surfaces_evidence_by_governing_seat(
         assert entry["verdict"] == "disagrees"
         assert out["evidence_disagrees"] is True
         assert seat["seat_id"] in out["warning"]
+        # SELF-CONSISTENCY, NOT VERIFICATION (Thoth's msg 4232): "confirms" must never be
+        # readable as "verified correct" — the receipt says so in its own wording, not
+        # only in a docstring a caller may never read
+        assert "self-consistency" in out["rename_evidence_note"].lower()
+        assert "not" in out["rename_evidence_note"].lower()
     finally:
         srv._pool = saved_pool
         _agents.pop(_conn_key(ctx), None)
