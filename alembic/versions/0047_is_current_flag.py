@@ -38,9 +38,39 @@ WHERE s.supersedes=a.id)` (the anti-join's own definition) agrees EXACTLY with
 `id IN (SELECT id FROM current_assertions)` (the view's actual output). Backfill below is
 that same formula, run once, instead of forever.
 
-Same precedent as 0005 (evidence_class): `current_assertions` is `SELECT a.*`, which
-Postgres freezes to the column list at view-creation time, so `is_current` does not
-appear in its output until the view is dropped and recreated — done here, the same way.
+WHY THIS IS FOUR AUTOCOMMIT BLOCKS, NOT ONE TRANSACTION (Thoth's reproduced-twice live
+deadlock, msg 4228 — DROP VIEW current_assertions vs a live reader, `Process ... waits
+for AccessExclusiveLock on relation ...; blocked by ...; Process ... waits for
+AccessShareLock ...; blocked by ...`): alembic wraps a whole upgrade run in ONE ambient
+transaction by default. Postgres never releases a lock before COMMIT — so `ALTER TABLE
+ADD COLUMN`'s AccessExclusiveLock, though metadata-only and near-instant BY ITSELF (the
+PG11+ fast-default path, no table rewrite), would otherwise stay HELD for the entire rest
+of the migration: the ~115s backfill, the index build, and the view swap — blocking every
+concurrent reader of current_assertions (five live agents plus osiris-worker/pulse, never
+not live) for that whole window, and setting up exactly the AB-BA cycle Thoth caught: this
+transaction holding the table exclusively while wanting the view exclusively, a live
+reader holding the view (briefly, resolving its query) while wanting the table. Splitting
+each DDL step into its own `autocommit_block()` (committing before entering, so each lock
+is acquired-and-released independently) breaks that cycle structurally, not by luck:
+  1. ADD COLUMN — its own block; commits and releases in well under a second.
+  2. Backfill UPDATE — plain RowExclusiveLock only, compatible with concurrent
+     AccessShareLock reads; safe to run for its full duration inside an ordinary
+     transaction, blocks no reader.
+  3. CREATE INDEX CONCURRENTLY — ShareUpdateExclusiveLock only (blocks other DDL, not
+     reads or writes); cannot run inside any transaction block at all, hence its own.
+  4. The view swap — the one step that genuinely needs AccessExclusiveLock on the view.
+     By now nothing else in this migration holds any lock, so a live reader's own
+     AccessShareLock (held only for the instant it resolves its query) is the only thing
+     it can ever wait on — a real but short window, bounded here with a session-level
+     `lock_timeout` so a rare live collision fails FAST and RETRYABLY instead of
+     deadlocking, exactly Thoth's own constraint. `CREATE OR REPLACE VIEW` (not DROP+
+     CREATE) — legal here because `is_current` only APPENDS to the frozen column list
+     from step 1, never reorders or removes a column — also collapses two exclusive-lock
+     acquisitions into one and removes the DROP..CREATE gap where a concurrent reader
+     would otherwise see "relation does not exist".
+
+Same precedent as 0005 (evidence_class) for the view's own shape: `SELECT a.*`, which
+Postgres freezes to the column list at view-creation time.
 """
 from __future__ import annotations
 
@@ -53,39 +83,50 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute("ALTER TABLE assertions ADD COLUMN is_current boolean NOT NULL DEFAULT true")
-    # one-time full pass — exactly the anti-join's own formula, run once instead of per read
+    with op.get_context().autocommit_block():
+        op.execute("ALTER TABLE assertions ADD COLUMN is_current boolean NOT NULL DEFAULT true")
+
+    # one-time full pass — exactly the anti-join's own formula, run once instead of per
+    # read. RowExclusiveLock only: concurrent readers are never blocked by this, only
+    # concurrent writers to the same rows, an ordinary and expected serialization.
     op.execute(
         """
         UPDATE assertions a SET is_current = false
         WHERE EXISTS (SELECT 1 FROM assertions s WHERE s.supersedes = a.id)
         """
     )
+
     # partial index: only the ~4.5% of rows that are actually current (measured live:
     # 119,901 of 2,650,934) — the read path's new O(matching rows) seek, replacing the
-    # anti-join's O(corpus) scan
-    op.execute(
-        "CREATE INDEX assertions_is_current_idx ON assertions (object_id, name) "
-        "WHERE is_current"
-    )
-    op.execute("DROP VIEW current_assertions")
-    op.execute(
-        """
-        CREATE VIEW current_assertions AS
-            SELECT a.* FROM assertions a WHERE a.is_current
-        """
-    )
+    # anti-join's O(corpus) scan. CONCURRENTLY: blocks no reader, no writer, only other
+    # DDL on this table — cannot run inside a transaction block, hence its own.
+    with op.get_context().autocommit_block():
+        op.execute(
+            "CREATE INDEX CONCURRENTLY assertions_is_current_idx ON assertions "
+            "(object_id, name) WHERE is_current"
+        )
+
+    # the view swap — see the module docstring for why this is the one genuinely
+    # contentious step and why it is bounded rather than left to deadlock
+    with op.get_context().autocommit_block():
+        op.execute("SET lock_timeout = '5s'")
+        op.execute(
+            "CREATE OR REPLACE VIEW current_assertions AS "
+            "SELECT a.* FROM assertions a WHERE a.is_current"
+        )
+        op.execute("SET lock_timeout = 0")
 
 
 def downgrade() -> None:
-    op.execute("DROP VIEW current_assertions")
-    op.execute(
-        """
-        CREATE VIEW current_assertions AS
-            SELECT a.*
-            FROM assertions a
-            WHERE NOT EXISTS (SELECT 1 FROM assertions s WHERE s.supersedes = a.id)
-        """
-    )
-    op.execute("DROP INDEX assertions_is_current_idx")
-    op.execute("ALTER TABLE assertions DROP COLUMN is_current")
+    with op.get_context().autocommit_block():
+        op.execute("SET lock_timeout = '5s'")
+        op.execute(
+            "CREATE OR REPLACE VIEW current_assertions AS "
+            "SELECT a.* FROM assertions a "
+            "WHERE NOT EXISTS (SELECT 1 FROM assertions s WHERE s.supersedes = a.id)"
+        )
+        op.execute("SET lock_timeout = 0")
+    with op.get_context().autocommit_block():
+        op.execute("DROP INDEX CONCURRENTLY assertions_is_current_idx")
+    with op.get_context().autocommit_block():
+        op.execute("ALTER TABLE assertions DROP COLUMN is_current")
