@@ -597,15 +597,23 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
     # resume all ride the durable binding. `seat_id` was already resolved above (it doubles
     # as the counting house's own key) — only the genuinely-new-handle case has minting left
     # to do here.
+    seat_error: str | None = None
     if seat_id is None:
         seat_world = await ensure_seat(actions, house=counting_house, handle=name, source=source)
-        if not seat_world.get("error"):
+        if seat_world.get("error"):
+            seat_error = seat_world["error"]
+        else:
             seat_id = seat_world["seat_id"]
     if seat_id:
         await bind_holder(actions, seat_id=seat_id, agent_id=agent_id, source=source)
+    # 60bc15db: a seat-world mint failure used to vanish into the same bare omission as
+    # "no seat needed yet" — the claim itself still succeeds (the assertion world doesn't
+    # depend on the seat world), but the receipt now SAYS why seat_id is missing instead of
+    # just not having it.
     return {"claimed": name, "seat": seat_label(agent_id, name, gen), "agent": agent_id,
             "house": counting_house, "generation": gen, "inherited_from": prior,
-            **({"seat_id": seat_id} if seat_id else {})}
+            **({"seat_id": seat_id} if seat_id else {}),
+            **({"seat_error": seat_error} if seat_error else {})}
 
 
 async def resolve_seat(actions: Actions, name: str) -> dict[str, Any]:
