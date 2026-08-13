@@ -289,6 +289,45 @@ async def project_identity_evidence(
     }
 
 
+def rename_evidence_verdict(evidence: dict[str, Any], new_name: str) -> str:
+    """The NAMED SIGNAL rename_project's pre-write check surfaces (#137's own arc, the
+    operator's ruling: DO NOT CROWN A TIER — wire the evidence in, pick nothing).
+    `evidence` is one seat's own `project_identity_evidence` report. Three answers, never
+    a silent pick between them (the same law as the coordination-lane's tri-state, ruling
+    f624d114):
+
+      "no-signal"  — this seat's evidence found no candidate at all (no charter, no pin,
+        no attributed work), OR found candidates but none carries real positive signal
+        (declared_charter/pin_match/remote_agrees — write_attribution alone never counts,
+        a single stray commit is not the same claim `agreement` already warns against).
+      "confirms"   — `new_name` is the seat's ONE AND ONLY strongly-evidenced candidate —
+        reuses `evidence["agreement"] == "single-candidate"` directly, never a second,
+        independently-drifting copy of that computation (ruling 70493925's own warning).
+      "disagrees"  — the seat's evidence disagrees WITH ITSELF (`agreement == "disagree"`,
+        more than one candidate carries real signal) regardless of whether `new_name` is
+        one of the rivals, OR the seat's one strongly-evidenced candidate is something
+        other than `new_name`. LIVE-VERIFIED SPECIMEN (seat:ddafff44/khepri, project
+        repo:tony, 2026-08-13): remote_agrees + write_attribution both back
+        "cultural-infrastructure" (`new_name` itself, strongly evidenced) while the
+        seat's OWN PIN still says "tony" — a naive "does new_name have signal" check
+        would have called this "confirms" and buried the exact stale-pin disagreement
+        #137 exists to catch. Ambiguity IS the finding here, not a tiebreak new_name wins
+        by having the stronger case."""
+    candidates: dict[str, Any] = evidence.get("candidates") or {}
+    if not candidates:
+        return "no-signal"
+    agreement = evidence.get("agreement")
+    if agreement == "disagree":
+        return "disagrees"
+    if agreement == "single-candidate":
+        entry = candidates.get(new_name)
+        if entry and (entry.get("declared_charter") or entry.get("pin_match")
+                     or entry.get("remote_agrees")):
+            return "confirms"
+        return "disagrees"  # the seat's one supported candidate is NOT new_name
+    return "no-signal"  # agreement == "no-signal"
+
+
 # --- rename_project / fork_project (#110, decision 1db1ff41, rulings 1-2) -----------------
 
 async def rename_project(

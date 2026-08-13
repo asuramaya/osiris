@@ -11,6 +11,7 @@ from src.actions.core import Actions
 from src.orchestrator.project_identity import (
     fork_project,
     project_identity_evidence,
+    rename_evidence_verdict,
     rename_project,
     unfork_project,
 )
@@ -476,6 +477,71 @@ async def test_unfork_project_refuses_when_nothing_to_unfork(actions: Actions) -
     assert "nothing to unfork" in out["error"]
 
 
+# --- rename_evidence_verdict (#137's arc, operator ruling: DO NOT CROWN A TIER) --------
+# a NAMED signal against a SPECIFIC new_name, distinct from project_identity_evidence's
+# own "agreement" field (which only says whether a seat's tiers agree with EACH OTHER) —
+# though the verdict function reuses that exact field rather than re-deriving it.
+
+def _evidence(candidates: dict[str, dict[str, object]], agreement: str) -> dict[str, object]:
+    """A minimal project_identity_evidence-shaped dict — only the fields the verdict
+    function reads, so these tests pin its contract without a live seat/DB round trip.
+    `agreement` must be supplied explicitly (never recomputed here) so each test states
+    the exact input the real function would have produced, rather than a second copy of
+    its ranking logic drifting alongside these tests."""
+    return {"candidates": candidates, "agreement": agreement}
+
+
+def test_rename_evidence_verdict_no_signal_on_empty_candidates() -> None:
+    assert rename_evidence_verdict(_evidence({}, "no-signal"), "anything") == "no-signal"
+
+
+def test_rename_evidence_verdict_confirms_when_new_name_is_the_sole_strong_candidate() -> None:
+    ev = _evidence({"newname": {"declared_charter": True, "pin_match": False,
+                                "remote_agrees": None}}, "single-candidate")
+    assert rename_evidence_verdict(ev, "newname") == "confirms"
+    ev2 = _evidence({"newname": {"declared_charter": False, "pin_match": True,
+                                 "remote_agrees": None}}, "single-candidate")
+    assert rename_evidence_verdict(ev2, "newname") == "confirms"
+    ev3 = _evidence({"newname": {"declared_charter": False, "pin_match": False,
+                                 "remote_agrees": True}}, "single-candidate")
+    assert rename_evidence_verdict(ev3, "newname") == "confirms"
+
+
+def test_rename_evidence_verdict_disagrees_when_the_sole_strong_candidate_is_not_new_name() -> None:
+    ev = _evidence({"oldname": {"declared_charter": True, "pin_match": True,
+                                "remote_agrees": None}}, "single-candidate")
+    assert rename_evidence_verdict(ev, "newname") == "disagrees"
+
+
+def test_rename_evidence_verdict_disagrees_on_internal_disagreement_even_if_new_name_wins() -> None:
+    """LIVE-VERIFIED SPECIMEN, run against production data 2026-08-13 (Thoth's dispatch
+    msg 4213, requirement 3): seat:ddafff44 (khepri, governs repo:tony). remote_agrees
+    AND write_attribution both back "cultural-infrastructure" (the current declared
+    name) — the STRONGER case by any tiebreak — while the seat's own PIN still says
+    "tony". A verdict that only asked "does new_name have real signal" would have
+    called this "confirms" and buried exactly the stale-pin disagreement #137 exists to
+    catch. Reusing `agreement == "disagree"` directly (rather than re-deriving a
+    per-name "is it the strongest" comparison) is what catches it: ambiguity itself is
+    the finding, and new_name having a stronger case among the rivals does not resolve
+    it — that would be crowning a tier by magnitude instead of by name, the same
+    mistake the operator's ruling forbids."""
+    live_shape = _evidence({
+        "cultural-infrastructure": {"declared_charter": False, "pin_match": False,
+                                    "remote_agrees": True},
+        "tony": {"declared_charter": False, "pin_match": True, "remote_agrees": False},
+    }, "disagree")
+    assert rename_evidence_verdict(live_shape, "cultural-infrastructure") == "disagrees"
+
+
+def test_rename_evidence_verdict_no_signal_when_agreement_says_so() -> None:
+    # project_identity_evidence itself only ever computes "no-signal" when candidates is
+    # empty, but the verdict function still honors an explicit no-signal agreement value
+    # defensively rather than assuming that invariant holds forever unchecked.
+    ev = _evidence({"newname": {"declared_charter": False, "pin_match": False,
+                                "remote_agrees": False}}, "no-signal")
+    assert rename_evidence_verdict(ev, "newname") == "no-signal"
+
+
 # --- MCP surface (task #163's arc: this whole module existed, tested, and had ZERO ------
 # MCP wiring until now — grep against src/mcp_server.py before this change: zero hits) ---
 
@@ -483,11 +549,13 @@ async def test_mcp_rename_project_surfaces_evidence_by_governing_seat(
     actions: Actions, tmp_path,
 ) -> None:
     """The MCP `rename_project` tool wires project_identity_evidence in as a PRE-WRITE
-    CHECK (task #163's arc, #137's own root-cause fix): every Seat currently GOVERNING
-    the project being renamed gets its own evidence report attached to the receipt, so a
-    caller sees — in the SAME turn — whether that seat's pin/charter/write-attribution
-    still disagrees with the new name. NOT A TIER RULING: this never refuses and never
-    picks a winner on it; the rename itself always proceeds regardless."""
+    CHECK (task #163's arc, #137's own root-cause fix, operator ruling: DO NOT CROWN A
+    TIER): every Seat currently GOVERNING the project being renamed gets its own evidence
+    report attached to the receipt, classified into a NAMED verdict — no-signal/confirms/
+    disagrees — against the specific new_name declared, so a caller sees in the SAME turn
+    whether that seat's pin/charter/remote still disagrees. NOT A TIER RULING: this never
+    refuses and never picks a winner on it; the rename itself always proceeds regardless,
+    but a disagreement surfaces as an unmissable top-level warning, never buried."""
     import src.mcp_server as srv
     from src.mcp_server import _agents, _conn_key
     from src.mcp_server import rename_project as rename_tool
@@ -520,13 +588,20 @@ async def test_mcp_rename_project_surfaces_evidence_by_governing_seat(
         out = await rename_tool(project="oldname", new_name="newname",
                                 because="test rename", ctx=ctx)
         assert out["new_name"] == "newname"
-        assert seat["seat_id"] in out["evidence_by_governing_seat"]
-        seat_evidence = out["evidence_by_governing_seat"][seat["seat_id"]]
+        assert seat["seat_id"] in out["rename_evidence"]
+        entry = out["rename_evidence"][seat["seat_id"]]
+        seat_evidence = entry["evidence"]
         assert seat_evidence["seat_id"] == seat["seat_id"]
         assert "candidates" in seat_evidence
         # the pin still says the OLD name — exactly the #137 disagreement this must
         # surface, not hide, since the rename never touches the seat's own .osiris file
         assert "oldname" in seat_evidence["candidates"]
+        # NAMED, NEVER SILENT: the pin's disagreement becomes an explicit verdict, and
+        # an unmissable top-level warning — never something a caller has to notice by
+        # diffing candidates themselves
+        assert entry["verdict"] == "disagrees"
+        assert out["evidence_disagrees"] is True
+        assert seat["seat_id"] in out["warning"]
     finally:
         srv._pool = saved_pool
         _agents.pop(_conn_key(ctx), None)
