@@ -590,10 +590,10 @@ async def _cmd_launch_harness(
         # holder was falsy. Asserted, not silently narrowed: a violated invariant here
         # should be loud, never a quiet skip of the identity gate.
         assert holder is not None
-        refusal = await _resume_guard(
+        gate, refusal = await _resume_guard(
             pool, resume, _generation(holder)[0], seat_id=facts["seat_id"], st=st)
-        if refusal is not None:
-            resume_log = [*resume_log, f"crossed-registry guard refused it: {refusal}"]
+        if gate is not None:
+            resume_log = [*resume_log, f"{gate} guard refused it: {refusal}"]
             resume = None
     if resume is not None:
         resumed_session_id, resumed_repo = resume[0], resume[1]
