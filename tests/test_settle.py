@@ -11,11 +11,12 @@ from typing import Any
 from src.actions.core import Actions
 from src.orchestrator.capture import open_thread, record_decision
 from src.orchestrator.settle import (
-    charter_touched,
     closure_edge_coverage,
     filed_under_check,
     missing_boxes,
+    seat_chartered,
     settle_boxes,
+    standing_orders_touched,
     uncommitted_git_work,
     unevaluated_boxes,
 )
@@ -25,21 +26,44 @@ def _git(cwd: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True)
 
 
-def test_charter_touched_absent_file_cannot_be_evaluated(tmp_path: Path) -> None:
+def test_standing_orders_touched_absent_file_cannot_be_evaluated(tmp_path: Path) -> None:
     """No charter.md here at all — a repo cwd, not an office — fails open, never punished."""
-    assert charter_touched(str(tmp_path), datetime.now(UTC)) is None
+    assert standing_orders_touched(str(tmp_path), datetime.now(UTC)) is None
 
 
-def test_charter_touched_checks_mtime_against_session_start(tmp_path: Path) -> None:
+def test_standing_orders_touched_checks_mtime_against_session_start(tmp_path: Path) -> None:
     charter = tmp_path / "charter.md"
     charter.write_text("# notes\n")
     now = datetime.now(UTC)
-    assert charter_touched(str(tmp_path), now - timedelta(minutes=5)) is True
-    assert charter_touched(str(tmp_path), now + timedelta(minutes=5)) is False
+    assert standing_orders_touched(str(tmp_path), now - timedelta(minutes=5)) is True
+    assert standing_orders_touched(str(tmp_path), now + timedelta(minutes=5)) is False
 
 
-def test_charter_touched_none_cwd_cannot_be_evaluated() -> None:
-    assert charter_touched(None, datetime.now(UTC)) is None
+def test_standing_orders_touched_none_cwd_cannot_be_evaluated() -> None:
+    assert standing_orders_touched(None, datetime.now(UTC)) is None
+
+
+async def test_seat_chartered_none_seat_id_cannot_be_evaluated(actions: Actions) -> None:
+    """RULING 205668ec's declaration half: no seat, no charter to hold — fails open, same
+    convention every box in this module follows."""
+    assert await seat_chartered(actions.pool, None) is None
+
+
+async def test_seat_chartered_reads_the_governs_edge_independent_of_the_file(
+    actions: Actions,
+) -> None:
+    """The whole point of the split: this asks the DECLARATION question, never the file
+    question — a seat can be chartered with a stale/absent charter.md, or hold a
+    freshly-touched charter.md while genuinely ungoverned. Verified against set_charter's
+    own governs edge, not a second hand-rolled write."""
+    from src.orchestrator.charter import set_charter
+
+    seat_id = "seat:se77le03"
+    await actions.create_or_find_object("Seat", seat_id, "session")
+    assert await seat_chartered(actions.pool, seat_id) is False
+    await actions.create_or_find_object("SoftwareProject", "repo:demo", "session")
+    await set_charter(actions, seat_id, ["demo"], actor="session")
+    assert await seat_chartered(actions.pool, seat_id) is True
 
 
 def test_missing_boxes_only_names_explicit_false() -> None:
@@ -54,7 +78,7 @@ def test_unevaluated_boxes_only_names_explicit_none(
 ) -> None:
     """Thoth DM 3076, defect 1(b): None (could not evaluate) is a DIFFERENT state from
     missing (False) and satisfied (True), and must be its own visible list — the exact
-    distinction charter_touched's own #128 masking collapsed away."""
+    distinction standing_orders_touched's own #128 masking collapsed away."""
     assert unevaluated_boxes({"a": True, "b": False, "c": None, "d": None}) == ["c", "d"]
     assert unevaluated_boxes({"a": True, "b": False}) == []
     assert unevaluated_boxes({}) == []
@@ -69,7 +93,7 @@ async def test_uncommitted_git_work_none_cwd_cannot_be_evaluated() -> None:
 
 async def test_uncommitted_git_work_a_non_repo_dir_cannot_be_evaluated(tmp_path: Path) -> None:
     """The common, innocent case: a seat-office cwd, or any ordinary non-repo directory —
-    fails open, same as charter_touched on a missing file."""
+    fails open, same as standing_orders_touched on a missing file."""
     assert await uncommitted_git_work(str(tmp_path)) is None
 
 
@@ -108,7 +132,7 @@ async def test_settle_boxes_works_against_a_pool_not_just_a_raw_connection(
                                cwd=str(office))
     assert boxes["decisions recorded this session"] is False
     assert boxes["threads trued this session (opened or resolved)"] is False
-    assert boxes["charter.md touched this session"] is None  # no such file here
+    assert boxes["standing orders touched this session"] is None  # no such file here
     assert boxes["a live succession/handoff note (this lineage was minted)"] is False
 
     await record_decision(actions, "a real ruling this session", source=agent)
@@ -120,7 +144,7 @@ async def test_settle_boxes_works_against_a_pool_not_just_a_raw_connection(
                                cwd=str(office))
     assert boxes["decisions recorded this session"] is True
     assert boxes["threads trued this session (opened or resolved)"] is True
-    assert boxes["charter.md touched this session"] is True
+    assert boxes["standing orders touched this session"] is True
     assert boxes["a live succession/handoff note (this lineage was minted)"] is True
 
 
@@ -1247,7 +1271,7 @@ async def test_settle_tool_resolves_the_seat_office_over_a_corrected_mount_cwd(
 ) -> None:
     """DEFECT 1 (Thoth DM 3076), THE LIVE SPECIMEN REPRODUCED: a seated agent's mount cwd
     reads as the bare office CONTAINER (a #128-class correction, not this agent's real
-    office at <container>/<handle>) — before the fix, charter_touched checked the wrong
+    office at <container>/<handle>) — before the fix, standing_orders_touched checked the wrong
     directory, found nothing, returned None, and `missing_boxes` silently dropped it: a
     real, 11-day-stale charter.md sat unevaluated forever. The SEAT BINDING (bind_holder's
     own `holds` link + the seat's `handle` property) must be resolved instead of trusting
@@ -1298,8 +1322,8 @@ async def test_settle_tool_resolves_the_seat_office_over_a_corrected_mount_cwd(
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
-    assert out["boxes"]["charter.md touched this session"] is False, out
-    assert "charter.md touched this session" in out["missing_boxes"]
+    assert out["boxes"]["standing orders touched this session"] is False, out
+    assert "standing orders touched this session" in out["missing_boxes"]
     assert out["complete"] is False, out
 
 
@@ -1344,12 +1368,12 @@ async def test_settle_tool_charter_box_still_none_for_an_unseated_session(
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
-    assert out["boxes"]["charter.md touched this session"] is None
-    assert "charter.md touched this session" not in out["missing_boxes"]
-    assert "charter.md touched this session" in out["unevaluated_boxes"]
+    assert out["boxes"]["standing orders touched this session"] is None
+    assert "standing orders touched this session" not in out["missing_boxes"]
+    assert "standing orders touched this session" in out["unevaluated_boxes"]
     assert out["complete"] is True, out  # still non-blocking — refuted, not assumed
     assert "could not evaluate" in out["note"]
-    assert "charter.md touched this session" in out["note"]
+    assert "standing orders touched this session" in out["note"]
 
 
 async def test_settle_tool_confirms_complete_after_a_full_dump(
@@ -1398,7 +1422,13 @@ async def test_settle_tool_confirms_complete_after_a_full_dump(
     assert out["complete"] is True, out
     assert out["missing_boxes"] == []
     assert out["open_obligations"] == []
-    assert out["note"] == "compaction-safe by construction"
+    # this session is UNSEATED (no Seat/held_seat binding) — "seat is chartered" has no
+    # seat to ask about and reads None (fog-of-war), same honest-not-invisible law
+    # unevaluated_boxes already enforces above; it never gates `complete`.
+    assert out["unevaluated_boxes"] == ["seat is chartered (governs a repo)"]
+    assert out["note"] == (
+        "compaction-safe by construction — could not evaluate: "
+        "seat is chartered (governs a repo) (fog-of-war, not a pass, never gates complete)")
 
 
 async def test_settle_tool_uncommitted_git_work_is_surfaced_but_never_blocks_complete(
