@@ -1225,6 +1225,52 @@ async def test_pause_seat_tool_stamps_the_lever_the_dispatch_reads(
         srv._agents.pop(srv._conn_key(ctx), None)
 
 
+async def test_pause_seat_refuses_a_target_name_whose_only_holder_is_ineligible(
+    actions: Actions,
+) -> None:
+    """task #142 punch-list item 3 (Thoth's dispatch DM 4097): pause_seat's plain-name
+    branch explicitly says it "resolves like a DM address does" — it must get the SAME
+    grave-delivery guard send() has, or a pause meant for a live seat could silently land
+    on some OTHER, older, unmarked generation while the real seat stays unpaused."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.seats import bind_holder, ensure_seat
+    from src.orchestrator.trigger import _paused
+
+    seat = await ensure_seat(actions, house="osiris", handle="PauseGhost", source="test")
+    now = datetime.now(UTC)
+    ancestor = await actions.create_or_find_object(
+        "Agent", "agent:pauseghost-old", "agent:pauseghost-old")
+    await actions.assert_property(ancestor, "handle", "PauseGhost", "agent:pauseghost-old",
+                                  now, 0.9, evidence_class="self_declared")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:pauseghost-old")
+    heir = await actions.create_or_find_object(
+        "Agent", "agent:pauseghost-new", "agent:pauseghost-new")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:pauseghost-new")
+    await actions.assert_property(heir, "false_mint", "true", "agent:pauseghost-new", now,
+                                  0.9, evidence_class="self_declared")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:pauser-1", session="pauser001", project="osiris", model=None, cwd=None)
+    try:
+        out = await srv.pause_seat(target="PauseGhost", ctx=ctx)
+        assert "error" in out
+        assert seat["seat_id"] in out["error"]
+        assert await _paused(actions.pool, ["agent:pauseghost-old"]) is None
+        assert await _paused(actions.pool, ["agent:pauseghost-new"]) is None
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+
 async def _owner(actions: Actions, tid: object) -> str | None:
     return await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
@@ -1444,3 +1490,27 @@ async def test_send_refusal_carries_no_hint_when_the_string_matches_nothing_at_a
         await send_message(actions.pool, from_agent="agent:x", from_project="osiris",
                            to_project="totally-unrecognizable-string", body="hello?")
     assert "did you mean" not in str(exc_info.value)
+
+
+async def test_send_refusal_suppresses_the_hint_when_it_would_lead_to_the_same_refusal(
+    actions: Actions,
+) -> None:
+    """task #142 punch-list item 3 (Thoth's dispatch DM 4097): a `to=` string matching a
+    name whose unique seat has only an ineligible holder must NOT get the "did you mean
+    to_agent=?" courtesy — following that hint would hit the exact same undeliverable
+    refusal this guard already enforces at the to_agent= branch. Pointing at a door that
+    won't open is worse than no hint at all."""
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="GhostProject", source="test")
+    holder = await actions.create_or_find_object(
+        "Agent", "agent:ghostproj0001", "agent:ghostproj0001")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:ghostproj0001")
+    await actions.assert_property(holder, "retired", "true", "agent:ghostproj0001",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    with pytest.raises(ValueError) as exc_info:
+        await send_message(actions.pool, from_agent="agent:x", from_project="osiris",
+                           to_project="GhostProject", body="meant this as a DM")
+    assert "did you mean" not in str(exc_info.value)
+    assert "no such project" in str(exc_info.value)

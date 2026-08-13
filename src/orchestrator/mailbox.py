@@ -334,9 +334,15 @@ async def send_message(
                 hint = ""
                 from src.actions.core import Actions
                 from src.orchestrator.agents import resolve_seat
-                maybe = await resolve_seat(Actions(pool), to_project)
-                if maybe["agent"] is not None:
-                    hint = f" — did you mean to_agent={to_project!r} instead of to=?"
+                from src.orchestrator.seats import seat_holder_ineligible
+                # Don't suggest a hint that's guaranteed to hit the SAME refusal: if
+                # to_project's unique seat has only ineligible holders, addressing it as
+                # to_agent=<name> below would refuse via this exact guard (task #142 punch-
+                # list item 3) — no point pointing the caller at a door that won't open.
+                if await seat_holder_ineligible(pool, to_project) is None:
+                    maybe = await resolve_seat(Actions(pool), to_project)
+                    if maybe["agent"] is not None:
+                        hint = f" — did you mean to_agent={to_project!r} instead of to=?"
                 raise ValueError(
                     f"no such project: {to_project!r} — nobody has ever mounted there, so "
                     f"no inbox() call would ever see this broadcast{hint}")

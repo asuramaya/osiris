@@ -2101,6 +2101,17 @@ async def pause_seat(paused: bool = True, target: str | None = None, reason: str
         stamp_on = (bound or {}).get("seat_id") or head
     else:  # a plain name — resolve like a DM address does
         from src.orchestrator.agents import resolve_seat
+        from src.orchestrator.seats import seat_holder_ineligible
+        # THE SAME GRAVE-DELIVERY GUARD send() USES (task #142 punch-list item 3): a name
+        # whose unique seat has ONLY ineligible holders must never fall through to
+        # resolve_seat's un-seated-lineage fallback here either — a pause meant for a live
+        # seat landing on some OTHER, older, unmarked generation instead would silently
+        # leave the actual seat unpaused while stamping a ghost, worse than a bare refusal.
+        ineligible = await seat_holder_ineligible(pool, who)
+        if ineligible is not None:
+            return {"error": f"cannot pause '{who}': {ineligible} — address the seat "
+                             "directly (target='seat:<id>') once a new holder claims it, "
+                             "or pause the seat id itself if you mean to gate the chair."}
         resolved = await resolve_seat(a, who)
         if resolved["agent"] is None:
             return {"error": f"no seat or agent named '{who}' — check fleet()"}
