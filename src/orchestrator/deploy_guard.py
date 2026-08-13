@@ -47,15 +47,41 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEPLOY_CURSOR_KEY = "deployed:osiris"
 
 
-def schema_drift(db_version: str | None, code_head: str | None) -> str | None:
+def schema_drift(
+    db_version: str | None, code_head: str | None, *, db_version_known: bool | None = None,
+) -> str | None:
     """Pure comparison, no IO — isolated-testable. Either side unknown (an empty
     alembic_version table, a script directory that failed to load) means "don't know", never
-    drift: only a genuine, confident mismatch between two known values is reported."""
+    drift: only a genuine, confident mismatch between two known values is reported.
+
+    DIRECTION-AWARE (decision 8d3f5e2d/ruling on capability-exists-but-unadopted, task #142
+    follow-up): a bare mismatch used to read "code is running ahead of (or behind)" — the
+    same third-state collapse 60bc15db names elsewhere, just here between two populations
+    with opposite severities. `db_version_known` (whether `db_version` exists as a script in
+    THIS TREE's own alembic chain, from `check_schema_drift`'s IO half) tells them apart:
+    CODE_AHEAD_OF_DB (db_version_known is True or None/undeterminable — the ordinary,
+    BENIGN transient between a merge and the next `alembic upgrade head`, already
+    migrate-before-restart guarded on `osiris deploy`, decision cda0866cba0a) from
+    DB_AHEAD_OF_TREE (db_version_known is False — this tree has never heard of that
+    revision at all, meaning some OTHER branch ran a migration against this shared database
+    before merging — the shape that blocked a whole deploy on 2026-08-13). Defaulting an
+    undeterminable `db_version_known` to the CALM reading, never the alarm, matches this
+    module's own fail-open law: a check that cannot tell direction must not manufacture the
+    scarier one."""
     if not db_version or not code_head:
         return None
     if db_version == code_head:
         return None
-    return f"code expects migration head {code_head!r}, DB is at {db_version!r}"
+    if db_version_known is False:
+        return (f"DB_AHEAD_OF_TREE: DB is at revision {db_version!r}, which this tree's own "
+               f"migrations do not recognize — another branch likely ran `alembic upgrade`/"
+               f"`osiris migrate` against this shared database before merging (decision "
+               f"8d3f5e2d). Do NOT run `alembic upgrade head`; find and merge the branch "
+               f"that owns revision {db_version!r}, or the divergence persists.")
+    return (f"CODE_AHEAD_OF_DB: code expects migration head {code_head!r}, DB is at "
+           f"{db_version!r} — benign, the ordinary gap between a merge and the next "
+           "`alembic upgrade head` (already migrate-before-restart guarded on `osiris "
+           "deploy`, decision cda0866cba0a).")
 
 
 async def check_schema_drift(pool: asyncpg.Pool) -> str | None:
@@ -64,11 +90,20 @@ async def check_schema_drift(pool: asyncpg.Pool) -> str | None:
     try:
         from alembic.config import Config
         from alembic.script import ScriptDirectory
+        from alembic.util.exc import CommandError
 
         cfg = Config(str(_REPO_ROOT / "alembic.ini"))
-        code_head = ScriptDirectory.from_config(cfg).get_current_head()
+        sd = ScriptDirectory.from_config(cfg)
+        code_head = sd.get_current_head()
         db_version = await pool.fetchval("SELECT version_num FROM alembic_version")
-        return schema_drift(db_version, code_head)
+        db_version_known: bool | None = None
+        if db_version:
+            try:
+                sd.get_revision(db_version)
+                db_version_known = True
+            except CommandError:
+                db_version_known = False
+        return schema_drift(db_version, code_head, db_version_known=db_version_known)
     except Exception as exc:  # noqa: BLE001 — a check that can't complete is UNKNOWN, not a refusal
         _log.warning("schema_drift check failed, treating as unknown: %r", exc)
         return None
@@ -97,18 +132,18 @@ async def alarm_schema_drift(pool: asyncpg.Pool, drift: str, *, service: str) ->
 
     _log.critical("%s booted against a drifted schema: %s", service, drift)
     actions = Actions(pool)
+    # `drift` is now direction-aware and self-describing (schema_drift's own
+    # CODE_AHEAD_OF_DB/DB_AHEAD_OF_TREE labels, each carrying its own correct action) — this
+    # wrapper no longer hard-codes "run alembic upgrade head", which was actively WRONG
+    # advice for the DB_AHEAD_OF_TREE case (decision 8d3f5e2d).
     await open_thread(
-        actions,
-        f"SCHEMA DRIFT: {drift}. Code is running ahead of (or behind) the "
-        "database's own migrations — run `alembic upgrade head` against the real DB before "
-        "trusting any feature the missing migration(s) touch.",
+        actions, f"SCHEMA DRIFT: {drift}",
         kind="obligation", arc="Fleet-Hygiene", severity="alarm", source=f"boot:{service}",
     )
     with contextlib.suppress(Exception):  # the desk being unreachable must not compound the alarm
         await send_message(
             pool, from_agent=f"system:{service}", from_project="osiris", to_project="operator",
-            body=f"{service} booted with a drifted schema — {drift}. Run `alembic upgrade "
-                 "head` against the real DB.",
+            body=f"{service} booted with a drifted schema — {drift}",
             dedup_window_secs=86400,
         )
 

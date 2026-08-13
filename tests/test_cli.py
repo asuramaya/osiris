@@ -15,6 +15,7 @@ import pytest
 from src.actions.core import Actions
 from src.cli import (
     DEPLOY_UNITS,
+    _apply_pending_migrations,
     _collapse_resume_log,
     _composition_gaps,
     _find_repo_root,
@@ -1281,6 +1282,53 @@ async def test_cmd_migrate_upgrade_failure_is_honest(actions: Actions, tmp_path:
     out = await cmd_migrate(repo_root=tmp_path, pool=actions.pool, state=_state,
                             run_migrations=_run)
     assert out == 1
+
+
+async def test_apply_pending_migrations_names_an_unrecognized_revision(
+    actions: Actions,
+) -> None:
+    """Decision 8d3f5e2d, task #142 follow-up: a DB carrying a revision this tree's own
+    alembic chain has never heard of used to be refused only by ACCIDENT — alembic's own
+    `command.upgrade` errors on it, and the generic except around `run_migrations` reported
+    whatever opaque text that exception happened to carry. This checks it explicitly first,
+    with the real reason named, and never even attempts the upgrade. Real repo_root (this
+    checkout has a real alembic.ini) with a synthetic revision no script defines — never a
+    real DB or a real upgrade."""
+    async def _state(pool: Any, root: Path) -> tuple[str | None, str | None]:
+        return "0099_unmerged_branch_revision", "0045"
+
+    async def _unreachable(root: Path) -> None:
+        raise AssertionError(
+            "must never attempt the upgrade once the revision is unrecognized")
+
+    repo_root = Path(__file__).resolve().parent.parent
+    ok, note = await _apply_pending_migrations(
+        actions.pool, repo_root, state=_state, run_migrations=_unreachable)
+    assert ok is False
+    assert "8d3f5e2d" in note
+    assert "0099_unmerged_branch_revision" in note
+    assert "do not recognize" in note
+
+
+async def test_apply_pending_migrations_still_falls_through_when_undeterminable(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """`known is None` (no alembic.ini under this repo_root, e.g. a bare tmp_path fixture)
+    must fall through to the EXISTING try/run_migrations path unchanged — this is the
+    backward-compatibility guarantee for every pre-existing caller of this function."""
+    async def _state(pool: Any, root: Path) -> tuple[str | None, str | None]:
+        return "0037", "0038"
+
+    calls: list[Path] = []
+
+    async def _run(root: Path) -> None:
+        calls.append(root)
+
+    ok, note = await _apply_pending_migrations(
+        actions.pool, tmp_path, state=_state, run_migrations=_run)
+    assert ok is True
+    assert calls == [tmp_path]
+    assert "applied" in note
 
 
 async def test_cmd_deploy_applies_pending_migrations_before_restarting(
