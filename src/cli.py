@@ -1010,6 +1010,26 @@ def alembic_gap_note(current: str | None, head: str | None) -> str | None:
            "run `alembic upgrade head`.")
 
 
+def _alembic_revision_known(repo_root: Path, revision: str) -> bool | None:
+    """Whether `revision` exists as a script anywhere in THIS TREE's own alembic chain —
+    None (undeterminable, e.g. no alembic.ini here) on any load failure, never a false
+    confident answer, same fail-open discipline as `_alembic_head`. This is the disk-only
+    half of the exact question decision 8d3f5e2d names: a revision the live DB carries but
+    this tree's script directory has never heard of means some OTHER branch's migration ran
+    against shared DATABASE_URL before merging."""
+    from alembic.script import ScriptDirectory
+    from alembic.util.exc import CommandError
+
+    cfg = _alembic_config(repo_root)
+    if cfg is None:
+        return None
+    try:
+        ScriptDirectory.from_config(cfg).get_revision(revision)
+        return True
+    except CommandError:
+        return False
+
+
 def composition_room_gap_notes(unassigned: list[str]) -> list[str]:
     """NAME every composition carrying no room_id, never a count (ruling 89e67c49, the
     follow-up to task #94's own gate fix): a NULL room_id renders nowhere outside the
@@ -1119,6 +1139,21 @@ async def _apply_pending_migrations(
         return True, ("migrations: up to date" if head is not None else
                       "migrations: undeterminable here (no alembic.ini under this repo_root) "
                       "— not gating")
+    # NAME THE ACCIDENTAL CONTROL (decision 8d3f5e2d, task #142 follow-up): this exact
+    # refusal already happened once by luck — `command.upgrade(cfg, "head")` errors when
+    # `current` isn't reachable from the tree's own alembic chain, and the generic except
+    # below caught that and reported it as an opaque upgrade failure. Checking it here
+    # FIRST makes the same refusal deliberate, with the real reason named, instead of
+    # depending on alembic's own exception text to explain it. `known is False` is the ONLY
+    # new branch — True or None (undeterminable, e.g. no alembic.ini here) fall through to
+    # the unchanged path below, so every existing caller's behavior is preserved exactly.
+    known = _alembic_revision_known(repo_root, current) if current is not None else None
+    if known is False:
+        return False, (
+            f"migrations: REFUSED — DB is at revision {current!r}, which this tree's own "
+            f"migrations do not recognize (decision 8d3f5e2d: another branch's migration "
+            f"ran against this shared database before merging). NOTHING was restarted; "
+            f"find and merge the branch that owns revision {current!r}.")
     try:
         await run_migrations(repo_root)
     except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, refuse, never restart

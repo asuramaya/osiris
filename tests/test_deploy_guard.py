@@ -42,6 +42,29 @@ def test_either_side_unknown_is_not_drift() -> None:
     assert schema_drift(None, None) is None
 
 
+def test_a_known_prior_revision_reads_as_the_benign_code_ahead_shape() -> None:
+    """Decision 8d3f5e2d: db_version_known=True (or the default None) is the ORDINARY,
+    benign transient — the DB just hasn't run a migration the tree already has."""
+    out = schema_drift("0034", "0036", db_version_known=True)
+    assert out is not None and out.startswith("CODE_AHEAD_OF_DB")
+    out_default = schema_drift("0034", "0036")
+    assert out_default is not None and out_default.startswith("CODE_AHEAD_OF_DB")
+
+
+def test_an_unrecognized_revision_reads_as_the_blocking_db_ahead_shape() -> None:
+    """db_version_known=False is the ONE population that actually blocks a deploy — the
+    tree has never heard of this revision at all, meaning another branch's migration ran
+    against shared DATABASE_URL before merging (decision 8d3f5e2d). Direction must be named,
+    not just the bare mismatch — a caller reading only 'ahead of (or behind)' cannot tell
+    these two populations apart, which is the exact defect this fix removes."""
+    out = schema_drift("0099_unmerged", "0045", db_version_known=False)
+    assert out is not None
+    assert out.startswith("DB_AHEAD_OF_TREE")
+    assert "8d3f5e2d" in out
+    assert "0099_unmerged" in out
+    assert "Do NOT run" in out
+
+
 async def test_check_schema_drift_is_clean_on_a_freshly_migrated_db(actions: Actions) -> None:
     """conftest's own pg_dsn fixture migrates the test container to head — so the running
     code and the test DB's alembic_version must already agree."""
@@ -54,7 +77,29 @@ async def test_check_schema_drift_finds_a_real_mismatch(actions: Actions) -> Non
     try:
         out = await check_schema_drift(actions.pool)
         assert out is not None and "0001" in out
+        # '0001' is a REAL, known revision in this tree's own chain -- benign, the DB is
+        # simply behind, not carrying a revision this tree has never heard of.
+        assert out.startswith("CODE_AHEAD_OF_DB")
     finally:  # alembic_version isn't in conftest's per-test _TABLES reset — restore by hand
+        await actions.pool.execute(
+            "UPDATE alembic_version SET version_num = $1", real)
+
+
+async def test_check_schema_drift_names_a_revision_this_tree_never_heard_of(
+    actions: Actions,
+) -> None:
+    """Decision 8d3f5e2d's live shape, reproduced: the DB carries a revision no script in
+    this tree's own alembic/versions/ defines at all — the class that blocked a deploy on
+    2026-08-13, caught by luck at deploy time. This check now names it directly."""
+    real = await actions.pool.fetchval("SELECT version_num FROM alembic_version")
+    await actions.pool.execute(
+        "UPDATE alembic_version SET version_num = '0099_unmerged_branch_revision'")
+    try:
+        out = await check_schema_drift(actions.pool)
+        assert out is not None
+        assert out.startswith("DB_AHEAD_OF_TREE")
+        assert "0099_unmerged_branch_revision" in out
+    finally:
         await actions.pool.execute(
             "UPDATE alembic_version SET version_num = $1", real)
 
