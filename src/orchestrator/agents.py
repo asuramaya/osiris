@@ -1180,6 +1180,122 @@ async def lineage_head(pool: asyncpg.Pool, canonical: str) -> str:
     return head
 
 
+async def _succeeded_from_of(pool: asyncpg.Pool, canonical: str) -> str | None:
+    """The immediate predecessor `canonical` succeeded, per its own `succeeded_from`
+    property assertion — one hop. The shared primitive under both the ancestor-walk
+    (nearest_handoff_ancestor, below) and lineage_root (ack_handoff's own lineage check) —
+    one mechanism, not two copies drifting (60bc15db, decision 61cb1f02)."""
+    val = await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='succeeded_from' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", canonical)
+    return str(val) if val else None
+
+
+async def lineage_root(pool: asyncpg.Pool, canonical: str, *, max_hops: int = 64) -> str:
+    """The ORIGIN of this canonical's own succession chain, walked via succeeded_from EDGES
+    — never `_generation()`'s string parse (60bc15db specimen, decision 61cb1f02): two
+    generations of the SAME lineage share this root even when the id FORMAT itself changes
+    across a renumbering. Live specimen that motivated this: agent:ad1a1cb0-g40-g40 and
+    agent:ad1a1cb0-g40-xxxix are six real succeeded_from hops apart and share nothing as
+    STRINGS (the "g40" suffix isn't a roman numeral, so `_generation()` roots the first one
+    at itself) — but they walk to the identical lineage origin. ack_handoff's own "is this
+    my lineage's handoff" guard uses this, replacing its old string-parse check; the cross-
+    lineage refusal itself is UNCHANGED (different root, refused, always) — only the
+    substrate computing "root" is more reliable now.
+
+    Bounded like every other succeeded_from walk in this file (mint_heir, the ancestor-walk
+    just below); a lineage longer than max_hops returns however far the walk reached, never
+    hangs on a cycle."""
+    cur = canonical
+    for _ in range(max_hops):
+        nxt = await _succeeded_from_of(pool, cur)
+        if nxt is None:
+            return cur
+        cur = nxt
+    return cur
+
+
+async def _lineage_ancestors(pool: asyncpg.Pool, canonical: str, *,
+                             max_hops: int = 64) -> list[str]:
+    """Self plus every real predecessor reached via succeeded_from, nearest first — the
+    full chain lineage_root walks to its end, exposed here so a caller can act on every
+    generation along the way, not just the terminus. Bounded identically to lineage_root;
+    a chain that never terminates within max_hops returns exactly that many entries, which
+    the caller can detect via len() to know the walk may be incomplete."""
+    out = [canonical]
+    cur = canonical
+    for _ in range(max_hops):
+        nxt = await _succeeded_from_of(pool, cur)
+        if nxt is None:
+            break
+        out.append(nxt)
+        cur = nxt
+    return out
+
+
+async def misfiled_by_lineage(
+    pool: asyncpg.Pool, agent_id: str, project: str | None, *, max_hops: int = 64,
+) -> dict[str, Any] | None:
+    """THE DISCOVERY HALF OF #145 (decision b89477a0, Thoth's authorization DM 4114):
+    identity_coherence (settle.py's filed_under_check) only ever checks THIS session's OWN
+    writes forward from its own mounted_at — it cannot help a LATER, correctly-filed
+    successor find an EARLIER generation's misfiled writes, because nothing anywhere
+    queries by LINEAGE across projects; every read (orient/recall/search) is project-
+    scoped, and a misfiled decision is invisible to that regardless of who's asking.
+
+    Walks the caller's own succeeded_from chain (`_lineage_ancestors`, the third use of
+    this session's shared primitive) and finds every Decision/Thread ANY generation of
+    that lineage ever authored, anywhere in history, whose `in_repo` project disagrees
+    with the caller's own current `project`.
+
+    REPORT-ONLY, never a gate or a repair (ruling 577988ed's law, same as
+    filed_under_check) — surfaces `misfiled`, never moves or corrects it. Repair is
+    explicitly out of scope for this build (decision b89477a0).
+
+    NAMES WHAT IT CANNOT SEE, ALWAYS (Thoth's own constraint, DM 4114): a succeeded_from
+    chain that is broken partway up (a real, measured, open question for at least one
+    live lineage as of decision ad7cddf9) makes this UNDER-report, never over-report — it
+    can only find ancestors it can actually reach. `chain_hops_walked` and
+    `chain_may_be_incomplete` are carried on every non-None result so a short or empty
+    `misfiled` list is never indistinguishable from a chain that was never fully walked.
+    Returns None only in the one case this cannot evaluate at all (`project` unknown,
+    mirroring filed_under_check) OR the genuinely clean case (nothing misfiled AND the
+    chain terminated within `max_hops`, i.e. an answer this function actually stands
+    behind) — a clean answer earned by a complete walk is still allowed to render as
+    silence; an INCOMPLETE walk never is, however clean it happens to look."""
+    if not project:
+        return None
+    ancestors = await _lineage_ancestors(pool, agent_id, max_hops=max_hops)
+    try:
+        rows = await pool.fetch(
+            "SELECT DISTINCT o.id, p.canonical AS filed_project FROM objects o "
+            "JOIN links l ON l.from_id = o.id AND l.type = 'in_repo' "
+            "JOIN objects p ON p.id = l.to_id AND p.type = 'SoftwareProject' "
+            "WHERE o.type IN ('Decision', 'Thread') AND EXISTS ("
+            "  SELECT 1 FROM assertions a WHERE a.object_id = o.id "
+            "  AND a.source_id = ANY($1::text[]) AND a.name = 'summary' "
+            "  AND a.evidence_class = 'self_declared')",
+            ancestors)
+    except Exception:  # noqa: BLE001 — fail open, same law as filed_under_check
+        return None
+    misfiled = sorted({
+        (str(r["id"])[:8], str(r["filed_project"]).removeprefix("repo:"))
+        for r in rows if str(r["filed_project"]).removeprefix("repo:") != project
+    })
+    hops_walked = len(ancestors) - 1
+    incomplete = hops_walked >= max_hops
+    if not misfiled and not incomplete:
+        return None  # earned silence: nothing misfiled AND the chain was fully walked
+    return {
+        "filed_under": project,
+        "misfiled": [{"id": i, "filed_under": p} for i, p in misfiled[:10]],
+        "misfiled_count": len(misfiled),
+        "chain_hops_walked": hops_walked,
+        "chain_may_be_incomplete": incomplete,
+    }
+
+
 async def nearest_handoff_ancestor(
     pool: asyncpg.Pool, start_id: str, *, max_hops: int = 5, respect_ack: bool = True,
 ) -> tuple[str, list[dict[str, Any]]] | None:
@@ -1251,13 +1367,10 @@ async def nearest_handoff_ancestor(
         picks = sorted(rows, key=lambda r: r["observed_at"], reverse=True)[:2]
         if picks:
             return cur, [dict(r) for r in picks]
-        nxt = await pool.fetchval(
-            "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
-            "WHERE o.canonical=$1 AND a.name='succeeded_from' "
-            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", cur)
-        if not nxt:
+        nxt = await _succeeded_from_of(pool, cur)
+        if nxt is None:
             return None
-        cur = str(nxt)
+        cur = nxt
     return None
 
 

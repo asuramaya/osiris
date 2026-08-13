@@ -60,6 +60,8 @@ from src.orchestrator import succession as comp_succession
 from src.orchestrator.agents import (
     AgentIdentity,
     _generation,
+    lineage_root,
+    misfiled_by_lineage,
     nearest_handoff_ancestor,
     project_pin_banner,
     read_project_model,
@@ -2420,6 +2422,12 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
                         "stays live and keeps costing every future orient() in this "
                         "project, not just yours.",
             }
+    # #145's DISCOVERY HALF (decision b89477a0/61cb1f02): a lineage-scoped, not project-
+    # scoped, misfiling finder — where identity_coherence (settle.py) can only ever see
+    # THIS session's own writes, this can see every generation's, so a correctly-filed
+    # successor can find an ancestor's misfiled work. Report-only, never a gate.
+    misfiled = (await misfiled_by_lineage(pool, ident.agent_id, proj)
+               if ident and proj else None)
     # CO-AGENT AWARENESS (Deckard XXVI, msg 258: a live sibling shared his exact worktree
     # and the graph never said so — he re-derived 'never git add -A' from a local file
     # while osiris KNEW). One query: other live mounts on THIS project, named at orient.
@@ -2518,6 +2526,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             **({"project_pin_error": pin_warn} if pin_warn else {}),
             **sweep_receipt,
             **({"succession_note": inheritance} if inheritance else {}),
+            **({"misfiled_elsewhere": misfiled} if misfiled else {}),
             **({"co_agents": co_agents} if co_agents else {}),
             **({"peer": peer} if peer else {}),
             **({"while_you_were_away": away} if away else {}),
@@ -2586,6 +2595,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         **({"swap": swap} if swap else {}),
         **({"project_pin_error": pin_warn} if pin_warn else {}),
         **({"succession_note": inheritance} if inheritance else {}),
+        **({"misfiled_elsewhere": misfiled} if misfiled else {}),
         **({"co_agents": co_agents} if co_agents else {}),
         **({"peer": peer} if peer else {}),
         **({"while_you_were_away": away} if away else {}),
@@ -5007,10 +5017,15 @@ async def _retire_stale_handoffs(
     live call path — a fresh is_handoff write no longer retires anything automatically.
 
     Retires every is_handoff='true' record from `actor`'s own LINEAGE — same seat, any
-    earlier OR same generation, Decision or Thread alike, `_generation()`'s root match, the
-    identical test `rank_open_threads.whose_move` already uses for 'mine to act' — except
-    `keep`. Cross-lineage records are NEVER touched: Khnum's handoff is never retired by a
-    Sekhmet-actor's backfill run.
+    earlier OR same generation, Decision or Thread alike, `lineage_root`'s succeeded_from
+    edge-walk (decision 61cb1f02: this carried the identical string-parse defect
+    ack_handoff's own lineage guard did, same fix applied here for the same reason) —
+    except `keep`. Cross-lineage records are NEVER touched: Khnum's handoff is never
+    retired by a Sekhmet-actor's backfill run. `rank_open_threads.whose_move` still
+    compares `_generation()` STRING roots for its own, unrelated "mine to act" ranking
+    question — a display-ordering concern on a documented PURE function, not this
+    function's own retirement guard; left alone deliberately, not silently inconsistent
+    (decision — see the sibling check this fix was built alongside).
 
     Resolves each candidate's CURRENT is_handoff value the same way every other property-
     read in this codebase does (confidence DESC, observed_at DESC LIMIT 1) rather than a
@@ -5025,9 +5040,7 @@ async def _retire_stale_handoffs(
     Returns the short ids of every record retired, for the caller's own receipt — a silent
     mutation behind an already-silent bleed would just be a quieter version of the same
     disease."""
-    from src.orchestrator.agents import _generation
-
-    root = _generation(actor)[0]
+    root = await lineage_root(pool, actor)
     rows = await pool.fetch(
         "SELECT o.id AS object_id, "
         "(SELECT a.source_id FROM current_assertions a WHERE a.object_id=o.id "
@@ -5042,7 +5055,7 @@ async def _retire_stale_handoffs(
     retired: list[str] = []
     actions = Actions(pool)
     for r in rows:
-        if _generation(r["source_id"])[0] == root:
+        if await lineage_root(pool, r["source_id"]) == root:
             await actions.assert_property(r["object_id"], "is_handoff", "false", actor, now,
                                           0.9, evidence_class="self_declared")
             retired.append(str(r["object_id"])[:8])
@@ -5064,11 +5077,11 @@ async def ack_handoff(
 
     Refuses rather than guesses: unresolvable ref ("no handoff matches"); already
     acknowledged or never a handoff ("already acknowledged or not a handoff" — a duplicate
-    ack is a clean error, not a second write); caller isn't a lineage descendant of the
-    handoff's own author (`_generation()` root match, same test `rank_open_threads.
-    whose_move` uses — "not your lineage's handoff to ack"). That last check is defense in
-    depth: delivery alone never burns a baton, but a MISTAKEN ack (a copy-pasted ref from
-    another lineage) would permanently retire someone else's live handoff, so it's refused.
+    ack is a clean error, not a second write); caller isn't in the handoff's own author's
+    lineage ("not your lineage's handoff to ack") — checked via `lineage_root`, a
+    succeeded_from edge-walk (decision 61cb1f02: replaces a string-parsed check that went
+    blind across an id-format change). Defense in depth: a MISTAKEN ack (a copy-pasted ref
+    from another lineage) would permanently retire someone else's live handoff, refused.
 
     PER-OBJECT not per-reader (first ack wins, retires for everyone). FINAL not a lease — an
     ack does not reopen if that generation goes on to produce zero further turns, the same
@@ -5077,7 +5090,6 @@ async def ack_handoff(
 
     Never deleted, never inaccessible — recall()/search() see it exactly as before; only
     succession_note and the open_threads/recent_decisions cap-exemption change."""
-    from src.orchestrator.agents import _generation
     from src.orchestrator.capture import RefAmbiguous, _find_decision, _find_thread
 
     pool = await _pool_get()
@@ -5101,7 +5113,9 @@ async def ack_handoff(
         "FROM objects o WHERE o.id=$1", oid)
     if row is None or row["is_handoff"] != "true":
         return {"error": f"{str(oid)[:8]} is already acknowledged or is not a handoff"}
-    if row["author"] is None or _generation(row["author"])[0] != _generation(actor)[0]:
+    if row["author"] is None:
+        return {"error": f"{str(oid)[:8]} is not your lineage's handoff to ack"}
+    if await lineage_root(pool, row["author"]) != await lineage_root(pool, actor):
         return {"error": f"{str(oid)[:8]} is not your lineage's handoff to ack"}
     now = datetime.now(UTC)
     await Actions(pool).assert_property(
