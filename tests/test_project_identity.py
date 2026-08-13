@@ -11,6 +11,7 @@ from src.actions.core import Actions
 from src.orchestrator.project_identity import (
     fork_project,
     project_identity_evidence,
+    rename_evidence_verdict,
     rename_project,
     unfork_project,
 )
@@ -476,6 +477,56 @@ async def test_unfork_project_refuses_when_nothing_to_unfork(actions: Actions) -
     assert "nothing to unfork" in out["error"]
 
 
+# --- rename_evidence_verdict (#137's arc, operator ruling: DO NOT CROWN A TIER) --------
+# a NAMED signal against a SPECIFIC new_name, distinct from project_identity_evidence's
+# own "agreement" field (which only says whether a seat's tiers agree with EACH OTHER).
+
+def _evidence(candidates: dict[str, dict[str, object]]) -> dict[str, object]:
+    """A minimal project_identity_evidence-shaped dict — only the field the verdict
+    function reads, so these tests pin its contract without a live seat/DB round trip."""
+    return {"candidates": candidates}
+
+
+def test_rename_evidence_verdict_no_signal_on_empty_candidates() -> None:
+    assert rename_evidence_verdict(_evidence({}), "anything") == "no-signal"
+
+
+def test_rename_evidence_verdict_confirms_when_new_name_carries_real_signal() -> None:
+    ev = _evidence({"newname": {"declared_charter": True, "pin_match": False,
+                                "remote_agrees": None}})
+    assert rename_evidence_verdict(ev, "newname") == "confirms"
+    ev2 = _evidence({"newname": {"declared_charter": False, "pin_match": True,
+                                 "remote_agrees": None}})
+    assert rename_evidence_verdict(ev2, "newname") == "confirms"
+    ev3 = _evidence({"newname": {"declared_charter": False, "pin_match": False,
+                                 "remote_agrees": True}})
+    assert rename_evidence_verdict(ev3, "newname") == "confirms"
+
+
+def test_rename_evidence_verdict_disagrees_when_a_different_candidate_is_strong() -> None:
+    # new_name never even surfaced as a candidate — a rival did
+    ev = _evidence({"oldname": {"declared_charter": True, "pin_match": True,
+                                "remote_agrees": None}})
+    assert rename_evidence_verdict(ev, "newname") == "disagrees"
+    # new_name IS a candidate but only via weak write-attribution-only presence, while a
+    # rival carries real signal — still a disagreement, never upgraded to confirms
+    ev2 = _evidence({
+        "newname": {"declared_charter": False, "pin_match": False, "remote_agrees": None},
+        "oldname": {"declared_charter": True, "pin_match": False, "remote_agrees": None},
+    })
+    assert rename_evidence_verdict(ev2, "newname") == "disagrees"
+
+
+def test_rename_evidence_verdict_no_signal_when_no_candidate_is_strong() -> None:
+    # candidates exist (e.g. incidental write-attribution mentions) but NONE carry real
+    # signal — nothing decisive either way, never misread as a disagreement
+    ev = _evidence({
+        "newname": {"declared_charter": False, "pin_match": False, "remote_agrees": None},
+        "oldname": {"declared_charter": False, "pin_match": False, "remote_agrees": False},
+    })
+    assert rename_evidence_verdict(ev, "newname") == "no-signal"
+
+
 # --- MCP surface (task #163's arc: this whole module existed, tested, and had ZERO ------
 # MCP wiring until now — grep against src/mcp_server.py before this change: zero hits) ---
 
@@ -483,11 +534,13 @@ async def test_mcp_rename_project_surfaces_evidence_by_governing_seat(
     actions: Actions, tmp_path,
 ) -> None:
     """The MCP `rename_project` tool wires project_identity_evidence in as a PRE-WRITE
-    CHECK (task #163's arc, #137's own root-cause fix): every Seat currently GOVERNING
-    the project being renamed gets its own evidence report attached to the receipt, so a
-    caller sees — in the SAME turn — whether that seat's pin/charter/write-attribution
-    still disagrees with the new name. NOT A TIER RULING: this never refuses and never
-    picks a winner on it; the rename itself always proceeds regardless."""
+    CHECK (task #163's arc, #137's own root-cause fix, operator ruling: DO NOT CROWN A
+    TIER): every Seat currently GOVERNING the project being renamed gets its own evidence
+    report attached to the receipt, classified into a NAMED verdict — no-signal/confirms/
+    disagrees — against the specific new_name declared, so a caller sees in the SAME turn
+    whether that seat's pin/charter/remote still disagrees. NOT A TIER RULING: this never
+    refuses and never picks a winner on it; the rename itself always proceeds regardless,
+    but a disagreement surfaces as an unmissable top-level warning, never buried."""
     import src.mcp_server as srv
     from src.mcp_server import _agents, _conn_key
     from src.mcp_server import rename_project as rename_tool
@@ -520,13 +573,20 @@ async def test_mcp_rename_project_surfaces_evidence_by_governing_seat(
         out = await rename_tool(project="oldname", new_name="newname",
                                 because="test rename", ctx=ctx)
         assert out["new_name"] == "newname"
-        assert seat["seat_id"] in out["evidence_by_governing_seat"]
-        seat_evidence = out["evidence_by_governing_seat"][seat["seat_id"]]
+        assert seat["seat_id"] in out["rename_evidence"]
+        entry = out["rename_evidence"][seat["seat_id"]]
+        seat_evidence = entry["evidence"]
         assert seat_evidence["seat_id"] == seat["seat_id"]
         assert "candidates" in seat_evidence
         # the pin still says the OLD name — exactly the #137 disagreement this must
         # surface, not hide, since the rename never touches the seat's own .osiris file
         assert "oldname" in seat_evidence["candidates"]
+        # NAMED, NEVER SILENT: the pin's disagreement becomes an explicit verdict, and
+        # an unmissable top-level warning — never something a caller has to notice by
+        # diffing candidates themselves
+        assert entry["verdict"] == "disagrees"
+        assert out["evidence_disagrees"] is True
+        assert seat["seat_id"] in out["warning"]
     finally:
         srv._pool = saved_pool
         _agents.pop(_conn_key(ctx), None)

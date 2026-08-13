@@ -289,6 +289,43 @@ async def project_identity_evidence(
     }
 
 
+def rename_evidence_verdict(evidence: dict[str, Any], new_name: str) -> str:
+    """The NAMED SIGNAL rename_project's pre-write check surfaces (#137's own arc, the
+    operator's ruling: DO NOT CROWN A TIER — wire the evidence in, pick nothing).
+    `evidence` is one seat's own `project_identity_evidence` report; this asks a narrower
+    question than that report's own `agreement` field (which only says whether the seat's
+    tiers agree WITH EACH OTHER) — does the evidence agree with `new_name` SPECIFICALLY?
+    Three answers, never a silent pick between them (the same law as the coordination-
+    lane's tri-state, ruling f624d114):
+
+      "no-signal"  — this seat's evidence found no candidate at all (no charter, no pin,
+        no attributed work) — nothing to confirm or disagree with.
+      "confirms"   — `new_name` itself carries a real positive signal (declared_charter,
+        pin_match, or remote_agrees — never write_attribution alone, a single stray commit
+        is not the same claim the module docstring already warns against for `agreement`).
+      "disagrees"  — a DIFFERENT candidate carries that same real positive signal and
+        `new_name` does not (including the case where `new_name` never even surfaced as a
+        candidate at all) — the caller declared one name while this seat's own evidence
+        points elsewhere.
+
+    Deliberately reuses only the per-candidate boolean flags already computed by
+    `project_identity_evidence`, never `write_attr["top"]` or the `supported`/`agreement`
+    internals directly — a second, drifting copy of that ranking is exactly the two-
+    readers-one-truth shape ruling 70493925 exists to warn against. If a future tier is
+    added to `project_identity_evidence`'s candidate entries, it must be added to the
+    `strong` predicate below too, in the same edit, not discovered later as a silent gap."""
+    candidates: dict[str, Any] = evidence.get("candidates") or {}
+    if not candidates:
+        return "no-signal"
+    strong = {n for n, e in candidates.items()
+             if e.get("declared_charter") or e.get("pin_match") or e.get("remote_agrees")}
+    if new_name in strong:
+        return "confirms"
+    if strong:
+        return "disagrees"
+    return "no-signal"
+
+
 # --- rename_project / fork_project (#110, decision 1db1ff41, rulings 1-2) -----------------
 
 async def rename_project(

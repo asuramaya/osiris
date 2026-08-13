@@ -3771,17 +3771,13 @@ async def rename_project(project: str, new_name: str, because: str,
     graph-only verb. `because` is mandatory testimony; this function never infers, only
     declares what a human already decided (read project_identity_evidence FIRST).
 
-    PRE-WRITE CHECK, SURFACED NEVER PICKED (task #163's arc, #137's own root cause):
-    #137's actual mechanism was register_agent reasserting a project's name from a
-    mounting seat's stale PIN at FULL confidence on every ordinary mount — recency always
-    won, and a declared rename got silently reverted five times by routine mounts. This
-    cannot fix that (a `.osiris` pin is out of scope for a graph verb) but it can stop it
-    from happening BLIND: before writing, every Seat currently GOVERNING this project has
-    project_identity_evidence run against it, returned in the receipt's
-    `evidence_by_governing_seat` keyed by seat canonical. NO TIER IS CROWNED and the write
-    proceeds regardless of what the evidence says — this only ensures a caller SEES, in
-    the same turn, which seats' pins might still disagree with the name they just declared,
-    so they know to go fix those pins too.
+    PRE-WRITE CHECK, SURFACED NEVER PICKED (task #163's arc, #137's own root cause;
+    operator ruling: DO NOT CROWN A TIER): before writing, every Seat GOVERNING this
+    project gets project_identity_evidence run and classified into a NAMED verdict
+    against `new_name` — "no-signal" / "confirms" / "disagrees" — in the receipt's
+    `rename_evidence` (keyed by seat, raw evidence rides along too). Write proceeds
+    regardless; `evidence_disagrees=True` plus an unmissable `warning` land in the same
+    receipt whenever any seat's own evidence names something else.
 
     Refuses LOUDLY on: a blank `new_name` or `because`; an unresolved or ambiguous
     `project` ref; a non-active project; `new_name` already resolving to a DIFFERENT
@@ -3795,6 +3791,7 @@ async def rename_project(project: str, new_name: str, because: str,
     from src.orchestrator.project_identity import (
         project_identity_evidence as _project_identity_evidence,
     )
+    from src.orchestrator.project_identity import rename_evidence_verdict
     from src.orchestrator.project_identity import rename_project as _rename_project
     from src.orchestrator.projects import AmbiguousProjectRef, _resolve_software_project
     evidence_by_seat: dict[str, Any] = {}
@@ -3814,7 +3811,19 @@ async def rename_project(project: str, new_name: str, because: str,
     out = await _rename_project(Actions(pool), project=project, new_name=new_name,
                                 because=because, actor=ident.agent_id)
     if evidence_by_seat:
-        out["evidence_by_governing_seat"] = evidence_by_seat
+        rename_evidence = {
+            seat: {"verdict": rename_evidence_verdict(ev, new_name), "evidence": ev}
+            for seat, ev in evidence_by_seat.items()
+        }
+        out["rename_evidence"] = rename_evidence
+        disagreeing = [s for s, v in rename_evidence.items() if v["verdict"] == "disagrees"]
+        if disagreeing:
+            out["evidence_disagrees"] = True
+            out["warning"] = (
+                f"{new_name!r} was written, but {len(disagreeing)} governing seat "
+                f"evidence disagrees with it: {', '.join(disagreeing)} — their own pin/"
+                "charter/remote still names something else; go fix those, this write "
+                "did not")
     return out
 
 
