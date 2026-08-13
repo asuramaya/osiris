@@ -261,6 +261,12 @@ class Actions:
                     evidence_class,
                 ),
             )
+            if prior is not None:
+                # is_current (migration 0047, thread 2a280e07): the flip costs one
+                # indexed UPDATE by primary key, in the SAME transaction as the insert
+                # above — never a new read, since `prior` is exactly the row current_
+                # assertions' anti-join would have excluded anyway.
+                await conn.execute("UPDATE assertions SET is_current=false WHERE id=$1", prior)
             await self._audit(
                 conn,
                 "assert_property",
@@ -337,6 +343,10 @@ class Actions:
                     evidence_class,
                 ),
             )
+            # is_current (migration 0047, thread 2a280e07) — same discipline as
+            # assert_property's own flip, see its comment
+            await conn.execute(
+                "UPDATE assertions SET is_current=false WHERE id=$1", superseded_id)
             await self._audit(
                 conn,
                 "supersede_assertion",
