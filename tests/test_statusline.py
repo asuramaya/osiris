@@ -203,6 +203,81 @@ async def test_counts_resolves_identity_through_the_seat_when_the_climb_hint_is_
     assert resolved_seat_handle == "Seatfaller"
 
 
+async def test_counts_resolves_a_cross_house_seat_handle_distinct_from_its_house(
+    actions: Actions, pg_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The operator's WIDENED complaint (msg 4193): every osiris-house seat (khnum, seshat,
+    imhotep, sekhmet) shares house="osiris", so testing only among them never proves handle
+    and house are actually two DIFFERENT facts — the same house string would render
+    correctly even from a bug that silently collapsed them. A cross-house seat (his own
+    example: alfred's, cupid's, Marquee, henry) is where a real defect would surface: house
+    and handle here are unrelated strings, and BOTH must land in the tuple untouched, case
+    preserved exactly as declared (no normalization — the ramstein/Lilguy case question
+    stays a separate, unresolved brief, not something this fix silently resolves)."""
+    from src.orchestrator.mounts import save_mount
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    monkeypatch.setattr(sl, "DSN", pg_dsn)
+    monkeypatch.setattr("src.ingest.providers.spend_is_metered", lambda s=None: False)
+    p = actions.pool
+    agent = "agent:seatfall02"
+
+    office = tmp_path / "seats" / "marquee"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "alfred"\n')
+    seat = await ensure_seat(actions, house="alfred", handle="Marquee", source="test")
+    assert seat.get("error") is None
+    await actions.assert_property(
+        await actions.create_or_find_object("Seat", seat["seat_id"], "test"),
+        "anchor_cwd", str(office), "test", datetime.now(UTC), 0.9)
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=agent, source="test")
+
+    session_id = "5ea7fa12-0000-0000-0000-000000000000"
+    await save_mount(p, job_dir="/x/jobs/5ea7fa12", agent_id=agent, project=None,
+                     cwd=str(tmp_path / "seats"), model=None, session_key=None)
+
+    result = await sl._counts("", session_id, "claude-sonnet-5", "claude-sonnet-5", None,
+                              intent_hint=None)
+    resolved_project, resolved_seat_handle = result[-3], result[-1]
+    assert resolved_project == "alfred", "a house other than 'osiris' must still resolve"
+    assert resolved_seat_handle == "Marquee", "case preserved exactly as declared, not folded"
+
+
+async def test_counts_resolves_the_seat_handle_even_when_the_pin_already_answered_project(
+    actions: Actions, pg_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of the widened acceptance test: a seat whose declared project pin
+    ALREADY equals its house (the common, well-behaved case — no seat-fallback gap to fill)
+    must still surface its handle. Before this fix the seat lookup only ran when
+    resolved_project was None; here project_hint is passed in non-empty (the pin already
+    answered), so the OLD gate would have skipped held_seat() entirely and rendered no
+    handle at all on the majority, everyday-working-seat path — exactly the operator's
+    original complaint."""
+    from src.orchestrator.mounts import save_mount
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    monkeypatch.setattr(sl, "DSN", pg_dsn)
+    monkeypatch.setattr("src.ingest.providers.spend_is_metered", lambda s=None: False)
+    p = actions.pool
+    agent = "agent:seatfall03"
+
+    seat = await ensure_seat(actions, house="osiris", handle="Khnum", source="test")
+    assert seat.get("error") is None
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=agent, source="test")
+
+    session_id = "5ea7fa13-0000-0000-0000-000000000000"
+    await save_mount(p, job_dir="/x/jobs/5ea7fa13", agent_id=agent, project=None,
+                     cwd=str(tmp_path), model=None, session_key=None)
+
+    # project_hint="osiris" — the climb/pin ALREADY answered; house equals what was declared.
+    result = await sl._counts("osiris", session_id, "claude-sonnet-5", "claude-sonnet-5", None,
+                              intent_hint=None)
+    resolved_project, resolved_seat_handle = result[-3], result[-1]
+    assert resolved_project == "osiris"
+    assert resolved_seat_handle == "Khnum", (
+        "the handle must still resolve even when the pin already answered the project")
+
+
 def test_a_dm_alone_rings_the_doorbell(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
