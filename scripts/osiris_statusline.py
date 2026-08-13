@@ -161,7 +161,7 @@ async def _counts(
     window_size: int | None = None, *, intent_hint: str | None = None,
     connect_timeout: float = 1.0,
 ) -> tuple[int, int, int, int, int, int, int, int, list[str],
-           tuple[float, float, int], str | None, str | None]:
+           tuple[float, float, int], str | None, str | None, str | None]:
     import asyncpg
 
     conn = await asyncpg.connect(DSN, timeout=connect_timeout)
@@ -209,13 +209,25 @@ async def _counts(
         # deliberately: house IS project for a seat-derived identity (ruling 577988ed), so
         # the label and the numbers beside it stay about the SAME thing, never a silent mix
         # of a seat's name against a different project's counts.
+        #
+        # THE WINDOW TAG NEEDS A SEPARATE FIELD (ruling b8a18059, same resolution chain as
+        # the mount-guard fix this session): 577988ed's reasoning stays right about the
+        # NUMBERS (they must be about `house`, never a silent mix), but the operator reads
+        # this line to answer "which MIND am I talking to", and `house` alone answers a
+        # different question ("whose counts are these"). resolved_seat_handle rides beside
+        # resolved_project rather than replacing it — the render layer decides how to show
+        # both together; this layer only resolves the extra fact. Looked up whenever an
+        # `agent` is known (not gated on resolved_project being None) because the handle is
+        # needed even on the common path where the pin climb already answered the project.
         resolved_project = project_hint or None
         resolved_intent = intent_hint
-        if agent and (resolved_project is None or resolved_intent is None):
+        resolved_seat_handle: str | None = None
+        if agent:
             from src.orchestrator.seats import held_seat, seat_facts
 
             seat = await held_seat(conn, agent)
             if seat:
+                resolved_seat_handle = seat.get("handle")
                 if resolved_project is None:
                     resolved_project = seat.get("house")
                 if resolved_intent is None and seat.get("seat_id"):
@@ -240,7 +252,7 @@ async def _counts(
                 seg.sensing.data["sick"],
                 (seg.spend.data.get("spent", 0.0), seg.spend.data.get("cap", 0.0),
                  seg.spend.data.get("blind", 0)),
-                resolved_project, resolved_intent)
+                resolved_project, resolved_intent, resolved_seat_handle)
     finally:
         await conn.close()
 
@@ -249,7 +261,7 @@ async def _fetch_counts(
     project_hint: str, session_id: str, model_id: str, model_raw: str,
     window_size: int | None, *, intent_hint: str | None,
 ) -> tuple[tuple[int, int, int, int, int, int, int, int, list[str],
-                 tuple[float, float, int], str | None, str | None], bool]:
+                 tuple[float, float, int], str | None, str | None, str | None], bool]:
     """SLOW IS NOT DOWN (field-witnessed tonight: the 1.0s connect timeout flapped "graph
     unreachable" under load while the graph was very much up). One retry, a wider budget,
     on a TIMEOUT ONLY — a refused connection, a DNS failure, a real Postgres error is
@@ -294,13 +306,13 @@ def _cache_key(session_id: str) -> str:
 
 
 def _encode_counts(counts: tuple[Any, ...]) -> list[Any]:
-    *head, spend, resolved_project, resolved_intent = counts
-    return [*head, list(spend), resolved_project, resolved_intent]
+    *head, spend, resolved_project, resolved_intent, resolved_seat_handle = counts
+    return [*head, list(spend), resolved_project, resolved_intent, resolved_seat_handle]
 
 
 def _decode_counts(obj: list[Any]) -> tuple[Any, ...]:
-    *head, spend, resolved_project, resolved_intent = obj
-    return (*head, tuple(spend), resolved_project, resolved_intent)
+    *head, spend, resolved_project, resolved_intent, resolved_seat_handle = obj
+    return (*head, tuple(spend), resolved_project, resolved_intent, resolved_seat_handle)
 
 
 def _cache_read(path: Path) -> tuple[tuple[Any, ...], bool, float] | None:
@@ -418,13 +430,20 @@ def main() -> None:
     resolved_intent = intent_hint
     try:
         ((desk, mail, dm, flight, live, wakes, owed, owed_here, sick,
-          (spent, cap, blind), resolved_project, resolved_intent), slow) = _counts_cached(
+          (spent, cap, blind), resolved_project, resolved_intent,
+          resolved_seat_handle), slow) = _counts_cached(
             project_hint or "", session_id, model_id, model_raw, window_size,
             intent_hint=intent_hint)
         # NEVER A WRONG BASENAME (Thoth's constraint 1, msg 3949): the pin climb and the
         # seat fallback both ran (inside _counts_cached) and STILL found nothing — an
         # explicit unresolved marker, never Path(cwd).name wearing identity's clothes.
         project = resolved_project or "?"
+        # THE SEAT RIDES BESIDE THE PROJECT, NEVER REPLACES IT (ruling b8a18059): the
+        # operator's question is "which mind is this window" — `house` alone answers "whose
+        # counts are these", a different question, correctly, but not the one being asked.
+        # SEATLESS: resolved_seat_handle is None (no held_seat found) — say nothing extra,
+        # today's project-only label is honest as-is, never an invented name.
+        seat_tag = f"{resolved_seat_handle}·" if resolved_seat_handle else ""
         # THE DEBT, NOT THE DOORBELL — and only the debt HERE (operator ruling, 2026-07-16:
         # the fleet-wide total 'can disappear'). A number you can do nothing about from this
         # directory is not an alarm, it is wallpaper, and wallpaper that is always red stops
@@ -464,7 +483,7 @@ def main() -> None:
                 c = RED if spent >= 0.85 * cap else AMBER
                 spend_s = f"{c}${spent:.2f}/${cap:.0f}{RESET}"
         parts = [
-            _link(f"◈ {project}", "desk"),
+            _link(f"◈ {seat_tag}{project}", "desk"),
             *([_link(sick_s, "fleet")] if sick_s else []),
             *([_link(spend_s, "desk")] if spend_s else []),
             _link(owe_s, "desk"),

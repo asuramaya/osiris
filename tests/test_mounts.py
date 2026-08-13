@@ -253,13 +253,89 @@ async def test_mount_preserves_a_declared_pin_across_the_recollection_override(
     saved_pool = srv._pool
     srv._pool = actions.pool
     try:
-        out = await srv.mount(cwd=str(office), job_dir=job_dir)
+        out = await srv.mount(cwd=str(office), job_dir=job_dir, verbose=True)
         assert out["project"] == "osiris", (
             f"the declared office's own pin was discarded by the recollection override: {out}")
         note = out.get("cwd_corrected")
         assert note is not None, f"mount() never confessed the correction: {out}"
         assert note["declared"] == str(office) and note["kept"] == str(container)
         assert note.get("declared_pin_kept_for_identity") == "osiris"
+    finally:
+        srv._pool = saved_pool
+
+
+async def test_mount_prefers_a_real_declared_office_over_a_bare_container_recollection(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thoth's own live repro, the still-open half of 13af22fc: mount(cwd='.../seats/thoth')
+    from a session whose registry row remembered the BARE seat-office container came back
+    cwd_corrected{kept: the container} — his correct, more-specific declared office was
+    discarded in favor of the parent-of-every-seat, one step from a basename phantom
+    (resolve_identity already refuses to invent one from "seats", but the location itself
+    was still silently wrong). Now: when the declared cwd is a real, existing office and the
+    registry's own "kept" value is exactly the bare container, the declared office wins
+    outright — `cwd` is left untouched, and the receipt says so rather than asserting a
+    correction that didn't happen."""
+    from src import mcp_server as srv
+    from src.orchestrator import offices as offices_mod
+
+    office = tmp_path / "seats" / "thoth"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "osiris"\n')
+    container = tmp_path / "seats"
+    monkeypatch.setattr(offices_mod, "_DEFAULT_OFFICE_ROOT", container)
+
+    job_dir = str(tmp_path / "jobs" / "recollect02")
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:recollect02",
+                            project="seats", cwd=str(container), model=None,
+                            session_key="sid:recollect02")
+    monkeypatch.setattr(mounts, "stale_recollection", lambda *a, **k: True)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(office), job_dir=job_dir, verbose=True)
+        assert out["project"] == "osiris"
+        note = out.get("cwd_corrected")
+        assert note is not None, f"mount() must still confess it checked: {out}"
+        assert note["declared"] == str(office)
+        assert note["kept"] == str(office), (
+            f"the bare container must never win over a real, existing declared office: {out}")
+        assert "wins outright" in note["note"]
+    finally:
+        srv._pool = saved_pool
+
+
+async def test_mount_confesses_honestly_when_neither_side_is_a_real_office(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of the same fix: when the declared cwd does NOT exist on disk either
+    (so there is no real office to prefer) and the registry's own recollection IS the bare
+    container, mount() still has to land somewhere for session bookkeeping (577988ed: never
+    a wall) — but the receipt must not assert the bare container is this session's home. A
+    confident wrong answer is worse than an honest 'could not resolve' (60bc15db applied to
+    location)."""
+    from src import mcp_server as srv
+    from src.orchestrator import offices as offices_mod
+
+    container = tmp_path / "seats"
+    container.mkdir(parents=True)
+    monkeypatch.setattr(offices_mod, "_DEFAULT_OFFICE_ROOT", container)
+    ghost = tmp_path / "seats" / "nowhere-real"  # never created
+
+    job_dir = str(tmp_path / "jobs" / "recollect03")
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:recollect03",
+                            project="seats", cwd=str(container), model=None,
+                            session_key="sid:recollect03")
+    monkeypatch.setattr(mounts, "stale_recollection", lambda *a, **k: True)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(ghost), job_dir=job_dir, verbose=True)
+        note = out.get("cwd_corrected")
+        assert note is not None
+        assert note["declared"] == str(ghost) and note["kept"] == str(container)
+        assert "NOT your home" in note["note"], (
+            f"the bare-container fallback must confess, never assert a home: {out}")
     finally:
         srv._pool = saved_pool
 

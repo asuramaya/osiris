@@ -45,13 +45,13 @@ async def test_a_timeout_then_success_reports_slow_not_a_clean_line(
         budgets.append(connect_timeout)
         if len(budgets) == 1:
             raise TimeoutError
-        return (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None)
+        return (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None, None)
 
     monkeypatch.setattr(sl, "_counts", fake_counts)
     counts, slow = await sl._fetch_counts("proj", "deadbeef", "claude-fable-5",
                                           "claude-fable-5", None, intent_hint=None)
     assert slow is True
-    assert counts == (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None)
+    assert counts == (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None, None)
     assert budgets == [1.0, 2.5]   # the retry's own, wider budget — never a repeat of the first
 
 
@@ -142,7 +142,8 @@ async def test_counts_maps_the_shared_segments_into_its_own_tuple_shape(
                     "VALUES ('test', 'x', 1.23, now())")
 
     (desk, mail, dm, flight, live, wakes, owed, owed_here, sick,
-     (spent, cap, blind), resolved_project, resolved_intent) = await sl._counts(
+     (spent, cap, blind), resolved_project, resolved_intent,
+     resolved_seat_handle) = await sl._counts(
         "proj", session_id, "claude-fable-5", "claude-fable-5", None)
 
     assert desk == 1 and mail == 1 and dm == 1 and flight == 0
@@ -153,6 +154,8 @@ async def test_counts_maps_the_shared_segments_into_its_own_tuple_shape(
     # fires — the passed-in hint (from a climb main() already did) rides straight through.
     assert resolved_project == "proj"
     assert resolved_intent is None
+    # b8a18059: no held_seat means no handle either — seatless stays seatless, honestly.
+    assert resolved_seat_handle is None
 
 
 async def test_counts_resolves_identity_through_the_seat_when_the_climb_hint_is_empty(
@@ -193,9 +196,11 @@ async def test_counts_resolves_identity_through_the_seat_when_the_climb_hint_is_
     # both come back None today — main() coerces the label hint to "" before this call.
     result = await sl._counts("", session_id, "claude-sonnet-5", "claude-sonnet-5", None,
                               intent_hint=None)
-    resolved_project, resolved_intent = result[-2], result[-1]
+    resolved_project, resolved_intent, resolved_seat_handle = result[-3], result[-2], result[-1]
     assert resolved_project == "osiris", "the seat's own HOUSE, not a raw directory basename"
     assert resolved_intent == "claude-opus-5", "the seat's OWN office pin, not a constant"
+    # b8a18059: the seat's own HANDLE rides beside the house, never replacing it.
+    assert resolved_seat_handle == "Seatfaller"
 
 
 def test_a_dm_alone_rings_the_doorbell(
@@ -207,7 +212,7 @@ def test_a_dm_alone_rings_the_doorbell(
     async def fake_fetch(
         *a: object, **k: object,
     ) -> tuple[tuple[int, int, int, int, int, int, int, int, list[str]], bool]:
-        return (0, 0, 7, 0, 16, 0, 25, 0, [], (1.2, 10.0, 0), "x", None), False
+        return (0, 0, 7, 0, 16, 0, 25, 0, [], (1.2, 10.0, 0), "x", None, None), False
 
     monkeypatch.setattr(sl, "_fetch_counts", fake_fetch)
     monkeypatch.setattr(
@@ -221,6 +226,48 @@ def test_a_dm_alone_rings_the_doorbell(
     assert "graph unreachable" not in out
 
 
+def test_the_window_tag_shows_the_seat_beside_the_house_not_instead_of_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Ruling b8a18059: the operator's complaint was never that 'osiris' was a WRONG answer
+    (577988ed's house-for-numbers reasoning is sound) — it answered a question he didn't ask.
+    'Which mind is this window' needs the seat's own handle, rendered BESIDE the house, never
+    replacing it (a silent swap would trade this complaint for 577988ed's exact silent-mix
+    risk in a week)."""
+    async def fake_fetch(*a: object, **k: object) -> tuple[tuple, bool]:
+        return (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "osiris", None, "Thoth"), False
+
+    monkeypatch.setattr(sl, "_fetch_counts", fake_fetch)
+    monkeypatch.setattr(
+        sys, "stdin",
+        io.StringIO(json.dumps({"workspace": {"current_dir": "/tmp/x"},
+                                "session_id": "seattag0001",
+                                "model": {"id": "claude-fable-5"}})))
+    sl.main()
+    out = capsys.readouterr().out
+    assert "Thoth·osiris" in out, "the seat handle must ride beside the house, both visible"
+
+
+def test_the_window_tag_stays_seatless_when_no_seat_is_held(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """SEATLESS session (b8a18059's first edge case): no held_seat means no handle to show —
+    today's project-only label is honest as-is; never invent a name to fill the slot."""
+    async def fake_fetch(*a: object, **k: object) -> tuple[tuple, bool]:
+        return (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "osiris", None, None), False
+
+    monkeypatch.setattr(sl, "_fetch_counts", fake_fetch)
+    monkeypatch.setattr(
+        sys, "stdin",
+        io.StringIO(json.dumps({"workspace": {"current_dir": "/tmp/x"},
+                                "session_id": "seattag0002",
+                                "model": {"id": "claude-fable-5"}})))
+    sl.main()
+    out = capsys.readouterr().out
+    assert "◈ osiris" in out
+    assert "·osiris" not in out
+
+
 def _strip_for(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
                ceil: tuple[float, float, int], sid: str, metered: bool = True) -> str:
     """Render main() once with a given (spent, cap, blind) riding the counts. `sid` must be
@@ -232,7 +279,7 @@ def _strip_for(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[st
     monkeypatch.setattr("src.ingest.providers.spend_is_metered", lambda s=None: metered)
 
     async def fake_fetch(*a: object, **k: object) -> tuple[tuple, bool]:
-        return (0, 0, 0, 0, 1, 0, 0, 0, [], ceil, "x", None), False
+        return (0, 0, 0, 0, 1, 0, 0, 0, [], ceil, "x", None, None), False
 
     monkeypatch.setattr(sl, "_fetch_counts", fake_fetch)
     monkeypatch.setattr(
@@ -297,7 +344,7 @@ def test_warm_cache_skips_the_second_fetch_entirely(monkeypatch: pytest.MonkeyPa
     async def fake_fetch(*a: object, **k: object) -> tuple[tuple, bool]:
         nonlocal calls
         calls += 1
-        return (1, 2, 3, 0, 4, 5, 6, 7, [], (0.0, 10.0, 0), "proj", None), False
+        return (1, 2, 3, 0, 4, 5, 6, 7, [], (0.0, 10.0, 0), "proj", None, None), False
 
     monkeypatch.setattr(sl, "_fetch_counts", fake_fetch)
     first = sl._counts_cached("proj", "session-a", "claude-fable-5", "claude-fable-5", None,
@@ -319,7 +366,7 @@ def test_two_renders_via_main_share_one_live_fetch(
     async def fake_counts(*a: object, **k: object) -> tuple[int, ...]:
         nonlocal calls
         calls += 1
-        return (0, 0, 7, 0, 16, 0, 25, 0, [], (1.2, 10.0, 0), "x", None)
+        return (0, 0, 7, 0, 16, 0, 25, 0, [], (1.2, 10.0, 0), "x", None, None)
 
     monkeypatch.setattr(sl, "_counts", fake_counts)
     payload = json.dumps({"workspace": {"current_dir": "/tmp/x"}, "session_id": "session-g",
@@ -348,7 +395,7 @@ def test_seventeen_concurrent_renders_make_exactly_one_connect(
         with calls_lock:
             calls += 1
         await asyncio.sleep(0.1)  # widen the race window so all 17 threads pile up together
-        return (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None), False
+        return (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None, None), False
 
     monkeypatch.setattr(sl, "_fetch_counts", fake_fetch)
     results: list[Any] = [None] * 17
@@ -378,7 +425,7 @@ def test_stale_cache_served_when_a_sibling_holds_the_refresh_lock(
     elsewhere), must still answer from the stale value — never block, never duplicate the
     query underneath a sibling that's already making one."""
     monkeypatch.setenv("OSIRIS_STATUSLINE_CACHE_TTL", "0")
-    stale = (9, 9, 9, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None)
+    stale = (9, 9, 9, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None, None)
     cache_path = sl._cache_dir() / f"{sl._cache_key('session-c')}.json"
     sl._cache_write(cache_path, stale, False)
     import time
@@ -431,12 +478,12 @@ def test_corrupt_cache_file_is_just_a_miss(monkeypatch: pytest.MonkeyPatch) -> N
     cache_path.write_text("not json{{{")
 
     async def fake_fetch(*a: object, **k: object) -> tuple[tuple, bool]:
-        return (1, 1, 1, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None), False
+        return (1, 1, 1, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None, None), False
 
     monkeypatch.setattr(sl, "_fetch_counts", fake_fetch)
     result = sl._counts_cached("proj", "session-e", "claude-fable-5", "claude-fable-5", None,
                                intent_hint=None)
-    assert result == ((1, 1, 1, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None), False)
+    assert result == ((1, 1, 1, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None, None), False)
 
 
 def test_no_session_id_never_touches_the_cache(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -447,7 +494,7 @@ def test_no_session_id_never_touches_the_cache(monkeypatch: pytest.MonkeyPatch) 
     async def fake_fetch(*a: object, **k: object) -> tuple[tuple, bool]:
         nonlocal calls
         calls += 1
-        return (0, 0, 0, 0, 0, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None), False
+        return (0, 0, 0, 0, 0, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None, None), False
 
     monkeypatch.setattr(sl, "_fetch_counts", fake_fetch)
     sl._counts_cached("proj", "", "claude-fable-5", "claude-fable-5", None, intent_hint=None)

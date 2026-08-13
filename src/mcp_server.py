@@ -1851,18 +1851,62 @@ async def mount(
         declared_pin = read_project_pin(cwd)
         if declared_pin.value:
             declared_project_label = declared_pin.value
-        cwd_note = {
-            "declared": cwd, "kept": bound.cwd,
-            **({"declared_pin_kept_for_identity": declared_project_label}
-               if declared_project_label else {}),
-            "note": ("your declared cwd is a STALE MEMORY of a former home — this session's "
-                     "transcript lives at the kept path (it moved; your history did not). "
-                     "Mounted at the kept path; update your bearings (90f0cb3a)"
-                     + (f" — its own project pin ({declared_project_label!r}) still won "
-                        "identity resolution; only the transcript/session address was "
-                        "corrected (ruling 13af22fc)" if declared_project_label else "")),
-        }
-        cwd = bound.cwd
+        # PREFER THE REAL DECLARED OFFICE (Thoth's live repro, this same finding): the glob
+        # inside stale_recollection() only answers "have I seen this session's transcript
+        # under this slug before" — never "where does this seat live". A registry row whose
+        # last-recorded cwd IS the bare seat-office container (~/.osiris/seats,
+        # offices.is_bare_office_root) is not evidence of anything; it is the shape every
+        # session has before it ever declares a specific office. When the freshly DECLARED
+        # cwd is itself a real, existing directory — and not that same bare container — it
+        # wins outright: the glob's silence about a path a session simply hasn't visited
+        # under this exact slug yet must never overrule a location that demonstrably exists
+        # right now. This is 60bc15db applied to location: a confident wrong answer (quietly
+        # becoming a session rooted at the parent-of-every-seat) is worse than deferring to
+        # what is actually on disk.
+        from src.orchestrator.offices import _dir_exists as _office_dir_exists
+        from src.orchestrator.offices import is_bare_office_root as _bare_office_root
+
+        declared_is_real_office = _office_dir_exists(cwd) and not _bare_office_root(cwd)
+        kept_is_bare_container = _bare_office_root(bound.cwd)
+        if declared_is_real_office and kept_is_bare_container:
+            cwd_note = {
+                "declared": cwd, "kept": cwd,
+                **({"declared_pin_kept_for_identity": declared_project_label}
+                   if declared_project_label else {}),
+                "note": ("registry recollection pointed at the bare seat-office container "
+                         "(~/.osiris/seats), never a home of its own — your declared cwd is "
+                         "a real, existing office and wins outright; nothing was corrected"),
+            }
+            # cwd is left as the caller's own declared value — no reassignment.
+        else:
+            # REFUSE ONLY THE BARE CONTAINER ROOT, never a wall (577988ed): a session still
+            # needs a cwd to mount at for transcript/session bookkeeping even when neither
+            # side resolves to a real office, so `cwd` still moves to `bound.cwd` below —
+            # but the receipt must say so honestly rather than asserting the bare container
+            # IS this session's home (60bc15db again, same law, the confession half of it).
+            honest_note = ("your declared cwd is a STALE MEMORY of a former home — this "
+                            "session's transcript lives at the kept path (it moved; your "
+                            "history did not). Mounted at the kept path; update your "
+                            "bearings (90f0cb3a)"
+                            + (f" — its own project pin ({declared_project_label!r}) still "
+                               "won identity resolution; only the transcript/session "
+                               "address was corrected (ruling 13af22fc)"
+                               if declared_project_label else ""))
+            if kept_is_bare_container:
+                honest_note = ("could not resolve a specific office for either the declared "
+                                "or the recollected cwd — mounted at the bare seat-office "
+                                "container for session bookkeeping only; this is NOT your "
+                                "home, it is a fallback with nowhere better to point"
+                                + (f" — its own project pin ({declared_project_label!r}) "
+                                   "still won identity resolution" if declared_project_label
+                                   else ""))
+            cwd_note = {
+                "declared": cwd, "kept": bound.cwd,
+                **({"declared_pin_kept_for_identity": declared_project_label}
+                   if declared_project_label else {}),
+                "note": honest_note,
+            }
+            cwd = bound.cwd
     # THE HARNESS-AGNOSTIC TRANSCRIPT STORE (ruling be741d3e; sole model lane since the
     # JSONL-fallback removal, #29): eat the current session's turns from whatever harness
     # the operator is running (Claude Code, Crush, …), then hand the model reading to
