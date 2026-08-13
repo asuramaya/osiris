@@ -1040,6 +1040,70 @@ async def seat_facts(pool: asyncpg.Pool, seat_id: str) -> dict[str, Any]:
             "tree_cwd": row["tree_cwd"]}
 
 
+async def backfill_anchor_cwd_from_live_observation(
+    actions: Actions, *, actor: str, live_secs: int = _LIVE_SECS,
+) -> dict[str, Any]:
+    """TASK #141 SHAPE 3 (decision eda71c32): a seat that is OCCUPIED right now but has
+    never had its `anchor_cwd` captured has no durable trace of its office at all — the
+    moment it goes cold, the location is gone from the graph, not merely undeclared. This
+    stamps `anchor_cwd` from a live, first-hand observation the instant one exists, so that
+    knowledge survives the seat going cold — the same OBSERVATION the fleet-observer
+    already records continuously for every other fact it touches (lineage.py), not a
+    DECLARATION on anyone else's behalf (Thoth's ruling, msg 4035: a pin written into
+    another house's office is a claim by someone else's hand, forbidden cross-house right
+    now; an anchor_cwd stamped from what a live session is actually doing is an observation
+    recorded, a different act, authorized here).
+
+    NARROW BY DESIGN, matching Thoth's own constraints exactly:
+    - NEVER OVERWRITES. A seat with an existing `anchor_cwd` (any value, even stale) is
+      skipped outright — there is nothing to arbitrate on this shape, only something
+      missing, and a seat that already has an answer is not this function's business.
+    - OCCUPIED ONLY. A cold or vacant seat has no live cwd to observe; nothing is guessed
+      from history.
+    - AMBIGUOUS MEANS NOTHING WRITTEN. If the seat's live holder shows more than one
+      DISTINCT cwd across its own fresh `agent_mounts` rows (more than one concurrent
+      session, disagreeing), this writes nothing for that seat — a missing value is
+      recoverable on a later, cleaner observation; a wrong one is not.
+
+    Returns `stamped` (seat -> the cwd it was given), `skipped_has_anchor`,
+    `skipped_not_occupied`, `skipped_ambiguous` — every seat is accounted for in exactly
+    one bucket, so a caller can see what happened to all of them, not just the successes."""
+    seat_rows = await actions.pool.fetch(
+        "SELECT o.canonical AS seat_id FROM objects o WHERE o.type='Seat' AND o.status='active' "
+        "ORDER BY o.canonical")
+    stamped: dict[str, str] = {}
+    skipped_has_anchor: list[str] = []
+    skipped_not_occupied: list[str] = []
+    skipped_ambiguous: list[str] = []
+    now = datetime.now(UTC)
+    for sr in seat_rows:
+        seat_id = sr["seat_id"]
+        facts = await seat_facts(actions.pool, seat_id)
+        if facts["anchor_cwd"] is not None:
+            skipped_has_anchor.append(seat_id)
+            continue
+        occ = await seat_occupancy(actions.pool, seat_id, live_secs=live_secs)
+        if occ["state"] != "occupied" or not occ["holder"]:
+            skipped_not_occupied.append(seat_id)
+            continue
+        cwd_rows = await actions.pool.fetch(
+            "SELECT DISTINCT cwd FROM agent_mounts WHERE agent_id=$1 AND cwd IS NOT NULL "
+            "AND last_seen > now() - make_interval(secs => $2)", occ["holder"], live_secs)
+        distinct_cwds = {r["cwd"] for r in cwd_rows}
+        if len(distinct_cwds) != 1:
+            skipped_ambiguous.append(seat_id)
+            continue
+        cwd = next(iter(distinct_cwds))
+        seat_oid = await actions.create_or_find_object("Seat", seat_id, actor)
+        obs_ec = EvidenceClass.DIRECT_OBSERVATION
+        await actions.assert_property(seat_oid, "anchor_cwd", cwd, actor, now,
+                                      confidence_for(obs_ec), evidence_class=obs_ec.value)
+        stamped[seat_id] = cwd
+    return {"stamped": stamped, "skipped_has_anchor": skipped_has_anchor,
+            "skipped_not_occupied": skipped_not_occupied,
+            "skipped_ambiguous": skipped_ambiguous}
+
+
 _ATTENDED_VALUES = {"human", "worker"}
 
 

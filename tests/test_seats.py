@@ -2354,6 +2354,114 @@ async def test_seat_facts_all_none_for_an_unknown_seat(actions: Actions) -> None
         "tree_cwd": None}
 
 
+# ═══ ANCHOR_CWD BACKFILL (task #141 shape 3, decision eda71c32) ═══════════════════════════
+# A seat OCCUPIED right now with no anchor_cwd ever captured has no durable trace of its
+# office — the moment it goes cold, the location is gone from the graph entirely. This
+# stamps anchor_cwd from a live, first-hand observation while one exists, additive-only.
+
+
+async def test_backfill_stamps_anchor_cwd_for_an_occupied_seat_with_none_on_file(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import (
+        backfill_anchor_cwd_from_live_observation,
+        seat_facts,
+    )
+
+    seat = await ensure_seat(actions, house="rotten-apple", handle="Ra", source="test")
+    await actions.create_or_find_object("Agent", "agent:baraobs1", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:baraobs1")
+    await save_mount(actions.pool, job_dir="/jobs/baraobs1", agent_id="agent:baraobs1",
+                     project="rotten-apple", cwd="/home/asuramaya/.osiris/seats/ra",
+                     model="claude-sonnet-5", session_key=None)
+
+    out = await backfill_anchor_cwd_from_live_observation(actions, actor="test")
+    assert out["stamped"].get(seat["seat_id"]) == "/home/asuramaya/.osiris/seats/ra"
+    assert seat["seat_id"] not in out["skipped_has_anchor"]
+    assert seat["seat_id"] not in out["skipped_not_occupied"]
+    assert seat["seat_id"] not in out["skipped_ambiguous"]
+
+    facts = await seat_facts(actions.pool, seat["seat_id"])
+    assert facts["anchor_cwd"] == "/home/asuramaya/.osiris/seats/ra"
+    row = await actions.pool.fetchrow(
+        "SELECT a.evidence_class FROM current_assertions a JOIN objects o "
+        "ON o.id=a.object_id WHERE o.canonical=$1 AND a.name='anchor_cwd'", seat["seat_id"])
+    assert row["evidence_class"] == "direct_observation"  # an OBSERVATION, never a declaration
+
+    # idempotent-safe: a second run must not re-stamp or error — the seat now HAS an anchor
+    out2 = await backfill_anchor_cwd_from_live_observation(actions, actor="test")
+    assert seat["seat_id"] not in out2["stamped"]
+    assert seat["seat_id"] in out2["skipped_has_anchor"]
+
+
+async def test_backfill_never_overwrites_an_existing_anchor_cwd(actions: Actions) -> None:
+    """The one absolute law: a seat that already has an answer, even a stale one, is this
+    function's business only to skip — never to arbitrate or correct."""
+    from src.orchestrator.seats import (
+        backfill_anchor_cwd_from_live_observation,
+        seat_facts,
+    )
+
+    seat = await ensure_seat(actions, house="alfred", handle="William", source="test")
+    await actions.assert_property((await actions.create_or_find_object(
+        "Seat", seat["seat_id"], "test")), "anchor_cwd",
+        "/home/asuramaya/.osiris/seats/tjmax", "test", datetime.now(UTC), 0.9)
+    await actions.create_or_find_object("Agent", "agent:barwm0001", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:barwm0001")
+    await save_mount(actions.pool, job_dir="/jobs/barwm0001", agent_id="agent:barwm0001",
+                     project="alfred", cwd="/somewhere/else/entirely",
+                     model="claude-sonnet-5", session_key=None)
+
+    out = await backfill_anchor_cwd_from_live_observation(actions, actor="test")
+    assert seat["seat_id"] not in out["stamped"]
+    assert seat["seat_id"] in out["skipped_has_anchor"]
+    facts = await seat_facts(actions.pool, seat["seat_id"])
+    assert facts["anchor_cwd"] == "/home/asuramaya/.osiris/seats/tjmax"  # untouched
+
+
+async def test_backfill_skips_a_seat_that_is_not_occupied(actions: Actions) -> None:
+    from src.orchestrator.seats import (
+        backfill_anchor_cwd_from_live_observation,
+        seat_facts,
+    )
+
+    seat = await ensure_seat(actions, house="osiris", handle="Vacant1", source="test")
+
+    out = await backfill_anchor_cwd_from_live_observation(actions, actor="test")
+    assert seat["seat_id"] not in out["stamped"]
+    assert seat["seat_id"] in out["skipped_not_occupied"]
+    facts = await seat_facts(actions.pool, seat["seat_id"])
+    assert facts["anchor_cwd"] is None
+
+
+async def test_backfill_writes_nothing_when_the_live_holder_is_ambiguous(
+    actions: Actions,
+) -> None:
+    """More than one DISTINCT fresh cwd for the same holder — two concurrent sessions
+    disagreeing — is not this function's call to arbitrate: a missing value is
+    recoverable, a wrong one is not."""
+    from src.orchestrator.seats import (
+        backfill_anchor_cwd_from_live_observation,
+        seat_facts,
+    )
+
+    seat = await ensure_seat(actions, house="dealer-to-fb", handle="Marquee", source="test")
+    await actions.create_or_find_object("Agent", "agent:bamqamb1", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:bamqamb1")
+    await save_mount(actions.pool, job_dir="/jobs/bamqamb1", agent_id="agent:bamqamb1",
+                     project="dealer-to-fb", cwd="/path/one",
+                     model="claude-sonnet-5", session_key=None)
+    await save_mount(actions.pool, job_dir="/jobs/bamqamb2", agent_id="agent:bamqamb1",
+                     project="dealer-to-fb", cwd="/path/two",
+                     model="claude-sonnet-5", session_key=None)
+
+    out = await backfill_anchor_cwd_from_live_observation(actions, actor="test")
+    assert seat["seat_id"] not in out["stamped"]
+    assert seat["seat_id"] in out["skipped_ambiguous"]
+    facts = await seat_facts(actions.pool, seat["seat_id"])
+    assert facts["anchor_cwd"] is None
+
+
 async def test_the_window_tag_renders_an_anchored_seat_s_true_house(actions: Actions) -> None:
     """THE OPERATOR'S OWN SIGHTING (decision 105f3425): 'Ferryman said [OS] instead of
     [HE]'. seat_facts (the shared resolver launch()'s window tag is built from) must
