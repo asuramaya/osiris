@@ -3567,6 +3567,135 @@ async def retire_project(project: str, because: str,
 
 
 @mcp.tool()
+async def project_identity_evidence(seat_id: str, operator_citation: str | None = None,
+                                    ctx: Context | None = None) -> dict[str, Any]:
+    """READ-ONLY (task #110/#163's arc — this door existed, tested, and had ZERO MCP
+    surface until now: nothing outside a direct Python import could ever call it).
+    Gathers whichever of five evidence tiers have signal for `seat_id`'s project identity
+    — operator-confirmed citation, declared charter (`governs`), self-authored CLAUDE.md/
+    charter.md existence, the seat's own `.osiris` pin, a live git remote check, and
+    write-attribution (the majority in_repo target across the seat's lineage) — and
+    reports each tier's answer PLUS per-candidate agreement/disagreement. NEVER PICKS A
+    WINNER: no tier ranks first across the population (the module's own xxit/ballgem
+    counter-example — remote is authoritative for one and blind for the other). Read this
+    BEFORE calling rename_project/fork_project — it is the report a human reads to make
+    the call this function can't make for them.
+    `operator_citation` = a decision id/quote the caller already has in hand for tier 1
+    (this never parses decision prose looking for one itself)."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — reading identity evidence needs a resolvable "
+                         "caller", "why": _anchorless(ctx)}
+    from src.orchestrator.project_identity import (
+        project_identity_evidence as _project_identity_evidence,
+    )
+    return await _project_identity_evidence(
+        await _pool_get(), seat_id=seat_id, operator_citation=operator_citation)
+
+
+@mcp.tool()
+async def rename_project(project: str, new_name: str, because: str,
+                         ctx: Context | None = None) -> dict[str, Any]:
+    """Declare a SoftwareProject's new NAME (#110, decision 1db1ff41) — the `canonical` id
+    NEVER changes, only the mutable `name` property (old value kept forever in assertion
+    history, same discipline rename_seat holds for a handle). ZERO edges move; only
+    `agent_mounts.project` is re-addressed so a fresh mount under the new name resolves.
+    OUT OF SCOPE, deliberately: a seat's own `.osiris` pin file on disk — this is a
+    graph-only verb. `because` is mandatory testimony; this function never infers, only
+    declares what a human already decided (read project_identity_evidence FIRST).
+
+    PRE-WRITE CHECK, SURFACED NEVER PICKED (task #163's arc, #137's own root cause):
+    #137's actual mechanism was register_agent reasserting a project's name from a
+    mounting seat's stale PIN at FULL confidence on every ordinary mount — recency always
+    won, and a declared rename got silently reverted five times by routine mounts. This
+    cannot fix that (a `.osiris` pin is out of scope for a graph verb) but it can stop it
+    from happening BLIND: before writing, every Seat currently GOVERNING this project has
+    project_identity_evidence run against it, returned in the receipt's
+    `evidence_by_governing_seat` keyed by seat canonical. NO TIER IS CROWNED and the write
+    proceeds regardless of what the evidence says — this only ensures a caller SEES, in
+    the same turn, which seats' pins might still disagree with the name they just declared,
+    so they know to go fix those pins too.
+
+    Refuses LOUDLY on: a blank `new_name` or `because`; an unresolved or ambiguous
+    `project` ref; a non-active project; `new_name` already resolving to a DIFFERENT
+    active SoftwareProject (a real collision — fold_project/`merge` is the deliberate,
+    evidence-gated verb for that, never a silent merge here)."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a rename is a deliberate act on the record",
+                "why": _anchorless(ctx)}
+    pool = await _pool_get()
+    from src.orchestrator.project_identity import (
+        project_identity_evidence as _project_identity_evidence,
+    )
+    from src.orchestrator.project_identity import rename_project as _rename_project
+    from src.orchestrator.projects import AmbiguousProjectRef, _resolve_software_project
+    evidence_by_seat: dict[str, Any] = {}
+    try:
+        row = await _resolve_software_project(pool, project)
+    except AmbiguousProjectRef:
+        row = None  # the real refusal below (inside _rename_project) names the
+                    # candidates properly; evidence-gathering here is best-effort only
+    if row is not None:
+        seat_rows = await pool.fetch(
+            "SELECT s.canonical FROM links l JOIN objects s ON s.id=l.from_id "
+            "WHERE l.to_id=$1 AND l.type='governs' "
+            "AND (l.valid_until IS NULL OR l.valid_until > now())", row["id"])
+        for r in seat_rows:
+            evidence_by_seat[r["canonical"]] = await _project_identity_evidence(
+                pool, seat_id=r["canonical"])
+    out = await _rename_project(Actions(pool), project=project, new_name=new_name,
+                                because=because, actor=ident.agent_id)
+    if evidence_by_seat:
+        out["evidence_by_governing_seat"] = evidence_by_seat
+    return out
+
+
+@mcp.tool()
+async def fork_project(project: str, fork_into: str, because: str,
+                       ctx: Context | None = None) -> dict[str, Any]:
+    """Declare TWO already-active SoftwareProjects a FORK pair — John's own redmonth/
+    ballgem shape (decision 58597670): `fork_into` is the successor, naming `project` as
+    its ancestor via one `forked_from` edge (heir -> ancestor, same direction convention
+    as `succeeded_from`). NO ESTATE MOVES — every existing in_repo/works_in/governs edge
+    on BOTH objects stays exactly where it is; this records a NEW relationship, never
+    merges two into one (`merge` is that verb, deliberately different). Never mints
+    either side — both must already exist as active SoftwareProjects. Never runs
+    project_identity_evidence itself; read that report BEFORE calling this, then name
+    both sides explicitly.
+
+    Refuses LOUDLY on: a blank `because`; `project`==`fork_into`; either ref ambiguous or
+    unresolved; either not an ACTIVE SoftwareProject; a live `forked_from` edge already
+    connecting this exact pair (idempotent refusal, never a duplicate mint)."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a fork is a deliberate act on the record",
+                "why": _anchorless(ctx)}
+    from src.orchestrator.project_identity import fork_project as _fork_project
+    return await _fork_project(Actions(await _pool_get()), project=project,
+                               fork_into=fork_into, because=because, actor=ident.agent_id)
+
+
+@mcp.tool()
+async def unfork_project(project: str, fork_into: str, because: str,
+                         ctx: Context | None = None) -> dict[str, Any]:
+    """Invalidate a live `forked_from` edge — the compensating-event complement to
+    fork_project. REVERSIBILITY PROVEN, not claimed: since fork_project never moves any
+    estate, there is nothing to move back either — the whole reversal is this one healed
+    edge, by design.
+
+    Refuses LOUDLY on: a blank `because`; either ref unresolved to a SoftwareProject; or
+    no active `forked_from` edge from `fork_into` to `project`."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — an unfork is a deliberate act on the record",
+                "why": _anchorless(ctx)}
+    from src.orchestrator.project_identity import unfork_project as _unfork_project
+    return await _unfork_project(Actions(await _pool_get()), project=project,
+                                 fork_into=fork_into, because=because, actor=ident.agent_id)
+
+
+@mcp.tool()
 async def assert_project_property(project: str, name: str, value: str,
                                   ctx: Context | None = None) -> dict[str, Any]:
     """The sanctioned write for a SINGLE project-scoped property (task #74) — closes the
@@ -4165,7 +4294,8 @@ async def record_decision(
     resolves: str | list[str] | None = None,
     obsoletes: list[str] | None = None,
     confirms: list[str] | None = None, refutes: str | None = None,
-    implements: str | None = None, ack_prior_art: bool = False,
+    implements: str | None = None, rediscovers: list[str] | None = None,
+    ack_prior_art: bool = False,
     subagent_id: str | None = None,
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None,
@@ -4213,9 +4343,20 @@ async def record_decision(
     `supersedes`: a target matching nothing errors and NOTHING is recorded.
     `implements` = a standing Decision this one is a SPECIFIC EXECUTION of — the parent stays
     alive, unlike `supersedes`. Same strictness as `supersedes`.
+    `rediscovers` = the earlier Decision(s) this one INDEPENDENTLY ARRIVED AT AGAIN (task #163,
+    ruling 5ecaf8d9 — the ruling this parameter exists to fix: it cited two earlier decisions
+    it re-derived by short-id as if `confirms` would link them, and `confirms` only resolves
+    against Practices). Points FROM this later finding TO each earlier one. Buries NEITHER:
+    the earlier decision's standing is untouched — no superseded_by, no graying out of
+    orient's recent list, unlike `supersedes`; and unlike `implements`, this decision isn't
+    executing the earlier one's plan, it reached the same conclusion on its own. Resolves like
+    `confirms`: each entry independent (UUID/canonical/short-id only), a miss reported in
+    `rediscovers_resolution` rather than aborting the rest. WHAT IT DOES NOT DO: it records a
+    rediscovery, it does not prevent one — catching one before it's written down is a
+    retrieval-quality question, deliberately not this parameter's job (task #163 piece 3).
     `ack_prior_art` = when this call's own `prior_art_flag` fires and none of supersedes/
-    implements/confirms/grounds already answers it, pass True to record the dismissal as a
-    graph event instead of a shrug that leaves no trace.
+    implements/rediscovers/confirms/grounds already answers it, pass True to record the
+    dismissal as a graph event instead of a shrug that leaves no trace.
     `content_landed` — present when `rationale`/`protocol` was passed: a READ-BACK
     confirming your text is now the CURRENT value (a different assertion can silently win
     the tie-break on the same object despite a success response). A `false` entry names
@@ -4306,6 +4447,20 @@ async def record_decision(
             continue
         confirm_ids.append(pid)
         confirm_receipt.append({"ref": ref, "matched": "true", "id": str(pid)[:8]})
+    # rediscovers resolves the same best-effort way as confirms — one bad ref must not
+    # veto the earlier decisions that DID match (task #163)
+    rediscover_ids: list[uuid.UUID] = []
+    rediscover_receipt: list[dict[str, str]] = []
+    for ref in rediscovers or []:
+        rdid = await capture._find_decision(pool, ref, require_identifier=True)
+        if rdid is None:
+            rediscover_receipt.append({"ref": ref, "matched": "false",
+                                       "note": "matched no decision — quote its UUID, "
+                                               "canonical, or 8-char short id (no longer a "
+                                               "prose match)"})
+            continue
+        rediscover_ids.append(rdid)
+        rediscover_receipt.append({"ref": ref, "matched": "true", "id": str(rdid)[:8]})
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     # NEAR-DUP RECEIPT HONESTY (task #117, thread ed9f73ce, Seshat's live specimen): the
     # SAME lookup `capture.record_decision` runs internally to decide whether to reuse an
@@ -4442,7 +4597,9 @@ async def record_decision(
                 out["prior_art_flag"] = (
                     f"a standing ruling ({top['id']}) covers this ground — supersede it "
                     "explicitly (supersedes=...), cite it (grounds=...), name this as what "
-                    "it executes (implements=...), or acknowledge it (ack_prior_art=True)")
+                    "it executes (implements=...), name this as an independent "
+                    "rediscovery of it (rediscovers=[...]) if you reached the same "
+                    "conclusion on your own, or acknowledge it (ack_prior_art=True)")
         # INSTRUMENT IT (THE THAW piece 6): every strong hit is a MEASURED re-derivation
         # event, logged regardless of whether the caller acts on it — the population,
         # aggregated over time, IS the fleet's re-derivation ratchet metric.
@@ -4481,6 +4638,14 @@ async def record_decision(
         out["confirmed_practices"] = witnessed
     if confirm_receipt:
         out["confirms_resolution"] = confirm_receipt
+    if rediscover_ids:
+        rediscovered = []
+        for rdid in rediscover_ids:
+            minted = await capture.mint_rediscovers(Actions(pool), d, rdid, actor)
+            rediscovered.append({"id": str(rdid)[:8], "new_link": minted})
+        out["rediscovers"] = rediscovered
+    if rediscover_receipt:
+        out["rediscovers_resolution"] = rediscover_receipt
     if refute_id is not None:
         converted = await capture.refute_practice(
             Actions(pool), str(refute_id), killed_by=str(d), repo=repo, source=actor)

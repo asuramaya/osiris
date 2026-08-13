@@ -626,6 +626,39 @@ async def test_default_compositions_seeded(actions: Actions) -> None:
     assert "operational-vs-disclosed-geography" in names
 
 
+async def test_projects_composition_surfaces_canonical_and_on_disk_path(
+    actions: Actions,
+) -> None:
+    """task #138/#163's arc: the `projects` browser composition already enumerated every
+    active SoftwareProject by NAME, but named alone isn't addressable — no canonical id
+    to act on, no on_disk_path to tell a real repo from registry noise. `canonical` and
+    `status` are object COLUMNS, not assertions (`_OBJ_COLS`) — `_table`'s per-object loop
+    only ever read `winning_props` (assertions), so a bare `{"property": "canonical"}`
+    column would have silently resolved to None without wiring object columns in too."""
+    await seed_default_compositions(actions.pool)
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:regtest", "test")
+    await actions.assert_property(proj, "name", "regtest", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(proj, "on_disk_path", "/home/asuramaya/code/regtest",
+                                  "test", now, 0.9, evidence_class="self_declared")
+
+    out = await run_composition(actions.pool, "projects")
+    row = next(r for r in out["items"] if r["project"] == "regtest")
+    assert row["canonical"] == "repo:regtest"
+    assert row["on_disk_path"] == "/home/asuramaya/code/regtest"
+
+    # a project with no on_disk_path asserted degrades to None, never a crash or a
+    # stale/wrong value borrowed from another row
+    bare = await actions.create_or_find_object("SoftwareProject", "repo:bareproj", "test")
+    await actions.assert_property(bare, "name", "bareproj", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    out2 = await run_composition(actions.pool, "projects")
+    bare_row = next(r for r in out2["items"] if r["project"] == "bareproj")
+    assert bare_row["canonical"] == "repo:bareproj"
+    assert bare_row["on_disk_path"] is None
+
+
 async def test_seeding_gives_only_mail_fleet_strip_and_fleet_live_a_refresh_secs(
     actions: Actions,
 ) -> None:
