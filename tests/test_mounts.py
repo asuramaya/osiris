@@ -16,6 +16,7 @@ import pytest
 from src.actions.core import Actions
 from src.orchestrator import mounts
 from src.orchestrator.agents import resolve_identity
+from src.orchestrator.capture import open_thread
 from src.parsers.base import EvidenceClass
 
 _SD = EvidenceClass.SELF_DECLARED.value
@@ -217,6 +218,56 @@ async def test_mount_tool_honors_a_bound_seat(actions: Actions, tmp_path: Path) 
         assert rec is not None and rec.agent_id == "agent:ad1a1cb0-xvii"  # binding survives
     finally:
         srv._pool = saved_pool
+
+
+async def test_mount_surfaces_held_work_for_the_project(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """task #168's narrowed leg (decision aa7993cf): held work is surfaced ONCE, at mount
+    time — not on orient()'s hot path (same reasoning as declining the drift-check wiring,
+    decision 51682926) — so a fresh session immediately learns another branch already
+    holds files it might be about to touch."""
+    from src import mcp_server as srv
+
+    await open_thread(
+        actions, "held: batch the props read", repo="heldmountproj", kind="obligation",
+        branch="seshat-batchtable", files_touched=["src/orchestrator/compositions.py"])
+    office = tmp_path / "o"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "heldmountproj"\n')
+    job_dir = str(tmp_path / "jobs" / "heldmount01")
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:heldmounter",
+                            project="heldmountproj", cwd=str(office), model=None,
+                            session_key="k:heldmount")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(office), job_dir=job_dir)
+    finally:
+        srv._pool = saved_pool
+    assert "held_work" in out
+    assert out["held_work"][0]["branch"] == "seshat-batchtable"
+
+
+async def test_mount_omits_held_work_when_the_project_has_none(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src import mcp_server as srv
+
+    office = tmp_path / "o"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "noheldworkproj"\n')
+    job_dir = str(tmp_path / "jobs" / "noheldwork01")
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:noheldwork",
+                            project="noheldworkproj", cwd=str(office), model=None,
+                            session_key="k:noheldwork")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(office), job_dir=job_dir)
+    finally:
+        srv._pool = saved_pool
+    assert "held_work" not in out
 
 
 async def test_mount_tool_welcomes_an_unbound_fresh_session(

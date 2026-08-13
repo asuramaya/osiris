@@ -2023,6 +2023,12 @@ async def mount(
     # repo is the one blindness that costs unrecoverable work (a stomped commit)
     co_agents = (await _co_agents(pool, ident.project, ident.agent_id)
                 if ident.project else None)
+    # HELD WORK, ONCE PER SESSION (task #168's narrowed leg, decision aa7993cf) — surfaced
+    # HERE, not on orient()'s hot path, same reasoning as declining to wire drift-checking
+    # into every orient() call (decision 51682926): mount() runs once at session start, so
+    # the cost is proportionate; a per-turn check would not be.
+    held_work = (await capture.open_held_work(pool, repo=ident.project)
+                if ident.project else None)
     # RULE 1 OF de3dfc18 (task #144): confessed, never acted on — "if it picks, it is
     # wrong, however good the pick" (Thoth, msg 3854). A disagreement is worth a look, not
     # an override.
@@ -2034,6 +2040,7 @@ async def mount(
     out: dict[str, Any] = {"agent": ident.agent_id, "project": ident.project or "?",
            "model": ident.model or "unknown",
            **({"co_agents": co_agents} if co_agents else {}),
+           **({"held_work": held_work} if held_work else {}),
            **({"seat": seat} if seat else
               {"anonymous": "unnamed — claim_name('<pick a meaningful name>') when you know "
                             "who you are, so the fleet can DM you by name"}),
@@ -4994,6 +5001,7 @@ async def open_thread(
     summary: str, repo: str | None = None, kind: str | None = None,
     owner: str | None = None, assignee: str | None = None, arc: str | None = None,
     resolves: str | list[str] | None = None,
+    branch: str | None = None, files_touched: list[str] | None = None,
     session_anchor: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
@@ -5033,7 +5041,9 @@ async def open_thread(
     entry independently and reports per-entry in the receipt (`resolved_threads`) rather
     than letting one miss veto the rest; the single-string form errors — and mints
     nothing, not even the new thread — if it matches no thread, the same all-or-nothing
-    strictness record_decision's own single-ref form uses."""
+    strictness record_decision's own single-ref form uses.
+    `branch`/`files_touched` mark held work (gated, unmerged); `colliding_work` in the
+    receipt names any open held-work thread already touching one of `files_touched`."""
     pool = await _pool_get()
     # AN UNFILED THREAD IS INVISIBLE TO ITS OWN PROJECT (Alfred V's succession repro,
     # thread 4ffe0eb9: IV's handoff, opened without repo=, hid from orient and the whisper
@@ -5085,7 +5095,7 @@ async def open_thread(
     try:
         t = await capture.open_thread(
             Actions(pool), summary, repo=repo, kind=kind, owner=owner, assignee=assignee,
-            arc=arc, resolves=resolves,
+            arc=arc, resolves=resolves, branch=branch, files_touched=files_touched,
             source=await _actor_for(ctx, subagent_id, subagent_type)
         )
     except ValueError as e:
@@ -5093,6 +5103,12 @@ async def open_thread(
     out = {"id": str(t), "summary": summary, "status": "open", "deduped": "false"}
     if assignee:
         out["assignee"] = assignee.strip()
+    if files_touched:
+        others = [c for c in await capture.open_held_work(pool, repo=repo)
+                 if c["id"] != str(t)[:8]]
+        collisions = capture.held_work_overlap(files_touched, others)
+        if collisions:
+            out["colliding_work"] = collisions
     if isinstance(resolves, list):
         out["resolved_threads"] = resolved_receipt
     elif resolves:

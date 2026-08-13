@@ -22,8 +22,10 @@ from src.orchestrator.capture import (
     decision_addenda,
     find_near_duplicate_decision,
     find_near_duplicate_open_thread,
+    held_work_overlap,
     link_repo,
     measurement_smell,
+    open_held_work,
     open_thread,
     prior_art_from_hits,
     prior_art_is_strong,
@@ -4032,3 +4034,123 @@ async def test_amend_decision_still_works_on_the_successor_after_a_supersede(
     assert got == new
     assert [a["addendum"] for a in await decision_addenda(actions.pool, new)] == [
         "confirmed live, 2026-07-30"]
+
+
+# --- HELD WORK: open_thread(branch=, files_touched=) + open_held_work + held_work_overlap ---
+# task #168's narrowed, falsification-survived leg (decision aa7993cf) --------------------
+
+async def test_open_thread_stamps_branch_and_files_touched(actions: Actions) -> None:
+    t = await open_thread(
+        actions, "held: batch the winning_props read", repo="heldproj",
+        kind="obligation", branch="seshat-batchtable",
+        files_touched=["src/orchestrator/compositions.py", "src/orchestrator/agents.py"])
+    branch = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='branch' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", t)
+    assert branch == "seshat-batchtable"
+    files = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='files_touched' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", t)
+    assert set(files) == {"src/orchestrator/compositions.py", "src/orchestrator/agents.py"}
+
+
+async def test_open_thread_without_branch_never_stamps_it(actions: Actions) -> None:
+    """An ordinary obligation (no branch/files_touched passed) must not grow these
+    properties at all — open_held_work's own EXISTS(...branch) filter depends on this."""
+    t = await open_thread(actions, "an ordinary obligation, no held work involved",
+                          repo="heldproj", kind="obligation")
+    branch = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='branch' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", t)
+    assert branch is None
+
+
+async def test_open_held_work_lists_only_branch_carrying_open_threads(
+    actions: Actions,
+) -> None:
+    held = await open_thread(
+        actions, "held: the batchtable branch", repo="heldworkproj", kind="obligation",
+        branch="seshat-batchtable", files_touched=["src/orchestrator/compositions.py"])
+    await open_thread(actions, "an ordinary obligation with no branch",
+                      repo="heldworkproj", kind="obligation")
+    rows = await open_held_work(actions.pool, repo="heldworkproj")
+    ids = {r["id"] for r in rows}
+    assert str(held)[:8] in ids
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["branch"] == "seshat-batchtable"
+    assert row["files_touched"] == ["src/orchestrator/compositions.py"]
+
+
+async def test_open_held_work_scopes_by_repo(actions: Actions) -> None:
+    await open_thread(actions, "held work in project A", repo="heldworka",
+                      kind="obligation", branch="a-branch", files_touched=["a.py"])
+    await open_thread(actions, "held work in project B", repo="heldworkb",
+                      kind="obligation", branch="b-branch", files_touched=["b.py"])
+    rows_a = await open_held_work(actions.pool, repo="heldworka")
+    assert {r["branch"] for r in rows_a} == {"a-branch"}
+    rows_b = await open_held_work(actions.pool, repo="heldworkb")
+    assert {r["branch"] for r in rows_b} == {"b-branch"}
+
+
+async def test_open_held_work_excludes_resolved_threads(actions: Actions) -> None:
+    t = await open_thread(
+        actions, "held: soon to be merged", repo="heldworkresolved", kind="obligation",
+        branch="merged-branch", files_touched=["merged.py"])
+    await resolve_thread(actions, str(t), because="merged")
+    rows = await open_held_work(actions.pool, repo="heldworkresolved")
+    assert rows == []
+
+
+def test_held_work_overlap_finds_a_shared_file() -> None:
+    candidates = [
+        {"id": "aaa11111", "branch": "x", "files_touched": ["src/a.py", "src/b.py"]},
+        {"id": "bbb22222", "branch": "y", "files_touched": ["src/c.py"]},
+    ]
+    hits = held_work_overlap(["src/b.py", "src/z.py"], candidates)
+    assert [c["id"] for c in hits] == ["aaa11111"]
+
+
+def test_held_work_overlap_empty_when_nothing_shared() -> None:
+    candidates = [{"id": "aaa11111", "branch": "x", "files_touched": ["src/a.py"]}]
+    assert held_work_overlap(["src/z.py"], candidates) == []
+
+
+async def test_open_thread_tool_names_a_colliding_held_work_thread(actions: Actions) -> None:
+    """The MCP tool surfaces the collision AT MINT TIME (task #168's discoverability half):
+    a second held-work thread touching an already-held file must not merge silently into
+    the fleet with nobody told."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        first = await srv.open_thread(
+            "held: batch the props read", repo="collideproj", kind="obligation",
+            branch="seshat-batchtable", files_touched=["src/orchestrator/compositions.py"])
+        second = await srv.open_thread(
+            "held: a different branch touching the same file", repo="collideproj",
+            kind="obligation", branch="khnum-other-branch",
+            files_touched=["src/orchestrator/compositions.py", "src/orchestrator/agents.py"])
+    finally:
+        srv._pool = saved_pool
+    assert "colliding_work" in second
+    hit = second["colliding_work"][0]
+    assert hit["id"] == first["id"][:8]
+    assert hit["branch"] == "seshat-batchtable"
+
+
+async def test_open_thread_tool_no_collision_key_when_nothing_overlaps(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.open_thread(
+            "held: an isolated branch", repo="nocollideproj", kind="obligation",
+            branch="lone-branch", files_touched=["src/only_mine.py"])
+    finally:
+        srv._pool = saved_pool
+    assert "colliding_work" not in out
