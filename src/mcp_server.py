@@ -2888,16 +2888,11 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     now = datetime.now(UTC)
 
     def _ts(r: Any) -> datetime | None:
-        # freshest sign of life: the miner's transcript stamp OR the durable mount registry
-        stamps = []
-        if r["mount_seen"] is not None:
-            stamps.append(r["mount_seen"])
-        if r["last_active"]:
-            try:
-                stamps.append(datetime.fromisoformat(r["last_active"]))
-            except ValueError:
-                pass
-        return max(stamps) if stamps else None
+        # freshest sign of life: the miner's transcript stamp OR the durable mount registry —
+        # the SAME decision agent_liveness()'s listener probe makes (ruling 70493925: this
+        # used to be two independently-written copies of "freshest of these two signals",
+        # which is exactly what let the probe and fleet() disagree about the same live agent.
+        return mounts.freshest_liveness_ts(r["mount_seen"], r["last_active"])
 
     nodes: dict[str, dict[str, Any]] = {}
     ghosts = 0
@@ -2914,7 +2909,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
             "depth": int(r["depth"]) if r["depth"] else 0,
             "last_active": r["last_active"], "ts": ts,
             "retired": r["retired"] in ("true", "True"),  # SIGNED, not merely silent
-            "live": ts is not None and now - ts < timedelta(minutes=15),
+            "live": mounts.is_live(ts, now=now),
             "seat": seat_label(str(r["canonical"]), r["handle"],
                                int(r["seat_gen"]) if r["seat_gen"] else None),
             "bound": r["bound_seat"],
@@ -3219,8 +3214,8 @@ async def wake_preflight(target: str) -> dict[str, Any]:
     Returns `{mode, status, detail}`. `status` is one of: `resumable` (every gate clears —
     a real wake() would resume this addressee now), `no-live-body` (vacant, retired, or
     never mounted — nothing to wait for), or `refused-<gate>` (compaction / ceiling /
-    no-anchor / crossed-registry / unknown — a mind exists, this specific gate is why a
-    resume would not return it). Read-only: checks nothing it cannot answer from the
+    no-anchor / crossed-registry / resident-unknown / unknown — the last two are never
+    the same finding, f624d114). Read-only: checks nothing it cannot answer from the
     graph and disk, sends nothing, spawns nothing."""
     pool = await _pool_get()
     from src.orchestrator.trigger import (

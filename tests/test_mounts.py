@@ -8,7 +8,7 @@ FRESH transcript read (never a stale copy of the stored model).
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +16,9 @@ import pytest
 from src.actions.core import Actions
 from src.orchestrator import mounts
 from src.orchestrator.agents import resolve_identity
+from src.parsers.base import EvidenceClass
+
+_SD = EvidenceClass.SELF_DECLARED.value
 
 
 async def test_save_find_upsert(actions: Actions) -> None:
@@ -59,6 +62,54 @@ async def test_agent_liveness_answers_for_the_soul_not_the_numeral(
                                        grace=0.0) is False
     assert mounts.greeted_within_grace("short") is False
     mounts._GREETS.clear()
+
+
+async def test_agent_liveness_falls_back_to_last_active_like_fleet_always_has(
+    actions: Actions,
+) -> None:
+    """Ruling 70493925 — the listener-probe flap Cupid measured (fleet() live:true the
+    whole time, the probe alternating live/dead on the SAME seat): the probe used to be
+    agent_mounts-only while fleet() also trusted the graph's own last_active testimony.
+    No mount row at all, only a fresh last_active assertion — fleet()'s signal alone —
+    must now be enough for the probe to call this agent live, exactly as fleet() would."""
+    agent = await actions.create_or_find_object(
+        "Agent", "agent:liveflap01", "fleet-observer")
+    fresh = datetime.now(UTC).isoformat()
+    await actions.assert_property(agent, "last_active", fresh, "fleet-observer",
+                                  datetime.now(UTC), 0.9, evidence_class=_SD)
+    out = await mounts.agent_liveness(actions.pool, "agent:liveflap01")
+    assert out["live"] is True and out["last_seen"] == fresh
+    # stale last_active (older than the shared 15-min window) and no mount row: dead,
+    # not flapping — the SAME window agent_liveness and fleet() both apply.
+    stale = await actions.create_or_find_object(
+        "Agent", "agent:liveflap02", "fleet-observer")
+    old = (datetime.now(UTC) - timedelta(minutes=30)).isoformat()
+    await actions.assert_property(stale, "last_active", old, "fleet-observer",
+                                  datetime.now(UTC), 0.9, evidence_class=_SD)
+    out2 = await mounts.agent_liveness(actions.pool, "agent:liveflap02")
+    assert out2["live"] is False
+
+
+def test_freshest_liveness_ts_and_is_live_are_the_one_shared_decision() -> None:
+    """The pure decision fleet() and agent_liveness() both defer to now (ruling
+    70493925) — two independent copies of "freshest of these two signals, within the
+    window" is what produced the flap; this pins the shared function's own behavior
+    directly, no database required."""
+    now = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
+    mount_only = mounts.freshest_liveness_ts(now - timedelta(minutes=5), None)
+    assert mount_only == now - timedelta(minutes=5)
+    last_active_only = mounts.freshest_liveness_ts(None, (now - timedelta(minutes=2)).isoformat())
+    assert last_active_only == now - timedelta(minutes=2)
+    # freshest of the two wins, whichever signal it came from
+    freshest = mounts.freshest_liveness_ts(
+        now - timedelta(minutes=20), (now - timedelta(minutes=3)).isoformat())
+    assert freshest == now - timedelta(minutes=3)
+    assert mounts.freshest_liveness_ts(None, None) is None
+    assert mounts.freshest_liveness_ts(None, "not-a-timestamp") is None
+    # the shared window: 15 minutes, neither more nor less
+    assert mounts.is_live(now - timedelta(minutes=14, seconds=59), now=now) is True
+    assert mounts.is_live(now - timedelta(minutes=15, seconds=1), now=now) is False
+    assert mounts.is_live(None, now=now) is False
 
 
 async def test_project_last_seen_feeds_the_listener_probe(actions: Actions) -> None:

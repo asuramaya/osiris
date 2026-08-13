@@ -25,7 +25,7 @@ import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import asyncpg
 
@@ -871,15 +871,24 @@ def _turn_fresh_sync(root: Path, sid: str, active_secs: int) -> bool:
     return False
 
 
-async def _resident_disagrees(
+ResidentVerdict = Literal["match", "mismatch", "unknown"]
+
+
+async def _resident_verdict(
     pool: asyncpg.Pool, root: Path, sid: str, base: str, *,
     job_dir_hint: str = "", seat_id: str | None = None,
-) -> bool:
-    """True when the session's own signed testimony names a DIFFERENT lineage than the
-    addressee — the crossed-registry class (thread 0100a35e, the Ra misdelivery): the
-    registry said the addressee lived there; the transcript says someone else does. Both
-    the nudge AND the resume must refuse on this — each would put the addressee's mail
-    into a foreign window.
+) -> ResidentVerdict:
+    """Does the session's own signed testimony agree with the addressee? Three answers,
+    not two (ruling f624d114 — the 18th specimen of 60bc15db: a function that could not
+    say "I don't know" and reported "no" instead). "mismatch" is a POSITIVE finding — a
+    signed act was found and it names a different lineage than `base`, the crossed-
+    registry class (thread 0100a35e, the Ra misdelivery). "unknown" is an ABSENCE of
+    evidence — nothing signed was found anywhere in the scan, or there was nothing left
+    to corroborate against — and must never be rendered with the same words as a found
+    disagreement: an ignorance dressed as a finding is exactly what cost the fleet its
+    coordination lane (Cupid's measurement, obligation 94dc4aae). Both non-"match"
+    verdicts still refuse a nudge/resume the same way (the addressee's mail must never
+    land in a foreign or unverified window) — only the CALLER'S WORDING differs now.
 
     THE DIFFERENT-MIND ARM IS UNCONDITIONAL (thread 25943031, halcyon's own stranding —
     the fix for the OTHER arm never touches this one): any signed act found, whether in
@@ -894,53 +903,87 @@ async def _resident_disagrees(
     the addressee's ONLY when that act's lineage matches AND a fresh registry read
     corroborates (`_registry_corroborates`) — either alone is insufficient. Still nothing
     found anywhere within the scan cap, or the deeper act names someone else, or the
-    registry doesn't corroborate: refuse, exactly as before this fix."""
+    registry doesn't corroborate: "unknown" (or "mismatch" if a lineage was positively
+    named), exactly the refusal shape from before this fix — only the label is honest now."""
     from src.orchestrator.agents import _generation
     resident = await asyncio.to_thread(_resident_of_sync, root, sid)
     if resident is not None:
-        return _generation(resident)[0] != base
+        return "mismatch" if _generation(resident)[0] != base else "match"
     deep_resident, transcript = await asyncio.to_thread(_resident_of_deeper_sync, root, sid)
     if deep_resident is None or transcript is None:
-        return True
+        return "unknown"  # nothing signed found anywhere in the scan — ignorance, not a finding
     if _generation(deep_resident)[0] != base:
-        return True
+        return "mismatch"
     if not job_dir_hint:
-        return True  # no candidate to corroborate against — refuse, never guess one
-    return not await _registry_corroborates(
+        return "unknown"  # no candidate to corroborate against — refuse, never guess one
+    corroborates = await _registry_corroborates(
         pool, job_dir_hint, transcript, base, seat_id=seat_id)
+    return "match" if corroborates else "unknown"
+
+
+async def _resident_disagrees(
+    pool: asyncpg.Pool, root: Path, sid: str, base: str, *,
+    job_dir_hint: str = "", seat_id: str | None = None,
+) -> bool:
+    """True when the door should NOT be trusted — either a positive mismatch or an
+    unresolved unknown (both refuse a nudge/resume the same way). Thin bool wrapper over
+    `_resident_verdict` for callers that only ever silently drop a candidate and never
+    render the reason as prose (a silent drop cannot misrepresent an unknown as a
+    finding, so collapsing the two here is safe) — callers that DO render a reason to a
+    human must call `_resident_verdict` directly instead, so "mismatch" and "unknown"
+    stay distinguishable at the point the words get written."""
+    return await _resident_verdict(
+        pool, root, sid, base, job_dir_hint=job_dir_hint, seat_id=seat_id) != "match"
 
 
 async def _resume_guard(
     pool: asyncpg.Pool, resume: tuple[str, str, float, str], base: str, *,
     seat_id: str | None, st: Settings,
-) -> str | None:
-    """The crossed-registry identity gate (0100a35e) an already-found `_agent_resumable`
-    result must clear before ANY caller continues someone else's session — shared by
-    dispatch_dm's DM-resume branch and launch_seat's launch-resume branch so the check
-    cannot drift between them the way eebeb1f's byte-for-byte copy of the OLD ceiling check
-    did (Thoth's ruling, 2026-08-04, decision a829a15d: "reuse it, do not reimplement it").
-    None means the resume may proceed; a string names the refusal reason. The gate itself
-    (`_resident_disagrees`) is unchanged — this only spares each caller its own copy of the
-    root-path derivation and the wording."""
+) -> tuple[str | None, str | None]:
+    """The resident-identity gate (0100a35e) an already-found `_agent_resumable` result
+    must clear before ANY caller continues someone else's session — shared by
+    dispatch_dm's DM-resume branch, launch_seat's launch-resume branch, and
+    wake_gate_preflight so the check cannot drift between them the way eebeb1f's byte-
+    for-byte copy of the OLD ceiling check did (Thoth's ruling, 2026-08-04, decision
+    a829a15d: "reuse it, do not reimplement it").
+
+    Returns `(gate, detail)`: `(None, None)` means the resume may proceed. Otherwise
+    `gate` is a stable short token the caller uses DIRECTLY for its mode/status string —
+    "crossed-registry" for a POSITIVELY found different mind, "resident-unknown" for an
+    absence of evidence either way (ruling f624d114: these used to be the same bool and
+    the same rendered sentence; a caller that string-matched `detail` to recover the
+    distinction would just reinvent that bug one layer up, so this returns the token
+    itself instead of prose to be re-parsed)."""
     root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
         else Path.home() / ".claude" / "projects"
-    if await _resident_disagrees(pool, root, resume[0], base, job_dir_hint=resume[3],
-                                 seat_id=seat_id):
-        return ("the registry's door for this addressee leads to a session whose own "
-                "signed testimony names a different mind (the crossed-registry class, "
-                "0100a35e)")
-    return None
+    verdict = await _resident_verdict(pool, root, resume[0], base, job_dir_hint=resume[3],
+                                      seat_id=seat_id)
+    if verdict == "match":
+        return None, None
+    if verdict == "mismatch":
+        return "crossed-registry", (
+            "the registry's door for this addressee leads to a session whose own "
+            "signed testimony names a different mind (the crossed-registry class, "
+            "0100a35e)")
+    return "resident-unknown", (
+        "no signed testimony could be found anywhere in the addressee's scanned "
+        "session history to confirm this door — an absence of evidence, not "
+        "evidence of a different mind (thread 0100a35e's unknown arm)")
 
 
 def _gate_name(detail: str) -> str:
     """A stable, short token for WHICH named gate refused a resume (#156.2, Thoth's own
     ask: 'refused-by-<named-gate>', not a bare 'refused'). Reads the SAME prose
-    `_resume_candidate_verdict` / `_resume_miss_reason` / `_resume_guard` already produce
-    for humans — never a second source of truth to drift from. A string it doesn't
-    recognize names itself 'unknown' rather than guessing: the whole point of this
-    function is to never relabel a refusal as something it wasn't."""
-    if "crossed-registry" in detail:
-        return "crossed-registry"
+    `_resume_candidate_verdict` / `_resume_miss_reason` already produce for humans —
+    never a second source of truth to drift from. A string it doesn't recognize names
+    itself 'unknown' rather than guessing: the whole point of this function is to never
+    relabel a refusal as something it wasn't.
+
+    NEVER FED `_resume_guard`'s output (ruling f624d114): that gate now returns its
+    token directly — "crossed-registry" or "resident-unknown" — precisely so nothing
+    downstream has to re-derive a mismatch/unknown distinction by string-matching
+    rendered prose, which is the same shape of bug this function's own docstring above
+    already warns against for every OTHER gate it names."""
     if "seam itself" in detail:
         return "compaction"
     if "context ceiling" in detail:
@@ -999,11 +1042,11 @@ async def wake_gate_preflight(
         return {"mode": f"resume-refused-{gate}", "status": f"refused-{gate}",
                 "detail": miss_reason}
     from src.orchestrator.agents import _generation
-    refusal = await _resume_guard(
+    gate, refusal = await _resume_guard(
         pool, resume, _generation(target)[0], seat_id=seat_id, st=st)
-    if refusal is not None:
-        return {"mode": "resume-refused-crossed-registry",
-                "status": "refused-crossed-registry", "detail": refusal}
+    if gate is not None:
+        return {"mode": f"resume-refused-{gate}",
+                "status": f"refused-{gate}", "detail": refusal}
     return {"mode": "resumable", "status": "resumable",
             "detail": f"resumable now — session {resume[0][:8]}, no gate refuses it"}
 
@@ -1414,11 +1457,11 @@ async def dispatch_dm(
                 "detail": f"{who} has no resumable session ({miss_reason}) — a private "
                           "message is never handed to a fresh twin"}
     session_id, repo = resume[0], resume[1]
-    refusal = await _resume_guard(pool, resume, base, seat_id=seat_id, st=st)
-    if refusal is not None:
-        return {"mode": f"resume-refused-{_gate_name(refusal)}",
+    gate, refusal = await _resume_guard(pool, resume, base, seat_id=seat_id, st=st)
+    if gate is not None:
+        return {"mode": f"resume-refused-{gate}",
                 "detail": f"{refusal} — refusing both nudge and resume; the mail "
-                          "stays pull-only until the identity is healed"}
+                          "stays pull-only for now"}
     # the ledger row goes in UNDER AN ADVISORY LOCK, before the spawn: two dispatchers
     # (send's immediate leg + a concurrent tick) can both reach here for one message —
     # exactly one of them may spend
@@ -1638,6 +1681,10 @@ _WAKE_STATUS = {
     "resume-refused-ceiling": "refused-ceiling",
     "resume-refused-no-anchor": "refused-no-anchor",
     "resume-refused-crossed-registry": "refused-crossed-registry",
+    # a POSITIVE mismatch (found a different mind) and an ABSENCE of evidence either way
+    # are no longer the same bucket (ruling f624d114) — an ignorance must never wear the
+    # same status as a finding, even at the bucket level.
+    "resume-refused-resident-unknown": "refused-resident-unknown",
     "resume-refused-unknown": "refused-unknown",
     # a manager is a LIVE human body, not a missing one — the human-attended guard queues the
     # knock in its box (perceived by pull), it does not forge the human's live turn (d8a77f80).
@@ -2032,10 +2079,10 @@ async def launch_seat(
             # holder was falsy. Asserted, not silently narrowed: a violated invariant here
             # should be loud, never a quiet skip of the identity gate.
             assert holder is not None
-            refusal = await _resume_guard(
+            gate, refusal = await _resume_guard(
                 pool, resume, _generation(holder)[0], seat_id=target_seat, st=st)
-            if refusal is not None:
-                resume_log = [*resume_log, f"crossed-registry guard refused it: {refusal}"]
+            if gate is not None:
+                resume_log = [*resume_log, f"{gate} guard refused it: {refusal}"]
                 resume = None
         if resume is not None:
             session_id, repo = resume[0], resume[1]

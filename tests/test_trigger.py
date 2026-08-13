@@ -2017,6 +2017,87 @@ async def test_a_crossed_registry_never_leaks_the_envelope_or_the_resume(
     assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
 
 
+async def test_an_absent_transcript_refuses_as_unknown_never_as_a_found_mismatch(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """Ruling f624d114 — the 18th specimen of 60bc15db: an EMPTY lookup (a transcript
+    exists and resumes fine, but nothing SIGNED appears anywhere in it — no whisper, no
+    mount, no send) must never be rendered with the same words as a POSITIVE identity
+    mismatch. Same registry shape as the crossed-registry test above (a mounted door, a
+    resumable candidate) but the transcript's content is unsigned harness noise, not a
+    signature naming a stranger — so this must refuse as `resident-unknown`, never
+    `crossed-registry`, and the detail text must never claim a different mind was found."""
+    import os
+    import time as _time
+
+    from src.orchestrator import mounts
+
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-demo"
+    proj.mkdir(parents=True, exist_ok=True)
+    t = proj / f"{FULL_SID}.jsonl"
+    # a real, resumable transcript — just nothing signed anywhere in it
+    t.write_bytes(b'{"type":"assistant","text":"just harness chrome, nothing signed"}\n')
+    old = _time.time() - 3600
+    os.utime(t, (old, old))
+    await mounts.save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "abcd1234"),
+                            agent_id="agent:abcd1234", project="demo", cwd="/repo/demo",
+                            model=None, session_key=None)
+    await actions.pool.execute("UPDATE agent_mounts SET last_seen = now() - interval '1 hour'")
+    msg_id = await _dm_to_owner(actions)
+
+    async def _jobs(ids: set) -> dict[str, Any]:
+        return {"short": "abcd1234", "sessionId": FULL_SID, "_sock": "/nowhere"}
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("an unresolved identity must never be nudged or resumed")
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_boom, windows=_no_windows, jobs=_jobs, nudge=_boom)
+    assert d["mode"] == "resume-refused-resident-unknown"
+    assert "signed testimony names a different mind" not in d["detail"]
+    assert "crossed-registry" not in d["detail"]
+    assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
+
+
+async def test_resume_guard_returns_gate_token_directly_not_prose_to_reparse(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """The tri-state fix itself, at the unit level: `_resume_guard` must hand back
+    "crossed-registry"/"resident-unknown" as a structured token, never leave the caller
+    to string-match its detail text to recover the distinction (that reinvents the exact
+    bug this fix closes, ruling f624d114)."""
+    from src.orchestrator import mounts
+
+    sense = tmp_path / "projects"
+    sense.mkdir(parents=True, exist_ok=True)
+    st = _settings(enabled=True, sense=str(sense))
+    resume = (FULL_SID, "/repo/demo", 0.0, "abcd1234")
+    # no transcript anywhere under `sense` for FULL_SID — the unknown arm
+    gate, detail = await trigger_module._resume_guard(
+        actions.pool, resume, "agent:abcd1234", seat_id=None, st=st)
+    assert gate == "resident-unknown"
+    assert detail is not None
+    assert "signed testimony names a different mind" not in detail
+
+    # now a transcript that positively names a stranger — the mismatch arm
+    proj = sense / "-repo-demo"
+    proj.mkdir(parents=True, exist_ok=True)
+    t = proj / f"{FULL_SID}.jsonl"
+    t.write_bytes(b'{"type":"user","toolUseResult":'
+                  b'"{\\"sent\\":1,\\"from\\":\\"agent:zzstranger-ix\\"}"}\n')
+    await mounts.save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "abcd1234-ii"),
+                            agent_id="agent:abcd1234", project="demo", cwd="/repo/demo",
+                            model=None, session_key=None)
+    gate2, detail2 = await trigger_module._resume_guard(
+        actions.pool, resume, "agent:abcd1234", seat_id=None, st=st)
+    assert gate2 == "crossed-registry"
+    assert detail2 is not None
+    assert "signed testimony names a different mind" in detail2
+
+
 # ═══ THE CORROBORATION FALLBACK (thread 25943031, halcyon's own stranding) ═══════════════
 # halcyon's parked session was provably its own — every signature in the whole transcript
 # was its own lineage — but the LAST 400KB was all unsigned harness noise (away summaries,
@@ -2771,8 +2852,14 @@ async def test_dispatch_dm_never_mounted_is_distinct_from_no_anchor(
 
 def test_gate_name_reads_the_same_prose_the_gates_already_produce() -> None:
     """#156.2: a stable short token per named gate, read from the SAME sentences
-    `_resume_candidate_verdict`/`_resume_miss_reason`/`_resume_guard` already produce for
-    humans — never a second source of truth, and never a guess on unrecognized text."""
+    `_resume_candidate_verdict`/`_resume_miss_reason` already produce for humans — never
+    a second source of truth, and never a guess on unrecognized text.
+
+    NEVER FED `_resume_guard`'s own prose (ruling f624d114): that gate returns its token
+    ("crossed-registry" / "resident-unknown") directly now, precisely so this function
+    never has to re-derive a mismatch/unknown distinction by string-matching rendered
+    text — former crossed-registry prose now falls through to "unknown" here, same as
+    any other text this function was never meant to parse."""
     gate_name = trigger_module._gate_name
     assert gate_name("found a candidate, but its tail after the last compaction boundary "
                      "is only 12 byte(s) (1 line(s)) — it closed at or near the seam "
@@ -2781,9 +2868,6 @@ def test_gate_name_reads_the_same_prose_the_gates_already_produce() -> None:
                      "ceiling") == "ceiling"
     assert gate_name("no anchored transcript at all") == "no-anchor"
     assert gate_name("retired — a deliberate close, never reanimated") == "retired"
-    assert gate_name("the registry's door for this addressee leads to a session whose "
-                     "own signed testimony names a different mind (the crossed-registry "
-                     "class, 0100a35e)") == "crossed-registry"
     assert gate_name("something nobody wrote yet") == "unknown"
 
 
