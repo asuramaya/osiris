@@ -3791,7 +3791,13 @@ async def _table(
     displayed data. The op-tree only ever DECLARES the shape; `/act`'s own registry (a
     separate, closed dispatch table) is what actually enforces which actions and args are
     real — this function has no opinion on that, same discipline as everywhere else in this
-    dispatcher (a Function/op computes DATA, it never decides what's SAFE to write)."""
+    dispatcher (a Function/op computes DATA, it never decides what's SAFE to write).
+
+    Props read is BATCHED (task #164 follow-on, dispatch msg 4010): measured live via
+    Sekhmet's index-scan protocol, one `_table` call inside `orient()`'s project-briefing
+    averaged ~42.8k assertions_supersedes_idx scans / ~15.7k assertions_object_name_idx
+    scans and ~2.2s wall-clock for a single call — the same per-object `_props()` loop
+    task #164 already fixed in the `select` op, unmigrated here. See `_props_batch`."""
     # OBJECT COLUMNS (canonical/type/status), not assertions — `_props`/`winning_props`
     # only ever reads `current_assertions`, so a column asking for one of these by name
     # would silently resolve to None without this (task #138/#163's arc: caught live
@@ -3805,8 +3811,9 @@ async def _table(
         obj_cols = {r["id"]: dict(r) for r in await pool.fetch(
             f"SELECT id, {cols_sql} FROM objects WHERE id = ANY($1::uuid[])", objects)}
     rows: list[dict[str, Any]] = []
+    props_by_id = await _props_batch(pool, objects)
     for oid in objects:
-        facts = await _props(pool, oid)
+        facts = props_by_id.get(oid, {})
         if oid in obj_cols:
             facts = {**facts, **{k: v for k, v in obj_cols[oid].items() if k != "id"}}
         row: dict[str, Any] = {}
