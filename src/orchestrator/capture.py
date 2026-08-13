@@ -36,6 +36,7 @@ body, just without waiting on a mining pass that never runs over session capture
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -944,6 +945,7 @@ async def open_thread(
     actions: Actions, summary: str, *, repo: str | None = None, kind: str | None = None,
     owner: str | None = None, assignee: str | None = None, arc: str | None = None,
     severity: str | None = None, resolves: str | list[str] | None = None,
+    branch: str | None = None, files_touched: list[str] | None = None,
     source: str = _SOURCE,
 ) -> uuid.UUID:
     """Open a thread at source — an unresolved question / next-step for the next session
@@ -998,7 +1000,16 @@ async def open_thread(
     target per Thoth DM 2975's sibling-thread-closure shape) — no new edge type, no new
     machinery: the new thread's own id becomes the resolved_by witness on whatever it
     supersedes. Runs AFTER the new thread's own creation transaction commits (resolving a
-    DIFFERENT, already-existing object is not part of this thread's own atomic write)."""
+    DIFFERENT, already-existing object is not part of this thread's own atomic write).
+
+    `branch`/`files_touched` mark HELD WORK — task #168's narrowed, falsification-survived
+    leg (decision aa7993cf: unmerged work is the one real gap of the three Alfred's ruling
+    named; rediscovery and conditional acceptance turned out already-solved or never
+    schema-shaped). No new type: the same generic obligation Thread Seshat's own
+    conditional-acceptance leg already proved sufficient (content-capacity was never the
+    problem), carrying the git branch and the repo-relative files this build touches so a
+    later reader — or `open_thread`'s own collision check, below — can find it by file
+    overlap instead of only by already suspecting it exists."""
     if arc is not None and arc not in ARCS:
         raise ValueError(f"arc must be one of {ARCS}, got {arc!r}")
     observed = datetime.now(UTC)
@@ -1036,6 +1047,12 @@ async def open_thread(
         if effective_owner:
             await a.assert_property(t, "owner", effective_owner.strip(), source, observed,
                                     _CONF, evidence_class=_EC)
+        if branch:
+            await a.assert_property(t, "branch", branch, source, observed, _CONF,
+                                    evidence_class=_EC)
+        if files_touched:
+            await a.assert_property(t, "files_touched", files_touched, source, observed,
+                                    _CONF, evidence_class=_EC)
         if repo:
             await link_repo(a, t, repo, observed, source=source, evidence_class=_EC)
     for old_tid in to_resolve:
@@ -1046,6 +1063,68 @@ async def open_thread(
             because=f"superseded by this lineage's own successor note: {summary[:200]}",
             artifact=str(t), source=source)
     return t
+
+
+async def open_held_work(
+    pool: asyncpg.Pool, *, repo: str | None = None,
+) -> list[dict[str, Any]]:
+    """Every OPEN held-work Thread — `open_thread(..., branch=..., files_touched=...)`'s
+    own written shape — task #168's narrowed, real leg (decision aa7993cf). `repo` scopes
+    to one project's `in_repo` edge, same discipline as `find_near_duplicate_open_thread`;
+    omitted, this is fleet-wide (a branch's files can collide across a repo boundary only
+    if the same repo is meant, so the common caller passes `repo`). Each row: `id` (short),
+    `summary`, `branch`, `files_touched` (list, possibly empty if the thread predates this
+    field or never carried it — never guessed), `owner`. Read-only; never gates anything —
+    same posture as `open_held_work`'s own callers (a courtesy at mint time, a listing at
+    mount time), never a refusal path (577988ed)."""
+    proj = await _resolve_repo(pool, repo.removeprefix("repo:").strip()) if repo else None
+    if repo and proj is None:
+        return []
+    repo_clause = " AND EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id " \
+                 "AND l.type='in_repo' AND l.to_id=$1)" if proj is not None else ""
+    params = (proj,) if proj is not None else ()
+    rows = await pool.fetch(
+        "SELECT o.id, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS summary, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='branch' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS branch, "
+        " (SELECT a.value FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='files_touched' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   LIMIT 1) AS files_touched, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS owner "
+        "FROM objects o "
+        "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
+        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "   WHERE a.object_id=o.id AND a.name='status' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "  AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='branch')" + repo_clause,
+        *params)
+    out = []
+    for r in rows:
+        files = r["files_touched"]
+        if isinstance(files, str):
+            files = json.loads(files)
+        out.append({"id": str(r["id"])[:8], "summary": r["summary"] or "",
+                    "branch": r["branch"] or "", "files_touched": files or [],
+                    "owner": r["owner"]})
+    return out
+
+
+def held_work_overlap(
+    files: list[str], candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Pure, no IO: which `candidates` (each an `open_held_work()` row) touch at least one
+    of `files`. The actual collision check — everything above this just supplies the rows.
+    Never blocks, never refuses; a caller decides what to do with what it finds (577988ed:
+    a fleet-wide check that can false-positive must never refuse-to-serve)."""
+    wanted = set(files)
+    return [c for c in candidates if wanted & set(c.get("files_touched") or [])]
 
 
 async def _current_owner(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | None:
