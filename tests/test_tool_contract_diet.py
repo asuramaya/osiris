@@ -422,8 +422,8 @@ def _tool_chars(t: Any) -> int:
 # see. Third author in a row to decline this line correctly; third time the author's honest
 # number could not have been right. No author can measure a surface that does not exist
 # until the merge.
-# 141,044 -> 147,610. 103 -> 105 tools, two added.
-TOOL_CONTRACT_CEILING_CHARS = 147_610
+# 147,610 -> 154,558. 105 -> 109 tools, four added at a nine-branch merge.
+TOOL_CONTRACT_CEILING_CHARS = 154_558
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -486,4 +486,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     102 -> 103 (2026-08-08, task #156.4): wake_preflight — which gates would refuse a wake,
     asked BEFORE the attempt instead of discovered as a wall of refusals after."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 105
+    assert len(per_tool) == 109
