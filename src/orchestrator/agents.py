@@ -1216,50 +1216,65 @@ async def _succeeded_from_of(pool: asyncpg.Pool, canonical: str) -> str | None:
     return str(val) if val else None
 
 
-async def lineage_root(pool: asyncpg.Pool, canonical: str, *, max_hops: int = 64) -> str:
+async def lineage_root(
+    pool: asyncpg.Pool, canonical: str, *, max_hops: int = 200,
+) -> tuple[str, bool]:
     """The ORIGIN of this canonical's own succession chain, walked via succeeded_from EDGES
     — never `_generation()`'s string parse (60bc15db specimen, decision 61cb1f02): two
     generations of the SAME lineage share this root even when the id FORMAT itself changes
-    across a renumbering. Live specimen that motivated this: agent:ad1a1cb0-g40-g40 and
-    agent:ad1a1cb0-g40-xxxix are six real succeeded_from hops apart and share nothing as
-    STRINGS (the "g40" suffix isn't a roman numeral, so `_generation()` roots the first one
-    at itself) — but they walk to the identical lineage origin. ack_handoff's own "is this
-    my lineage's handoff" guard uses this, replacing its old string-parse check; the cross-
-    lineage refusal itself is UNCHANGED (different root, refused, always) — only the
-    substrate computing "root" is more reliable now.
+    across a renumbering.
+
+    Returns `(root, complete)` — NEVER a bare string (60bc15db, decision 1cb389be, found
+    INSIDE this function itself: Thoth's own 76-generation-deep lineage crossed the old
+    max_hops=64 ceiling, and a bare-string return could not say so — it silently handed
+    back whatever intermediate canonical the walk happened to reach at hop 64, confidently
+    indistinguishable from a genuine origin. 12 of her generations each hit the ceiling at
+    a different depth and resolved to 12 different WRONG roots, reading as 12 real
+    lineages until this was traced by hand past the bound. `complete=True` means the walk
+    reached a genuine `succeeded_from IS NULL` terminus — `root` is trustworthy.
+    `complete=False` means the walk exhausted `max_hops` before terminating — `root` is
+    SOME real ancestor along the true chain, but not proven to be its origin, and a caller
+    comparing two such roots for equality can be confidently wrong in both directions.
+    NEVER treat a `complete=False` root as final; every caller below refuses rather than
+    trusts one.
 
     Bounded like every other succeeded_from walk in this file (mint_heir, the ancestor-walk
-    just below); a lineage longer than max_hops returns however far the walk reached, never
-    hangs on a cycle."""
+    just below) — a corrupt cycle can never hang this — but the bound is now a safety
+    backstop, not the caller's only signal: `complete` is the fact to check, not silence
+    on whether 64 (or 200, or any other number) was enough this time."""
     cur = canonical
     for _ in range(max_hops):
         nxt = await _succeeded_from_of(pool, cur)
         if nxt is None:
-            return cur
+            return cur, True
         cur = nxt
-    return cur
+    return cur, False
 
 
-async def _lineage_ancestors(pool: asyncpg.Pool, canonical: str, *,
-                             max_hops: int = 64) -> list[str]:
-    """Self plus every real predecessor reached via succeeded_from, nearest first — the
-    full chain lineage_root walks to its end, exposed here so a caller can act on every
-    generation along the way, not just the terminus. Bounded identically to lineage_root;
-    a chain that never terminates within max_hops returns exactly that many entries, which
-    the caller can detect via len() to know the walk may be incomplete."""
+async def _lineage_ancestors(
+    pool: asyncpg.Pool, canonical: str, *, max_hops: int = 200,
+) -> tuple[list[str], bool]:
+    """Self plus every real predecessor reached via succeeded_from, nearest first, PLUS
+    whether the walk actually terminated — the full chain `lineage_root` walks to its end,
+    exposed here so a caller can act on every generation along the way, not just the
+    terminus. Returns `(ancestors, complete)`, same completeness contract as `lineage_root`
+    (decision 1cb389be) — a caller must never read a short or clean-looking `ancestors`
+    list as complete without checking the flag; `len(ancestors) - 1 >= max_hops` was the
+    ad-hoc way `misfiled_by_lineage` used to re-derive this itself before `complete` became
+    a first-class return value."""
     out = [canonical]
     cur = canonical
     for _ in range(max_hops):
         nxt = await _succeeded_from_of(pool, cur)
         if nxt is None:
-            break
+            return out, True
         out.append(nxt)
         cur = nxt
-    return out
+    return out, False
 
 
 async def misfiled_by_lineage(
-    pool: asyncpg.Pool, agent_id: str, project: str | None, *, max_hops: int = 64,
+    pool: asyncpg.Pool, agent_id: str, project: str | None, *, max_hops: int = 200,
 ) -> dict[str, Any] | None:
     """THE DISCOVERY HALF OF #145 (decision b89477a0, Thoth's authorization DM 4114):
     identity_coherence (settle.py's filed_under_check) only ever checks THIS session's OWN
@@ -1278,11 +1293,15 @@ async def misfiled_by_lineage(
     explicitly out of scope for this build (decision b89477a0).
 
     NAMES WHAT IT CANNOT SEE, ALWAYS (Thoth's own constraint, DM 4114): a succeeded_from
-    chain that is broken partway up (a real, measured, open question for at least one
-    live lineage as of decision ad7cddf9) makes this UNDER-report, never over-report — it
-    can only find ancestors it can actually reach. `chain_hops_walked` and
-    `chain_may_be_incomplete` are carried on every non-None result so a short or empty
-    `misfiled` list is never indistinguishable from a chain that was never fully walked.
+    chain that is broken partway up, or simply longer than `max_hops`, makes this UNDER-
+    report, never over-report — it can only find ancestors it can actually reach.
+    `chain_hops_walked` and `chain_may_be_incomplete` are carried on every non-None result
+    so a short or empty `misfiled` list is never indistinguishable from a chain that was
+    never fully walked. `chain_may_be_incomplete` now comes DIRECTLY from
+    `_lineage_ancestors`'s own `complete` flag (decision 1cb389be) rather than being re-
+    derived here from `len(ancestors) >= max_hops` — that re-derivation was this
+    function's own correct workaround for a signal `_lineage_ancestors` didn't carry yet;
+    now that it does, trust the primitive instead of recomputing its answer.
     Returns None only in the one case this cannot evaluate at all (`project` unknown,
     mirroring filed_under_check) OR the genuinely clean case (nothing misfiled AND the
     chain terminated within `max_hops`, i.e. an answer this function actually stands
@@ -1290,7 +1309,7 @@ async def misfiled_by_lineage(
     silence; an INCOMPLETE walk never is, however clean it happens to look."""
     if not project:
         return None
-    ancestors = await _lineage_ancestors(pool, agent_id, max_hops=max_hops)
+    ancestors, complete = await _lineage_ancestors(pool, agent_id, max_hops=max_hops)
     try:
         rows = await pool.fetch(
             "SELECT DISTINCT o.id, p.canonical AS filed_project FROM objects o "
@@ -1308,7 +1327,7 @@ async def misfiled_by_lineage(
         for r in rows if str(r["filed_project"]).removeprefix("repo:") != project
     })
     hops_walked = len(ancestors) - 1
-    incomplete = hops_walked >= max_hops
+    incomplete = not complete
     if not misfiled and not incomplete:
         return None  # earned silence: nothing misfiled AND the chain was fully walked
     return {
