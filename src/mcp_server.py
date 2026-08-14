@@ -4150,6 +4150,20 @@ async def hold_action(holder: str, held: str, act: str, because: str, hours: flo
 
 
 @mcp.tool()
+async def peer_reachable(seat_id: str) -> list[str]:
+    """Every seat a search for `seat_id`'s own queue should also cover (task #76 item 5b,
+    spec e6636c7e's "the pair faces the tree through both peers") — DISCOVERABILITY ONLY,
+    per Thoth's ruling: mail delivery itself is untouched, this never widens who a DM
+    reaches. Returns `[seat_id]` alone when unpeered/unknown, or `[seat_id, peer]` when an
+    active peer_of bond exists. There is no `review` verb/object in this codebase today —
+    item 5's own missing piece (5c) — so this is scoped for whatever future surface reads
+    one seat's queue, not a review-assignment feature that doesn't exist yet."""
+    pool = await _pool_get()
+    from src.orchestrator.seats import peer_reachable as _peer_reachable
+    return await _peer_reachable(pool, seat_id)
+
+
+@mcp.tool()
 async def detach_seat(seat: str, because: str, ctx: Context | None = None) -> dict[str, Any]:
     """Invalidate an active managed_by edge — the toolkit hole named at thread fad0dc14
     (unpeer heals peer_of, nothing healed managed_by before this). A COORDINATOR IS DEFINED
