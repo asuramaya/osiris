@@ -51,9 +51,11 @@ async def test_dossier_renders_identity_and_named_network(actions: Actions) -> N
     assert d["type"] == "Person"
     assert d["name"] == "Kim Jong Un"
 
-    # identity properties (name/tag excluded; multi-source set preserved)
+    # identity properties (task #170's neighbour: `name` now JOINS this set, `tag` stays
+    # excluded on its own separate grounds — see dossier.py's own comment)
     prop_names = {p["name"] for p in d["properties"]}
-    assert {"country", "birthDate", "topics"} <= prop_names
+    assert {"country", "birthDate", "topics", "name"} <= prop_names
+    assert "tag" not in prop_names
     country = next(p for p in d["properties"] if p["name"] == "country")
     assert country["values"][0]["value"] == "kp"
     assert country["values"][0]["evidence_class"] == "authoritative_api"
@@ -226,6 +228,48 @@ async def test_dossier_marks_two_sources_with_different_values_as_contradicting(
     status = next(p for p in d["properties"] if p["name"] == "status")
     assert status["agreement"] == "contradicting"
     assert {v["value"] for v in status["values"]} == {"open", "resolved"}
+
+
+async def test_dossier_marks_name_disagreement_without_the_display_field_picking_a_winner(
+    actions: Actions,
+) -> None:
+    """THE NAME-PROPERTY GAP (Thoth msg 4292, Sekhmet's find, decision 7960db40): `name`
+    used to be silently excluded from the agreement view — a UI-dedup call made before
+    #102 existed, inherited by #102's own query without anyone revisiting it. `name` now
+    joins the SAME vocabulary as every other property (single/agreeing/contradicting), and
+    the top-level `name` field (resolve_label's own silent winner-pick, task #97/ruling
+    52daab71) must keep answering a DIFFERENT question — "what to display" — never leaking
+    into or being replaced by the agreement mark. This is repo:bytebye's/repo:tony's own
+    live shape in miniature: two different sources, two different spellings, neither
+    superseding the other."""
+    from datetime import UTC, datetime
+
+    obj = await actions.create_or_find_object("Domain", "domain:namegap", "test")
+    now = datetime.now(UTC)
+    await actions.assert_property(obj, "name", "ByeByte", "agent:first", now, 0.9)
+    await actions.assert_property(obj, "name", "byebyte", "agent:second", now, 0.9)
+
+    d = await entity_dossier(actions.pool, obj)
+    name_prop = next(p for p in d["properties"] if p["name"] == "name")
+    assert name_prop["agreement"] == "contradicting"
+    assert {v["value"] for v in name_prop["values"]} == {"ByeByte", "byebyte"}
+    # the top-level display field is still a single, resolved string — never a list, never
+    # the agreement mark itself; it answers "what to show", not "do sources disagree"
+    assert d["name"] in {"ByeByte", "byebyte"}
+    assert isinstance(d["name"], str)
+
+
+async def test_dossier_tag_stays_excluded_from_the_agreement_view(actions: Actions) -> None:
+    """`tag` keeps its own, separate, still-correct exclusion (dossier.py's own comment):
+    additive/multi-valued by design, no winner or disagreement concept applies to it the
+    way it does to a single-fact property like `name` or `status`."""
+    obj = await actions.create_or_find_object("Domain", "domain:tagstays", "test")
+    await actions.tag_object(obj, "flagged", "session", "agent:alice")
+    await actions.tag_object(obj, "reviewed", "session", "agent:bob")
+
+    d = await entity_dossier(actions.pool, obj)
+    prop_names = {p["name"] for p in d["properties"]}
+    assert "tag" not in prop_names
 
 
 async def test_dossier_relationships_filter_invalidated_links(actions: Actions) -> None:
