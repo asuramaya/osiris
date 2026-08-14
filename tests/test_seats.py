@@ -1168,6 +1168,75 @@ async def test_occupancy_is_lineage_aware_like_held_seat(actions: Actions) -> No
     assert occ["state"] == "occupied" and occ["live"] is True
 
 
+async def test_occupancy_reads_occupied_off_last_active_alone_the_tenth_instance(
+    actions: Actions,
+) -> None:
+    """Alfred's question via Thoth (msg 4394/4405, decision 59b3092c): seat_occupancy()
+    used to run its own inline agent_mounts-only query — the exact single-source shape
+    the dispatch-listener probe had BEFORE ruling 70493925 gave it a current_assertions
+    fallback (test_agent_liveness_falls_back_to_last_active_like_fleet_always_has, this
+    same fix, one reader over). A holder with NO mount row at all but a FRESH last_active
+    assertion — the graph's own self-testimony, fleet()'s signal the whole time — now
+    reads OCCUPIED here too, not COLD. Before this fix this returned COLD; the assertion
+    below is the actual regression, not a restatement of already-passing behavior."""
+    from src.orchestrator.seats import seat_occupancy
+
+    seat = await ensure_seat(actions, house="osiris", handle="Sobek", source="test")
+    await actions.create_or_find_object("Agent", "agent:lastactive1", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:lastactive1")
+    agent_oid = await actions.create_or_find_object("Agent", "agent:lastactive1", "test")
+    fresh = datetime.now(UTC).isoformat()
+    await actions.assert_property(agent_oid, "last_active", fresh, "fleet-observer",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    occ = await seat_occupancy(actions.pool, seat["seat_id"])
+    assert occ == {"state": "occupied", "holder": "agent:lastactive1", "live": True}
+
+
+async def test_occupancy_and_fleet_occupancy_no_longer_disagree_with_themselves(
+    actions: Actions,
+) -> None:
+    """Thoth's own regression proof (msg 4405): fleet() used to compute agent-level
+    liveness via the fixed dual-source path and seat-level occupancy via this function's
+    OWN unfixed single-source query — one payload, two disagreeing authorities over the
+    same table. Both now delegate to the same mounts.agent_liveness(), so a holder live
+    only by last_active reads occupied through BOTH doors, not just one."""
+    from src.orchestrator import mounts
+    from src.orchestrator.seats import fleet_occupancy, seat_occupancy
+
+    seat = await ensure_seat(actions, house="osiris", handle="Bastet", source="test")
+    await actions.create_or_find_object("Agent", "agent:selfconsist1", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:selfconsist1")
+    agent_oid = await actions.create_or_find_object("Agent", "agent:selfconsist1", "test")
+    fresh = datetime.now(UTC).isoformat()
+    await actions.assert_property(agent_oid, "last_active", fresh, "fleet-observer",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    via_agent_liveness = await mounts.agent_liveness(actions.pool, "agent:selfconsist1")
+    via_seat_occupancy = await seat_occupancy(actions.pool, seat["seat_id"])
+    rows = await fleet_occupancy(actions.pool)
+    via_fleet_occupancy = next(r for r in rows if r["seat_id"] == seat["seat_id"])
+
+    assert via_agent_liveness["live"] is True
+    assert via_seat_occupancy["live"] is True
+    assert via_fleet_occupancy["live"] is True  # all three doors, one answer
+
+
+async def test_occupancy_refuses_a_custom_live_secs_rather_than_silently_ignoring_it(
+    actions: Actions,
+) -> None:
+    """`live_secs` is no longer a real knob — agent_liveness owns the one shared window.
+    Nothing in this codebase ever passed a non-default value (confirmed by grep before
+    this fix), so a refusal here costs nothing today; the alternative (silently dropping
+    the parameter) would let a future caller believe it changed behavior when it hadn't,
+    exactly the class of silent divergence this whole fix exists to close."""
+    from src.orchestrator.seats import seat_occupancy
+
+    seat = await ensure_seat(actions, house="osiris", handle="Khepri", source="test")
+    with pytest.raises(ValueError, match="no longer supports a custom live_secs"):
+        await seat_occupancy(actions.pool, seat["seat_id"], live_secs=60)
+
+
 async def test_fleet_occupancy_lists_every_active_seat_including_vacant(
     actions: Actions,
 ) -> None:
