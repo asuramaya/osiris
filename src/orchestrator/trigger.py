@@ -1830,6 +1830,49 @@ def _launch_anchor(seat_id: str) -> str:
     return str(Path.home() / ".claude" / "jobs" / seat_id.replace(":", "-"))
 
 
+async def _launch_twin_check(
+    pool: asyncpg.Pool, agents_json: Any, launch_cwd: str,
+) -> dict[str, Any] | None:
+    """THE SHARED TWIN GUARD, reused by BOTH launch doors (ruling 983ec87a, "two doors, one
+    receipt") — the harness-native launch lane's own idempotency check used to consult ONLY
+    `claude agents --json`, the harness's own `--bg` roster, which is INVISIBLE TO A RESUMED
+    (`-p --resume`) BODY BY CONSTRUCTION (this file's own launch_seat docstring, decision
+    536de12f). A live resumed session sitting at `launch_cwd` was therefore invisible to this
+    guard — not an audit gap, a real double-mint collision risk (task #148's contested seam
+    4). Reads BOTH halves of "what is running" and refuses on EITHER: `claude agents --json`
+    (the harness's own, known-incomplete) AND `agent_mounts` (osiris's own registry, which a
+    resumed body's mid-turn mount() call DOES reach). NEVER FIXES the harness roster's own
+    incompleteness (that is THEIRS, per #148's ruling) — only stops trusting it ALONE.
+
+    Returns None when neither source sees a live body at `launch_cwd` (safe to proceed).
+    Otherwise a dict naming EXACTLY which source(s) fired (577988ed: a guard that wrongly
+    blocks a legitimate launch is worse than the disease it prevents — a caller must be able
+    to see and judge WHY this refused, never just that it did) — `harness` (the matching
+    `claude agents --json` row, or None) and `mounts` (the matching agent_mounts row, or
+    None). Both present is not treated as more ambiguous than either alone: two live-looking
+    signals for the same cwd both mean the same thing (don't mint), so both are reported and
+    both refuse the same way — there is no genuinely ambiguous case here to invent a third
+    verdict for, only ONE OR THE OTHER OR NEITHER, and this reports exactly which."""
+    try:
+        roster = await agents_json(cwd=launch_cwd)
+    except (OSError, TimeoutError, ValueError):
+        roster = []
+    from_harness = next((r for r in roster
+                         if isinstance(r, dict) and r.get("cwd") == launch_cwd), None)
+    from_mounts_row = await pool.fetchrow(
+        "SELECT agent_id, last_seen FROM agent_mounts WHERE cwd=$1 "
+        "ORDER BY last_seen DESC NULLS LAST LIMIT 1", launch_cwd)
+    from_mounts = None
+    if from_mounts_row is not None and from_mounts_row["last_seen"] is not None:
+        from src.orchestrator.mounts import is_live
+        if is_live(from_mounts_row["last_seen"]):
+            from_mounts = {"agent_id": from_mounts_row["agent_id"],
+                           "last_seen": from_mounts_row["last_seen"].isoformat()}
+    if from_harness is None and from_mounts is None:
+        return None
+    return {"harness": from_harness, "mounts": from_mounts}
+
+
 async def launch_seat(
     actions: Actions, *, caller: str, target: str, message: str = "",
     model: str | None = None, settings: Settings | None = None,
@@ -2052,16 +2095,20 @@ async def launch_seat(
         # process already sitting there IS its body, whatever session id the harness gave it.
         # MUST be `launch_cwd`, never bare `office`: a tree-bound seat's live process sits at
         # tree_cwd, and matching on `office` alone would never find it, twinning on relaunch.
-        try:
-            roster = await agents_json(cwd=launch_cwd)
-        except (OSError, TimeoutError, ValueError):
-            roster = []
-        live = next((r for r in roster
-                    if isinstance(r, dict) and r.get("cwd") == launch_cwd), None)
-        if live is not None:
-            return {"status": "already-live", "window": live.get("name"), "seat": target_seat,
+        twin = await _launch_twin_check(pool, agents_json, launch_cwd)
+        if twin is not None:
+            seen_via = [s for s in (
+                f"claude agents --json ({twin['harness'].get('name')!r})"
+                if twin["harness"] else None,
+                f"agent_mounts ({twin['mounts']['agent_id']}, last_seen "
+                f"{twin['mounts']['last_seen']})" if twin["mounts"] else None,
+            ) if s]
+            return {"status": "already-live",
+                    "window": (twin["harness"] or {}).get("name"), "seat": target_seat,
                     "body_exists": True, "can_receive": True, "attach": attach,
-                    "detail": f"a live body already holds {handle} — not minting a twin"}
+                    "seen_via": seen_via,
+                    "detail": f"a live body already holds {handle} — not minting a twin "
+                              f"(seen via {', '.join(seen_via)})"}
 
         # THE RESUME LANE (this docstring's own "THE RESUME LANE" section explains the
         # policy; this is just the mechanism). Checked BEFORE minting fresh. `holder` (not
