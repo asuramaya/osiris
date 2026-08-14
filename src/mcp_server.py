@@ -979,7 +979,9 @@ async def graph_lint(stale_days: int = 14, check: str | None = None, limit: int 
     generation minted while a different door of its own lineage still pulsed), duplicate
     works_in (a currently-live agent carrying more than one simultaneously-live works_in
     edge — orient() resolves through exactly one, so a live lineage can hide its own
-    threads/decisions from itself).
+    threads/decisions from itself), peer-silent (an active peer_of pair with no direct
+    mail between either side's holders in `stale_days` — a mechanical proxy for the
+    peer-bond's fiduciary-disclosure duty, never proof a finding was withheld).
     Findings are TESTIMONY for a mind to judge, not verdicts to auto-apply; heal with
     compensating events, never DELETE (constitution 3).
 

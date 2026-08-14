@@ -732,3 +732,120 @@ async def test_lint_flags_a_parallel_life(actions: Actions) -> None:
     assert par[0]["severity"] == "warn"
     assert "a7e60257" in par[0]["detail"]                # names the live door
     assert "fold by hand" in par[0]["detail"]            # testimony, never a verdict
+
+
+async def test_lint_flags_a_silent_peer_pair(actions: Actions) -> None:
+    """PEER-SILENT (task #76 item 2, spec e6636c7e): an active peer_of pair with no DM
+    ever seen between either side's holders is flagged as a proxy for the fiduciary-
+    disclosure duty ("silence is a violation") — testimony, not proof a finding was
+    withheld."""
+    from src.orchestrator.seats import bind_holder, peer_seats
+
+    t = "agent:teller"
+    await actions.create_or_find_object("Seat", "seat:ps1aaaaa", t)
+    await actions.create_or_find_object("Seat", "seat:ps1bbbbb", t)
+    await bind_holder(actions, seat_id="seat:ps1aaaaa", agent_id="agent:ps1holda")
+    await bind_holder(actions, seat_id="seat:ps1bbbbb", agent_id="agent:ps1holdb")
+    await peer_seats(actions, "seat:ps1aaaaa", "seat:ps1bbbbb", because="the pairing",
+                     actor=t)
+
+    out = await _fn(actions, "lint", {"stale_days": 14})
+
+    silent = _by_check(out, "peer-silent")
+    assert [f["subject"] for f in silent] == ["seat:ps1aaaaa <-> seat:ps1bbbbb"]
+    assert silent[0]["severity"] == "warn"
+    assert "no direct mail" in silent[0]["detail"]
+    assert "the pairing" in silent[0]["detail"]
+
+
+async def test_lint_does_not_flag_a_peer_pair_that_talked_recently(
+    actions: Actions,
+) -> None:
+    """A DM between the two holders, inside the window, clears the pair — direct contact
+    is the signal this proxy actually measures."""
+    from src.orchestrator.seats import bind_holder, peer_seats
+
+    t = "agent:teller"
+    await actions.create_or_find_object("Seat", "seat:ps2aaaaa", t)
+    await actions.create_or_find_object("Seat", "seat:ps2bbbbb", t)
+    await bind_holder(actions, seat_id="seat:ps2aaaaa", agent_id="agent:ps2holda")
+    await bind_holder(actions, seat_id="seat:ps2bbbbb", agent_id="agent:ps2holdb")
+    await peer_seats(actions, "seat:ps2aaaaa", "seat:ps2bbbbb", because="the pairing",
+                     actor=t)
+    await actions.pool.execute(
+        "INSERT INTO fleet_messages (from_agent, to_agent, body, created_at) "
+        "VALUES ($1, $2, $3, now())", "agent:ps2holda", "agent:ps2holdb", "checking in")
+
+    out = await _fn(actions, "lint", {"stale_days": 14})
+
+    assert _by_check(out, "peer-silent") == []
+
+
+async def test_lint_flags_a_peer_pair_whose_only_contact_is_stale(actions: Actions) -> None:
+    """Contact that happened, but outside the window, still reads as silence right now —
+    `stale_days` is the same rolling-window law stale-obligation already applies."""
+    from src.orchestrator.seats import bind_holder, peer_seats
+
+    t = "agent:teller"
+    await actions.create_or_find_object("Seat", "seat:ps3aaaaa", t)
+    await actions.create_or_find_object("Seat", "seat:ps3bbbbb", t)
+    await bind_holder(actions, seat_id="seat:ps3aaaaa", agent_id="agent:ps3holda")
+    await bind_holder(actions, seat_id="seat:ps3bbbbb", agent_id="agent:ps3holdb")
+    await peer_seats(actions, "seat:ps3aaaaa", "seat:ps3bbbbb", because="the pairing",
+                     actor=t)
+    stale_at = datetime.now(UTC) - timedelta(days=30)
+    await actions.pool.execute(
+        "INSERT INTO fleet_messages (from_agent, to_agent, body, created_at) "
+        "VALUES ($1, $2, $3, $4)", "agent:ps3holda", "agent:ps3holdb", "long ago", stale_at)
+
+    out = await _fn(actions, "lint", {"stale_days": 14})
+
+    silent = _by_check(out, "peer-silent")
+    assert [f["subject"] for f in silent] == ["seat:ps3aaaaa <-> seat:ps3bbbbb"]
+    assert "last direct mail" in silent[0]["detail"]
+
+
+async def test_lint_peer_silent_counts_seat_addressed_mail_as_contact(
+    actions: Actions,
+) -> None:
+    """A DM addressed to the SEAT itself (`to_agent='seat:...'`, holds-resolved to
+    whichever generation is live) still counts as contact — it reaches the same peer
+    regardless of which generation happens to be holding at read time."""
+    from src.orchestrator.seats import bind_holder, peer_seats
+
+    t = "agent:teller"
+    await actions.create_or_find_object("Seat", "seat:ps4aaaaa", t)
+    await actions.create_or_find_object("Seat", "seat:ps4bbbbb", t)
+    await bind_holder(actions, seat_id="seat:ps4aaaaa", agent_id="agent:ps4holda")
+    await bind_holder(actions, seat_id="seat:ps4bbbbb", agent_id="agent:ps4holdb")
+    await peer_seats(actions, "seat:ps4aaaaa", "seat:ps4bbbbb", because="the pairing",
+                     actor=t)
+    await actions.pool.execute(
+        "INSERT INTO fleet_messages (from_agent, to_agent, body, created_at) "
+        "VALUES ($1, $2, $3, now())", "agent:ps4holda", "seat:ps4bbbbb", "checking in")
+
+    out = await _fn(actions, "lint", {"stale_days": 14})
+
+    assert _by_check(out, "peer-silent") == []
+
+
+async def test_lint_peer_silent_ignores_a_project_broadcast(actions: Actions) -> None:
+    """A broadcast (`to_agent` NULL, `to_project` set) is NOT counted as disclosure —
+    neither peer need have actually read it, so crediting it would hide real silence."""
+    from src.orchestrator.seats import bind_holder, peer_seats
+
+    t = "agent:teller"
+    await actions.create_or_find_object("Seat", "seat:ps5aaaaa", t)
+    await actions.create_or_find_object("Seat", "seat:ps5bbbbb", t)
+    await bind_holder(actions, seat_id="seat:ps5aaaaa", agent_id="agent:ps5holda")
+    await bind_holder(actions, seat_id="seat:ps5bbbbb", agent_id="agent:ps5holdb")
+    await peer_seats(actions, "seat:ps5aaaaa", "seat:ps5bbbbb", because="the pairing",
+                     actor=t)
+    await actions.pool.execute(
+        "INSERT INTO fleet_messages (from_agent, to_project, body, created_at) "
+        "VALUES ($1, $2, $3, now())", "agent:ps5holda", "osiris", "broadcast, not a DM")
+
+    out = await _fn(actions, "lint", {"stale_days": 14})
+
+    silent = _by_check(out, "peer-silent")
+    assert [f["subject"] for f in silent] == ["seat:ps5aaaaa <-> seat:ps5bbbbb"]
