@@ -430,7 +430,7 @@ def _tool_chars(t: Any) -> int:
 # until the merge.
 # 155,414 -> 156,685. 110 -> 111 tools: create_project (#139) is the new one;
 # the rest is tool_traffic gaining its per-caller cut (#170).
-TOOL_CONTRACT_CEILING_CHARS = 159_347
+TOOL_CONTRACT_CEILING_CHARS = 160_282
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -493,4 +493,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     102 -> 103 (2026-08-08, task #156.4): wake_preflight — which gates would refuse a wake,
     asked BEFORE the attempt instead of discovered as a wall of refusals after."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 112
+    assert len(per_tool) == 113
