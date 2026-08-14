@@ -923,6 +923,79 @@ async def test_roadmap_composition_resolved_is_pure_op_tree_group(actions: Actio
     assert res["items"]["retracted"] == {}  # nothing retracted — an empty group, not missing
 
 
+async def test_roadmap_open_section_shows_the_corrected_summary_by_default(
+    actions: Actions,
+) -> None:
+    """Roadmap ledger-rot stage 3.5 (Thoth LXXIV, DM 4364): "the reader must get the
+    corrected text by default... not the original with a footnote." open_thread_wall feeds
+    the OPEN section (roadmap AND orient's own wall, _fn_wall) — the corrected text must
+    win there without the caller asking for it."""
+    from src.orchestrator.capture import correct_thread_summary, open_thread
+    from src.orchestrator.compositions import ROADMAP
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:rmcorrect", "test")
+    await actions.assert_property(proj, "name", "rmcorrect", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    tid = await open_thread(actions, "six seats pinned to dead project names",
+                            repo="rmcorrect", arc="Fleet-Hygiene", owner="agent:x",
+                            source="agent:me")
+    await correct_thread_summary(
+        actions, str(tid), "almost entirely different population once re-measured")
+
+    await save_composition(actions.pool, "roadmap", ROADMAP)
+    res = await run_composition(actions.pool, "roadmap", proj)
+    open_data = res["items"]["open"]
+    rows = open_data["Fleet-Hygiene"]["agent:x"]
+    assert rows[0]["summary"] == "almost entirely different population once re-measured"
+    assert "six seats pinned to dead project names" not in str(open_data)
+
+
+async def test_roadmap_resolved_section_shows_the_corrected_summary_by_default(
+    actions: Actions,
+) -> None:
+    """Same law for the RESOLVED section — a different code path (_col_value's `table` op,
+    not open_thread_wall's raw SQL) must not disagree with the OPEN section on which text
+    is current."""
+    from src.orchestrator.capture import correct_thread_summary, open_thread, resolve_thread
+    from src.orchestrator.compositions import ROADMAP
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:rmcorrect2", "test")
+    await actions.assert_property(proj, "name", "rmcorrect2", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    tid = await open_thread(actions, "docs compile from the graph, live accretion",
+                            repo="rmcorrect2", arc="Token-Cost", owner="agent:builder",
+                            source="agent:me")
+    await correct_thread_summary(
+        actions, str(tid), "shipped from the static schema manifest, never live accretion")
+    await resolve_thread(actions, str(tid), because="done", source="agent:me")
+
+    await save_composition(actions.pool, "roadmap", ROADMAP)
+    res = await run_composition(actions.pool, "roadmap", proj)
+    resolved = res["items"]["resolved"]
+    row = list(resolved["Token-Cost"]["agent:builder"])[0]
+    assert row["summary"] == "shipped from the static schema manifest, never live accretion"
+
+
+async def test_fn_wall_orient_surface_shows_the_corrected_summary_by_default(
+    actions: Actions,
+) -> None:
+    """orient()'s own wall (`_fn_wall`, docstring: "exactly as orient renders it") reuses
+    open_thread_wall directly — proving the fix once at that shared function covers both
+    surfaces, not just roadmap's."""
+    from src.orchestrator.capture import correct_thread_summary, open_thread
+    from src.orchestrator.compositions import _fn_wall
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:rmwall", "test")
+    await actions.assert_property(proj, "name", "rmwall", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    tid = await open_thread(actions, "the pulse numbers disagree with the census",
+                            repo="rmwall", owner="agent:x", source="agent:me")
+    await correct_thread_summary(actions, str(tid), "the census undercounts, not the pulse")
+
+    out = await _fn_wall(actions.pool, proj, {})
+    assert out["wall"][0]["summary"] == "the census undercounts, not the pulse"
+
+
 # The end-to-end proof that a composition's own output fed chrome.py's render_composition
 # with no adapter RETIRED alongside it (task #96, second cut, 2026-07-30) — the shared
 # {kind,items} contract now runs solely through osiris.js's table()/renderResult, exercised
