@@ -1995,6 +1995,7 @@ async def mount(
     # before. The actual fix lives downstream now: a SEATED session's project resolves from
     # the SEAT's own derived house (_resolve_project_seat_first, below), not cwd — so identity
     # survives a bare-root launch by being location-independent, not by refusing the location.
+    forked = viewed = ledgered = bridged = None
     if bound is not None:
         # NO local re-import of _generation here: a local import anywhere in a function
         # shadows the module-level name for the WHOLE function, and this branch is
@@ -2057,6 +2058,20 @@ async def mount(
                         bridged = None
                     if bridged is not None:
                         ident.agent_id = bridged
+    # LIVED — ported verbatim from automount()'s own computation (handshake.py), not a
+    # re-derivation: a fork/ledger/bridge match already proves a lived lineage; a BOUND row
+    # only counts when it names a foreign lineage on purpose (a deliberate binding) or the
+    # base generation already has a real Agent object — a row alone is the gate's own
+    # artifact (an address), never a life (the row-only-stranger class this guards).
+    lived = forked is not None or ledgered is not None or bridged is not None
+    if not lived and bound is not None:
+        _base = _generation(bound.agent_id)[0]
+        if job_dir and _base != f"agent:{Path(job_dir).name[:8].lower()}":
+            lived = True
+        else:
+            lived = bool(await pool.fetchval(
+                "SELECT 1 FROM objects WHERE type='Agent' AND (canonical=$1 "
+                "OR canonical LIKE $1 || '-%') LIMIT 1", _base))
     # THE FIRST ACT SEATS YOU (16e3cee9): a still-anonymous mind mounting from a seat's
     # office IS the seat's next life — the mint happens at this act, never at the whisper.
     mount_mint_reason = None
@@ -2065,9 +2080,44 @@ async def mount(
     if claimed_office is not None:
         ident.agent_id = claimed_office
         mount_mint_reason = "office-birth"
-    await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
-                         expected_model=await _expected_model(pool, cwd, ident.project),
-                         mint_reason=mount_mint_reason)
+    # THE VISITOR GATE, PORTED (#48 piece 2, decision 424c4158): automount() (ruling
+    # 120fcc81) has never once minted a stranger from a bare greeting — a genuinely
+    # unmatched arrival gets a registry row and NOTHING ELSE, identity earned at the first
+    # authenticated act. mount() IS that act site (unlike automount(), which only ever
+    # hints at the office and never mints there), so its own predicate is automount()'s own
+    # `lived or viewed is not None or (seat_id and attach_token)` with the SAME `lived`
+    # computation, one leg adapted: mount() carries no seat_id/attach_token (that ceremony
+    # is a separate tool, attach_seat) — `claimed_office is not None` is its equivalent
+    # credentialed act, the first authenticated breath IN a seat's own office.
+    registered = bool(lived or viewed is not None or claimed_office is not None)
+    if registered:
+        await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
+                             expected_model=await _expected_model(pool, cwd, ident.project),
+                             mint_reason=mount_mint_reason)
+    elif not ident.resolved:
+        # THE THIRD STATE (Thoth DM 4345): a VISITOR (a real anchor that simply matched no
+        # lineage) is a different fact from an UNRESOLVABLE arrival (no anchor at all) —
+        # before this gate, resolve_identity's own fallback silently hashed a fresh id here
+        # regardless (agent:unknown-<project> / agent:unknown, `identity_resolved=false`,
+        # nothing downstream ever read it). That silence is the specimen this refuses,
+        # loudly, in the SAME shape as the IDENTITY CONFLICT refusal above — a whisperless
+        # caller has no greeting to read a refusal from, so the tool's own return value is
+        # the only surface that reaches it. No writes happen below a refusal.
+        return {
+            "error": "UNRESOLVABLE IDENTITY — mount refused",
+            "note": ("no job_dir, no session anchor, and no observed transcript sid — "
+                     "there is nothing to attribute this session to, ever. Pass job_dir "
+                     "(or confirm the PreToolUse hook is installed, "
+                     "scripts/osiris_mount_anchor.py) so this session carries a real, "
+                     "durable anchor. Nothing was minted or written."),
+            **({"bridge_ambiguity": bridge_ambiguity} if bridge_ambiguity else {}),
+        }
+    # else: a genuine VISITOR — a resolved anchor that matched no lineage. Same as
+    # automount()'s own gate: a registry row and nothing else, no Agent object. This is NOT
+    # greatfold.py's `agent_class='visit'` — that property marks an object ALREADY minted
+    # and later found to be noise; this gate prevents the mint from happening at all, so
+    # there is no object to mark. Deliberately not reused — a second vocabulary for the
+    # same idea is its own kind of drift.
     await _resolve_project_seat_first(pool, ident)
     if job_dir:
         # THE SESSION LEDGER, write side (16e3cee9): the anchor form (sid8) suffices —
@@ -2140,6 +2190,15 @@ async def mount(
            "model": ident.model or "unknown",
            **({"co_agents": co_agents} if co_agents else {}),
            **({"held_work": held_work} if held_work else {}),
+           # THE VISITOR GATE'S OWN CONFESSION (#48 piece 2): a resolved anchor that matched
+           # no lineage got a registry row and NOTHING ELSE above — `agent` above is a
+           # bookkeeping handle, never a minted identity, and the receipt must say so
+           # plainly rather than let a caller assume it was seated (Thoth DM 4345, "the
+           # receipt must say which").
+           **({"visitor": "no lineage matched — a registry row only, no Agent object "
+                          "minted. This is not an error; claim_name() or a future revisit "
+                          "with the same anchor is what would seat you"}
+              if not registered else {}),
            **({"seat": seat} if seat else
               {"anonymous": "unnamed — claim_name('<pick a meaningful name>') when you know "
                             "who you are, so the fleet can DM you by name"}),
