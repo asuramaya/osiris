@@ -1149,6 +1149,44 @@ async def _current_owner(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | None
     )
 
 
+async def _thread_named_properties(
+    pool: asyncpg.Pool, thread_id: uuid.UUID, names: tuple[str, ...],
+) -> dict[str, str]:
+    """The WINNING value of each named property on a thread, present only where one
+    exists — the read side discarded_on_noop() needs to compare against a caller's
+    supplied fields on open_thread's own dedup branch (decision beb046cfbdf9/42176e16)."""
+    rows = await pool.fetch(
+        "SELECT a.name, a.value #>> '{}' AS val FROM current_assertions a "
+        "WHERE a.object_id=$1 AND a.name = ANY($2::text[]) "
+        "ORDER BY a.confidence DESC, a.observed_at DESC", thread_id, list(names))
+    out: dict[str, str] = {}
+    for r in rows:
+        out.setdefault(r["name"], r["val"])  # first row per name is the winner (ORDER BY)
+    return out
+
+
+def discarded_on_noop(supplied: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
+    """THE WRITE-BOUNDARY COUNTERPART TO 60bc15db (decision beb046cfbdf9/42176e16): on an
+    idempotent/already-exists early return, which of the caller's OTHER supplied fields
+    would have changed the record had the write actually run? `supplied` is PRE-FILTERED
+    to the fields the caller actually passed (never a default-means-unset sentinel like
+    None); this returns the subset whose value differs from — or is simply absent in —
+    `existing`. Empty when every supplied field already matches (a genuine no-op, no
+    warning earned) or when the caller supplied nothing beyond the identity key.
+
+    ONE RULE for every early-return write path in this house, not a second hand-rolled
+    diff invented per module — the two known specimens (open_thread's `deduped: true`
+    silently dropping arc/kind/owner/branch/files_touched; write_pin_additions'
+    `written: False` unable to say whether a skipped key's value actually matched what
+    was proposed) are the SAME defect in two modules, and fixing them independently is
+    exactly how this fleet ended up with two disagreeing liveness authorities days
+    earlier (decision 59b3092c) — a lesson this rule exists to not repeat a third time.
+    NEVER a refusal (577988ed): the caller still gets the existing record; this only
+    names what of their own argument was thrown away, so they can act on knowing rather
+    than discover it later by re-counting the population by hand."""
+    return {k: v for k, v in supplied.items() if existing.get(k) != v}
+
+
 async def _thread_resolved_in(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | None:
     """Whether a thread was ALREADY resolved before the current call — `resolved_in` is
     stamped both by `resolve_thread` itself and by record_decision's own `resolves=`

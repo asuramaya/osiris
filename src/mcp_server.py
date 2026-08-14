@@ -5294,17 +5294,38 @@ async def open_thread(
     if dup is not None:
         out: dict[str, Any] = {"id": str(dup), "summary": summary, "status": "open",
                                "deduped": "true"}
+        # THE WRITE-BOUNDARY HONESTY RULE (decision beb046cfbdf9/42176e16): a dedup hit
+        # returns here, before kind/arc/etc. are ever applied — 17 threads once got a
+        # clean-looking receipt while nothing landed (Sekhmet, decision d310fee2).
+        # capture.discarded_on_noop names which of THESE two supplied fields would have
+        # changed the existing thread; owner/assignee keeps its own bespoke lease-
+        # visibility note below (a sharper message than a generic diff would give it).
+        # branch/files_touched/resolves are not yet wired into this check — a named gap,
+        # not a silent one; see the function's own docstring.
+        supplied = {k: v for k, v in {"kind": kind, "arc": arc}.items() if v is not None}
+        if supplied:
+            existing_vals = await capture._thread_named_properties(pool, dup, tuple(supplied))
+            discarded = capture.discarded_on_noop(supplied, existing_vals)
+            if discarded:
+                out["discarded"] = discarded
+                out["note"] = (
+                    f"matched an existing thread — {', '.join(sorted(discarded))} you "
+                    "passed here were NOT applied (open_thread never updates an existing "
+                    "thread on a dedup hit). Use reclassify_thread to change arc after "
+                    "the fact."
+                )
         if assignee:
             holder = await capture._current_owner(pool, dup)
             claim = assignee.strip()
             out["leased_to"] = holder or "(unowned)"
-            out["note"] = (
+            lease_note = (
                 f"already leased to {holder} (thread {str(dup)[:8]}) — no new build minted"
                 if holder == claim else
                 f"existing lease on thread {str(dup)[:8]} is held by "
                 f"{holder or '(unowned)'!r}, not {claim!r} — surfaced instead of minting a "
                 "parallel build (a double-assignment must be visible, not silent)"
             )
+            out["note"] = f"{out['note']} {lease_note}" if out.get("note") else lease_note
         return out
     # resolve BEFORE recording, same discipline record_decision's own resolves= uses — for
     # RECEIPT purposes only (what a caller sees closed in the SAME turn); the actual write

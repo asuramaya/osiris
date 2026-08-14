@@ -3238,6 +3238,57 @@ async def test_open_thread_same_assignee_near_dup_surfaces_the_existing_lease(
     assert n == 1
 
 
+async def test_open_thread_dedup_names_a_discarded_arc(actions: Actions) -> None:
+    """The write-boundary honesty rule (decision beb046cfbdf9/42176e16): a dedup hit that
+    silently dropped a caller's `arc` used to look identical to a genuine no-op — 17
+    threads once got a clean-looking `deduped: true` while nothing landed (Sekhmet,
+    decision d310fee2). A dedup hit whose `arc` differs from the existing thread's own
+    now names it in the receipt, and never applies it (open_thread never updates on a
+    dedup hit — that stays reclassify_thread's job)."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        first = await srv.open_thread(
+            "wire the composed watcher into the meter", repo="discardproj")
+        second = await srv.open_thread(
+            "Wire the composed watcher into the meter.", repo="discardproj",
+            arc="Fleet-Hygiene")
+    finally:
+        srv._pool = saved_pool
+    assert second["id"] == first["id"] and second["deduped"] == "true"
+    assert second["discarded"] == {"arc": "Fleet-Hygiene"}
+    assert "arc" in second["note"] and "NOT applied" in second["note"]
+    stored = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "WHERE a.object_id=$1 AND a.name='arc' LIMIT 1", uuid.UUID(first["id"]))
+    assert stored is None  # never applied — the receipt names it, it does not fix it
+
+
+async def test_open_thread_dedup_is_silent_when_the_repeat_matches_exactly(
+    actions: Actions,
+) -> None:
+    """A caller who repeats the SAME kind/arc a dedup hit already carries gets no warning
+    — a genuine no-op earns no note, only a real mismatch does (577988ed: never a
+    refusal, and never noise where nothing was actually lost)."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        first = await srv.open_thread(
+            "the exact-repeat no-op case", repo="noopproj", kind="obligation",
+            arc="Fleet-Hygiene")
+        second = await srv.open_thread(
+            "The exact-repeat no-op case.", repo="noopproj", kind="obligation",
+            arc="Fleet-Hygiene")
+    finally:
+        srv._pool = saved_pool
+    assert second["id"] == first["id"] and second["deduped"] == "true"
+    assert "discarded" not in second
+
+
 async def test_open_thread_different_assignee_near_dup_surfaces_the_holder(
     actions: Actions,
 ) -> None:
