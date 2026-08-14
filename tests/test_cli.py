@@ -356,6 +356,35 @@ async def test_cmd_launch_harness_returns_the_existing_body_instead_of_twinning(
     assert out == 0
 
 
+async def test_cmd_launch_harness_catches_a_resumed_body_the_harness_roster_cannot_see(
+    actions: Actions,
+) -> None:
+    """Task #148's contested seam 4, the CLI's own copy of the same shared bug: `claude
+    agents --json` is invisible to a resumed (`-p --resume`) body by construction, so an
+    EMPTY harness roster used to mean "safe to mint" even with a genuinely live resumed
+    session at this exact cwd, reachable only via agent_mounts. Shares launch_seat's own
+    _launch_twin_check now (ruling 983ec87a, two doors one receipt) — never a second,
+    differently-shaped guard on the same class."""
+    from src.orchestrator.mounts import save_mount
+
+    await ensure_seat(actions, house="osiris", handle="resumed-cli",
+                      anchor_cwd="/home/x/.osiris/seats/resumed-cli", source="test")
+    await save_mount(actions.pool, job_dir="/tmp/jobs/resumed-cli-job",
+                     agent_id="agent:resumed-cli-body", project="p",
+                     cwd="/home/x/.osiris/seats/resumed-cli", model=None, session_key=None)
+
+    async def _spawn(*a: Any, **k: Any) -> None:
+        raise AssertionError("should never be called — a resumed body already holds this "
+                             "seat, invisible to the harness roster alone")
+
+    async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        return []  # the harness roster sees NOTHING here — that used to mean "mint fresh"
+
+    out = await cmd_launch("resumed-cli", model=None, pool=actions.pool,
+                           spawn=_spawn, agents_json=_agents_json)
+    assert out == 0
+
+
 async def test_cmd_launch_harness_spawns_and_confirms(actions: Actions) -> None:
     """The full honest path: no live body yet, `claude --bg` fires with the mount+claim_name
     boot prompt, then a bounded poll confirms the body shows up in `claude agents --json` —

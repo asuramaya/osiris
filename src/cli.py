@@ -543,6 +543,7 @@ async def _cmd_launch_harness(
     from src.orchestrator.trigger import (
         _DM_RESUME_PROMPT,
         _bg_boot_prompt,
+        _launch_twin_check,
         _lineage_resume_candidate,
         _resume_guard,
         _tree_exists,
@@ -563,16 +564,21 @@ async def _cmd_launch_harness(
             return 1
         launch_cwd = tree_cwd
 
-    try:
-        roster = await agents_json(cwd=launch_cwd)
-    except (OSError, TimeoutError, ValueError):
-        roster = []
-    live = next((r for r in roster if isinstance(r, dict) and r.get("cwd") == launch_cwd),
-               None)
-    if live is not None:
-        live_name = live.get("name")
-        print(f"osiris launch: a live body already holds {handle!r} — not minting a twin. "
-              f"Find it in `claude agents` as {live_name!r}.")
+    # THE SHARED TWIN GUARD (task #148's contested seam 4, ruling 983ec87a "two doors, one
+    # receipt"): reads BOTH claude agents --json (the harness's own, known-incomplete roster
+    # — invisible to a resumed non-bg body by construction) AND agent_mounts (osiris's own
+    # registry, which a resumed body's mid-turn mount() call DOES reach), same helper
+    # launch_seat's own harness-native lane calls, so the two doors can never drift.
+    twin = await _launch_twin_check(pool, agents_json, launch_cwd)
+    if twin is not None:
+        seen_via = [s for s in (
+            f"claude agents --json ({twin['harness'].get('name')!r})"
+            if twin["harness"] else None,
+            f"agent_mounts ({twin['mounts']['agent_id']}, last_seen "
+            f"{twin['mounts']['last_seen']})" if twin["mounts"] else None,
+        ) if s]
+        print(f"osiris launch: a live body already holds {handle!r} — not minting a twin "
+              f"(seen via {', '.join(seen_via)}).")
         return 0
 
     resolved_model = resolve_model(model, facts["intended_model"], wake_default)

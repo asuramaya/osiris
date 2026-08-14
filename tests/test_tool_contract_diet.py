@@ -5,6 +5,12 @@ tools, names 1,109 + descriptions ~85,988 + inputSchemas ~32,130 chars ~= 119,22
 (~30k tokens). Same mechanism as #125's frozen tool-list index: too big to ship eagerly ->
 deferred -> stale cache. Every char cut here is pressure off the thing that freezes.
 
+QUALIFIED FOR THIS FLEET (decision 94b85709, task #148's harness-boundary survey): the
+eager-boot premise above is no longer true FOR US — every worker in this fleet defers tool
+resolution and pays via ToolSearch instead, so the connect-time cost this ratchet was built
+to police doesn't land on our own clients. The ceiling stays armed for a non-Claude-Code
+client that might still boot eagerly, not for this fleet's own connections.
+
 THE MEASUREMENT IS THE LIVE, IN-PROCESS TOOL REGISTRATION, NOT A DOCSTRING GREP: `t.name` /
 `t.description` / `t.inputSchema` / `t.outputSchema` come from `mcp.list_tools()` on the
 actual FastMCP server object this module builds (json.dumps on the two schema dicts because

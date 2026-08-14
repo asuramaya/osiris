@@ -3256,6 +3256,35 @@ async def test_launch_harness_lane_is_idempotent_returns_the_live_body_not_a_twi
     assert spawned == []  # NO twin spawned
 
 
+async def test_launch_harness_lane_catches_a_resumed_body_the_harness_roster_cannot_see(
+    actions: Actions,
+) -> None:
+    """Task #148's contested seam 4: `claude agents --json` is invisible to a resumed
+    (`-p --resume`) body BY CONSTRUCTION — an EMPTY harness roster used to mean "safe to
+    mint," even when a resumed session is genuinely live at this exact cwd, reachable only
+    through agent_mounts (its own mid-turn mount() call lands there, never in the harness's
+    `--bg`-only roster). The shared twin guard now reads BOTH and refuses on either,
+    naming agent_mounts by name in the receipt so the refusal is never mistaken for the
+    harness-roster case."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:hw03", manager_agent="agent:hm03",
+        worker_handle="Sobek-Resumed", house="osiris")
+    await _office(actions, worker_seat, "/tmp/sobek-resumed")
+    await save_mount(actions.pool, job_dir="/tmp/jobs/sobek-resumed-job",
+                     agent_id="agent:hw03", project="p", cwd="/tmp/sobek-resumed",
+                     model=None, session_key=None)
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm03", target=worker_seat,
+        spawn=_fake_spawn(spawned),
+        agents_json=_fake_agents_json([[]]))  # the harness roster sees NOTHING here
+
+    assert d["status"] == "already-live"
+    assert spawned == []  # NO twin spawned, even though the harness roster was empty
+    assert any("agent_mounts" in s for s in d["seen_via"])
+    assert d["window"] is None  # nothing to name from the (empty) harness roster
+
+
 async def test_launch_harness_lane_confesses_dormant_history_before_spawn(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
