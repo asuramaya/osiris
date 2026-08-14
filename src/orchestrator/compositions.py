@@ -1352,7 +1352,10 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     none), PEER-SILENT (warn: an active peer_of pair with no direct mail between either
     side's holders in `stale_days` — a mechanical proxy for v1's fiduciary-disclosure duty,
     task #76 item 2, spec e6636c7e; testimony that a pair has gone quiet, never proof a
-    finding was actually withheld).
+    finding was actually withheld), HELD-PAST-DEADLINE (warn: a hold_action() thread still
+    open past its own time-box — task #76 item 4b, the mutual HOLD's auto-escalation half
+    built as a lint check rather than a new daemon; testimony a mind takes to the
+    operator's desk, never lint's own push).
 
     `check`/`limit`/`offset` (task #74, thread 12a210ab leg 1): every check hard-caps its
     LISTED findings at `_LINT_CAP` (50) regardless — the reap needed the full 19
@@ -1916,6 +1919,51 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                      "withheld a finding — testimony for a mind to judge, same as every "
                      "other check here"}
         for r in peer_silence])
+
+    # HELD-PAST-DEADLINE — task #76 item 4b (spec e6636c7e, decision e85d3040): the mutual
+    # HOLD's auto-escalation-to-the-operator half, built as a LINT check rather than a new
+    # daemon (Thoth's ruling, matching the operator's own #169 precedent — match the
+    # instrument to the base rate; a periodic read over durable state is exactly graph_lint's
+    # own shape, and this reuses the SAME function item 2 just extended, no new machinery).
+    # A hold_action() thread (severity='hold') still open past its own hold_deadline is
+    # flagged — this is testimony ONLY, same as every other check: the actual push-to-the-
+    # operator act stays a mind's (or a later caller's) own move, never lint's.
+    held_past_deadline = await pool.fetch(
+        "SELECT o.id, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='hold_holder' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   LIMIT 1) AS holder, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='hold_held' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   LIMIT 1) AS held, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='hold_act' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   LIMIT 1) AS act, "
+        " (SELECT (a.value #>> '{}')::timestamptz FROM current_assertions a "
+        "   WHERE a.object_id=o.id AND a.name='hold_deadline' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS deadline "
+        "FROM objects o "
+        "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
+        "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "    AND a.name='severity' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "    = 'hold' "
+        "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "    AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "    = 'open' "
+        "  AND (SELECT (a.value #>> '{}')::timestamptz FROM current_assertions a "
+        "    WHERE a.object_id=o.id AND a.name='hold_deadline' "
+        "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) < now() "
+        "ORDER BY (SELECT (a.value #>> '{}')::timestamptz FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='hold_deadline' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) ASC")
+    land("held-past-deadline", "warn", [
+        {"subject": f"{r['holder']} holding {r['held']}'s act ({r['act']})",
+         "detail": f"time-boxed hold expired {r['deadline'].isoformat()} with no "
+                   "resolve_thread call yet — the spec's auto-escalation-to-the-operator "
+                   "half, unbuilt as a push, surfaces here instead: this is where a mind "
+                   "(or a future caller reading this check) takes it to the operator's "
+                   "desk, not lint's own act"}
+        for r in held_past_deadline])
 
     findings.sort(key=lambda f: (_SEVERITY_RANK.get(str(f["severity"]), 9), str(f["check"])))
     if check_filter is not None:
