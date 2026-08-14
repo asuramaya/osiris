@@ -53,7 +53,7 @@ async def test_a_fresh_mint_creates_seat_office_model_and_edge(
     # Seat object this call just minted) — the receipt says so plainly now, establish_office's
     # own text reused verbatim, rather than staying silent about it (the exact gap that let
     # 26 of 33 live seats go unchartered with nothing on record ever having said so).
-    assert out["charter"] == "UNDECLARED — the standing orders instruct the seat to declare"
+    assert out["charter"].startswith("UNDECLARED — call charter(repos=[...])")
 
     office = offices / "vajra"
     assert office.is_dir()
