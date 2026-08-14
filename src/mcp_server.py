@@ -981,7 +981,9 @@ async def graph_lint(stale_days: int = 14, check: str | None = None, limit: int 
     edge — orient() resolves through exactly one, so a live lineage can hide its own
     threads/decisions from itself), peer-silent (an active peer_of pair with no direct
     mail between either side's holders in `stale_days` — a mechanical proxy for the
-    peer-bond's fiduciary-disclosure duty, never proof a finding was withheld).
+    peer-bond's fiduciary-disclosure duty, never proof a finding was withheld),
+    held-past-deadline (a mutual HOLD still open past its own time-box — the auto-
+    escalation half, surfaced here rather than a new daemon).
     Findings are TESTIMONY for a mind to judge, not verdicts to auto-apply; heal with
     compensating events, never DELETE (constitution 3).
 

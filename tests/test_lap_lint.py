@@ -849,3 +849,83 @@ async def test_lint_peer_silent_ignores_a_project_broadcast(actions: Actions) ->
 
     silent = _by_check(out, "peer-silent")
     assert [f["subject"] for f in silent] == ["seat:ps5aaaaa <-> seat:ps5bbbbb"]
+
+
+async def _hold_thread(
+    actions: Actions, *, holder: str, held: str, act: str, deadline: datetime,
+) -> str:
+    """Mirrors hold_action()'s own written shape by hand — this branch predates item 4a's
+    merge, so there's no hold_action() import to reuse; the lint check only ever reads the
+    property names, never the verb that wrote them."""
+    from src.orchestrator.capture import open_thread
+
+    t = await open_thread(actions, f"HOLD by {holder} on {held}'s act ({act}): test",
+                          kind="obligation", owner=held, severity="hold", source="test")
+    for name, value in (
+        ("hold_holder", holder), ("hold_held", held), ("hold_act", act),
+        ("hold_because", "test"), ("hold_deadline", deadline.isoformat()),
+    ):
+        await actions.assert_property(t, name, value, "test", NOW, 0.9, evidence_class=_SD)
+    return str(t)
+
+
+async def test_lint_flags_a_hold_past_its_deadline(actions: Actions) -> None:
+    """HELD-PAST-DEADLINE (task #76 item 4b): a mutual HOLD's time-box, expired, with no
+    resolve_thread call yet — the spec's auto-escalation half, surfaced as testimony
+    rather than pushed anywhere, matching Thoth's own ruling (lint, not a daemon)."""
+    past = NOW - timedelta(hours=1)
+    await _hold_thread(actions, holder="seat:hp1aaaaa", held="seat:hp1bbbbb",
+                       act="deleting the shared checkout", deadline=past)
+
+    out = await _fn(actions, "lint", {})
+
+    held = _by_check(out, "held-past-deadline")
+    assert [f["subject"] for f in held] == [
+        "seat:hp1aaaaa holding seat:hp1bbbbb's act (deleting the shared checkout)"]
+    assert held[0]["severity"] == "warn"
+    assert past.isoformat() in held[0]["detail"]
+
+
+async def test_lint_does_not_flag_a_hold_still_inside_its_window(actions: Actions) -> None:
+    # NOW is a fixed HISTORICAL fake date (this file's own convention) — the deadline
+    # comparison is against the database's real `now()`, so "still inside its window"
+    # needs a genuinely future wall-clock timestamp, not NOW + an offset.
+    future = datetime.now(UTC) + timedelta(hours=1)
+    await _hold_thread(actions, holder="seat:hp2aaaaa", held="seat:hp2bbbbb", act="test",
+                       deadline=future)
+
+    out = await _fn(actions, "lint", {})
+
+    assert _by_check(out, "held-past-deadline") == []
+
+
+async def test_lint_does_not_flag_a_resolved_hold_past_its_deadline(
+    actions: Actions,
+) -> None:
+    """Resolved is not held — the same law every other obligation follows."""
+    from src.orchestrator.capture import resolve_thread
+
+    past = NOW - timedelta(hours=1)
+    tid = await _hold_thread(actions, holder="seat:hp3aaaaa", held="seat:hp3bbbbb",
+                             act="test", deadline=past)
+    await resolve_thread(actions, tid, because="respected the hold", source="test")
+
+    out = await _fn(actions, "lint", {})
+
+    assert _by_check(out, "held-past-deadline") == []
+
+
+async def test_lint_does_not_flag_an_ordinary_obligation_with_no_severity(
+    actions: Actions,
+) -> None:
+    """An obligation with no `severity='hold'` at all is a different check's business
+    (stale-obligation) — this one is scoped to holds specifically, never every open
+    thread."""
+    from src.orchestrator.capture import open_thread
+
+    await open_thread(actions, "an ordinary obligation, unrelated to any hold",
+                      kind="obligation", owner="seat:hp4aaaaa", source="test")
+
+    out = await _fn(actions, "lint", {})
+
+    assert _by_check(out, "held-past-deadline") == []
