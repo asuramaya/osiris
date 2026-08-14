@@ -12,6 +12,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from src.actions.core import Actions
 from src.orchestrator.lineage import (
     register_swarm,
@@ -124,6 +125,40 @@ async def test_register_swarm_is_idempotent(actions: Actions, tmp_path: Path) ->
         "AND canonical IN ('agent:child01','agent:gc000002')") == 2
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE type='spawned_by'") == 2
+
+
+async def test_register_swarm_refuses_a_malformed_project_but_still_registers_the_child(
+    actions: Actions, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#139's dispatch, thread db14d8be: register_swarm was register_spawn's unremediated
+    sibling — same disk-scanned, unsanitized `project` signal, same #162-class risk, but
+    commit b690393 only touched register_spawn. Fixed with register_spawn's OWN pattern,
+    matched exactly (task #107's `_validate_repo_name`, a confession via _log.warning
+    rather than a silent skip). A session dir whose cwd-derived project segment contains a
+    space (harness-encoded `-home-x-code-my project`) is malformed by #107's rule — the
+    child registration and its `project` property must still land; only the SoftwareProject
+    mint and works_in edge are refused, aloud."""
+    session = tmp_path / "-home-x-code-my project" / "abc12345-5985-491e-9ac2-af94587b18ac"
+    subs = session / "subagents"
+    subs.mkdir(parents=True)
+    (subs / "agent-child01.meta.json").write_text(json.dumps(
+        {"agentType": "general-purpose", "description": "the child probe",
+         "toolUseId": "tu-child", "spawnDepth": 1}))
+    (subs / "agent-child01.jsonl").write_text(_assistant("claude-sonnet-5") + "\n")
+    with caplog.at_level("WARNING"):
+        counts = await register_swarm(actions, session)
+    assert counts["agents"] == 1
+    assert await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='agent:child01' AND a.name='project'") == "my project"
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='SoftwareProject' AND "
+        "canonical='repo:my project'") is None
+    edges = await actions.pool.fetch(
+        "SELECT l.type FROM links l JOIN objects c ON c.id=l.from_id WHERE c.canonical=$1",
+        "agent:child01")
+    assert "works_in" not in {r["type"] for r in edges}
+    assert any("refusing to mint" in r.message for r in caplog.records)
 
 
 async def test_sense_swarms_walks_every_session(actions: Actions, tmp_path: Path) -> None:

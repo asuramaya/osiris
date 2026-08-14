@@ -561,3 +561,59 @@ async def unfork_project(
     await actions.invalidate_link(link["from_id"], link["to_id"], "forked_from", actor, now)
     return {"unforked": proj_row["canonical"], "was_into": into_row["canonical"],
            "because": because}
+
+
+# --- create_project (#139's CREATE half, task #163's arc) --------------------------------
+
+async def create_project(
+    actions: Actions, *, name: str, because: str, actor: str,
+) -> dict[str, Any]:
+    """Declare a NEW SoftwareProject — the deliberate, user-facing CREATE door #139 asked
+    for, built NOT AS A SEVENTH MINT DOOR (Thoth's explicit ruling) but as a thin wrapper
+    over the two guards this house already built and re-validated at the merge point
+    today: task #107's validated choke point (`_validate_repo_name`/`_resolve_repo`,
+    capture.py, reused verbatim — refuses a path-shaped or malformed `name` before any
+    object is touched) LAYERED WITH task #137's case-insensitive de-dup (the
+    ramstein/RAMstein twin is the live proof shape-validation alone doesn't catch a case
+    collision — #107 validates SHAPE, #137 prevents CASE-COLLISION twins, complementary,
+    not redundant).
+
+    Refuses LOUDLY on: a blank `because` (the same mandatory-testimony discipline
+    rename_project/fork_project/unfork_project already hold — creating a project is
+    testimony too) or a malformed/path-shaped `name`.
+
+    NEVER MINTS A TWIN: if `name` already resolves — by exact canonical or `name`-property
+    match (`_resolve_repo`) OR a case-insensitive canonical match (task #137's own layer)
+    — the EXISTING object is returned, `created=False`, never a fresh mint. A genuinely
+    new name (zero matches either way) mints fresh and stamps `because` as founding
+    testimony, same as `_mint_or_find_repo`'s own name-property assert."""
+    from src.orchestrator.capture import _resolve_repo, _validate_repo_name
+
+    because = (because or "").strip()
+    if not because:
+        return {"error": "because is required — creating a project is a deliberate act "
+                         "on the record"}
+    raw = (name or "").strip()
+    stripped = raw.removeprefix("repo:").strip()
+    try:
+        _validate_repo_name(stripped, raw)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    existing = await _resolve_repo(actions.pool, stripped)
+    if existing is None:
+        twins = await actions.pool.fetch(
+            "SELECT id FROM objects WHERE type='SoftwareProject' AND status='active' "
+            "AND lower(canonical) = lower($1)", f"repo:{stripped}")
+        if len(twins) == 1:
+            existing = twins[0]["id"]
+    if existing is not None:
+        row = await actions.pool.fetchrow("SELECT canonical FROM objects WHERE id=$1",
+                                          existing)
+        return {"canonical": row["canonical"], "created": False,
+                "note": "already exists — reused, never minted as a twin"}
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", f"repo:{stripped}", actor)
+    await actions.assert_property(proj, "name", stripped, actor, now, _CONF,
+                                  evidence_class=_EC)
+    row = await actions.pool.fetchrow("SELECT canonical FROM objects WHERE id=$1", proj)
+    return {"canonical": row["canonical"], "created": True, "because": because}

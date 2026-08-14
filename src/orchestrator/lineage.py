@@ -267,9 +267,27 @@ async def register_swarm(
             await prop("model_swapped", swap_marker(v))  # DIRECT_OBSERVATION, like source_model
         if s.project:
             await prop("project", s.project)
-            proj = await actions.create_or_find_object(
-                "SoftwareProject", f"repo:{s.project}", _SOURCE)
-            await _link_once(actions, a, proj, "works_in", now)
+            # task #107's choke point (capture.py), reused verbatim rather than re-
+            # validated here (thread db14d8be, #162's own sibling: this door was found
+            # alongside register_spawn but left unremediated; #139's dispatch closes it
+            # with register_spawn's OWN pattern, matched exactly rather than reinvented).
+            # A malformed s.project (a raw cwd, a placeholder) still stamps the agent's
+            # own project property above — a claim about the caller, harmless as text —
+            # but mints no phantom SoftwareProject.
+            from src.orchestrator.capture import _validate_repo_name
+            try:
+                _validate_repo_name(s.project, s.project)
+            except ValueError as exc:
+                # CONFESSION, NOT SILENT REFUSAL (Thoth's ruling, msg 4023, the 60bc15db
+                # shape): a skip that says nothing is indistinguishable from a clean pass.
+                # register_swarm returns only aggregate counts, so there is no receipt
+                # field to carry this on — a warning is the honest surface until one exists.
+                _log.warning("register_swarm(%s): refusing to mint a SoftwareProject from "
+                            "project=%r — %s", s.agent_id, s.project, exc)
+            else:
+                proj = await actions.create_or_find_object(
+                    "SoftwareProject", f"repo:{s.project}", _SOURCE)
+                await _link_once(actions, a, proj, "works_in", now)
         # delegation: child → its DIRECT parent (a sibling sub-agent, or the root agent)
         parent = await actions.create_or_find_object("Agent", parents[s.agent_id], _SOURCE)
         if await _link_once(actions, a, parent, "spawned_by", now):

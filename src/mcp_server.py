@@ -3887,6 +3887,25 @@ async def unfork_project(project: str, fork_into: str, because: str,
 
 
 @mcp.tool()
+async def create_project(name: str, because: str, ctx: Context | None = None) -> dict[str, Any]:
+    """Declare a NEW SoftwareProject (#139's create half) — layers task #107's name-shape
+    validation with task #137's case-insensitive de-dup, never a fresh, unguarded mint
+    (this was deliberately NOT built as a seventh mint door). If `name` already resolves
+    (exact match or a case-insensitive canonical twin, the ramstein/RAMstein shape) the
+    EXISTING object is returned, `created=False` — never a duplicate.
+
+    Refuses LOUDLY on: a blank `because` (creating a project is testimony, same as
+    rename_project/fork_project) or a path-shaped/malformed `name`."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — creating a project is a deliberate act on the "
+                         "record", "why": _anchorless(ctx)}
+    from src.orchestrator.project_identity import create_project as _create_project
+    return await _create_project(Actions(await _pool_get()), name=name, because=because,
+                                 actor=ident.agent_id)
+
+
+@mcp.tool()
 async def assert_project_property(project: str, name: str, value: str,
                                   ctx: Context | None = None) -> dict[str, Any]:
     """The sanctioned write for a SINGLE project-scoped property (task #74) — closes the
