@@ -81,6 +81,27 @@ async def _seat_lock(pool: asyncpg.Pool, house: str, handle: str) -> AsyncIterat
             await conn.execute("SELECT pg_advisory_unlock(hashtext($1))", key)
 
 
+@asynccontextmanager
+async def _peer_lock(pool: asyncpg.Pool, *canonicals: str) -> AsyncIterator[None]:
+    """Serialize peer_seats per seat — the same advisory-lock discipline as _seat_lock
+    (task #76 item 1): peer_seats' own "already has a peer" check and its create_link are
+    two round-trips with no lock between them, so two concurrent peer_seats calls sharing a
+    seat could both pass the check and each mint an edge, leaving that seat with two active
+    peer_of bonds — exactly the chain v1's design (this file's own peer_seats docstring)
+    says never happens. Locks EVERY seat named, in SORTED order, so overlapping pairs — a
+    peer_seats(A, B) racing a peer_seats(B, C) — always acquire their shared seat (B) in the
+    same order and never deadlock against each other."""
+    keys = sorted({f"peer:{c}" for c in canonicals})
+    async with pool.acquire() as conn:
+        for key in keys:
+            await conn.execute("SELECT pg_advisory_lock(hashtext($1))", key)
+        try:
+            yield
+        finally:
+            for key in reversed(keys):
+                await conn.execute("SELECT pg_advisory_unlock(hashtext($1))", key)
+
+
 async def find_seat(pool: asyncpg.Pool, *, house: str | None, handle: str) -> str | None:
     """The existing Seat object for (house, handle), by WINNING assertions — the same
     predicate style seat_holders uses, so the roster and the mint see one truth."""
@@ -2260,30 +2281,33 @@ async def peer_seats(
     if not because:
         return {"error": "because is required — peering two seats is a deliberate act on "
                          "the record"}
-    row_a = await actions.pool.fetchrow(
-        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
-        "AND status='active'", (seat_a or "").strip())
-    if row_a is None:
-        return {"error": f"no such active seat: {seat_a!r}"}
-    row_b = await actions.pool.fetchrow(
-        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
-        "AND status='active'", (seat_b or "").strip())
-    if row_b is None:
-        return {"error": f"no such active seat: {seat_b!r}"}
-    if row_a["id"] == row_b["id"]:
-        return {"error": f"{row_a['canonical']} cannot be peered with itself"}
-    existing_a = await _active_peer(actions.pool, row_a["id"])
-    if existing_a is not None:
-        return {"error": f"{row_a['canonical']} already has a peer "
-                         f"({existing_a['peer']}) — v1 is pairs only, no chains"}
-    existing_b = await _active_peer(actions.pool, row_b["id"])
-    if existing_b is not None:
-        return {"error": f"{row_b['canonical']} already has a peer "
-                         f"({existing_b['peer']}) — v1 is pairs only, no chains"}
-    now = datetime.now(UTC)
-    await actions.create_link(row_a["id"], row_b["id"], "peer_of", actor, now, _CONF,
-                              properties={"because": because}, evidence_class=_EC)
-    return {"peered": [row_a["canonical"], row_b["canonical"]], "because": because}
+    seat_a = (seat_a or "").strip()
+    seat_b = (seat_b or "").strip()
+    async with _peer_lock(actions.pool, seat_a, seat_b):
+        row_a = await actions.pool.fetchrow(
+            "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
+            "AND status='active'", seat_a)
+        if row_a is None:
+            return {"error": f"no such active seat: {seat_a!r}"}
+        row_b = await actions.pool.fetchrow(
+            "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
+            "AND status='active'", seat_b)
+        if row_b is None:
+            return {"error": f"no such active seat: {seat_b!r}"}
+        if row_a["id"] == row_b["id"]:
+            return {"error": f"{row_a['canonical']} cannot be peered with itself"}
+        existing_a = await _active_peer(actions.pool, row_a["id"])
+        if existing_a is not None:
+            return {"error": f"{row_a['canonical']} already has a peer "
+                             f"({existing_a['peer']}) — v1 is pairs only, no chains"}
+        existing_b = await _active_peer(actions.pool, row_b["id"])
+        if existing_b is not None:
+            return {"error": f"{row_b['canonical']} already has a peer "
+                             f"({existing_b['peer']}) — v1 is pairs only, no chains"}
+        now = datetime.now(UTC)
+        await actions.create_link(row_a["id"], row_b["id"], "peer_of", actor, now, _CONF,
+                                  properties={"because": because}, evidence_class=_EC)
+        return {"peered": [row_a["canonical"], row_b["canonical"]], "because": because}
 
 
 async def unpeer(
