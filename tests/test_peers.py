@@ -343,3 +343,77 @@ async def test_peer_reachable_never_refuses_an_unknown_seat(actions: Actions) ->
     from src.orchestrator.seats import peer_reachable
 
     assert await peer_reachable(actions.pool, "seat:no-such-seat") == ["seat:no-such-seat"]
+
+
+async def test_peer_ledger_unions_open_threads_owned_by_either_seat(
+    actions: Actions,
+) -> None:
+    """Task #76 item 3: the reciprocity ledger is zero new storage — every open thread
+    owned by EITHER seat, oldest first, as one list. Age is the ordering (hxaro's own
+    framing), not any notion of amount owed."""
+    from src.orchestrator.capture import open_thread
+    from src.orchestrator.seats import peer_ledger
+
+    await _seat(actions, "seat:pl1aaaaa")
+    await _seat(actions, "seat:pl1bbbbb")
+    await open_thread(actions, "pl1: first item, owned by A", owner="seat:pl1aaaaa",
+                      source="test")
+    await open_thread(actions, "pl1: second item, owned by B", owner="seat:pl1bbbbb",
+                      source="test")
+    await open_thread(actions, "pl1: unrelated item, owned by a stranger",
+                      owner="seat:pl1zzzzzz", source="test")
+
+    ledger = await peer_ledger(actions.pool, "seat:pl1aaaaa", "seat:pl1bbbbb")
+
+    summaries = [row["summary"] for row in ledger]
+    assert summaries == ["pl1: first item, owned by A", "pl1: second item, owned by B"]
+    assert [row["owner"] for row in ledger] == ["seat:pl1aaaaa", "seat:pl1bbbbb"]
+
+
+async def test_peer_ledger_excludes_a_resolved_item(actions: Actions) -> None:
+    """Resolved is not ledger — the whole point is what STAYS open."""
+    from src.orchestrator.capture import open_thread, resolve_thread
+    from src.orchestrator.seats import peer_ledger
+
+    await _seat(actions, "seat:pl2aaaaa")
+    await _seat(actions, "seat:pl2bbbbb")
+    still_open = await open_thread(actions, "pl2: still open", owner="seat:pl2aaaaa",
+                                   source="test")
+    resolved = await open_thread(actions, "pl2: already resolved", owner="seat:pl2bbbbb",
+                                 source="test")
+    await resolve_thread(actions, str(resolved), because="done", source="test")
+
+    ledger = await peer_ledger(actions.pool, "seat:pl2aaaaa", "seat:pl2bbbbb")
+
+    assert [row["id"] for row in ledger] == [str(still_open)[:8]]
+
+
+async def test_peer_ledger_is_empty_for_a_pair_with_no_open_items(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import peer_ledger
+
+    await _seat(actions, "seat:pl3aaaaa")
+    await _seat(actions, "seat:pl3bbbbb")
+
+    assert await peer_ledger(actions.pool, "seat:pl3aaaaa", "seat:pl3bbbbb") == []
+
+
+async def test_peer_ledger_does_not_require_an_active_peer_bond(actions: Actions) -> None:
+    """A healed (unpeered) pair's own shared history stays readable — the ledger is a pure
+    read over `owner`, never gated on peer_of's own live status."""
+    from src.orchestrator.capture import open_thread
+    from src.orchestrator.seats import peer_ledger, peer_seats, unpeer
+
+    await _seat(actions, "seat:pl4aaaaa")
+    await _seat(actions, "seat:pl4bbbbb")
+    await peer_seats(actions, "seat:pl4aaaaa", "seat:pl4bbbbb", because="paired",
+                     actor="test")
+    await open_thread(actions, "pl4: from back when they were paired",
+                      owner="seat:pl4aaaaa", source="test")
+    await unpeer(actions, "seat:pl4aaaaa", "seat:pl4bbbbb", because="reconciled apart",
+                actor="test")
+
+    ledger = await peer_ledger(actions.pool, "seat:pl4aaaaa", "seat:pl4bbbbb")
+
+    assert [row["summary"] for row in ledger] == ["pl4: from back when they were paired"]

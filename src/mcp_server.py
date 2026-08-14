@@ -4164,6 +4164,19 @@ async def peer_reachable(seat_id: str) -> list[str]:
 
 
 @mcp.tool()
+async def peer_ledger(seat_a: str, seat_b: str) -> list[dict[str, Any]]:
+    """The pair's shared reciprocity ledger (task #76 item 3, spec e6636c7e) — every OPEN
+    thread owned by EITHER seat, oldest first, as one resumable list. Zero new storage:
+    open_thread/resolve_thread stay the only write path, this only reads — what makes a
+    parked pair resumable is exactly a Thread staying open on purpose. Doesn't require an
+    active peer_of bond between the two named seats — a healed pair's own history stays
+    readable."""
+    pool = await _pool_get()
+    from src.orchestrator.seats import peer_ledger as _peer_ledger
+    return await _peer_ledger(pool, seat_a, seat_b)
+
+
+@mcp.tool()
 async def detach_seat(seat: str, because: str, ctx: Context | None = None) -> dict[str, Any]:
     """Invalidate an active managed_by edge — the toolkit hole named at thread fad0dc14
     (unpeer heals peer_of, nothing healed managed_by before this). A COORDINATOR IS DEFINED
