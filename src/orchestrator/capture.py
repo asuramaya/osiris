@@ -1190,7 +1190,7 @@ _TRIAGE_KINDS = ("obligation", "question", "task")
 
 async def reclassify_thread(
     actions: Actions, ref: str, *, kind: str, because: str | None = None,
-    owner: str | None = None, source: str = _SOURCE,
+    owner: str | None = None, arc: str | None = None, source: str = _SOURCE,
 ) -> uuid.UUID | None:
     """Triage a thread WITHOUT lying about its state (ruling 758ded94: untouched ≠ resolved).
     Reclassification is TESTIMONY — a mind read the thread and judged what it IS: adopt a
@@ -1199,9 +1199,22 @@ async def reclassify_thread(
     question stays OPEN in the record; the LENS ranks it out of the work wall. SELF_DECLARED
     (outranks the miner's DERIVED kind), event-sourced, reversible. Returns the thread id,
     or None if `ref` matched nothing. `owner` optionally CLAIMS the thread in the same act
-    (see open_thread) — triage is where an existing thread learns whose move it is."""
+    (see open_thread) — triage is where an existing thread learns whose move it is.
+
+    `arc` (the arc-backfill gap, task #76's roadmap follow-on): `open_thread`'s own `arc`
+    param only ever writes on a genuinely NEW thread — its near-duplicate collision path
+    (`find_near_duplicate_open_thread`) returns the existing id and `deduped: "true"`
+    WITHOUT ever calling this module's own write block, so re-calling `open_thread` with
+    the same summary text plus an `arc` value is a silent no-op on an already-open thread,
+    discovered live (17 attempted stamps, zero landed, caught by dossier-checking one
+    afterward rather than trusting the receipt). This was the missing verb, not a filing
+    gap — `reclassify_thread` already exists for exactly this shape (judging an EXISTING
+    thread's own metadata after the fact) and `arc` is a closed taxonomy exactly like
+    `kind`, so it gets the same validate-then-assert treatment rather than new machinery."""
     if kind not in _TRIAGE_KINDS:
         raise ValueError(f"kind must be one of {_TRIAGE_KINDS}")
+    if arc is not None and arc not in ARCS:
+        raise ValueError(f"arc must be one of {ARCS}, got {arc!r}")
     tid = await _find_thread(actions.pool, ref)
     if tid is None:
         return None
@@ -1210,6 +1223,9 @@ async def reclassify_thread(
                                   evidence_class=_EC)
     if owner:
         await actions.assert_property(tid, "owner", owner.strip(), source, observed, _CONF,
+                                      evidence_class=_EC)
+    if arc:
+        await actions.assert_property(tid, "arc", arc, source, observed, _CONF,
                                       evidence_class=_EC)
     if because:
         await actions.assert_property(tid, "reclassified_because", because, source, observed,
