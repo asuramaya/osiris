@@ -291,6 +291,113 @@ async def test_mount_tool_welcomes_an_unbound_fresh_session(
         srv._pool = saved_pool
 
 
+async def test_mount_never_mints_a_genuine_visitor(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """#48 piece 2 (decision 424c4158, Thoth DM 4345): THE VISITOR GATE, ported from
+    automount() (ruling 120fcc81). A resolved anchor (a real job_dir) that matches NO
+    lineage — no bound row, no fork, no view, no ledger, no bridge, no office — must get a
+    registry row and NOTHING ELSE: no Agent object minted, ever, however many times the
+    same stranger re-fires. Before this gate, register_agent ran unconditionally and
+    minted a hash-derived twin for every such arrival (the exact silent-mint gap named in
+    424c4158)."""
+    from src import mcp_server as srv
+
+    job_dir = str(tmp_path / "jobs" / "9a9a9a9a")   # nobody has ever seen this anchor
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(tmp_path / "stranger-repo"), job_dir=job_dir)
+    finally:
+        srv._pool = saved_pool
+    assert "visitor" in out                # the receipt SAYS which state this is
+    assert "error" not in out              # never a refusal — a real anchor, just unmatched
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' AND canonical=$1",
+        out["agent"]) == 0
+    # a registry row still lands — bookkeeping, not identity
+    rec = await mounts.find_mount(actions.pool, job_dir=job_dir)
+    assert rec is not None and rec.agent_id == out["agent"]
+
+
+async def test_mount_stays_a_visitor_on_repeat_visits_never_oscillating(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A second mount() call at the SAME anchor (an MCP reconnect) now finds a `bound` row
+    from the first visit — the gate must still refuse to mint (the SQL existence check
+    finds no Agent object either, same as the first call), not treat the row's mere
+    existence as a life. This is exactly the row-only-stranger class automount()'s own
+    comment names."""
+    from src import mcp_server as srv
+
+    job_dir = str(tmp_path / "jobs" / "b0b0b0b0")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        first = await srv.mount(cwd=str(tmp_path / "stranger-repo"), job_dir=job_dir)
+        second = await srv.mount(cwd=str(tmp_path / "stranger-repo"), job_dir=job_dir)
+    finally:
+        srv._pool = saved_pool
+    assert "visitor" in first and "visitor" in second
+    assert first["agent"] == second["agent"]
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' AND canonical=$1",
+        first["agent"]) == 0
+
+
+async def test_mount_recognizes_a_lived_lineage_via_an_existing_agent_object(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The OTHER half of the ported `lived` check (the SQL-existence branch, not the
+    deliberate-foreign-binding branch already covered by
+    test_mount_tool_honors_a_bound_seat): a bound row whose agent_id's OWN generation
+    already has a real Agent object in the graph is a lived lineage re-mounting at its own
+    anchor — register_agent must still fire (idempotently), never fall through to the
+    visitor gate."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import register_agent, resolve_identity
+
+    job_dir = str(tmp_path / "jobs" / "c0c0c0c0")
+    ident = resolve_identity(cwd=str(tmp_path / "lived-repo"), job_dir=job_dir)
+    await register_agent(actions, ident, actor="analyst:operator")   # the FIRST, real mint
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id=ident.agent_id,
+                            project=ident.project, cwd=str(tmp_path / "lived-repo"),
+                            model=None, session_key="k:lived")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(tmp_path / "lived-repo"), job_dir=job_dir)
+    finally:
+        srv._pool = saved_pool
+    assert "visitor" not in out
+    assert out["agent"] == ident.agent_id
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' AND canonical=$1",
+        ident.agent_id) == 1
+
+
+async def test_mount_refuses_a_truly_unresolvable_arrival_loudly(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE THIRD STATE (Thoth DM 4345): distinct from a visitor — no job_dir, no ctx
+    header, no locatable transcript, no fallback_seed at all leaves resolve_identity with
+    nothing to anchor on (`resolved=False`). Before this gate that silently minted a
+    hash-derived `agent:unknown...` id anyway; now it refuses loudly, same shape as the
+    IDENTITY CONFLICT refusal, and writes nothing."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    monkeypatch.setattr(srv, "_conn_key", lambda ctx: None)   # no connection key either
+    try:
+        out = await srv.mount(cwd="/nonexistent/nowhere-office")
+    finally:
+        srv._pool = saved_pool
+    assert out["error"] == "UNRESOLVABLE IDENTITY — mount refused"
+    assert "note" in out
+    assert "agent" not in out
+
+
 async def test_mount_wires_view_seat_and_adopts_the_soul_it_shows(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
