@@ -95,10 +95,29 @@ async def entity_dossier(pool: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, 
     # confidence DESC, THEN observed_at DESC (winning_props' own tiebreaker, migration
     # 0015) — the FIRST row per name under this exact order is that property's WINNER,
     # captured below into `winners` as we go, with no second query.
+    #
+    # `name` JOINS THIS SET (task #170's neighbour, the name-property gap, Thoth msg 4292 —
+    # Sekhmet's find, decision 7960db40): it is an ordinary assertion, same table, same
+    # write path, same coexistence rules as anything else — the old `NOT IN ('name', ...)`
+    # exclusion was never structural, it was a UI-dedup call (don't show the top-level
+    # `name` field's own fact a second time) made before #102's agreement law existed, and
+    # #102 later reused this query without revisiting whether that exclusion should ALSO
+    # make disagreement itself unrecoverable. It shouldn't. The top-level `name` field two
+    # returns down (via resolve_label/fetch_label_props, #97/ruling 52daab71) answers "what
+    # should I display" — a silent winner-pick across a 6-property fallback chain; THIS
+    # list answers "do sources disagree," and marks, never resolves, exactly like every
+    # other property. Live acceptance test at build time: repo:bytebye (3 distinct values —
+    # bytebye/ByeByte/byebyte) and repo:tony (2 — "tony" vs a live, unmarked "cultural-
+    # infrastructure" rename) both now read `contradicting` from THIS surface.
+    #
+    # `tag` stays excluded on its own, separate, still-correct grounds: additive/multi-
+    # valued by design (assert_property explicitly allows many simultaneously-true tags
+    # per object) — no winner concept and no disagreement concept applies to it the way it
+    # does to a single-fact property.
     prop_rows = await pool.fetch(
         "SELECT name, value #>> '{}' AS value, source_id, evidence_class, confidence "
         "FROM current_assertions "
-        "WHERE object_id=$1 AND name NOT IN ('name','tag') "
+        "WHERE object_id=$1 AND name <> 'tag' "
         "ORDER BY name, confidence DESC NULLS LAST, observed_at DESC",
         object_id,
     )
