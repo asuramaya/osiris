@@ -424,6 +424,10 @@ def test_write_pin_additions_never_touches_an_existing_key_constraint_1(
     assert out["written"] is True
     assert out["added"] == ["kind", "seat"]           # house was already declared — skipped
     assert out["skipped"] == ["house"]
+    # THE WRITE-BOUNDARY HONESTY RULE (decision beb046cfbdf9/42176e16, Alfred's own
+    # scenario, obligation 71f637e8): `skipped` alone cannot say whether "wronghouse" was
+    # already correct or was left wrong on purpose — `discarded` names it explicitly.
+    assert out["discarded"] == {"house": "correcthouse"}
     text = (office / ".osiris").read_text()
     assert 'house = "wronghouse"' in text             # UNTOUCHED, even though it disagrees
     assert 'project = "Like-Us"' in text               # untouched, never this writer's key
@@ -435,7 +439,9 @@ def test_write_pin_additions_is_idempotent_byte_identical_on_second_call(
     tmp_path: Path,
 ) -> None:
     """Constraint 2, PROVEN BY TEST: two calls with the same `proposed` leave the file
-    byte-identical after the second, and the second call reports written=False."""
+    byte-identical after the second, and the second call reports written=False. A skipped
+    key whose value already MATCHES `proposed` earns no `discarded` entry — a genuine
+    no-op, not a disagreement (decision beb046cfbdf9/42176e16's own discriminator)."""
     office = tmp_path / "idempotentoffice"
     office.mkdir()
     proposed = {"seat": "Twice", "house": "twicehouse", "kind": "office"}
@@ -446,7 +452,7 @@ def test_write_pin_additions_is_idempotent_byte_identical_on_second_call(
 
     second = write_pin_additions(str(office), proposed)
     assert second == {"written": False, "added": [], "skipped": ["house", "kind", "seat"],
-                      "path": str(office / ".osiris")}
+                      "discarded": {}, "path": str(office / ".osiris")}
     bytes_after_second = (office / ".osiris").read_bytes()
     assert bytes_after_second == bytes_after_first, (
         "a second call with the same proposal must leave the file byte-identical")

@@ -1809,7 +1809,21 @@ async def correct_house(actions: Actions, agent_id: str, new_house: str, *, sour
     standing Decision that may already cover this seat's house — the same search()-based
     guard record_decision runs on itself, generalized here. Cannot distinguish a
     deliberate correction from an uninformed overwrite; only ensures the write does not
-    land silently unread."""
+    land silently unread.
+
+    THE FOURTH 42176e16 SPECIMEN, NAMED IN THE RECEIPT (Alfred's own catch, an hour after
+    Khnum built the shared rule for the first two): `was == new_house` means this call's
+    OWN declaration was already true before it ran — the write above still lands (a fresh
+    assertion, harmless, matching the append-only discipline), but nothing was actually
+    CORRECTED, and a verb whose name promises correction owes the caller that word instead
+    of a receipt indistinguishable from a real one. `already_correct` says so plainly.
+    Separately, and this is the part `was` alone could never say: OTHER sources may still
+    carry a contradicting `house` value for this seat, never invalidated by this or any
+    call — `still_contradicted` lists them (source, value, observed_at), read-only, so a
+    caller who declared the truth weeks ago and still shows up in a 'contradicted' triage
+    bucket can see exactly why (decision 7a46db36's own fleet-wide measurement: declaring
+    is not the missing step, invalidating is, and this verb still does not do it — 60bc15db
+    the read side, not this write)."""
     new_house = (new_house or "").strip()
     if not new_house:
         return {"error": "a house needs a name"}
@@ -1833,7 +1847,16 @@ async def correct_house(actions: Actions, agent_id: str, new_house: str, *, sour
     prior_art_bits = await property_prior_art(
         actions.pool, subject_canonical=seat_id, field="house", new_value=new_house,
         actor=source)
-    return {"seat_id": seat_id, "house": new_house, "was": was, **prior_art_bits}
+    contradicting = await actions.pool.fetch(
+        "SELECT a.value #>> '{}' AS val, a.source_id, a.observed_at "
+        "FROM current_assertions a WHERE a.object_id=$1 AND a.name='house' "
+        "AND a.value #>> '{}' != $2 ORDER BY a.observed_at DESC", seat_obj, new_house)
+    still_contradicted = [
+        {"value": r["val"], "source": r["source_id"], "observed_at": r["observed_at"].isoformat()}
+        for r in contradicting]
+    return {"seat_id": seat_id, "house": new_house, "was": was,
+            "already_correct": was == new_house, "still_contradicted": still_contradicted,
+            **prior_art_bits}
 
 
 async def resync_seat_house_third_party(
@@ -1851,7 +1874,11 @@ async def resync_seat_house_third_party(
     same cause that function refuses an empty reason: a correction with no stated reason is
     the silent overwrite this house rules against, not a fix. Does NOT check headship or
     caller identity — this is explicitly a third-party act, unlike `correct_house`, and
-    callers are responsible for the authorization this docstring cannot enforce."""
+    callers are responsible for the authorization this docstring cannot enforce.
+
+    `still_contradicted` (correct_house's own fourth-specimen fix, decision 7a46db36):
+    names any OTHER source's lingering `house` value neither branch here touches — writing
+    or confirming the correct value is not the same act as invalidating a stale one."""
     new_house = (new_house or "").strip()
     if not new_house:
         return {"error": "a house needs a name"}
@@ -1860,13 +1887,26 @@ async def resync_seat_house_third_party(
                          "719ed5b1 rules against — refusing"}
     facts = await seat_facts(actions.pool, seat_id)
     was = facts.get("house")
-    if was == new_house:
-        return {"written": False, "seat_id": seat_id, "house": was}
     seat_obj = await actions.create_or_find_object("Seat", seat_id, source)
-    await actions.assert_property(seat_obj, "house", new_house, source, datetime.now(UTC),
-                                  _CONF, evidence_class=_EC)
+    written = was != new_house
+    if written:
+        await actions.assert_property(seat_obj, "house", new_house, source, datetime.now(UTC),
+                                      _CONF, evidence_class=_EC)
+    # read AFTER any write, so `still_contradicted` reflects the state this call actually
+    # leaves behind (a same-source prior value is superseded by the write above and drops
+    # out here; a different-source value survives untouched either way).
+    contradicting = await actions.pool.fetch(
+        "SELECT a.value #>> '{}' AS val, a.source_id, a.observed_at "
+        "FROM current_assertions a WHERE a.object_id=$1 AND a.name='house' "
+        "AND a.value #>> '{}' != $2 ORDER BY a.observed_at DESC", seat_obj, new_house)
+    still_contradicted = [
+        {"value": r["val"], "source": r["source_id"], "observed_at": r["observed_at"].isoformat()}
+        for r in contradicting]
+    if not written:
+        return {"written": False, "seat_id": seat_id, "house": was,
+                "still_contradicted": still_contradicted}
     return {"written": True, "seat_id": seat_id, "house": new_house, "was": was,
-            "reason": reason}
+            "reason": reason, "still_contradicted": still_contradicted}
 
 
 async def _move_seat_estate(

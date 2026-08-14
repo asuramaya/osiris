@@ -201,8 +201,15 @@ def write_pin_additions(path: str, proposed: dict[str, str]) -> dict[str, Any]:
     appending onto a broken file would make a bad file worse and harder to diagnose, not better.
 
     Returns `written` (bool), `added` (the keys actually appended, a strict subset of
-    `proposed`), `skipped` (keys already present, left untouched), and `backup` (only when a
-    write happened)."""
+    `proposed`), `skipped` (keys already present, left untouched), `discarded` (the write-
+    boundary honesty rule, decision beb046cfbdf9/42176e16: the subset of `skipped` whose
+    ALREADY-PRESENT value actually DIFFERS from what `proposed` asked for — additive-only
+    means this function will never resolve that disagreement itself, but it must say the
+    disagreement exists rather than let `written: False` read identically to "already
+    correct." Alfred's own scenario, obligation 71f637e8: rerun a pin migration, get
+    byte-identical `written: False` across 31 files, wrongly conclude the fleet is
+    normalized when some of those files were left holding the WRONG value on purpose,
+    unannounced), and `backup` (only when a write happened)."""
     import tomllib
 
     p = Path(path) / ".osiris"
@@ -215,8 +222,12 @@ def write_pin_additions(path: str, proposed: dict[str, str]) -> dict[str, Any]:
 
     to_add = {k: v for k, v in proposed.items() if k not in existing}
     skipped = sorted(set(proposed) - set(to_add))
+    from src.orchestrator.capture import discarded_on_noop
+
+    discarded = discarded_on_noop({k: proposed[k] for k in skipped}, existing)
     if not to_add:
-        return {"written": False, "added": [], "skipped": skipped, "path": str(p)}
+        return {"written": False, "added": [], "skipped": skipped, "discarded": discarded,
+                "path": str(p)}
 
     backup = p.with_name(".osiris.bak")
     backup.write_text(existing_text)
@@ -224,6 +235,7 @@ def write_pin_additions(path: str, proposed: dict[str, str]) -> dict[str, Any]:
     sep = "\n" if existing_text and not existing_text.endswith("\n") else ""
     p.write_text(existing_text + sep + "\n".join(new_lines) + "\n")
     return {"written": True, "added": sorted(to_add), "skipped": skipped,
+            "discarded": discarded,
             "path": str(p), "backup": str(backup)}
 
 

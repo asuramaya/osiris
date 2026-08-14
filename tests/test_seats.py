@@ -3025,8 +3025,38 @@ async def test_correct_house_lets_a_head_fix_its_own_anchor(actions: Actions) ->
     assert claimed.get("error") is None
 
     out = await correct_house(actions, "agent:ch1alfrd", "alfred", source="test")
-    assert out == {"seat_id": claimed["seat_id"], "house": "alfred", "was": "bytebye"}
+    assert out == {"seat_id": claimed["seat_id"], "house": "alfred", "was": "bytebye",
+                   "already_correct": False, "still_contradicted": []}
     assert await derive_house(actions.pool, claimed["seat_id"]) == "alfred"
+
+
+async def test_correct_house_names_when_it_corrected_nothing(actions: Actions) -> None:
+    """The fourth 42176e16 specimen, Alfred's own catch: a call whose `new_house` already
+    matches `was` still writes (harmless, append-only) but corrects nothing — `was`
+    alone reads identically to a real correction. `already_correct` says so plainly, and
+    `still_contradicted` names any OTHER source's value this call did NOT touch (decision
+    7a46db36: declaring is not the missing step, invalidating is, and this verb still
+    doesn't do it)."""
+    from src.orchestrator.agents import claim_name
+    from src.orchestrator.seats import correct_house
+
+    claimed = await claim_name(actions, "agent:ch5alrdy", "Alfred5", source="test")
+    assert claimed.get("error") is None
+    # a stale, OUTVOTED contradicting value from a different source, sitting untouched
+    seat_obj = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
+    await actions.assert_property(seat_obj, "house", "stalehouse", "some-other-agent",
+                                  datetime.now(UTC) - timedelta(days=21), 0.9,
+                                  evidence_class="self_declared")
+    first = await correct_house(actions, "agent:ch5alrdy", "alfred5", source="test")
+    assert first["already_correct"] is False
+    assert first["still_contradicted"] == [
+        {"value": "stalehouse", "source": "some-other-agent",
+         "observed_at": first["still_contradicted"][0]["observed_at"]}]
+
+    again = await correct_house(actions, "agent:ch5alrdy", "alfred5", source="test")
+    assert again["was"] == "alfred5" and again["house"] == "alfred5"
+    assert again["already_correct"] is True  # the real catch — was == house, nothing to fix
+    assert again["still_contradicted"][0]["value"] == "stalehouse"  # still sitting there
 
 
 async def test_correct_house_surfaces_prior_art_never_refuses_on_it(
@@ -3098,7 +3128,8 @@ async def test_resync_seat_house_third_party_writes_a_new_value(actions: Actions
     assert out == {"written": True, "seat_id": "seat:rs1khepr",
                    "house": "cultural-infrastructure", "was": "tony",
                    "reason": "task #152: repo:tony was renamed, khepri's Seat.house never "
-                             "followed"}
+                             "followed",
+                   "still_contradicted": []}  # same source: the old value is superseded
     facts = await seat_facts(actions.pool, "seat:rs1khepr")
     assert facts["house"] == "cultural-infrastructure"
 
@@ -3113,8 +3144,29 @@ async def test_resync_seat_house_third_party_is_a_noop_when_already_correct(
 
     out = await resync_seat_house_third_party(
         actions, "seat:rs2match0", "xxit", source="test", reason="x")
-    assert out == {"written": False, "seat_id": "seat:rs2match0", "house": "xxit"}
+    assert out == {"written": False, "seat_id": "seat:rs2match0", "house": "xxit",
+                   "still_contradicted": []}
 
+
+async def test_resync_seat_house_third_party_names_a_lingering_different_source(
+    actions: Actions,
+) -> None:
+    """A different source's contradicting value survives BOTH a real write and a no-op —
+    neither branch invalidates it, and `still_contradicted` says so honestly instead of
+    a clean receipt implying the seat is now fully consistent."""
+    from src.orchestrator.seats import resync_seat_house_third_party
+
+    seat = await actions.create_or_find_object("Seat", "seat:rs5linger", "test")
+    await actions.assert_property(seat, "house", "xxit", "some-other-agent",
+                                  datetime.now(UTC) - timedelta(days=10), 0.9)
+
+    out = await resync_seat_house_third_party(
+        actions, "seat:rs5linger", "handlingtheloop", source="test",
+        reason="rename never propagated")
+    assert out["written"] is True
+    assert out["still_contradicted"] == [
+        {"value": "xxit", "source": "some-other-agent",
+         "observed_at": out["still_contradicted"][0]["observed_at"]}]
 
 async def test_resync_seat_house_third_party_refuses_an_empty_reason(
     actions: Actions,
