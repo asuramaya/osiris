@@ -376,7 +376,21 @@ IN-PROGRESS state a typed object can't hold on its own.
 # word for "nothing there yet" — mint_seat's receipt said nothing at all about it while this
 # ceremony, one door over, already spoke plainly. Centralized so every caller that reports
 # charter state says the SAME thing, not a copy that can drift the moment one side is edited.
-_CHARTER_UNDECLARED = "UNDECLARED — the standing orders instruct the seat to declare"
+#
+# THE VERB, NAMED IN THE SENTINEL ITSELF (operator's self-chartering ruling, "each agent
+# should be able to own it and handle it on their own" — msg 4378): the ORIGINAL text sent a
+# reader back to "the standing orders" (CLAUDE.md, read once at mint/boot) instead of naming
+# the call on THE ONE SURFACE a seat actually re-reads every session, orient()'s own live
+# payload (mcp_server.py, 26 of 33 active seats measured reading `charter` absent from their
+# own orient() — task #157's own live count). An office whose CLAUDE.md was "left in place"
+# (compile_managed_body's own branch — an existing office's standing orders are never
+# recompiled) can go an entire reign without that file crossing a session's eyes again; a
+# sentinel that only points at it, rather than carrying the verb itself, is a dead end for
+# exactly the seat it's meant to move. Plain text, no harness assumed — `charter(repos=[...])`
+# is the same MCP tool name on every surface, Claude Code or otherwise.
+_CHARTER_UNDECLARED = ("UNDECLARED — call charter(repos=[...]) naming the repos you govern "
+                       "(the standing orders say more, but this is the one line every "
+                       "session sees)")
 
 
 async def _handle_of(pool: asyncpg.Pool, agent_id: str) -> str | None:

@@ -482,7 +482,7 @@ async def test_orient_tool_names_an_undeclared_charter_instead_of_staying_silent
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
-    assert out.get("charter") == "UNDECLARED — the standing orders instruct the seat to declare"
+    assert out.get("charter", "").startswith("UNDECLARED — call charter(repos=[...])")
     assert seat_id  # the seat exists and IS what orient() is being honest about
 
 
