@@ -133,7 +133,7 @@ async def test_settle_boxes_works_against_a_pool_not_just_a_raw_connection(
     assert boxes["decisions recorded this session"] is False
     assert boxes["threads trued this session (opened or resolved)"] is False
     assert boxes["standing orders touched this session"] is None  # no such file here
-    assert boxes["a live succession/handoff note (this lineage was minted)"] is False
+    assert boxes["an obligation opened this session (this lineage was minted)"] is False
 
     await record_decision(actions, "a real ruling this session", source=agent)
     await open_thread(actions, "an obligation left for the heir", kind="obligation",
@@ -145,7 +145,7 @@ async def test_settle_boxes_works_against_a_pool_not_just_a_raw_connection(
     assert boxes["decisions recorded this session"] is True
     assert boxes["threads trued this session (opened or resolved)"] is True
     assert boxes["standing orders touched this session"] is True
-    assert boxes["a live succession/handoff note (this lineage was minted)"] is True
+    assert boxes["an obligation opened this session (this lineage was minted)"] is True
 
 
 async def test_settle_boxes_a_non_minted_agent_carries_no_succession_box(
@@ -155,7 +155,7 @@ async def test_settle_boxes_a_non_minted_agent_carries_no_succession_box(
     await actions.create_or_find_object("Agent", agent, agent)
     boxes = await settle_boxes(actions.pool, agent_id=agent, mounted_at=datetime.now(UTC),
                                cwd=str(tmp_path))
-    assert "a live succession/handoff note (this lineage was minted)" not in boxes
+    assert "an obligation opened this session (this lineage was minted)" not in boxes
 
 
 class _RaisingOnMintedCheck:
@@ -188,10 +188,10 @@ async def test_settle_boxes_outer_minted_check_failure_is_unevaluated_not_missin
     await actions.create_or_find_object("Agent", agent, agent)
     boxes = await settle_boxes(_RaisingOnMintedCheck(actions.pool), agent_id=agent,
                                mounted_at=datetime.now(UTC), cwd=str(tmp_path))
-    assert boxes["a live succession/handoff note (this lineage was minted)"] is None
-    assert ("a live succession/handoff note (this lineage was minted)"
+    assert boxes["an obligation opened this session (this lineage was minted)"] is None
+    assert ("an obligation opened this session (this lineage was minted)"
            in unevaluated_boxes(boxes))
-    assert ("a live succession/handoff note (this lineage was minted)"
+    assert ("an obligation opened this session (this lineage was minted)"
            not in missing_boxes(boxes))
 
 
