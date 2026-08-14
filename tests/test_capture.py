@@ -19,6 +19,7 @@ from src.orchestrator.capture import (
     amend_decision,
     annotate_thread,
     backfill_decided_in,
+    correct_thread_summary,
     decision_addenda,
     find_near_duplicate_decision,
     find_near_duplicate_open_thread,
@@ -1198,6 +1199,57 @@ async def test_annotate_thread_tool_reports_a_miss_without_erroring(actions: Act
     finally:
         srv._pool = saved_pool
     assert "error" in out and "no-such-thread-anywhere" in out["error"]
+
+
+async def test_correct_thread_summary_tool_corrects_without_touching_status(
+    actions: Actions,
+) -> None:
+    """Roadmap ledger-rot stage 3 (decision ccbe37cf), MCP surface. Status stays exactly as
+    it was before the call, same discipline annotate_thread's own MCP wrapper holds."""
+    from src import mcp_server as srv
+
+    t = await open_thread(actions, "a thread that will be corrected after it closes")
+    await resolve_thread(actions, str(t), because="shipped")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.correct_thread_summary(
+            str(t), "narrower: only the async path shipped", because="the sync path was cut")
+    finally:
+        srv._pool = saved_pool
+    assert out == {"id": str(t), "corrected_summary": "narrower: only the async path shipped",
+                   "status": "corrected", "because": "the sync path was cut"}
+    props = await _props(actions.pool, t)
+    assert props["status"] == "resolved"  # untouched by the correction
+    assert props["corrected_summary"] == "narrower: only the async path shipped"
+
+
+async def test_correct_thread_summary_tool_reports_a_miss_without_erroring(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.correct_thread_summary(
+            "no-such-thread-anywhere-in-this-graph", "a correction")
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out and "no-such-thread-anywhere" in out["error"]
+
+
+async def test_correct_thread_summary_tool_reports_a_blank_correction(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    t = await open_thread(actions, "a thread whose MCP correction call will be blank")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.correct_thread_summary(str(t), "   ")
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out and "blank" in out["error"]
 
 
 async def test_amend_decision_tool_appends_without_touching_summary(actions: Actions) -> None:
@@ -3964,6 +4016,95 @@ async def test_annotate_thread_leaves_a_resolved_thread_resolved(actions: Action
     await annotate_thread(actions, str(t), "khnum's fix: cf9413a")
     props = await _props(actions.pool, t)
     assert props["status"] == "resolved"
+
+
+async def test_correct_thread_summary_supersedes_without_touching_the_original(
+    actions: Actions,
+) -> None:
+    """The verb annotate_thread names and refuses to be — decision ccbe37cf, roadmap
+    ledger-rot stage 3. `summary` is open_thread's own dedup key and must survive
+    untouched; `corrected_summary` is a plain property, so it appears as ONE current
+    winner, not a growing pile of notes."""
+    t = await open_thread(actions, "six seats pinned to dead or non-canonical project names")
+    got = await correct_thread_summary(
+        actions, str(t),
+        "almost entirely different population once re-measured — see the per-seat rows")
+    assert got == t
+    props = await _props(actions.pool, t)
+    assert props["summary"] == "six seats pinned to dead or non-canonical project names"
+    assert props["corrected_summary"] == (
+        "almost entirely different population once re-measured — see the per-seat rows")
+
+
+async def test_correct_thread_summary_re_call_supersedes_the_prior_correction(
+    actions: Actions,
+) -> None:
+    """Calling it again SUPERSEDES the earlier correction (current_assertions' ordinary
+    law) rather than appending a second, competing candidate — there is exactly one live
+    answer to "what does this thread currently say," same as `status`/`summary` itself."""
+    t = await open_thread(actions, "does the composer need a live-collab mode")
+    await correct_thread_summary(actions, str(t), "first correction: no evidence either way")
+    await correct_thread_summary(actions, str(t), "second correction: confirmed no, checked "
+                                 "the actual usage logs")
+    props = await _props(actions.pool, t)
+    assert props["corrected_summary"] == (
+        "second correction: confirmed no, checked the actual usage logs")
+
+
+async def test_correct_thread_summary_carries_an_optional_because(actions: Actions) -> None:
+    t = await open_thread(actions, "why do the pulse numbers disagree with the census")
+    await correct_thread_summary(actions, str(t), "the census undercounts, not the pulse",
+                                 because="traced both instruments against a known-good sample")
+    props = await _props(actions.pool, t)
+    assert props["corrected_because"] == "traced both instruments against a known-good sample"
+
+
+async def test_correct_thread_summary_returns_none_when_nothing_matches(
+    actions: Actions,
+) -> None:
+    assert await correct_thread_summary(
+        actions, "no such thread anywhere", "a correction") is None
+
+
+async def test_correct_thread_summary_refuses_a_blank_correction(actions: Actions) -> None:
+    import pytest
+
+    t = await open_thread(actions, "a thread that will receive a rejected blank correction")
+    with pytest.raises(ValueError, match="blank"):
+        await correct_thread_summary(actions, str(t), "   ")
+    props = await _props(actions.pool, t)
+    assert "corrected_summary" not in props
+
+
+async def test_correct_thread_summary_leaves_a_resolved_thread_resolved(
+    actions: Actions,
+) -> None:
+    """A correction is not a state transition — it must not silently reopen a thread the
+    caller already closed, same discipline annotate_thread already holds for status."""
+    t = await open_thread(actions, "was the AF_UNIX regression xdist-exclusive")
+    await resolve_thread(actions, str(t), because="confirmed: bare pytest hits it too")
+    await correct_thread_summary(actions, str(t), "narrower: only under xdist -n auto")
+    props = await _props(actions.pool, t)
+    assert props["status"] == "resolved"
+
+
+async def test_correct_thread_summary_surfaces_in_recall_beside_the_original(
+    actions: Actions,
+) -> None:
+    """ONE HOP, not six (Thoth's own requirement) — recall()'s existing flat-dump already
+    returns every current property with no special-casing, so the correction sits right
+    beside the untouched original in the SAME call. No change to recall.py was needed."""
+    from src.orchestrator.recall import recall
+
+    t = await open_thread(actions, "#111 docs compile from the graph, live accretion")
+    await correct_thread_summary(
+        actions, str(t), "shipped from the static schema manifest, never live accretion",
+        because="catalog.py's own CI-redenning ruling contradicted the original criterion")
+    rec = await recall(actions.pool, str(t))
+    assert rec["summary"] == "#111 docs compile from the graph, live accretion"
+    assert rec["corrected_summary"] == (
+        "shipped from the static schema manifest, never live accretion")
+    assert "CI-redenning" in rec["corrected_because"]
 
 
 async def test_amend_decision_adds_an_addendum_without_touching_summary(

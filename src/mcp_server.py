@@ -5353,6 +5353,40 @@ async def annotate_thread(
 
 
 @mcp.tool()
+async def correct_thread_summary(
+    ref: str, corrected_summary: str, because: str | None = None,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    session_anchor: str | None = None, ctx: Context | None = None,
+) -> dict[str, str]:
+    """Correct a THREAD's own headline in place — the verb `annotate_thread` names and
+    refuses to be: "a caller who means the earlier understanding was wrong wants a
+    different verb entirely." `summary` itself is never touched (it is `open_thread`'s own
+    dedup key — re-asserting it under a new value would mint a twin, not fix the original);
+    `corrected_summary` is an ordinary property instead, so re-calling this SUPERSEDES the
+    prior correction (current_assertions' normal law) rather than piling up undated notes.
+    `because` (optional) rides the same pattern, naming why the headline changed.
+
+    ONE HOP: recall(ref) already returns every current property flat, no special-casing
+    needed — the corrected text sits right beside the untouched original `summary` in the
+    SAME call, so a reader sees both without a second lookup.
+
+    Returns {"error": ...} (never raises past this wrapper) when `ref` matches nothing."""
+    pool = await _pool_get()
+    try:
+        tid = await capture.correct_thread_summary(
+            Actions(pool), ref, corrected_summary, because=because,
+            source=await _actor_for(ctx, subagent_id, subagent_type))
+    except ValueError as e:
+        return {"error": str(e)}
+    if tid is None:
+        return {"error": f"no thread matches {ref!r}"}
+    out = {"id": str(tid), "corrected_summary": corrected_summary.strip(), "status": "corrected"}
+    if because:
+        out["because"] = because.strip()
+    return out
+
+
+@mcp.tool()
 async def amend_decision(
     ref: str, addendum: str,
     subagent_id: str | None = None, subagent_type: str | None = None,
