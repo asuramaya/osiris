@@ -35,12 +35,14 @@ def _use_test_pool(actions: Actions, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(srv, "_pool_get", _fake_pool_get)
 
 
-def test_record_tool_call_accumulates_count_and_ms() -> None:
-    srv._record_tool_call("orient", 12.5)
-    srv._record_tool_call("orient", 7.5)
-    srv._record_tool_call("mount", 3.0)
-    assert srv._tool_call_stats["orient"] == {"count": 2, "total_ms": 20.0}
-    assert srv._tool_call_stats["mount"] == {"count": 1, "total_ms": 3.0}
+def test_record_tool_call_accumulates_count_and_ms_per_tool_and_caller() -> None:
+    srv._record_tool_call("orient", "agent:thoth", 12.5)
+    srv._record_tool_call("orient", "agent:thoth", 7.5)
+    srv._record_tool_call("orient", "agent:seshat", 9.0)
+    srv._record_tool_call("mount", "agent:thoth", 3.0)
+    assert srv._tool_call_stats[("orient", "agent:thoth")] == {"count": 2, "total_ms": 20.0}
+    assert srv._tool_call_stats[("orient", "agent:seshat")] == {"count": 1, "total_ms": 9.0}
+    assert srv._tool_call_stats[("mount", "agent:thoth")] == {"count": 1, "total_ms": 3.0}
 
 
 def test_record_tool_call_counts_a_failed_call_too() -> None:
@@ -48,27 +50,55 @@ def test_record_tool_call_counts_a_failed_call_too() -> None:
     succeeding one — a counter that only saw successes would report the expensive/broken
     calls as cheap. This test proves the accumulator itself has no success-only bias;
     BoundedMCP.call_tool's own try/finally wiring is what actually guarantees the call."""
-    srv._record_tool_call("dossier", 4.0)
-    assert srv._tool_call_stats["dossier"]["count"] == 1
+    srv._record_tool_call("dossier", "agent:thoth", 4.0)
+    assert srv._tool_call_stats[("dossier", "agent:thoth")]["count"] == 1
+
+
+def test_caller_for_is_cache_only_never_reattaches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """task #170: the hot path must never pay for a DB round trip just to attribute a
+    telemetry row. An uncached connection is 'unattributed', not a reattach attempt."""
+    from src.orchestrator.agents import AgentIdentity
+
+    assert srv._caller_for(None) == "unattributed"
+
+    class _FakeCtx:
+        pass
+
+    fake_ctx = _FakeCtx()
+    monkeypatch.setattr(srv, "_conn_key", lambda ctx: "sid:test")
+    # uncached — no entry in _agents for this key
+    assert srv._caller_for(fake_ctx) == "unattributed"  # type: ignore[arg-type]
+
+    srv._agents["sid:test"] = AgentIdentity(
+        agent_id="agent:c38f8f3b-xxx", session="s", project=None, model=None, cwd=None)
+    try:
+        # the lineage ROOT, not the raw per-generation id — a seat's generations fold
+        # to one caller (same discipline doors.py's _record uses)
+        assert srv._caller_for(fake_ctx) == "agent:c38f8f3b"  # type: ignore[arg-type]
+    finally:
+        del srv._agents["sid:test"]
 
 
 @pytest.mark.asyncio
-async def test_flush_writes_the_batch_and_clears_the_live_dict(
+async def test_flush_writes_the_batch_by_tool_and_caller_and_clears_the_live_dict(
     actions: Actions, _use_test_pool: None,
 ) -> None:
     srv._tool_stats_window_start = datetime.now(UTC) - timedelta(seconds=60)
-    srv._record_tool_call("orient", 10.0)
-    srv._record_tool_call("orient", 20.0)
-    srv._record_tool_call("roster", 5.0)
+    srv._record_tool_call("orient", "agent:thoth", 10.0)
+    srv._record_tool_call("orient", "agent:thoth", 20.0)
+    srv._record_tool_call("orient", "agent:seshat", 5.0)
+    srv._record_tool_call("roster", "unattributed", 5.0)
 
     await srv._flush_tool_stats_once()
 
     assert srv._tool_call_stats == {}  # the live dict is empty again, ready for the next window
     rows = await actions.pool.fetch(
-        "SELECT tool_name, call_count, total_ms FROM mcp_tool_stats ORDER BY tool_name")
+        "SELECT tool_name, caller, call_count, total_ms FROM mcp_tool_stats "
+        "ORDER BY tool_name, caller")
     assert [dict(r) for r in rows] == [
-        {"tool_name": "orient", "call_count": 2, "total_ms": 30.0},
-        {"tool_name": "roster", "call_count": 1, "total_ms": 5.0},
+        {"tool_name": "orient", "caller": "agent:seshat", "call_count": 1, "total_ms": 5.0},
+        {"tool_name": "orient", "caller": "agent:thoth", "call_count": 2, "total_ms": 30.0},
+        {"tool_name": "roster", "caller": "unattributed", "call_count": 1, "total_ms": 5.0},
     ]
 
 
@@ -81,23 +111,32 @@ async def test_flush_of_an_empty_window_writes_nothing(
 
 
 @pytest.mark.asyncio
-async def test_tool_traffic_reports_persisted_and_live_windows_plus_blind_spots(
+async def test_tool_traffic_reports_both_cuts_persisted_and_live_plus_blind_spots(
     actions: Actions, _use_test_pool: None,
 ) -> None:
     await actions.pool.execute(
-        "INSERT INTO mcp_tool_stats (tool_name, window_start, window_end, call_count, "
-        "total_ms) VALUES ('orient', now() - interval '30 seconds', now(), 3, 90.0)")
-    srv._record_tool_call("mount", 4.0)  # still in the live, unflushed window
+        "INSERT INTO mcp_tool_stats (tool_name, caller, window_start, window_end, "
+        "call_count, total_ms) VALUES "
+        "('orient', 'agent:thoth', now() - interval '30 seconds', now(), 2, 60.0), "
+        "('orient', 'agent:seshat', now() - interval '30 seconds', now(), 1, 30.0)")
+    srv._record_tool_call("mount", "agent:thoth", 4.0)  # still in the live, unflushed window
 
     out = await srv.tool_traffic(window_minutes=5)
 
     assert out["persisted"] == [
         {"tool": "orient", "calls": 3, "total_ms": 90.0, "avg_ms": 30.0}]
+    assert sorted(out["persisted_by_caller"], key=lambda r: r["caller"]) == [
+        {"caller": "agent:seshat", "calls": 1, "total_ms": 30.0, "avg_ms": 30.0},
+        {"caller": "agent:thoth", "calls": 2, "total_ms": 60.0, "avg_ms": 30.0},
+    ]
     assert out["current_unflushed_window"] == [
         {"tool": "mount", "calls": 1, "total_ms": 4.0, "avg_ms": 4.0}]
+    assert out["current_unflushed_by_caller"] == [
+        {"caller": "agent:thoth", "calls": 1, "total_ms": 4.0, "avg_ms": 4.0}]
     # rule 2 from msg 4034: the blind population lives IN the output, not only in a decision
     assert any("osiris-console" in s for s in out["blind_spots"])
     assert any("osiris-worker" in s for s in out["blind_spots"])
     assert any("osiris-pulse" in s for s in out["blind_spots"])
     assert any("osiris-manager" in s for s in out["blind_spots"])
+    assert any("CACHE-ONLY" in s for s in out["blind_spots"])  # task #170's own named limit
     assert "MCP tool calls" in out["measures"]
