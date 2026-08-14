@@ -430,7 +430,7 @@ def _tool_chars(t: Any) -> int:
 # until the merge.
 # 155,414 -> 156,685. 110 -> 111 tools: create_project (#139) is the new one;
 # the rest is tool_traffic gaining its per-caller cut (#170).
-TOOL_CONTRACT_CEILING_CHARS = 161_137
+TOOL_CONTRACT_CEILING_CHARS = 162_869
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -498,6 +498,10 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     reconstructed from git and typed once is the same defect one layer up (ruling
     e6277013). Read the commit that raised the assert for a given tool's provenance.
     113 -> 114 (2026-08-14, task #76 item 3): peer_ledger — the history of the peer
-    relationship between two seats, the last item of the #76 punch list."""
+    relationship between two seats, the last item of the #76 punch list.
+    114 -> 115 (2026-08-14, ruling e6277013/5273e0f3): correct_thread_summary — a Thread's
+    summary could be TWINNED but never CORRECTED (open_thread is idempotent on the summary
+    hash; annotate_thread's own docstring refuses the job). The one genuinely missing verb
+    of the three ledger diseases; the other two already had uncalled cures."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 114
+    assert len(per_tool) == 115
