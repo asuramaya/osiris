@@ -46,9 +46,10 @@ async def test_health(client: httpx.AsyncClient) -> None:
 
 async def test_membrane_route_is_retired(client: httpx.AsyncClient) -> None:
     """THE INBOX (task #71, ruling 0b3dd431) replaced /membrane as :8011's front door —
-    locking in the retirement as intentional, not an accidental regression. render_membrane
-    itself stays in src/api/membrane.py, unrouted, for one deploy cycle (Thoth's own
-    instruction, msg 1811) — this only proves the ROUTE is gone, not the module."""
+    locking in the retirement as intentional, not an accidental regression. src/api/
+    membrane.py itself is gone now too (task #92's residual, thread 0aa9debf7c04) — its
+    three still-live names (_CSS/_age/_e) folded into chrome.py, which was already their
+    only caller."""
     r = await client.get("/membrane")
     assert r.status_code == 404
 

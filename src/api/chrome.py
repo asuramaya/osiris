@@ -13,13 +13,53 @@ Renderers are PURE (fixture-fed in tests); the routes in app.py feed them the li
 """
 from __future__ import annotations
 
+import html
 import re
 from typing import Any
 
 import asyncpg
 
-from src.api.membrane import _CSS, _age, _e
 from src.orchestrator.agents import seat_label
+
+_CSS = """
+body{background:#0d1117;color:#c9d1d9;font:14px/1.5 ui-monospace,monospace;margin:2rem auto;
+     max-width:72rem;padding:0 1rem}
+h1{font-size:1.1rem;letter-spacing:.2em;text-transform:uppercase;color:#8b949e}
+h2{font-size:.9rem;letter-spacing:.15em;text-transform:uppercase;color:#8b949e;
+   border-bottom:1px solid #21262d;padding-bottom:.3rem;margin-top:2.2rem}
+table{border-collapse:collapse;width:100%;margin:.6rem 0}
+td,th{text-align:left;padding:.25rem .6rem .25rem 0;vertical-align:top}
+th{color:#484f58;font-weight:normal}
+tr{border-bottom:1px solid #161b22}
+.dim{color:#484f58}.red{color:#f85149}.green{color:#3fb950}.amber{color:#d29922}
+.strip{display:flex;gap:1.6rem;margin:1rem 0;flex-wrap:wrap}
+.strip a{color:#c9d1d9;text-decoration:none;border-bottom:1px dotted #30363d}
+.strip b{font-weight:600}
+.strip.ambient{border-top:1px solid #21262d;padding-top:.7rem;margin-top:0}
+.strip-label{font-size:.75rem;letter-spacing:.15em;text-transform:uppercase;color:#484f58;
+             margin:1rem 0 -.4rem}
+a{color:#58a6ff;text-decoration:none}
+.body{white-space:pre-wrap;color:#8b949e;max-width:60rem}
+"""
+
+
+def _e(v: Any) -> str:
+    return html.escape(str(v if v is not None else ""))
+
+
+def _age(secs: float | None) -> str:
+    """A coarse human age for the watermark's own freshness ('3h', '2d', 'just now')."""
+    if secs is None:
+        return "unknown"
+    secs = int(secs)
+    if secs < 90:
+        return "just now"
+    if secs < 5400:
+        return f"{round(secs / 60)}m"
+    if secs < 172800:
+        return f"{round(secs / 3600)}h"
+    return f"{round(secs / 86400)}d"
+
 
 _CHROME_CSS = _CSS + """
 .nav{display:flex;gap:1.4rem;margin:.4rem 0 1.4rem;flex-wrap:wrap}

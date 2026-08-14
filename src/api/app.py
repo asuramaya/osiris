@@ -1020,12 +1020,15 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
     # THE MEMBRANE ROUTE IS RETIRED (task #71, ruling 0b3dd431, msg 1811/1818): THE INBOX
     # (src/api/inbox/) is :8011's new front door, mounted below. render_membrane's own
-    # module (src/api/membrane.py) stays in the tree, unrouted, for one deploy cycle per
-    # Thoth's explicit instruction — a rollback needs it reachable without a revert.
+    # module (src/api/membrane.py) stayed in the tree, unrouted, for one deploy cycle per
+    # Thoth's explicit instruction — that cycle has long since passed; the module and its
+    # test are gone (task #92's residual, thread 0aa9debf7c04), its three still-live names
+    # (_CSS/_age/_e) folded directly into chrome.py, which was already their only caller.
 
     # THE CHROME OPENED (operator, 2026-07-11): /desk /mail /fleet — clickable, openable,
     # ~4s-fresh lenses so the human looks WITHOUT calling an agent. Same read-only
-    # constitution as /membrane; ?partial=1 serves just the content div for the poller.
+    # constitution the old /membrane page held; ?partial=1 serves just the content div for
+    # the poller.
     @app.get("/desk")
     async def desk_page(
         partial: int = 0, p_: str | None = Query(None, alias="p"),
