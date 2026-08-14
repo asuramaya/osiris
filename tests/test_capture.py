@@ -2573,6 +2573,52 @@ async def test_reclassify_thread_changes_kind_never_status(actions: Actions) -> 
     assert await reclassify_thread(actions, "zz-never-matches-zz", kind="question") is None
 
 
+async def test_reclassify_thread_backfills_arc_on_an_already_open_thread(
+    actions: Actions,
+) -> None:
+    """Task #76's roadmap follow-on: open_thread's own `arc` param is a silent no-op on an
+    ALREADY-open thread — its near-duplicate collision path returns the existing id without
+    ever writing arc (discovered live: 17 attempted stamps via open_thread, zero landed).
+    reclassify_thread is the door that can actually reach an existing thread's metadata."""
+    from src.orchestrator.capture import reclassify_thread
+
+    t = await open_thread(actions, "a thread minted with no arc at all", source="agent:x")
+
+    got = await reclassify_thread(actions, str(t), kind="obligation", arc="Fleet-Hygiene",
+                                  source="agent:triager")
+
+    assert got == t
+    props = await _props(actions.pool, t)
+    assert props["arc"] == "Fleet-Hygiene"
+    assert props["kind"] == "obligation"
+    assert props["status"] == "open"  # still untouched by a reclassify
+
+
+async def test_reclassify_thread_refuses_an_unrecognized_arc(actions: Actions) -> None:
+    from src.orchestrator.capture import reclassify_thread
+
+    t = await open_thread(actions, "a thread for the bad-arc refusal test", source="agent:x")
+
+    import pytest
+    with pytest.raises(ValueError):
+        await reclassify_thread(actions, str(t), kind="obligation", arc="Not-A-Real-Arc")
+
+
+async def test_reclassify_thread_leaves_arc_untouched_when_omitted(actions: Actions) -> None:
+    """arc is optional — a plain kind-only reclassify (the existing, common case) must not
+    silently blank out an arc a caller set earlier."""
+    from src.orchestrator.capture import reclassify_thread
+
+    t = await open_thread(actions, "a thread already carrying an arc", arc="Token-Cost",
+                          source="agent:x")
+
+    await reclassify_thread(actions, str(t), kind="question", source="agent:triager")
+
+    props = await _props(actions.pool, t)
+    assert props["arc"] == "Token-Cost"
+    assert props["kind"] == "question"
+
+
 async def test_orient_wall_collapses_echoes_and_deals_a_triage_card(actions: Actions) -> None:
     """The lens split: a thread NO MIND HAS TOUCHED leaves the wall for a counted line + a
     3-card triage hand. Agent threads ride however old; miner guesses do not ride at all.

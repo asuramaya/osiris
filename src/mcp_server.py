@@ -6083,7 +6083,7 @@ async def settle(
 @mcp.tool()
 async def reclassify_thread(
     ref: str, kind: str, because: str | None = None, owner: str | None = None,
-    subagent_id: str | None = None,
+    arc: str | None = None, subagent_id: str | None = None,
     subagent_type: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
     """Triage a thread WITHOUT changing its status (untouched is not resolved — ruling
@@ -6094,13 +6094,23 @@ async def reclassify_thread(
     substring; `because` records your judgment. SELF_DECLARED — your testimony outranks the
     miner's guess. Use resolve_thread instead when the work is actually done or moot.
     `owner` optionally CLAIMS the thread in the same act ('operator' / 'agent:<id>' /
-    a project name) — triage is where an existing thread learns whose move it is."""
+    a project name) — triage is where an existing thread learns whose move it is.
+
+    `arc` names which of `open_thread`'s own closed taxonomy (capture.ARCS) this ALREADY-
+    OPEN thread belongs to — the write door `open_thread` cannot reach once a thread
+    exists: its own near-duplicate collision path returns the existing id without ever
+    asserting `arc` on it, a silent no-op discovered live (task #76's roadmap follow-on).
+    This is the door for backfilling arc onto a thread you're re-reading, not opening.
+    Unrecognized value refuses loudly, same law `open_thread` already applies."""
     t = await capture.reclassify_thread(
-        Actions(await _pool_get()), ref, kind=kind, because=because, owner=owner,
+        Actions(await _pool_get()), ref, kind=kind, because=because, owner=owner, arc=arc,
         source=await _actor_for(ctx, subagent_id, subagent_type))
     if t is None:
         return {"error": f"no thread matched {ref!r}"}
-    return {"id": str(t), "kind": kind, "status": "open (unchanged — reclassified, not resolved)"}
+    out = {"id": str(t), "kind": kind, "status": "open (unchanged — reclassified, not resolved)"}
+    if arc:
+        out["arc"] = arc
+    return out
 
 
 @mcp.tool()
