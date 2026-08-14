@@ -95,7 +95,20 @@ async def plan_pin_migration(pool: asyncpg.Pool) -> dict[str, Any]:
     matching every existing writer's own preserve-what-I-don't-own discipline, `_write_osiris_
     file`'s own convention). `changes` is the actual diff (current != proposed, so a pin
     already correct proposes nothing there — idempotent by construction, the same no-churn
-    discipline `_write_model_pin_sync` already keeps for `model`)."""
+    discipline `_write_model_pin_sync` already keeps for `model`).
+
+    THE PIN SCHEMA'S OWN CONTRACT, STATED EXPLICITLY (decisions 126210f0/23b667d0, task
+    #152's own khepri mistake): `project` HOLDS A SoftwareProject'S CANONICAL SUFFIX,
+    NEVER A DISPLAY NAME. This was never written down before, and that silence is exactly
+    what let a "corrected" pin regress — `rename_project` changes only the `name` property,
+    the canonical stays fixed forever, and every mint/lookup path outside a narrow
+    diagnostic read (`register_agent`'s/`mint_heir`'s own `_resolve_or_mint_project`,
+    `f"repo:{project}"`, literal) treats a pin that doesn't match the canonical as grounds
+    to MINT A BRAND NEW OBJECT — not to look the project up by its current name. A seat
+    whose project was renamed keeps the OLD canonical string in its pin, forever; only the
+    project's own `name` property changes. `roster()`'s own `pin.name_resolution` field
+    (seats.py) is diagnostic-only for exactly this shape — it never implies a pin should be
+    rewritten to a display name, only reports when one already, mistakenly, is."""
     from src.orchestrator.agents import read_house_label, read_seat_handle, read_tree_kind
     from src.orchestrator.seats import roster
 

@@ -391,6 +391,16 @@ _ROSTER_CAVEATS = (
     "colliding object's own canonical and agent_count SO A READER CAN JUDGE THE COLLISION "
     "THEMSELVES — it never picks a winner among them, it only stops attributing a sibling's "
     "emptiness to a seat whose own pin may be perfectly fine.",
+    "pin.triage_bucket=='no-such-project' can carry `pin.name_resolution` — DIAGNOSTIC ONLY, "
+    "never a resolution. A seat's `project` pin is the CANONICAL SUFFIX by system-wide "
+    "contract (every mint/lookup path outside this note builds repo:<value> and mints a NEW "
+    "object on a mismatch, task #152/#157's own khepri specimen — decisions 126210f0/"
+    "23b667d0); if the declared value instead matches some OTHER object's current NAME (a "
+    "post-rename display name, not its canonical), that is worth saying but never worth "
+    "silently trusting — `resolved_by:'name'` with a `canonical` names what the pin SHOULD "
+    "be corrected to; `ambiguous:true` with `candidates` means it matches more than one "
+    "object's name and picks none of them (#102's law, generalized). Absence of this field "
+    "on a no-such-project pin means the value matches nothing at all — a genuinely dead pin.",
 )
 
 
@@ -465,6 +475,43 @@ async def _duplicate_suspect_siblings(pool: asyncpg.Pool, canonical: str,
             r["id"])
         siblings.append({"canonical": r["canonical"], "agent_count": agent_count})
     return sorted(siblings, key=lambda s: s["canonical"])
+
+
+async def _pin_name_resolution_note(pool: asyncpg.Pool, pin_value: str,
+                                    ) -> dict[str, Any] | None:
+    """Task #152/#157 arc (decisions 126210f0, 23b667d0): a pin's `project` field is the
+    CANONICAL SUFFIX by system-wide contract — every mint/lookup path outside this one
+    (register_agent, mint_heir's own `_resolve_or_mint_project`) builds `repo:<value>` and
+    treats a mismatch as grounds to MINT A NEW OBJECT, never to resolve by name. So when
+    roster()'s own canonical-only lookup already came back `no-such-project`, this asks one
+    further, PURELY DIAGNOSTIC question: does this value match some OTHER live object's
+    current NAME instead? If so, that is worth SAYING — it is the exact shape of Sekhmet's
+    own first #152 khepri mistake (a pin holding a display name instead of a canonical,
+    later reverted) — but never worth ACTING on here. This function NEVER changes
+    triage_bucket, never implies the pin should be silently rewritten to what it found, and
+    never picks among multiple name matches: `_resolve_software_project`'s own
+    `AmbiguousProjectRef` (ruling 8cdf905's law, generalized) is surfaced as its own
+    distinct state, not swallowed into a false single answer. A canonical MATCH here (the
+    resolved object's own canonical equals `repo:<pin_value>`) returns None — roster's own
+    lookup would already have found that case, this has nothing new to add."""
+    from src.orchestrator.projects import AmbiguousProjectRef, _resolve_software_project
+
+    try:
+        row = await _resolve_software_project(pool, pin_value)
+    except AmbiguousProjectRef as exc:
+        return {"resolved_by": "name", "ambiguous": True, "candidates": exc.candidates}
+    if row is None:
+        return None
+    canonical = row["canonical"]
+    if canonical == f"repo:{pin_value}":
+        return None
+    return {
+        "resolved_by": "name", "canonical": canonical,
+        "note": ("this pin's value matches an existing object's current NAME, not its "
+                 "canonical suffix — a pin should hold the canonical (stable across a "
+                 "rename), never a display name; correct the pin to the canonical shown "
+                 "here, never to the name it currently holds"),
+    }
 
 
 async def roster(
@@ -543,11 +590,14 @@ async def roster(
             pin_state = "no-pin"
         triage_bucket = None
         duplicate_siblings = None
+        name_resolution = None
         if pin_state == "declared" and pin.value:
             triage_bucket = bucket_map.get(f"repo:{pin.value}", "no-such-project")
             if triage_bucket == "duplicate_suspect":
                 duplicate_siblings = await _duplicate_suspect_siblings(
                     pool, f"repo:{pin.value}")
+            elif triage_bucket == "no-such-project":
+                name_resolution = await _pin_name_resolution_note(pool, pin.value)
         live_cwd = None
         if occ["state"] == "occupied" and occ["holder"]:
             live_cwd = await pool.fetchval(
@@ -562,7 +612,9 @@ async def roster(
             "pin": {"declared": pin.value, "state": pin_state, "path": pin.path,
                     "error": pin.error, "triage_bucket": triage_bucket,
                     **({"duplicate_siblings": duplicate_siblings}
-                       if duplicate_siblings is not None else {})},
+                       if duplicate_siblings is not None else {}),
+                    **({"name_resolution": name_resolution}
+                       if name_resolution is not None else {})},
         })
 
     if repo is None:
