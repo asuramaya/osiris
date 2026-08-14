@@ -5,6 +5,8 @@ peer_of_seat must answer the same regardless of which side peer_seats happened t
 """
 from __future__ import annotations
 
+import asyncio
+
 from src.actions.core import Actions
 
 
@@ -158,3 +160,35 @@ async def test_peer_of_seat_is_none_for_an_unpeered_seat(actions: Actions) -> No
     await _seat(actions, "seat:prcccccc")
     assert await peer_of_seat(actions.pool, "seat:prcccccc") is None
     assert await peer_of_seat(actions.pool, "seat:no-such-seat") is None
+
+
+async def test_peer_seats_serializes_two_concurrent_calls_sharing_a_seat(
+    actions: Actions,
+) -> None:
+    """Task #76 item 1: peer_seats' own "already has a peer" check and its create_link were
+    two round-trips with no lock between them — two concurrent callers both trying to pair a
+    THIRD seat onto the same shared seat could each pass the check before either wrote,
+    leaving that seat with two active peer_of edges. Fire both at once; exactly one must
+    land, the other must see the fresh bond and refuse — never both succeeding."""
+    from src.orchestrator.seats import peer_of_seat, peer_seats
+
+    await _seat(actions, "seat:prlockaa")
+    await _seat(actions, "seat:prlockbb")
+    await _seat(actions, "seat:prlockcc")
+
+    results = await asyncio.gather(
+        peer_seats(actions, "seat:prlockaa", "seat:prlockbb", because="racer 1",
+                   actor="test"),
+        peer_seats(actions, "seat:prlockcc", "seat:prlockbb", because="racer 2",
+                   actor="test"),
+    )
+
+    successes = [r for r in results if "peered" in r]
+    failures = [r for r in results if "error" in r]
+    assert len(successes) == 1, results
+    assert len(failures) == 1, results
+    assert "already has a peer" in failures[0]["error"]
+    # the graph agrees with whichever racer actually won — no double bond either way
+    winner_peer = "seat:prlockaa" if successes[0]["peered"][0] == "seat:prlockaa" \
+        else "seat:prlockcc"
+    assert await peer_of_seat(actions.pool, "seat:prlockbb") == winner_peer
