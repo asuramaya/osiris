@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 
 from src.actions.core import Actions
 from src.orchestrator.project_identity import (
+    create_project,
     fork_project,
     project_identity_evidence,
     rename_evidence_verdict,
@@ -477,6 +478,58 @@ async def test_unfork_project_refuses_when_nothing_to_unfork(actions: Actions) -
     assert "nothing to unfork" in out["error"]
 
 
+# --- create_project (#139's CREATE half — NOT a seventh mint door) ---------------------
+# layers task #107's _validate_repo_name with task #137's case-insensitive de-dup, both
+# reused verbatim; never a fresh, unguarded create_or_find_object of its own.
+
+async def test_create_project_mints_a_genuinely_new_project(actions: Actions) -> None:
+    out = await create_project(actions, name="brand-new-thing", because="starting fresh",
+                               actor="agent:test")
+    assert out["created"] is True and out["canonical"] == "repo:brand-new-thing"
+    assert await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='repo:brand-new-thing' AND a.name='name'") == "brand-new-thing"
+
+
+async def test_create_project_refuses_blank_because() -> None:
+    out = await create_project(None, name="whatever", because="", actor="agent:test")  # type: ignore[arg-type]
+    assert "because is required" in out["error"]
+
+
+async def test_create_project_refuses_a_path_shaped_name(actions: Actions) -> None:
+    out = await create_project(actions, name="/home/asuramaya/code/whatever",
+                               because="testing", actor="agent:test")
+    assert "error" in out and "bare project name" in out["error"]
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='SoftwareProject' AND "
+        "canonical='repo:/home/asuramaya/code/whatever'") is None
+
+
+async def test_create_project_reuses_an_exact_match_never_a_twin(actions: Actions) -> None:
+    await _mk_project(actions, "already-here")
+    out = await create_project(actions, name="already-here", because="testing dedup",
+                               actor="agent:test")
+    assert out["created"] is False and out["canonical"] == "repo:already-here"
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' AND "
+        "canonical='repo:already-here'") == 1
+
+
+async def test_create_project_reuses_a_case_insensitive_twin_never_a_second_object(
+    actions: Actions,
+) -> None:
+    """The ramstein/RAMstein shape (task #137's own live proof) — #107's shape validation
+    alone would happily mint 'Ramstein' as a SEPARATE object from an existing 'ramstein';
+    the case-insensitive layer on top is what stops it."""
+    await _mk_project(actions, "ramstein")
+    out = await create_project(actions, name="Ramstein", because="testing case dedup",
+                               actor="agent:test")
+    assert out["created"] is False and out["canonical"] == "repo:ramstein"
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' AND "
+        "lower(canonical)='repo:ramstein'") == 1
+
+
 # --- rename_evidence_verdict (#137's arc, operator ruling: DO NOT CROWN A TIER) --------
 # a NAMED signal against a SPECIFIC new_name, distinct from project_identity_evidence's
 # own "agreement" field (which only says whether a seat's tiers agree with EACH OTHER) —
@@ -664,6 +717,36 @@ async def test_mcp_project_identity_evidence_and_fork_doors(
             "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='forked_from' "
             "AND (valid_until IS NULL OR valid_until > now())", successor, ancestor)
         assert edge_after is None
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
+async def test_mcp_create_project_door(actions: Actions) -> None:
+    """#139's create half, reachable from the MCP surface — the door existed as a Python
+    function only until now, same gap the other three doors had before this arc's earlier
+    wiring pass."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import create_project as create_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:creator1", session="creator1", project="create-land",
+        model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await create_tool(name="fresh-via-mcp", because="onboarding", ctx=ctx)
+        assert out["created"] is True and out["canonical"] == "repo:fresh-via-mcp"
+        refusal = await create_tool(name="/a/path/shape", because="testing", ctx=ctx)
+        assert "error" in refusal
     finally:
         srv._pool = saved_pool
         _agents.pop(_conn_key(ctx), None)
