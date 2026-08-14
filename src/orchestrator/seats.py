@@ -2266,6 +2266,23 @@ async def peer_of_seat(pool: asyncpg.Pool, seat_id: str) -> str | None:
     return peer["peer"] if peer is not None else None
 
 
+async def peer_reachable(pool: asyncpg.Pool, seat_id: str) -> list[str]:
+    """Every seat a search for `seat_id`'s own queue should ALSO cover — task #76 item 5b
+    (spec e6636c7e: "the pair faces the tree through BOTH peers"), scoped to
+    DISCOVERABILITY ONLY per Thoth's own ruling (msg 4337/4351): mail delivery itself is
+    untouched — widening `_addressed_to_me`'s own resolution is a correctness-sensitive
+    change to a path every seat's mail already depends on, not this item's to make
+    unilaterally. Returns [seat_id] alone when unpeered/unknown (never refuses — a
+    stranger's queue is still exactly one seat, its own), or [seat_id, peer] when an active
+    peer_of bond exists — so a caller reading "whose queue is this" (a future review-
+    assignment surface, item 5c's own still-missing piece) checks both names instead of
+    silently missing the peer's half. `seat_id` need not itself resolve to a real Seat —
+    the ordinary [seat_id] fallback still answers, same as an unknown seat has no peer
+    rather than an error, for a pure-read helper with nothing to refuse."""
+    peer = await peer_of_seat(pool, seat_id)
+    return [seat_id, peer] if peer is not None else [seat_id]
+
+
 async def peer_seats(
     actions: Actions, seat_a: str, seat_b: str, *, because: str, actor: str,
 ) -> dict[str, Any]:

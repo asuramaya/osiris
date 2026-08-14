@@ -308,3 +308,38 @@ async def test_hold_action_is_resolved_by_the_ordinary_resolve_thread_verb(
         "SELECT a.value #>> '{}' FROM current_assertions a "
         "WHERE a.object_id::text=$1 AND a.name='status'", out["held"])
     assert status == "resolved"
+
+
+async def test_peer_reachable_includes_the_active_peer(actions: Actions) -> None:
+    """Task #76 item 5b: a search for one seat's own queue should also cover its peer's —
+    discoverability only, no change to mail delivery."""
+    from src.orchestrator.seats import peer_reachable, peer_seats
+
+    await _seat(actions, "seat:pc1aaaaa")
+    await _seat(actions, "seat:pc1bbbbb")
+    await peer_seats(actions, "seat:pc1aaaaa", "seat:pc1bbbbb", because="paired",
+                     actor="test")
+
+    assert await peer_reachable(actions.pool, "seat:pc1aaaaa") == \
+        ["seat:pc1aaaaa", "seat:pc1bbbbb"]
+    # symmetric, same as peer_of_seat
+    assert await peer_reachable(actions.pool, "seat:pc1bbbbb") == \
+        ["seat:pc1bbbbb", "seat:pc1aaaaa"]
+
+
+async def test_peer_reachable_is_just_the_seat_itself_when_unpeered(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import peer_reachable
+
+    await _seat(actions, "seat:pc2aaaaa")
+
+    assert await peer_reachable(actions.pool, "seat:pc2aaaaa") == ["seat:pc2aaaaa"]
+
+
+async def test_peer_reachable_never_refuses_an_unknown_seat(actions: Actions) -> None:
+    """A pure-read helper with nothing to refuse — an unknown seat's own queue is still
+    exactly one name, its own, never an error."""
+    from src.orchestrator.seats import peer_reachable
+
+    assert await peer_reachable(actions.pool, "seat:no-such-seat") == ["seat:no-such-seat"]
