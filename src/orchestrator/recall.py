@@ -26,12 +26,34 @@ IDENTICAL gap (verified: zero callers of `thread_notes` anywhere outside tests, 
 function, not a second, separate defect worth leaving half-mended right next to the first."""
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Any
 
 import asyncpg
 
 _KINDS = ("thread", "decision")
+
+# The migrated-board address form (roadmap_migration.py's legacy_task_ref, msg 4429's
+# acceptance test: "after apply, #150 must resolve to the object"). A bare decimal, with
+# or without the leading '#' this reign's own mail always writes it with.
+_LEGACY_TASK_ID_RE = re.compile(r"^#?(\d+)$")
+
+
+async def _find_by_legacy_task_ref(
+    pool: asyncpg.Pool, task_id: str,
+) -> list[tuple[uuid.UUID, str, str | None]]:
+    """Every ACTIVE object carrying legacy_task_ref.id == task_id, any store. A bare task
+    number is only unique PER STORE (task_sync.py's own binding rule, proven the hard way
+    this same reign — ruling 50c3ed90) — more than one hit here is a real ambiguity, never
+    resolved by picking the first row."""
+    rows = await pool.fetch(
+        "SELECT a.object_id, o.type, a.value ->> 'store' AS store "
+        "FROM current_assertions a JOIN objects o ON o.id = a.object_id "
+        "WHERE a.name = 'legacy_task_ref' AND a.value ->> 'id' = $1 AND o.status = 'active'",
+        task_id,
+    )
+    return [(r["object_id"], r["type"], r["store"]) for r in rows]
 
 
 async def _full_record(pool: asyncpg.Pool, oid: uuid.UUID, otype: str) -> dict[str, Any] | None:
@@ -90,6 +112,25 @@ async def recall(pool: asyncpg.Pool, ref: str, *, kind: str | None = None) -> di
 
     if kind is not None and kind not in _KINDS:
         return {"error": f"kind must be 'thread' or 'decision', got {kind!r}"}
+
+    legacy_match = _LEGACY_TASK_ID_RE.match(ref.strip())
+    if legacy_match:
+        hits = await _find_by_legacy_task_ref(pool, legacy_match.group(1))
+        if len(hits) > 1:
+            stores = sorted({h[2] for h in hits if h[2] is not None})
+            return {"error": f"{ref!r} matches legacy_task_ref id={legacy_match.group(1)!r} "
+                             f"in {len(hits)} stores {stores} — a bare task number is only "
+                             "unique per store; recall never guesses which one you mean"}
+        if len(hits) == 1:
+            oid, otype, _store = hits[0]
+            rec = await _full_record(pool, oid, otype)
+            if rec is not None:
+                return rec
+        # zero hits (or a dangling id with no active object): not migrated, or not this
+        # id — fall through to the ordinary ladder unchanged, so "#150" typed before any
+        # migration still resolves via a Thread/Decision that happens to quote it, exactly
+        # as it always has.
+
     tried: list[str] = []
     if kind in (None, "thread"):
         tid = await _find_thread(pool, ref)
