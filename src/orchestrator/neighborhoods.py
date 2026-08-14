@@ -200,17 +200,37 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
     and "/home/.../REPOS/sutra" duplicates, folded separately, are what that gap already
     cost). A refusal degrades PER ENTRY, never the whole batch — #107's own third-order
     defect (settle()'s batch-abort gap) is the standing precedent: one hostile directory
-    name costs that one census row, not the walk."""
+    name costs that one census row, not the walk.
+
+    REMOTE_URL RIDES THE SAME WALK (#144 Rule 2, decision ffc193a4ce07): a git remote is
+    CONFIGURATION, not content — cheap to read (`git remote get-url origin` touches only
+    .git/config, no network), so it costs nothing new to capture on the walk this function
+    already runs every 10 minutes (arq_worker.py's backfill_transcripts cron). This is the
+    ONLY place remote_url is ever written — resolve_identity's hot mount()-time path reads
+    it as a plain DB column, never shells out live (577988ed: no subprocess on the path
+    every session in the fleet traverses). STALENESS IS BOUNDED BY THE EXISTING CADENCE:
+    a repo whose origin changes (the /srv/git relocation is a real, recent instance of
+    exactly this) self-heals on this function's own next run, at most 10 minutes later —
+    no new staleness window is introduced, because on_disk_path already carries this same
+    bound and nothing here reads faster than the walk that writes it. A repo with no
+    configured origin (ballgem's own shape, Sekhmet's e221128e) gets no remote_url
+    assertion at all — absence stays absence, never a persisted null standing in for
+    "checked, found nothing" (60bc15db: a reader downstream must be able to tell
+    "no signal" from "confirmed empty", and skipping the write is how that distinction
+    survives here)."""
     from src.orchestrator.capture import _mint_or_find_repo, _resolve_repo
+    from src.orchestrator.project_identity import _git_remote
 
     observed = datetime.now(UTC)
     ec = EvidenceClass.DIRECT_OBSERVATION.value
     minted: list[str] = []
     pathed: list[str] = []
+    remoted: list[str] = []
     refused: list[dict[str, str]] = []
     known = 0
     for repo in _git_dirs(roots):
         name = repo.name
+        _, remote_url = _git_remote(str(repo))
         existing = await _resolve_repo(actions.pool, name)
         if existing is None:
             try:
@@ -223,6 +243,10 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
                                           observed, 0.9, evidence_class=ec)
             await actions.assert_property(obj, "on_disk_path", str(repo), "disk-census",
                                           observed, 0.9, evidence_class=ec)
+            if remote_url:
+                await actions.assert_property(obj, "remote_url", remote_url, "disk-census",
+                                              observed, 0.9, evidence_class=ec)
+                remoted.append(name)
             minted.append(name)
             continue
         known += 1
@@ -233,7 +257,16 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
             await actions.assert_property(existing, "on_disk_path", str(repo),
                                           "disk-census", observed, 0.9, evidence_class=ec)
             pathed.append(name)
-    return {"known": known, "minted": minted, "pathed": pathed, "refused": refused}
+        if remote_url:
+            current_remote = await actions.pool.fetchval(
+                "SELECT a.value #>> '{}' FROM current_assertions a "
+                "WHERE a.object_id=$1 AND a.name='remote_url' LIMIT 1", existing)
+            if current_remote != remote_url:
+                await actions.assert_property(existing, "remote_url", remote_url,
+                                              "disk-census", observed, 0.9, evidence_class=ec)
+                remoted.append(name)
+    return {"known": known, "minted": minted, "pathed": pathed, "remoted": remoted,
+            "refused": refused}
 
 
 async def neighborhoods_of(

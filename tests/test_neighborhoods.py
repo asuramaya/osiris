@@ -134,6 +134,66 @@ async def test_census_trees_mints_the_unmodeled_and_paths_the_known(
     assert again["known"] == 2  # both now known; the unchanged disk writes nothing
 
 
+def _real_git_repo(tmp_path: Path, name: str, remote: str | None) -> Path:
+    import subprocess
+    path = tmp_path / "code" / name
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    if remote:
+        subprocess.run(["git", "remote", "add", "origin", remote], cwd=path, check=True)
+    return path
+
+
+def _relocate_remote(path: Path, new_url: str) -> None:
+    import subprocess
+    subprocess.run(["git", "remote", "set-url", "origin", new_url], cwd=path, check=True)
+
+
+async def test_census_trees_captures_remote_url_on_mint_and_self_heals_on_change(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """#144 Rule 2 (decision ffc193a4ce07): the census is the ONLY place remote_url is
+    ever written, so the hot mount()-time path never shells out live. A freshly-minted
+    repo gets remote_url alongside on_disk_path; a repo with no configured origin
+    (ballgem's own shape) gets no remote_url assertion at all — absence stays absence,
+    never a persisted null standing in for "checked, found nothing" (60bc15db). A later
+    walk that finds the origin CHANGED (the real /srv/git relocation shape) overwrites it
+    — the cache self-heals on its own next 10-minute cadence, never held stale forever."""
+    from src.orchestrator.neighborhoods import census_trees
+    _real_git_repo(tmp_path, "withremote", "git@github.com:x/withremote.git")
+    _real_git_repo(tmp_path, "noremote", None)
+
+    out = await census_trees(actions, roots=[str(tmp_path / "code")])
+    assert set(out["minted"]) == {"withremote", "noremote"}
+    assert out["remoted"] == ["withremote"]
+
+    with_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:withremote'")
+    no_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:noremote'")
+    with_url = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "WHERE a.object_id=$1 AND a.name='remote_url' LIMIT 1", with_id)
+    no_url = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "WHERE a.object_id=$1 AND a.name='remote_url' LIMIT 1", no_id)
+    assert with_url == "git@github.com:x/withremote.git"
+    assert no_url is None  # never written, not written-as-null
+
+    # unchanged origin: idempotent, no second write
+    again = await census_trees(actions, roots=[str(tmp_path / "code")])
+    assert again["remoted"] == []
+
+    # the origin RELOCATES (the real /srv/git shape) — the next walk catches it
+    _relocate_remote(tmp_path / "code" / "withremote", "git@newhost:x/withremote.git")
+    healed = await census_trees(actions, roots=[str(tmp_path / "code")])
+    assert healed["remoted"] == ["withremote"]
+    healed_url = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "WHERE a.object_id=$1 AND a.name='remote_url' LIMIT 1", with_id)
+    assert healed_url == "git@newhost:x/withremote.git"
+
+
 def test_git_dirs_skips_a_bare_venv_one_level_shallower_than_the_depth_cutoff(
     tmp_path: Path,
 ) -> None:
