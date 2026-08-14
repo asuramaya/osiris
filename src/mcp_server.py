@@ -5443,8 +5443,8 @@ async def reap_stale_leases(older_than_secs: int = 3600) -> dict[str, Any]:
 
 
 async def _retire_stale_handoffs(
-    pool: asyncpg.Pool, actor: str, keep: uuid.UUID, now: datetime,
-) -> list[str]:
+    pool: asyncpg.Pool, actor: str, keep: uuid.UUID, now: datetime, *, max_hops: int = 200,
+) -> dict[str, list[str]]:
     """A ONE-TIME BACKFILL UTILITY, NOT A LIVE TRIGGER (Thoth DM 3355 built the write-
     triggered version this originally was; the operator's 2026-08-03 ruling superseded that
     trigger with an explicit ack_handoff(ref=...) receipt — see settle()'s own docstring).
@@ -5453,6 +5453,18 @@ async def _retire_stale_handoffs(
     existed and that nobody will ever explicitly ack retroactively (there is no way to know,
     after the fact, who "read" a years-old handoff). NOT wired into settle() or any other
     live call path — a fresh is_handoff write no longer retires anything automatically.
+
+    REFUSES, NEVER DEGRADES, ON A TRUNCATED WALK (decision 1cb389be — the mechanism that
+    made the 220+-record backlog disposition unsafe until fixed): this is the ONE caller
+    of `lineage_root` that decides for a WHOLE POPULATION at once, so a truncated root
+    would silently UNDER-retire — records that are really the same continuing lineage as
+    `actor` would each read as their own separate, unrelated root, and the run would look
+    like a clean success while leaving most of the real work undone. If `actor`'s own walk
+    is incomplete, the whole call raises `ValueError` before touching anything — there is
+    no safe partial answer to "retire everything in my lineage" when the caller does not
+    yet know its own lineage's true root. If a CANDIDATE record's own walk is incomplete,
+    that one record is left untouched and named in the receipt's `skipped_incomplete_walk`
+    (never silently treated as same-lineage OR cross-lineage — a third, honest outcome).
 
     Retires every is_handoff='true' record from `actor`'s own LINEAGE — same seat, any
     earlier OR same generation, Decision or Thread alike, `lineage_root`'s succeeded_from
@@ -5475,10 +5487,15 @@ async def _retire_stale_handoffs(
 
     Never touches `summary`/`kind`/anything else on the retired object — same append-only
     discipline as `amend_decision`/`amend_practice`, an independent property, not a rewrite.
-    Returns the short ids of every record retired, for the caller's own receipt — a silent
-    mutation behind an already-silent bleed would just be a quieter version of the same
-    disease."""
-    root = await lineage_root(pool, actor)
+    Returns `{"retired": [...], "skipped_incomplete_walk": [...]}` — short ids either way,
+    for the caller's own receipt — a silent mutation behind an already-silent bleed would
+    just be a quieter version of the same disease."""
+    root, root_complete = await lineage_root(pool, actor, max_hops=max_hops)
+    if not root_complete:
+        raise ValueError(
+            f"cannot determine {actor!r}'s own lineage root — the succeeded_from walk did "
+            "not reach a true origin within the hop bound. Refusing the whole disposition "
+            "rather than risk under-retiring on an unverified root (decision 1cb389be).")
     rows = await pool.fetch(
         "SELECT o.id AS object_id, "
         "(SELECT a.source_id FROM current_assertions a WHERE a.object_id=o.id "
@@ -5491,13 +5508,19 @@ async def _retire_stale_handoffs(
         "     WHERE a3.object_id=o.id AND a3.name='is_handoff' "
         "     ORDER BY a3.confidence DESC, a3.observed_at DESC LIMIT 1) = 'true'", keep)
     retired: list[str] = []
+    skipped: list[str] = []
     actions = Actions(pool)
     for r in rows:
-        if await lineage_root(pool, r["source_id"]) == root:
+        candidate_root, candidate_complete = await lineage_root(
+            pool, r["source_id"], max_hops=max_hops)
+        if not candidate_complete:
+            skipped.append(str(r["object_id"])[:8])
+            continue
+        if candidate_root == root:
             await actions.assert_property(r["object_id"], "is_handoff", "false", actor, now,
                                           0.9, evidence_class="self_declared")
             retired.append(str(r["object_id"])[:8])
-    return retired
+    return {"retired": retired, "skipped_incomplete_walk": skipped}
 
 
 @mcp.tool()
@@ -5519,7 +5542,8 @@ async def ack_handoff(
     lineage ("not your lineage's handoff to ack") — checked via `lineage_root`, a
     succeeded_from edge-walk (decision 61cb1f02: replaces a string-parsed check that went
     blind across an id-format change). Defense in depth: a MISTAKEN ack (a copy-pasted ref
-    from another lineage) would permanently retire someone else's live handoff, refused.
+    from another lineage) would permanently retire someone else's live handoff, refused —
+    including a truncated walk on either side (decision 1cb389be), never trusted as final.
 
     PER-OBJECT not per-reader (first ack wins, retires for everyone). FINAL not a lease — an
     ack does not reopen if that generation goes on to produce zero further turns, the same
@@ -5553,7 +5577,13 @@ async def ack_handoff(
         return {"error": f"{str(oid)[:8]} is already acknowledged or is not a handoff"}
     if row["author"] is None:
         return {"error": f"{str(oid)[:8]} is not your lineage's handoff to ack"}
-    if await lineage_root(pool, row["author"]) != await lineage_root(pool, actor):
+    author_root, author_complete = await lineage_root(pool, row["author"])
+    actor_root, actor_complete = await lineage_root(pool, actor)
+    if not author_complete or not actor_complete:
+        return {"error": f"{str(oid)[:8]}: cannot confirm lineage — the succeeded_from "
+                         "walk did not reach a true origin within the hop bound, refused "
+                         "rather than trusted (decision 1cb389be)"}
+    if author_root != actor_root:
         return {"error": f"{str(oid)[:8]} is not your lineage's handoff to ack"}
     now = datetime.now(UTC)
     await Actions(pool).assert_property(

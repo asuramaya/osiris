@@ -992,17 +992,45 @@ async def test_lineage_root_walks_edges_not_id_strings(actions: Actions) -> None
     """Direct unit coverage of the primitive ack_handoff's fix is built on: two format-
     changed generations of the SAME lineage resolve to the identical root, while two
     genuinely unrelated agents that merely share NOTHING (no succeeded_from at all) each
-    root at themselves."""
+    root at themselves. Both complete -- short chains, well under any hop bound."""
     from src.orchestrator.agents import lineage_root
 
     await _succeed(actions, "agent:lrootB", "agent:lrootA")
     await _succeed(actions, "agent:lroot-g40-g40", "agent:lrootB")
-    assert (await lineage_root(actions.pool, "agent:lroot-g40-g40")
-           == await lineage_root(actions.pool, "agent:lrootA") == "agent:lrootA")
+    root1, complete1 = await lineage_root(actions.pool, "agent:lroot-g40-g40")
+    root2, complete2 = await lineage_root(actions.pool, "agent:lrootA")
+    assert root1 == root2 == "agent:lrootA"
+    assert complete1 and complete2
 
     # no edge asserted between these two -- each is its own root, never coincidentally equal
-    assert (await lineage_root(actions.pool, "agent:lrootstranger1")
-           != await lineage_root(actions.pool, "agent:lrootstranger2"))
+    root3, complete3 = await lineage_root(actions.pool, "agent:lrootstranger1")
+    root4, complete4 = await lineage_root(actions.pool, "agent:lrootstranger2")
+    assert root3 != root4
+    assert complete3 and complete4
+
+
+async def test_lineage_root_reports_incomplete_when_the_chain_exceeds_max_hops(
+    actions: Actions,
+) -> None:
+    """decision 1cb389be, found live in Thoth's own 76-generation lineage: a chain longer
+    than `max_hops` must say so, not silently hand back whatever intermediate ancestor the
+    walk happened to reach -- the exact defect this fix removes from the function built to
+    fix a sibling instance of the same ruling."""
+    from src.orchestrator.agents import lineage_root
+
+    await _succeed(actions, "agent:ltrunc2", "agent:ltrunc1")
+    await _succeed(actions, "agent:ltrunc3", "agent:ltrunc2")
+    await _succeed(actions, "agent:ltrunc4", "agent:ltrunc3")
+    root_bounded, complete_bounded = await lineage_root(
+        actions.pool, "agent:ltrunc4", max_hops=2)
+    root_full, complete_full = await lineage_root(actions.pool, "agent:ltrunc4", max_hops=10)
+    assert complete_full is True
+    assert root_full == "agent:ltrunc1"  # the TRUE origin, no predecessor at all
+    assert complete_bounded is False
+    # the truncated root is a REAL ancestor along the true chain (never fabricated) but
+    # it is NOT the origin -- exactly the shape that read as 12 fake "roots" live
+    assert root_bounded == "agent:ltrunc2"
+    assert root_bounded != root_full
 
 
 async def test_retire_stale_handoffs_survives_an_id_format_change(actions: Actions) -> None:
@@ -1030,12 +1058,67 @@ async def test_retire_stale_handoffs_survives_an_id_format_change(actions: Actio
 
     await _succeed(actions, "agent:retireformat-g40-g40", "agent:retireformat")
 
-    retired = await srv._retire_stale_handoffs(
+    receipt = await srv._retire_stale_handoffs(
         actions.pool, "agent:retireformat-g40-g40", uuid_mod.UUID(int=0), datetime.now(UTC))
-    assert old_id in retired
-    assert stranger_id not in retired
+    assert old_id in receipt["retired"]
+    assert stranger_id not in receipt["retired"]
+    assert receipt["skipped_incomplete_walk"] == []
     assert await _is_handoff_value(actions.pool, old_id) == "false"
     assert await _is_handoff_value(actions.pool, stranger_id) == "true"  # untouched
+
+
+async def test_retire_stale_handoffs_refuses_on_the_actors_own_truncated_walk(
+    actions: Actions,
+) -> None:
+    """decision 1cb389be: the one caller that decides for a WHOLE POPULATION at once must
+    REFUSE outright rather than silently under-retire on an unverified root — the failure
+    mode that made the real 220+-record backlog disposition unsafe."""
+    import uuid as uuid_mod
+    from datetime import UTC, datetime
+
+    from src import mcp_server as srv
+
+    cur = "agent:rsdeep0"
+    for i in range(1, 5):
+        nxt = f"agent:rsdeep{i}"
+        await _succeed(actions, nxt, cur)
+        cur = nxt
+
+    import pytest
+
+    with pytest.raises(ValueError, match="cannot determine"):
+        await srv._retire_stale_handoffs(
+            actions.pool, cur, uuid_mod.UUID(int=0), datetime.now(UTC), max_hops=2)
+
+
+async def test_retire_stale_handoffs_skips_a_candidate_with_a_truncated_walk(
+    actions: Actions,
+) -> None:
+    """A CANDIDATE record's own truncated walk must be left untouched and named, never
+    silently treated as same-lineage (would wrongly retire a stranger's handoff) or
+    cross-lineage (would silently under-retire, the exact disease this fix removes)."""
+    from datetime import UTC, datetime
+
+    from src import mcp_server as srv
+
+    cur = "agent:rsdeepc0"
+    for i in range(1, 5):
+        nxt = f"agent:rsdeepc{i}"
+        await _succeed(actions, nxt, cur)
+        cur = nxt
+    deep_author = cur  # the DEEPEST generation -- its own walk needs 4 hops to the origin
+    deep_handoff = await _settle_as(
+        actions.pool, deep_author,
+        decisions=[{"summary": "a deep-chain lineage's own state of the board",
+                   "kind": "choice", "is_handoff": True}])
+    deep_id = deep_handoff["accepted"]["decisions"][0]["id"]
+
+    import uuid as uuid_mod
+    receipt = await srv._retire_stale_handoffs(
+        actions.pool, "agent:rsshallow", uuid_mod.UUID(int=0), datetime.now(UTC), max_hops=2)
+    assert deep_id in receipt["skipped_incomplete_walk"]
+    assert deep_id not in receipt["retired"]
+    assert await _is_handoff_value(actions.pool, deep_id) == "true"  # untouched
 
 
 # ═══ misfiled_by_lineage — #145's discovery half (decision b89477a0/61cb1f02) ═══
