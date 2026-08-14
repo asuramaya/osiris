@@ -5268,8 +5268,8 @@ async def open_thread(
     `arc` names which of a CLOSED taxonomy (capture.ARCS: Identity-Succession,
     Compaction-Resilience, Model-Identity, Token-Cost, Surfaces-Roadmap-Docs,
     Fleet-Hygiene, Security) this thread belongs to — the roadmap screen's top grouping.
-    Omit it for the common case; an unrecognized value refuses loudly rather than
-    fragmenting the taxonomy with a typo.
+    Omit it for the common case; an unrecognized value refuses loudly. Unset, the receipt's
+    `arc` reads "unsorted".
     `resolves` closes a PREDECESSOR thread this new one supersedes, in the same call —
     decision 883bb3da's own diagnosed gap: a lineage's own board-state/handoff threads
     accumulate forever because nothing ever closed the ancestor's when the successor
@@ -5338,7 +5338,8 @@ async def open_thread(
         )
     except ValueError as e:
         return {"error": str(e)}
-    out = {"id": str(t), "summary": summary, "status": "open", "deduped": "false"}
+    out = {"id": str(t), "summary": summary, "status": "open", "deduped": "false",
+          "arc": arc or capture._ARC_UNSORTED}
     if assignee:
         out["assignee"] = assignee.strip()
     if files_touched:

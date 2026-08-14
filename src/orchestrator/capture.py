@@ -940,6 +940,17 @@ async def find_near_duplicate_decision(
 ARCS = ("Identity-Succession", "Compaction-Resilience", "Model-Identity", "Token-Cost",
         "Surfaces-Roadmap-Docs", "Fleet-Hygiene", "Security")
 
+# THE ONE UNSORTED SENTINEL (ruling e6277013's arc-adoption follow-on, measured at 7.2%
+# fleet-wide): the same shape as offices._CHARTER_UNDECLARED — never persisted (ARCS stays
+# a closed taxonomy; this is not a legal `arc` value and never becomes one), a receipt-only
+# honest echo so a caller who left `arc` unset SEES that choice on every mint rather than
+# it silently vanishing, the same way a fresh seat's missing charter now reads UNDECLARED
+# instead of nothing at all. Leads with "unsorted" deliberately: `_fn_roadmap_open`
+# (compositions.py) already buckets an arc-less thread under that exact word on the READ
+# side, so a caller who sees this in their own receipt and later finds it grouped
+# "unsorted" on the roadmap recognizes the same fact stated twice, not two different ones.
+_ARC_UNSORTED = "unsorted — arc was left unset (capture.ARCS names the taxonomy)"
+
 
 async def open_thread(
     actions: Actions, summary: str, *, repo: str | None = None, kind: str | None = None,

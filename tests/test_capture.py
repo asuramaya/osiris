@@ -193,6 +193,35 @@ async def test_open_thread_surfaces_in_the_briefing_open_section(actions: Action
     )
 
 
+async def test_mcp_open_thread_receipt_names_arc_omission_honestly(actions: Actions) -> None:
+    """Arc-adoption follow-on (ruling e6277013, measured at 7.2% fleet-wide): a caller who
+    left `arc` unset SEES that choice in their own receipt (the port of Sekhmet's
+    charter-UNDECLARED pattern, commit 446a5bf) — never a refusal, never required
+    (577988ed). Setting a real arc echoes it back unchanged; omitting it gets the same
+    _ARC_UNSORTED sentinel every time, never a persisted value (ARCS stays closed)."""
+    from src import mcp_server as srv
+    from src.orchestrator import capture
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        omitted = await srv.open_thread("a thread with no arc chosen", repo="arcproj")
+        named = await srv.open_thread(
+            "a thread deliberately filed under Fleet-Hygiene", repo="arcproj",
+            arc="Fleet-Hygiene")
+    finally:
+        srv._pool = saved_pool
+    assert omitted["arc"] == capture._ARC_UNSORTED
+    assert named["arc"] == "Fleet-Hygiene"
+    # never persisted as a real property — ARCS stays a closed taxonomy, the sentinel is
+    # receipt-only, matching mint_seat's own UNDECLARED string (also never written to the
+    # graph, only ever reported)
+    stored = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "WHERE a.object_id=$1 AND a.name='arc' LIMIT 1", uuid.UUID(omitted["id"]))
+    assert stored is None
+
+
 async def test_resolve_thread_leaves_open_and_joins_resolved(actions: Actions) -> None:
     summary = "prune the internal-URL spread in url_fetch to profile-shaped only"
     t = await open_thread(actions, summary)
