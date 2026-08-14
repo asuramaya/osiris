@@ -33,7 +33,7 @@ import secrets
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -2348,6 +2348,70 @@ async def unpeer(
         await actions.assert_property(oid, "unpeer_because", because, actor, now, _CONF,
                                       evidence_class=_EC)
     return {"unpeered": [row_a["canonical"], row_b["canonical"]], "because": because}
+
+
+async def hold_action(
+    actions: Actions, holder: str, held: str, *, act: str, because: str, hours: float = 24,
+    actor: str,
+) -> dict[str, Any]:
+    """Mint a mutual HOLD — task #76 item 4a (spec e6636c7e): either peer may say HOLD on
+    the OTHER's specific irreversible act, time-boxed. Reuses `open_thread`'s existing
+    Thread shape wholesale (no new object type, no new table): the hold IS an obligation
+    Thread, `owner=held` (whose move it is to respond), `severity='hold'` so it's filterable
+    without a text match, resolved the ordinary way — `resolve_thread` on the returned id,
+    same verb every other obligation uses, no new resolve path needed. The escalation half
+    of the spec (an unresolved hold auto-reaching the operator past its time-box) is
+    DELIBERATELY NOT built here — that needs a live sweep (pit_watch.py's own shape) or a
+    lint check, a separate call Thoth hasn't made yet (decision e85d3040); this only records
+    the hold and its deadline honestly, as testimony a mind — or, later, a sweep — can read.
+
+    Refuses LOUDLY on: blank `act`/`because`; `holder==held`; an unknown/inactive seat on
+    either side; `hours<=0`; or holder and held not currently an active peer_of pair — v1's
+    hold is a PEER'S power over its OWN peer, never a stranger's."""
+    act = (act or "").strip()
+    because = (because or "").strip()
+    if not act:
+        return {"error": "act is required — name the specific act being held"}
+    if not because:
+        return {"error": "because is required — holding a peer's act is a deliberate act "
+                         "on the record"}
+    if hours <= 0:
+        return {"error": "hours must be positive — a hold is time-boxed, never indefinite"}
+    holder = (holder or "").strip()
+    held = (held or "").strip()
+    if holder == held:
+        return {"error": f"{holder!r} cannot hold its own act"}
+    row_holder = await actions.pool.fetchrow(
+        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
+        "AND status='active'", holder)
+    if row_holder is None:
+        return {"error": f"no such active seat: {holder!r}"}
+    row_held = await actions.pool.fetchrow(
+        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
+        "AND status='active'", held)
+    if row_held is None:
+        return {"error": f"no such active seat: {held!r}"}
+    peer = await peer_of_seat(actions.pool, holder)
+    if peer != held:
+        return {"error": f"{holder!r} and {held!r} are not an active peer_of pair — a "
+                         "hold is a peer's own power, not a stranger's"}
+    now = datetime.now(UTC)
+    deadline = now + timedelta(hours=hours)
+    from src.orchestrator.capture import open_thread
+
+    thread_id = await open_thread(
+        actions, f"HOLD by {holder} on {held}'s act ({act}): {because}",
+        kind="obligation", owner=held, severity="hold", source=actor)
+    for name, value in (
+        ("hold_holder", holder), ("hold_held", held), ("hold_act", act),
+        ("hold_because", because), ("hold_deadline", deadline.isoformat()),
+    ):
+        await actions.assert_property(thread_id, name, value, actor, now, _CONF,
+                                      evidence_class=_EC)
+    return {"held": str(thread_id), "holder": holder, "held_seat": held, "act": act,
+            "deadline": deadline.isoformat(),
+            "note": "resolve_thread on this id when it's respected/resolved — the "
+                    "auto-escalation half is not built yet (decision e85d3040)"}
 
 
 async def detach_seat(

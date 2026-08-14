@@ -4022,6 +4022,31 @@ async def unpeer(seat_a: str, seat_b: str, because: str,
 
 
 @mcp.tool()
+async def hold_action(holder: str, held: str, act: str, because: str, hours: float = 24,
+                      ctx: Context | None = None) -> dict[str, Any]:
+    """Mint a mutual HOLD (task #76 item 4a, spec e6636c7e) — a peer's power to say HOLD on
+    its OWN peer's specific irreversible act, time-boxed. `holder` is the seat calling the
+    hold, `held` is the seat whose act is being held, `act` names the specific act, `hours`
+    sets the time-box (default 24). Reuses the ordinary obligation Thread shape wholesale —
+    no new object type. Resolve it the ordinary way, with `resolve_thread` on the returned
+    `held` id, once it's respected or the act proceeds anyway. The spec's own auto-
+    escalation-to-the-operator half (an unresolved hold past its deadline reaching the
+    desk unprompted) is NOT built yet — this only records the hold and its deadline
+    honestly; nothing sweeps for expiry today.
+
+    Refuses LOUDLY on: blank `act`/`because`; `holder==held`; an unknown/inactive seat on
+    either side; non-positive `hours`; or holder/held not currently an active peer_of
+    pair — a hold is a peer's own power, never a stranger's."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — holding a peer's act is a deliberate act on the "
+                         "record", "why": _anchorless(ctx)}
+    from src.orchestrator.seats import hold_action as _hold_action
+    return await _hold_action(Actions(await _pool_get()), holder, held, act=act,
+                              because=because, hours=hours, actor=ident.agent_id)
+
+
+@mcp.tool()
 async def detach_seat(seat: str, because: str, ctx: Context | None = None) -> dict[str, Any]:
     """Invalidate an active managed_by edge — the toolkit hole named at thread fad0dc14
     (unpeer heals peer_of, nothing healed managed_by before this). A COORDINATOR IS DEFINED
